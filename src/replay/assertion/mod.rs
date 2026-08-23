@@ -2,6 +2,7 @@ mod artifact;
 mod binary_body;
 mod compare;
 pub(in crate::replay) mod hessian2;
+mod joined_string;
 mod model;
 mod motan;
 pub(in crate::replay) mod protobuf;
@@ -17,9 +18,10 @@ use self::artifact::{
 use self::compare::compare_json;
 pub use self::model::{
     Hessian2BodyDifference, Hessian2BodyDifferenceKind, Hessian2JoinedStringCandidate,
-    Hessian2ValuePathCandidate, ProtobufBodyDifference, ProtobufBodyDifferenceKind,
-    ProtobufFieldPathCandidate, ResponseAssertionCaseReport, ResponseBodyAssertionReport,
-    ResponseBodyDifferenceDetail, ResponseBodyUnorderedPathCandidate, ResponseDifference,
+    Hessian2ValuePathCandidate, JsonJoinedStringCandidate, ProtobufBodyDifference,
+    ProtobufBodyDifferenceKind, ProtobufFieldPathCandidate, ProtobufJoinedStringCandidate,
+    ResponseAssertionCaseReport, ResponseBodyAssertionReport, ResponseBodyDifferenceDetail,
+    ResponseBodyJoinedStringCandidate, ResponseBodyUnorderedPathCandidate, ResponseDifference,
     ResponseDifferenceKind, ResponseGatewayProtocol,
 };
 use super::policy::{ResponseBodyCodec, fingerprint, load_replay_policy, uri_path};
@@ -107,9 +109,13 @@ pub(in crate::replay) fn diagnose_response_body(
                     .into_iter()
                     .map(Into::into)
                     .collect(),
-                unordered_joined_string_candidates: Vec::new(),
+                unordered_joined_string_candidates: discovery
+                    .unordered_joined_string_paths
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
                 differences: discovery.differences.into_iter().map(Into::into).collect(),
-                candidates_explain_all_differences: discovery.order_only,
+                candidates_explain_all_differences: discovery.candidates_explain_all_differences,
                 order_only: discovery.order_only,
             })
         }
@@ -440,10 +446,6 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
         );
         let (body_matches, body_diagnosis) = match rule.codec {
             super::policy::ResponseBodyCodec::Protobuf => {
-                ensure!(
-                    rule.unordered_joined_string_paths.is_empty(),
-                    "protobuf response-body rule cannot carry joined-string paths"
-                );
                 let unordered_paths = rule
                     .unordered_paths
                     .iter()
@@ -458,11 +460,26 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
+                let joined_string_paths = rule
+                    .unordered_joined_string_paths
+                    .iter()
+                    .map(|path| match path {
+                        super::policy::ResponseBodyJoinedStringPath::Protobuf(path) => {
+                            Ok(path.clone())
+                        }
+                        super::policy::ResponseBodyJoinedStringPath::Hessian2(_) => {
+                            anyhow::bail!(
+                                "protobuf response-body rule contains a Hessian2 joined-string path"
+                            )
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 report.body_codec = ResponseBodyCodec::Protobuf;
                 let (body_matches, discovery) = protobuf::evaluate_protobuf(
                     expected_body.body(),
                     actual_body.body(),
                     &unordered_paths,
+                    &joined_string_paths,
                 )
                 .context("failed to apply configured protobuf response-body rule")?;
                 (
@@ -477,9 +494,14 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                             .into_iter()
                             .map(Into::into)
                             .collect(),
-                        unordered_joined_string_candidates: Vec::new(),
+                        unordered_joined_string_candidates: discovery
+                            .unordered_joined_string_paths
+                            .into_iter()
+                            .map(Into::into)
+                            .collect(),
                         differences: discovery.differences.into_iter().map(Into::into).collect(),
-                        candidates_explain_all_differences: discovery.order_only,
+                        candidates_explain_all_differences: discovery
+                            .candidates_explain_all_differences,
                         order_only: discovery.order_only,
                     },
                 )
@@ -499,12 +521,26 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
+                let joined_string_paths = rule
+                    .unordered_joined_string_paths
+                    .iter()
+                    .map(|path| match path {
+                        super::policy::ResponseBodyJoinedStringPath::Hessian2(path) => {
+                            Ok(path.clone())
+                        }
+                        super::policy::ResponseBodyJoinedStringPath::Protobuf(_) => {
+                            anyhow::bail!(
+                                "Hessian2 response-body rule contains a protobuf joined-string path"
+                            )
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 report.body_codec = ResponseBodyCodec::Hessian2;
                 let (body_matches, discovery) = hessian2::evaluate_hessian2(
                     expected_body.body(),
                     actual_body.body(),
                     &unordered_paths,
-                    &rule.unordered_joined_string_paths,
+                    &joined_string_paths,
                 )
                 .context("failed to apply configured Hessian2 response-body rule")?;
                 (

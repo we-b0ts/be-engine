@@ -35,7 +35,11 @@ pub(super) fn refresh_background_evidence(
         .iter()
         .map(|case| (case.case_id.clone(), case.case_dir.clone()))
         .collect::<BTreeMap<_, _>>();
-    reclassify_background_dependencies(&config.coordinator_rules, &state.replay_report, &case_dirs)
+    reclassify_background_dependencies(
+        &config.source_traffic_policy,
+        &state.replay_report,
+        &case_dirs,
+    )
 }
 
 pub(super) fn apply_reclassified_case_outcomes(

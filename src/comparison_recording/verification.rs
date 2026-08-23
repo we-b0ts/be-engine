@@ -516,6 +516,7 @@ fn policy_mismatch_rule_ids(
                 .applied_generated_rule_ids
                 .iter()
                 .chain(&report.applied_unordered_rule_ids)
+                .chain(&report.applied_unordered_joined_string_rule_ids)
                 .chain(&report.applied_counter_rule_ids)
                 .chain(&report.applied_body_rule_ids)
         })
@@ -527,6 +528,7 @@ fn policy_mismatch_rule_ids(
                 .unused_applicable_generated_rule_ids
                 .iter()
                 .chain(&report.unused_applicable_unordered_rule_ids)
+                .chain(&report.unused_applicable_unordered_joined_string_rule_ids)
                 .chain(&report.unused_applicable_counter_rule_ids)
                 .chain(&report.unused_applicable_body_rule_ids)
         })

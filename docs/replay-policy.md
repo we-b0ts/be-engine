@@ -344,6 +344,25 @@ traffic-e2e config replay apply response-rule \
   --case-source <exact-finalized-case-source>
 ```
 
+JSON strings that encode a joined unordered collection use the same semantic
+rule with an explicit separator:
+
+```yaml
+response_rules:
+  json:
+    "GET /api/members":
+      unordered_joined_string:
+        - pointer: /member_names
+          separator: ","
+          source_evidence: src/member.rs:member_names joins a Set
+```
+
+The comparator splits both strings, preserves empty elements and duplicate
+counts, and ignores only token order. A reorder-only mismatch produces an
+`unordered_joined_string_candidates` entry containing both the JSON Pointer
+and the matching separator. Apply it with `--kind unordered-joined-string` and
+`--separator`; source evidence remains mandatory.
+
 Both actions accept only the difference kind selected by `--kind`, runner-owned
 assertions using the current policy fingerprint, exact focused-case coverage,
 and complete aggregate evidence. Generated-scalar rules may be planned while
@@ -387,8 +406,9 @@ response_rules:
 ```
 
 Some business fields carry a `Set` that has been joined into a single string
-(for example `"alice,bob,carol"`). Such a field is a Hessian2 string, not a
-list, so `unordered` cannot relax it. Use `unordered_joined_string` instead:
+(for example `"alice,bob,carol"`). Such a field is a scalar string, not a
+list/repeated field, so `unordered` cannot relax it. Use
+`unordered_joined_string` instead:
 the selected string is split on
 `separator` and compared as a multiset (element order is ignored, but
 duplicate counts are preserved, matching the List semantics above).
@@ -396,6 +416,14 @@ duplicate counts are preserved, matching the List semantics above).
 
 ```yaml
 response_rules:
+  protobuf:
+    "MOTAN /rpc/ExampleService-getMembersProto-long-long-095f05367f122cf4":
+      unordered_joined_string:
+        - field_path: [3, 1]
+          display_path: result.member_names
+          field_type: string
+          separator: ","
+          source_evidence: src/cache.rs:member_names joins a Set
   hessian2:
     "MOTAN /rpc/ExampleService-getMembers-long-long-095f05367f122cf4":
       unordered_joined_string:
@@ -405,11 +433,12 @@ response_rules:
           source_evidence: src/cache.rs:white_list joins a Set
 ```
 
-When a Hessian2 body mismatches only on such a joined string, the
-codec-aware comparison report surfaces `unordered_joined_string_candidates`
-with the value path and the separator that makes the two sides compare equal.
-Joined-string paths are Hessian2-only and a given value path may be either an
-`unordered` list or a joined string, but not both.
+When a structured body mismatches only on such a joined string, the codec-aware
+comparison report surfaces `unordered_joined_string_candidates` with the
+codec-specific path and the separator that makes the two sides compare equal.
+Protobuf requires `field_type: string` so length-delimited message/bytes fields
+are never implicitly treated as text. A selected field may be either an
+unordered collection or a joined string, but not both.
 
 Gateway protocol, response component, body envelope, and body codec are
 separate dimensions. Gateway protocol is currently `http`, `motan1`, or
@@ -448,7 +477,7 @@ same field is reorder-only.
 
 The reported paths and successful offline multiset comparison are mechanical
 candidates, not authorization that order is absent from the product contract.
-Every selected protobuf path, Hessian2 list, and Hessian2 joined string must
+Every selected protobuf path, Hessian2 list, and joined string must
 persist its own source citation. Codec-only selection is the sole
 evidence-light step because it enables decoding without ignoring a body value;
 it may remain nonpassing until a later source-proven selector accounts for the
@@ -465,6 +494,11 @@ backend-rewrite rule plan \
   --evidence-id <current-evidence-id> \
   --body-codec protobuf \
   --unordered-path '{"field_path":[3,1,6,3],"display_path":"rule_collection.experiments.groups.white_list","element_type":"string","source_evidence":"src/rule.rs:white_list is a Set"}'
+
+backend-rewrite rule plan \
+  --evidence-id <current-evidence-id> \
+  --body-codec protobuf \
+  --unordered-joined-string-path '{"field_path":[3,1],"display_path":"result.member_names","field_type":"string","separator":",","source_evidence":"src/cache.rs:member_names joins a Set"}'
 
 backend-rewrite rule plan \
   --evidence-id <current-evidence-id> \
@@ -496,13 +530,13 @@ explicitly reviewed `value_path`. Elements, duplicate multiplicity, types,
 unselected values, and binary values remain exact; Hessian2 binary data cannot
 be declared unordered.
 
-For Hessian2 joined-string paths, `value_path` selects a string terminal with
-the same traversal rules as list paths, but the terminal must be a Hessian2
-string. The string is split on `separator` and compared as a multiset, so
-element order is ignored while duplicate multiplicity is preserved. A path
-absent from both bodies is a no-op; selecting a present non-string fails
-closed. Joined-string paths are Hessian2-only and never overlap an `unordered`
-value path on the same field.
+For joined-string paths, JSON uses `pointer`, protobuf uses `field_path` plus
+explicit `field_type: string`, and Hessian2 uses `value_path`. The terminal
+must be a string. It is split on `separator` and compared as a multiset, so
+element order is ignored while empty elements and duplicate multiplicity are
+preserved. A path absent from both bodies is a no-op; selecting a present
+non-string fails closed. Joined-string selectors never overlap an `unordered`
+selector on the same field.
 
 Comparison-only live counter semantics use the `counter` kind under the JSON API:
 

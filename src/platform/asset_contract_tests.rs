@@ -43,7 +43,7 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(MANAGER.contains("comparison-target-network.sh"));
     assert!(MANAGER.contains("comparison-process-outputs.sh"));
     assert!(MANAGER.contains("recorder-runtime.sh"));
-    assert!(MANAGER.contains("TRAFFIC_E2E_COORDINATOR_RULES"));
+    assert!(MANAGER.contains("TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY"));
     assert!(COMPARISON_PROCESS_OUTPUTS.contains("--observation comparison"));
     assert!(COMPARISON_PROCESS_OUTPUTS.contains("completion_reason"));
     assert!(
@@ -51,11 +51,11 @@ fn embedded_platform_manager_is_valid_bash() {
             .contains("--volume \"$TRAFFIC_E2E_RECORDER_CONFIG:/workspace/project.yaml:ro\"")
     );
     assert!(RECORDER_RUNTIME.contains(
-        "--volume \"$TRAFFIC_E2E_COORDINATOR_RULES:/workspace/coordinator-rules.yaml:ro\""
+        "--volume \"$TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY:/workspace/source-traffic-policy.yaml:ro\""
     ));
     assert_eq!(
         RECORDER_RUNTIME
-            .matches("$TRAFFIC_E2E_COORDINATOR_RULES:/workspace/coordinator-rules.yaml:ro")
+            .matches("$TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY:/workspace/source-traffic-policy.yaml:ro")
             .count(),
         1
     );

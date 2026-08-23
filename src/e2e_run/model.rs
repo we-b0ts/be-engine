@@ -85,7 +85,7 @@ pub(super) struct ReplayProjectConfig {
 pub(super) struct RecordingProjectConfig {
     #[serde(default, rename = "rule", skip_serializing)]
     pub _legacy_rule: Option<String>,
-    pub coordinator_rules: PathBuf,
+    pub source_traffic_policy: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,7 +129,7 @@ pub(crate) struct ResolvedProjectConfig {
     pub(crate) replay_startup_timeout: Duration,
     pub(crate) pr_base: String,
     pub(crate) recorder_config: PathBuf,
-    pub(crate) coordinator_rules: PathBuf,
+    pub(crate) source_traffic_policy: PathBuf,
     pub(crate) runner_owned_response_assertions: bool,
 }
 

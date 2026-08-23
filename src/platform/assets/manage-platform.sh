@@ -23,7 +23,7 @@ required_environment=(
     TRAFFIC_E2E_SOURCE_READY_PATH
     TRAFFIC_E2E_SOURCE_READY_STATUS
     TRAFFIC_E2E_RECORDER_CONFIG
-    TRAFFIC_E2E_COORDINATOR_RULES
+    TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY
     TRAFFIC_E2E_REPLAY_POLICY
     TRAFFIC_E2E_PLATFORM_ASSETS
     TRAFFIC_E2E_COMPARISON_PROCESS_OUTPUTS_ENABLED
@@ -158,8 +158,8 @@ fi
     printf 'error: recorder config is missing\n' >&2
     exit 1
 }
-[[ -f "$TRAFFIC_E2E_COORDINATOR_RULES" ]] || {
-    printf 'error: coordinator rules are missing\n' >&2
+[[ -f "$TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY" ]] || {
+    printf 'error: source traffic policy is missing\n' >&2
     exit 1
 }
 [[ -f "$TRAFFIC_E2E_REPLAY_POLICY" ]] || {

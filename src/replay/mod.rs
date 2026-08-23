@@ -106,10 +106,12 @@ pub(crate) use assertion::{
 };
 pub use assertion::{
     Hessian2BodyDifference, Hessian2BodyDifferenceKind, Hessian2JoinedStringCandidate,
-    Hessian2ValuePathCandidate, ProtobufBodyDifference, ProtobufBodyDifferenceKind,
-    ProtobufFieldPathCandidate, ResponseAssertionCaseReport, ResponseAssertionOptions,
-    ResponseBodyAssertionReport, ResponseBodyDifferenceDetail, ResponseBodyUnorderedPathCandidate,
-    ResponseDifference, ResponseDifferenceKind, ResponseGatewayProtocol, assert_recorded_response,
+    Hessian2ValuePathCandidate, JsonJoinedStringCandidate, ProtobufBodyDifference,
+    ProtobufBodyDifferenceKind, ProtobufFieldPathCandidate, ProtobufJoinedStringCandidate,
+    ResponseAssertionCaseReport, ResponseAssertionOptions, ResponseBodyAssertionReport,
+    ResponseBodyDifferenceDetail, ResponseBodyJoinedStringCandidate,
+    ResponseBodyUnorderedPathCandidate, ResponseDifference, ResponseDifferenceKind,
+    ResponseGatewayProtocol, assert_recorded_response,
 };
 pub(crate) use policy::render_validated_replay_policy;
 pub(crate) use policy::response_locations_overlap;
@@ -117,14 +119,15 @@ pub use policy::{
     ComparisonResponseRuleFeedback, ComparisonSourceMatch, ComparisonVerificationPolicy,
     Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath,
     MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MemcachedTimestampRuleReport,
-    ProtobufFieldPath, ProtobufRepeatedElementType, ProtobufUnorderedPath, ReplayPolicyInitOptions,
+    ProtobufFieldPath, ProtobufJoinedStringFieldType, ProtobufJoinedStringPath,
+    ProtobufRepeatedElementType, ProtobufUnorderedPath, ReplayPolicyInitOptions,
     ReplayPolicyInitResult, ReplayPolicyValidationReport, ResponseBodyCodec,
-    ResponseBodyRuleEvidence, ResponseBodyRuleEvidenceKind, ResponseBodyRuleFeedback,
-    ResponseBodyRulePlan, ResponseBodyRuleReport, ResponseBodyRuleVerificationOutcome,
-    ResponseBodyUnorderedPath, ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan,
-    ResponseRuleReport, initialize_replay_policy, plan_comparison_response_rule,
-    plan_memcached_timestamp_rule, plan_response_body_rule, plan_response_rule,
-    validate_replay_policy,
+    ResponseBodyJoinedStringPath, ResponseBodyRuleEvidence, ResponseBodyRuleEvidenceKind,
+    ResponseBodyRuleFeedback, ResponseBodyRulePlan, ResponseBodyRuleReport,
+    ResponseBodyRuleVerificationOutcome, ResponseBodyUnorderedPath, ResponseRuleFeedback,
+    ResponseRuleKind, ResponseRulePlan, ResponseRuleReport, initialize_replay_policy,
+    plan_comparison_response_rule, plan_memcached_timestamp_rule, plan_response_body_rule,
+    plan_response_rule, validate_replay_policy,
 };
 pub use report::aggregate::{
     ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,

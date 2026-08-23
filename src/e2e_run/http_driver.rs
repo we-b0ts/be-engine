@@ -358,7 +358,7 @@ mod tests {
             replay_startup_timeout: Duration::from_secs(1),
             pr_base: "main".to_string(),
             recorder_config: PathBuf::from("project.yaml"),
-            coordinator_rules: PathBuf::from("coordinator-rules.yaml"),
+            source_traffic_policy: PathBuf::from("source-traffic-policy.yaml"),
             runner_owned_response_assertions: true,
         };
 

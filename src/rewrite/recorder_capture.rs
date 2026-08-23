@@ -126,7 +126,7 @@ fn plan_with_capture_requirement(
     let project_config_revision = fingerprint::project_config_revision(target_root)?;
     let traffic_plan = plan_breeze_endpoint_capture(BreezeEndpointCaptureFeedback {
         project_config_path: project_config(target_root),
-        rules_path: coordinator_rules(target_root),
+        rules_path: source_traffic_policy_path(target_root),
         endpoint: options.endpoint.clone(),
         source_revision: source_revision.clone(),
         source_evidence: options.source_evidence.clone(),
@@ -216,7 +216,7 @@ pub(super) fn apply(
     let report = plan.apply()?;
     let current_target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
     let config_revision = fingerprint::project_config_revision(target_root)?;
-    let rules_revision = fingerprint::coordinator_rules_revision(target_root)?;
+    let rules_revision = fingerprint::source_traffic_policy_revision(target_root)?;
     let api = state.api.clone();
     let refresh = state
         .recording_refresh
@@ -224,11 +224,11 @@ pub(super) fn apply(
             applied: Vec::new(),
             dependency_rules: Vec::new(),
             project_config_revision: config_revision.clone(),
-            coordinator_rules_revision: rules_revision.clone(),
+            source_traffic_policy_revision: rules_revision.clone(),
             recording_run_id: None,
         });
     refresh.project_config_revision = config_revision;
-    refresh.coordinator_rules_revision = rules_revision;
+    refresh.source_traffic_policy_revision = rules_revision;
     if !refresh
         .applied
         .iter()
@@ -360,7 +360,7 @@ fn build_plan(
 ) -> Result<BreezeResourceCapturePlan> {
     plan_breeze_endpoint_capture(BreezeEndpointCaptureFeedback {
         project_config_path: project_config(target_root),
-        rules_path: coordinator_rules(target_root),
+        rules_path: source_traffic_policy_path(target_root),
         endpoint: record.endpoint.clone(),
         source_revision: record.source_revision.clone(),
         source_evidence: record.source_evidence.clone(),
@@ -371,8 +371,8 @@ fn project_config(target_root: &Path) -> PathBuf {
     target_root.join(".traffic-e2e/project.yaml")
 }
 
-fn coordinator_rules(target_root: &Path) -> PathBuf {
-    target_root.join(".traffic-e2e/coordinator-rules.yaml")
+fn source_traffic_policy_path(target_root: &Path) -> PathBuf {
+    target_root.join(".traffic-e2e/source-traffic-policy.yaml")
 }
 
 pub(super) fn pending_plan_action(
@@ -510,7 +510,7 @@ mod tests {
                 source_evidence: "Cache.java:42".to_string(),
             }],
             project_config_revision: "fnv1a64:config".to_string(),
-            coordinator_rules_revision: "fnv1a64:rules".to_string(),
+            source_traffic_policy_revision: "fnv1a64:rules".to_string(),
             recording_run_id: None,
         });
         state.api_inventory.push(RewriteApiProgress {
@@ -634,7 +634,9 @@ mod tests {
         let evidence_id = evidence::query(target.path(), &state, &query_id)
             .unwrap()
             .evidence_id;
-        let config = target.path().join(".traffic-e2e/coordinator-rules.yaml");
+        let config = target
+            .path()
+            .join(".traffic-e2e/source-traffic-policy.yaml");
         let original = fs::read_to_string(&config).unwrap();
 
         let planned = plan(

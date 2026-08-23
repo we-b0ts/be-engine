@@ -84,7 +84,7 @@ fn value<'a>(mapping: &'a Mapping, key: &str) -> Option<&'a Value> {
 fn reject_key(mapping: &Mapping, key: &str, qualified: &str) -> Result<()> {
     ensure!(
         !mapping.contains_key(Value::String(key.to_string())),
-        "{qualified} is coordinator-managed and must be declared in coordinator-rules.yaml"
+        "{qualified} is coordinator-managed and must be declared in source-traffic-policy.yaml"
     );
     Ok(())
 }

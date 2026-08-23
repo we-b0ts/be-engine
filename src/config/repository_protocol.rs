@@ -246,11 +246,11 @@ mod tests {
         .unwrap();
         fs::write(
             root.join("project.yaml"),
-            "version: 14\nproject:\n  recording:\n    coordinator_rules: coordinator-rules.yaml\nrecorder:\n  http_gateway:\n    ready:\n      enabled: true\n      path: /healthz\n      success_status: 404\n    rules:\n    - name: http-rule\n      methods: [GET]\n      path_prefixes: [/]\n  motan_gateway:\n    enabled: false\n    listen: 127.0.0.1:18081\n    matched_upstream: 127.0.0.1:8080\n",
+            "version: 14\nproject:\n  recording:\n    source_traffic_policy: source-traffic-policy.yaml\nrecorder:\n  http_gateway:\n    ready:\n      enabled: true\n      path: /healthz\n      success_status: 404\n    rules:\n    - name: http-rule\n      methods: [GET]\n      path_prefixes: [/]\n  motan_gateway:\n    enabled: false\n    listen: 127.0.0.1:18081\n    matched_upstream: 127.0.0.1:8080\n",
         )
         .unwrap();
         fs::write(
-            root.join("coordinator-rules.yaml"),
+            root.join("source-traffic-policy.yaml"),
             "version: 2\nhttp:\n  case_path_patterns: []\n  allowed_unused_http_hosts: []\nbreeze_capture: []\nprocess_owned_dependencies: []\n",
         )
         .unwrap();

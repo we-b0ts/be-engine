@@ -8,27 +8,27 @@ use serde::{Deserialize, Serialize};
 use super::process_owned_dependencies::{self, BackgroundDependencyRuleConfig};
 use super::{AppConfig, DnsBypassStrategyConfig};
 
-pub const COORDINATOR_RULES_VERSION: u32 = 2;
-pub const COORDINATOR_RULES_FILE: &str = "coordinator-rules.yaml";
+pub const SOURCE_TRAFFIC_POLICY_VERSION: u32 = 2;
+pub const SOURCE_TRAFFIC_POLICY_FILE: &str = "source-traffic-policy.yaml";
 
 const MANAGED_HEADER: &str =
     "# Managed by the backend-rewrite coordinator. Do not edit manually.\n";
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct CoordinatorRulesConfig {
+pub struct SourceTrafficPolicyConfig {
     pub version: u32,
     #[serde(default)]
-    pub http: CoordinatorHttpConfig,
+    pub http: SourceTrafficHttpPolicyConfig,
     #[serde(default)]
-    pub breeze_capture: Vec<CoordinatorBreezeCaptureConfig>,
+    pub breeze_capture: Vec<SourceTrafficBreezeCaptureConfig>,
     #[serde(default)]
     pub process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct CoordinatorHttpConfig {
+pub struct SourceTrafficHttpPolicyConfig {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_revision: String,
     #[serde(default)]
@@ -38,25 +38,25 @@ pub struct CoordinatorHttpConfig {
 }
 
 #[derive(Debug, Deserialize)]
-struct CoordinatorRulesVersion {
+struct SourceTrafficPolicyVersion {
     version: u32,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LegacyCoordinatorRulesConfig {
+struct LegacySourceTrafficPolicyConfig {
     version: u32,
     #[serde(default)]
-    http: Vec<LegacyCoordinatorHttpRuleConfig>,
+    http: Vec<LegacySourceTrafficHttpPolicyRuleConfig>,
     #[serde(default)]
-    breeze_capture: Vec<CoordinatorBreezeCaptureConfig>,
+    breeze_capture: Vec<SourceTrafficBreezeCaptureConfig>,
     #[serde(default)]
     process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LegacyCoordinatorHttpRuleConfig {
+struct LegacySourceTrafficHttpPolicyRuleConfig {
     #[serde(rename = "name")]
     _name: String,
     #[serde(default)]
@@ -69,18 +69,18 @@ struct LegacyCoordinatorHttpRuleConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct CoordinatorBreezeCaptureConfig {
+pub struct SourceTrafficBreezeCaptureConfig {
     pub snapshot_dir: PathBuf,
     #[serde(default)]
     pub capture_resources: Vec<String>,
 }
 
-impl CoordinatorRulesConfig {
+impl SourceTrafficPolicyConfig {
     #[cfg(test)]
     pub fn empty() -> Self {
         Self {
-            version: COORDINATOR_RULES_VERSION,
-            http: CoordinatorHttpConfig::default(),
+            version: SOURCE_TRAFFIC_POLICY_VERSION,
+            http: SourceTrafficHttpPolicyConfig::default(),
             breeze_capture: Vec::new(),
             process_owned_dependencies: Vec::new(),
         }
@@ -88,8 +88,8 @@ impl CoordinatorRulesConfig {
 
     pub fn repository_defaults() -> Self {
         Self {
-            version: COORDINATOR_RULES_VERSION,
-            http: CoordinatorHttpConfig::default(),
+            version: SOURCE_TRAFFIC_POLICY_VERSION,
+            http: SourceTrafficHttpPolicyConfig::default(),
             breeze_capture: Vec::new(),
             process_owned_dependencies: vec![BackgroundDependencyRuleConfig::Http {
                 name: "breeze_vintage".to_string(),
@@ -113,39 +113,40 @@ impl CoordinatorRulesConfig {
         let path = path.as_ref();
         require_regular_file(path)?;
         let raw = fs::read_to_string(path)
-            .with_context(|| format!("failed to read coordinator rules {}", path.display()))?;
+            .with_context(|| format!("failed to read source traffic policy {}", path.display()))?;
         Self::parse(&raw, path)
     }
 
     pub fn parse(raw: &str, path: &Path) -> Result<Self> {
-        let version: CoordinatorRulesVersion = serde_yaml::from_str(raw)
-            .with_context(|| format!("failed to parse coordinator rules {}", path.display()))?;
+        let version: SourceTrafficPolicyVersion = serde_yaml::from_str(raw)
+            .with_context(|| format!("failed to parse source traffic policy {}", path.display()))?;
         let config = match version.version {
             1 => {
-                let legacy: LegacyCoordinatorRulesConfig =
-                    serde_yaml::from_str(raw).with_context(|| {
-                        format!("failed to parse coordinator rules {}", path.display())
+                let legacy: LegacySourceTrafficPolicyConfig = serde_yaml::from_str(raw)
+                    .with_context(|| {
+                        format!("failed to parse source traffic policy {}", path.display())
                     })?;
                 Self::from_legacy(legacy)
             }
-            COORDINATOR_RULES_VERSION => serde_yaml::from_str(raw)
-                .with_context(|| format!("failed to parse coordinator rules {}", path.display()))?,
+            SOURCE_TRAFFIC_POLICY_VERSION => serde_yaml::from_str(raw).with_context(|| {
+                format!("failed to parse source traffic policy {}", path.display())
+            })?,
             unsupported => anyhow::bail!(
-                "unsupported coordinator rules version {unsupported}; expected 1 or {COORDINATOR_RULES_VERSION}"
+                "unsupported source traffic policy version {unsupported}; expected 1 or {SOURCE_TRAFFIC_POLICY_VERSION}"
             ),
         };
         config
             .validate()
-            .with_context(|| format!("invalid coordinator rules {}", path.display()))?;
+            .with_context(|| format!("invalid source traffic policy {}", path.display()))?;
         Ok(config)
     }
 
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.version == COORDINATOR_RULES_VERSION,
-            "unsupported coordinator rules version {}; expected {}",
+            self.version == SOURCE_TRAFFIC_POLICY_VERSION,
+            "unsupported source traffic policy version {}; expected {}",
             self.version,
-            COORDINATOR_RULES_VERSION
+            SOURCE_TRAFFIC_POLICY_VERSION
         );
         let mut snapshots = BTreeSet::new();
         for capture in &self.breeze_capture {
@@ -183,13 +184,13 @@ impl CoordinatorRulesConfig {
                 });
             let strategy = matches.next().with_context(|| {
                 format!(
-                    "coordinator Breeze capture {:?} has no matching recorder strategy",
+                    "source traffic Breeze capture {:?} has no matching recorder strategy",
                     overlay.snapshot_dir
                 )
             })?;
             ensure!(
                 matches.next().is_none(),
-                "coordinator Breeze capture {:?} matches multiple recorder strategies",
+                "source traffic Breeze capture {:?} matches multiple recorder strategies",
                 overlay.snapshot_dir
             );
             let DnsBypassStrategyConfig::Breeze {
@@ -201,7 +202,7 @@ impl CoordinatorRulesConfig {
         Ok(())
     }
 
-    fn from_legacy(legacy: LegacyCoordinatorRulesConfig) -> Self {
+    fn from_legacy(legacy: LegacySourceTrafficPolicyConfig) -> Self {
         debug_assert_eq!(legacy.version, 1);
         let source_revisions = legacy
             .http
@@ -233,8 +234,8 @@ impl CoordinatorRulesConfig {
             .into_iter()
             .collect();
         Self {
-            version: COORDINATOR_RULES_VERSION,
-            http: CoordinatorHttpConfig {
+            version: SOURCE_TRAFFIC_POLICY_VERSION,
+            http: SourceTrafficHttpPolicyConfig {
                 source_revision,
                 case_path_patterns,
                 allowed_unused_http_hosts,
@@ -248,14 +249,14 @@ impl CoordinatorRulesConfig {
 pub fn resolve_from_project_config(project_config: &Path, relative: &Path) -> Result<PathBuf> {
     ensure!(
         !relative.as_os_str().is_empty() && relative.is_relative(),
-        "project.recording.coordinator_rules must be a non-empty path relative to project.yaml"
+        "project.recording.source_traffic_policy must be a non-empty path relative to project.yaml"
     );
     ensure!(
         relative.components().all(|component| matches!(
             component,
             std::path::Component::Normal(_) | std::path::Component::CurDir
         )),
-        "project.recording.coordinator_rules must stay within the project configuration directory"
+        "project.recording.source_traffic_policy must stay within the project configuration directory"
     );
     let parent = project_config
         .parent()
@@ -265,10 +266,10 @@ pub fn resolve_from_project_config(project_config: &Path, relative: &Path) -> Re
 
 fn require_regular_file(path: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("failed to inspect coordinator rules {}", path.display()))?;
+        .with_context(|| format!("failed to inspect source traffic policy {}", path.display()))?;
     ensure!(
         metadata.is_file() && !metadata.file_type().is_symlink(),
-        "coordinator rules must be a regular file and not a symlink: {}",
+        "source traffic policy must be a regular file and not a symlink: {}",
         path.display()
     );
     Ok(())
@@ -279,12 +280,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_rules_round_trip_with_managed_header() {
-        let rendered = CoordinatorRulesConfig::empty().render().unwrap();
+    fn empty_policy_round_trips_with_managed_header() {
+        let rendered = SourceTrafficPolicyConfig::empty().render().unwrap();
         assert!(rendered.starts_with(MANAGED_HEADER));
         let parsed =
-            CoordinatorRulesConfig::parse(&rendered, Path::new("coordinator-rules.yaml")).unwrap();
-        assert_eq!(parsed, CoordinatorRulesConfig::empty());
+            SourceTrafficPolicyConfig::parse(&rendered, Path::new("source-traffic-policy.yaml"))
+                .unwrap();
+        assert_eq!(parsed, SourceTrafficPolicyConfig::empty());
     }
 
     #[test]
@@ -299,20 +301,20 @@ mod tests {
 
     #[test]
     fn repository_defaults_use_global_http_policy() {
-        let rules = CoordinatorRulesConfig::repository_defaults();
-        assert_eq!(rules.http, CoordinatorHttpConfig::default());
+        let rules = SourceTrafficPolicyConfig::repository_defaults();
+        assert_eq!(rules.http, SourceTrafficHttpPolicyConfig::default());
         rules.validate().unwrap();
     }
 
     #[test]
     fn legacy_named_http_rules_merge_into_global_policy() {
-        let parsed = CoordinatorRulesConfig::parse(
+        let parsed = SourceTrafficPolicyConfig::parse(
             "version: 1\nhttp:\n- name: first\n  source_revision: abc\n  case_path_patterns: [/a/*]\n  allowed_unused_http_hosts: [a.example]\n- name: second\n  source_revision: abc\n  case_path_patterns: [/b/*]\n  allowed_unused_http_hosts: [b.example]\nbreeze_capture: []\nprocess_owned_dependencies: []\n",
-            Path::new("coordinator-rules.yaml"),
+            Path::new("source-traffic-policy.yaml"),
         )
         .unwrap();
 
-        assert_eq!(parsed.version, COORDINATOR_RULES_VERSION);
+        assert_eq!(parsed.version, SOURCE_TRAFFIC_POLICY_VERSION);
         assert_eq!(parsed.http.source_revision, "abc");
         assert_eq!(parsed.http.case_path_patterns, ["/a/*", "/b/*"]);
         assert_eq!(

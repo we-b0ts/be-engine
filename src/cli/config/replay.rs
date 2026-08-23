@@ -70,6 +70,8 @@ struct ResponseRuleArgs {
         required_if_eq("kind", "random")
     )]
     target_example: Option<String>,
+    #[arg(long, required_if_eq("kind", "unordered-joined-string"))]
+    separator: Option<String>,
     /// Exact finalized replay case source; runner-owned evidence is resolved internally.
     #[arg(long, conflicts_with = "comparison_run")]
     case_source: Option<PathBuf>,
@@ -85,6 +87,7 @@ enum ResponseRuleKindArg {
     Uuid,
     Random,
     Unordered,
+    UnorderedJoinedString,
 }
 
 impl From<ResponseRuleKindArg> for ResponseRuleKind {
@@ -95,6 +98,7 @@ impl From<ResponseRuleKindArg> for ResponseRuleKind {
             ResponseRuleKindArg::Uuid => Self::Uuid,
             ResponseRuleKindArg::Random => Self::Random,
             ResponseRuleKindArg::Unordered => Self::Unordered,
+            ResponseRuleKindArg::UnorderedJoinedString => Self::UnorderedJoinedString,
         }
     }
 }
@@ -139,6 +143,7 @@ fn response_rule_plan(
             source_evidence: Some(args.source_evidence),
             source_example: args.source_example,
             target_example: args.target_example,
+            separator: args.separator,
             comparison_report: comparison_run.join("comparison-report.json"),
         })
     } else {
@@ -160,6 +165,7 @@ fn response_rule_plan(
             source_evidence: Some(args.source_evidence),
             source_example: args.source_example,
             target_example: args.target_example,
+            separator: args.separator,
             assertion_report: evidence.assertions,
             aggregate_report: evidence.aggregate,
         })
@@ -231,6 +237,35 @@ mod tests {
                 "src/api.rs:items is a Set",
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn joined_string_rule_requires_a_separator() {
+        let args = [
+            "test",
+            "plan",
+            "response-rule",
+            "--kind",
+            "unordered-joined-string",
+            "--api",
+            "GET /api",
+            "--json-pointer",
+            "/member_names",
+            "--source-evidence",
+            "src/api.rs:member_names joins a Set",
+            "--case-source",
+            "/cases/run",
+        ];
+        assert!(TestCli::try_parse_from(args).is_err());
+
+        assert!(
+            TestCli::try_parse_from(
+                args.into_iter()
+                    .chain(["--separator", ","])
+                    .collect::<Vec<_>>()
+            )
+            .is_ok()
         );
     }
 }

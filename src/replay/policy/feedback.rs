@@ -20,9 +20,9 @@ use self::evidence::{
 use super::config::{LoadedReplayPolicy, fingerprint, load_replay_policy};
 use super::pattern::path_pattern_matches;
 use super::response::{
-    CounterResponseRule, GeneratedResponseRule, JsonUnorderedResponseRule, ResponseRuleKind,
-    parse_api, response_locations_overlap, response_rule_id, validate_json_pointer,
-    validate_response_rules,
+    CounterResponseRule, GeneratedResponseRule, JsonJoinedStringResponseRule,
+    JsonUnorderedResponseRule, ResponseRuleKind, parse_api, response_locations_overlap,
+    response_rule_id, validate_json_pointer, validate_response_rules,
 };
 use crate::config::edit::write_atomic;
 
@@ -80,6 +80,7 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
         feedback.source_evidence,
         feedback.source_example,
         feedback.target_example,
+        feedback.separator,
     )?;
     let prepared = prepare_response_rule(
         &feedback.policy_path,
@@ -133,6 +134,7 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
         &feedback.api,
         &assertions.cases,
         true,
+        justification.separator.as_deref(),
     )?;
     build_response_rule_plan(
         feedback.policy_path,
@@ -198,6 +200,7 @@ pub fn plan_comparison_response_rule(
         feedback.source_evidence,
         feedback.source_example,
         feedback.target_example,
+        feedback.separator,
     )?;
     let prepared = prepare_response_rule(
         &feedback.policy_path,
@@ -243,6 +246,7 @@ pub fn plan_comparison_response_rule(
         &feedback.api,
         &comparison.cases,
         false,
+        justification.separator.as_deref(),
     )?;
     build_response_rule_plan(
         feedback.policy_path,
@@ -323,6 +327,7 @@ fn validate_response_evidence(
     api: &str,
     cases: &[AssertionCaseEvidence],
     require_all_cases: bool,
+    separator: Option<&str>,
 ) -> Result<ResponseEvidenceValidation> {
     let matching = cases
         .iter()
@@ -398,7 +403,7 @@ fn validate_response_evidence(
                 .iter()
                 .any(|difference| response_locations_overlap(pointer, &difference.pointer));
             ensure!(
-                response.candidates(kind).contains(pointer)
+                response.has_candidate(kind, pointer, separator)
                     || response
                         .applied_rule_ids(kind)
                         .contains(&response_rule_id(kind, api, pointer))
@@ -415,7 +420,13 @@ fn validate_response_evidence(
     ensure!(
         observed_difference
             || prepared.requested.iter().all(|pointer| {
-                response_rule_exists(&prepared.loaded.document.response_rules, kind, api, pointer)
+                response_rule_exists(
+                    &prepared.loaded.document.response_rules,
+                    kind,
+                    api,
+                    pointer,
+                    separator,
+                )
             }),
         "response evidence contains no differing field selected by the proposed rule"
     );
@@ -452,6 +463,11 @@ fn build_response_rule_plan(
             .collect::<BTreeSet<_>>(),
         ResponseRuleKind::Unordered => api_rules
             .unordered
+            .iter()
+            .map(|field| field.pointer.clone())
+            .collect::<BTreeSet<_>>(),
+        ResponseRuleKind::UnorderedJoinedString => api_rules
+            .unordered_joined_string
             .iter()
             .map(|field| field.pointer.clone())
             .collect::<BTreeSet<_>>(),
@@ -500,6 +516,28 @@ fn build_response_rule_plan(
                         .source_evidence
                         .clone()
                         .expect("unordered justification requires source evidence"),
+                };
+                if let Some(existing) = fields.iter_mut().find(|field| field.pointer == *pointer) {
+                    *existing = proposed;
+                } else {
+                    fields.push(proposed);
+                }
+            }
+            fields.sort_by(|left, right| left.pointer.cmp(&right.pointer));
+        }
+        ResponseRuleKind::UnorderedJoinedString => {
+            let fields = &mut api_rules.unordered_joined_string;
+            for pointer in &prepared.requested {
+                let proposed = JsonJoinedStringResponseRule {
+                    pointer: pointer.clone(),
+                    separator: justification
+                        .separator
+                        .clone()
+                        .expect("joined-string justification requires a separator"),
+                    source_evidence: justification
+                        .source_evidence
+                        .clone()
+                        .expect("joined-string justification requires source evidence"),
                 };
                 if let Some(existing) = fields.iter_mut().find(|field| field.pointer == *pointer) {
                     *existing = proposed;
@@ -614,6 +652,7 @@ fn build_response_rule_plan(
             source_evidence: justification.source_evidence,
             source_example: justification.source_example,
             target_example: justification.target_example,
+            separator: justification.separator,
             matching_cases: response_evidence.matching_cases,
             selected_difference_cases: response_evidence.selected_difference_cases,
             unselected_difference_pointers: response_evidence.unselected_difference_pointers,

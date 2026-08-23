@@ -1,7 +1,7 @@
 use anyhow::{Result, ensure};
 
 use super::super::super::response::{
-    Hessian2JoinedStringPath, ResponseBodyCodec, ResponseBodyUnorderedPath,
+    ResponseBodyCodec, ResponseBodyJoinedStringPath, ResponseBodyUnorderedPath,
 };
 use crate::replay::{is_hessian2_body, is_protobuf_body};
 
@@ -42,14 +42,10 @@ pub(super) fn compare_response_body(
     actual: &[u8],
     codec: ResponseBodyCodec,
     unordered_paths: &[ResponseBodyUnorderedPath],
-    joined_string_paths: &[Hessian2JoinedStringPath],
+    joined_string_paths: &[ResponseBodyJoinedStringPath],
 ) -> Result<bool> {
     match codec {
         ResponseBodyCodec::Protobuf => {
-            ensure!(
-                joined_string_paths.is_empty(),
-                "protobuf rule cannot carry joined-string paths"
-            );
             let paths = unordered_paths
                 .iter()
                 .map(|path| match path {
@@ -59,7 +55,16 @@ pub(super) fn compare_response_body(
                     }
                 })
                 .collect::<Result<Vec<_>>>()?;
-            crate::replay::assertion::protobuf::compare_protobuf(expected, actual, &paths)
+            let joined = joined_string_paths
+                .iter()
+                .map(|path| match path {
+                    ResponseBodyJoinedStringPath::Protobuf(path) => Ok(path.clone()),
+                    ResponseBodyJoinedStringPath::Hessian2(_) => {
+                        anyhow::bail!("protobuf rule contains a Hessian2 joined-string path")
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            crate::replay::assertion::protobuf::compare_protobuf(expected, actual, &paths, &joined)
         }
         ResponseBodyCodec::Hessian2 => {
             let paths = unordered_paths
@@ -71,12 +76,16 @@ pub(super) fn compare_response_body(
                     }
                 })
                 .collect::<Result<Vec<_>>>()?;
-            crate::replay::assertion::hessian2::compare_hessian2(
-                expected,
-                actual,
-                &paths,
-                joined_string_paths,
-            )
+            let joined = joined_string_paths
+                .iter()
+                .map(|path| match path {
+                    ResponseBodyJoinedStringPath::Hessian2(path) => Ok(path.clone()),
+                    ResponseBodyJoinedStringPath::Protobuf(_) => {
+                        anyhow::bail!("Hessian2 rule contains a protobuf joined-string path")
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            crate::replay::assertion::hessian2::compare_hessian2(expected, actual, &paths, &joined)
         }
         codec => anyhow::bail!("unsupported structured response body codec {codec:?}"),
     }

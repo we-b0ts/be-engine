@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use super::*;
-use crate::config::{BackgroundDependencyRuleConfig, CoordinatorRulesConfig};
+use crate::config::{BackgroundDependencyRuleConfig, SourceTrafficPolicyConfig};
 
 const REVISION: &str = "0123456789abcdef";
 const EVIDENCE: &str =
@@ -17,10 +17,14 @@ struct Fixture {
 impl Fixture {
     fn new(key: &str) -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let config = temp.path().join("coordinator-rules.yaml");
+        let config = temp.path().join("source-traffic-policy.yaml");
         let replay_report = temp.path().join("replay-report.json");
         let dependencies = temp.path().join("dependencies.jsonl");
-        fs::write(&config, CoordinatorRulesConfig::empty().render().unwrap()).unwrap();
+        fs::write(
+            &config,
+            SourceTrafficPolicyConfig::empty().render().unwrap(),
+        )
+        .unwrap();
         fs::write(
             &dependencies,
             format!(
@@ -119,7 +123,7 @@ fn plan_and_apply_persist_ports_without_redis_domains() {
     assert!(raw.contains("command: ZCOUNT"));
     assert!(!raw.contains("rs20917"));
 
-    let config = CoordinatorRulesConfig::load(&fixture.config).unwrap();
+    let config = SourceTrafficPolicyConfig::load(&fixture.config).unwrap();
     assert!(matches!(
         &config.process_owned_dependencies[0],
         BackgroundDependencyRuleConfig::Redis { ports, key_prefix, key_suffix, .. }
@@ -133,7 +137,7 @@ fn plan_and_apply_persist_ports_without_redis_domains() {
     let expanded = plan_redis_background_dependency(expanded).unwrap();
     assert!(expanded.report().changed);
     expanded.apply().unwrap();
-    let config = CoordinatorRulesConfig::load(&fixture.config).unwrap();
+    let config = SourceTrafficPolicyConfig::load(&fixture.config).unwrap();
     assert!(matches!(
         &config.process_owned_dependencies[0],
         BackgroundDependencyRuleConfig::Redis { ports, .. }
@@ -198,7 +202,7 @@ fn redis_get_requires_every_exact_key_in_unused_case_evidence() {
     let fixture = Fixture::new("unrelated-case-key");
     fs::write(
         &fixture.config,
-        CoordinatorRulesConfig::empty().render().unwrap(),
+        SourceTrafficPolicyConfig::empty().render().unwrap(),
     )
     .unwrap();
     let keys = ["cache:init:a", "cache:init:b"];
@@ -265,7 +269,7 @@ fn redis_get_requires_every_exact_key_in_unused_case_evidence() {
     );
 
     plan.apply().unwrap();
-    let config = CoordinatorRulesConfig::load(&fixture.config).unwrap();
+    let config = SourceTrafficPolicyConfig::load(&fixture.config).unwrap();
     assert!(matches!(
         &config.process_owned_dependencies[0],
         BackgroundDependencyRuleConfig::Redis {
@@ -280,10 +284,14 @@ fn redis_get_requires_every_exact_key_in_unused_case_evidence() {
 #[test]
 fn plans_bootstrap_hget_from_global_evidence_with_compact_patterns() {
     let temp = tempfile::tempdir().unwrap();
-    let config = temp.path().join("coordinator-rules.yaml");
+    let config = temp.path().join("source-traffic-policy.yaml");
     let replay_report = temp.path().join("replay-report.json");
     let global = temp.path().join("global-dependencies.jsonl");
-    fs::write(&config, CoordinatorRulesConfig::empty().render().unwrap()).unwrap();
+    fs::write(
+        &config,
+        SourceTrafficPolicyConfig::empty().render().unwrap(),
+    )
+    .unwrap();
     let exchanges = ["exp:matchlist:123", "traffic-result"]
         .map(|key| {
             json!({
@@ -343,7 +351,7 @@ fn plans_bootstrap_hget_from_global_evidence_with_compact_patterns() {
     assert_eq!(plan.report().matched_unused_exchanges, 2);
     assert!(plan.report().matched_case_ids.is_empty());
     plan.apply().unwrap();
-    let config = CoordinatorRulesConfig::load(&config).unwrap();
+    let config = SourceTrafficPolicyConfig::load(&config).unwrap();
     assert!(matches!(
         &config.process_owned_dependencies[0],
         BackgroundDependencyRuleConfig::Redis {
@@ -361,10 +369,10 @@ fn plans_bootstrap_hget_from_global_evidence_with_compact_patterns() {
 #[test]
 fn hash_read_plans_merge_keys_and_patterns_into_compatible_existing_rules() {
     let temp = tempfile::tempdir().unwrap();
-    let config = temp.path().join("coordinator-rules.yaml");
+    let config = temp.path().join("source-traffic-policy.yaml");
     let replay_report = temp.path().join("replay-report.json");
     let global = temp.path().join("global-dependencies.jsonl");
-    let mut rules = CoordinatorRulesConfig::empty();
+    let mut rules = SourceTrafficPolicyConfig::empty();
     for (name, command, fields) in [
         ("abtest_bootstrap_hget_version", "HGET", vec!["version"]),
         (
@@ -478,7 +486,7 @@ fn hash_read_plans_merge_keys_and_patterns_into_compatible_existing_rules() {
     );
     hmget_plan.apply().unwrap();
 
-    let config = CoordinatorRulesConfig::load(&config).unwrap();
+    let config = SourceTrafficPolicyConfig::load(&config).unwrap();
     assert_eq!(config.process_owned_dependencies.len(), 2);
     for rule in &config.process_owned_dependencies {
         let BackgroundDependencyRuleConfig::Redis {
@@ -523,7 +531,7 @@ fn scard_and_hgetall_plan_from_exact_key_unused_case_evidence() {
         let fixture = Fixture::new("unrelated-case-key");
         fs::write(
             &fixture.config,
-            CoordinatorRulesConfig::empty().render().unwrap(),
+            SourceTrafficPolicyConfig::empty().render().unwrap(),
         )
         .unwrap();
         fs::write(
@@ -570,7 +578,7 @@ fn scard_and_hgetall_plan_from_exact_key_unused_case_evidence() {
         assert_eq!(plan.report().matched_unused_exchanges, 1);
         plan.apply().unwrap();
 
-        let rules = CoordinatorRulesConfig::load(&fixture.config).unwrap();
+        let rules = SourceTrafficPolicyConfig::load(&fixture.config).unwrap();
         assert!(rules.process_owned_dependencies.iter().any(|rule| matches!(
             rule,
             BackgroundDependencyRuleConfig::Redis {

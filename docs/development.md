@@ -753,7 +753,7 @@ runner-owned generated-scalar and unordered response fields, and dirty-evidence
 behavior.
 
 Coordinator-owned host exceptions for API-independent process-level tasks live
-in the target repository's `.traffic-e2e/coordinator-rules.yaml`, not
+in the target repository's `.traffic-e2e/source-traffic-policy.yaml`, not
 `.traffic-e2e/project.yaml` or `.traffic-e2e/verification.yaml`. Apply an add-only host after source inspection
 proves that all traffic to that host belongs to a task that is unrelated to API
 handlers:
@@ -764,10 +764,10 @@ traffic-e2e config recorder apply allowed-unused-http-hosts \
   --host cs.aliyuncs.com
 ```
 
-The tool updates the global HTTP policy in the wholly coordinator-managed rules
-document. Apply replans against current evidence and is add-only, sorted,
-deduplicated, atomic, and safe against concurrent changes to either config
-document. One host applies to every HTTP case, independent of which recording
+The tool updates the global HTTP policy in the wholly coordinator-managed
+source traffic policy document. Apply replans against current evidence and is
+add-only, sorted, deduplicated, atomic, and safe against concurrent changes to
+either config document. One host applies to every HTTP case, independent of which recording
 rule or active API window happened to capture the process-level task.
 
 When a response-driving source hostname is absent from dependency evidence but
@@ -967,7 +967,7 @@ traffic-e2e config recorder apply case-path-patterns \
 ```
 
 The command updates the global HTTP policy, sorts and deduplicates patterns,
-validates the complete recorder config, and replaces the coordinator rules file
+validates the complete recorder config, and replaces the source traffic policy file
 atomically. Every authority mode is add-only: a full case source or full replay
 does not authorize deleting patterns that were not observed.
 
@@ -998,7 +998,7 @@ To narrow one recording invocation, repeat
 selectors are run-local and intersect the configured HTTP rules. They are
 persisted in the run summary and used as the selected cases' `api_pattern`, but
 never rewrite `.traffic-e2e/project.yaml` or
-`.traffic-e2e/coordinator-rules.yaml`; no plan/apply workflow is needed for a temporary
+`.traffic-e2e/source-traffic-policy.yaml`; no plan/apply workflow is needed for a temporary
 recording scope. Use `--per-api-case-limit N` when the same positive run-local case
 limit must apply to every selected API. Explicitly selected runs finalize when
 all selectors reach `N`; runs without selectors continue for the full duration.
@@ -1318,9 +1318,9 @@ an initialization port argument. Change a non-standard native endpoint under
 containers need only be inspectable, not running.
 
 The command atomically generates version-14 `.traffic-e2e/project.yaml`,
-`.traffic-e2e/coordinator-rules.yaml`, and `.traffic-e2e/verification.yaml`.
+`.traffic-e2e/source-traffic-policy.yaml`, and `.traffic-e2e/verification.yaml`.
 `project.yaml` combines project settings with the static recorder settings;
-`coordinator-rules.yaml` is wholly AI/coordinator managed. Project settings
+`source-traffic-policy.yaml` is wholly AI/coordinator managed. Project settings
 have explicit source, optional Breeze, target, replay, recording, delivery,
 and state sections. A typical
 target section is:
@@ -1646,7 +1646,7 @@ Intermediate attempts do not require Git commits for progress. After every API
 is verified, the rewrite coordinator synchronizes the final public
 `progress.yaml` snapshot and returns
 `input_required/verification_progress_commit_required` until every dirty,
-fixed coordinator-managed delivery file is committed: `coordinator-rules.yaml`,
+coordinator-managed delivery file is committed: `source-traffic-policy.yaml`,
 `verification.yaml`, and `progress.yaml`. The action lists only the dirty
 paths. A reset at that gate is reconstructed from the local ledger and cannot
 make terminal completion available.

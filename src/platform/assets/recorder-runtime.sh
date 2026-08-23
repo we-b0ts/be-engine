@@ -2,7 +2,7 @@
 
 recorder_config_mounts=(
     --volume "$TRAFFIC_E2E_RECORDER_CONFIG:/workspace/project.yaml:ro"
-    --volume "$TRAFFIC_E2E_COORDINATOR_RULES:/workspace/coordinator-rules.yaml:ro"
+    --volume "$TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY:/workspace/source-traffic-policy.yaml:ro"
 )
 
 report_recorder_startup_failure() {

@@ -8,7 +8,7 @@ use crate::verification_progress::{self, VerificationStage};
 
 const PUBLIC_PROGRESS: &str = ".traffic-e2e/progress.yaml";
 const MANAGED_DELIVERY_PATHS: &[&str] = &[
-    ".traffic-e2e/coordinator-rules.yaml",
+    ".traffic-e2e/source-traffic-policy.yaml",
     ".traffic-e2e/verification.yaml",
     PUBLIC_PROGRESS,
 ];

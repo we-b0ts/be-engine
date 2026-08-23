@@ -474,11 +474,11 @@ mod tests {
         let recorder_config = directory.path().join("project.yaml");
         std::fs::write(
             &recorder_config,
-            "version: 14\nproject:\n  recording:\n    coordinator_rules: coordinator-rules.yaml\nrecorder:\n  dns_mock:\n    listen: 127.0.0.153:15353\n  tcp_gateway:\n    listen: 127.0.0.1:15001\n  udp_gateway:\n    listen: 127.0.0.1:15002\n",
+            "version: 14\nproject:\n  recording:\n    source_traffic_policy: source-traffic-policy.yaml\nrecorder:\n  dns_mock:\n    listen: 127.0.0.153:15353\n  tcp_gateway:\n    listen: 127.0.0.1:15001\n  udp_gateway:\n    listen: 127.0.0.1:15002\n",
         )
         .unwrap();
         std::fs::write(
-            directory.path().join("coordinator-rules.yaml"),
+            directory.path().join("source-traffic-policy.yaml"),
             "version: 2\nhttp:\n  case_path_patterns: []\n  allowed_unused_http_hosts: []\nbreeze_capture: []\nprocess_owned_dependencies: []\n",
         )
         .unwrap();

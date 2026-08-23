@@ -5,7 +5,7 @@ use super::*;
 const CONFIG: &str = r#"version: 14
 project:
   recording:
-    coordinator_rules: coordinator-rules.yaml
+    source_traffic_policy: source-traffic-policy.yaml
 recorder:
   http_gateway:
     enabled: true
@@ -129,8 +129,8 @@ fn dynamic_group_collects_sibling_directories_applies_pattern_and_is_idempotent(
     let config = temporary.path().join("project.yaml");
     fs::write(&config, CONFIG).unwrap();
     fs::write(
-        temporary.path().join("coordinator-rules.yaml"),
-        crate::config::CoordinatorRulesConfig::empty()
+        temporary.path().join("source-traffic-policy.yaml"),
+        crate::config::SourceTrafficPolicyConfig::empty()
             .render()
             .unwrap(),
     )
@@ -168,7 +168,7 @@ fn dynamic_group_collects_sibling_directories_applies_pattern_and_is_idempotent(
         created.manifest.display().to_string()
     );
     assert!(
-        fs::read_to_string(temporary.path().join("coordinator-rules.yaml"))
+        fs::read_to_string(temporary.path().join("source-traffic-policy.yaml"))
             .unwrap()
             .contains("/api/huaweiyun/loadbalancers/get/*")
     );

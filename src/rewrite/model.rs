@@ -240,6 +240,8 @@ pub struct RewriteRulePlanRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_example: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub separator: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_body: Option<RewriteResponseBodyRuleSpec>,
     pub evidence_id: String,
 }
@@ -250,7 +252,7 @@ pub struct RewriteResponseBodyRuleSpec {
     #[serde(default)]
     pub unordered_paths: Vec<crate::ResponseBodyUnorderedPath>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub unordered_joined_string_paths: Vec<crate::Hessian2JoinedStringPath>,
+    pub unordered_joined_string_paths: Vec<crate::ResponseBodyJoinedStringPath>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -366,7 +368,7 @@ pub(super) struct RewriteRecordingRefreshState {
     #[serde(default)]
     pub dependency_rules: Vec<RewriteDependencyRuleAppliedRecord>,
     pub project_config_revision: String,
-    pub coordinator_rules_revision: String,
+    pub source_traffic_policy_revision: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recording_run_id: Option<String>,
 }

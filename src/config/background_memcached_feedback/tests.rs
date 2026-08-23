@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use super::*;
-use crate::config::CoordinatorRulesConfig;
+use crate::config::SourceTrafficPolicyConfig;
 
 const REVISION: &str = "0123456789abcdef";
 const EVIDENCE: &str = "TopUserServiceImpl.java:691 scheduled local cache warm";
@@ -18,13 +18,17 @@ struct Fixture {
 impl Fixture {
     fn new(key: &str) -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let config = temp.path().join("coordinator-rules.yaml");
+        let config = temp.path().join("source-traffic-policy.yaml");
         let replay_report = temp.path().join("replay-report.json");
         let dependencies = temp.path().join("dependencies.jsonl");
         let socks = temp.path().join("socks");
         fs::create_dir(&socks).unwrap();
         fs::write(socks.join(DESCRIPTOR), "").unwrap();
-        fs::write(&config, CoordinatorRulesConfig::empty().render().unwrap()).unwrap();
+        fs::write(
+            &config,
+            SourceTrafficPolicyConfig::empty().render().unwrap(),
+        )
+        .unwrap();
         fs::write(
             &dependencies,
             format!(
@@ -123,7 +127,7 @@ fn plans_exact_breeze_identity_without_persisting_dynamic_port() {
     assert!(raw.contains("key_end: 4095"));
     assert!(raw.contains("initial_load_timeout_ms: 30000"));
     assert!(!raw.contains("mc:9448"));
-    let config = CoordinatorRulesConfig::load(&fixture.config).unwrap();
+    let config = SourceTrafficPolicyConfig::load(&fixture.config).unwrap();
     assert_eq!(config.process_owned_dependencies.len(), 1);
 }
 

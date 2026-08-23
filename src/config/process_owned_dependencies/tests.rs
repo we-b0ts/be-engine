@@ -113,7 +113,7 @@ fn http_rule_matches_authority_method_and_path_without_weakening_query_identity(
 
 #[test]
 fn parses_and_validates_http_background_rules() {
-    let rules: super::super::CoordinatorRulesConfig = serde_yaml::from_str(
+    let rules: super::super::SourceTrafficPolicyConfig = serde_yaml::from_str(
         r#"
         version: 1
         process_owned_dependencies:
@@ -209,7 +209,7 @@ fn motan_rule_matches_exact_business_method_but_never_heartbeat() {
 
 #[test]
 fn parses_and_validates_exact_motan_background_rules() {
-    let rules: super::super::CoordinatorRulesConfig = serde_yaml::from_str(
+    let rules: super::super::SourceTrafficPolicyConfig = serde_yaml::from_str(
         r#"
         version: 1
         process_owned_dependencies:

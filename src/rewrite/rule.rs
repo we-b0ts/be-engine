@@ -9,7 +9,7 @@ use super::model::{
 };
 use super::{action, evidence};
 use crate::{
-    ComparisonResponseRuleFeedback, E2eRunContext, Hessian2JoinedStringPath, ResponseBodyCodec,
+    ComparisonResponseRuleFeedback, E2eRunContext, ResponseBodyCodec, ResponseBodyJoinedStringPath,
     ResponseBodyRuleEvidence, ResponseBodyRuleFeedback, ResponseBodyRulePlan,
     ResponseBodyUnorderedPath, ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan,
     plan_comparison_response_rule, plan_response_body_rule, plan_response_rule,
@@ -25,8 +25,9 @@ pub struct RewriteRulePlanOptions {
     pub source_evidence: Option<String>,
     pub source_example: Option<String>,
     pub target_example: Option<String>,
+    pub separator: Option<String>,
     pub unordered_paths: Vec<ResponseBodyUnorderedPath>,
-    pub unordered_joined_string_paths: Vec<Hessian2JoinedStringPath>,
+    pub unordered_joined_string_paths: Vec<ResponseBodyJoinedStringPath>,
 }
 
 enum VerificationRulePlan {
@@ -116,6 +117,7 @@ fn plan_json(
         source_evidence: options.source_evidence,
         source_example: options.source_example,
         target_example: options.target_example,
+        separator: options.separator,
         response_body: None,
         evidence_id: options.evidence_id,
     };
@@ -147,7 +149,8 @@ fn plan_response_body(
             && options.json_pointer.is_none()
             && options.source_evidence.is_none()
             && options.source_example.is_none()
-            && options.target_example.is_none(),
+            && options.target_example.is_none()
+            && options.separator.is_none(),
         "typed response-body rules cannot carry JSON rule arguments"
     );
     validate_response_body_plan_evidence(
@@ -181,6 +184,7 @@ fn plan_response_body(
         source_evidence: None,
         source_example: None,
         target_example: None,
+        separator: None,
         response_body: Some(spec),
         evidence_id: options.evidence_id,
     };
@@ -295,6 +299,7 @@ fn build_plan(
                 source_evidence: record.source_evidence.clone(),
                 source_example: record.source_example.clone(),
                 target_example: record.target_example.clone(),
+                separator: record.separator.clone(),
                 comparison_report: comparison_run.join("comparison-report.json"),
             })?,
         )));
@@ -324,6 +329,7 @@ fn build_plan(
             source_evidence: record.source_evidence.clone(),
             source_example: record.source_example.clone(),
             target_example: record.target_example.clone(),
+            separator: record.separator.clone(),
             assertion_report: evidence.assertions,
             aggregate_report: evidence.aggregate,
         })?,
@@ -412,6 +418,7 @@ fn project_response_report(report: &crate::ResponseRuleReport) -> Result<Value> 
         "kind": report.kind,
         "api": report.api,
         "json_pointers": report.json_pointers,
+        "separator": report.separator,
         "matching_cases": report.matching_cases,
         "selected_difference_cases": report.selected_difference_cases,
         "unselected_difference_pointers": report.unselected_difference_pointers,
@@ -433,9 +440,8 @@ fn project_body_report(report: &crate::ResponseBodyRuleReport) -> Value {
         "selected_difference_cases": report.selected_difference_cases,
         "discovered_unordered_paths": report.discovered_unordered_paths,
         "effective_unordered_paths": report.effective_unordered_paths,
-        // Joined-string paths are Hessian2-only. Always emit them (empty when
-        // none) so downstream tooling sees that joined-string rules exist even
-        // when this run found no candidate.
+        // Always emit joined-string paths (empty when none) so downstream
+        // tooling sees that the rule family exists for every structured codec.
         "discovered_unordered_joined_string_paths": report.discovered_unordered_joined_string_paths,
         "effective_unordered_joined_string_paths": report.effective_unordered_joined_string_paths,
         "offline_verification": report.offline_verification,
@@ -453,6 +459,7 @@ fn rule_kind(kind: ResponseRuleKind) -> &'static str {
         ResponseRuleKind::Uuid => "uuid",
         ResponseRuleKind::Random => "random",
         ResponseRuleKind::Unordered => "unordered",
+        ResponseRuleKind::UnorderedJoinedString => "unordered_joined_string",
         ResponseRuleKind::Counter => "counter",
     }
 }
@@ -464,6 +471,7 @@ fn parse_rule_kind(value: &str) -> Result<ResponseRuleKind> {
         "uuid" => Ok(ResponseRuleKind::Uuid),
         "random" => Ok(ResponseRuleKind::Random),
         "unordered" => Ok(ResponseRuleKind::Unordered),
+        "unordered_joined_string" => Ok(ResponseRuleKind::UnorderedJoinedString),
         "counter" => Ok(ResponseRuleKind::Counter),
         _ => anyhow::bail!("unsupported rewrite rule kind {value:?}"),
     }

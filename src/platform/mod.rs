@@ -289,11 +289,11 @@ async fn run_managed_runtime(
         "recorder config does not exist: {}",
         recorder_config.display()
     );
-    let coordinator_rules = &config.coordinator_rules;
+    let source_traffic_policy = &config.source_traffic_policy;
     ensure!(
-        coordinator_rules.is_file(),
-        "coordinator rules do not exist: {}",
-        coordinator_rules.display()
+        source_traffic_policy.is_file(),
+        "source traffic policy does not exist: {}",
+        source_traffic_policy.display()
     );
     let managed_candidate = crate::config::managed_comparison_candidate(config.target_port);
     let recorder = crate::config::AppConfig::load_comparison_recording_with_candidate(
@@ -483,7 +483,7 @@ async fn run_managed_runtime(
             recorder.http_gateway.ready.success_status.to_string(),
         )
         .env("TRAFFIC_E2E_RECORDER_CONFIG", recorder_config)
-        .env("TRAFFIC_E2E_COORDINATOR_RULES", coordinator_rules)
+        .env("TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY", source_traffic_policy)
         .env("TRAFFIC_E2E_REPLAY_POLICY", &config.replay_policy)
         .env("TRAFFIC_E2E_PLATFORM_ASSETS", &assets)
         .env(

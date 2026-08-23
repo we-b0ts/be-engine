@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::config::CoordinatorRulesConfig;
+use crate::config::SourceTrafficPolicyConfig;
 
 const REVISION: &str = "0123456789abcdef";
 const EVIDENCE: &str = "src/config/refresh.rs:42 process-level scheduled refresh";
@@ -18,9 +18,13 @@ struct Fixture {
 impl Fixture {
     fn new(report: Value) -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let config = temp.path().join("coordinator-rules.yaml");
+        let config = temp.path().join("source-traffic-policy.yaml");
         let replay_report = temp.path().join("replay-report.json");
-        fs::write(&config, CoordinatorRulesConfig::empty().render().unwrap()).unwrap();
+        fs::write(
+            &config,
+            SourceTrafficPolicyConfig::empty().render().unwrap(),
+        )
+        .unwrap();
         fs::write(&replay_report, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
         Self {
             _temp: temp,
@@ -102,7 +106,7 @@ fn plan_and_apply_add_a_valid_idempotent_managed_rule() {
     assert!(!raw.contains("response_role"));
     assert!(!raw.contains("source_revision"));
     assert!(raw.contains(EVIDENCE));
-    let config = CoordinatorRulesConfig::load(&fixture.config).unwrap();
+    let config = SourceTrafficPolicyConfig::load(&fixture.config).unwrap();
     assert_eq!(config.process_owned_dependencies.len(), 1);
 
     let repeated = plan_background_dependency(fixture.feedback()).unwrap();
@@ -134,7 +138,7 @@ fn equivalent_http_selector_reuses_existing_rule_even_when_name_and_proof_change
     assert!(applied.applied);
     assert!(applied.reused_existing);
 
-    let config = CoordinatorRulesConfig::load(&fixture.config).unwrap();
+    let config = SourceTrafficPolicyConfig::load(&fixture.config).unwrap();
     assert_eq!(config.process_owned_dependencies.len(), 1);
     assert_eq!(
         config.process_owned_dependencies[0].name(),
@@ -147,7 +151,7 @@ fn covered_http_selector_reuses_a_multi_selector_system_default() {
     let fixture = Fixture::new(report_with_unused());
     fs::write(
         &fixture.config,
-        CoordinatorRulesConfig::repository_defaults()
+        SourceTrafficPolicyConfig::repository_defaults()
             .render()
             .unwrap(),
     )
@@ -264,7 +268,7 @@ fn existing_name_cannot_be_reused_for_a_different_selector() {
 }
 
 #[test]
-fn rejects_unknown_fields_in_the_coordinator_owned_file() {
+fn rejects_unknown_fields_in_the_source_traffic_policy() {
     let fixture = Fixture::new(report_with_unused());
     fs::write(&fixture.config, "version: 1\nowner: manual\n").unwrap();
 
@@ -272,6 +276,6 @@ fn rejects_unknown_fields_in_the_coordinator_owned_file() {
         plan_background_dependency(fixture.feedback())
             .unwrap_err()
             .to_string()
-            .contains("failed to parse coordinator rules")
+            .contains("failed to parse source traffic policy")
     );
 }

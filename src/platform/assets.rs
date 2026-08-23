@@ -61,7 +61,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let runtime = temp.path().join("recorder-runtime.sh");
         let project = temp.path().join("project.yaml");
-        let rules = temp.path().join("coordinator-rules.yaml");
+        let rules = temp.path().join("source-traffic-policy.yaml");
         write_asset(&runtime, RECORDER_RUNTIME, 0o600).unwrap();
         fs::write(&project, "version: 14\n").unwrap();
         fs::write(&rules, "version: 1\n").unwrap();
@@ -72,7 +72,7 @@ mod tests {
             .arg("bash")
             .arg(&runtime)
             .env("TRAFFIC_E2E_RECORDER_CONFIG", &project)
-            .env("TRAFFIC_E2E_COORDINATOR_RULES", &rules)
+            .env("TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY", &rules)
             .output()
             .unwrap();
 
@@ -80,7 +80,7 @@ mod tests {
         assert_eq!(
             String::from_utf8(output.stdout).unwrap(),
             format!(
-                "--volume\n{}:/workspace/project.yaml:ro\n--volume\n{}:/workspace/coordinator-rules.yaml:ro\n",
+                "--volume\n{}:/workspace/project.yaml:ro\n--volume\n{}:/workspace/source-traffic-policy.yaml:ro\n",
                 project.display(),
                 rules.display()
             )

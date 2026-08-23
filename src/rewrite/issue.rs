@@ -138,6 +138,8 @@ pub(super) fn response_possible_causes(kind: Option<ResponseDifferenceKind>) -> 
             ResponseDifferenceKind::GeneratedFieldNotScalar
             | ResponseDifferenceKind::UnorderedFieldNotArray
             | ResponseDifferenceKind::UnorderedArrayContentMismatch
+            | ResponseDifferenceKind::UnorderedJoinedStringFieldNotString
+            | ResponseDifferenceKind::UnorderedJoinedStringContentMismatch
             | ResponseDifferenceKind::CounterFieldUnsupportedType,
         ) => &[
             "verification_rule_shape_or_scope",

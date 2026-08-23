@@ -5,6 +5,17 @@ use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 use super::pattern::path_pattern_matches;
 
+mod body_validation;
+mod joined_string;
+
+use body_validation::{validate_hessian2_rule_map, validate_protobuf_rule_map};
+pub(in crate::replay) use joined_string::JsonJoinedStringResponseRule;
+use joined_string::validate_separator;
+pub use joined_string::{
+    Hessian2JoinedStringPath, ProtobufJoinedStringFieldType, ProtobufJoinedStringPath,
+    ResponseBodyJoinedStringPath,
+};
+
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ComparisonSourceMatch {
@@ -67,6 +78,8 @@ pub(in crate::replay) struct JsonResponseRules {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) unordered: Vec<JsonUnorderedResponseRule>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) unordered_joined_string: Vec<JsonJoinedStringResponseRule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) counter: Vec<CounterResponseRule>,
 }
 
@@ -77,6 +90,7 @@ impl JsonResponseRules {
             && self.uuid.is_empty()
             && self.random.is_empty()
             && self.unordered.is_empty()
+            && self.unordered_joined_string.is_empty()
             && self.counter.is_empty()
     }
 
@@ -108,7 +122,9 @@ impl JsonResponseRules {
             ResponseRuleKind::Duration => Some(&self.duration),
             ResponseRuleKind::Uuid => Some(&self.uuid),
             ResponseRuleKind::Random => Some(&self.random),
-            ResponseRuleKind::Unordered | ResponseRuleKind::Counter => None,
+            ResponseRuleKind::Unordered
+            | ResponseRuleKind::UnorderedJoinedString
+            | ResponseRuleKind::Counter => None,
         }
     }
 
@@ -121,7 +137,9 @@ impl JsonResponseRules {
             ResponseRuleKind::Duration => Some(&mut self.duration),
             ResponseRuleKind::Uuid => Some(&mut self.uuid),
             ResponseRuleKind::Random => Some(&mut self.random),
-            ResponseRuleKind::Unordered | ResponseRuleKind::Counter => None,
+            ResponseRuleKind::Unordered
+            | ResponseRuleKind::UnorderedJoinedString
+            | ResponseRuleKind::Counter => None,
         }
     }
 }
@@ -131,6 +149,8 @@ impl JsonResponseRules {
 pub(in crate::replay) struct ProtobufResponseRules {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) unordered: Vec<ProtobufUnorderedPath>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) unordered_joined_string: Vec<ProtobufJoinedStringPath>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -156,9 +176,17 @@ impl ResponseRules {
             .flat_map(|(api, rules)| {
                 rules
                     .generated()
-                    .map(move |(kind, field)| response_field(kind, api, &field.pointer))
+                    .map(move |(kind, field)| response_field(kind, api, &field.pointer, None))
                     .chain(rules.unordered.iter().map(move |field| {
-                        response_field(ResponseRuleKind::Unordered, api, &field.pointer)
+                        response_field(ResponseRuleKind::Unordered, api, &field.pointer, None)
+                    }))
+                    .chain(rules.unordered_joined_string.iter().map(move |field| {
+                        response_field(
+                            ResponseRuleKind::UnorderedJoinedString,
+                            api,
+                            &field.pointer,
+                            Some(&field.separator),
+                        )
                     }))
             })
             .collect()
@@ -174,7 +202,7 @@ impl ResponseRules {
             .chain(
                 matching_json_rules(&self.json, method, path).flat_map(|(api, rules)| {
                     rules.counter.iter().map(move |field| {
-                        response_field(ResponseRuleKind::Counter, api, &field.pointer)
+                        response_field(ResponseRuleKind::Counter, api, &field.pointer, None)
                     })
                 }),
             )
@@ -197,7 +225,12 @@ impl ResponseRules {
                     .cloned()
                     .map(ResponseBodyUnorderedPath::Protobuf)
                     .collect(),
-                unordered_joined_string_paths: Vec::new(),
+                unordered_joined_string_paths: rules
+                    .unordered_joined_string
+                    .iter()
+                    .cloned()
+                    .map(ResponseBodyJoinedStringPath::Protobuf)
+                    .collect(),
             })
             .chain(
                 matching_body_rules(&self.hessian2, method, path).map(|(api, rules)| {
@@ -211,7 +244,12 @@ impl ResponseRules {
                             .cloned()
                             .map(ResponseBodyUnorderedPath::Hessian2)
                             .collect(),
-                        unordered_joined_string_paths: rules.unordered_joined_string.clone(),
+                        unordered_joined_string_paths: rules
+                            .unordered_joined_string
+                            .iter()
+                            .cloned()
+                            .map(ResponseBodyJoinedStringPath::Hessian2)
+                            .collect(),
                     }
                 }),
             )
@@ -234,7 +272,12 @@ impl ResponseRules {
                     .cloned()
                     .map(ResponseBodyUnorderedPath::Protobuf)
                     .collect(),
-                unordered_joined_string_paths: Vec::new(),
+                unordered_joined_string_paths: rules
+                    .unordered_joined_string
+                    .iter()
+                    .cloned()
+                    .map(ResponseBodyJoinedStringPath::Protobuf)
+                    .collect(),
             })
             .or_else(|| {
                 self.hessian2.get(api).map(|rules| ResponseBodyRuleMatch {
@@ -247,7 +290,12 @@ impl ResponseRules {
                         .cloned()
                         .map(ResponseBodyUnorderedPath::Hessian2)
                         .collect(),
-                    unordered_joined_string_paths: rules.unordered_joined_string.clone(),
+                    unordered_joined_string_paths: rules
+                        .unordered_joined_string
+                        .iter()
+                        .cloned()
+                        .map(ResponseBodyJoinedStringPath::Hessian2)
+                        .collect(),
                 })
             })
     }
@@ -315,18 +363,6 @@ impl Hessian2ValuePath {
 pub struct Hessian2UnorderedPath {
     pub value_path: Hessian2ValuePath,
     pub display_path: String,
-    pub source_evidence: String,
-}
-
-/// Selects a Hessian2 **String** field whose value is a set joined into one
-/// string (for example `"alice,bob,carol"`). The string is split on
-/// `separator` and compared as a multiset, so element order is ignored.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(deny_unknown_fields)]
-pub struct Hessian2JoinedStringPath {
-    pub value_path: Hessian2ValuePath,
-    pub display_path: String,
-    pub separator: String,
     pub source_evidence: String,
 }
 
@@ -405,7 +441,7 @@ pub(in crate::replay) struct ResponseBodyRuleMatch {
     pub(in crate::replay) api: String,
     pub(in crate::replay) codec: ResponseBodyCodec,
     pub(in crate::replay) unordered_paths: Vec<ResponseBodyUnorderedPath>,
-    pub(in crate::replay) unordered_joined_string_paths: Vec<Hessian2JoinedStringPath>,
+    pub(in crate::replay) unordered_joined_string_paths: Vec<ResponseBodyJoinedStringPath>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -416,6 +452,7 @@ pub enum ResponseRuleKind {
     Uuid,
     Random,
     Unordered,
+    UnorderedJoinedString,
     Counter,
 }
 
@@ -459,6 +496,8 @@ pub struct ResponseField {
     pub api: String,
     pub pointer: String,
     pub kind: ResponseRuleKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub separator: Option<String>,
 }
 
 pub(in crate::replay) fn validate_response_rules(rules: &ResponseRules) -> Result<()> {
@@ -501,6 +540,9 @@ pub(in crate::replay) fn response_rule_ids(rules: &ResponseRules) -> Vec<String>
                 .chain(rules.unordered.iter().map(move |field| {
                     response_rule_id(ResponseRuleKind::Unordered, api, &field.pointer)
                 }))
+                .chain(rules.unordered_joined_string.iter().map(move |field| {
+                    response_rule_id(ResponseRuleKind::UnorderedJoinedString, api, &field.pointer)
+                }))
                 .chain(rules.counter.iter().map(move |field| {
                     response_rule_id(ResponseRuleKind::Counter, api, &field.pointer)
                 }))
@@ -530,6 +572,7 @@ pub(in crate::replay) fn response_rule_id(
         ResponseRuleKind::Uuid => ("response", "uuid"),
         ResponseRuleKind::Random => ("response", "random"),
         ResponseRuleKind::Unordered => ("response", "unordered"),
+        ResponseRuleKind::UnorderedJoinedString => ("response", "unordered_joined_string"),
         ResponseRuleKind::Counter => ("response:comparison", "counter"),
     };
     format!("{namespace}:{kind}:{api}:{pointer}")
@@ -606,6 +649,23 @@ fn validate_json_rule_map<'a>(
             validate_audit_text(&field.source_evidence, "source_evidence", 512)?;
             locations.push((method, path, &field.pointer, ResponseRuleKind::Unordered));
         }
+        let mut unique_joined_string = BTreeSet::new();
+        for field in &rules.unordered_joined_string {
+            validate_json_pointer(&field.pointer)?;
+            ensure!(
+                unique_joined_string.insert(field.pointer.as_str()),
+                "unordered joined-string response rule API {api:?} repeats JSON Pointer {:?}",
+                field.pointer
+            );
+            validate_separator(&field.separator, "JSON unordered joined-string separator")?;
+            validate_audit_text(&field.source_evidence, "source_evidence", 512)?;
+            locations.push((
+                method,
+                path,
+                &field.pointer,
+                ResponseRuleKind::UnorderedJoinedString,
+            ));
+        }
         let mut unique_counter = BTreeSet::new();
         for field in &rules.counter {
             validate_json_pointer(&field.pointer)?;
@@ -616,122 +676,6 @@ fn validate_json_rule_map<'a>(
             );
             validate_counter_rule(field)?;
             locations.push((method, path, &field.pointer, ResponseRuleKind::Counter));
-        }
-    }
-    Ok(())
-}
-
-fn validate_protobuf_rule_map(rules: &BTreeMap<String, ProtobufResponseRules>) -> Result<()> {
-    const MAX_FIELD_NUMBER: u32 = (1 << 29) - 1;
-    const MAX_PATHS: usize = 32;
-    const MAX_PATH_DEPTH: usize = 32;
-
-    for (api, rule) in rules {
-        validate_rule_api(api)?;
-        ensure!(
-            rule.unordered.len() <= MAX_PATHS,
-            "protobuf response rule API {api:?} selects more than {MAX_PATHS} unordered paths"
-        );
-        let mut unique_protobuf = BTreeSet::new();
-        let mut unique_display = BTreeSet::new();
-        for unordered_path in &rule.unordered {
-            validate_audit_text(&unordered_path.display_path, "display_path", 512)?;
-            validate_audit_text(&unordered_path.source_evidence, "source_evidence", 512)?;
-            ensure!(
-                unordered_path
-                    .display_path
-                    .chars()
-                    .any(|character| character.is_alphabetic() || character == '_'),
-                "protobuf response rule API {api:?} requires a semantic display_path"
-            );
-            ensure!(
-                unique_display.insert(&unordered_path.display_path),
-                "protobuf response rule API {api:?} repeats display_path {:?}",
-                unordered_path.display_path
-            );
-            let field_path = &unordered_path.field_path;
-            ensure!(
-                !field_path.0.is_empty() && field_path.0.len() <= MAX_PATH_DEPTH,
-                "protobuf response rule API {api:?} has an empty or over-deep field path"
-            );
-            ensure!(
-                field_path
-                    .0
-                    .iter()
-                    .all(|number| (1..=MAX_FIELD_NUMBER).contains(number)),
-                "protobuf response rule API {api:?} has an invalid field number"
-            );
-            ensure!(
-                unique_protobuf.insert(field_path),
-                "protobuf response rule API {api:?} repeats field path {:?}",
-                field_path.0
-            );
-            ensure!(
-                unordered_path.display_path != field_path.display_path(),
-                "protobuf response rule API {api:?} field path {:?} requires a semantic display_path",
-                field_path.0
-            );
-        }
-    }
-    Ok(())
-}
-
-fn validate_hessian2_rule_map(rules: &BTreeMap<String, Hessian2ResponseRules>) -> Result<()> {
-    const MAX_PATHS: usize = 32;
-    const MAX_PATH_DEPTH: usize = 32;
-
-    for (api, rule) in rules {
-        validate_rule_api(api)?;
-        ensure!(
-            rule.unordered.len() <= MAX_PATHS,
-            "Hessian2 response rule API {api:?} selects more than {MAX_PATHS} unordered paths"
-        );
-        ensure!(
-            rule.unordered_joined_string.len() <= MAX_PATHS,
-            "Hessian2 response rule API {api:?} selects more than {MAX_PATHS} unordered joined-string paths"
-        );
-        let mut unique_hessian2 = BTreeSet::new();
-        let mut unique_display = BTreeSet::new();
-        for unordered_path in &rule.unordered {
-            validate_hessian2_value_path(api, &unordered_path.value_path, MAX_PATH_DEPTH)?;
-            validate_semantic_display_path(api, &unordered_path.display_path)?;
-            validate_audit_text(&unordered_path.source_evidence, "source_evidence", 512)?;
-            ensure!(
-                unique_display.insert(&unordered_path.display_path),
-                "Hessian2 response rule API {api:?} repeats display_path {:?}",
-                unordered_path.display_path
-            );
-            ensure!(
-                unique_hessian2.insert(&unordered_path.value_path),
-                "Hessian2 response rule API {api:?} repeats value path {:?}",
-                unordered_path.value_path.0
-            );
-        }
-        let mut unique_joined_string = BTreeSet::new();
-        for joined in &rule.unordered_joined_string {
-            validate_hessian2_value_path(api, &joined.value_path, MAX_PATH_DEPTH)?;
-            ensure!(
-                !joined.separator.is_empty(),
-                "Hessian2 response rule API {api:?} has a joined-string path with an empty separator"
-            );
-            validate_audit_text(&joined.separator, "Hessian2 joined-string separator", 16)?;
-            validate_semantic_display_path(api, &joined.display_path)?;
-            validate_audit_text(&joined.source_evidence, "source_evidence", 512)?;
-            ensure!(
-                unique_display.insert(&joined.display_path),
-                "Hessian2 response rule API {api:?} repeats display_path {:?}",
-                joined.display_path
-            );
-            ensure!(
-                unique_joined_string.insert(&joined.value_path),
-                "Hessian2 response rule API {api:?} repeats joined-string value path {:?}",
-                joined.value_path.0
-            );
-            ensure!(
-                unique_hessian2.insert(&joined.value_path),
-                "Hessian2 response rule API {api:?} joins the same value path {:?} as an unordered list path",
-                joined.value_path.0
-            );
         }
     }
     Ok(())
@@ -761,32 +705,6 @@ fn validate_body_codec_routes(rules: &ResponseRules) -> Result<()> {
             );
         }
     }
-    Ok(())
-}
-
-fn validate_hessian2_value_path(
-    api: &str,
-    value_path: &Hessian2ValuePath,
-    max_depth: usize,
-) -> Result<()> {
-    ensure!(
-        value_path.0.len() <= max_depth,
-        "Hessian2 response rule API {api:?} has an over-deep value path"
-    );
-    for segment in &value_path.0 {
-        validate_audit_text(segment, "Hessian2 value path segment", 256)?;
-    }
-    Ok(())
-}
-
-fn validate_semantic_display_path(api: &str, display_path: &str) -> Result<()> {
-    validate_audit_text(display_path, "display_path", 512)?;
-    ensure!(
-        display_path
-            .chars()
-            .any(|character| character.is_alphabetic() || character == '_'),
-        "Hessian2 response rule API {api:?} requires a semantic display_path"
-    );
     Ok(())
 }
 
@@ -869,12 +787,18 @@ fn matching_body_rules<'a, T>(
     })
 }
 
-fn response_field(kind: ResponseRuleKind, api: &str, pointer: &str) -> ResponseField {
+fn response_field(
+    kind: ResponseRuleKind,
+    api: &str,
+    pointer: &str,
+    separator: Option<&str>,
+) -> ResponseField {
     ResponseField {
         id: response_rule_id(kind, api, pointer),
         api: api.to_string(),
         pointer: pointer.to_string(),
         kind,
+        separator: separator.map(str::to_string),
     }
 }
 

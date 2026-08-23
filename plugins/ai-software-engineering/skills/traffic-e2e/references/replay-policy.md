@@ -347,6 +347,28 @@ action still requires clean aggregate evidence and rejects undeclared response
 differences. Both reject unsupported differences at a selected location.
 Apply is additive, sorted, and atomic.
 
+## Unordered Joined Strings
+
+`unordered_joined_string` is one codec-independent comparison semantic with
+codec-specific selectors. JSON uses a `pointer`, protobuf uses `field_path`
+plus explicit `field_type: string`, and Hessian2 uses `value_path`. Every rule
+requires a non-empty `separator` and one-line `source_evidence`:
+
+```yaml
+response_rules:
+  json:
+    "GET /api/members":
+      unordered_joined_string:
+        - pointer: /member_names
+          separator: ","
+          source_evidence: src/member.rs:member_names joins a Set
+```
+
+Both strings are split without trimming or case normalization and compared as
+multisets. Empty elements and duplicate multiplicity are preserved. Mechanical
+discovery tries only `,`, `;`, and `|` and reports the exact matching
+separator; source proof is still required before planning the rule.
+
 ## Structured Response-Body Rules
 
 The policy has exactly two top-level rule surfaces: `dependency_rules` changes
@@ -390,6 +412,12 @@ response_rules:
           display_path: rule_collection.experiments.groups.white_list
           element_type: string
           source_evidence: src/rule.rs:white_list is a Set
+      unordered_joined_string:
+        - field_path: [3, 1]
+          display_path: result.member_names
+          field_type: string
+          separator: ","
+          source_evidence: src/service.rs:memberNames joins a Set
   hessian2:
     "MOTAN /rpc/ExampleService-getMembers-Request-hash":
       unordered:
@@ -403,9 +431,11 @@ response_rules:
           source_evidence: src/service.rs:memberNames joins a Set
 ```
 
-Protobuf selectors require a numeric `field_path`, semantic `display_path`, and
-explicit repeated `element_type`. Hessian2 selectors require a `value_path` and
-semantic `display_path`; joined strings also require a non-empty separator.
+Protobuf repeated selectors require a numeric `field_path`, semantic
+`display_path`, and explicit repeated `element_type`; protobuf joined strings
+instead require explicit `field_type: string`. Hessian2 selectors require a
+`value_path` and semantic `display_path`; joined strings also require a
+non-empty separator.
 Only selected collection order is ignored. Presence, types, contents,
 duplicate multiplicity, status, envelope, and undeclared paths remain exact.
 

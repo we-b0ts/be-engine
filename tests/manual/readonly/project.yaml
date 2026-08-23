@@ -8,15 +8,15 @@ project:
   replay:
     policy: config/verification.example.yaml
   recording:
-    coordinator_rules: coordinator-rules.yaml
+    source_traffic_policy: source-traffic-policy.yaml
   delivery:
     pr_base: dev-migration
   state:
     runtime_root: local/runtime
 recorder:
   # Static recorder example. Project initialization embeds these settings under
-  # `recorder` in `.traffic-e2e/project.yaml`. Coordinator-managed values belong
-  # exclusively in `.traffic-e2e/coordinator-rules.yaml`.
+  # `recorder` in `.traffic-e2e/project.yaml`. Coordinator-managed source-traffic
+  # policy values belong exclusively in `.traffic-e2e/source-traffic-policy.yaml`.
   artifacts: null
   comparison_recording: null
   dns_mock:

@@ -23,7 +23,7 @@ pub struct ResponseBodyAssertionReport {
     pub codec_candidates: Vec<ResponseBodyCodec>,
     pub unordered_path_candidates: Vec<ResponseBodyUnorderedPathCandidate>,
     #[serde(default)]
-    pub unordered_joined_string_candidates: Vec<Hessian2JoinedStringCandidate>,
+    pub unordered_joined_string_candidates: Vec<ResponseBodyJoinedStringCandidate>,
     pub differences: Vec<ResponseBodyDifferenceDetail>,
     /// Whether applying every mechanically discovered candidate would make the
     /// decoded protocol bodies equal. This is evidence coverage, not proof
@@ -44,6 +44,22 @@ pub enum ResponseBodyUnorderedPathCandidate {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(untagged)]
+pub enum ResponseBodyJoinedStringCandidate {
+    Protobuf(ProtobufJoinedStringCandidate),
+    Hessian2(Hessian2JoinedStringCandidate),
+}
+
+impl ResponseBodyJoinedStringCandidate {
+    pub fn separator(&self) -> &str {
+        match self {
+            Self::Protobuf(candidate) => &candidate.separator,
+            Self::Hessian2(candidate) => &candidate.separator,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(untagged)]
 pub enum ResponseBodyDifferenceDetail {
     Protobuf(ProtobufBodyDifference),
     Hessian2(Hessian2BodyDifference),
@@ -53,9 +69,34 @@ pub enum ResponseBodyDifferenceDetail {
 #[serde(rename_all = "snake_case")]
 pub enum ProtobufBodyDifferenceKind {
     RepeatedFieldOrderMismatch,
+    JoinedStringOrderMismatch,
     OccurrenceCountMismatch,
     WireTypeMismatch,
     ValueMismatch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ProtobufJoinedStringCandidate {
+    pub field_path: ProtobufFieldPath,
+    pub display_path: String,
+    pub separator: String,
+}
+
+impl From<(ProtobufFieldPath, String)> for ProtobufJoinedStringCandidate {
+    fn from((field_path, separator): (ProtobufFieldPath, String)) -> Self {
+        let display_path = field_path.display_path();
+        Self {
+            field_path,
+            display_path,
+            separator,
+        }
+    }
+}
+
+impl From<(ProtobufFieldPath, String)> for ResponseBodyJoinedStringCandidate {
+    fn from(candidate: (ProtobufFieldPath, String)) -> Self {
+        Self::Protobuf(candidate.into())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -133,6 +174,12 @@ impl From<(Hessian2ValuePath, String)> for Hessian2JoinedStringCandidate {
     }
 }
 
+impl From<(Hessian2ValuePath, String)> for ResponseBodyJoinedStringCandidate {
+    fn from(candidate: (Hessian2ValuePath, String)) -> Self {
+        Self::Hessian2(candidate.into())
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum Hessian2BodyDifferenceKind {
@@ -171,6 +218,8 @@ pub enum ResponseDifferenceKind {
     GeneratedFieldNotScalar,
     UnorderedFieldNotArray,
     UnorderedArrayContentMismatch,
+    UnorderedJoinedStringFieldNotString,
+    UnorderedJoinedStringContentMismatch,
     CounterFieldUnsupportedType,
 }
 
@@ -245,6 +294,10 @@ pub struct ResponseAssertionCaseReport {
     pub applied_unordered_rule_ids: Vec<String>,
     pub unused_applicable_unordered_rule_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applied_unordered_joined_string_rule_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unused_applicable_unordered_joined_string_rule_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub applied_counter_rule_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unused_applicable_counter_rule_ids: Vec<String>,
@@ -255,7 +308,15 @@ pub struct ResponseAssertionCaseReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body_diagnosis: Option<ResponseBodyAssertionReport>,
     pub unordered_candidates: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unordered_joined_string_candidates: Vec<JsonJoinedStringCandidate>,
     pub passed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct JsonJoinedStringCandidate {
+    pub pointer: String,
+    pub separator: String,
 }
 
 impl ResponseAssertionCaseReport {
@@ -293,12 +354,15 @@ impl ResponseAssertionCaseReport {
             generated_scalar_candidates: Vec::new(),
             applied_unordered_rule_ids: Vec::new(),
             unused_applicable_unordered_rule_ids: Vec::new(),
+            applied_unordered_joined_string_rule_ids: Vec::new(),
+            unused_applicable_unordered_joined_string_rule_ids: Vec::new(),
             applied_counter_rule_ids: Vec::new(),
             unused_applicable_counter_rule_ids: Vec::new(),
             applied_body_rule_ids: Vec::new(),
             unused_applicable_body_rule_ids: Vec::new(),
             body_diagnosis: None,
             unordered_candidates: Vec::new(),
+            unordered_joined_string_candidates: Vec::new(),
             passed: false,
         }
     }
@@ -324,6 +388,17 @@ impl ResponseAssertionCaseReport {
             .iter()
             .filter(|field| field.kind == ResponseRuleKind::Unordered)
             .filter(|field| !applied_unordered.contains(&field.id))
+            .map(|field| field.id.clone())
+            .collect();
+        let applied_joined_string = self
+            .applied_unordered_joined_string_rule_ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        self.unused_applicable_unordered_joined_string_rule_ids = applicable
+            .iter()
+            .filter(|field| field.kind == ResponseRuleKind::UnorderedJoinedString)
+            .filter(|field| !applied_joined_string.contains(&field.id))
             .map(|field| field.id.clone())
             .collect();
         let applied_counter = self
@@ -366,9 +441,14 @@ impl ResponseAssertionCaseReport {
             .filter(|difference| difference.kind == ResponseDifferenceKind::ArrayOrderMismatch)
             .map(|difference| difference.pointer.clone())
             .collect();
+        self.unordered_joined_string_candidates.sort();
+        self.unordered_joined_string_candidates.dedup();
         self.passed = self.differences.is_empty()
             && self.unused_applicable_generated_rule_ids.is_empty()
             && self.unused_applicable_unordered_rule_ids.is_empty()
+            && self
+                .unused_applicable_unordered_joined_string_rule_ids
+                .is_empty()
             && self.unused_applicable_counter_rule_ids.is_empty()
             && self.unused_applicable_body_rule_ids.is_empty();
     }

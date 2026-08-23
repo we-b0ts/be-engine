@@ -78,8 +78,8 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
     require_internal_root_ignored(&target_root, &runtime_root)?;
 
     let payload = render_project_config(&options, recorder)?;
-    let rules_path = traffic_e2e_dir.join(crate::config::COORDINATOR_RULES_FILE);
-    let rules = crate::config::CoordinatorRulesConfig::repository_defaults().render()?;
+    let rules_path = traffic_e2e_dir.join(crate::config::SOURCE_TRAFFIC_POLICY_FILE);
+    let rules = crate::config::SourceTrafficPolicyConfig::repository_defaults().render()?;
     if options.force {
         crate::config::edit::write_atomic(&config_path, &payload)?;
         crate::config::edit::write_atomic(&rules_path, rules.as_bytes())?;
@@ -135,7 +135,7 @@ pub(crate) fn render_project_config(
             },
             recording: RecordingProjectConfig {
                 _legacy_rule: None,
-                coordinator_rules: PathBuf::from(crate::config::COORDINATOR_RULES_FILE),
+                source_traffic_policy: PathBuf::from(crate::config::SOURCE_TRAFFIC_POLICY_FILE),
             },
             delivery: DeliveryProjectConfig {
                 pr_base: options.pr_base.clone(),
@@ -212,9 +212,9 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         "managed project replay requires verification policy version 3 with runner-owned response assertions"
     );
     let recorder_config = config_path.clone();
-    let coordinator_rules = crate::config::coordinator_rules::resolve_from_project_config(
+    let source_traffic_policy = crate::config::source_traffic_policy::resolve_from_project_config(
         &config_path,
-        &config.project.recording.coordinator_rules,
+        &config.project.recording.source_traffic_policy,
     )?;
     let recorder = crate::config::AppConfig::load(&recorder_config)?;
     ensure!(
@@ -285,7 +285,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
             ),
             pr_base: config.project.delivery.pr_base,
             recorder_config,
-            coordinator_rules,
+            source_traffic_policy,
             runner_owned_response_assertions: policy.runner_owned_response_assertions,
         },
     ))
@@ -385,9 +385,10 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         "state.runtime_root must be {DEFAULT_RUNTIME_ROOT:?}"
     );
     ensure!(
-        project.recording.coordinator_rules == Path::new(crate::config::COORDINATOR_RULES_FILE),
-        "project.recording.coordinator_rules must be {:?}",
-        crate::config::COORDINATOR_RULES_FILE
+        project.recording.source_traffic_policy
+            == Path::new(crate::config::SOURCE_TRAFFIC_POLICY_FILE),
+        "project.recording.source_traffic_policy must be {:?}",
+        crate::config::SOURCE_TRAFFIC_POLICY_FILE
     );
     Ok(())
 }
@@ -475,7 +476,7 @@ mod tests {
         fs::write(
             root.join("config/project.yaml"),
             format!(
-                "version: 14\nproject:\n  recording:\n    coordinator_rules: coordinator-rules.yaml\nrecorder:\n{recorder}"
+                "version: 14\nproject:\n  recording:\n    source_traffic_policy: source-traffic-policy.yaml\nrecorder:\n{recorder}"
             ),
         )
         .unwrap();
@@ -522,7 +523,7 @@ mod tests {
         }];
         write_input_project(root, &recorder);
         fs::write(
-            root.join("config/coordinator-rules.yaml"),
+            root.join("config/source-traffic-policy.yaml"),
             "version: 2\nhttp:\n  case_path_patterns: []\n  allowed_unused_http_hosts: []\nbreeze_capture: []\nprocess_owned_dependencies: []\n",
         )
         .unwrap();

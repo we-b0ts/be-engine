@@ -103,7 +103,7 @@ fn matches_ports_command_and_key_shape_without_domain_identity() {
 
 #[test]
 fn validates_zcount_redis_rule() {
-    let rules: super::super::CoordinatorRulesConfig = serde_yaml::from_str(
+    let rules: super::super::SourceTrafficPolicyConfig = serde_yaml::from_str(
         r#"
         version: 1
         process_owned_dependencies:
