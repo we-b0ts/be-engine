@@ -266,26 +266,31 @@ async fn fetch(
     .await;
     match result {
         Ok(response) => {
-            let (status, rpc_status, body) = match response.as_ref() {
-                Some(frame) => {
-                    let kind = frame.response_kind().unwrap_or(ResponseKind::Other(0));
-                    (
-                        Some(status_code(kind)),
-                        Some(kind.as_str()),
-                        capture_case_body(
-                            &frame.body,
-                            runtime.config.recording.max_body_bytes,
-                            runtime.config.recording.decoded_body_limit(),
-                            None,
-                        ),
-                    )
-                }
-                None => (
-                    Some(204),
-                    Some("oneway"),
-                    capture_case_body(&[], 0, 0, None),
-                ),
-            };
+            let (status, rpc_status, body, response_version, serialization) =
+                match response.as_ref() {
+                    Some(frame) => {
+                        let kind = frame.response_kind().unwrap_or(ResponseKind::Other(0));
+                        (
+                            Some(status_code(kind)),
+                            Some(kind.as_str()),
+                            capture_case_body(
+                                &frame.body,
+                                runtime.config.recording.max_body_bytes,
+                                runtime.config.recording.decoded_body_limit(),
+                                None,
+                            ),
+                            frame.version,
+                            frame.serialization,
+                        )
+                    }
+                    None => (
+                        Some(204),
+                        Some("oneway"),
+                        capture_case_body(&[], 0, 0, None),
+                        request.version,
+                        request.serialization,
+                    ),
+                };
             MotanCapture {
                 capture: UpstreamCapture {
                     record: ComparisonRecordingResponse {
@@ -297,7 +302,8 @@ async fn fetch(
                         body: Some(body),
                         duration_ms: started.elapsed().as_millis(),
                         error: None,
-                        protocol_version: Some(protocol_version(request.version)),
+                        protocol_version: Some(protocol_version(response_version)),
+                        serialization,
                         rpc_status,
                     },
                     downstream: None,

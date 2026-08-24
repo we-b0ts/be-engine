@@ -79,19 +79,27 @@ pub(super) fn difference(
             })
             .context("representative comparison Pointer has no difference evidence")?;
         let case_dir = Path::new(&case.case_dir);
+        let request_path = case_dir.join("request.json");
         let source_before = value(
+            &request_path,
             &case_dir.join("expected-response.json"),
             "source-before response",
             pointer,
         )?;
         let candidate = value(
+            &request_path,
             &case_dir.join("response.json"),
             "candidate response",
             pointer,
         )?;
         let source_after_path = case_dir.join("expected-response-after.json");
         let source_after = if path_is_present(&source_after_path)? {
-            value(&source_after_path, "source-after response", pointer)?
+            value(
+                &request_path,
+                &source_after_path,
+                "source-after response",
+                pointer,
+            )?
         } else {
             Value::String("not_recorded".to_string())
         };
@@ -126,8 +134,8 @@ pub(super) fn policy_mismatch(
     })
 }
 
-fn value(path: &Path, label: &str, pointer: &str) -> Result<Value> {
-    let observation = read_comparison_response_observation(path, label)?;
+fn value(request_path: &Path, path: &Path, label: &str, pointer: &str) -> Result<Value> {
+    let observation = read_comparison_response_observation(request_path, path, label)?;
     match pointer {
         "$status" => Ok(Value::from(observation.status)),
         "$body" => Ok(bounded_body(observation)),

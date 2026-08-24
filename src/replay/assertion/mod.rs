@@ -101,7 +101,7 @@ pub(in crate::replay) fn diagnose_response_body(
             let discovery = protobuf::discover_protobuf_order(expected, actual)?;
             Ok(ResponseBodyAssertionReport {
                 codec,
-                envelope: "simple_byte_array".to_string(),
+                envelope: discovery.envelope.as_str().to_string(),
                 configured: false,
                 codec_candidates: vec![codec],
                 unordered_path_candidates: discovery
@@ -245,9 +245,9 @@ pub(crate) fn assert_comparison_response(
         response.version
     );
     let expected_status = captured_status(&expected, "expected response")?;
-    let expected_body = AssertionBody::Bytes(captured_body(&expected, "expected response")?);
+    let expected_body = comparison_assertion_body(&request, &expected, "expected response")?;
     let actual_status = captured_status(&response, "response")?;
-    let actual_body = AssertionBody::Bytes(captured_body(&response, "response")?);
+    let actual_body = comparison_assertion_body(&request, &response, "response")?;
     evaluate_response(AssertionInputs {
         mode: AssertionMode::Comparison,
         case_id: options.case_id,
@@ -266,9 +266,13 @@ pub(crate) fn assert_comparison_response(
 }
 
 pub(crate) fn read_comparison_response_observation(
+    request_path: &Path,
     path: &Path,
     label: &str,
 ) -> Result<ComparisonResponseObservation> {
+    let request_bytes = read_regular(request_path, "comparison request")?;
+    let request: RecordedRequest = serde_json::from_slice(&request_bytes)
+        .with_context(|| format!("invalid comparison request {}", request_path.display()))?;
     let bytes = read_regular(path, label)?;
     let response: ComparisonResponse = serde_json::from_slice(&bytes)
         .with_context(|| format!("invalid {label} {}", path.display()))?;
@@ -277,10 +281,43 @@ pub(crate) fn read_comparison_response_observation(
         "unsupported {label} version {}; expected 1",
         response.version
     );
+    let body = comparison_assertion_body(&request, &response, label)?;
     Ok(ComparisonResponseObservation {
         status: captured_status(&response, label)?,
-        body: captured_body(&response, label)?,
+        body: body.body().to_vec(),
     })
+}
+
+fn comparison_assertion_body(
+    request: &RecordedRequest,
+    response: &ComparisonResponse,
+    label: &str,
+) -> Result<AssertionBody> {
+    let body = captured_body(response, label)?;
+    if !request.has_motan_frame() {
+        return Ok(AssertionBody::Bytes(body));
+    }
+    let version = response
+        .protocol_version
+        .as_deref()
+        .or(request.protocol_version.as_deref())
+        .context("Motan comparison response has no protocol version")?;
+    let version = motan::protocol_version(version, label)?;
+    let serialization = match response.serialization {
+        Some(serialization) => Some(serialization),
+        None => match request.body.as_ref() {
+            Some(request_body) => {
+                let raw = decode_body(request_body, "comparison request")?;
+                motan::request_serialization(&raw, "comparison request")?
+            }
+            None => None,
+        },
+    };
+    Ok(AssertionBody::MotanBody(motan::comparable_response_body(
+        version,
+        serialization,
+        body,
+    )))
 }
 
 fn captured_status(response: &ComparisonResponse, label: &str) -> Result<u16> {
@@ -351,6 +388,7 @@ struct AssertionInputs {
 enum AssertionBody {
     Bytes(Vec<u8>),
     MotanFrame(motan::ComparableResponseFrame),
+    MotanBody(motan::ComparableResponseBody),
 }
 
 impl AssertionBody {
@@ -358,6 +396,7 @@ impl AssertionBody {
         match self {
             Self::Bytes(bytes) => bytes,
             Self::MotanFrame(frame) => frame.body(),
+            Self::MotanBody(body) => body.body(),
         }
     }
 
@@ -367,20 +406,25 @@ impl AssertionBody {
             (Self::MotanFrame(expected), Self::MotanFrame(actual)) => {
                 expected.carrier() == actual.carrier()
             }
+            (Self::MotanBody(expected), Self::MotanBody(actual)) => {
+                expected.gateway_context_matches(actual)
+            }
             _ => false,
         }
     }
 
     fn type_difference(&self, actual: &Self) -> Option<ResponseDifference> {
-        let (Self::MotanFrame(expected), Self::MotanFrame(actual)) = (self, actual) else {
-            return None;
+        let (expected, actual) = match (self, actual) {
+            (Self::MotanFrame(expected), Self::MotanFrame(actual)) => {
+                (expected.body_kind(), actual.body_kind())
+            }
+            (Self::MotanBody(expected), Self::MotanBody(actual)) => {
+                (expected.body_kind(), actual.body_kind())
+            }
+            _ => return None,
         };
-        (expected.body_kind() != actual.body_kind()).then(|| {
-            ResponseDifference::body_type_mismatch(
-                expected.body_kind().as_str(),
-                actual.body_kind().as_str(),
-            )
-        })
+        (expected != actual)
+            .then(|| ResponseDifference::body_type_mismatch(expected.as_str(), actual.as_str()))
     }
 }
 
@@ -498,7 +542,7 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                     body_matches,
                     ResponseBodyAssertionReport {
                         codec: rule.codec,
-                        envelope: "simple_byte_array".to_string(),
+                        envelope: discovery.envelope.as_str().to_string(),
                         configured: true,
                         codec_candidates: vec![rule.codec],
                         unordered_path_candidates: discovery

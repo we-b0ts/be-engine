@@ -209,6 +209,7 @@ fn response_record(
         duration_ms: started.elapsed().as_millis(),
         error: body.error,
         protocol_version: None,
+        serialization: None,
         rpc_status: None,
     }
 }
@@ -265,6 +266,7 @@ pub(super) fn failed_capture(
             duration_ms,
             error: Some(error),
             protocol_version: None,
+            serialization: None,
             rpc_status: None,
         },
         downstream: None,

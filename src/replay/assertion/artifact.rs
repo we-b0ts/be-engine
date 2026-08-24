@@ -12,6 +12,7 @@ pub(super) struct RecordedRequest {
     pub(super) method: String,
     pub(super) uri: String,
     pub(super) protocol_version: Option<String>,
+    pub(super) body: Option<ResponseBody>,
 }
 
 impl RecordedRequest {
@@ -70,6 +71,8 @@ pub(super) struct ComparisonResponse {
     pub(super) headers: Option<HeaderMapSnapshot>,
     pub(super) body: Option<ResponseBody>,
     pub(super) error: Option<String>,
+    pub(super) protocol_version: Option<String>,
+    pub(super) serialization: Option<u8>,
 }
 
 #[derive(Debug, Deserialize)]

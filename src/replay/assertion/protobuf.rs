@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail, ensure};
 
-use super::binary_body::extract_simple_payload;
+use super::binary_body::BodyEnvelope;
 use super::joined_string;
 use super::model::{ProtobufBodyDifference, ProtobufBodyDifferenceKind};
 use crate::replay::policy::{
@@ -13,8 +13,13 @@ const MAX_DISCOVERED_PATHS: usize = 32;
 const MAX_NESTING_DEPTH: usize = 32;
 const MAX_FIELDS: usize = 1_000_000;
 
+mod envelope;
+
+use envelope::{parse_bodies, resolve_body};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ProtobufOrderDiscovery {
+    pub(super) envelope: BodyEnvelope,
     pub(super) unordered_paths: Vec<ProtobufFieldPath>,
     pub(super) unordered_joined_string_paths: Vec<(ProtobufFieldPath, String)>,
     pub(super) differences: Vec<ProtobufBodyDifference>,
@@ -33,9 +38,7 @@ struct Field<'a> {
 }
 
 pub(crate) fn is_protobuf_body(body: &[u8]) -> bool {
-    extract_simple_payload(body)
-        .and_then(|payload| parse_fields(payload).map(|_| ()))
-        .is_ok()
+    resolve_body(body).is_ok()
 }
 
 pub(in crate::replay) fn compare_protobuf(
@@ -44,10 +47,7 @@ pub(in crate::replay) fn compare_protobuf(
     unordered_paths: &[ProtobufUnorderedPath],
     joined_string_paths: &[ProtobufJoinedStringPath],
 ) -> Result<bool> {
-    let expected = extract_simple_payload(expected)?;
-    let actual = extract_simple_payload(actual)?;
-    parse_fields(expected)?;
-    parse_fields(actual)?;
+    let (_, expected, actual) = parse_bodies(expected, actual)?;
     let expected = canonicalize_rules(expected, unordered_paths, joined_string_paths)?;
     let actual = canonicalize_rules(actual, unordered_paths, joined_string_paths)?;
     Ok(expected == actual)
@@ -145,10 +145,9 @@ pub(super) fn discover_protobuf_order(
     expected: &[u8],
     actual: &[u8],
 ) -> Result<ProtobufOrderDiscovery> {
-    let mut expected = extract_simple_payload(expected)?.to_vec();
-    let mut actual = extract_simple_payload(actual)?.to_vec();
-    parse_fields(&expected)?;
-    parse_fields(&actual)?;
+    let (envelope, expected, actual) = parse_bodies(expected, actual)?;
+    let mut expected = expected.to_vec();
+    let mut actual = actual.to_vec();
     let mut selected = BTreeSet::new();
 
     while expected != actual && selected.len() < MAX_DISCOVERED_PATHS {
@@ -208,6 +207,7 @@ pub(super) fn discover_protobuf_order(
     differences
         .dedup_by(|left, right| left.field_path == right.field_path && left.kind == right.kind);
     Ok(ProtobufOrderDiscovery {
+        envelope,
         unordered_paths: selected.into_iter().collect(),
         unordered_joined_string_paths: joined_string_paths.into_iter().collect(),
         differences,

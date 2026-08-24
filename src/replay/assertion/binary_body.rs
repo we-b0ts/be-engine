@@ -1,5 +1,3 @@
-use anyhow::{Context, Result, ensure};
-
 const SIMPLE_BYTE_ARRAY: u8 = 3;
 const SIMPLE_BYTE_ARRAY_HEADER: usize = 5;
 
@@ -19,14 +17,6 @@ impl BodyEnvelope {
             Self::Raw => "raw",
         }
     }
-}
-
-pub(super) fn extract_simple_payload(body: &[u8]) -> Result<&[u8]> {
-    ensure!(
-        body.len() >= SIMPLE_BYTE_ARRAY_HEADER && body[0] == SIMPLE_BYTE_ARRAY,
-        "response body is not a simple byte-array envelope"
-    );
-    simple_payload(body).context("simple byte-array length does not match its payload")
 }
 
 /// Returns the payload of a simple byte-array envelope when the body has
