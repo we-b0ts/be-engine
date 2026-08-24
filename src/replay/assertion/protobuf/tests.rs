@@ -227,6 +227,38 @@ fn discovers_and_applies_a_joined_string_field() {
 }
 
 #[test]
+fn discards_auto_discovered_joined_string_path_that_also_selects_binary() {
+    let expected = body(message([
+        bytes_field(3, &message([bytes_field(1, b"alice,bob")])),
+        bytes_field(3, &message([bytes_field(1, &[0xff, 0x2c, 0x80])])),
+    ]));
+    let actual = body(message([
+        bytes_field(3, &message([bytes_field(1, b"bob,alice")])),
+        bytes_field(3, &message([bytes_field(1, &[0xff, 0x2c, 0x80])])),
+    ]));
+
+    let discovery = discover_protobuf_order(&expected, &actual).unwrap();
+
+    assert!(discovery.unordered_joined_string_paths.is_empty());
+    assert!(!discovery.candidates_explain_all_differences);
+    assert!(!evaluate_protobuf(&expected, &actual, &[], &[]).unwrap().0);
+
+    let rule = ProtobufJoinedStringPath {
+        field_path: ProtobufFieldPath(vec![3, 1]),
+        display_path: "response.names".to_string(),
+        field_type: ProtobufJoinedStringFieldType::String,
+        separator: ",".to_string(),
+        source_evidence: "test source contract".to_string(),
+    };
+    let error = compare_protobuf(&expected, &actual, &[], &[rule]).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("protobuf joined-string field is not UTF-8")
+    );
+}
+
+#[test]
 fn joined_string_rule_preserves_duplicate_multiplicity() {
     let expected = body(message([bytes_field(3, b"alice,bob,alice")]));
     let actual = body(message([bytes_field(3, b"bob,alice")]));
