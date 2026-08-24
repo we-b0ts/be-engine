@@ -1005,6 +1005,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "motan-breeze"
+version = "0.1.0"
+dependencies = [
+ "motan-json",
+ "serde",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "motan-codec"
 version = "0.1.0"
 dependencies = [
@@ -1019,7 +1028,18 @@ name = "motan-hessian2"
 version = "0.1.0"
 dependencies = [
  "cesu8",
+ "motan-json",
+ "serde",
  "smallvec",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "motan-json"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
 ]
 
@@ -1028,6 +1048,16 @@ name = "motan-protocol"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "motan-simple"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "motan-json",
+ "serde",
  "thiserror 2.0.20",
 ]
 
@@ -1886,9 +1916,12 @@ dependencies = [
  "hyper-util",
  "kafka-protocol",
  "libc",
+ "motan-breeze",
  "motan-codec",
  "motan-hessian2",
+ "motan-json",
  "motan-protocol",
+ "motan-simple",
  "rcgen",
  "redis-protocol",
  "rustls",

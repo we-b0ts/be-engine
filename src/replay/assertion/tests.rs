@@ -2,6 +2,7 @@ use std::fs;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use motan_breeze::{Limits as BreezeLimits, SERIALIZATION_ID as BREEZE_SERIALIZATION_ID};
 use motan_hessian2::{Limits as HessianLimits, to_vec as encode_hessian2};
 use motan_protocol::{
     FrameBuilder, Limits, META_PROCESS_TIME, MessageFlags, Metadata, ProtocolVersion,
@@ -12,6 +13,8 @@ use tempfile::tempdir;
 
 use super::model::ResponseDifferenceKind;
 use super::*;
+
+mod simple_motan;
 
 fn write_case(
     response_rules: &str,
@@ -126,6 +129,24 @@ fn write_motan2_case_with_rules(
         actual_stable_metadata,
         expected_body,
         actual_body,
+        1,
+    )
+}
+
+fn write_motan2_breeze_case(
+    expected_body: &[u8],
+    actual_body: &[u8],
+) -> (tempfile::TempDir, ResponseAssertionOptions) {
+    write_motan_case_with_rules(
+        ProtocolVersion::Motan2,
+        "",
+        Some("3"),
+        Some("1"),
+        "value",
+        "value",
+        expected_body,
+        actual_body,
+        BREEZE_SERIALIZATION_ID,
     )
 }
 
@@ -139,12 +160,14 @@ fn write_motan_case_with_rules(
     actual_stable_metadata: &str,
     expected_body: &[u8],
     actual_body: &[u8],
+    serialization: u8,
 ) -> (tempfile::TempDir, ResponseAssertionOptions) {
     fn response(
         protocol_version: ProtocolVersion,
         process_time: Option<&str>,
         stable_metadata: &str,
         body: &[u8],
+        serialization: u8,
     ) -> Vec<u8> {
         let mut metadata = Metadata::new();
         metadata.insert("stable", stable_metadata);
@@ -170,6 +193,7 @@ fn write_motan_case_with_rules(
                 output
             }
             ProtocolVersion::Motan2 => FrameBuilder::response(42)
+                .serialization(serialization)
                 .metadata(metadata)
                 .body(body.to_vec())
                 .encode()
@@ -206,7 +230,8 @@ fn write_motan_case_with_rules(
                     protocol_version,
                     expected_process_time,
                     expected_stable_metadata,
-                    expected_body
+                    expected_body,
+                    serialization
                 )),
                 "truncated": false
             }
@@ -225,7 +250,8 @@ fn write_motan_case_with_rules(
                     protocol_version,
                     actual_process_time,
                     actual_stable_metadata,
-                    actual_body
+                    actual_body,
+                    serialization
                 )),
                 "truncated": false
             }
@@ -268,6 +294,13 @@ fn hessian2_string_list(values: &[&str]) -> Vec<u8> {
     let mut body = vec![3];
     body.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());
     body.extend_from_slice(&payload);
+    body
+}
+
+fn breeze_byte_array(payload: &[u8]) -> Vec<u8> {
+    let mut body = vec![0x9d];
+    body.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());
+    body.extend_from_slice(payload);
     body
 }
 
@@ -333,13 +366,94 @@ fn motan2_business_body_remains_exact_after_process_time_normalization() {
         "value",
         "value",
         b"M_pt\n3",
-        b"M_pt\n1",
+        b"M_pt\n100",
     );
 
     let report = assert_recorded_response(options).unwrap();
 
     assert!(!report.passed);
     assert_eq!(report.body_codec, ResponseBodyCodec::ExactBytes);
+    assert_eq!(report.differences.len(), 1);
+    assert_eq!(
+        report.differences[0].kind,
+        ResponseDifferenceKind::ExactBodyMismatch
+    );
+}
+
+#[test]
+fn motan2_breeze_string_exposes_json_for_semantic_comparison() {
+    let expected = motan_breeze::to_vec(
+        r#"{"name":"alice","roles":["reader","writer"]}"#,
+        BreezeLimits::default(),
+    )
+    .unwrap();
+    let actual = motan_breeze::to_vec(
+        r#"{ "roles": ["reader", "writer"], "name": "alice" }"#,
+        BreezeLimits::default(),
+    )
+    .unwrap();
+    let (_temp, options) = write_motan2_breeze_case(&expected, &actual);
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(report.passed);
+    assert_eq!(report.body_codec, ResponseBodyCodec::Json);
+    assert!(report.differences.is_empty());
+}
+
+#[test]
+fn motan2_breeze_byte_array_exposes_json_for_semantic_comparison() {
+    let expected = breeze_byte_array(br#"{"count":1,"active":true}"#);
+    let actual = breeze_byte_array(br#"{ "active": true, "count": 1 }"#);
+    let (_temp, options) = write_motan2_breeze_case(&expected, &actual);
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(report.passed);
+    assert_eq!(report.body_codec, ResponseBodyCodec::Json);
+    assert!(report.differences.is_empty());
+}
+
+#[test]
+fn motan2_breeze_payload_type_remains_part_of_the_contract() {
+    let payload = br#"{"value":1}"#;
+    let expected = motan_breeze::to_vec(
+        std::str::from_utf8(payload).unwrap(),
+        BreezeLimits::default(),
+    )
+    .unwrap();
+    let actual = breeze_byte_array(payload);
+    let (_temp, options) = write_motan2_breeze_case(&expected, &actual);
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(!report.passed);
+    assert_eq!(report.body_codec, ResponseBodyCodec::Json);
+    assert_eq!(report.differences.len(), 1);
+    assert_eq!(
+        report.differences[0].kind,
+        ResponseDifferenceKind::TypeMismatch
+    );
+}
+
+#[test]
+fn motan1_body_length_does_not_duplicate_a_body_mismatch() {
+    let (_temp, options) = write_motan_case_with_rules(
+        ProtocolVersion::Motan1,
+        "",
+        None,
+        None,
+        "",
+        "",
+        b"short",
+        b"a longer response",
+        1,
+    );
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(!report.passed);
+    assert_eq!(report.differences.len(), 1);
     assert_eq!(
         report.differences[0].kind,
         ResponseDifferenceKind::ExactBodyMismatch
@@ -567,6 +681,7 @@ fn motan1_unordered_rule_compares_the_business_body() {
         "",
         &expected,
         &actual,
+        1,
     );
 
     let report = assert_recorded_response(options).unwrap();
@@ -589,6 +704,7 @@ fn motan1_hessian2_unordered_rule_compares_the_business_body() {
         "",
         &expected,
         &actual,
+        1,
     );
 
     let report = assert_recorded_response(options).unwrap();

@@ -370,6 +370,18 @@ impl AssertionBody {
             _ => false,
         }
     }
+
+    fn type_difference(&self, actual: &Self) -> Option<ResponseDifference> {
+        let (Self::MotanFrame(expected), Self::MotanFrame(actual)) = (self, actual) else {
+            return None;
+        };
+        (expected.body_kind() != actual.body_kind()).then(|| {
+            ResponseDifference::body_type_mismatch(
+                expected.body_kind().as_str(),
+                actual.body_kind().as_str(),
+            )
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -571,11 +583,18 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
         };
         report.applied_body_rule_ids.push(rule.id.clone());
         report.body_diagnosis = Some(body_diagnosis);
-        if !body_matches || !expected_body.gateway_metadata_matches(&actual_body) {
+        let body_type_difference = expected_body.type_difference(&actual_body);
+        if !body_matches
+            || body_type_difference.is_some()
+            || !expected_body.gateway_metadata_matches(&actual_body)
+        {
             if !body_matches {
                 report
                     .differences
                     .push(ResponseDifference::exact_body_mismatch());
+            }
+            if let Some(difference) = body_type_difference {
+                report.differences.push(difference);
             }
             if !expected_body.gateway_metadata_matches(&actual_body) {
                 report
@@ -594,6 +613,9 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
         (Ok(expected), Ok(actual)) => {
             report.body_codec = ResponseBodyCodec::Json;
             compare_json(&expected, &actual, &response_fields, &mut report);
+            if let Some(difference) = expected_body.type_difference(&actual_body) {
+                report.differences.push(difference);
+            }
             if !expected_body.gateway_metadata_matches(&actual_body) {
                 report
                     .differences
@@ -612,6 +634,7 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
         _ => {
             report.body_codec = ResponseBodyCodec::ExactBytes;
             let bodies_match = expected_body.body() == actual_body.body();
+            let body_type_difference = expected_body.type_difference(&actual_body);
             // Configured response rules are JSON-pointer-based and cannot apply
             // to a non-JSON body. When the bodies are byte-equal there is no
             // difference for any rule to evaluate, so the case passes
@@ -619,7 +642,7 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
             // with configured rules is unevaluable, because the rules cannot
             // judge whether the difference would be tolerated.
             ensure!(
-                bodies_match || response_fields.is_empty(),
+                (bodies_match && body_type_difference.is_none()) || response_fields.is_empty(),
                 "response rules require JSON response bodies"
             );
             if !bodies_match {
@@ -655,6 +678,9 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                         report.body_diagnosis = Some(diagnosis);
                     }
                 }
+            }
+            if let Some(difference) = body_type_difference {
+                report.differences.push(difference);
             }
             if !expected_body.gateway_metadata_matches(&actual_body) {
                 report

@@ -270,6 +270,17 @@ impl ResponseDifference {
             actual_status: None,
         }
     }
+
+    pub(super) fn body_type_mismatch(expected: &str, actual: &str) -> Self {
+        Self {
+            pointer: "$body".to_string(),
+            kind: ResponseDifferenceKind::TypeMismatch,
+            expected_type: Some(expected.to_string()),
+            actual_type: Some(actual.to_string()),
+            expected_status: None,
+            actual_status: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
