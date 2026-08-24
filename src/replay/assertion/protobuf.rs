@@ -173,6 +173,10 @@ pub(super) fn discover_protobuf_order(
     let order_only = expected == actual;
     let mut joined_string_paths = BTreeSet::new();
     discover_joined_string_paths(&expected, &actual, &[], 0, &mut joined_string_paths);
+    joined_string_paths.retain(|(path, separator)| {
+        canonicalize_joined_string_path(&expected, &path.0, separator, 0).is_ok()
+            && canonicalize_joined_string_path(&actual, &path.0, separator, 0).is_ok()
+    });
     let candidate_expected = canonicalize_joined_paths(&expected, &joined_string_paths)?;
     let candidate_actual = canonicalize_joined_paths(&actual, &joined_string_paths)?;
     let candidates_explain_all_differences = candidate_expected == candidate_actual;
