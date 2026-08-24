@@ -16,6 +16,17 @@ pub(super) enum BodyPath {
     Hessian2JoinedString(Hessian2ValuePath),
 }
 
+pub(super) fn display(path: &BodyPath) -> String {
+    match path {
+        BodyPath::Protobuf(field_path) | BodyPath::ProtobufJoinedString(field_path) => {
+            field_path.display_path()
+        }
+        BodyPath::Hessian2(value_path) | BodyPath::Hessian2JoinedString(value_path) => {
+            value_path.display_path()
+        }
+    }
+}
+
 pub(super) fn from_rule(path: &ResponseBodyUnorderedPath) -> BodyPath {
     match path {
         ResponseBodyUnorderedPath::Protobuf(path) => BodyPath::Protobuf(path.field_path.clone()),

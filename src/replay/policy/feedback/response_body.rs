@@ -30,7 +30,7 @@ mod path;
 
 use codec::{compare_response_body, validate_unreported_codec_candidate};
 use path::{
-    BodyPath, from_candidate as body_path_from_candidate,
+    BodyPath, display as body_path_display, from_candidate as body_path_from_candidate,
     from_difference as body_path_from_difference,
     from_joined_string_candidate as body_path_from_joined_string_candidate,
     from_joined_string_rule as body_path_from_joined_string_rule, from_rule as body_path_from_rule,
@@ -542,6 +542,7 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
     let matching = &evidence.cases;
     let mut selected_difference_cases = 0;
     let mut discovered = BTreeSet::new();
+    let mut discovered_case_ids = BTreeMap::<BodyPath, String>::new();
     let mut discovered_joined_string = BTreeSet::<(BodyPath, String)>::new();
     let mut diagnostic_paths = BTreeSet::new();
     let mut diagnostic_joined_string_paths = BTreeSet::<BodyPath>::new();
@@ -614,21 +615,24 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
                     )
                 })?;
         selected_difference_cases += 1;
-        discovered.extend(
-            selected_diagnosis
-                .unordered_path_candidates
-                .iter()
-                .filter_map(|candidate| body_path_from_candidate(candidate, feedback.codec)),
-        );
-        discovered_joined_string.extend(
-            selected_diagnosis
-                .unordered_joined_string_candidates
-                .iter()
-                .filter_map(|candidate| {
-                    body_path_from_joined_string_candidate(candidate, feedback.codec)
-                        .map(|path| (path, candidate.separator().to_string()))
-                }),
-        );
+        for path in selected_diagnosis
+            .unordered_path_candidates
+            .iter()
+            .filter_map(|candidate| body_path_from_candidate(candidate, feedback.codec))
+        {
+            discovered_case_ids
+                .entry(path.clone())
+                .or_insert_with(|| case.case_id.clone());
+            discovered.insert(path);
+        }
+        for candidate in &selected_diagnosis.unordered_joined_string_candidates {
+            if let Some(path) = body_path_from_joined_string_candidate(candidate, feedback.codec) {
+                discovered_case_ids
+                    .entry(path.clone())
+                    .or_insert_with(|| case.case_id.clone());
+                discovered_joined_string.insert((path, candidate.separator().to_string()));
+            }
+        }
         diagnostic_paths.extend(
             selected_diagnosis
                 .differences
@@ -711,17 +715,43 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
             requested.is_disjoint(&requested_joined_string),
             "response-body rule plan uses the same body path as both an unordered collection and a joined-string path"
         );
+        let missing_discovered = new_discovered
+            .difference(&requested)
+            .map(|path| {
+                format!(
+                    "- {} (case_id: {})",
+                    body_path_display(path),
+                    discovered_case_ids
+                        .get(path)
+                        .expect("every discovered path has a representative case")
+                )
+            })
+            .collect::<Vec<_>>();
         ensure!(
-            new_discovered.is_subset(&requested),
-            "response-body rule plan must include every newly discovered unordered body path"
+            missing_discovered.is_empty(),
+            "response-body rule plan must include every newly discovered unordered body path; missing:\n{}",
+            missing_discovered.join("\n")
         );
+        let new_discovered_joined_string_paths = new_discovered_joined_string
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect::<BTreeSet<_>>();
+        let missing_discovered_joined_string = new_discovered_joined_string_paths
+            .difference(&requested_joined_string)
+            .map(|path| {
+                format!(
+                    "- {} (case_id: {})",
+                    body_path_display(path),
+                    discovered_case_ids
+                        .get(path)
+                        .expect("every discovered path has a representative case")
+                )
+            })
+            .collect::<Vec<_>>();
         ensure!(
-            new_discovered_joined_string
-                .iter()
-                .map(|(path, _)| path.clone())
-                .collect::<BTreeSet<_>>()
-                .is_subset(&requested_joined_string),
-            "response-body rule plan must include every newly discovered joined-string body path"
+            missing_discovered_joined_string.is_empty(),
+            "response-body rule plan must include every newly discovered joined-string body path; missing:\n{}",
+            missing_discovered_joined_string.join("\n")
         );
         ensure!(
             requested.is_subset(&diagnostic_paths),
