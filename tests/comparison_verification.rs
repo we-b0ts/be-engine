@@ -342,6 +342,30 @@ fn protobuf_joined_string_rule_reuses_comparison_bodies_for_offline_verification
     .apply()
     .unwrap();
 
+    let missing_error = plan_response_body_rule(ResponseBodyRuleFeedback {
+        policy_path: policy.clone(),
+        api: "MOTAN /rpc/example".to_string(),
+        codec: ResponseBodyCodec::Protobuf,
+        unordered_paths: vec![ResponseBodyUnorderedPath::Protobuf(ProtobufUnorderedPath {
+            field_path: ProtobufFieldPath(vec![3]),
+            display_path: "response.names".to_string(),
+            element_type: ProtobufRepeatedElementType::String,
+            source_evidence: "src/service.rs:names is a set".to_string(),
+        })],
+        unordered_joined_string_paths: Vec::new(),
+        evidence: ResponseBodyRuleEvidence::Comparison {
+            comparison_report: report_path.clone(),
+        },
+    })
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(
+        missing_error
+            .contains("must include every newly discovered joined-string body path; missing:\n- 3")
+    );
+    assert!(missing_error.contains("case_id: 00000000-0000-4000-8000-000000000001"));
+
     let applied = plan_response_body_rule(ResponseBodyRuleFeedback {
         policy_path: policy.clone(),
         api: "MOTAN /rpc/example".to_string(),
@@ -623,6 +647,124 @@ fn motan_gateway_hessian2_body_rule_accepts_a_raw_body_envelope() {
     let updated = fs::read_to_string(policy).unwrap();
     assert!(updated.contains("hessian2:"));
     assert!(updated.contains("value_path:\n        - names"));
+}
+
+#[test]
+fn response_body_rule_reports_each_missing_path_with_one_case_id() {
+    fn hessian2_object(names: &[&str], aliases: &[&str]) -> Vec<u8> {
+        let mut payload = Vec::new();
+        let mut encoder = HessianEncoder::new(&mut payload, HessianLimits::default());
+        encoder
+            .begin_object(HessianClassSchema::new(
+                "example.CacheResult",
+                &["names", "aliases"],
+            ))
+            .unwrap();
+        encoder.encode_value(&names.to_vec()).unwrap();
+        encoder.encode_value(&aliases.to_vec()).unwrap();
+        encoder.end_object();
+        payload
+    }
+
+    let temp = tempdir().unwrap();
+    let run = create_run(temp.path(), json!("unused"), json!("unused"));
+    let first_case_id = "00000000-0000-4000-8000-000000000001";
+    let second_case_id = "00000000-0000-4000-8000-000000000002";
+    let first_case = run.join(format!("apis/api-token/{first_case_id}"));
+    let second_case = run.join(format!("apis/api-token/{second_case_id}"));
+    fs::write(
+        first_case.join("request.json"),
+        serde_json::to_vec(&json!({
+            "protocol": "motan",
+            "protocol_version": "motan2",
+            "method": "MOTAN",
+            "uri": "/rpc/hessian-multiple-paths",
+            "api_pattern": "/rpc/hessian-multiple-paths",
+            "api_key": "motan:test/example#result()"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    write_binary_response(
+        &first_case.join("expected-response.json"),
+        200,
+        &hessian2_object(&["alice", "bob"], &["one", "two"]),
+    );
+    write_binary_response(
+        &first_case.join("response.json"),
+        200,
+        &hessian2_object(&["bob", "alice"], &["one", "two"]),
+    );
+
+    fs::create_dir_all(&second_case).unwrap();
+    fs::copy(
+        first_case.join("case-kind.json"),
+        second_case.join("case-kind.json"),
+    )
+    .unwrap();
+    fs::copy(
+        first_case.join("request.json"),
+        second_case.join("request.json"),
+    )
+    .unwrap();
+    write_binary_response(
+        &second_case.join("expected-response.json"),
+        200,
+        &hessian2_object(&["alice", "bob"], &["one", "two"]),
+    );
+    write_binary_response(
+        &second_case.join("response.json"),
+        200,
+        &hessian2_object(&["alice", "bob"], &["two", "one"]),
+    );
+    fs::write(
+        run.join("comparison-recording-run.json"),
+        serde_json::to_vec(&json!({
+            "status": "completed",
+            "ready": true,
+            "finished_at": "2026-07-22T16:00:01Z",
+            "counts": {"published": 2}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+    )
+    .unwrap();
+    let report_path = run.join("comparison-report.json");
+    verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run,
+        policy: policy.clone(),
+        report: report_path.clone(),
+    })
+    .unwrap();
+
+    let error = plan_response_body_rule(ResponseBodyRuleFeedback {
+        policy_path: policy,
+        api: "MOTAN /rpc/hessian-multiple-paths".to_string(),
+        codec: ResponseBodyCodec::Hessian2,
+        unordered_paths: vec![ResponseBodyUnorderedPath::Hessian2(Hessian2UnorderedPath {
+            value_path: Hessian2ValuePath(vec!["names".to_string()]),
+            display_path: "$.names".to_string(),
+            source_evidence: "names is an unordered set".to_string(),
+        })],
+        unordered_joined_string_paths: Vec::new(),
+        evidence: ResponseBodyRuleEvidence::Comparison {
+            comparison_report: report_path,
+        },
+    })
+    .err()
+    .unwrap()
+    .to_string();
+
+    assert!(error.contains("must include every newly discovered unordered body path; missing:"));
+    assert!(error.contains("- $.aliases"));
+    assert!(error.contains(&format!("case_id: {second_case_id}")));
+    assert!(!error.contains(&format!("case_id: {first_case_id}")));
 }
 
 #[test]
