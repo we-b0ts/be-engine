@@ -108,6 +108,11 @@ async fn motan_requests_are_compared_with_the_same_case_lifecycle() {
         "baseline"
     );
     assert_eq!(recorded_body(&case.join("response.json")), "candidate");
+    assert_eq!(
+        read_json(&case.join("expected-response.json"))["serialization"],
+        1
+    );
+    assert_eq!(read_json(&case.join("response.json"))["serialization"], 1);
     task.abort();
     drop(occupied_http_gateway);
 }

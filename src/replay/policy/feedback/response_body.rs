@@ -197,11 +197,14 @@ fn load_comparison_evidence(
         let (expected_body, actual_body, source_after_body) = if case.passed {
             (Vec::new(), Vec::new(), None)
         } else {
+            let request = case_dir.join("request.json");
             let expected = read_comparison_response_observation(
+                &request,
                 &case_dir.join("expected-response.json"),
                 "source-before response",
             )?;
             let actual = read_comparison_response_observation(
+                &request,
                 &case_dir.join("response.json"),
                 "candidate response",
             )?;
@@ -210,6 +213,7 @@ fn load_comparison_evidence(
                 .as_ref()
                 .map(|_| {
                     read_comparison_response_observation(
+                        &request,
                         &case_dir.join("expected-response-after.json"),
                         "source-after response",
                     )

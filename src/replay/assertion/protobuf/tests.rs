@@ -115,6 +115,33 @@ fn rejects_invalid_envelope_length() {
 }
 
 #[test]
+fn accepts_raw_protobuf_after_gateway_payload_normalization() {
+    let expected = message([bytes_field(3, b"alice"), bytes_field(3, b"bob")]);
+    let actual = message([bytes_field(3, b"bob"), bytes_field(3, b"alice")]);
+
+    let discovery = discover_protobuf_order(&expected, &actual).unwrap();
+
+    assert_eq!(discovery.envelope, BodyEnvelope::Raw);
+    assert_eq!(discovery.unordered_paths, vec![ProtobufFieldPath(vec![3])]);
+    assert!(discovery.order_only);
+    assert!(is_protobuf_body(&expected));
+}
+
+#[test]
+fn rejects_a_protobuf_envelope_change() {
+    let payload = message([bytes_field(3, b"alice")]);
+    let enveloped = body(payload.clone());
+
+    let error = discover_protobuf_order(&enveloped, &payload).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("different envelopes: source-before simple_byte_array and candidate raw")
+    );
+}
+
+#[test]
 fn compares_packed_integer_elements_without_treating_bytes_as_a_collection() {
     let expected = body(message([bytes_field(2, &[1, 0x80, 1, 2])]));
     let actual = body(message([bytes_field(2, &[2, 1, 0x80, 1])]));

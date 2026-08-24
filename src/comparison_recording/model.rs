@@ -47,6 +47,8 @@ pub(super) struct ComparisonRecordingResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) protocol_version: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) serialization: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) rpc_status: Option<&'static str>,
 }
 
