@@ -1,78 +1,53 @@
-# Expose a Motan RPC service with macros
+# Implement Motan APIs through `brz-motan` macros
 
-This is an implementation guide for adding Motan to a target service, not a
-reference for the Motan protocol, SDK, or Hessian capabilities. Copy the source
-service's RPC contract exactly: interface path, method name, descriptor, Java
-DTO class name, field names, and field order must all come from evidence rather
-than inference.
+Use this guide while implementing a recorded Motan API in a target service. It
+is not a Motan protocol reference or an SDK capability catalog. Start from
+source and traffic evidence, then apply the patterns below. Copy the source
+service's interface path, method name, descriptor, outer serialization, Java
+DTO class name, field names, and field order exactly; never infer them from a
+method name or payload contents.
 
 Every target service uses a macro-generated adapter:
 
 ```text
-#[brz_motan::export] + #[brz_motan::method] + Hessian DTO derives
+#[brz_motan::export] + #[brz_motan::method] + DTO derives when objects are used
 ```
 
-Do not implement `ExportService`, start a raw server, read or write frames, or
-encode a Motan response manually in business code. If a proven, generally
-needed wire form cannot be expressed with these macros and derives, add it to
-`brz-motan`; the target service must continue to use the generated adapter.
+This generated-adapter path is mandatory. If a proven, generally needed wire
+form cannot be expressed with these macros and derives, add it to `brz-motan`;
+the target service must continue to use the generated adapter.
 
-## 1. Add the macro export path
+## 1. Follow the generated-adapter path
 
-Use the project-approved Motan revision and enable `hessian2`. This feature
-also enables the service-export macros; ordinary RPC methods do not need a
-second export mechanism.
+Reuse the target's project-approved `brz-motan` dependency. If the target does
+not have one, add the approved revision and enable the feature required by the
+recorded outer serialization. Product code depends only on `brz-motan`; never
+add a direct codec-crate dependency.
 
-```toml
-brz-motan = { package = "motan", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", rev = "<approved-revision>", features = ["hessian2"] }
-```
-
-Keep RPC adapters in an API-boundary module and business logic in domain
+Keep the RPC adapter in an API-boundary module and business logic in domain
 modules. One Motan interface maps to one service type annotated with
-`#[brz_motan::export]`; mount all generated adapters centrally at startup.
+`#[brz_motan::export]`. Each source method maps to one
+`#[brz_motan::method]` function. Mount the generated exporters centrally at
+startup.
 
-## 2. Define DTOs with derives
+The generated adapter owns method matching, argument decoding, response
+encoding, and serialization validation. Application code must not implement
+`ExportService`, add a second dispatch table, start a raw Motan server, or read
+and write frames.
 
-Declare object DTOs only with Hessian derives: request objects derive
-`HessianDecode`, response objects derive `HessianEncode`, and DTOs that travel
-in both directions derive both. Every DTO must declare its real Java class
-name. Use `rename` whenever the Rust and wire field names differ. Struct field
-declaration order is the wire field order used for encoding.
+## 2. Put the source contract in the macro and signature
 
-```rust
-use brz_motan::hessian2::{HessianDecode, HessianEncode};
+Copy `path`, `name`, `descriptor`, and any fixed `serialization` value from
+source or recorded evidence. Express the business boundary in the Rust method
+signature so the generated adapter can do the wire work. For a
+`java.lang.String` carrying typed JSON, use `Json<Request>` and
+`Json<Response>` with Serde derives. For other values, use their direct Rust
+types or the DTO derives provided by `brz-motan`.
 
-#[derive(HessianDecode)]
-#[hessian(
-    crate = "brz_motan::hessian2",
-    class = "com.example.api.CreateProfileRequest"
-)]
-struct CreateProfileRequest {
-    #[hessian(rename = "displayName")]
-    display_name: String,
-    age: i32,
-    #[hessian(bytes)]
-    avatar: Vec<u8>,
-}
-
-#[derive(HessianEncode)]
-#[hessian(
-    crate = "brz_motan::hessian2",
-    class = "com.example.api.CreateProfileResponse"
-)]
-struct CreateProfileResponse {
-    #[hessian(rename = "profileId")]
-    profile_id: i64,
-    #[hessian(rename = "displayName")]
-    display_name: String,
-}
-```
-
-Basic scalars and collections can be positional method arguments or return
-values directly; use the DTO pattern above for objects. Do not hand-write
-`HessianEncode` or `HessianDecode` in application code, and do not create an
-extra DTO wrapper merely to hold method arguments. Java `byte[]` maps to
-`Vec<u8>` annotated with `#[hessian(bytes)]`.
+Do not manually parse a typed `Json<Request>` or serialize a typed
+`Json<Response>` in the handler. Do not hand-write codec traits in application
+code. If an evidence-proven wire form cannot be expressed by the macros and
+provided derives, extend `brz-motan` and keep the target on the same macro path.
 
 ## 3. Declare the interface and methods with macros
 
@@ -82,46 +57,63 @@ in declaration order: no arguments use `"void"`; two `i64` arguments use
 `"long,long"`. An exported method must take shared `&self` and return
 `Result<Response, brz_motan::Error>`; it may be synchronous or `async`.
 
-```rust
-use brz_motan::Error;
+Always declare the source method's descriptor in `#[brz_motan::method]`, even
+when recorded requests omit it. The generated adapter handles an omitted wire
+descriptor when the method name is unique. Do not add codec or
+missing-descriptor compatibility options to application exports.
 
-struct ProfileRpcService {
-    // Hold only domain services or dependencies; wire DTO details stay here.
+```rust
+use brz_motan::{Error, Json};
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize)]
+struct LookupRequest {
+    #[serde(rename = "recordId")]
+    record_id: i64,
 }
 
+#[derive(Serialize)]
+struct LookupResponse {
+    found: bool,
+}
+
+struct ExampleRpcService;
+
 #[brz_motan::export(
-    path = "com.example.api.ProfileService",
+    path = "com.example.api.ExampleService",
     visibility = "pub(crate)",
     crate = "brz_motan"
 )]
-impl ProfileRpcService {
-    #[brz_motan::method(name = "getProfile", descriptor = "long")]
-    async fn get_profile(&self, profile_id: i64) -> Result<CreateProfileResponse, Error> {
-        Ok(CreateProfileResponse {
-            profile_id,
-            display_name: "example".to_owned(),
-        })
-    }
-
+impl ExampleRpcService {
     #[brz_motan::method(
-        name = "createProfile",
-        descriptor = "com.example.api.CreateProfileRequest"
+        name = "lookupJson",
+        descriptor = "java.lang.String",
+        serialization = "breeze"
     )]
-    async fn create_profile(
+    async fn lookup_json(
         &self,
-        request: CreateProfileRequest,
-    ) -> Result<CreateProfileResponse, Error> {
-        Ok(CreateProfileResponse {
-            profile_id: 1,
-            display_name: request.display_name,
-        })
+        request: Json<LookupRequest>,
+    ) -> Result<Json<LookupResponse>, Error> {
+        Ok(Json::new(LookupResponse {
+            found: request.into_inner().record_id > 0,
+        }))
     }
 }
 ```
 
-The macro generates `ProfileRpcServiceExporter` and its `PATH` constant. Create
-adapters only from this generated type; do not duplicate the interface string
-or implement separate dispatch.
+`Json<T>` changes how the generated adapter invokes business code; it does not
+change the source descriptor, so the example remains `java.lang.String`.
+Specify `serialization` only when the source contract fixes it. When source
+evidence requires adaptive String handling, omit that attribute and let the
+generated adapter mirror the request serialization.
+
+`Json<T>` is not an instruction to the Replay comparator. Do not alter the
+target signature merely to change comparison behavior; response payload
+detection remains traffic-engine-owned.
+
+The macro generates `ExampleRpcServiceExporter` and its `PATH` constant.
+Create adapters only from this generated type; do not duplicate the interface
+string or implement separate dispatch.
 
 ## 4. Mount and bind at startup
 
@@ -141,7 +133,7 @@ async fn serve_motan(
     shutdown: impl Future<Output = ()> + Send,
 ) -> Result<(), Error> {
     let services = brz_motan::exporter!(
-        ProfileRpcServiceExporter::new(ProfileRpcService {}),
+        ExampleRpcServiceExporter::new(ExampleRpcService),
     );
 
     let bound = MotanExporter::new(ServerConfig::default())
@@ -150,7 +142,7 @@ async fn serve_motan(
             port,
             group,
             module,
-            interfaces: vec![ProfileRpcServiceExporter::PATH.to_owned()],
+            interfaces: vec![ExampleRpcServiceExporter::PATH.to_owned()],
         })
         .bind()
         .await?;
@@ -165,9 +157,11 @@ the corresponding endpoint's `interfaces`.
 
 ## 5. Check before delivery
 
-1. Test every DTO's encoding and decoding, covering its actual class name,
-   field names, field order, and `byte[]` values.
-2. Call the running exporter with each exact `(path, method, descriptor)` for
-   every migrated method.
-3. Run the target repository's normal tests and this API's Replay/Comparison
+1. Test each macro method through its generated exporter, including request
+   decoding, handler invocation, response encoding, and error conversion.
+2. For DTOs, test the source field names, defaults, nullability, numeric ranges,
+   omitted fields, and any exact text that the source contract preserves.
+3. Replay recorded request frames unchanged against the running exporter,
+   preserving the descriptor when present and its absence when omitted.
+4. Run the target repository's normal tests and this API's Replay/Comparison
    acceptance.

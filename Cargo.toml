@@ -21,8 +21,10 @@ hyper-util = { version = "0.1", features = ["client-legacy", "http1", "server", 
 kafka-protocol = { version = "0.17", default-features = false, features = ["broker", "client", "messages_enums"] }
 libc = "0.2"
 motan-codec = { path = "../breeze/motan/crates/motan-codec" }
+motan-breeze = { path = "../breeze/motan/crates/motan-breeze" }
 motan-hessian2 = { path = "../breeze/motan/crates/motan-hessian2", default-features = false }
 motan-protocol = { path = "../breeze/motan/crates/motan-protocol" }
+motan-simple = { path = "../breeze/motan/crates/motan-simple" }
 rcgen = { version = "0.13", features = ["pem", "x509-parser"] }
 redis-protocol = { version = "6", features = ["bytes"] }
 rustls = "0.23"
@@ -41,5 +43,6 @@ webpki-roots = "1"
 x509-parser = "0.16"
 
 [dev-dependencies]
+motan-json = { path = "../breeze/motan/crates/motan-json" }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
