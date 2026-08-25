@@ -366,18 +366,19 @@ fn cancel_misroute(
         route.repair_id.as_deref() == Some(requested_id),
         "repair cancellation is stale or belongs to another issue"
     );
+    let issue_kind = state
+        .active_issue
+        .as_ref()
+        .context("system repair has no active issue")?
+        .kind;
     ensure!(
-        route.kind == "source_change",
-        "only a misrouted source-change repair can be canceled"
+        repair_can_return_to_target(&route.kind, issue_kind),
+        "only a misrouted source-change or Recorder/Replay capability repair can be returned to target implementation"
     );
     let issue = state
         .active_issue
         .as_mut()
         .context("system repair has no active issue")?;
-    ensure!(
-        issue.kind == RewriteIssueKind::Comparison,
-        "source-change repair cancellation requires a comparison issue"
-    );
     issue.owner = RewriteIssueOwner::TargetCode;
     state.phase = RewritePhase::ImplementationRequired;
     state.route = None;
@@ -387,6 +388,21 @@ fn cancel_misroute(
         state,
         format!("administrator canceled misrouted repair {requested_id}: {reason}"),
     ))
+}
+
+fn repair_can_return_to_target(route_kind: &str, issue_kind: RewriteIssueKind) -> bool {
+    match route_kind {
+        "source_change" => issue_kind == RewriteIssueKind::Comparison,
+        "replay_capability_gap" => matches!(
+            issue_kind,
+            RewriteIssueKind::Replay | RewriteIssueKind::Dependency
+        ),
+        "recorder_capability_gap" => matches!(
+            issue_kind,
+            RewriteIssueKind::Response | RewriteIssueKind::Dependency
+        ),
+        _ => false,
+    }
 }
 
 fn resume_replay_planning(
@@ -676,11 +692,55 @@ mod tests {
     }
 
     #[test]
-    fn repair_cancellation_rejects_wrong_id_and_non_source_routes() {
+    fn administrator_can_cancel_a_misrouted_capability_repair() {
+        let target = tempfile::tempdir().unwrap();
+        for (route_kind, issue_kind) in [
+            ("replay_capability_gap", RewriteIssueKind::Replay),
+            ("replay_capability_gap", RewriteIssueKind::Dependency),
+            ("recorder_capability_gap", RewriteIssueKind::Response),
+            ("recorder_capability_gap", RewriteIssueKind::Dependency),
+        ] {
+            let mut state = repair_state("traffic-e2e-revision".to_string());
+            state.active_issue.as_mut().unwrap().kind = issue_kind;
+            state.route.as_mut().unwrap().kind = route_kind.to_string();
+            let revision = state.revision;
+
+            let action = cancel_misroute(
+                target.path(),
+                &mut state,
+                "repair-current",
+                "target behavior caused the observed mismatch",
+            )
+            .unwrap();
+
+            assert_eq!(state.phase, RewritePhase::ImplementationRequired);
+            assert_eq!(
+                state.active_issue.as_ref().map(|issue| issue.owner),
+                Some(RewriteIssueOwner::TargetCode)
+            );
+            assert!(state.route.is_none());
+            assert_eq!(state.revision, revision + 1);
+            assert!(matches!(
+                action.action,
+                super::super::model::RewriteAction::AdvanceRequired { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn repair_cancellation_rejects_wrong_id_incompatible_issue_and_external_data_routes() {
         let target = tempfile::tempdir().unwrap();
         let mut state = repair_state("revision".to_string());
 
         assert!(cancel_misroute(target.path(), &mut state, "repair-stale", "misroute").is_err());
+
+        state.active_issue.as_mut().unwrap().kind = RewriteIssueKind::Response;
+        assert!(cancel_misroute(target.path(), &mut state, "repair-current", "misroute").is_err());
+
+        state.active_issue.as_mut().unwrap().owner = RewriteIssueOwner::SourceInvestigation;
+        state.route.as_mut().unwrap().kind = "external_data_blocker".to_string();
+        state.route.as_mut().unwrap().acceptance_kind =
+            Some(RewriteRepairAcceptanceKind::SourceRuntimeInputsChanged);
         assert!(cancel_misroute(target.path(), &mut state, "repair-current", "misroute").is_err());
         assert_eq!(state.phase, RewritePhase::SystemRepairRequired);
         assert!(state.route.is_some());
