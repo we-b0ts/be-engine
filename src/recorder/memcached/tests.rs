@@ -255,6 +255,87 @@ async fn text_request_is_pending_before_upstream_write_completes() {
 }
 
 #[tokio::test]
+async fn text_connection_preserves_sequential_exchanges_across_an_idle_gap() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let temp = tempdir().unwrap();
+    let mut config = AppConfig::default();
+    config.recording.output_dir = temp.path().join("recordings");
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+    let state = AppState::new(config).await.unwrap();
+
+    let (mut client, proxy_client) = memcached_tcp_pair().await;
+    let (mut upstream, proxy_upstream) = memcached_tcp_pair().await;
+    let upstream_addr = upstream.peer_addr().unwrap();
+    let handler = tokio::spawn(handle_connected(
+        proxy_client,
+        proxy_upstream,
+        state.clone(),
+        ConnectionContext {
+            client_addr: None,
+            target_host: "cache.test".to_string(),
+            target_port: 11211,
+            target_addr: "cache.test:11211".to_string(),
+            upstream_addr: upstream_addr.to_string(),
+        },
+        MemcachedWireProtocol::Text,
+    ));
+
+    for (index, request) in [b"get first\r\n".as_slice(), b"get second\r\n".as_slice()]
+        .into_iter()
+        .enumerate()
+    {
+        client.write_all(request).await.unwrap();
+        let mut forwarded = vec![0_u8; request.len()];
+        upstream.read_exact(&mut forwarded).await.unwrap();
+        assert_eq!(forwarded, request);
+        upstream.write_all(b"END\r\n").await.unwrap();
+        let mut response = [0_u8; 5];
+        client.read_exact(&mut response).await.unwrap();
+        assert_eq!(&response, b"END\r\n");
+
+        if index == 0 {
+            // Let the server-to-client task finish recording the first
+            // exchange and wait for more upstream bytes while the pending
+            // queue is empty. The next response must be correlated with the
+            // request that arrives during that wait.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    client.shutdown().await.unwrap();
+    upstream.shutdown().await.unwrap();
+    drop(client);
+    drop(upstream);
+    tokio::time::timeout(Duration::from_secs(1), handler)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    state.recorder().flush_traffic().await.unwrap();
+    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+        .await
+        .unwrap();
+    let events = traffic
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["event_type"] == "memcached_exchange")
+            .count(),
+        2
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| event["event_type"] != "proxy_error")
+    );
+}
+
+#[tokio::test]
 async fn raw_fallback_reports_later_case_activity_on_the_same_connection() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let temp = tempdir().unwrap();

@@ -314,6 +314,15 @@ async fn proxy_text(
                         break;
                     }
                     Ok(_) => {
+                        // `peek` may wait after the empty-queue check above.
+                        // The client task always queues a response-bearing
+                        // request before writing it upstream, so a request can
+                        // legitimately appear while this task is waiting for
+                        // the corresponding response bytes. Recheck here
+                        // before classifying those bytes as unsolicited.
+                        if !s2c_pending.lock().await.is_empty() {
+                            continue;
+                        }
                         s2c_capture_health.activate(
                             &s2c_state,
                             "Memcached text response has no pending request; switched to raw forwarding"

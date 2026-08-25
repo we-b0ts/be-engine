@@ -26,6 +26,16 @@ Successful verification chooses the next transition. Replay and external-input
 repairs reuse the same cases; Recorder or source-baseline repairs allocate
 fresh standard traffic. The AI never chooses between those transitions.
 
+If an administrator confirms that a `source_change`,
+`recorder_capability_gap`, or `replay_capability_gap` route was accepted by
+mistake and the issue is target-owned, use `backend-rewrite-admin repair
+cancel` with the exact repair ID, a bounded reason, and
+`--confirm-misroute`. The command clears only the current accepted route,
+restores `target_code` ownership, and returns the coordinator-owned advance
+command. Execute that returned command once. It does not apply to
+`external_data_blocker`, delete evidence, or bypass ordinary AI workflow
+transitions.
+
 Use `recorder-capability-gap` only when the recorder lacks a required mechanism.
 A configured Breeze resource bypassed during recording is reported as
 `missing-recorded-resource` and becomes an API-scoped recorder-capture refresh,

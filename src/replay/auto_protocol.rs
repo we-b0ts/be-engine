@@ -28,6 +28,12 @@ pub(super) async fn detect(stream: &TcpStream) -> Result<ReplayProtocol> {
             ClientProtocolDetection::Match(
                 DetectedClientProtocol::MemcachedText | DetectedClientProtocol::MemcachedBinary,
             ) => return Ok(ReplayProtocol::Memcached),
+            ClientProtocolDetection::Match(DetectedClientProtocol::Http) => {
+                return Ok(ReplayProtocol::Http);
+            }
+            ClientProtocolDetection::Match(DetectedClientProtocol::Tls) => {
+                return Ok(ReplayProtocol::Https);
+            }
             ClientProtocolDetection::NeedMore if len < MAX_SNIFF_BYTES => {
                 sleep(RETRY_INTERVAL).await;
             }
@@ -36,7 +42,7 @@ pub(super) async fn detect(stream: &TcpStream) -> Result<ReplayProtocol> {
             }
             ClientProtocolDetection::NeedMore | ClientProtocolDetection::NoMatch => {
                 return Err(anyhow!(
-                    "auto replay target traffic is neither Redis nor Memcached"
+                    "auto replay target traffic is not a supported replay protocol"
                 ));
             }
             ClientProtocolDetection::Match(protocol) => {
@@ -60,6 +66,11 @@ mod tests {
         for (payload, expected) in [
             (b"*1\r\n$4\r\nPING\r\n".as_slice(), ReplayProtocol::Redis),
             (b"get key\r\n".as_slice(), ReplayProtocol::Memcached),
+            (
+                b"GET /resource HTTP/1.1\r\nHost: api.example.test\r\n\r\n".as_slice(),
+                ReplayProtocol::Http,
+            ),
+            (b"\x16\x03\x01\x00\x01".as_slice(), ReplayProtocol::Https),
         ] {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let mut client = TcpStream::connect(listener.local_addr().unwrap())

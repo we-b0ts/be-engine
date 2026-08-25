@@ -1283,19 +1283,21 @@ recording evidence. A successful `missing-recorded-resource` route instead
 returns the existing recorder-capture apply command and never enters system
 repair.
 
-If an administrator confirms that a comparison issue was incorrectly routed
-as a `source_change` system repair, return that exact repair to target
-implementation explicitly:
+If an administrator confirms that an issue was incorrectly routed as a
+`source_change`, `recorder_capability_gap`, or `replay_capability_gap` system
+repair, return that exact repair to target implementation explicitly:
 
 ```bash
 backend-rewrite-admin --target-root ../target repair cancel <repair-id> \
-  --reason 'comparison evidence was misclassified' \
+  --reason 'the observed mismatch is target-owned' \
   --confirm-misroute
 ```
 
-The command accepts only the current comparison repair, clears its accepted
-route, and restores the issue's target-code owner. It does not cancel other
-repair kinds, delete evidence, or provide an ordinary AI workflow bypass.
+The command accepts only the current repair and one of the supported
+source/capability route and issue combinations. It clears the accepted route,
+restores the issue's target-code owner, and returns the coordinator-owned
+advance command. It does not cancel external-data repairs, delete evidence, or
+provide an ordinary AI workflow bypass.
 
 Initialize a rewrite target's three generated documents once, before its first
 coordinator session:
@@ -1328,6 +1330,8 @@ target section is:
 ```yaml
 target:
   dockerfile: .traffic-e2e/Dockerfile.e2e
+  # Maximum time from target launch until every enabled endpoint is ready.
+  startup_timeout_seconds: 60
   startup:
     mounts:
       - /data1/weibo/confs
@@ -1343,10 +1347,11 @@ target:
 ```
 
 Target readiness path and status come from the project document's
-`recorder.http_gateway.ready` section. Target request timeout comes from
-`comparison_recording.upstream_timeout_ms`; target startup and replay startup
-timeouts are coordinator-owned defaults. These runtime policy values are not
-duplicated in project settings. The target's native HTTP port is the port in
+`recorder.http_gateway.ready` section. Target startup readiness uses
+`project.target.startup_timeout_seconds`, which defaults to 60 seconds when
+omitted and accepts values through 1800 seconds. Target request timeout comes
+from `comparison_recording.upstream_timeout_ms`; the Replay service startup
+timeout remains a coordinator-owned default. The target's native HTTP port is the port in
 `recorder.http_gateway.matched_upstream`; Replay uses it on loopback and Comparison uses
 it on the run-owned target bridge IP.
 

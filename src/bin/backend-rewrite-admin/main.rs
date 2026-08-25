@@ -46,7 +46,7 @@ struct RepairArgs {
 
 #[derive(Debug, Subcommand)]
 enum RepairCommand {
-    /// Return a misrouted source-change repair to target implementation.
+    /// Return a misrouted source or capability repair to target implementation.
     Cancel(RepairCancelArgs),
     /// Re-arm coordinator Replay after a confirmed out-of-band focused run.
     RetryReplay(RepairRetryReplayArgs),

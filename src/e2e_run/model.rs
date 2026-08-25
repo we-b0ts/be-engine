@@ -20,8 +20,13 @@ pub(super) const STATE_VERSION: u32 = 3;
 pub(super) const ASSERTION_REPORT_VERSION: u32 = 3;
 pub(super) const DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS: u64 = 60;
 pub(super) const DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS: u64 = 60;
+pub(super) const MAX_TARGET_STARTUP_TIMEOUT_SECONDS: u64 = 30 * 60;
 pub(super) const DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS: u64 = 30;
 pub(super) const MAX_RESPONSE_DIFFERENCE_INDEX: usize = 256;
+
+fn default_target_startup_timeout_seconds() -> u64 {
+    DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -62,6 +67,8 @@ pub(super) struct BreezeProjectConfig {
 #[serde(deny_unknown_fields)]
 pub(super) struct TargetProjectConfig {
     pub dockerfile: PathBuf,
+    #[serde(default = "default_target_startup_timeout_seconds")]
+    pub startup_timeout_seconds: u64,
     pub startup: crate::startup::StartupConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality_gates: Option<Vec<TargetQualityGateConfig>>,

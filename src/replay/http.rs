@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::future::pending;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
@@ -20,6 +22,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_rustls::TlsAcceptor;
+use tracing::info;
 use url::form_urlencoded;
 
 use super::{
@@ -73,6 +76,27 @@ pub(super) struct ReplayHttpExchange {
     identity: HttpDependencyIdentity,
     record: RecordedHttpExchange,
     consumed: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(super) struct RecordedTcpGatewayConnection {
+    domain: Option<String>,
+    fake_addr: String,
+    client_to_server_bytes: u64,
+    server_to_client_bytes: u64,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ReplayHttpBlackhole {
+    case_id: String,
+    target: TargetKey,
+    consumed: bool,
+}
+
+enum HttpReplayMatchError {
+    Blackhole,
+    BadGateway(String),
 }
 
 #[derive(Debug, Default)]
@@ -175,6 +199,42 @@ pub(super) fn register_http_exchange(
         case_id: case_id.map(ToOwned::to_owned),
         identity,
         record,
+        consumed: false,
+    });
+    Ok(())
+}
+
+pub(super) fn register_tcp_connection_blackhole(
+    record: RecordedTcpGatewayConnection,
+    source: ReplaySource,
+    case_id: Option<&str>,
+    blackholes: &mut Vec<ReplayHttpBlackhole>,
+    targets: &mut BTreeMap<TargetKey, ReplayTarget>,
+) -> Result<()> {
+    if source != ReplaySource::Case
+        || record.error.is_some()
+        || record.client_to_server_bytes != 0
+        || record.server_to_client_bytes != 0
+    {
+        return Ok(());
+    }
+    let (Some(case_id), Some(domain)) = (case_id, record.domain.as_deref()) else {
+        return Ok(());
+    };
+    let fake_addr = record.fake_addr.parse::<SocketAddr>().with_context(|| {
+        format!(
+            "invalid fake address for zero-byte TCP connection {domain}: {}",
+            record.fake_addr
+        )
+    })?;
+    let target = TargetKey {
+        host: super::normalize_host(domain),
+        port: fake_addr.port(),
+    };
+    register_replay_target(targets, &target, ReplayProtocol::Auto)?;
+    blackholes.push(ReplayHttpBlackhole {
+        case_id: case_id.to_string(),
+        target,
         consumed: false,
     });
     Ok(())
@@ -313,11 +373,19 @@ async fn handle_http_request(
         let mut state = state.lock().await;
         state.match_http_request(scheme, &target_key, &method, &uri, host.as_deref(), &body)
     };
-    let response = match matched {
-        Ok(record) => response_from_record(record),
-        Err(reason) => Ok(error_response(StatusCode::BAD_GATEWAY, &reason)),
-    }
-    .unwrap_or_else(|error| error_response(StatusCode::BAD_GATEWAY, &error.to_string()));
+    let record = match matched {
+        Ok(record) => record,
+        Err(HttpReplayMatchError::Blackhole) => {
+            report_writer.request();
+            return pending::<Result<Response<Full<Bytes>>, Infallible>>().await;
+        }
+        Err(HttpReplayMatchError::BadGateway(reason)) => {
+            report_writer.request();
+            return Ok(error_response(StatusCode::BAD_GATEWAY, &reason));
+        }
+    };
+    let response = response_from_record(record)
+        .unwrap_or_else(|error| error_response(StatusCode::BAD_GATEWAY, &error.to_string()));
     report_writer.request();
     Ok(response)
 }
@@ -331,7 +399,7 @@ impl ReplayState {
         uri: &Uri,
         host: Option<&str>,
         body: &[u8],
-    ) -> std::result::Result<RecordedHttpExchange, String> {
+    ) -> std::result::Result<RecordedHttpExchange, HttpReplayMatchError> {
         let active_case_id = self.active_case_id.clone();
         if let Some(host) = host
             && !host_matches_target(host, target)
@@ -341,7 +409,7 @@ impl ReplayState {
                 target.host
             );
             self.record_unmatched_http(scheme, target, method, uri, reason.clone());
-            return Err(reason);
+            return Err(HttpReplayMatchError::BadGateway(reason));
         }
 
         let mut matching_index = None;
@@ -396,11 +464,14 @@ impl ReplayState {
             }
         }
         let Some(index) = matching_index else {
+            if self.claim_http_blackhole(target, method, uri) {
+                return Err(HttpReplayMatchError::Blackhole);
+            }
             let reason = closest_mismatch.unwrap_or_else(|| {
                 "no recorded HTTP exchange matched the active case and target".to_string()
             });
             self.record_unmatched_http(scheme, target, method, uri, reason.clone());
-            return Err(reason);
+            return Err(HttpReplayMatchError::BadGateway(reason));
         };
         let exchange = self.http_exchanges[index].clone();
         if exchange.record.error.is_some() || exchange.record.response_status.is_none() {
@@ -415,7 +486,7 @@ impl ReplayState {
                 uri: uri_path_only(&uri.to_string()),
                 reason: reason.clone(),
             });
-            return Err(reason);
+            return Err(HttpReplayMatchError::BadGateway(reason));
         }
 
         self.http_exchanges[index].consumed = true;
@@ -437,6 +508,29 @@ impl ReplayState {
             },
         );
         Ok(exchange.record)
+    }
+
+    fn claim_http_blackhole(&mut self, target: &TargetKey, method: &Method, uri: &Uri) -> bool {
+        let Some(active_case_id) = self.active_case_id.as_deref() else {
+            return false;
+        };
+        let Some(blackhole) = self.http_blackholes.iter_mut().find(|blackhole| {
+            !blackhole.consumed
+                && blackhole.case_id == active_case_id
+                && blackhole.target == *target
+        }) else {
+            return false;
+        };
+        blackhole.consumed = true;
+        info!(
+            case_id = active_case_id,
+            host = %target.host,
+            port = target.port,
+            method = %method,
+            uri = %uri_path_only(&uri.to_string()),
+            "replaying recorded zero-byte TCP dependency as an open connection with no response"
+        );
+        true
     }
 
     fn record_unmatched_http(
