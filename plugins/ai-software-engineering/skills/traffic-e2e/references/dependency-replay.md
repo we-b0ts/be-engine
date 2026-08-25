@@ -34,8 +34,9 @@ recorder metadata, or replay evidence. Required side effects remain required.
 For source-proven API-independent HTTP work, use the guarded narrow background
 workflow and re-record; existing dirty cases are never retroactively
 reclassified. `allowed_unused_http_hosts` remains a host-wide compatibility
-exception for older recordings. Unmatched or unsupported target calls always
-remain dirty.
+exception for older recordings. Target calls that are neither matched by an
+exchange nor claimed by the narrow zero-byte TCP behavior below remain dirty.
+Unsupported exchanges always remain dirty.
 
 ## Coverage
 
@@ -68,6 +69,17 @@ exception: Replay may return its first successful recorded response for every
 identical logical read. Unmarked Redis, Memcached, HTTP, MySQL, Kafka, and Motan
 evidence remains finite inventory. The target must issue genuine dependency
 calls and build its own local state from replayed responses.
+
+A legacy, Case-local `tcp_gateway_connection` with no recorded error and zero
+bytes in both directions is finite evidence for one dependency connection that
+returned no bytes. Only after normal HTTP exchange matching fails, Replay may
+consume one such record for the same normalized `domain:port`, fully read the
+target request, write no response bytes, and wait for the target to close the
+connection. Do not reproduce the recorded connection duration as a server-side
+timeout, and do not emit unmatched-request evidence for the claimed call.
+Global/bootstrap connection records never authorize this behavior. If neither
+an exchange nor a matching Case-local zero-byte record exists, preserve the
+ordinary immediate HTTP 502 and unmatched evidence.
 
 For ordinary MySQL, Redis, Memcached, and Kafka Produce/Fetch responses, delay
 delivery by the recorded semantic exchange `duration_ms`; do not collapse

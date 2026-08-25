@@ -4,6 +4,7 @@ pub(super) enum DependencyRecord {
     MysqlConnection(Box<RecordedMysqlConnection>),
     MysqlExchange(Box<RecordedMysqlExchange>),
     HttpExchange(Box<http::RecordedHttpExchange>),
+    TcpGatewayConnection(Box<http::RecordedTcpGatewayConnection>),
     RedisConnection(Box<redis::RecordedConnection>),
     RedisExchange(Box<redis::RecordedExchange>),
     MemcachedConnection(Box<memcached::RecordedConnection>),
@@ -32,6 +33,7 @@ pub(super) async fn load_dependency_file(
     case_id: Option<&str>,
     exchanges: &mut Vec<ReplayExchange>,
     http_exchanges: &mut Vec<http::ReplayHttpExchange>,
+    http_blackholes: &mut Vec<http::ReplayHttpBlackhole>,
     redis: &mut redis::RedisReplayState,
     memcached: &mut memcached::MemcachedReplayState,
     kafka: &mut kafka::KafkaReplayState,
@@ -99,6 +101,16 @@ pub(super) async fn load_dependency_file(
         match record {
             DependencyRecord::HttpExchange(exchange) => {
                 http::register_http_exchange(*exchange, source, case_id, http_exchanges, targets)?;
+                continue;
+            }
+            DependencyRecord::TcpGatewayConnection(connection) => {
+                http::register_tcp_connection_blackhole(
+                    *connection,
+                    source,
+                    case_id,
+                    http_blackholes,
+                    targets,
+                )?;
                 continue;
             }
             DependencyRecord::RedisExchange(exchange) => {

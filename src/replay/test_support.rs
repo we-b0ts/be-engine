@@ -89,6 +89,15 @@ fn collect_json_endpoints(value: &Value, endpoints: &mut BTreeSet<RecordedEndpoi
             });
         endpoints.insert(RecordedEndpoint::new(authority.host(), port).unwrap());
     }
+    if object.get("event_type").and_then(Value::as_str) == Some("tcp_gateway_connection")
+        && let (Some(domain), Some(fake_addr)) = (
+            object.get("domain").and_then(Value::as_str),
+            object.get("fake_addr").and_then(Value::as_str),
+        )
+    {
+        let port = fake_addr.parse::<std::net::SocketAddr>().unwrap().port();
+        endpoints.insert(RecordedEndpoint::new(domain, port).unwrap());
+    }
     for value in object.values() {
         collect_json_endpoints(value, endpoints);
     }

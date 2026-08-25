@@ -6,6 +6,7 @@ use hyper::client::conn::http1;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, RootCertStore};
 use tempfile::tempdir;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsConnector;
 
@@ -121,6 +122,45 @@ fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
         .unwrap();
     assert_eq!(motan.protocol, ReplayProtocol::Motan);
     assert_eq!(motan.fake_ip, "198.19.0.20".parse::<Ipv4Addr>().unwrap());
+}
+
+#[test]
+fn tcp_blackhole_requires_case_local_clean_zero_byte_connection() {
+    for (source, client_bytes, server_bytes, error, expected) in [
+        (ReplaySource::Case, 0, 0, None, true),
+        (ReplaySource::Case, 1, 0, None, false),
+        (ReplaySource::Case, 0, 1, None, false),
+        (
+            ReplaySource::Case,
+            0,
+            0,
+            Some("connect failed".to_string()),
+            false,
+        ),
+        (ReplaySource::Global, 0, 0, None, false),
+    ] {
+        let record = RecordedTcpGatewayConnection {
+            domain: Some("api.example.test".to_string()),
+            fake_addr: "198.19.0.1:80".to_string(),
+            client_to_server_bytes: client_bytes,
+            server_to_client_bytes: server_bytes,
+            error,
+        };
+        let mut blackholes = Vec::new();
+        let mut targets = BTreeMap::new();
+
+        register_tcp_connection_blackhole(
+            record,
+            source,
+            Some("case-a"),
+            &mut blackholes,
+            &mut targets,
+        )
+        .unwrap();
+
+        assert_eq!(blackholes.len(), usize::from(expected));
+        assert_eq!(targets.len(), usize::from(expected));
+    }
 }
 
 #[tokio::test]
@@ -447,6 +487,87 @@ async fn allowed_unused_http_host_is_diagnostic_but_unmatched_requests_stay_dirt
     task.abort();
 }
 
+#[tokio::test]
+async fn auto_http_target_without_a_blackhole_returns_bad_gateway() {
+    let temp = tempdir().unwrap();
+    let case_dir = temp.path().join("case-auto-http");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    tokio::fs::write(case_dir.join("dependencies.jsonl"), "")
+        .await
+        .unwrap();
+    tokio::fs::write(
+        case_dir.join(crate::recording_network::RECORDING_NETWORK_FILENAME),
+        r#"{"version":1,"resolved_domains":["api.example.test"],"accessed_endpoints":[{"host":"api.example.test","port":80}]}"#,
+    )
+    .await
+    .unwrap();
+    let (addr, runtime, task) = spawn_http_replay(&case_dir, Vec::new()).await;
+
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let response = send_request(TokioIo::new(stream), "api.example.test", "/missing", "").await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let report = runtime.state.lock().await.snapshot_report();
+    assert_eq!(report.unmatched_http_requests.len(), 1);
+    assert!(super::super::report_is_dirty(&report));
+
+    task.abort();
+}
+
+#[tokio::test]
+async fn case_zero_byte_tcp_connection_blackholes_one_http_request_without_evidence() {
+    let temp = tempdir().unwrap();
+    let case_dir = temp.path().join("case-blackhole");
+    write_tcp_gateway_connection(&case_dir, "api.example.test", 80).await;
+    let (addr, runtime, task) = spawn_http_replay(&case_dir, Vec::new()).await;
+
+    let client = assert_http_request_hangs(addr, "api.example.test", "/timeout").await;
+    let report = runtime.state.lock().await.snapshot_report();
+    assert!(report.unmatched_http_requests.is_empty());
+    assert!(!super::super::report_is_dirty(&report));
+    drop(client);
+
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let response = send_request(TokioIo::new(stream), "api.example.test", "/timeout", "").await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let report = runtime.state.lock().await.snapshot_report();
+    assert_eq!(report.unmatched_http_requests.len(), 1);
+    assert!(super::super::report_is_dirty(&report));
+
+    task.abort();
+}
+
+#[tokio::test]
+async fn global_zero_byte_tcp_connection_does_not_blackhole_a_case_request() {
+    let temp = tempdir().unwrap();
+    write_tcp_gateway_dependency(
+        &temp.path().join("global-dependencies.jsonl"),
+        "api.example.test",
+        80,
+    )
+    .await;
+    let case_dir = temp.path().join("case-global-blackhole");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    tokio::fs::write(case_dir.join("dependencies.jsonl"), "")
+        .await
+        .unwrap();
+    tokio::fs::write(
+        case_dir.join(crate::recording_network::RECORDING_NETWORK_FILENAME),
+        r#"{"version":1,"resolved_domains":["api.example.test"],"accessed_endpoints":[{"host":"api.example.test","port":80}]}"#,
+    )
+    .await
+    .unwrap();
+    let (addr, runtime, task) = spawn_http_replay(&case_dir, Vec::new()).await;
+
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let response = send_request(TokioIo::new(stream), "api.example.test", "/timeout", "").await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let report = runtime.state.lock().await.snapshot_report();
+    assert_eq!(report.unmatched_http_requests.len(), 1);
+    assert!(super::super::report_is_dirty(&report));
+
+    task.abort();
+}
+
 async fn spawn_http_replay(
     case_dir: &Path,
     ignored_query_params: Vec<String>,
@@ -526,6 +647,25 @@ where
         .unwrap()
 }
 
+async fn assert_http_request_hangs(addr: std::net::SocketAddr, host: &str, uri: &str) -> TcpStream {
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    let request = format!(
+        "POST {uri} HTTP/1.1\r\nHost: {host}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    client.write_all(request.as_bytes()).await.unwrap();
+    let mut response = [0_u8; 1];
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(150),
+            client.read(&mut response),
+        )
+        .await
+        .is_err(),
+        "unmatched HTTP dependency must neither respond nor close"
+    );
+    client
+}
+
 async fn write_http_case(
     case_dir: &Path,
     scheme: &str,
@@ -544,6 +684,29 @@ async fn write_http_case(
         response_body,
     )
     .await;
+}
+
+async fn write_tcp_gateway_connection(case_dir: &Path, domain: &str, port: u16) {
+    tokio::fs::create_dir_all(case_dir).await.unwrap();
+    write_tcp_gateway_dependency(&case_dir.join("dependencies.jsonl"), domain, port).await;
+}
+
+async fn write_tcp_gateway_dependency(path: &Path, domain: &str, port: u16) {
+    let dependency = serde_json::json!({
+        "event_type": "tcp_gateway_connection",
+        "domain": domain,
+        "fake_addr": format!("198.19.0.1:{port}"),
+        "client_to_server_bytes": 0,
+        "server_to_client_bytes": 0,
+        "duration_ms": 103,
+        "error": null
+    });
+    tokio::fs::write(
+        path,
+        format!("{}\n", serde_json::to_string(&dependency).unwrap()),
+    )
+    .await
+    .unwrap();
 }
 
 async fn write_http_dependency(

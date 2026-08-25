@@ -230,6 +230,7 @@ impl ReplayRuntime {
         let (global_path, global_debug_path) = find_run_level_dependencies(&root_dir);
         let mut mysql = MysqlReplayState::default();
         let mut http_exchanges = Vec::new();
+        let mut http_blackholes = Vec::new();
         let mut redis = redis::RedisReplayState::default();
         let mut memcached = memcached::MemcachedReplayState::default();
         let mut kafka = kafka::KafkaReplayState::default();
@@ -254,6 +255,7 @@ impl ReplayRuntime {
                 None,
                 &mut mysql.exchanges,
                 &mut http_exchanges,
+                &mut http_blackholes,
                 &mut redis,
                 &mut memcached,
                 &mut kafka,
@@ -274,6 +276,7 @@ impl ReplayRuntime {
                 Some(&case.id),
                 &mut mysql.exchanges,
                 &mut http_exchanges,
+                &mut http_blackholes,
                 &mut redis,
                 &mut memcached,
                 &mut kafka,
@@ -359,6 +362,7 @@ impl ReplayRuntime {
             targets,
             mysql,
             http_exchanges,
+            http_blackholes,
             redis,
             memcached,
             kafka,
@@ -485,6 +489,7 @@ struct ReplayState {
     targets: Vec<ReplayTarget>,
     mysql: mysql::MysqlReplayState,
     http_exchanges: Vec<http::ReplayHttpExchange>,
+    http_blackholes: Vec<http::ReplayHttpBlackhole>,
     redis: redis::RedisReplayState,
     memcached: memcached::MemcachedReplayState,
     kafka: kafka::KafkaReplayState,
@@ -622,6 +627,19 @@ async fn handle_gateway_connection(
                 }
                 ReplayProtocol::Memcached => {
                     memcached::handle_connection(stream, target, state, report_writer).await
+                }
+                protocol @ (ReplayProtocol::Http | ReplayProtocol::Https) => {
+                    let mut target = target.clone();
+                    target.protocol = protocol;
+                    http::handle_http_replay_connection(
+                        stream,
+                        peer_addr,
+                        target,
+                        state,
+                        report_writer,
+                        ca,
+                    )
+                    .await
                 }
                 protocol => Err(anyhow!(
                     "auto replay target resolved to unsupported protocol {protocol:?}"
