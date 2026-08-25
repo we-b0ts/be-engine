@@ -21,8 +21,10 @@ an embedded static `recorder` section. AI-managed source-traffic evidence
 acquisition and classification policy is kept in the separate
 `.traffic-e2e/source-traffic-policy.yaml` document.
 Relevant target fields are `.traffic-e2e/Dockerfile.e2e`, explicit startup
-mount paths and environment names, and optional quality gates. Native HTTP
-port, readiness, and request policy come from the embedded recorder. Do not
+mount paths and environment names, `startup_timeout_seconds` (60 by default,
+at most 1800), and optional quality gates. The timeout bounds the interval from
+target launch until every enabled endpoint passes readiness. Native HTTP port,
+readiness probes, and request policy come from the embedded recorder. Do not
 hand-write the generated project configuration.
 
 Before a run, the runner requires:

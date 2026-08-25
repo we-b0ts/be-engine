@@ -4,9 +4,10 @@ use std::process::Command;
 use std::time::Duration;
 
 use super::model::{
-    BreezeProjectConfig, DeliveryProjectConfig, ProjectConfig, ProjectSettings,
-    RecordingProjectConfig, ReplayProjectConfig, ResolvedProjectConfig, RunLayout,
-    SourceProjectConfig, StateProjectConfig, TargetProjectConfig,
+    BreezeProjectConfig, DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS, DeliveryProjectConfig,
+    MAX_TARGET_STARTUP_TIMEOUT_SECONDS, ProjectConfig, ProjectSettings, RecordingProjectConfig,
+    ReplayProjectConfig, ResolvedProjectConfig, RunLayout, SourceProjectConfig, StateProjectConfig,
+    TargetProjectConfig,
 };
 use super::target_quality_config::{inferred_target_quality_gates, validate_target_quality_gates};
 use super::{E2eRunInitOptions, E2eRunInitResult, branch};
@@ -127,6 +128,7 @@ pub(crate) fn render_project_config(
             process_outputs: Vec::new(),
             target: TargetProjectConfig {
                 dockerfile: options.target_dockerfile.clone(),
+                startup_timeout_seconds: DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS,
                 startup: crate::startup::normalized_config(options.target_startup.clone())?,
                 quality_gates: None,
             },
@@ -271,7 +273,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
             target_readiness_path: recorder.http_gateway.ready.path,
             target_readiness_status: recorder.http_gateway.ready.success_status,
             target_startup_timeout: Duration::from_secs(
-                super::model::DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS,
+                config.project.target.startup_timeout_seconds,
             ),
             target_request_timeout,
             target_quality_gates,
@@ -367,6 +369,10 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
     ensure!(
         project.target.dockerfile == Path::new(".traffic-e2e/Dockerfile.e2e"),
         "target.dockerfile must be .traffic-e2e/Dockerfile.e2e"
+    );
+    ensure!(
+        (1..=MAX_TARGET_STARTUP_TIMEOUT_SECONDS).contains(&project.target.startup_timeout_seconds),
+        "target.startup_timeout_seconds must be between 1 and {MAX_TARGET_STARTUP_TIMEOUT_SECONDS}"
     );
     crate::startup::validate_config(&project.target.startup)?;
     if let Some(gates) = &project.target.quality_gates {
@@ -601,6 +607,10 @@ mod tests {
             PathBuf::from(".traffic-e2e/Dockerfile.e2e")
         );
         assert_eq!(
+            config.project.target.startup_timeout_seconds,
+            DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS
+        );
+        assert_eq!(
             config.project.replay.policy,
             PathBuf::from("config/replay.yaml")
         );
@@ -608,7 +618,6 @@ mod tests {
         for duplicate in [
             "readiness_path",
             "readiness_status",
-            "startup_timeout_seconds",
             "request_timeout_seconds",
             "http_host",
             "motan_port",
@@ -624,6 +633,68 @@ mod tests {
         assert_eq!(
             config.project.state.runtime_root,
             PathBuf::from(DEFAULT_RUNTIME_ROOT)
+        );
+    }
+
+    #[test]
+    fn managed_replay_uses_the_project_target_startup_timeout() {
+        let target = target();
+        initialize(options(target.path())).unwrap();
+        let config_path = target.path().join(".traffic-e2e/project.yaml");
+        let mut project: ProjectConfig =
+            serde_yaml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        project.project.target.startup_timeout_seconds = 180;
+        fs::write(config_path, serde_yaml::to_string(&project).unwrap()).unwrap();
+
+        let (_, config) = resolve_project(target.path()).unwrap();
+
+        assert_eq!(config.target_startup_timeout, Duration::from_secs(180));
+    }
+
+    #[test]
+    fn existing_project_without_target_startup_timeout_defaults_to_sixty_seconds() {
+        let target = target();
+        initialize(options(target.path())).unwrap();
+        let config_path = target.path().join(".traffic-e2e/project.yaml");
+        let raw = fs::read_to_string(&config_path)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.contains("startup_timeout_seconds:"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&config_path, format!("{raw}\n")).unwrap();
+
+        let (_, config) = resolve_project(target.path()).unwrap();
+
+        assert_eq!(
+            config.target_startup_timeout,
+            Duration::from_secs(DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS)
+        );
+    }
+
+    #[test]
+    fn project_rejects_target_startup_timeout_outside_the_bounded_range() {
+        let target = target();
+        initialize(options(target.path())).unwrap();
+        let config_path = target.path().join(".traffic-e2e/project.yaml");
+        let mut project: ProjectConfig =
+            serde_yaml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        project.project.target.startup_timeout_seconds = 0;
+        fs::write(&config_path, serde_yaml::to_string(&project).unwrap()).unwrap();
+
+        let zero_error = resolve_project(target.path()).unwrap_err();
+        assert!(
+            format!("{zero_error:#}")
+                .contains("startup_timeout_seconds must be between 1 and 1800")
+        );
+
+        project.project.target.startup_timeout_seconds = MAX_TARGET_STARTUP_TIMEOUT_SECONDS + 1;
+        fs::write(&config_path, serde_yaml::to_string(&project).unwrap()).unwrap();
+
+        let excessive_error = resolve_project(target.path()).unwrap_err();
+        assert!(
+            format!("{excessive_error:#}")
+                .contains("startup_timeout_seconds must be between 1 and 1800")
         );
     }
 

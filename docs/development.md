@@ -1330,6 +1330,8 @@ target section is:
 ```yaml
 target:
   dockerfile: .traffic-e2e/Dockerfile.e2e
+  # Maximum time from target launch until every enabled endpoint is ready.
+  startup_timeout_seconds: 60
   startup:
     mounts:
       - /data1/weibo/confs
@@ -1345,10 +1347,11 @@ target:
 ```
 
 Target readiness path and status come from the project document's
-`recorder.http_gateway.ready` section. Target request timeout comes from
-`comparison_recording.upstream_timeout_ms`; target startup and replay startup
-timeouts are coordinator-owned defaults. These runtime policy values are not
-duplicated in project settings. The target's native HTTP port is the port in
+`recorder.http_gateway.ready` section. Target startup readiness uses
+`project.target.startup_timeout_seconds`, which defaults to 60 seconds when
+omitted and accepts values through 1800 seconds. Target request timeout comes
+from `comparison_recording.upstream_timeout_ms`; the Replay service startup
+timeout remains a coordinator-owned default. The target's native HTTP port is the port in
 `recorder.http_gateway.matched_upstream`; Replay uses it on loopback and Comparison uses
 it on the run-owned target bridge IP.
 
