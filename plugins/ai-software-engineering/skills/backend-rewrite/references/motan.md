@@ -165,6 +165,10 @@ through `TokenProxyTauth2Connect`; application code must not select an endpoint,
 fetch a token, build an `Authorization` attachment, or construct raw Motan
 frames.
 
+Keep the concrete generated `*Referer` in the dependency-construction layer.
+Business functions must depend on the generated service trait through a generic
+type parameter; they must not accept or store the concrete referer type.
+
 ```rust,no_run
 use brz_motan::vintage::{Client, ClientConfig, ExciseStrategy};
 use brz_motan::{Motan1RefererConfig, SessionConfig};
@@ -188,6 +192,18 @@ pub trait EchoService {
     ) -> Result<String, brz_motan::Error>;
 }
 
+/// Business code uses `T: EchoService`; it must not depend directly on
+/// `EchoServiceReferer`.
+async fn echo_for_business<T>(
+    service: &T,
+    message: String,
+) -> Result<String, brz_motan::Error>
+where
+    T: EchoService + ?Sized,
+{
+    service.echo(message).await
+}
+
 async fn echo_through_motan(
     vintage_endpoint: &str,
     message: String,
@@ -203,7 +219,7 @@ async fn echo_through_motan(
     )
     .await?;
 
-    let result = referer.echo(message).await;
+    let result = echo_for_business(&referer, message).await;
     referer.close().await?;
     Ok(result?)
 }
