@@ -2,35 +2,41 @@
 
 Use this reference for every `implementation_required` action. Problem
 diagnosis is a required rewrite phase, not optional troubleshooting. Its result
-chooses the only repair attempted before the next focused E2E run.
+chooses the only repair attempted before the coordinator-issued acceptance.
+Select the diagnosis path from `action.details.work_scope.kind` before reading
+work-item evidence.
 
 ## Contents
 
-- Contract and evidence queries
+- Work-scope contract
+- Process-output issues
+- API evidence queries
 - Response, missing-recording, cache, runtime, and Replay issues
 - Dirty dependency and comparison issues
 - Repair routing and blocker criteria
 
-## Contract
+## Work-Scope Contract
 
 The coordinator supplies one active issue in `action.details`, including
-bounded possible causes and one representative when available. Exact
-evidence-query argv are under `action.commands.evidence`, and the sole
-acceptance command is `action.commands.acceptance`. Treat possible causes as
-hypotheses. Traffic facts come only from the returned queries and immutable
-artifacts; business causality comes from source and target code. Return the
-acceptance command unchanged to the orchestrator; never execute it as a worker.
+bounded possible causes and one representative when available. Treat possible
+causes as hypotheses. The sole acceptance command is
+`action.commands.acceptance`; return it unchanged to the orchestrator and never
+execute it as a worker. In both worker roles, prove one cause from source and
+target code, make one coherent repair, and run focused local tests.
 
-Standard and comparison artifacts are readable, read-only diagnostic evidence.
-Start from the representative `case_dir` returned by the coordinator and
-inspect its complete contents. Inspect other cases under
-`.traffic-e2e/local/artifacts/` when they help distinguish hypotheses. Use
-bounded coordinator queries before inspecting `.traffic-e2e/local/runtime/`.
+For `work_scope.kind=api`, exact evidence-query argv are under
+`action.commands.evidence`. Traffic facts come only from those returned queries
+and immutable artifacts. Standard and comparison artifacts are readable,
+read-only diagnostic evidence. Start from the representative `case_dir`
+returned by the coordinator and inspect its complete contents. Inspect other
+cases under `.traffic-e2e/local/artifacts/` only when they help distinguish
+hypotheses. Use bounded coordinator queries before inspecting
+`.traffic-e2e/local/runtime/`.
 Runtime inspection is read-only and diagnostic: do not infer the active run by
 recency, edit state, or use ad-hoc scripts to recreate a coordinator query.
 Never patch multiple speculative categories in one iteration.
 
-Evaluate gates in this order:
+For an API work item, evaluate gates in this order:
 
 ```text
 responses -> replay completeness -> dependency cleanliness
@@ -42,7 +48,39 @@ evidence, and a non-JSON body. Map key order and JSON formatting are already
 ignored. Array order, type, presence, empty string, and scalar value remain
 real differences until source evidence proves otherwise.
 
-## Evidence Queries
+The response, dependency, Replay, and comparison sections below apply only to
+API work items. A process-output worker follows the next section and returns
+after completing that diagnosis path.
+
+## Process-Output Issues
+
+For `work_scope.kind=process_output`, an empty
+`action.commands.evidence` list is expected. Start from
+`action.details.comparison_observation`, which identifies the process-output
+ID, configured path, classification, comparison contract, and source/target
+presence. Do not look for an API representative or `case_dir`, execute API
+evidence queries, inspect dependency traffic, or invent a recording operation.
+
+For `comparison=regular_file_exists` with source present and target absent,
+trace the ordinary product output path:
+
+```text
+configured output -> component loading -> initialization -> startup -> write
+or flush -> observation timing -> shutdown
+```
+
+Confirm the configured path and source-side presence from the action, then
+inspect the corresponding source and target component wiring. Repair the
+target's normal startup, configuration, output creation, flush, or shutdown
+behavior. Do not create a replay-only file, copy a recorded output into the
+target, or make target code read coordinator artifacts.
+
+Return the exact work scope and issue ID, proven cause, changed files and shared
+impact, patch or commit, local test results, unchanged acceptance command, and
+unresolved risks. The main orchestrator integrates the change and executes
+acceptance; the worker does not run process-output comparison itself.
+
+## API Evidence Queries
 
 Run only query IDs returned by `action.commands.evidence`:
 
@@ -354,6 +392,10 @@ coordinator must rerun focused E2E before requesting a fresh comparison.
 
 Route the proven cause to exactly one action:
 
+- process-output generation defect: repair normal target component loading,
+  configuration, startup, write/flush, or shutdown behavior, run focused local
+  tests, and return the tested handoff plus unchanged acceptance to the
+  orchestrator;
 - target implementation or cache defect: change target code with
   `backend-engineering`, run focused target tests, and return the tested handoff
   plus unchanged `action.commands.acceptance` to the orchestrator;
@@ -382,6 +424,8 @@ value is unavailable and completion would require invention. Repeated failed
 attempts, dirty evidence, an empty dependency stream, or a tool failure do not
 prove a blocker.
 
-After one repair, rerun the entire immutable API group. If two repairs do not
-improve the active cluster, stop adding field patches and produce a bounded
-structural replan from the current issue and attempt delta.
+After one API repair, let the orchestrator rerun the entire immutable API group;
+after one process-output repair, let it run the returned process-output
+acceptance. If two repairs do not improve the active issue, stop adding local
+patches and produce a bounded structural replan from the current issue and
+attempt delta.
