@@ -1,9 +1,11 @@
 use anyhow::{Context, Result, anyhow, bail};
 use bytes::Bytes;
-use motan_codec::inspect_request;
+use motan_codec::{
+    Motan1RequestInspection, Motan1RequestLimits, inspect_motan1_request, inspect_request,
+};
 use motan_protocol::{
-    DecodeStatus, Frame as ProtocolFrame, FrameInspection, Limits, MessageKind, ResponseKind,
-    decode_frame, inspect_frame,
+    DecodeStatus, Frame as ProtocolFrame, FrameInspection, Limits, MessageKind, ProtocolVersion,
+    ResponseKind, decode_frame, inspect_frame,
 };
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -96,6 +98,10 @@ fn decode_adapter(raw: Vec<u8>, limits: Limits) -> Result<Frame> {
 }
 
 impl Frame {
+    pub(crate) fn decode(raw: Vec<u8>) -> Result<Self> {
+        decode_adapter(raw, Limits::default())
+    }
+
     pub(crate) fn request_metadata(&self) -> Result<RequestMetadata> {
         let envelope =
             inspect_request(&self.protocol).context("failed to decode Motan request envelope")?;
@@ -109,6 +115,13 @@ impl Frame {
                 method_sign: envelope.method_sign,
             },
         })
+    }
+
+    pub(crate) fn motan1_request(&self) -> Result<Option<Motan1RequestInspection>> {
+        (self.protocol.version == ProtocolVersion::Motan1)
+            .then(|| inspect_motan1_request(&self.protocol, Motan1RequestLimits::default()))
+            .transpose()
+            .context("failed to decode Motan1 request arguments and attachments")
     }
 }
 
