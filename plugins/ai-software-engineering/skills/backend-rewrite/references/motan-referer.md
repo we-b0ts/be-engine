@@ -127,11 +127,6 @@ duplicate those defaults in application code. Apart from the required request
 timeout, override a value only when source or runtime evidence proves that the
 standard policy does not apply.
 
-Do not look up Vintage endpoints before constructing a referer. The referer
-subscribes directly and reuses the subscription's initial snapshot, producing
-one initial Vintage lookup for that service. Manual pre-discovery or a second
-auth proxy changes the dependency count observed by recording and replay.
-
 ## Check before delivery
 
 1. Test every generated method's Hessian argument encoding, response decoding,
