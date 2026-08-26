@@ -85,15 +85,13 @@ struct ReplayExchange {
 
 #[derive(Clone, PartialEq, Eq)]
 struct RequestMatch {
-    arguments: Vec<Vec<u8>>,
     authentication: Authentication,
 }
 
 impl RequestMatch {
     fn from_inspection(inspection: motan_codec::Motan1RequestInspection) -> Self {
-        let (arguments, attachments) = inspection.into_parts();
+        let (_arguments, attachments) = inspection.into_parts();
         Self {
-            arguments,
             authentication: Authentication::from_attachments(&attachments),
         }
     }
@@ -107,7 +105,6 @@ impl std::fmt::Debug for RequestMatch {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("RequestMatch")
-            .field("argument_count", &self.arguments.len())
             .field("authentication", &self.authentication)
             .finish()
     }
@@ -614,24 +611,13 @@ fn request_mismatch_fields(
         return Vec::new();
     };
     let Some(actual) = actual else {
-        let mut fields = vec!["request_arguments"];
-        fields.extend(
-            expected
-                .authentication
-                .mismatch_fields(&Authentication::None),
-        );
-        return fields;
-    };
-    let mut fields = Vec::new();
-    if expected.arguments != actual.arguments {
-        fields.push("request_arguments");
-    }
-    fields.extend(
-        expected
+        return expected
             .authentication
-            .mismatch_fields(&actual.authentication),
-    );
-    fields
+            .mismatch_fields(&Authentication::None);
+    };
+    expected
+        .authentication
+        .mismatch_fields(&actual.authentication)
 }
 
 fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnusedReport> {
