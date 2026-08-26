@@ -1,5 +1,7 @@
 use super::*;
 
+use motan_codec::{Attachment, Attachments, Motan1RequestBuilder, Motan1RequestLimits};
+
 fn frame(request_id: u64, request: bool, inner_flag: u8) -> Vec<u8> {
     let body = b"payload";
     let mut inner = vec![0_u8; 16];
@@ -40,6 +42,11 @@ fn exchange(heartbeat: bool) -> RecordedExchange {
             Some("long".to_string()),
         )
     };
+    let request = if heartbeat {
+        frame(1, true, 0)
+    } else {
+        business_request(1, 1, None)
+    };
     RecordedExchange {
         connection_id: Uuid::nil(),
         sequence: 1,
@@ -56,12 +63,73 @@ fn exchange(heartbeat: bool) -> RecordedExchange {
         } else {
             "cn.sina.api.data.service.SinaUserService#getUser".to_string()
         },
-        request: capture(&frame(1, true, 0)),
+        request: capture(&request),
         response: capture(&frame(1, false, 1)),
         heartbeat,
         outcome: DependencyExchangeOutcome::Response,
         duration_ms: 0,
         replay_safe: true,
+    }
+}
+
+fn business_request(request_id: u64, uid: i64, authorization: Option<&str>) -> Vec<u8> {
+    let mut attachments = Attachments::new();
+    if let Some(authorization) = authorization {
+        attachments.insert(Attachment::new("Authorization", authorization));
+    }
+    Motan1RequestBuilder::new(
+        "cn.sina.api.data.service.SinaUserService",
+        "getUser",
+        "long",
+    )
+    .request_id(request_id)
+    .hessian_argument(motan_hessian2::to_vec(&uid, motan_hessian2::Limits::default()).unwrap())
+    .attachments(attachments)
+    .build(Motan1RequestLimits::default())
+    .unwrap()
+    .raw()
+    .to_vec()
+}
+
+fn request_match(raw: Vec<u8>) -> RequestMatch {
+    RequestMatch::from_frame(&crate::motan::Frame::decode(raw).unwrap())
+        .unwrap()
+        .unwrap()
+}
+
+fn business_identity() -> RequestIdentity {
+    RequestIdentity {
+        interface_name: Some("cn.sina.api.data.service.SinaUserService".to_string()),
+        method_name: Some("getUser".to_string()),
+        parameter_desc: Some("long".to_string()),
+        method_sign: None,
+    }
+}
+
+fn business_target() -> TargetKey {
+    TargetKey {
+        host: "vintage-node-b.trp.test".to_string(),
+        port: 8881,
+    }
+}
+
+fn state_with_business_request(uid: i64, authorization: Option<&str>) -> MotanReplayState {
+    let mut state = MotanReplayState::default();
+    let mut targets = BTreeMap::new();
+    let mut recorded = exchange(false);
+    recorded.request = capture(&business_request(1, uid, authorization));
+    state
+        .register_exchange(recorded, ReplaySource::Case, Some("case"), &mut targets)
+        .unwrap();
+    state
+}
+
+fn mismatch_fields(
+    result: std::result::Result<MatchedExchange, CommandMatchDiagnostic>,
+) -> Vec<String> {
+    match result.unwrap_err() {
+        CommandMatchDiagnostic::Mismatch { fields } => fields,
+        diagnostic => panic!("expected mismatch diagnostic, got {diagnostic:?}"),
     }
 }
 
@@ -77,28 +145,74 @@ fn business_exchange_matches_across_nodes_in_same_rpc_pool() {
             &mut targets,
         )
         .unwrap();
-    let identity = RequestIdentity {
-        interface_name: Some("cn.sina.api.data.service.SinaUserService".to_string()),
-        method_name: Some("getUser".to_string()),
-        parameter_desc: Some("long".to_string()),
-        method_sign: None,
-    };
+    let identity = business_identity();
+    let request_match = request_match(business_request(2, 1, None));
 
     let matched = state
         .match_exchange(
             Some("case"),
-            &TargetKey {
-                host: "vintage-node-b.trp.test".to_string(),
-                port: 8881,
-            },
+            &business_target(),
             None,
             1,
             &identity,
+            Some(&request_match),
         )
         .unwrap();
     state.complete(&matched);
     assert_eq!(state.snapshot().matched_count, 1);
     assert!(state.snapshot().unused_case.is_empty());
+}
+
+#[test]
+fn business_exchange_matches_when_tauth2_credentials_rotate() {
+    let source = "TAuth2 token=\"old\",param=\"uid%3D1\",sign=\"first\"";
+    let target = "TAuth2 token=\"new\",param=\"uid%3D1\",sign=\"second\"";
+    let mut state = state_with_business_request(1, Some(source));
+    let request_match = request_match(business_request(2, 1, Some(target)));
+
+    let matched = state
+        .match_exchange(
+            Some("case"),
+            &business_target(),
+            None,
+            1,
+            &business_identity(),
+            Some(&request_match),
+        )
+        .unwrap();
+
+    state.complete(&matched);
+    assert_eq!(state.snapshot().matched_count, 1);
+}
+
+#[test]
+fn business_exchange_reports_argument_and_auth_semantic_mismatches() {
+    let source = "TAuth2 token=\"old\",param=\"uid%3D1\",sign=\"first\"";
+    let mut state = state_with_business_request(1, Some(source));
+    let changed = "TAuth2 token=\"new\",param=\"uid%3D2\",sign=\"second\"";
+    let changed_request = request_match(business_request(2, 2, Some(changed)));
+
+    let fields = mismatch_fields(state.match_exchange(
+        Some("case"),
+        &business_target(),
+        None,
+        1,
+        &business_identity(),
+        Some(&changed_request),
+    ));
+
+    assert_eq!(fields, ["request_arguments", "auth_parameters"]);
+
+    let missing_auth = request_match(business_request(3, 1, None));
+    let fields = mismatch_fields(state.match_exchange(
+        Some("case"),
+        &business_target(),
+        None,
+        1,
+        &business_identity(),
+        Some(&missing_auth),
+    ));
+    assert_eq!(fields, ["auth_presence"]);
 }
 
 #[test]

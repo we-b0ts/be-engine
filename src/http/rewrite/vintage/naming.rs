@@ -13,6 +13,8 @@ use super::{alias_for_ip, application_error_code, parse_outer, query, required_q
 
 const PLUGIN_NAME: &str = "vintage-naming";
 const MAX_DISCOVERED_NODES: usize = 4096;
+const WORKING_NODES: &str = "working";
+const UNREACHABLE_NODES: &str = "unreachable";
 
 pub(in crate::http::rewrite) struct Naming {
     services: BTreeSet<String>,
@@ -108,7 +110,7 @@ impl ResponsePlan {
             .get("body")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("Vintage lookup response has no string body field"))?;
-        let inner: Value =
+        let mut inner: Value =
             serde_json::from_str(inner_text).context("Vintage lookup body is not valid JSON")?;
         if inner.get("service").and_then(Value::as_str) != Some(service)
             || inner.get("cluster").and_then(Value::as_str) != Some(cluster)
@@ -117,14 +119,26 @@ impl ResponsePlan {
                 "Vintage lookup response identity does not match request service={service:?} cluster={cluster:?}"
             );
         }
-        let nodes = collect_nodes(&inner)?;
-        if nodes.len() > MAX_DISCOVERED_NODES {
+        let original_node_count = collect_nodes(&inner)?.len();
+        if original_node_count > MAX_DISCOVERED_NODES {
             bail!(
                 "Vintage lookup response has {} nodes, exceeding limit {}",
-                nodes.len(),
+                original_node_count,
                 MAX_DISCOVERED_NODES
             );
         }
+        let counts = retain_one_node_per_state(&mut inner)?;
+        if counts.working > 1 || counts.unreachable > 1 {
+            debug!(
+                plugin = PLUGIN_NAME,
+                service,
+                cluster,
+                working_before = counts.working,
+                unreachable_before = counts.unreachable,
+                "reduced Vintage node states for deterministic traffic capture"
+            );
+        }
+        let nodes = collect_nodes(&inner)?;
         Ok(ParsedResponse::Success(Self {
             outer,
             inner,
@@ -174,6 +188,51 @@ impl ResponsePlan {
     }
 }
 
+struct NodeStateCounts {
+    working: usize,
+    unreachable: usize,
+}
+
+fn retain_one_node_per_state(inner: &mut Value) -> Result<NodeStateCounts> {
+    let nodes = inner
+        .get_mut("nodes")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| anyhow!("Vintage lookup body has no nodes object"))?;
+    Ok(NodeStateCounts {
+        working: retain_lowest_address(nodes, WORKING_NODES)?,
+        unreachable: retain_lowest_address(nodes, UNREACHABLE_NODES)?,
+    })
+}
+
+fn retain_lowest_address(
+    nodes: &mut serde_json::Map<String, Value>,
+    state: &'static str,
+) -> Result<usize> {
+    let Some(value) = nodes.get_mut(state) else {
+        return Ok(0);
+    };
+    let values = value
+        .as_array_mut()
+        .ok_or_else(|| anyhow!("Vintage {state} nodes value is not an array"))?;
+    let original_count = values.len();
+    if original_count <= 1 {
+        return Ok(original_count);
+    }
+
+    let mut selected = None;
+    for (index, value) in values.iter().enumerate() {
+        let address = node_address(value)?;
+        if selected.is_none_or(|(_, current)| address < current) {
+            selected = Some((index, address));
+        }
+    }
+    let (selected, _) = selected.ok_or_else(|| anyhow!("Vintage {state} node state is empty"))?;
+    let selected = values.swap_remove(selected);
+    values.clear();
+    values.push(selected);
+    Ok(original_count)
+}
+
 fn collect_nodes(inner: &Value) -> Result<Vec<SocketAddrV4>> {
     let nodes = inner
         .get("nodes")
@@ -185,17 +244,19 @@ fn collect_nodes(inner: &Value) -> Result<Vec<SocketAddrV4>> {
             continue;
         };
         for value in values {
-            let host = value
-                .get("host")
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow!("Vintage node has no string host field"))?;
-            out.push(
-                host.parse::<SocketAddrV4>()
-                    .with_context(|| format!("Vintage node host {host:?} is not IPv4:port"))?,
-            );
+            out.push(node_address(value)?);
         }
     }
     Ok(out)
+}
+
+fn node_address(value: &Value) -> Result<SocketAddrV4> {
+    let host = value
+        .get("host")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("Vintage node has no string host field"))?;
+    host.parse::<SocketAddrV4>()
+        .with_context(|| format!("Vintage node host {host:?} is not IPv4:port"))
 }
 
 fn rewrite_nodes(inner: &mut Value, registered: &BTreeMap<Ipv4Addr, FakeDnsEntry>) -> Result<()> {
@@ -273,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn rewrites_all_node_sets_and_preserves_unknown_fields() {
+    fn retains_one_deterministic_node_per_state_and_preserves_unknown_fields() {
         let plugin = Naming::new(&["yf-rpc".to_string()], &[]);
         let uri: Uri = "/naming/service?action=lookup&service=yf-rpc&cluster=user/service"
             .parse()
@@ -284,10 +345,14 @@ mod tests {
             "sign": "abc",
             "nodes": {
                 "working": [
-                    {"host": "10.145.1.107:8881", "extInfo": "keep"},
-                    {"host": "10.145.1.107:8882", "extInfo": ""}
+                    {"host": "10.145.1.109:8881", "extInfo": "drop"},
+                    {"host": "10.145.1.107:8882", "extInfo": "drop"},
+                    {"host": "10.145.1.107:8881", "extInfo": "keep"}
                 ],
-                "unreachable": [{"host": "10.145.1.108:8881", "extInfo": ""}]
+                "unreachable": [
+                    {"host": "10.145.1.110:8881", "extInfo": "drop"},
+                    {"host": "10.145.1.108:8881", "extInfo": "keep"}
+                ]
             },
             "futureField": {"keep": true}
         });
@@ -322,12 +387,14 @@ mod tests {
         let (body, discovered) = plan.render(&registered).unwrap();
         let outer: Value = serde_json::from_slice(&body).unwrap();
         let inner: Value = serde_json::from_str(outer["body"].as_str().unwrap()).unwrap();
+        assert_eq!(inner["nodes"]["working"].as_array().unwrap().len(), 1);
+        assert_eq!(inner["nodes"]["unreachable"].as_array().unwrap().len(), 1);
         assert_eq!(inner["nodes"]["working"][0]["host"], "198.19.0.10:8881");
-        assert_eq!(inner["nodes"]["working"][1]["host"], "198.19.0.10:8882");
         assert_eq!(inner["nodes"]["unreachable"][0]["host"], "198.19.0.11:8881");
         assert_eq!(inner["nodes"]["working"][0]["extInfo"], "keep");
+        assert_eq!(inner["nodes"]["unreachable"][0]["extInfo"], "keep");
         assert_eq!(inner["futureField"]["keep"], true);
-        assert_eq!(discovered.len(), 3);
+        assert_eq!(discovered.len(), 2);
     }
 
     #[test]
@@ -377,6 +444,41 @@ mod tests {
                 .to_string()
                 .contains("Vintage lookup body is not valid JSON")
         );
+    }
+
+    #[test]
+    fn rejects_original_node_count_before_reduction() {
+        let plugin = Naming::new(&[], &[]);
+        let uri: Uri =
+            "/naming/service?action=lookup&service=any-service&cluster=any-cluster/service"
+                .parse()
+                .unwrap();
+        let working = (0..=MAX_DISCOVERED_NODES)
+            .map(|index| {
+                serde_json::json!({
+                    "host": format!("10.0.0.1:{}", 10_000 + index),
+                    "extInfo": ""
+                })
+            })
+            .collect::<Vec<_>>();
+        let inner = serde_json::json!({
+            "service": "any-service",
+            "cluster": "any-cluster/service",
+            "sign": "abc",
+            "nodes": {"working": working, "unreachable": []}
+        });
+        let body = serde_json::to_vec(&serde_json::json!({
+            "code": "200",
+            "body": inner.to_string()
+        }))
+        .unwrap();
+
+        let error = plugin
+            .rewrite(&input(&uri, &body))
+            .err()
+            .expect("oversized original node set must fail");
+
+        assert!(error.to_string().contains("exceeding limit 4096"));
     }
 
     #[test]

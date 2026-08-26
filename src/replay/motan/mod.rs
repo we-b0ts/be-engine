@@ -28,6 +28,10 @@ use super::{
     register_replay_target_at,
 };
 
+mod auth;
+
+use auth::Authentication;
+
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct RecordedConnection {
     target_host: String,
@@ -73,9 +77,40 @@ struct ReplayExchange {
     case_id: Option<String>,
     record: RecordedExchange,
     identity: RequestIdentity,
+    request_match: Option<RequestMatch>,
     response: Vec<u8>,
     status: ReplayExchangeStatus,
     timing: ReplayExchangeTiming,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct RequestMatch {
+    arguments: Vec<Vec<u8>>,
+    authentication: Authentication,
+}
+
+impl RequestMatch {
+    fn from_inspection(inspection: motan_codec::Motan1RequestInspection) -> Self {
+        let (arguments, attachments) = inspection.into_parts();
+        Self {
+            arguments,
+            authentication: Authentication::from_attachments(&attachments),
+        }
+    }
+
+    fn from_frame(frame: &crate::motan::Frame) -> Result<Option<Self>> {
+        Ok(frame.motan1_request()?.map(Self::from_inspection))
+    }
+}
+
+impl std::fmt::Debug for RequestMatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RequestMatch")
+            .field("argument_count", &self.arguments.len())
+            .field("authentication", &self.authentication)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +205,21 @@ impl MotanReplayState {
             record.advertised_ip,
         )?;
         let identity = identity(&record)?;
+        let request_frame = crate::motan::Frame::decode(record.request.decode()?)
+            .context("recorded Motan request contains invalid framing")?;
+        if !request_frame.request {
+            return Err(anyhow!(
+                "recorded Motan request capture is a response frame"
+            ));
+        }
+        if request_frame.codec_version != record.codec_version {
+            return Err(anyhow!(
+                "recorded Motan request codec {} differs from exchange codec {}",
+                request_frame.codec_version,
+                record.codec_version
+            ));
+        }
+        let request_match = RequestMatch::from_frame(&request_frame)?;
         let response = if record.outcome.is_client_terminated() {
             Vec::new()
         } else {
@@ -181,6 +231,7 @@ impl MotanReplayState {
             case_id: case_id.map(ToOwned::to_owned),
             record,
             identity,
+            request_match,
             response,
             status: ReplayExchangeStatus::Available,
             timing,
@@ -242,12 +293,15 @@ impl MotanReplayState {
         bound_connection: Option<Uuid>,
         codec_version: u8,
         identity: &RequestIdentity,
+        request_match: Option<&RequestMatch>,
     ) -> std::result::Result<MatchedExchange, CommandMatchDiagnostic> {
         let matched = preferred_match(&self.exchanges, active_case_id, |exchange| {
             exchange.status.is_available()
                 && bound_connection.is_none_or(|id| exchange.record.connection_id == id)
                 && exchange.record.codec_version == codec_version
                 && exchange.identity == *identity
+                && request_mismatch_fields(exchange.request_match.as_ref(), request_match)
+                    .is_empty()
         });
         let index = match matched {
             PreferredMatch::Matched(index) => index,
@@ -259,7 +313,13 @@ impl MotanReplayState {
                     &self.exchanges,
                     active_case_id,
                     |exchange| {
-                        motan_mismatch_fields(exchange, bound_connection, codec_version, identity)
+                        motan_mismatch_fields(
+                            exchange,
+                            bound_connection,
+                            codec_version,
+                            identity,
+                            request_match,
+                        )
                     },
                 ));
             }
@@ -344,6 +404,7 @@ pub(super) async fn handle_connection(
         }
         let request_metadata = frame.request_metadata()?;
         let identity = request_metadata.identity;
+        let request_match = RequestMatch::from_frame(&frame)?;
         if request_metadata.heartbeat {
             let template = {
                 state
@@ -381,6 +442,7 @@ pub(super) async fn handle_connection(
                 bound_connection,
                 frame.codec_version,
                 &identity,
+                request_match.as_ref(),
             ) {
                 Ok(matched) => {
                     connection_binding.bind(active_case_id.as_deref(), matched.connection_id);
@@ -391,9 +453,7 @@ pub(super) async fn handle_connection(
                         case_id: active_case_id,
                         target: target_key.clone(),
                         command: identity.command(),
-                        reason:
-                            "no recorded Motan exchange matched method identity and connection lane"
-                                .to_string(),
+                        reason: "no recorded Motan exchange matched method identity, request arguments, authentication, and connection lane".to_string(),
                         diagnostic: Some(diagnostic),
                     });
                     None
@@ -527,6 +587,7 @@ fn motan_mismatch_fields(
     bound_connection: Option<Uuid>,
     codec_version: u8,
     identity: &RequestIdentity,
+    request_match: Option<&RequestMatch>,
 ) -> Vec<&'static str> {
     let mut fields = Vec::new();
     if bound_connection.is_some_and(|id| exchange.record.connection_id != id) {
@@ -538,6 +599,38 @@ fn motan_mismatch_fields(
     if exchange.identity != *identity {
         fields.push("method_identity");
     }
+    fields.extend(request_mismatch_fields(
+        exchange.request_match.as_ref(),
+        request_match,
+    ));
+    fields
+}
+
+fn request_mismatch_fields(
+    expected: Option<&RequestMatch>,
+    actual: Option<&RequestMatch>,
+) -> Vec<&'static str> {
+    let Some(expected) = expected else {
+        return Vec::new();
+    };
+    let Some(actual) = actual else {
+        let mut fields = vec!["request_arguments"];
+        fields.extend(
+            expected
+                .authentication
+                .mismatch_fields(&Authentication::None),
+        );
+        return fields;
+    };
+    let mut fields = Vec::new();
+    if expected.arguments != actual.arguments {
+        fields.push("request_arguments");
+    }
+    fields.extend(
+        expected
+            .authentication
+            .mismatch_fields(&actual.authentication),
+    );
     fields
 }
 

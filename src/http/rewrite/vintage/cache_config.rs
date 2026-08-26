@@ -15,7 +15,6 @@ use super::{alias_for_ip, application_error_code, parse_outer, query, required_q
 const PLUGIN_NAME: &str = "vintage-cache-config";
 const MAX_DISCOVERED_ENDPOINTS: usize = 4096;
 const ENDPOINT_FIELDS: [&str; 4] = ["master", "slave", "master_l1", "slave_l1"];
-const L1_GROUP_FIELDS: [&str; 2] = ["master_l1", "slave_l1"];
 
 pub(in crate::http::rewrite) struct CacheConfig;
 
@@ -105,7 +104,7 @@ impl ResponsePlan {
         let mut endpoints = BTreeSet::new();
         let mut deferred_error = None;
         let mut endpoint_count = 0;
-        let mut limited_l1_groups = false;
+        let mut normalized_l1_topology = false;
         for (node_index, node) in nodes.iter().enumerate() {
             let Some(config) = node.get("value").and_then(JsonValue::as_str) else {
                 deferred_error.get_or_insert_with(|| {
@@ -122,13 +121,13 @@ impl ResponsePlan {
                     continue;
                 }
             };
-            limited_l1_groups |= retain_first_l1_groups(&mut value);
+            normalized_l1_topology |= normalize_l1_topology(&mut value);
             collect_document_endpoints(&value, &mut endpoints, &mut endpoint_count)
                 .with_context(|| format!("failed to inspect Vintage config node {node_index}"))?;
             documents.push(ConfigDocument { node_index, value });
         }
 
-        if endpoints.is_empty() && !limited_l1_groups {
+        if endpoints.is_empty() && !normalized_l1_topology {
             return Ok(ParsedResponse::Success(None));
         }
         if let Some(error) = deferred_error {
@@ -205,26 +204,27 @@ impl ResponsePlan {
     }
 }
 
-fn retain_first_l1_groups(document: &mut YamlValue) -> bool {
+fn normalize_l1_topology(document: &mut YamlValue) -> bool {
     let Some(resources) = document.as_mapping_mut() else {
         return false;
     };
-    let mut limited = false;
+    let mut changed = false;
     for resource in resources.values_mut() {
         let Some(resource) = resource.as_mapping_mut() else {
             continue;
         };
-        for field in L1_GROUP_FIELDS {
-            let Some(YamlValue::Sequence(groups)) = mapping_value_mut(resource, field) else {
-                continue;
-            };
-            if groups.len() > 1 && groups.first().is_some_and(is_nested_group) {
-                groups.truncate(1);
-                limited = true;
-            }
+        changed |= resource
+            .remove(YamlValue::String("master_l1".to_string()))
+            .is_some();
+        let Some(YamlValue::Sequence(groups)) = mapping_value_mut(resource, "slave_l1") else {
+            continue;
+        };
+        if groups.len() > 1 && groups.first().is_some_and(is_nested_group) {
+            groups.truncate(1);
+            changed = true;
         }
     }
-    limited
+    changed
 }
 
 fn is_nested_group(value: &YamlValue) -> bool {
@@ -456,7 +456,7 @@ global:
         else {
             panic!("expected rewrite");
         };
-        assert_eq!(targets.len(), 4);
+        assert_eq!(targets.len(), 3);
         let RewrittenBody::VintageCacheConfig(plan) = *body else {
             panic!("expected Vintage cache config plan");
         };
@@ -477,10 +477,7 @@ global:
             config["redis-cache"]["slave"][0],
             YamlValue::String("198.19.0.12:6379".to_string())
         );
-        assert_eq!(
-            config["redis-cache"]["master_l1"][0][0],
-            YamlValue::String("198.19.0.13:6379".to_string())
-        );
+        assert!(mapping_value(config["redis-cache"].as_mapping().unwrap(), "master_l1").is_none());
         assert_eq!(config["global"]["lru_max_memory"], 100);
         assert_eq!(outer["future"]["keep"], true);
         assert!(discovered.iter().all(|target| target.protocol == "auto"));
@@ -537,7 +534,7 @@ mem:
     }
 
     #[test]
-    fn retains_only_the_first_nested_l1_group() {
+    fn removes_master_l1_and_retains_only_the_first_slave_l1_group() {
         let plugin = CacheConfig;
         let uri: Uri = "/1/config/service?action=lookup&group=cache.service.test"
             .parse()
@@ -563,14 +560,16 @@ flat-cache:
             panic!("expected rewrite");
         };
 
-        for dropped in ["10.0.2.1", "10.0.4.1"] {
+        for dropped in [
+            "10.0.1.1", "10.0.1.2", "10.0.2.1", "10.0.4.1", "10.0.7.1", "10.0.7.2",
+        ] {
             let dropped = dropped.parse::<Ipv4Addr>().unwrap();
             assert!(
                 targets.iter().all(|target| target.connect_ip != dropped),
                 "dropped L1 group endpoint must not be discovered"
             );
         }
-        assert_eq!(targets.len(), 9);
+        assert_eq!(targets.len(), 5);
 
         let RewrittenBody::VintageCacheConfig(plan) = *body else {
             panic!("expected Vintage cache config plan");
@@ -582,9 +581,43 @@ flat-cache:
 
         assert_eq!(sequence_len(&config["cache"]["master"]), 2);
         assert_eq!(sequence_len(&config["cache"]["slave"]), 2);
-        assert_eq!(sequence_len(&config["cache"]["master_l1"]), 1);
-        assert_eq!(sequence_len(&config["cache"]["master_l1"][0]), 2);
+        assert!(mapping_value(config["cache"].as_mapping().unwrap(), "master_l1").is_none());
         assert_eq!(sequence_len(&config["cache"]["slave_l1"]), 1);
-        assert_eq!(sequence_len(&config["flat-cache"]["master_l1"]), 2);
+        assert_eq!(sequence_len(&config["cache"]["slave_l1"][0]), 1);
+        assert_eq!(config["cache"]["slave_l1"][0][0], "198.19.0.14:3120");
+        assert!(mapping_value(config["flat-cache"].as_mapping().unwrap(), "master_l1").is_none());
+    }
+
+    #[test]
+    fn rewrites_a_master_l1_only_config_to_remove_the_field() {
+        let plugin = CacheConfig;
+        let uri: Uri = "/1/config/service?action=lookup&group=cache.service.test"
+            .parse()
+            .unwrap();
+        let body = response(
+            r#"
+cache:
+  master_l1:
+    - [10.0.1.1:3120]
+  custom: keep
+"#,
+        );
+        let PluginResult::Rewritten { body, targets, .. } =
+            plugin.rewrite(&input(&uri, &body)).unwrap()
+        else {
+            panic!("expected rewrite");
+        };
+        assert!(targets.is_empty());
+
+        let RewrittenBody::VintageCacheConfig(plan) = *body else {
+            panic!("expected Vintage cache config plan");
+        };
+        let (body, discovered) = plan.render(&BTreeMap::new()).unwrap();
+        assert!(discovered.is_empty());
+        let outer: JsonValue = serde_json::from_slice(&body).unwrap();
+        let config: YamlValue =
+            serde_yaml::from_str(outer["body"]["nodes"][0]["value"].as_str().unwrap()).unwrap();
+        assert!(mapping_value(config["cache"].as_mapping().unwrap(), "master_l1").is_none());
+        assert_eq!(config["cache"]["custom"], "keep");
     }
 }

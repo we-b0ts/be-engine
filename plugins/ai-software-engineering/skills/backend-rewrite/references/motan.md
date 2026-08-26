@@ -155,7 +155,66 @@ For multiple interfaces, pass every generated `*Exporter::new(...)` to the
 same `brz_motan::exporter!(...)` invocation and use each `*Exporter::PATH` in
 the corresponding endpoint's `interfaces`.
 
-## 5. Check before delivery
+## 5. Call a Motan1 service through a generated Vintage referer
+
+For a Motan1 Java/Hessian dependency, declare its contract with
+`#[brz_motan::referer]` and let the generated referer own Hessian argument and
+response handling. Use `connect_vintage` for endpoint discovery. When the
+source call carries TokenProxy-backed TAuth2, construct the generated referer
+through `TokenProxyTauth2Connect`; application code must not select an endpoint,
+fetch a token, build an `Authorization` attachment, or construct raw Motan
+frames.
+
+```rust,no_run
+use brz_motan::vintage::{Client, ClientConfig, ExciseStrategy};
+use brz_motan::{Motan1RefererConfig, SessionConfig};
+use brz_motan_token_proxy::{
+    TokenProxyTauth2Config,
+    TokenProxyTauth2Connect as _,
+};
+
+#[brz_motan::referer(
+    interface = "com.example.api.EchoService",
+    crate = "brz_motan"
+)]
+pub trait EchoService {
+    #[brz_motan::method(
+        name = "echo",
+        descriptor = "java.lang.String"
+    )]
+    async fn echo(
+        &self,
+        message: String,
+    ) -> Result<String, brz_motan::Error>;
+}
+
+async fn echo_through_motan(
+    vintage_endpoint: &str,
+    message: String,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let vintage = Client::new(ClientConfig::new(vintage_endpoint)?)?;
+    let referer = EchoServiceReferer::connect_vintage(
+        vintage,
+        ExciseStrategy::ratio(80)?,
+        SessionConfig::default(),
+        Motan1RefererConfig::new("SOURCE_APPLICATION", "SOURCE_GROUP"),
+        TokenProxyTauth2Config::new(SOURCE_TOKEN_ID)
+            .with_signing_parameter("SOURCE_PARAMETER_NAME", "SOURCE_PARAMETER_VALUE")?,
+    )
+    .await?;
+
+    let result = referer.echo(message).await;
+    referer.close().await?;
+    Ok(result?)
+}
+```
+
+Every `SOURCE_*` value above must come from source code or recorded evidence.
+The connector loads TokenProxy credentials during readiness, and the referer
+injects a freshly signed attachment for every call while hiding discovery and
+authentication details from the caller.
+
+## 6. Check before delivery
 
 1. Test each macro method through its generated exporter, including request
    decoding, handler invocation, response encoding, and error conversion.
