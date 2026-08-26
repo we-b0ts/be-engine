@@ -68,8 +68,11 @@ conditional coordinator references or worker engineering guidance merely to
 anticipate a later action.
 
 When an assigned API worker exposes a Motan service through `brz-motan`, read
-[motan.md](references/motan.md) before defining DTOs, service adapters, or
-export endpoints.
+[motan-exporter.md](references/motan-exporter.md) before defining DTOs, service
+adapters, or export endpoints. When target code calls a Motan dependency, read
+[motan-referer.md](references/motan-referer.md) before defining its dependency
+contract, client, authentication, or lifecycle. Read both only when the same
+work scope owns both directions.
 
 When an assigned API worker uses memcache `CacheService`, read
 [memcache.md](references/memcache.md) before constructing the cache or calling
