@@ -159,23 +159,22 @@ the corresponding endpoint's `interfaces`.
 
 For a Motan1 Java/Hessian dependency, declare its contract with
 `#[brz_motan::referer]` and let the generated referer own Hessian argument and
-response handling. Use `connect_vintage` for endpoint discovery. When the
-source call carries TokenProxy-backed TAuth2, construct the generated referer
-through `TokenProxyTauth2Connect`; application code must not select an endpoint,
-fetch a token, build an `Authorization` attachment, or construct raw Motan
-frames.
+response handling. Create it with `MotanClient::motan1_referer` so the client
+owns Vintage endpoint discovery. When the source call carries TokenProxy-backed
+TAuth2, enable the auth proxy once on that process-level client; application
+code must not select an endpoint, fetch a token, build an `Authorization`
+attachment, construct raw Motan frames, or manage an authentication provider.
 
 Keep the concrete generated `*Referer` in the dependency-construction layer.
 Business functions must depend on the generated service trait through a generic
 type parameter; they must not accept or store the concrete referer type.
 
 ```rust,no_run
-use brz_motan::vintage::{Client, ClientConfig, ExciseStrategy};
-use brz_motan::{Motan1RefererConfig, SessionConfig};
+use brz_motan::vintage::{Client, ClientConfig};
+use brz_motan::{Motan1RefererOptions, MotanClient};
 use brz_motan_token_proxy::{
+    TokenProxyTauth2ClientExt as _,
     TokenProxyTauth2Config,
-    TokenProxyTauth2Connect as _,
-    TokenProxyTauth2Provider,
 };
 
 #[brz_motan::referer(
@@ -210,62 +209,54 @@ async fn echo_through_motan(
     message: String,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let vintage = Client::new(ClientConfig::new(vintage_endpoint)?)?;
-    let excise = ExciseStrategy::ratio(80)?;
-    let session = SessionConfig::default();
-    let auth = TokenProxyTauth2Provider::connect_vintage(
-        vintage.clone(),
-        excise,
-        session.clone(),
-        TokenProxyTauth2Config::new(SOURCE_TOKEN_ID)
-            .with_signing_parameter("SOURCE_PARAMETER_NAME", "SOURCE_PARAMETER_VALUE")?,
-    )
-    .await?;
-    let referer = match EchoServiceReferer::connect_vintage_with_auth(
-        vintage,
-        excise,
-        session,
-        Motan1RefererConfig::new("SOURCE_APPLICATION", "SOURCE_GROUP"),
-        &auth,
-    )
-    .await
+    let client = MotanClient::new(vintage)
+        .with_auth_proxy(
+            TokenProxyTauth2Config::new(SOURCE_TOKEN_ID)
+                .with_signing_parameter(SOURCE_PARAMETER_NAME, SOURCE_PARAMETER_VALUE)?,
+        )
+        .await?;
+    let referer: EchoServiceReferer = match client
+        .motan1_referer(Motan1RefererOptions::new(
+            SOURCE_APPLICATION,
+            SOURCE_GROUP,
+        ))
+        .await
     {
         Ok(referer) => referer,
         Err(error) => {
-            auth.close().await?;
+            client.close().await?;
             return Err(error.into());
         }
     };
 
     let result = echo_for_business(&referer, message).await;
     let referer_close = referer.close().await;
-    let auth_close = auth.close().await;
+    let client_close = client.close().await;
     referer_close?;
-    auth_close?;
+    client_close?;
     Ok(result?)
 }
 ```
 
 Every `SOURCE_*` value above must come from source code or recorded evidence.
-The connector loads TokenProxy credentials during readiness, and the referer
+The client loads TokenProxy credentials during readiness, and the referer
 injects a freshly signed attachment for every call while hiding discovery and
 authentication details from the caller.
 
-Create exactly one `TokenProxyTauth2Provider` for referers that share the same
-TokenProxy source and ordered signing-parameter values, and keep it in the
-process-level dependency-construction layer. Pass `&auth` to every generated
-referer's `connect_vintage_with_auth`; do not construct one provider per referer. A
-shared provider performs TokenProxy discovery and `getAllTokens` once, while
-each business referer still performs its own service discovery. Separate
-providers create separate recorded dependencies and can make replay issue
-calls that do not exist in the source case.
-
-The shared provider must outlive every referer that uses it. During shutdown,
-close all business referers first and close the provider last. Closing one
+Create exactly one `MotanClient` for referers that share the same TokenProxy
+source and ordered signing-parameter values. Enable authentication once with
+`with_auth_proxy`, then create every generated Motan1 referer through
+`motan1_referer`. Omit `with_auth_proxy` when the source call is unauthenticated.
+The client performs TokenProxy discovery and `getAllTokens` once, while each
+business referer still performs its own service discovery. During shutdown,
+close all business referers first and close the client last. Closing one
 business referer does not close the shared authentication dependency, so the
-remaining referers continue to work. The shorter generated
-`Referer::connect_vintage(..., TokenProxyTauth2Config)` form owns a private
-provider and is only appropriate when the process has exactly one
-authenticated referer.
+remaining referers continue to work.
+
+`Motan1RefererOptions::new` applies the SDK's standard session, request, and
+80% Vintage node threshold-protection policies. Do not duplicate these
+defaults in application code. Override an evidenced non-standard value only
+through the corresponding `with_*` method on the same options value.
 
 Do not look up Vintage endpoints before constructing a referer. The referer
 subscribes directly and reuses the subscription's initial snapshot, producing
