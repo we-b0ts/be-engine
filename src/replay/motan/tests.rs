@@ -186,7 +186,27 @@ fn business_exchange_matches_when_tauth2_credentials_rotate() {
 }
 
 #[test]
-fn business_exchange_reports_argument_and_auth_semantic_mismatches() {
+fn business_exchange_matches_when_arguments_differ() {
+    let mut state = state_with_business_request(1, None);
+    let changed_request = request_match(business_request(2, 2, None));
+
+    let matched = state
+        .match_exchange(
+            Some("case"),
+            &business_target(),
+            None,
+            1,
+            &business_identity(),
+            Some(&changed_request),
+        )
+        .unwrap();
+
+    state.complete(&matched);
+    assert_eq!(state.snapshot().matched_count, 1);
+}
+
+#[test]
+fn business_exchange_reports_auth_semantic_mismatches() {
     let source = "TAuth2 token=\"old\",param=\"uid%3D1\",sign=\"first\"";
     let mut state = state_with_business_request(1, Some(source));
     let changed = "TAuth2 token=\"new\",param=\"uid%3D2\",sign=\"second\"";
@@ -201,7 +221,7 @@ fn business_exchange_reports_argument_and_auth_semantic_mismatches() {
         Some(&changed_request),
     ));
 
-    assert_eq!(fields, ["request_arguments", "auth_parameters"]);
+    assert_eq!(fields, ["auth_parameters"]);
 
     let missing_auth = request_match(business_request(3, 1, None));
     let fields = mismatch_fields(state.match_exchange(
