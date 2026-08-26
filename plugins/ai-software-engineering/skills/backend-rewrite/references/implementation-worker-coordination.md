@@ -1,9 +1,9 @@
 # Implementation Worker Coordination
 
-Use this guide once per orchestrator task: when initialized inventory first
-reports `total > 1`, or before the first `implementation_required` action in a
-single-API workflow. Worker dispatch is universal; inventory size changes only
-what the orchestrator does after dispatch.
+Use this guide before the first `implementation_required` action for any API or
+process-output work item, and again whenever dispatch, resume, transfer,
+integration, or cleanup is required. Worker dispatch is universal; inventory
+size changes only what the orchestrator does after dispatch.
 
 ## Contents
 
@@ -23,45 +23,50 @@ checks, and the final `terminal_allowed` decision.
 Maintain this invariant for the complete workflow:
 
 ```text
-one exact API <-> one dedicated subagent handle <-> one dedicated worktree
+one exact work item <-> one dedicated subagent handle <-> one dedicated worktree
 ```
 
-The API method/pattern, not its current issue ID, is the assignment identity.
-Attempts, issue IDs, workflow revisions, Replay results, and comparison results
-may change without changing that binding.
+The assignment identity is either the exact API method/pattern or
+`process_output:<id>`, matching `action.details.work_scope`. The issue ID is not
+the identity. Attempts, issue IDs, workflow revisions, Replay results, and
+comparison results may change without changing that binding.
 
-Each subagent owns one API's diagnosis-to-tested-change cycle:
+Each subagent owns one work item's diagnosis-to-tested-change cycle:
 
-- execute the assigned read-only evidence commands;
+- for an API, execute only its assigned read-only evidence commands;
+- for a process output, start from its returned `comparison_observation` and
+  target startup/output path; an empty evidence-command list is expected;
 - inspect source and target code and prove one cause;
 - implement the smallest compatible repair;
-- run API-local unit and component tests; and
+- run work-item-local unit and component tests; and
 - return a reviewable handoff.
 
-A handoff ends only the worker's current turn. It does not complete the API or
-release the `API -> subagent -> worktree` binding.
+A handoff ends only the worker's current turn. It does not complete the work
+item or release its worker binding.
 
 Keep recording, focused Replay, and comparison serial. They share one
 `traffic_runtime` lease and run only under the orchestrator. Serialization
-applies to one live traffic operation, not to an API's complete lifecycle.
+applies to one live traffic operation, not to a work item's complete lifecycle.
 
 ## Mandatory Dispatch Gate
 
-Treat the first `implementation_required` action for an API, including the only
-API in a workflow, as an immediate dispatch barrier. The orchestrator may read
-the action envelope, but before it executes evidence, opens a case artifact,
-inspects source or target code, or develops an API-level hypothesis, it must:
+Treat the first `implementation_required` action for every work item, including
+the only API in a workflow or a process output, as an immediate dispatch
+barrier. The orchestrator may read the action envelope, but before it executes
+evidence, opens a case artifact, inspects source or target code, or develops a
+work-item hypothesis, it must:
 
-1. preserve the complete action, exact API, issue ID, canonical `cwd`, and
-   command specs without executing the evidence commands;
-2. create the API worker worktree from the current integrated target revision;
+1. preserve the complete action, exact `work_scope`, issue ID, canonical `cwd`,
+   and command specs without executing the evidence commands;
+2. create the work-item worker worktree from the current integrated target
+   revision;
 3. invoke the runtime's actual subagent-dispatch tool with that context and the
    required handoff;
 4. capture the returned worker handle and optional display name;
 5. execute the returned `commands.confirm_worker`, supplying
    `BACKEND_REWRITE_SUBAGENT_HANDLE` and optionally
    `BACKEND_REWRITE_SUBAGENT_NAME`; and
-6. execute no later `next`, including same-API acceptance or cross-API
+6. execute no later `next`, including same-item acceptance or cross-item
    scheduling, until confirmation returns either `worker.state=confirmed` or
    the exact post-confirmation `advance_required` action.
 
@@ -70,17 +75,17 @@ dispatch does not satisfy this gate. If no real subagent capability is
 available, report the blocker; do not silently fall back to main-Agent
 diagnosis or implementation.
 
-The coordinator enforces this barrier at its API diagnostic boundary. Until
-the worker for the evidence-owning API confirms the current dispatch, evidence
-queries, response/dependency/recorder-capture planning, and repair routing are
-rejected. For parked work, the confirmation check follows the opaque evidence
-identity to its owning API rather than using the currently active API.
+The coordinator enforces this barrier at the work-item diagnostic boundary.
+Until the owning worker confirms the current dispatch, its evidence queries
+and repair routing are rejected. API response/dependency/recorder-capture
+planning follows the opaque evidence identity to its owning API rather than
+using whichever API is currently active.
 
-For a later `implementation_required` on a bound API, do not dispatch another
-subagent. Refresh the same worktree from the integrated revision and use the
-runtime's resume/reactivate operation with the stored handle. A fresh Agent or
-subagent invocation is a replacement even when given the prior prompt or
-worktree; it loses the dedicated worker's accumulated context.
+For a later `implementation_required` on a bound work item, do not dispatch
+another subagent. Refresh the same worktree from the integrated revision and
+use the runtime's resume/reactivate operation with the stored handle. A fresh
+Agent or subagent invocation is a replacement even when given the prior prompt
+or worktree; it loses the dedicated worker's accumulated context.
 Confirm every reactivation with the same handle through the new action's
 `commands.confirm_worker` before any later `next`.
 
@@ -90,20 +95,23 @@ Use the absolute canonical coordinator `cwd` returned by the action as
 `<coordinator-root>`. The orchestrator stores workers at:
 
 ```text
-<coordinator-root>/.traffic-e2e/local/rewrite-worktrees/<workflow.id>/<api-slug>
+<coordinator-root>/.traffic-e2e/local/rewrite-worktrees/<workflow.id>/<work-item-slug>
 ```
 
-Give the worker that absolute path. Repository initialization keeps
+Use a deterministic filesystem-safe slug prefixed with `api-` or
+`process-output-` so the two work-scope namespaces cannot collide. Give the
+worker that absolute path. Repository initialization keeps
 `/.traffic-e2e/local/` ignored; never commit worktree contents. Workers must not
 create, switch, reset, remove, or repurpose worktrees and must not initialize a
 private coordinator. Worker edits stay isolated until orchestrator integration.
 
 Every returned coordinator argv includes the absolute canonical
-`--target-root`. A worker may therefore execute its assigned evidence,
+`--target-root`. An API worker may therefore execute its assigned evidence,
 case-dependency, returned read-only help, and explicitly handed API-scoped
-status argv from its own worktree. It must execute the argv exactly and must not
-remove or replace `--target-root`. Inventory and unscoped status remain
-orchestrator concerns.
+status argv from its own worktree. A process-output worker executes only
+read-only commands present in its handoff; normally it receives no evidence
+commands. Every worker executes argv exactly and never removes or replaces
+`--target-root`. Inventory and unscoped status remain orchestrator concerns.
 
 Only the orchestrator runs state-mutating transitions: `next` and acceptance,
 recording, rule plan/apply, route or repair verification, recover, Replay, and
@@ -155,16 +163,17 @@ the worker to rediscover workflow state or enumerate other work items.
 
 The worker handoff is ready after local tests when it returns:
 
-- API and issue ID;
+- exact `work_scope` and issue ID;
 - proven root cause and supporting evidence;
 - changed files and shared-module impact;
 - patch or commit identity and test outcomes; and
-- required coordinator transition inputs and unresolved risks.
+- required coordinator transition inputs, the unchanged acceptance command,
+  and unresolved risks.
 
 The worker's current turn becomes idle after handoff and does not wait for
-Replay. Retain the `API -> subagent -> worktree` binding through per-API
-`complete` and until workflow `terminal_allowed=true`, unless ownership is
-explicitly transferred.
+Replay or process-output comparison. Retain the
+`work item -> subagent -> worktree` binding through item `complete` and until
+workflow `terminal_allowed=true`, unless ownership is explicitly transferred.
 
 If serialized acceptance returns `implementation_required`, update that
 worker's worktree from the integrated target revision and resume the stored
@@ -176,20 +185,21 @@ the same worktree and complete current action, then execute
 `backend-rewrite worker transfer <binding-id>` with its runtime handle, a
 single-line `--reason`, and `--approve-ownership-transfer`. The binding ID must
 come from current scoped status; stale IDs and handles already bound to another
-API are rejected.
+work item are rejected.
 A successful transfer atomically confirms the current dispatch. Never let two
-workers own or edit the same API concurrently.
+workers own or edit the same work item concurrently.
 
 After handoff, integrate the worker patch or commit into the coordinator
 worktree, resolve conflicts, batch compatible handoffs, freeze the target
-content fingerprint, and execute that API's
-coordinator-issued acceptance. If it returns `target_quality_required`, execute
-its exact command only in the absolute canonical worktree named by the action,
-then execute the returned `advance_required`. Worker-local tests do not satisfy
-this integrated-revision gate. Later integrations move old completed APIs to
-deferred `revalidation_pending`; after ordinary work drains, the coordinator
-automatically verifies all of them against the final fingerprint. When the
-handoff's shared-module impact is high, the orchestrator may first run
+content fingerprint, and execute that work item's coordinator-issued
+acceptance. Follow every returned action unchanged. If it returns
+`target_quality_required`, execute its exact command only in the absolute
+canonical worktree named by the action, then execute the returned
+`advance_required`. Worker-local tests do not satisfy this integrated-revision
+gate. Later integrations can make completed APIs or process outputs stale;
+after ordinary work drains, the coordinator automatically verifies them
+against the final fingerprint. When an API handoff's shared-module impact is
+high, the orchestrator may first run
 `backend-rewrite verification request --api ... --reason ...` for selected
 stale APIs and execute its returned advance command. This optional early check
 does not replace final coverage. Release bindings and remove worker worktrees

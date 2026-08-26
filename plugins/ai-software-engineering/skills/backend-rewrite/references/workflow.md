@@ -6,11 +6,39 @@ workflow. Load action-specific references only through the direct routing in
 
 ## Contents
 
+- Session start and resume
 - Coordinator phase order
 - Core action handling
 - API inventory and serialized traffic
 - Integrated target quality
 - Completion
+
+## Session Start And Resume
+
+Start or resume an initialized workflow from the canonical target repository:
+
+```bash
+backend-rewrite next
+```
+
+Before the first standard recording, add `--api '<METHOD path-or-pattern>'`
+only when the caller explicitly requests a single-API recording. After the
+coordinator publishes its stable inventory, select work with the exact
+inventory method/pattern. If an action response was lost or the session is
+resuming, recover it with scoped read-only `status`; never infer workflow state
+from artifact recency.
+
+At the start of every main-orchestrator session, read
+`.traffic-e2e/local/block.md` when it exists. Project initialization may create
+it with temporary reference evidence about source configuration, Vintage
+access, startup/process activity, and local caches. The first rewrite session
+after initialization must read that evidence completely. Remove each entry
+after the rewrite has fully understood it, implemented the required behavior,
+or proved it irrelevant; keep no resolved history and remove the file when it
+is empty. When progress is proven blocked and the orchestrator is about to
+stop, create or update the same file with useful resume context. Treat it as
+AI-owned reference and handoff context, never as coordinator state;
+`backend-rewrite status` remains authoritative.
 
 ## Coordinator Phase Order
 
@@ -164,16 +192,17 @@ main orchestrator proves that the same value is hardcoded in source code and
 records one commit trailer per target occurrence:
 
 ```text
-Hardcode-Source-Evidence: TARGET_FILE:LINE:COLUMN <= SOURCE_REPOSITORY@SOURCE_REVISION:SOURCE_FILE:LINE
+Hardcode-Source-Evidence: TARGET_FILE:LINE:COLUMN <= SOURCE_REPOSITORY@SOURCE_REVISION:SOURCE_FILE:LINE:COLUMN
 ```
 
 `SOURCE_REVISION` must be the 7-64 hexadecimal commit ID inspected by the AI;
 traffic, recordings, logs, runtime configuration, and container state are not
 source-code proof. After committing the trailer, rerun the unchanged quality
-command with one repeatable exact-position argument per occurrence:
+command with one repeatable target-to-source evidence mapping per occurrence.
+The argument must exactly match the committed trailer:
 
 ```text
---hardcode-ai-verified TARGET_FILE:LINE:COLUMN
+--hardcode-ai-verified TARGET_FILE:LINE:COLUMN=SOURCE_REPOSITORY@SOURCE_REVISION:SOURCE_FILE:LINE:COLUMN
 ```
 
 The target occurrence itself must be committed at that exact position; an
@@ -201,9 +230,11 @@ Continue other runnable work only through current coordinator-issued commands.
 ### `complete`
 
 API-scoped `complete` means only that API has current passing focused E2E and
-comparison evidence. Finish repository-wide verification and delivery only
-when `terminal_allowed=true` proves every API is complete for the same target
-content fingerprint and the final public `progress.yaml` is committed. Use
+comparison evidence. Process-output-scoped `complete` means only that output
+passes its configured comparison for the current target fingerprint. Finish
+repository-wide verification and delivery only when `terminal_allowed=true`
+proves every API and process output is complete for the same target content
+fingerprint and the final public `progress.yaml` is committed. Use
 `backend-rewrite inventory` when delivery needs the full per-API list.
 
 ## API Inventory And Serialized Traffic
@@ -265,11 +296,12 @@ for that recording.
 
 ## Completion Invariants
 
-Keep worker handoff, API completion, and workflow completion distinct. A worker
-handoff supplies a tested patch and coordinator inputs; only integrated
-acceptance can complete the API. Later integrated changes may make that API
-`revalidation_pending`. Retain each API's worker binding and worktree until
-`terminal_allowed=true` and final delivery no longer needs them.
+Keep worker handoff, work-item completion, and workflow completion distinct. A
+worker handoff supplies a tested patch and coordinator inputs; only integrated
+acceptance can complete its API or process output. Later integrated changes may
+make that item `revalidation_pending`. Retain every work item's worker binding
+and worktree until `terminal_allowed=true` and final delivery no longer needs
+them.
 
 An evidence-proven unavailable external response-driving value may be blocked
 under [problem-diagnosis.md](problem-diagnosis.md). A blocker is not successful
