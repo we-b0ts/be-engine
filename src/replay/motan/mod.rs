@@ -292,14 +292,31 @@ impl MotanReplayState {
         identity: &RequestIdentity,
         request_match: Option<&RequestMatch>,
     ) -> std::result::Result<MatchedExchange, CommandMatchDiagnostic> {
-        let matched = preferred_match(&self.exchanges, active_case_id, |exchange| {
+        let matches_request = |exchange: &ReplayExchange, connection_id: Option<Uuid>| {
             exchange.status.is_available()
-                && bound_connection.is_none_or(|id| exchange.record.connection_id == id)
+                && connection_id.is_none_or(|id| exchange.record.connection_id == id)
                 && exchange.record.codec_version == codec_version
                 && exchange.identity == *identity
                 && request_mismatch_fields(exchange.request_match.as_ref(), request_match)
                     .is_empty()
-        });
+        };
+        let matched = bound_connection.map_or_else(
+            || {
+                preferred_match(&self.exchanges, active_case_id, |exchange| {
+                    matches_request(exchange, None)
+                })
+            },
+            |connection_id| match preferred_match(&self.exchanges, active_case_id, |exchange| {
+                matches_request(exchange, Some(connection_id))
+            }) {
+                PreferredMatch::NotFound => {
+                    preferred_match(&self.exchanges, active_case_id, |exchange| {
+                        matches_request(exchange, None)
+                    })
+                }
+                preferred => preferred,
+            },
+        );
         let index = match matched {
             PreferredMatch::Matched(index) => index,
             PreferredMatch::LaneBlocked { candidate, blocker } => {
@@ -310,13 +327,7 @@ impl MotanReplayState {
                     &self.exchanges,
                     active_case_id,
                     |exchange| {
-                        motan_mismatch_fields(
-                            exchange,
-                            bound_connection,
-                            codec_version,
-                            identity,
-                            request_match,
-                        )
+                        motan_mismatch_fields(exchange, codec_version, identity, request_match)
                     },
                 ));
             }
@@ -450,7 +461,7 @@ pub(super) async fn handle_connection(
                         case_id: active_case_id,
                         target: target_key.clone(),
                         command: identity.command(),
-                        reason: "no recorded Motan exchange matched method identity, request arguments, authentication, and connection lane".to_string(),
+                        reason: "no recorded Motan exchange matched method identity, authentication, and recorded lane order".to_string(),
                         diagnostic: Some(diagnostic),
                     });
                     None
@@ -581,15 +592,11 @@ impl CommandExchangeScope for ReplayExchange {
 
 fn motan_mismatch_fields(
     exchange: &ReplayExchange,
-    bound_connection: Option<Uuid>,
     codec_version: u8,
     identity: &RequestIdentity,
     request_match: Option<&RequestMatch>,
 ) -> Vec<&'static str> {
     let mut fields = Vec::new();
-    if bound_connection.is_some_and(|id| exchange.record.connection_id != id) {
-        fields.push("connection");
-    }
     if exchange.record.codec_version != codec_version {
         fields.push("codec_version");
     }
