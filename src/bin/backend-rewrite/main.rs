@@ -222,9 +222,15 @@ impl From<ResponseBodyCodecArg> for ResponseBodyCodec {
 struct RulePlanArgs {
     #[arg(long)]
     evidence_id: String,
+    /// Response body codec. JSON uses --kind and JSON arguments; typed codecs use typed path JSON.
     #[arg(long, value_enum)]
     body_codec: ResponseBodyCodecArg,
-    #[arg(long, value_enum)]
+    /// JSON response-rule kind. Omit for protobuf and Hessian2 typed-body rules.
+    #[arg(
+        long,
+        value_enum,
+        conflicts_with_all = ["unordered_paths", "unordered_joined_string_paths"]
+    )]
     kind: Option<RuleKindArg>,
     #[arg(long)]
     json_pointer: Option<String>,
@@ -236,9 +242,35 @@ struct RulePlanArgs {
     target_example: Option<String>,
     #[arg(long, required_if_eq("kind", "unordered-joined-string"))]
     separator: Option<String>,
-    #[arg(long = "unordered-path", value_parser = parse_response_body_unordered_path)]
+    /// Typed protobuf/Hessian2 unordered selector encoded as one JSON object.
+    #[arg(
+        long = "unordered-path",
+        value_name = "PATH_JSON",
+        value_parser = parse_response_body_unordered_path,
+        conflicts_with_all = [
+            "kind",
+            "json_pointer",
+            "source_evidence",
+            "source_example",
+            "target_example",
+            "separator"
+        ]
+    )]
     unordered_paths: Vec<ResponseBodyUnorderedPath>,
-    #[arg(long = "unordered-joined-string-path", value_parser = parse_response_body_joined_string_path)]
+    /// Typed protobuf/Hessian2 joined-string selector encoded as one JSON object.
+    #[arg(
+        long = "unordered-joined-string-path",
+        value_name = "PATH_JSON",
+        value_parser = parse_response_body_joined_string_path,
+        conflicts_with_all = [
+            "kind",
+            "json_pointer",
+            "source_evidence",
+            "source_example",
+            "target_example",
+            "separator"
+        ]
+    )]
     unordered_joined_string_paths: Vec<ResponseBodyJoinedStringPath>,
 }
 

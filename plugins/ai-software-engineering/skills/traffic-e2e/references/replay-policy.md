@@ -410,6 +410,17 @@ source proof on every selected path. A diagnostic candidate proves only that
 multiset comparison explains observed bytes; it does not prove order is absent
 from the product contract:
 
+```bash
+backend-rewrite rule plan \
+  --evidence-id <current-evidence-id> \
+  --body-codec hessian2 \
+  --unordered-path '{"value_path":["result","groups","*","whiteList"],"display_path":"$.result.groups[*].whiteList","source_evidence":"src/rule.rs:whiteList is a Set"}'
+```
+
+Typed protobuf/Hessian2 paths carry their source evidence inside the JSON
+object. Do not combine them with JSON-only `--kind`, `--json-pointer`,
+`--source-evidence`, examples, or the top-level separator argument.
+
 ```yaml
 response_rules:
   protobuf:

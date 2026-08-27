@@ -2,6 +2,7 @@ mod action;
 mod action_contract;
 mod artifacts;
 mod case_dependencies;
+mod comparison_issue;
 mod dependency_rule;
 mod evidence;
 mod evidence_model;
@@ -38,8 +39,6 @@ mod worker;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
-use serde_json::Value;
-
 pub use case_dependencies::{
     RewriteCapturePreview, RewriteCaseDependenciesOptions, RewriteCaseDependenciesReport,
     RewriteCaseDependencyProtocolDetail, RewriteCaseDependencyTarget,
@@ -876,55 +875,12 @@ fn compare_and_transition(target_root: &Path, state: &mut RewriteState) -> Resul
             state.phase = RewritePhase::SliceComplete;
         }
     } else {
-        let observation = report
-            .representative_difference
-            .as_ref()
-            .map(serde_json::to_value)
-            .transpose()?;
-        let pointer = observation
-            .as_ref()
-            .and_then(|value| value.get("pointer"))
-            .and_then(Value::as_str)
-            .unwrap_or("<comparison>");
-        let id = issue::id(&state.api, "comparison", pointer);
-        let response_body_candidate = observation.as_ref().is_some_and(|value| {
-            value
-                .get("body_diagnosis")
-                .is_some_and(|body| !body.is_null())
-        });
-        state.active_issue = Some(RewriteIssue {
-            id,
-            kind: RewriteIssueKind::Comparison,
-            owner: if response_body_candidate {
-                RewriteIssueOwner::SourceInvestigation
-            } else {
-                RewriteIssueOwner::TargetCode
-            },
-            summary: format!(
-                "comparison has {} candidate difference(s) and {} inconclusive case(s)",
-                report.counts.failed, report.counts.inconclusive
-            ),
-            pointer_pattern: (pointer != "<comparison>")
-                .then(|| crate::e2e_run::response_pointer_pattern(pointer)),
-            representative: None,
-            response_diagnosis: None,
-            possible_causes: if response_body_candidate {
-                vec![
-                    "structured_response_body_order_candidate".to_string(),
-                    "source_contract_must_prove_order_is_irrelevant".to_string(),
-                ]
-            } else {
-                vec![
-                    "target_behavior".to_string(),
-                    "intentional_source_nondeterminism".to_string(),
-                    "source_changed_during_comparison".to_string(),
-                    "verification_policy_gap".to_string(),
-                ]
-            },
-            observed_target_fingerprint: fingerprint::repository_fingerprint(target_root)?,
-            attempt: state.attempts.last().map_or(0, |attempt| attempt.attempt),
-            comparison_observation: observation,
-        });
+        state.active_issue = Some(comparison_issue::from_report(
+            &state.api,
+            &report,
+            fingerprint::repository_fingerprint(target_root)?,
+            state.attempts.last().map_or(0, |attempt| attempt.attempt),
+        )?);
         state.target_fingerprint = Some(target_fingerprint);
         state.phase = RewritePhase::ImplementationRequired;
     }

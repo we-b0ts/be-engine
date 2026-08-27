@@ -174,6 +174,16 @@ fn untyped_fixed_list(items: &[Vec<u8>]) -> Vec<u8> {
     encoded
 }
 
+fn untyped_map(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    let mut encoded = vec![b'H'];
+    for (key, value) in entries {
+        encoded.extend(string(key));
+        encoded.extend_from_slice(value);
+    }
+    encoded.push(b'Z');
+    encoded
+}
+
 /// Fixed-length typed list, the form Java writes for more than seven elements.
 fn typed_fixed_list(type_name: &str, items: &[Vec<u8>]) -> Vec<u8> {
     let mut encoded = vec![b'V'];
@@ -204,6 +214,75 @@ fn thirteen_class_body(last_field: Vec<u8>) -> Vec<u8> {
         })
         .collect::<Vec<_>>();
     untyped_fixed_list(&items)
+}
+
+#[test]
+fn wildcard_unordered_path_skips_non_list_siblings_and_keeps_them_exact() {
+    let response = |names: &[&str], scalar: u8| {
+        untyped_map(&[(
+            "groups",
+            untyped_fixed_list(&[
+                untyped_map(&[(
+                    "candidates",
+                    untyped_fixed_list(&names.iter().copied().map(string).collect::<Vec<_>>()),
+                )]),
+                untyped_map(&[("candidates", int(scalar))]),
+            ]),
+        )])
+    };
+    let expected = response(&["alice", "bob"], 7);
+    let actual = response(&["bob", "alice"], 7);
+
+    let discovery = discover_hessian2_order(&expected, &actual).unwrap();
+    let value_path = Hessian2ValuePath(vec![
+        "groups".to_string(),
+        "*".to_string(),
+        "candidates".to_string(),
+    ]);
+    assert_eq!(discovery.unordered_paths, vec![value_path.clone()]);
+    assert!(discovery.order_only);
+    let rule = Hessian2UnorderedPath {
+        value_path,
+        display_path: "response.groups[].candidates".to_string(),
+        source_evidence: "test source contract".to_string(),
+    };
+    assert!(compare_hessian2(&expected, &actual, std::slice::from_ref(&rule), &[]).unwrap());
+    assert!(!compare_hessian2(&expected, &response(&["bob", "alice"], 8), &[rule], &[]).unwrap());
+}
+
+#[test]
+fn wildcard_joined_string_path_skips_non_string_siblings_and_keeps_them_exact() {
+    let response = |names: &str, scalar: u8| {
+        untyped_map(&[(
+            "groups",
+            untyped_fixed_list(&[
+                untyped_map(&[("candidates", string(names))]),
+                untyped_map(&[("candidates", int(scalar))]),
+            ]),
+        )])
+    };
+    let expected = response("alice,bob", 7);
+    let actual = response("bob,alice", 7);
+
+    let discovery = discover_hessian2_order(&expected, &actual).unwrap();
+    let value_path = Hessian2ValuePath(vec![
+        "groups".to_string(),
+        "*".to_string(),
+        "candidates".to_string(),
+    ]);
+    assert_eq!(
+        discovery.unordered_joined_string_paths,
+        vec![(value_path.clone(), ",".to_string())]
+    );
+    assert!(discovery.candidates_explain_all_differences);
+    let rule = Hessian2JoinedStringPath {
+        value_path,
+        display_path: "response.groups[].candidates".to_string(),
+        separator: ",".to_string(),
+        source_evidence: "test source contract".to_string(),
+    };
+    assert!(compare_hessian2(&expected, &actual, &[], std::slice::from_ref(&rule)).unwrap());
+    assert!(!compare_hessian2(&expected, &response("bob,alice", 8), &[], &[rule]).unwrap());
 }
 
 #[test]

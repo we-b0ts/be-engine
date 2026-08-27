@@ -1,16 +1,46 @@
 # Coordinator Evidence Actions
 
 Read this guide only after the API worker is confirmed and returns source-proven
-inputs for recorder capture or a process-owned dependency rule, or when the
-current action exposes one of those planners. Workers may run returned
-read-only help commands but never execute the state-mutating commands here.
+inputs for a response rule, recorder capture, or a process-owned dependency
+rule, or when the current action exposes one of those planners. Workers may run
+returned read-only help commands but never execute the state-mutating commands
+here.
 
 ## Contents
 
 - Recorder-capture planning and refresh
+- Typed response-rule planning
 - Process-owned dependency-rule planning and reclassification
 - Evidence gate and ownership invariants
 - Bootstrap dependency overlays
+
+## Typed Response Rules
+
+The target never receives a response-rule selector. A worker returns the
+codec-specific path plus source proof; the main orchestrator plans and applies
+the rule. Replay and comparison load the applied selector from
+`.traffic-e2e/verification.yaml` and normalize source and target observations
+without changing target code, configuration, or RPC signatures.
+
+JSON rules use `--kind`, `--json-pointer`, and their top-level justification
+arguments. Protobuf and Hessian2 rules instead use typed path JSON and MUST NOT
+carry any of those JSON arguments. For a Hessian2 unordered collection:
+
+```text
+backend-rewrite rule plan \
+  --evidence-id <current-evidence-id> \
+  --body-codec hessian2 \
+  --unordered-path '{"value_path":["result","groups","*","whiteList"],"display_path":"$.result.groups[*].whiteList","source_evidence":"src/rule.rs:whiteList is a Set"}'
+```
+
+Use `--unordered-joined-string-path` for a joined string; its typed JSON also
+contains `separator`. Execute the exact returned apply command once.
+
+Planning requires complete current comparison or focused-E2E evidence. An
+`unevaluable` comparison is a verification-system issue, not authorization to
+apply a selector or change the target. Preserve its bounded error, route the
+reported issue with `--cause replay-capability-gap`, repair traffic-e2e, and
+regenerate the comparison result before planning.
 
 ## Recorder Capture
 

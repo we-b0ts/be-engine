@@ -565,10 +565,13 @@ fn repair_id(
 
 fn validate_route_kind(issue: &RewriteIssue, kind: &str) -> Result<()> {
     let allowed = match kind {
-        "replay_capability_gap" => matches!(
-            issue.kind,
-            RewriteIssueKind::Replay | RewriteIssueKind::Dependency
-        ),
+        "replay_capability_gap" => {
+            matches!(
+                issue.kind,
+                RewriteIssueKind::Replay | RewriteIssueKind::Dependency
+            ) || (issue.kind == RewriteIssueKind::Comparison
+                && issue.owner == RewriteIssueOwner::TrafficE2eSystem)
+        }
         "recorder_capability_gap" => matches!(
             issue.kind,
             RewriteIssueKind::Response | RewriteIssueKind::Dependency
@@ -603,6 +606,20 @@ mod tests {
     use crate::{
         E2eDependencyGate, E2eDiagnosisCounts, E2eReplayGate, E2eResponseGate, E2eVerificationGates,
     };
+
+    #[test]
+    fn traffic_system_comparison_issue_accepts_replay_capability_repair() {
+        let mut issue = repair_state("fnv1a64:old".to_string())
+            .active_issue
+            .clone()
+            .unwrap();
+        issue.kind = RewriteIssueKind::Comparison;
+
+        validate_route_kind(&issue, "replay_capability_gap").unwrap();
+
+        issue.owner = RewriteIssueOwner::SourceInvestigation;
+        assert!(validate_route_kind(&issue, "replay_capability_gap").is_err());
+    }
 
     #[test]
     fn repair_verification_rejects_stale_ids_and_unchanged_revisions() {
