@@ -183,21 +183,26 @@ pub fn assert_recorded_response(
         None => anyhow::bail!("expected response has no body or frame"),
     };
     let actual_body = decode_body(&actual.body, "actual response")?;
-    let (expected_body, actual_body) = if request.has_motan_frame() && !oneway {
+    let actual_status = actual.status;
+    let (expected_body, actual_body, expected_status, actual_status) = if request.has_motan_frame()
+        && !oneway
+    {
+        let expected_frame = motan::comparable_response_frame(&expected_body, "expected response")?;
+        let actual_frame = motan::comparable_response_frame(&actual_body, "actual response")?;
+        let expected_status = expected_frame.status_code();
+        let actual_status = actual_frame.status_code();
         (
-            AssertionBody::MotanFrame(motan::comparable_response_frame(
-                &expected_body,
-                "expected response",
-            )?),
-            AssertionBody::MotanFrame(motan::comparable_response_frame(
-                &actual_body,
-                "actual response",
-            )?),
+            AssertionBody::MotanFrame(expected_frame),
+            AssertionBody::MotanFrame(actual_frame),
+            expected_status,
+            actual_status,
         )
     } else {
         (
             AssertionBody::Bytes(expected_body),
             AssertionBody::Bytes(actual_body),
+            expected_status,
+            actual_status,
         )
     };
     evaluate_response(AssertionInputs {
@@ -209,7 +214,7 @@ pub fn assert_recorded_response(
         expected_body,
         expected_path: options.expected_response,
         expected_bytes,
-        actual_status: actual.status,
+        actual_status,
         actual_body,
         actual_path: options.actual_response,
         actual_bytes,
@@ -317,6 +322,7 @@ fn comparison_assertion_body(
         version,
         serialization,
         body,
+        response.rpc_body_decoded == Some(true),
     )))
 }
 

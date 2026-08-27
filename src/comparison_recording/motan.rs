@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use motan_codec::inspect_request;
+use motan_codec::{Motan1Response, decode_motan1_response, inspect_request};
 use motan_protocol::{Frame, FrameDecoder, Limits, MessageKind, ProtocolVersion, ResponseKind};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
@@ -15,6 +15,7 @@ use super::model::{
 use super::runtime::{ComparisonRecordingRuntime, UpstreamRole, update_upstream_counts};
 use super::upstream::{UpstreamCapture, UpstreamErrorKind, request_body_capture};
 use crate::gateway::motan::{rules, transport};
+use crate::motan::response_kind_status_code;
 use crate::recorder::{HeaderMapSnapshot, capture_case_body};
 
 pub(super) async fn run_listener(
@@ -266,21 +267,39 @@ async fn fetch(
     .await;
     match result {
         Ok(response) => {
-            let (status, rpc_status, body, response_version, serialization) =
+            let (status, rpc_status, body, response_version, serialization, rpc_body_decoded) =
                 match response.as_ref() {
                     Some(frame) => {
                         let kind = frame.response_kind().unwrap_or(ResponseKind::Other(0));
+                        let (business_body, rpc_body_decoded) =
+                            match comparison_response_body(frame) {
+                                Ok(body) => body,
+                                Err(error) => {
+                                    return MotanCapture {
+                                        capture: super::upstream::failed_capture(
+                                            upstream,
+                                            started.elapsed().as_millis(),
+                                            format!(
+                                                "failed to decode Motan response body: {error}"
+                                            ),
+                                            UpstreamErrorKind::ResponseDecode,
+                                        ),
+                                        response,
+                                    };
+                                }
+                            };
                         (
-                            Some(status_code(kind)),
+                            Some(response_kind_status_code(Some(kind))),
                             Some(kind.as_str()),
                             capture_case_body(
-                                &frame.body,
+                                business_body,
                                 runtime.config.recording.max_body_bytes,
                                 runtime.config.recording.decoded_body_limit(),
                                 None,
                             ),
                             frame.version,
                             frame.serialization,
+                            rpc_body_decoded.then_some(true),
                         )
                     }
                     None => (
@@ -289,6 +308,7 @@ async fn fetch(
                         capture_case_body(&[], 0, 0, None),
                         request.version,
                         request.serialization,
+                        None,
                     ),
                 };
             MotanCapture {
@@ -305,6 +325,7 @@ async fn fetch(
                         protocol_version: Some(protocol_version(response_version)),
                         serialization,
                         rpc_status,
+                        rpc_body_decoded,
                     },
                     downstream: None,
                     error_kind: None,
@@ -321,6 +342,17 @@ async fn fetch(
             ),
             response: None,
         },
+    }
+}
+
+fn comparison_response_body(frame: &Frame) -> Result<(&[u8], bool)> {
+    if frame.version != ProtocolVersion::Motan1 {
+        return Ok((&frame.body, false));
+    }
+    match decode_motan1_response(frame).context("invalid Motan1 ObjectStream response")? {
+        Motan1Response::Value(payload) => Ok((payload, true)),
+        Motan1Response::Void => Ok((&frame.body[frame.body.len()..], true)),
+        Motan1Response::Exception | Motan1Response::Attachment => Ok((&frame.body, false)),
     }
 }
 
@@ -356,13 +388,47 @@ fn protocol_version(version: ProtocolVersion) -> &'static str {
     }
 }
 
-fn status_code(kind: ResponseKind) -> u16 {
-    match kind {
-        ResponseKind::Normal => 200,
-        ResponseKind::Value => 201,
-        ResponseKind::Void => 204,
-        ResponseKind::Attachment => 206,
-        ResponseKind::Exception => 500,
-        ResponseKind::Other(_) => 520,
+#[cfg(test)]
+mod tests {
+    use motan_codec::motan1_value_response_prefix;
+    use motan_protocol::{
+        DecodeStatus, MessageFlags, Metadata, ResponseEncoder, ResponseStatus, decode_frame,
+    };
+
+    use super::*;
+
+    #[test]
+    fn motan1_comparison_capture_extracts_the_object_stream_payload() {
+        let mut raw = Vec::new();
+        let mut encoder = ResponseEncoder::new(
+            &mut raw,
+            ProtocolVersion::Motan1,
+            42,
+            MessageFlags::default(),
+            ResponseStatus::Normal,
+            None,
+            &Metadata::new(),
+            Limits::default(),
+        )
+        .unwrap();
+        encoder
+            .set_motan1_response_kind(ResponseKind::Value)
+            .unwrap();
+        let prefix = motan1_value_response_prefix(7, "java.lang.String").unwrap();
+        encoder
+            .begin_deferred_u32_length_prefixed_body(&prefix)
+            .unwrap();
+        encoder
+            .write_body(&[0x05, b'h', b'e', b'l', b'l', b'o'])
+            .unwrap();
+        encoder.finish().unwrap();
+        let DecodeStatus::Complete(frame) = decode_frame(&raw, Limits::default()).unwrap() else {
+            panic!("golden response must be complete")
+        };
+
+        let (body, decoded) = comparison_response_body(&frame).unwrap();
+
+        assert!(decoded);
+        assert_eq!(body, &[0x05, b'h', b'e', b'l', b'l', b'o']);
     }
 }

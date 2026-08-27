@@ -1,8 +1,9 @@
 use chrono::{DateTime, Utc};
-use motan_protocol::{Frame, ProtocolVersion, ResponseStatus};
+use motan_protocol::{Frame, ProtocolVersion};
 use serde::Serialize;
 use tracing::{info, warn};
 
+use crate::motan::response_kind_label;
 use crate::recorder::{
     CaseBodyCapture, CaseContext, CaseInvalidation, PrimaryCaseDescriptor, Recorder,
     capture_case_body,
@@ -173,7 +174,7 @@ pub(super) fn response_record(
         timestamp: Utc::now(),
         protocol_version: protocol_version(request.version),
         response_expected: !request.flags.oneway(),
-        status: response.map(|frame| response_status(frame.status)),
+        status: response.map(|frame| response_kind_label(frame.response_kind())),
         frame: response.map(|frame| {
             capture_case_body(
                 frame.raw(),
@@ -276,14 +277,6 @@ fn protocol_version(version: ProtocolVersion) -> &'static str {
     match version {
         ProtocolVersion::Motan1 => "motan1",
         ProtocolVersion::Motan2 => "motan2",
-    }
-}
-
-fn response_status(status: ResponseStatus) -> &'static str {
-    match status {
-        ResponseStatus::Normal => "normal",
-        ResponseStatus::Exception => "exception",
-        ResponseStatus::Other(_) => "other",
     }
 }
 

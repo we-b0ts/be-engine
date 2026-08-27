@@ -126,10 +126,25 @@ impl Frame {
 }
 
 pub(crate) fn response_status(frame: &Frame) -> &'static str {
-    frame
-        .protocol
-        .response_kind()
-        .map_or("unknown", ResponseKind::as_str)
+    response_kind_label(frame.protocol.response_kind())
+}
+
+pub(crate) const fn response_kind_label(kind: Option<ResponseKind>) -> &'static str {
+    match kind {
+        Some(kind) => kind.as_str(),
+        None => "unknown",
+    }
+}
+
+pub(crate) const fn response_kind_status_code(kind: Option<ResponseKind>) -> u16 {
+    match kind {
+        Some(ResponseKind::Normal) => 200,
+        Some(ResponseKind::Value) => 201,
+        Some(ResponseKind::Void) => 204,
+        Some(ResponseKind::Attachment) => 206,
+        Some(ResponseKind::Exception) => 500,
+        Some(ResponseKind::Other(_)) | None => 520,
+    }
 }
 
 pub(crate) fn patch_request_id(raw: &mut [u8], request_id: u64) -> Result<()> {
@@ -212,5 +227,13 @@ mod tests {
         let frame = decode_adapter(motan2.to_vec(), Limits::default()).unwrap();
         assert_eq!(frame.protocol.version, ProtocolVersion::Motan2);
         assert_eq!(response_status(&frame), "exception");
+    }
+
+    #[test]
+    fn response_kind_status_mapping_preserves_motan1_value() {
+        assert_eq!(response_kind_label(Some(ResponseKind::Value)), "value");
+        assert_eq!(response_kind_status_code(Some(ResponseKind::Value)), 201);
+        assert_eq!(response_kind_status_code(Some(ResponseKind::Normal)), 200);
+        assert_eq!(response_kind_status_code(None), 520);
     }
 }

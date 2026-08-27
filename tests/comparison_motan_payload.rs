@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use motan_breeze::{Limits as BreezeLimits, SERIALIZATION_ID as BREEZE_SERIALIZATION_ID};
+use motan_hessian2::{Limits as HessianLimits, to_vec as encode_hessian2};
 use motan_protocol::FrameBuilder;
 use motan_simple::{Limits as SimpleLimits, SERIALIZATION_ID as SIMPLE_SERIALIZATION_ID};
 use serde_json::{Value, json};
@@ -28,7 +29,15 @@ fn legacy_motan_simple_json_uses_request_serialization_for_comparison() {
         .to_vec();
     let expected = simple_string(r#"{"businessId":11,"sourceLog":"a,b,a"}"#);
     let actual = simple_string(r#"{"sourceLog":"b,a,a","businessId":11}"#);
-    let run = write_run(temp.path(), Some(&request), &expected, &actual, None, None);
+    let run = write_run(
+        temp.path(),
+        Some(&request),
+        &expected,
+        &actual,
+        None,
+        None,
+        ResponseEnvelope::Motan2,
+    );
     let policy = write_policy(
         temp.path(),
         "response_rules:\n  json:\n    \"MOTAN /rpc/AlchemyJsonRpcService-getConfigJson-test\":\n      unordered_joined_string:\n        - pointer: /sourceLog\n          separator: ','\n          source_evidence: src/service.rs:sourceLog is set-joined\n",
@@ -61,6 +70,7 @@ fn recorded_response_serialization_drives_json_comparison_and_evidence() {
         &actual,
         Some(SIMPLE_SERIALIZATION_ID),
         Some(SIMPLE_SERIALIZATION_ID),
+        ResponseEnvelope::Motan2,
     );
     let policy = write_policy(temp.path(), "");
 
@@ -106,6 +116,7 @@ fn recorded_breeze_string_uses_the_same_comparison_normalizer() {
         &actual,
         Some(BREEZE_SERIALIZATION_ID),
         Some(BREEZE_SERIALIZATION_ID),
+        ResponseEnvelope::Motan2,
     );
     let policy = write_policy(
         temp.path(),
@@ -138,6 +149,7 @@ fn recorded_simple_byte_array_exposes_raw_protobuf_to_the_same_comparison_path()
         &actual,
         Some(SIMPLE_SERIALIZATION_ID),
         Some(SIMPLE_SERIALIZATION_ID),
+        ResponseEnvelope::Motan2,
     );
     let policy = write_policy(
         temp.path(),
@@ -155,6 +167,39 @@ fn recorded_simple_byte_array_exposes_raw_protobuf_to_the_same_comparison_path()
     let response = report.cases[0].response.as_ref().unwrap();
     assert_eq!(response.body_codec, ResponseBodyCodec::Protobuf);
     assert_eq!(response.body_diagnosis.as_ref().unwrap().envelope, "raw");
+}
+
+#[test]
+fn decoded_motan1_payload_uses_hessian2_comparison() {
+    let temp = tempdir().unwrap();
+    let expected = encode_hessian2(&vec!["alice", "bob"], HessianLimits::default()).unwrap();
+    let actual = encode_hessian2(&vec!["bob", "alice"], HessianLimits::default()).unwrap();
+    let run = write_run(
+        temp.path(),
+        None,
+        &expected,
+        &actual,
+        None,
+        None,
+        ResponseEnvelope::DecodedMotan1,
+    );
+    let policy = write_policy(
+        temp.path(),
+        "response_rules:\n  hessian2:\n    \"MOTAN /rpc/AlchemyJsonRpcService-getConfigJson-test\":\n      unordered:\n        - value_path: []\n          display_path: response.names\n          source_evidence: src/service.rs:names is a Set\n",
+    );
+
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run.clone(),
+        policy,
+        report: run.join("comparison-report.json"),
+    })
+    .unwrap();
+
+    assert!(report.passed);
+    assert_eq!(
+        report.cases[0].response.as_ref().unwrap().body_codec,
+        ResponseBodyCodec::Hessian2
+    );
 }
 
 fn simple_string(value: &str) -> Vec<u8> {
@@ -175,6 +220,25 @@ fn protobuf_repeated_strings(values: &[&[u8]]) -> Vec<u8> {
     payload
 }
 
+#[derive(Clone, Copy)]
+enum ResponseEnvelope {
+    Motan2,
+    DecodedMotan1,
+}
+
+impl ResponseEnvelope {
+    const fn protocol_version(self) -> &'static str {
+        match self {
+            Self::Motan2 => "motan2",
+            Self::DecodedMotan1 => "motan1",
+        }
+    }
+
+    const fn body_is_decoded(self) -> bool {
+        matches!(self, Self::DecodedMotan1)
+    }
+}
+
 fn write_run(
     root: &Path,
     request_frame: Option<&[u8]>,
@@ -182,6 +246,7 @@ fn write_run(
     actual: &[u8],
     expected_serialization: Option<u8>,
     actual_serialization: Option<u8>,
+    response_envelope: ResponseEnvelope,
 ) -> PathBuf {
     let run = root.join("comparison-recordings/20260824141224");
     let case = run.join("apis/get-config-json/00000000-0000-4000-8000-000000000001");
@@ -204,7 +269,7 @@ fn write_run(
     .unwrap();
     let mut request = json!({
         "protocol": "motan",
-        "protocol_version": "motan2",
+        "protocol_version": response_envelope.protocol_version(),
         "method": "MOTAN",
         "uri": API_PATH,
         "api_pattern": API_PATH,
@@ -222,22 +287,37 @@ fn write_run(
         &case.join("expected-response.json"),
         expected,
         expected_serialization,
+        response_envelope,
     );
-    write_response(&case.join("response.json"), actual, actual_serialization);
+    write_response(
+        &case.join("response.json"),
+        actual,
+        actual_serialization,
+        response_envelope,
+    );
     run
 }
 
-fn write_response(path: &Path, body: &[u8], serialization: Option<u8>) {
+fn write_response(
+    path: &Path,
+    body: &[u8],
+    serialization: Option<u8>,
+    response_envelope: ResponseEnvelope,
+) {
+    let protocol_version = response_envelope.protocol_version();
     let mut response = json!({
         "version": 1,
-        "status": 200,
-        "protocol_version": "motan2",
-        "rpc_status": "normal",
+        "status": if protocol_version == "motan1" { 201 } else { 200 },
+        "protocol_version": protocol_version,
+        "rpc_status": if protocol_version == "motan1" { "value" } else { "normal" },
         "body": captured_body(body),
         "error": null
     });
     if let Some(serialization) = serialization {
         response["serialization"] = json!(serialization);
+    }
+    if response_envelope.body_is_decoded() {
+        response["rpc_body_decoded"] = json!(true);
     }
     fs::write(path, serde_json::to_vec(&response).unwrap()).unwrap();
 }

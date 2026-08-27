@@ -50,6 +50,8 @@ pub(super) struct ComparisonRecordingResponse {
     pub(super) serialization: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) rpc_status: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) rpc_body_decoded: Option<bool>,
 }
 
 #[derive(Debug)]
