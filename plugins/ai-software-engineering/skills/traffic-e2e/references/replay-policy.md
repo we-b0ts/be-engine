@@ -413,13 +413,29 @@ from the product contract:
 ```bash
 backend-rewrite rule plan \
   --evidence-id <current-evidence-id> \
+  --body-codec protobuf \
+  --unordered-path '{"field_path":[3,1,6,3],"display_path":"rule_collection.experiments.groups.white_list","element_type":"string","source_evidence":"src/rule.rs:142-149 RuleConfig::white_list: collected from a HashSet, so iteration order is not contractual"}'
+```
+
+```bash
+backend-rewrite rule plan \
+  --evidence-id <current-evidence-id> \
   --body-codec hessian2 \
-  --unordered-path '{"value_path":["result","groups","*","whiteList"],"display_path":"$.result.groups[*].whiteList","source_evidence":"src/rule.rs:whiteList is a Set"}'
+  --unordered-path '{"value_path":["result","groups","*","whiteList"],"display_path":"$.result.groups[*].whiteList","source_evidence":"src/rule.rs:142-149 RuleConfig::white_list: collected from a HashSet, so iteration order is not contractual"}'
 ```
 
 Typed protobuf/Hessian2 paths carry their source evidence inside the JSON
 object. Do not combine them with JSON-only `--kind`, `--json-pointer`,
 `--source-evidence`, examples, or the top-level separator argument.
+
+For ordinary source files, `source_evidence` MUST identify a
+repository-relative path, exact line or narrow line range, symbol, and the
+specific contract fact that authorizes order-insensitive comparison. Prefer
+`<path>:<line-or-range> <symbol>: <fact>`. A field name, inferred protobuf
+shape, or diagnostic candidate alone is insufficient. When source proof is a
+generated schema or another immutable artifact, cite its exact location and
+symbol instead. Keep the citation single-line and tied to the source revision
+represented by the current evidence.
 
 ```yaml
 response_rules:
@@ -429,31 +445,33 @@ response_rules:
         - field_path: [3, 1, 6, 3]
           display_path: rule_collection.experiments.groups.white_list
           element_type: string
-          source_evidence: src/rule.rs:white_list is a Set
+          source_evidence: 'src/rule.rs:142-149 RuleConfig::white_list: collected from a HashSet, so iteration order is not contractual'
       unordered_joined_string:
         - field_path: [3, 1]
           display_path: result.member_names
           field_type: string
           separator: ","
-          source_evidence: src/service.rs:memberNames joins a Set
+          source_evidence: 'src/service.rs:88-93 member_names: joins values collected from a HashSet'
   hessian2:
     "MOTAN /rpc/ExampleService-getMembers-Request-hash":
       unordered:
         - value_path: [result, groups, "*", whiteList]
           display_path: result.groups[].white_list
-          source_evidence: src/rule.rs:white_list is a Set
+          source_evidence: 'src/rule.rs:142-149 RuleConfig::white_list: collected from a HashSet, so iteration order is not contractual'
       unordered_joined_string:
         - value_path: [result, memberNames]
           display_path: result.member_names
           separator: ","
-          source_evidence: src/service.rs:memberNames joins a Set
+          source_evidence: 'src/service.rs:88-93 member_names: joins values collected from a HashSet'
 ```
 
 Protobuf repeated selectors require a numeric `field_path`, semantic
 `display_path`, and explicit repeated `element_type`; protobuf joined strings
 instead require explicit `field_type: string`. Hessian2 selectors require a
 `value_path` and semantic `display_path`; joined strings also require a
-non-empty separator.
+non-empty separator. Protobuf repeated element types cover `string`, `message`,
+integer/fixed-width scalars, `bool`, `enum`, `float`, and `double`; raw `bytes`
+is intentionally unsupported.
 Only selected collection order is ignored. Presence, types, contents,
 duplicate multiplicity, status, envelope, and undeclared paths remain exact.
 
