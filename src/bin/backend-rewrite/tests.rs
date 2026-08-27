@@ -69,6 +69,39 @@ fn parses_the_bounded_rewrite_surface() {
         ])
         .is_ok()
     );
+    let hessian2_unordered_path = r#"{"value_path":["result","groups","*","whiteList"],"display_path":"$.result.groups[*].whiteList","source_evidence":"src/rule.rs:whiteList is a Set"}"#;
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "rule",
+            "plan",
+            "--evidence-id",
+            "evidence-current",
+            "--body-codec",
+            "hessian2",
+            "--unordered-path",
+            hessian2_unordered_path,
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "rule",
+            "plan",
+            "--evidence-id",
+            "evidence-current",
+            "--body-codec",
+            "hessian2",
+            "--kind",
+            "unordered",
+            "--json-pointer",
+            "$.result.groups[*].whiteList",
+            "--unordered-path",
+            hessian2_unordered_path,
+        ])
+        .is_err()
+    );
     assert!(
         Cli::try_parse_from([
             "test",

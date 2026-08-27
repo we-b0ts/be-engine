@@ -106,8 +106,8 @@ finalized run becomes `advance_required`.
 ### `plan_apply_required`
 
 Execute the exact unchanged `commands.apply` once; never rerun planning or
-reconstruct selector inputs. For recorder-capture or process-owned-dependency
-plans, first read
+reconstruct selector inputs. For response-rule, recorder-capture, or
+process-owned-dependency plans, first read
 [coordinator-evidence-actions.md](coordinator-evidence-actions.md). A response
 rule plan remains bound to its existing evidence and plan ID.
 
@@ -159,8 +159,8 @@ eligible work instead of waiting. If a process-output repair changes target
 content, completed APIs become stale; let the coordinator drain their final
 revalidation before it performs the process-output comparison again.
 
-If the worker returns source-proven recorder-capture or process-owned-rule inputs,
-read
+If the worker returns source-proven response-rule, recorder-capture, or
+process-owned-rule inputs, read
 [coordinator-evidence-actions.md](coordinator-evidence-actions.md) before the
 main orchestrator performs the coordinator-owned mutation.
 

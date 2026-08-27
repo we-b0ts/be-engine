@@ -49,8 +49,8 @@ file only when their trigger occurs:
 - Read
   [coordinator-evidence-actions.md](references/coordinator-evidence-actions.md)
   only after worker confirmation and only when that worker returns inputs for
-  recorder-capture or dependency-rule planning, or confirmed evidence exposes
-  one of those coordinator-owned planners.
+  response-rule, recorder-capture, or dependency-rule planning, or confirmed
+  evidence exposes one of those coordinator-owned planners.
 - Read
   [recovery-and-system-repair.md](references/recovery-and-system-repair.md) only
   for `recovery_required`, `system_repair_required`, or a coordinator-issued

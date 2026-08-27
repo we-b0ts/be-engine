@@ -14,8 +14,10 @@ const MAX_NESTING_DEPTH: usize = 32;
 const MAX_FIELDS: usize = 1_000_000;
 
 mod envelope;
+mod selection;
 
 use envelope::{parse_bodies, resolve_body};
+pub(in crate::replay) use selection::selected_paths_match;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ProtobufOrderDiscovery {

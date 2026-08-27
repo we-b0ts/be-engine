@@ -340,12 +340,12 @@ traffic-e2e config replay apply response-rule \
 ```
 
 Both actions require runner-owned structural assertion evidence using the
-current policy fingerprint and complete aggregate evidence. A generated-scalar
-action validates only its selected Pointer and may retain dirty dependencies or
-unselected response differences as independent failing gates. An unordered
-action still requires clean aggregate evidence and rejects undeclared response
-differences. Both reject unsupported differences at a selected location.
-Apply is additive, sorted, and atomic.
+current policy fingerprint and complete aggregate evidence. They validate only
+their selected Pointers and may retain dirty dependencies or unselected
+response differences as independent failing gates. Both reject content,
+structure, type, presence, length, or duplicate-count differences at a selected
+location. The plan reports aggregate dirtiness, residual case count, and every
+unselected difference Pointer. Apply is additive, sorted, and atomic.
 
 ## Unordered Joined Strings
 
@@ -368,6 +368,8 @@ Both strings are split without trimming or case normalization and compared as
 multisets. Empty elements and duplicate multiplicity are preserved. Mechanical
 discovery tries only `,`, `;`, and `|` and reports the exact matching
 separator; source proof is still required before planning the rule.
+Other response differences do not block an independently proven joined-string
+rule, but a content or type difference at the selected string still does.
 
 ## Structured Response-Body Rules
 
@@ -410,6 +412,33 @@ source proof on every selected path. A diagnostic candidate proves only that
 multiset comparison explains observed bytes; it does not prove order is absent
 from the product contract:
 
+```bash
+backend-rewrite rule plan \
+  --evidence-id <current-evidence-id> \
+  --body-codec protobuf \
+  --unordered-path '{"field_path":[3,1,6,3],"display_path":"rule_collection.experiments.groups.white_list","element_type":"string","source_evidence":"src/rule.rs:142-149 RuleConfig::white_list: collected from a HashSet, so iteration order is not contractual"}'
+```
+
+```bash
+backend-rewrite rule plan \
+  --evidence-id <current-evidence-id> \
+  --body-codec hessian2 \
+  --unordered-path '{"value_path":["result","groups","*","whiteList"],"display_path":"$.result.groups[*].whiteList","source_evidence":"src/rule.rs:142-149 RuleConfig::white_list: collected from a HashSet, so iteration order is not contractual"}'
+```
+
+Typed protobuf/Hessian2 paths carry their source evidence inside the JSON
+object. Do not combine them with JSON-only `--kind`, `--json-pointer`,
+`--source-evidence`, examples, or the top-level separator argument.
+
+For ordinary source files, `source_evidence` MUST identify a
+repository-relative path, exact line or narrow line range, symbol, and the
+specific contract fact that authorizes order-insensitive comparison. Prefer
+`<path>:<line-or-range> <symbol>: <fact>`. A field name, inferred protobuf
+shape, or diagnostic candidate alone is insufficient. When source proof is a
+generated schema or another immutable artifact, cite its exact location and
+symbol instead. Keep the citation single-line and tied to the source revision
+represented by the current evidence.
+
 ```yaml
 response_rules:
   protobuf:
@@ -418,31 +447,33 @@ response_rules:
         - field_path: [3, 1, 6, 3]
           display_path: rule_collection.experiments.groups.white_list
           element_type: string
-          source_evidence: src/rule.rs:white_list is a Set
+          source_evidence: 'src/rule.rs:142-149 RuleConfig::white_list: collected from a HashSet, so iteration order is not contractual'
       unordered_joined_string:
         - field_path: [3, 1]
           display_path: result.member_names
           field_type: string
           separator: ","
-          source_evidence: src/service.rs:memberNames joins a Set
+          source_evidence: 'src/service.rs:88-93 member_names: joins values collected from a HashSet'
   hessian2:
     "MOTAN /rpc/ExampleService-getMembers-Request-hash":
       unordered:
         - value_path: [result, groups, "*", whiteList]
           display_path: result.groups[].white_list
-          source_evidence: src/rule.rs:white_list is a Set
+          source_evidence: 'src/rule.rs:142-149 RuleConfig::white_list: collected from a HashSet, so iteration order is not contractual'
       unordered_joined_string:
         - value_path: [result, memberNames]
           display_path: result.member_names
           separator: ","
-          source_evidence: src/service.rs:memberNames joins a Set
+          source_evidence: 'src/service.rs:88-93 member_names: joins values collected from a HashSet'
 ```
 
 Protobuf repeated selectors require a numeric `field_path`, semantic
 `display_path`, and explicit repeated `element_type`; protobuf joined strings
 instead require explicit `field_type: string`. Hessian2 selectors require a
 `value_path` and semantic `display_path`; joined strings also require a
-non-empty separator.
+non-empty separator. Protobuf repeated element types cover `string`, `message`,
+integer/fixed-width scalars, `bool`, `enum`, `float`, and `double`; raw `bytes`
+is intentionally unsupported.
 Only selected collection order is ignored. Presence, types, contents,
 duplicate multiplicity, status, envelope, and undeclared paths remain exact.
 
@@ -450,8 +481,11 @@ Use current focused E2E or comparison evidence and the current policy
 fingerprint. Plan first, review the exact selectors and source citations, apply
 atomically, then rerun the affected E2E/comparison group. Planning rejects stale
 reports, source changes, unused applicable dependency rules, selectors absent
-from typed diagnostics, and a set of selectors that does not fully explain the
-current body difference.
+from typed diagnostics, and any selected location whose exact values still
+differ after its reviewed normalization. It does not require selecting every
+mechanical candidate or resolving unrelated body differences in the same plan.
+The report records residual difference cases, which remain exact failing gates
+after apply.
 
 ## Comparison Counter Fields
 

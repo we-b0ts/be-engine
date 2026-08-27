@@ -1,16 +1,82 @@
 # Coordinator Evidence Actions
 
 Read this guide only after the API worker is confirmed and returns source-proven
-inputs for recorder capture or a process-owned dependency rule, or when the
-current action exposes one of those planners. Workers may run returned
-read-only help commands but never execute the state-mutating commands here.
+inputs for a response rule, recorder capture, or a process-owned dependency
+rule, or when the current action exposes one of those planners. Workers may run
+returned read-only help commands but never execute the state-mutating commands
+here.
 
 ## Contents
 
 - Recorder-capture planning and refresh
+- Typed response-rule planning
 - Process-owned dependency-rule planning and reclassification
 - Evidence gate and ownership invariants
 - Bootstrap dependency overlays
+
+## Typed Response Rules
+
+The target never receives a response-rule selector. A worker returns the
+codec-specific path plus source proof; the main orchestrator plans and applies
+the rule. Replay and comparison load the applied selector from
+`.traffic-e2e/verification.yaml` and normalize source and target observations
+without changing target code, configuration, or RPC signatures.
+
+JSON rules use `--kind`, `--json-pointer`, and their top-level justification
+arguments. Protobuf and Hessian2 rules instead use typed path JSON and MUST NOT
+carry any of those JSON arguments. For a protobuf repeated field:
+
+```text
+backend-rewrite rule plan \
+  --evidence-id <current-evidence-id> \
+  --body-codec protobuf \
+  --unordered-path '{"field_path":[3,1,6,3],"display_path":"rule_collection.experiments.groups.white_list","element_type":"string","source_evidence":"src/rule.rs:142-149 RuleConfig::white_list: collected from a HashSet, so iteration order is not contractual"}'
+```
+
+For a Hessian2 unordered collection:
+
+```text
+backend-rewrite rule plan \
+  --evidence-id <current-evidence-id> \
+  --body-codec hessian2 \
+  --unordered-path '{"value_path":["result","groups","*","whiteList"],"display_path":"$.result.groups[*].whiteList","source_evidence":"src/rule.rs:142-149 RuleConfig::white_list: collected from a HashSet, so iteration order is not contractual"}'
+```
+
+Protobuf paths use numeric schema field numbers in `field_path` plus a semantic
+`display_path`. Repeated fields require `element_type`; supported values are
+`string`, `message`, the protobuf integer and fixed-width scalar types, `bool`,
+`enum`, `float`, and `double`. Raw `bytes` is intentionally unsupported because
+its element boundaries and semantics cannot be inferred safely.
+
+Use `--unordered-joined-string-path` for a joined string; its typed JSON also
+contains `separator`. Protobuf joined strings additionally require
+`"field_type":"string"`.
+
+`source_evidence` is an auditable source citation, not a restatement of the
+field name or a diagnostic candidate. For ordinary source files it MUST use
+the form `<repository-relative-path>:<line-or-narrow-range> <symbol>: <proven
+contract fact>`. The fact must explain why order is non-contractual, for
+example that the selected response field is collected from a Set. If the proof
+comes from a generated schema or another immutable artifact, cite that exact
+artifact location and symbol instead. Keep the citation on one line and bind
+it to the source revision represented by the current evidence.
+
+Execute the exact returned apply command once.
+
+Rules are authorized per selected location. A plan may apply one independently
+source-proven JSON Pointer, protobuf field path, or Hessian2 value path while
+other response differences, dirty dependencies, or unreviewed mechanical
+candidates remain. The selected location itself MUST be order-only in every
+case where it differs; content, type, presence, length, or duplicate-count
+differences at that location fail closed. Plan and apply reports expose the
+residual case count or unselected JSON Pointers, and those residuals continue
+to block API completion.
+
+Planning requires complete current comparison or focused-E2E evidence. An
+`unevaluable` comparison is a verification-system issue, not authorization to
+apply a selector or change the target. Preserve its bounded error, route the
+reported issue with `--cause replay-capability-gap`, repair traffic-e2e, and
+regenerate the comparison result before planning.
 
 ## Recorder Capture
 

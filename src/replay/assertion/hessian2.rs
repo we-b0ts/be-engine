@@ -15,6 +15,10 @@ const MAX_NODES: usize = 1_000_000;
 const MAX_DISCOVERED_PATHS: usize = 32;
 const MAX_DIFFERENCES: usize = 32;
 
+mod selection;
+
+pub(in crate::replay) use selection::selected_paths_match;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Hessian2OrderDiscovery {
     pub(super) envelope: BodyEnvelope,
@@ -375,22 +379,37 @@ fn canonicalize_path(
     path: &[String],
     full_path: &Hessian2ValuePath,
 ) -> Result<bool> {
+    canonicalize_path_inner(value, path, full_path, false)
+}
+
+fn canonicalize_path_inner(
+    value: &mut HessianValue<'_>,
+    path: &[String],
+    full_path: &Hessian2ValuePath,
+    below_wildcard: bool,
+) -> Result<bool> {
     let Some((segment, remaining)) = path.split_first() else {
-        let HessianValue::List { values, .. } = value else {
-            bail!(
+        return match value {
+            HessianValue::List { values, .. } => {
+                values.sort();
+                Ok(true)
+            }
+            // A wildcard path can legitimately select heterogeneous sibling
+            // values. Normalize its list-valued matches and leave every other
+            // value exact so a real type or value difference still fails.
+            _ if below_wildcard => Ok(false),
+            _ => bail!(
                 "Hessian2 unordered path {:?} does not select a list",
                 full_path.0
-            );
+            ),
         };
-        values.sort();
-        return Ok(true);
     };
     match value {
         HessianValue::Object { class, fields } => {
             let mut found = false;
             for (name, value) in class.fields.iter().zip(fields.iter_mut()) {
                 if name.as_ref() == segment {
-                    found |= canonicalize_path(value, remaining, full_path)?;
+                    found |= canonicalize_path_inner(value, remaining, full_path, below_wildcard)?;
                 }
             }
             Ok(found)
@@ -399,7 +418,7 @@ fn canonicalize_path(
             let mut found = false;
             for (key, value) in entries {
                 if matches!(key, HessianValue::String(name) if name.as_ref() == segment) {
-                    found |= canonicalize_path(value, remaining, full_path)?;
+                    found |= canonicalize_path_inner(value, remaining, full_path, below_wildcard)?;
                 }
             }
             Ok(found)
@@ -407,7 +426,7 @@ fn canonicalize_path(
         HessianValue::List { values, .. } if segment == "*" => {
             let mut found = false;
             for value in values {
-                found |= canonicalize_path(value, remaining, full_path)?;
+                found |= canonicalize_path_inner(value, remaining, full_path, true)?;
             }
             Ok(found)
         }
@@ -423,19 +442,36 @@ fn canonicalize_joined_string(
     path: &[String],
     separator: &str,
 ) -> Result<bool> {
+    canonicalize_joined_string_inner(value, path, separator, false)
+}
+
+fn canonicalize_joined_string_inner(
+    value: &mut HessianValue<'_>,
+    path: &[String],
+    separator: &str,
+    below_wildcard: bool,
+) -> Result<bool> {
     let Some((segment, remaining)) = path.split_first() else {
-        let HessianValue::String(text) = value else {
-            bail!("joined-string path does not select a Hessian2 string");
+        return match value {
+            HessianValue::String(text) => {
+                *text = Cow::Owned(joined_string::canonicalize(text, separator));
+                Ok(true)
+            }
+            _ if below_wildcard => Ok(false),
+            _ => bail!("joined-string path does not select a Hessian2 string"),
         };
-        *text = Cow::Owned(joined_string::canonicalize(text, separator));
-        return Ok(true);
     };
     match value {
         HessianValue::Object { class, fields } => {
             let mut found = false;
             for (name, value) in class.fields.iter().zip(fields.iter_mut()) {
                 if name.as_ref() == segment {
-                    found |= canonicalize_joined_string(value, remaining, separator)?;
+                    found |= canonicalize_joined_string_inner(
+                        value,
+                        remaining,
+                        separator,
+                        below_wildcard,
+                    )?;
                 }
             }
             Ok(found)
@@ -444,7 +480,12 @@ fn canonicalize_joined_string(
             let mut found = false;
             for (key, value) in entries {
                 if matches!(key, HessianValue::String(name) if name.as_ref() == segment) {
-                    found |= canonicalize_joined_string(value, remaining, separator)?;
+                    found |= canonicalize_joined_string_inner(
+                        value,
+                        remaining,
+                        separator,
+                        below_wildcard,
+                    )?;
                 }
             }
             Ok(found)
@@ -452,7 +493,7 @@ fn canonicalize_joined_string(
         HessianValue::List { values, .. } if segment == "*" => {
             let mut found = false;
             for value in values {
-                found |= canonicalize_joined_string(value, remaining, separator)?;
+                found |= canonicalize_joined_string_inner(value, remaining, separator, true)?;
             }
             Ok(found)
         }
