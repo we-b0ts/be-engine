@@ -211,6 +211,7 @@ fn response_record(
         protocol_version: None,
         serialization: None,
         rpc_status: None,
+        rpc_body_decoded: None,
     }
 }
 
@@ -268,6 +269,7 @@ pub(super) fn failed_capture(
             protocol_version: None,
             serialization: None,
             rpc_status: None,
+            rpc_body_decoded: None,
         },
         downstream: None,
         error_kind: Some(kind),

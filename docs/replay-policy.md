@@ -449,6 +449,15 @@ either `envelope: simple_byte_array` or `envelope: raw`. Both compared bodies
 must use the same envelope because an envelope change is a response-shape
 difference, not a body-value difference.
 
+Motan1 `value` responses are a protocol-defined exception to manual codec
+selection: after removing the Java ObjectStream wrapper, replay and comparison
+use Hessian2 semantic equality by default. This makes alternate wire encodings
+and map entry order non-semantic while list order and business values remain
+exact. A matching explicit protobuf or Hessian2 response-body rule still takes
+priority, and Motan1 `void`, `exception`, and `attachment` bodies keep their
+existing exact handling. `body_diagnosis.used_for_verdict` distinguishes a
+structured verdict from decoder-only diagnostic evidence.
+
 The configured rule relaxes only the ordering of the declared repeated
 protobuf fields or Hessian2 lists inside the business body. For Motan gateways,
 the outer frame metadata remains exact after removing only the
@@ -459,12 +468,13 @@ must still match.
 This is a response rule, not a Motan rule. Planning is available whenever
 current runner-owned focused E2E evidence or current comparison evidence
 contains the required body diagnosis; it is not gated on entering the
-Comparison phase. When no body codec is configured, evidence reports the
-syntactically valid `protobuf` and/or `hessian2` candidates. They are decoding
-candidates rather than schema claims, so application or schema context must
-select the codec. The same plan may configure the codec and add reviewed paths
-in one step. Planning and apply reuse immutable response artifacts and do not
-start source or target processes or record new traffic.
+Comparison phase. Except for protocol-defined Motan1 `value` responses, when
+no body codec is configured, evidence reports the syntactically valid
+`protobuf` and/or `hessian2` candidates. They are decoding candidates rather
+than schema claims, so application or schema context must select the codec.
+The same plan may configure the codec and add reviewed paths in one step.
+Planning and apply reuse immutable response artifacts and do not start source
+or target processes or record new traffic.
 
 For protobuf, adding
 unordered fields must provide every newly discovered `field_path` together

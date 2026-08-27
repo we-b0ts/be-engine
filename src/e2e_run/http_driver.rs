@@ -17,6 +17,7 @@ use tokio::net::TcpStream;
 use super::model::ResolvedProjectConfig;
 use super::result::E2eResponseUnavailableReason;
 use super::store;
+use crate::motan::response_kind_status_code;
 use crate::recorded_request::{RecordedHttpClient, target_uri};
 
 type HttpClient = Client<HttpConnector, Full<Bytes>>;
@@ -256,14 +257,7 @@ async fn capture_motan_case(
         if response.request_id != request.request_id || response.version != request.version {
             bail!("target returned a mismatched Motan response frame");
         }
-        let status = match response.response_kind() {
-            Some(motan_protocol::ResponseKind::Normal) => 200,
-            Some(motan_protocol::ResponseKind::Value) => 201,
-            Some(motan_protocol::ResponseKind::Void) => 204,
-            Some(motan_protocol::ResponseKind::Attachment) => 206,
-            Some(motan_protocol::ResponseKind::Exception) => 500,
-            Some(motan_protocol::ResponseKind::Other(_)) | None => 520,
-        };
+        let status = response_kind_status_code(response.response_kind());
         Ok::<_, anyhow::Error>((status, response.raw().to_vec()))
     };
     let (status, body) = tokio::time::timeout(config.target_request_timeout, operation)

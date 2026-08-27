@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, bail, ensure};
 use motan_breeze::{Limits as BreezeLimits, SERIALIZATION_ID as BREEZE_SERIALIZATION_ID};
+use motan_codec::{Motan1Response, decode_motan1_response};
 use motan_protocol::{
-    DecodeStatus, Limits, META_PROCESS_TIME, MessageKind, ProtocolVersion, decode_frame,
+    DecodeStatus, Frame, Limits, META_PROCESS_TIME, MessageKind, ProtocolVersion, decode_frame,
 };
 use motan_simple::{Limits as SimpleLimits, SERIALIZATION_ID as SIMPLE_SERIALIZATION_ID};
 
@@ -18,6 +19,7 @@ pub(super) struct ComparableResponseFrame {
     body_offset: usize,
     body_kind: ComparableBodyKind,
     carrier: Vec<u8>,
+    status_code: u16,
 }
 
 pub(super) struct ComparableResponseBody {
@@ -31,6 +33,7 @@ pub(super) struct ComparableResponseBody {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ComparableBodyKind {
     WireBytes,
+    Motan1Hessian2Value,
     BreezeString,
     BreezeByteArray,
     BreezeValue,
@@ -43,6 +46,7 @@ impl ComparableBodyKind {
     pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::WireBytes => "wire_bytes",
+            Self::Motan1Hessian2Value => "motan1_hessian2_value",
             Self::BreezeString => "breeze_string",
             Self::BreezeByteArray => "breeze_byte_array",
             Self::BreezeValue => "breeze_value",
@@ -65,6 +69,10 @@ impl ComparableResponseFrame {
     pub(super) const fn body_kind(&self) -> ComparableBodyKind {
         self.body_kind
     }
+
+    pub(super) const fn status_code(&self) -> u16 {
+        self.status_code
+    }
 }
 
 impl ComparableResponseBody {
@@ -85,8 +93,21 @@ pub(super) fn comparable_response_body(
     version: ProtocolVersion,
     serialization: Option<u8>,
     body: Vec<u8>,
+    already_decoded: bool,
+    rpc_status: Option<&str>,
 ) -> ComparableResponseBody {
-    let (payload_offset, body_kind) = business_body(version, serialization, &body);
+    let (payload_offset, body_kind) = if already_decoded {
+        (
+            0,
+            if version == ProtocolVersion::Motan1 && rpc_status == Some("value") {
+                ComparableBodyKind::Motan1Hessian2Value
+            } else {
+                ComparableBodyKind::WireBytes
+            },
+        )
+    } else {
+        business_body(version, serialization, &body)
+    };
     ComparableResponseBody {
         encoded: body,
         payload_offset,
@@ -159,9 +180,9 @@ pub(super) fn comparable_response_frame(
 
     while frame.metadata.remove(META_PROCESS_TIME).is_some() {}
     let version = frame.version;
-    let serialization = frame.serialization;
     let body_len = frame.body.len();
-    let (business_payload_offset, body_kind) = business_body(version, serialization, &frame.body);
+    let (business_payload_offset, body_kind) = frame_business_body(&frame, label)?;
+    let status_code = crate::motan::response_kind_status_code(frame.response_kind());
     let mut encoded = frame
         .encode()
         .map(|encoded| encoded.to_vec())
@@ -187,7 +208,35 @@ pub(super) fn comparable_response_frame(
         body_offset: body_offset + business_payload_offset,
         body_kind,
         carrier,
+        status_code,
     })
+}
+
+fn frame_business_body(frame: &Frame, label: &str) -> Result<(usize, ComparableBodyKind)> {
+    if frame.version != ProtocolVersion::Motan1 {
+        return Ok(business_body(
+            frame.version,
+            frame.serialization,
+            &frame.body,
+        ));
+    }
+
+    match decode_motan1_response(frame)
+        .with_context(|| format!("failed to unpack {label} Motan1 response body"))?
+    {
+        Motan1Response::Value(payload) => Ok((
+            frame
+                .body
+                .len()
+                .checked_sub(payload.len())
+                .context("Motan1 response payload exceeds its ObjectStream body")?,
+            ComparableBodyKind::Motan1Hessian2Value,
+        )),
+        Motan1Response::Void => Ok((frame.body.len(), ComparableBodyKind::WireBytes)),
+        Motan1Response::Exception | Motan1Response::Attachment => {
+            Ok((0, ComparableBodyKind::WireBytes))
+        }
+    }
 }
 
 fn business_body(

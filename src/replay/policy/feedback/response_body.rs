@@ -576,8 +576,12 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
         ensure!(
             response.differences.len() == 1
                 && response.differences[0].pointer == "$body"
-                && response.differences[0].kind == ResponseDifferenceKind::ExactBodyMismatch,
-            "case {:?} has differences other than the exact response body",
+                && matches!(
+                    response.differences[0].kind,
+                    ResponseDifferenceKind::ExactBodyMismatch
+                        | ResponseDifferenceKind::ValueMismatch
+                ),
+            "case {:?} has differences other than the response body value",
             case.case_id
         );
         if let Some(body) = response.body_diagnosis.as_ref() {

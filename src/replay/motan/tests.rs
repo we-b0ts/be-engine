@@ -73,22 +73,27 @@ fn exchange(heartbeat: bool) -> RecordedExchange {
 }
 
 fn business_request(request_id: u64, uid: i64, authorization: Option<&str>) -> Vec<u8> {
+    request_for_method(request_id, "getUser", uid, authorization)
+}
+
+fn request_for_method(
+    request_id: u64,
+    method: &str,
+    uid: i64,
+    authorization: Option<&str>,
+) -> Vec<u8> {
     let mut attachments = Attachments::new();
     if let Some(authorization) = authorization {
         attachments.insert(Attachment::new("Authorization", authorization));
     }
-    Motan1RequestBuilder::new(
-        "cn.sina.api.data.service.SinaUserService",
-        "getUser",
-        "long",
-    )
-    .request_id(request_id)
-    .hessian_argument(motan_hessian2::to_vec(&uid, motan_hessian2::Limits::default()).unwrap())
-    .attachments(attachments)
-    .build(Motan1RequestLimits::default())
-    .unwrap()
-    .raw()
-    .to_vec()
+    Motan1RequestBuilder::new("cn.sina.api.data.service.SinaUserService", method, "long")
+        .request_id(request_id)
+        .hessian_argument(motan_hessian2::to_vec(&uid, motan_hessian2::Limits::default()).unwrap())
+        .attachments(attachments)
+        .build(Motan1RequestLimits::default())
+        .unwrap()
+        .raw()
+        .to_vec()
 }
 
 fn request_match(raw: Vec<u8>) -> RequestMatch {
@@ -161,6 +166,115 @@ fn business_exchange_matches_across_nodes_in_same_rpc_pool() {
     state.complete(&matched);
     assert_eq!(state.snapshot().matched_count, 1);
     assert!(state.snapshot().unused_case.is_empty());
+}
+
+#[test]
+fn one_live_connection_can_consume_multiple_recorded_connection_lanes() {
+    let first_connection = Uuid::new_v4();
+    let second_connection = Uuid::new_v4();
+    let mut first = exchange(false);
+    first.connection_id = first_connection;
+    let mut second = exchange(false);
+    second.connection_id = second_connection;
+    second.target_host = "vintage-node-c.trp.test".to_string();
+    let mut state = MotanReplayState::default();
+    let mut targets = BTreeMap::new();
+    state
+        .register_exchange(first, ReplaySource::Case, Some("case"), &mut targets)
+        .unwrap();
+    state
+        .register_exchange(second, ReplaySource::Case, Some("case"), &mut targets)
+        .unwrap();
+    let identity = business_identity();
+    let request_match = request_match(business_request(2, 1, None));
+
+    let matched = state
+        .match_exchange(
+            Some("case"),
+            &business_target(),
+            None,
+            1,
+            &identity,
+            Some(&request_match),
+        )
+        .unwrap();
+    assert_eq!(matched.connection_id, first_connection);
+    state.complete(&matched);
+
+    let matched = state
+        .match_exchange(
+            Some("case"),
+            &business_target(),
+            Some(first_connection),
+            1,
+            &identity,
+            Some(&request_match),
+        )
+        .unwrap();
+    assert_eq!(matched.connection_id, second_connection);
+    state.complete(&matched);
+
+    assert_eq!(state.snapshot().matched_count, 2);
+    assert!(state.snapshot().unused_case.is_empty());
+}
+
+#[test]
+fn cross_lane_fallback_preserves_recorded_lane_order() {
+    let first_connection = Uuid::new_v4();
+    let second_connection = Uuid::new_v4();
+    let mut first = exchange(false);
+    first.connection_id = first_connection;
+    let mut blocker = exchange(false);
+    blocker.connection_id = second_connection;
+    blocker.method_name = Some("prepareUser".to_string());
+    blocker.command = "cn.sina.api.data.service.SinaUserService#prepareUser".to_string();
+    blocker.request = capture(&request_for_method(2, "prepareUser", 1, None));
+    let mut candidate = exchange(false);
+    candidate.connection_id = second_connection;
+    candidate.sequence = 2;
+    let mut state = MotanReplayState::default();
+    let mut targets = BTreeMap::new();
+    for recorded in [first, blocker, candidate] {
+        state
+            .register_exchange(recorded, ReplaySource::Case, Some("case"), &mut targets)
+            .unwrap();
+    }
+    let identity = business_identity();
+    let request_match = request_match(business_request(3, 1, None));
+
+    let matched = state
+        .match_exchange(
+            Some("case"),
+            &business_target(),
+            None,
+            1,
+            &identity,
+            Some(&request_match),
+        )
+        .unwrap();
+    state.complete(&matched);
+
+    let diagnostic = state
+        .match_exchange(
+            Some("case"),
+            &business_target(),
+            Some(first_connection),
+            1,
+            &identity,
+            Some(&request_match),
+        )
+        .unwrap_err();
+    let CommandMatchDiagnostic::LaneBlocked {
+        candidate,
+        blocked_by,
+    } = diagnostic
+    else {
+        panic!("expected cross-lane candidate to remain lane-blocked");
+    };
+    assert_eq!(candidate.connection_id, second_connection);
+    assert_eq!(candidate.sequence, 2);
+    assert_eq!(blocked_by.connection_id, second_connection);
+    assert_eq!(blocked_by.sequence, 1);
 }
 
 #[test]

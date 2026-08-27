@@ -49,6 +49,7 @@ async fn matched_motan1_and_motan2_requests_are_forwarded_and_published() {
     assert_eq!(versions, ["motan1", "motan2"]);
     for published in cases {
         let request = read_json(published.join("request.json"));
+        let response = read_json(published.join("expected-response.json"));
         assert_eq!(request["method"], "MOTAN");
         assert_eq!(request["uri"], request["api_pattern"]);
         assert!(
@@ -65,7 +66,11 @@ async fn matched_motan1_and_motan2_requests_are_forwarded_and_published() {
                 .unwrap()
                 .starts_with("motan:motan-rust-interop/")
         );
-        assert!(published.join("expected-response.json").is_file());
+        match request["protocol_version"].as_str().unwrap() {
+            "motan1" => assert_eq!(response["status"], "void"),
+            "motan2" => assert_eq!(response["status"], "normal"),
+            version => panic!("unexpected Motan version {version}"),
+        }
         assert!(published.join("dependencies.jsonl").is_file());
     }
 

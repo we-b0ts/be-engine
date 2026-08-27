@@ -3,10 +3,11 @@ use std::fs;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use motan_breeze::{Limits as BreezeLimits, SERIALIZATION_ID as BREEZE_SERIALIZATION_ID};
+use motan_codec::motan1_value_response_prefix;
 use motan_hessian2::{Limits as HessianLimits, to_vec as encode_hessian2};
 use motan_protocol::{
     FrameBuilder, Limits, META_PROCESS_TIME, MessageFlags, Metadata, ProtocolVersion,
-    ResponseEncoder, ResponseStatus,
+    ResponseEncoder, ResponseKind, ResponseStatus,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -14,6 +15,7 @@ use tempfile::tempdir;
 use super::model::ResponseDifferenceKind;
 use super::*;
 
+mod motan1;
 mod simple_motan;
 
 fn write_case(
@@ -188,6 +190,17 @@ fn write_motan_case_with_rules(
                     Limits::default(),
                 )
                 .unwrap();
+                encoder
+                    .set_motan1_response_kind(ResponseKind::Value)
+                    .unwrap();
+                let process_time = process_time
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or_default();
+                let prefix =
+                    motan1_value_response_prefix(process_time, "java.lang.Object").unwrap();
+                encoder
+                    .begin_deferred_u32_length_prefixed_body(&prefix)
+                    .unwrap();
                 encoder.write_body(body).unwrap();
                 encoder.finish().unwrap();
                 output
@@ -243,7 +256,10 @@ fn write_motan_case_with_rules(
         &actual,
         serde_json::to_vec(&json!({
             "version": 1,
-            "status": 200,
+            "status": match protocol_version {
+                ProtocolVersion::Motan1 => 201,
+                ProtocolVersion::Motan2 => 200,
+            },
             "body": {
                 "encoding": "base64",
                 "data": STANDARD.encode(response(
@@ -433,30 +449,6 @@ fn motan2_breeze_payload_type_remains_part_of_the_contract() {
     assert_eq!(
         report.differences[0].kind,
         ResponseDifferenceKind::TypeMismatch
-    );
-}
-
-#[test]
-fn motan1_body_length_does_not_duplicate_a_body_mismatch() {
-    let (_temp, options) = write_motan_case_with_rules(
-        ProtocolVersion::Motan1,
-        "",
-        None,
-        None,
-        "",
-        "",
-        b"short",
-        b"a longer response",
-        1,
-    );
-
-    let report = assert_recorded_response(options).unwrap();
-
-    assert!(!report.passed);
-    assert_eq!(report.differences.len(), 1);
-    assert_eq!(
-        report.differences[0].kind,
-        ResponseDifferenceKind::ExactBodyMismatch
     );
 }
 
@@ -666,52 +658,6 @@ fn motan2_hessian2_unordered_rule_keeps_metadata_exact() {
     assert!(!report.passed);
     assert_eq!(report.body_codec, ResponseBodyCodec::Hessian2);
     assert_eq!(report.differences.len(), 1);
-}
-
-#[test]
-fn motan1_unordered_rule_compares_the_business_body() {
-    let expected = protobuf_repeated_strings(&[b"alice", b"bob"]);
-    let actual = protobuf_repeated_strings(&[b"bob", b"alice"]);
-    let (_temp, options) = write_motan_case_with_rules(
-        ProtocolVersion::Motan1,
-        "response_rules:\n  protobuf:\n    \"MOTAN /rpc/example\":\n      unordered:\n        - field_path: [3]\n          display_path: response.names\n          element_type: string\n          source_evidence: src/service.rs:names is a Set\n",
-        None,
-        None,
-        "",
-        "",
-        &expected,
-        &actual,
-        1,
-    );
-
-    let report = assert_recorded_response(options).unwrap();
-
-    assert!(report.passed);
-    assert_eq!(report.body_codec, ResponseBodyCodec::Protobuf);
-    assert!(report.differences.is_empty());
-}
-
-#[test]
-fn motan1_hessian2_unordered_rule_compares_the_business_body() {
-    let expected = hessian2_string_list(&["alice", "bob"]);
-    let actual = hessian2_string_list(&["bob", "alice"]);
-    let (_temp, options) = write_motan_case_with_rules(
-        ProtocolVersion::Motan1,
-        "response_rules:\n  hessian2:\n    \"MOTAN /rpc/example\":\n      unordered:\n        - value_path: []\n          display_path: response.names\n          source_evidence: src/service.rs:names is a Set\n",
-        None,
-        None,
-        "",
-        "",
-        &expected,
-        &actual,
-        1,
-    );
-
-    let report = assert_recorded_response(options).unwrap();
-
-    assert!(report.passed);
-    assert_eq!(report.body_codec, ResponseBodyCodec::Hessian2);
-    assert!(report.differences.is_empty());
 }
 
 #[test]

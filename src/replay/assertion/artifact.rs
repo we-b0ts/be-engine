@@ -73,6 +73,8 @@ pub(super) struct ComparisonResponse {
     pub(super) error: Option<String>,
     pub(super) protocol_version: Option<String>,
     pub(super) serialization: Option<u8>,
+    pub(super) rpc_status: Option<String>,
+    pub(super) rpc_body_decoded: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
