@@ -1,9 +1,22 @@
 # Traffic E2E Code Organization
 
-Read the backend-engineering
-[code-organization reference](../plugins/ai-software-engineering/skills/backend-engineering/references/code-organization.md)
-for the generic boundary, naming, cohesion, dependency-direction, refactoring,
-and size rules. This file contains only traffic-e2e-specific package and module
+These requirements apply to every traffic-e2e product-code change:
+
+- A changed unit and its parent must keep one clear owner and primary reason to
+  change. Adjust the smallest relevant boundary when new behavior no longer
+  fits that owner.
+- Names must describe the current responsibility. Do not add catch-all
+  `common`, `utils`, `helpers`, `manager`, or equivalent ownership for unrelated
+  behavior.
+- Keep protocol parsing separate from persistence, configuration loading
+  separate from runtime behavior, adapters separate from caller lifecycle, and
+  production startup separate from test or Replay support.
+- Preserve observable contracts and keep unrelated legacy cleanup outside the
+  change.
+- A touched Rust product source file over 1000 lines must have the touched
+  responsibility extracted before new behavior is added.
+
+The remainder of this file defines traffic-e2e-specific package and module
 ownership.
 
 ## Package Shape
@@ -135,11 +148,11 @@ feature-local adjustment and preserve observable contracts.
 
 ## Repository Check
 
-After the final Rust product-code edit and before commit, run the checker
-bundled with `backend-engineering`:
+After the final Rust product-code edit and before commit, run the bundled
+checker:
 
 ```bash
-plugins/ai-software-engineering/skills/backend-engineering/scripts/check-code-organization
+plugins/ai-software-engineering/skills/backend-rewrite/scripts/check-code-organization
 ```
 
 Before an MR, set `CODE_ORG_BASE` to the target branch. Use `--all` only for an

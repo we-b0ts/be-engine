@@ -59,12 +59,18 @@ file only when their trigger occurs:
   [implementation-worker-coordination.md](references/implementation-worker-coordination.md)
   before the first implementation dispatch and whenever dispatch, resume,
   transfer, integration, or worker cleanup is required.
+- Read
+  [target-implementation-requirements.md](references/target-implementation-requirements.md)
+  before integrating a worker change, resolving an integration conflict that
+  changes target code, or making a shared target refactor. Ordinary coordinator
+  transitions do not load target implementation requirements.
 
 Both assigned worker roles read
-[problem-diagnosis.md](references/problem-diagnosis.md) and load
-[`backend-engineering`](../backend-engineering/SKILL.md) before changing target
-code. Follow the diagnosis branch selected by `work_scope.kind`. Do not preload
-conditional coordinator references or worker engineering guidance merely to
+[problem-diagnosis.md](references/problem-diagnosis.md) and
+[target-implementation-requirements.md](references/target-implementation-requirements.md)
+before changing target product code, startup, or configuration. Follow the
+diagnosis branch selected by `work_scope.kind`. Do not preload conditional
+coordinator references or target implementation requirements merely to
 anticipate a later action.
 
 When an assigned API worker exposes a Motan service through `brz-motan`, read
@@ -145,18 +151,5 @@ configuration. It must not read cases, Replay sessions, expected responses, or
 reports. The coordinator owns the isolated target runtime, build caching,
 traffic dependencies, readiness, signals, and cleanup. See
 [project-init.md](references/project-init.md) only for the one-time target
-contract and initialization procedure.
-
-## Mandatory Breeze SDK Packages
-
-Implement every used Breeze or platform SDK capability—including Memcache,
-Redis, MySQL, Vintage, Motan, Auth, MCQ, Kafka, and equivalents—as its own
-workspace package at `crates/breeze/<capability>` and expose it through the
-corresponding `brz-<capability>` library. Use the canonical capability names
-`memcache`, `redis`, `mysql`, `vintage`, `motan`, `auth`, `mcq`, and `kafka`.
-`brz-auth` owns all authentication SDK implementations, including TAuth and
-TAuth2. MCQ is the internal Memcache-backed queue and belongs in `brz-mcq`.
-Product code MUST use the `brz-*` library; it MUST NOT depend directly on the
-raw SDK or driver, place the implementation in an application or domain crate,
-or combine multiple capabilities into one package. Create only packages the
-product uses.
+contract and initialization procedure. Target-code changes and integration use
+[target-implementation-requirements.md](references/target-implementation-requirements.md).

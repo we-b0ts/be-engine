@@ -11,7 +11,7 @@ Use the standard Cargo workflow:
 cargo fmt --check
 cargo test
 cargo clippy --all-targets -- -D warnings
-plugins/ai-software-engineering/skills/backend-engineering/scripts/check-code-organization
+plugins/ai-software-engineering/skills/backend-rewrite/scripts/check-code-organization
 cargo build --bins
 ```
 
