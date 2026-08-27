@@ -108,10 +108,6 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
         "aggregate replay evidence must be complete"
     );
     ensure!(
-        feedback.kind.is_generated() || !aggregate.dirty,
-        "unordered response rule evidence requires clean aggregate replay evidence"
-    );
-    ensure!(
         assertions.case_source == aggregate.case_source,
         "assertion and aggregate reports use different case sources"
     );
@@ -348,6 +344,7 @@ fn validate_response_evidence(
     );
     let mut observed_difference = false;
     let mut selected_difference_cases = 0;
+    let mut residual_difference_cases = 0;
     let mut unselected_difference_pointers = BTreeSet::new();
     for (case, response) in &matching {
         ensure!(
@@ -372,6 +369,7 @@ fn validate_response_evidence(
             "response rules require structural JSON assertion evidence"
         );
         let mut case_has_selected_difference = false;
+        let mut case_has_unselected_difference = false;
         for difference in &response.differences {
             let overlaps_requested = prepared
                 .requested
@@ -386,17 +384,13 @@ fn validate_response_evidence(
                 );
                 observed_difference = true;
                 case_has_selected_difference = true;
-            } else if kind.is_generated() || kind == ResponseRuleKind::Counter {
-                unselected_difference_pointers.insert(difference.pointer.clone());
             } else {
-                anyhow::bail!(
-                    "case {:?} has an unsupported or undeclared response difference at {}",
-                    case.case_id,
-                    difference.pointer
-                );
+                unselected_difference_pointers.insert(difference.pointer.clone());
+                case_has_unselected_difference = true;
             }
         }
         selected_difference_cases += usize::from(case_has_selected_difference);
+        residual_difference_cases += usize::from(case_has_unselected_difference);
         for pointer in &prepared.requested {
             let has_overlapping_difference = response
                 .differences
@@ -407,7 +401,7 @@ fn validate_response_evidence(
                     || response
                         .applied_rule_ids(kind)
                         .contains(&response_rule_id(kind, api, pointer))
-                    || (kind.is_generated() && !has_overlapping_difference)
+                    || !has_overlapping_difference
                     || (kind == ResponseRuleKind::Counter && has_overlapping_difference)
                     || response.differences.is_empty(),
                 "case {:?} does not provide {:?} evidence for {}",
@@ -433,6 +427,7 @@ fn validate_response_evidence(
     Ok(ResponseEvidenceValidation {
         matching_cases: matching.len(),
         selected_difference_cases,
+        residual_difference_cases,
         unselected_difference_pointers: unselected_difference_pointers.into_iter().collect(),
     })
 }
@@ -440,6 +435,7 @@ fn validate_response_evidence(
 struct ResponseEvidenceValidation {
     matching_cases: usize,
     selected_difference_cases: usize,
+    residual_difference_cases: usize,
     unselected_difference_pointers: Vec<String>,
 }
 
@@ -655,6 +651,7 @@ fn build_response_rule_plan(
             separator: justification.separator,
             matching_cases: response_evidence.matching_cases,
             selected_difference_cases: response_evidence.selected_difference_cases,
+            residual_difference_cases: response_evidence.residual_difference_cases,
             unselected_difference_pointers: response_evidence.unselected_difference_pointers,
             aggregate_dirty,
             changed,

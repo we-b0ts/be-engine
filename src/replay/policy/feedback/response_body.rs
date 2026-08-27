@@ -28,14 +28,16 @@ use crate::replay::{
 mod codec;
 mod path;
 
-use codec::{compare_response_body, validate_unreported_codec_candidate};
+use codec::{
+    compare_response_body, selected_response_body_paths_match, validate_unreported_codec_candidate,
+};
 use path::{
     BodyPath, display as body_path_display, from_candidate as body_path_from_candidate,
     from_difference as body_path_from_difference,
     from_joined_string_candidate as body_path_from_joined_string_candidate,
     from_joined_string_rule as body_path_from_joined_string_rule, from_rule as body_path_from_rule,
     into_candidate as candidate_from_body_path,
-    into_joined_string_candidate as joined_string_candidate_from_body_path,
+    into_joined_string_candidate as joined_string_candidate_from_body_path, joined_string_location,
 };
 
 #[derive(Debug, Clone)]
@@ -87,6 +89,7 @@ pub struct ResponseBodyRuleReport {
     pub codec: ResponseBodyCodec,
     pub matching_cases: usize,
     pub selected_difference_cases: usize,
+    pub residual_difference_cases: usize,
     pub discovered_unordered_paths: Vec<ResponseBodyUnorderedPathCandidate>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub discovered_unordered_joined_string_paths: Vec<ResponseBodyJoinedStringCandidate>,
@@ -501,6 +504,7 @@ impl ResponseBodyRulePlan {
             .into_iter()
             .collect();
         report.order_only = Some(body_reports.iter().all(|body| body.order_only));
+        report.residual_difference_cases = outcome.failed;
         report.offline_verification = Some(outcome);
         report.policy_fingerprint = load_replay_policy(&self.policy_path)?.fingerprint;
         report.applied = true;
@@ -544,12 +548,12 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
         "response-body rule plan contains a joined-string path for a different codec"
     );
     let matching = &evidence.cases;
-    let mut selected_difference_cases = 0;
+    let mut diagnosed_difference_cases = 0;
     let mut discovered = BTreeSet::new();
-    let mut discovered_case_ids = BTreeMap::<BodyPath, String>::new();
     let mut discovered_joined_string = BTreeSet::<(BodyPath, String)>::new();
     let mut diagnostic_paths = BTreeSet::new();
-    let mut diagnostic_joined_string_paths = BTreeSet::<BodyPath>::new();
+    let mut diagnostic_joined_string_paths = BTreeSet::new();
+    let mut case_candidates = Vec::new();
     for case in matching {
         ensure!(
             case.policy_mismatch_rule_ids.is_empty(),
@@ -622,47 +626,43 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
                         case.case_id
                     )
                 })?;
-        selected_difference_cases += 1;
-        for path in selected_diagnosis
+        diagnosed_difference_cases += 1;
+        let case_unordered = selected_diagnosis
             .unordered_path_candidates
             .iter()
             .filter_map(|candidate| body_path_from_candidate(candidate, feedback.codec))
-        {
-            discovered_case_ids
-                .entry(path.clone())
-                .or_insert_with(|| case.case_id.clone());
-            discovered.insert(path);
-        }
-        for candidate in &selected_diagnosis.unordered_joined_string_candidates {
-            if let Some(path) = body_path_from_joined_string_candidate(candidate, feedback.codec) {
-                discovered_case_ids
-                    .entry(path.clone())
-                    .or_insert_with(|| case.case_id.clone());
-                discovered_joined_string.insert((path, candidate.separator().to_string()));
-            }
-        }
-        diagnostic_paths.extend(
-            selected_diagnosis
-                .differences
-                .iter()
-                .filter_map(|difference| body_path_from_difference(difference, feedback.codec)),
-        );
-        diagnostic_joined_string_paths.extend(selected_diagnosis.differences.iter().filter_map(
-            |difference| {
-                let path = body_path_from_difference(difference, feedback.codec)?;
-                match path {
-                    BodyPath::Protobuf(field_path) | BodyPath::ProtobufJoinedString(field_path) => {
-                        Some(BodyPath::ProtobufJoinedString(field_path))
-                    }
-                    BodyPath::Hessian2(value_path) | BodyPath::Hessian2JoinedString(value_path) => {
-                        Some(BodyPath::Hessian2JoinedString(value_path))
-                    }
-                }
-            },
+            .collect::<BTreeSet<_>>();
+        let case_joined = selected_diagnosis
+            .unordered_joined_string_candidates
+            .iter()
+            .filter_map(|candidate| {
+                body_path_from_joined_string_candidate(candidate, feedback.codec)
+                    .map(|path| (path, candidate.separator().to_string()))
+            })
+            .collect::<BTreeSet<_>>();
+        let case_differences = selected_diagnosis
+            .differences
+            .iter()
+            .filter_map(|difference| body_path_from_difference(difference, feedback.codec))
+            .collect::<BTreeSet<_>>();
+        let case_joined_differences = case_differences
+            .iter()
+            .cloned()
+            .map(joined_string_location)
+            .collect::<BTreeSet<_>>();
+        discovered.extend(case_unordered.iter().cloned());
+        discovered_joined_string.extend(case_joined.iter().cloned());
+        diagnostic_paths.extend(case_differences.iter().cloned());
+        diagnostic_joined_string_paths.extend(case_joined_differences.iter().cloned());
+        case_candidates.push((
+            case_unordered,
+            case_joined,
+            case_differences,
+            case_joined_differences,
         ));
     }
     ensure!(
-        selected_difference_cases > 0,
+        diagnosed_difference_cases > 0,
         "response evidence contains no exact response-body difference"
     );
     let existing_fields = existing
@@ -681,24 +681,38 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
         .difference(&existing_fields)
         .cloned()
         .collect::<BTreeSet<_>>();
-    let new_discovered_joined_string = discovered_joined_string
-        .iter()
-        .filter(|(path, _)| !existing_joined_string_fields.contains(path))
+    let selectable_unordered = new_discovered
+        .union(&diagnostic_paths)
+        .filter(|path| !existing_fields.contains(*path))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let selectable_joined_string = diagnostic_joined_string_paths
+        .difference(&existing_joined_string_fields)
         .cloned()
         .collect::<BTreeSet<_>>();
     let selecting_paths =
         !feedback.unordered_paths.is_empty() || !feedback.unordered_joined_string_paths.is_empty();
+    let requested = feedback
+        .unordered_paths
+        .iter()
+        .map(body_path_from_rule)
+        .collect::<BTreeSet<_>>();
+    let requested_joined_string = feedback
+        .unordered_joined_string_paths
+        .iter()
+        .map(body_path_from_joined_string_rule)
+        .collect::<BTreeSet<_>>();
+    let requested_joined_candidates = feedback
+        .unordered_joined_string_paths
+        .iter()
+        .map(|path| {
+            (
+                body_path_from_joined_string_rule(path),
+                path.separator().to_string(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
     if codec_configured || selecting_paths {
-        let requested = feedback
-            .unordered_paths
-            .iter()
-            .map(body_path_from_rule)
-            .collect::<BTreeSet<_>>();
-        let requested_joined_string = feedback
-            .unordered_joined_string_paths
-            .iter()
-            .map(body_path_from_joined_string_rule)
-            .collect::<BTreeSet<_>>();
         ensure!(
             requested.len() == feedback.unordered_paths.len(),
             "response-body rule plan repeats an unordered body path"
@@ -723,53 +737,41 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
             requested.is_disjoint(&requested_joined_string),
             "response-body rule plan uses the same body path as both an unordered collection and a joined-string path"
         );
-        let missing_discovered = new_discovered
-            .difference(&requested)
-            .map(|path| {
-                format!(
-                    "- {} (case_id: {})",
-                    body_path_display(path),
-                    discovered_case_ids
-                        .get(path)
-                        .expect("every discovered path has a representative case")
-                )
-            })
+        let unsupported = requested
+            .difference(&selectable_unordered)
+            .map(body_path_display)
             .collect::<Vec<_>>();
         ensure!(
-            missing_discovered.is_empty(),
-            "response-body rule plan must include every newly discovered unordered body path; missing:\n{}",
-            missing_discovered.join("\n")
+            unsupported.is_empty(),
+            "reviewed unordered body paths were not present in typed response differences: {}",
+            unsupported.join(", ")
         );
-        let new_discovered_joined_string_paths = new_discovered_joined_string
-            .iter()
-            .map(|(path, _)| path.clone())
-            .collect::<BTreeSet<_>>();
-        let missing_discovered_joined_string = new_discovered_joined_string_paths
-            .difference(&requested_joined_string)
-            .map(|path| {
-                format!(
-                    "- {} (case_id: {})",
-                    body_path_display(path),
-                    discovered_case_ids
-                        .get(path)
-                        .expect("every discovered path has a representative case")
-                )
-            })
+        let unsupported_joined = requested_joined_string
+            .difference(&selectable_joined_string)
+            .map(body_path_display)
             .collect::<Vec<_>>();
         ensure!(
-            missing_discovered_joined_string.is_empty(),
-            "response-body rule plan must include every newly discovered joined-string body path; missing:\n{}",
-            missing_discovered_joined_string.join("\n")
-        );
-        ensure!(
-            requested.is_subset(&diagnostic_paths),
-            "response-body rule plan paths must be present in the codec-aware comparison differences"
-        );
-        ensure!(
-            requested_joined_string.is_subset(&diagnostic_joined_string_paths),
-            "response-body rule plan joined-string paths must be present in the codec-aware comparison differences"
+            unsupported_joined.is_empty(),
+            "reviewed joined-string body paths were not present in typed response differences: {}",
+            unsupported_joined.join(", ")
         );
     }
+
+    let selected_difference_cases = if selecting_paths {
+        case_candidates
+            .iter()
+            .filter(|(unordered, joined, differences, joined_differences)| {
+                !unordered.is_disjoint(&requested)
+                    || !differences.is_disjoint(&requested)
+                    || joined
+                        .iter()
+                        .any(|candidate| requested_joined_candidates.contains(candidate))
+                    || !joined_differences.is_disjoint(&requested_joined_string)
+            })
+            .count()
+    } else {
+        diagnosed_difference_cases
+    };
 
     let mut effective_paths = existing
         .as_ref()
@@ -801,8 +803,41 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
     let effective_joined_string_paths = effective_joined_string_paths
         .into_values()
         .collect::<Vec<_>>();
+    let mut residual_difference_cases = 0;
     if !effective_paths.is_empty() || !effective_joined_string_paths.is_empty() {
         for case in matching.iter().filter(|case| !case.passed) {
+            if selecting_paths {
+                let selected_matches_before = selected_response_body_paths_match(
+                    &case.expected_body,
+                    &case.actual_body,
+                    feedback.codec,
+                    &effective_paths,
+                    &effective_joined_string_paths,
+                    &feedback.unordered_paths,
+                    &feedback.unordered_joined_string_paths,
+                )?;
+                let selected_matches_after = if !selected_matches_before
+                    && evidence.source_match == ComparisonSourceMatch::BeforeOrAfter
+                    && case.source_after_body.is_some()
+                {
+                    selected_response_body_paths_match(
+                        case.source_after_body.as_deref().unwrap_or_default(),
+                        &case.actual_body,
+                        feedback.codec,
+                        &effective_paths,
+                        &effective_joined_string_paths,
+                        &feedback.unordered_paths,
+                        &feedback.unordered_joined_string_paths,
+                    )?
+                } else {
+                    false
+                };
+                ensure!(
+                    selected_matches_before || selected_matches_after,
+                    "reviewed response-body unordered paths do not preserve exact values at their selected locations in case {:?}",
+                    case.case_id
+                );
+            }
             let matches_before = compare_response_body(
                 &case.expected_body,
                 &case.actual_body,
@@ -824,12 +859,10 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
             } else {
                 false
             };
-            ensure!(
-                matches_before || matches_after,
-                "reviewed response-body unordered paths do not fully explain case {:?}",
-                case.case_id
-            );
+            residual_difference_cases += usize::from(!matches_before && !matches_after);
         }
+    } else {
+        residual_difference_cases = diagnosed_difference_cases;
     }
     match feedback.codec {
         ResponseBodyCodec::Protobuf => {
@@ -922,6 +955,7 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
             codec: feedback.codec,
             matching_cases,
             selected_difference_cases,
+            residual_difference_cases,
             discovered_unordered_paths: discovered
                 .into_iter()
                 .map(candidate_from_body_path)

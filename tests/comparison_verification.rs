@@ -13,8 +13,9 @@ use motan_hessian2::{
 use serde_json::json;
 use tempfile::tempdir;
 use traffic_e2e::{
-    ComparisonVerificationClassification, ComparisonVerificationOptions, Hessian2UnorderedPath,
-    Hessian2ValuePath, MatchedSourceObservation, ProtobufFieldPath, ProtobufJoinedStringFieldType,
+    ComparisonVerificationClassification, ComparisonVerificationOptions,
+    ComparisonVerificationReport, Hessian2UnorderedPath, Hessian2ValuePath,
+    MatchedSourceObservation, ProtobufFieldPath, ProtobufJoinedStringFieldType,
     ProtobufJoinedStringPath, ProtobufRepeatedElementType, ProtobufUnorderedPath,
     ResponseBodyCodec, ResponseBodyDifferenceDetail, ResponseBodyJoinedStringCandidate,
     ResponseBodyJoinedStringPath, ResponseBodyRuleEvidence, ResponseBodyRuleFeedback,
@@ -361,10 +362,12 @@ fn protobuf_joined_string_rule_reuses_comparison_bodies_for_offline_verification
     .unwrap()
     .to_string();
     assert!(
-        missing_error
-            .contains("must include every newly discovered joined-string body path; missing:\n- 3")
+        missing_error.contains(
+            "reviewed response-body unordered paths do not preserve exact values at their selected locations"
+        ),
+        "{missing_error}"
     );
-    assert!(missing_error.contains("case_id: 00000000-0000-4000-8000-000000000001"));
+    assert!(missing_error.contains("00000000-0000-4000-8000-000000000001"));
 
     let applied = plan_response_body_rule(ResponseBodyRuleFeedback {
         policy_path: policy.clone(),
@@ -650,7 +653,7 @@ fn motan_gateway_hessian2_body_rule_accepts_a_raw_body_envelope() {
 }
 
 #[test]
-fn response_body_rule_reports_each_missing_path_with_one_case_id() {
+fn response_body_rule_can_apply_one_reviewed_path_while_another_difference_remains() {
     fn hessian2_object(names: &[&str], aliases: &[&str]) -> Vec<u8> {
         let mut payload = Vec::new();
         let mut encoder = HessianEncoder::new(&mut payload, HessianLimits::default());
@@ -743,28 +746,54 @@ fn response_body_rule_reports_each_missing_path_with_one_case_id() {
     })
     .unwrap();
 
-    let error = plan_response_body_rule(ResponseBodyRuleFeedback {
-        policy_path: policy,
+    let plan = plan_response_body_rule(ResponseBodyRuleFeedback {
+        policy_path: policy.clone(),
         api: "MOTAN /rpc/hessian-multiple-paths".to_string(),
         codec: ResponseBodyCodec::Hessian2,
         unordered_paths: vec![ResponseBodyUnorderedPath::Hessian2(Hessian2UnorderedPath {
             value_path: Hessian2ValuePath(vec!["names".to_string()]),
             display_path: "$.names".to_string(),
-            source_evidence: "names is an unordered set".to_string(),
+            source_evidence: "src/cache.rs:42-48 names is an unordered set".to_string(),
         })],
         unordered_joined_string_paths: Vec::new(),
         evidence: ResponseBodyRuleEvidence::Comparison {
-            comparison_report: report_path,
+            comparison_report: report_path.clone(),
         },
     })
-    .err()
-    .unwrap()
-    .to_string();
+    .unwrap();
 
-    assert!(error.contains("must include every newly discovered unordered body path; missing:"));
-    assert!(error.contains("- $.aliases"));
-    assert!(error.contains(&format!("case_id: {second_case_id}")));
-    assert!(!error.contains(&format!("case_id: {first_case_id}")));
+    assert_eq!(plan.report().selected_difference_cases, 1);
+    assert_eq!(plan.report().residual_difference_cases, 1);
+
+    let applied = plan.apply().unwrap();
+    let outcome = applied.offline_verification.as_ref().unwrap();
+    assert!(outcome.complete);
+    assert!(!outcome.passed);
+    assert_eq!(outcome.failed, 1);
+    assert_eq!(applied.residual_difference_cases, 1);
+
+    let updated = fs::read_to_string(policy).unwrap();
+    assert!(updated.contains("display_path: $.names"));
+    assert!(!updated.contains("display_path: $.aliases"));
+
+    let refreshed: ComparisonVerificationReport =
+        serde_json::from_slice(&fs::read(report_path).unwrap()).unwrap();
+    assert!(
+        refreshed
+            .cases
+            .iter()
+            .find(|case| case.case_id == first_case_id)
+            .unwrap()
+            .passed
+    );
+    assert!(
+        !refreshed
+            .cases
+            .iter()
+            .find(|case| case.case_id == second_case_id)
+            .unwrap()
+            .passed
+    );
 }
 
 #[test]

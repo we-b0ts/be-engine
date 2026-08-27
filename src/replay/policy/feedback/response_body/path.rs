@@ -90,6 +90,17 @@ pub(super) fn from_difference(
     }
 }
 
+pub(super) fn joined_string_location(path: BodyPath) -> BodyPath {
+    match path {
+        BodyPath::Protobuf(field_path) | BodyPath::ProtobufJoinedString(field_path) => {
+            BodyPath::ProtobufJoinedString(field_path)
+        }
+        BodyPath::Hessian2(value_path) | BodyPath::Hessian2JoinedString(value_path) => {
+            BodyPath::Hessian2JoinedString(value_path)
+        }
+    }
+}
+
 pub(super) fn into_candidate(path: BodyPath) -> ResponseBodyUnorderedPathCandidate {
     match path {
         BodyPath::Protobuf(field_path) => ResponseBodyUnorderedPathCandidate::Protobuf(

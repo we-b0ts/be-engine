@@ -340,12 +340,12 @@ traffic-e2e config replay apply response-rule \
 ```
 
 Both actions require runner-owned structural assertion evidence using the
-current policy fingerprint and complete aggregate evidence. A generated-scalar
-action validates only its selected Pointer and may retain dirty dependencies or
-unselected response differences as independent failing gates. An unordered
-action still requires clean aggregate evidence and rejects undeclared response
-differences. Both reject unsupported differences at a selected location.
-Apply is additive, sorted, and atomic.
+current policy fingerprint and complete aggregate evidence. They validate only
+their selected Pointers and may retain dirty dependencies or unselected
+response differences as independent failing gates. Both reject content,
+structure, type, presence, length, or duplicate-count differences at a selected
+location. The plan reports aggregate dirtiness, residual case count, and every
+unselected difference Pointer. Apply is additive, sorted, and atomic.
 
 ## Unordered Joined Strings
 
@@ -368,6 +368,8 @@ Both strings are split without trimming or case normalization and compared as
 multisets. Empty elements and duplicate multiplicity are preserved. Mechanical
 discovery tries only `,`, `;`, and `|` and reports the exact matching
 separator; source proof is still required before planning the rule.
+Other response differences do not block an independently proven joined-string
+rule, but a content or type difference at the selected string still does.
 
 ## Structured Response-Body Rules
 
@@ -479,8 +481,11 @@ Use current focused E2E or comparison evidence and the current policy
 fingerprint. Plan first, review the exact selectors and source citations, apply
 atomically, then rerun the affected E2E/comparison group. Planning rejects stale
 reports, source changes, unused applicable dependency rules, selectors absent
-from typed diagnostics, and a set of selectors that does not fully explain the
-current body difference.
+from typed diagnostics, and any selected location whose exact values still
+differ after its reviewed normalization. It does not require selecting every
+mechanical candidate or resolving unrelated body differences in the same plan.
+The report records residual difference cases, which remain exact failing gates
+after apply.
 
 ## Comparison Counter Fields
 

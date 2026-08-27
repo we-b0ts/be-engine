@@ -421,6 +421,7 @@ fn project_response_report(report: &crate::ResponseRuleReport) -> Result<Value> 
         "separator": report.separator,
         "matching_cases": report.matching_cases,
         "selected_difference_cases": report.selected_difference_cases,
+        "residual_difference_cases": report.residual_difference_cases,
         "unselected_difference_pointers": report.unselected_difference_pointers,
         "aggregate_dirty": report.aggregate_dirty,
         "changed": report.changed,
@@ -438,6 +439,7 @@ fn project_body_report(report: &crate::ResponseBodyRuleReport) -> Value {
         "body_codec": report.codec,
         "matching_cases": report.matching_cases,
         "selected_difference_cases": report.selected_difference_cases,
+        "residual_difference_cases": report.residual_difference_cases,
         "discovered_unordered_paths": report.discovered_unordered_paths,
         "effective_unordered_paths": report.effective_unordered_paths,
         // Always emit joined-string paths (empty when none) so downstream

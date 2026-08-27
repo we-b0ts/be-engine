@@ -63,6 +63,15 @@ it to the source revision represented by the current evidence.
 
 Execute the exact returned apply command once.
 
+Rules are authorized per selected location. A plan may apply one independently
+source-proven JSON Pointer, protobuf field path, or Hessian2 value path while
+other response differences, dirty dependencies, or unreviewed mechanical
+candidates remain. The selected location itself MUST be order-only in every
+case where it differs; content, type, presence, length, or duplicate-count
+differences at that location fail closed. Plan and apply reports expose the
+residual case count or unselected JSON Pointers, and those residuals continue
+to block API completion.
+
 Planning requires complete current comparison or focused-E2E evidence. An
 `unevaluable` comparison is a verification-system issue, not authorization to
 apply a selector or change the target. Preserve its bounded error, route the

@@ -264,6 +264,133 @@ fn generated_field_plan_preserves_unselected_differences_and_dirty_dependencies(
 }
 
 #[test]
+fn unordered_plan_preserves_unselected_differences_and_dirty_dependencies() {
+    let temp = tempdir().unwrap();
+    let mut feedback = write_generated_replay_feedback(
+        temp.path(),
+        json!([
+            {
+                "case_id": "case-1",
+                "response": {
+                    "method": "GET",
+                    "path": "/api/resource/token",
+                    "body_codec": "json",
+                    "differences": [
+                        {
+                            "pointer": "/members",
+                            "kind": "array_order_mismatch",
+                            "expected_type": "array",
+                            "actual_type": "array"
+                        },
+                        {
+                            "pointer": "/source",
+                            "kind": "value_mismatch",
+                            "expected_type": "string",
+                            "actual_type": "string"
+                        }
+                    ],
+                    "unordered_candidates": ["/members"]
+                }
+            },
+            {
+                "case_id": "case-2",
+                "response": {
+                    "method": "GET",
+                    "path": "/api/resource/token",
+                    "body_codec": "json",
+                    "differences": [{
+                        "pointer": "/source",
+                        "kind": "value_mismatch",
+                        "expected_type": "string",
+                        "actual_type": "string"
+                    }]
+                }
+            }
+        ]),
+        json!(["case-1", "case-2"]),
+        true,
+        true,
+    );
+    feedback.kind = ResponseRuleKind::Unordered;
+    feedback.json_pointers = vec!["/members".to_string()];
+    feedback.source_evidence =
+        Some("src/members.rs:42-48 MemberService::members returns a Set".to_string());
+    feedback.source_example = None;
+    feedback.target_example = None;
+
+    let plan = plan_response_rule(feedback).unwrap();
+    assert_eq!(plan.report().matching_cases, 2);
+    assert_eq!(plan.report().selected_difference_cases, 1);
+    assert_eq!(plan.report().residual_difference_cases, 2);
+    assert_eq!(plan.report().aggregate_dirty, Some(true));
+    assert_eq!(
+        plan.report().unselected_difference_pointers,
+        vec!["/source".to_string()]
+    );
+
+    plan.apply().unwrap();
+    let updated = fs::read_to_string(temp.path().join("replay.yaml")).unwrap();
+    assert!(updated.contains("unordered:"));
+    assert!(updated.contains("pointer: /members"));
+    assert!(!updated.contains("pointer: /source"));
+}
+
+#[test]
+fn unordered_plan_rejects_a_real_difference_at_the_selected_location() {
+    let temp = tempdir().unwrap();
+    let mut feedback = write_generated_replay_feedback(
+        temp.path(),
+        json!([
+            {
+                "case_id": "case-order",
+                "response": {
+                    "method": "GET",
+                    "path": "/api/resource/token",
+                    "body_codec": "json",
+                    "differences": [{
+                        "pointer": "/members",
+                        "kind": "array_order_mismatch",
+                        "expected_type": "array",
+                        "actual_type": "array"
+                    }],
+                    "unordered_candidates": ["/members"]
+                }
+            },
+            {
+                "case_id": "case-content",
+                "response": {
+                    "method": "GET",
+                    "path": "/api/resource/token",
+                    "body_codec": "json",
+                    "differences": [{
+                        "pointer": "/members",
+                        "kind": "array_length_mismatch",
+                        "expected_type": "array",
+                        "actual_type": "array"
+                    }]
+                }
+            }
+        ]),
+        json!(["case-order", "case-content"]),
+        true,
+        false,
+    );
+    feedback.kind = ResponseRuleKind::Unordered;
+    feedback.json_pointers = vec!["/members".to_string()];
+    feedback.source_evidence =
+        Some("src/members.rs:42-48 MemberService::members returns a Set".to_string());
+    feedback.source_example = None;
+    feedback.target_example = None;
+
+    let error = plan_response_rule(feedback).err().unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported response difference at selected location /members")
+    );
+}
+
+#[test]
 fn generated_field_plan_still_requires_complete_aggregate_evidence() {
     let temp = tempdir().unwrap();
     let feedback = write_generated_replay_feedback(
