@@ -1,20 +1,19 @@
 {
   "name": "ai-software-engineering",
-  "version": "0.1.0+codex.20260802035305",
-  "description": "Backend engineering standards, rewrite orchestration, and evidence-based traffic verification for AI coding agents.",
+  "version": "0.1.0+codex.20260827141153",
+  "description": "Backend rewrite orchestration and evidence-based traffic verification for AI coding agents.",
   "author": {
     "name": "traffic-e2e contributors"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "AI Software Engineering",
-    "shortDescription": "Backend engineering, rewrite, and traffic E2E",
-    "longDescription": "Guides AI coding agents through production backend engineering, recorded-traffic rewrites, and evidence-based traffic recording, replay, and verification.",
+    "shortDescription": "Backend rewrite and traffic E2E",
+    "longDescription": "Guides AI coding agents through state-machine-driven backend rewrites and evidence-based traffic recording, replay, and verification.",
     "developerName": "traffic-e2e contributors",
     "category": "Productivity",
     "capabilities": [],
     "defaultPrompt": [
-      "Apply backend engineering standards to this service change.",
       "Rewrite this backend against recorded traffic and deliver a PR.",
       "Record or replay this contract with Traffic E2E."
     ]

@@ -25,8 +25,6 @@ are development or manual host-trust tools only.
   [docs/development.md](docs/development.md)
 - Traffic-e2e-specific package and module ownership:
   [docs/code-organization.md](docs/code-organization.md)
-- Backend engineering standards for AI coding work:
-  [plugins/ai-software-engineering/skills/backend-engineering/SKILL.md](plugins/ai-software-engineering/skills/backend-engineering/SKILL.md)
 - Traffic recording, replay, and verification skill:
   [plugins/ai-software-engineering/skills/traffic-e2e/SKILL.md](plugins/ai-software-engineering/skills/traffic-e2e/SKILL.md)
 
@@ -40,7 +38,7 @@ cargo fmt --check
 cargo test
 cargo clippy --all-targets -- -D warnings
 CODE_ORG_BASE=origin/master \
-  plugins/ai-software-engineering/skills/backend-engineering/scripts/check-code-organization
+  plugins/ai-software-engineering/skills/backend-rewrite/scripts/check-code-organization
 ```
 
 Useful focused tests:
@@ -72,10 +70,9 @@ traffic-e2e target exec -- path/to/prebuilt-target
   detected, keep rejecting and recording the reason.
 - Keep sensitive data handling explicit. Add newly sensitive headers to
   `recording.redact_headers` defaults or document the choice.
-- Before changing product code, follow the backend-engineering
-  [code-organization rules](plugins/ai-software-engineering/skills/backend-engineering/references/code-organization.md)
-  and this repository's [module ownership](docs/code-organization.md). Treat
-  the initial boundary as a hypothesis and review the implemented
+- Before changing product code, follow this repository's
+  [module ownership and code-organization requirements](docs/code-organization.md).
+  Treat the initial boundary as a hypothesis and review the implemented
   responsibilities again before completion. Keep feature-local structural
   convergence in scope and unrelated legacy cleanup out of scope.
 - Product source files must not exceed 1000 lines after a change. If a touched

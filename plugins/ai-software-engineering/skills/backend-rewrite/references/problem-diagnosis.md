@@ -396,9 +396,10 @@ Route the proven cause to exactly one action:
   configuration, startup, write/flush, or shutdown behavior, run focused local
   tests, and return the tested handoff plus unchanged acceptance to the
   orchestrator;
-- target implementation or cache defect: change target code with
-  `backend-engineering`, run focused target tests, and return the tested handoff
-  plus unchanged `action.commands.acceptance` to the orchestrator;
+- target implementation or cache defect: change target code under
+  [target-implementation-requirements.md](target-implementation-requirements.md),
+  run focused target tests, and return the tested handoff plus unchanged
+  `action.commands.acceptance` to the orchestrator;
 - startup/configuration defect: repair source-compatible loading or the fixed
   start/stop boundary, test it, and return the handoff plus unchanged acceptance
   to the orchestrator;
