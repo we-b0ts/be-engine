@@ -19,6 +19,10 @@ pub struct ResponseBodyAssertionReport {
     pub codec: ResponseBodyCodec,
     pub envelope: String,
     pub configured: bool,
+    /// Whether this structured comparison determined the response verdict.
+    /// False means the codec was decoded only to provide diagnostic evidence.
+    #[serde(default)]
+    pub used_for_verdict: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub codec_candidates: Vec<ResponseBodyCodec>,
     pub unordered_path_candidates: Vec<ResponseBodyUnorderedPathCandidate>,
@@ -253,6 +257,17 @@ impl ResponseDifference {
         Self {
             pointer: "$body".to_string(),
             kind: ResponseDifferenceKind::ExactBodyMismatch,
+            expected_type: None,
+            actual_type: None,
+            expected_status: None,
+            actual_status: None,
+        }
+    }
+
+    pub(super) fn body_value_mismatch() -> Self {
+        Self {
+            pointer: "$body".to_string(),
+            kind: ResponseDifferenceKind::ValueMismatch,
             expected_type: None,
             actual_type: None,
             expected_status: None,

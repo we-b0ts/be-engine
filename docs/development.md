@@ -1229,13 +1229,16 @@ When evidence identifies a protocol with supported rules, the report includes
 exact read-only `help` command. This list is separate from
 `applicable_rule_planners`, which contains planner entrypoints appropriate to
 the current evidence state; neither list proves that a rule applies. For a
-response body without a configured codec, the planner offers each
-syntactically valid protobuf or Hessian2 codec candidate. The observed body
-framing is reported separately as `envelope`. Once one codec is configured,
-the response rule hint instead
-directs the AI to the reported field/value differences and unordered-path
-candidates. These candidates identify mechanically explainable paths but do
-not prove that order is semantically irrelevant. Every selected
+response body without a configured or protocol-defined codec, the planner
+offers each syntactically valid protobuf or Hessian2 codec candidate. Motan1
+`value` responses are already defined as Hessian2 by the protocol, so their
+unwrapped bodies use Hessian2 semantic equality for the verdict without a
+codec rule. The observed body framing is reported separately as `envelope`,
+and `body_diagnosis.used_for_verdict` says whether structured comparison
+determined the verdict. Once one codec is configured, the response rule hint
+instead directs the AI to the reported field/value differences and
+unordered-path candidates. These candidates identify mechanically explainable
+paths but do not prove that order is semantically irrelevant. Every selected
 protobuf/Hessian2 path must include one-line source evidence; codec-only
 selection is evidence-light because it does not relax body values. Memcached dirty-cluster
 evidence currently exposes `protobuf-timestamp`, whose help command is:

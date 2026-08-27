@@ -33,6 +33,7 @@ pub(super) struct ComparableResponseBody {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ComparableBodyKind {
     WireBytes,
+    Motan1Hessian2Value,
     BreezeString,
     BreezeByteArray,
     BreezeValue,
@@ -45,6 +46,7 @@ impl ComparableBodyKind {
     pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::WireBytes => "wire_bytes",
+            Self::Motan1Hessian2Value => "motan1_hessian2_value",
             Self::BreezeString => "breeze_string",
             Self::BreezeByteArray => "breeze_byte_array",
             Self::BreezeValue => "breeze_value",
@@ -92,9 +94,17 @@ pub(super) fn comparable_response_body(
     serialization: Option<u8>,
     body: Vec<u8>,
     already_decoded: bool,
+    rpc_status: Option<&str>,
 ) -> ComparableResponseBody {
     let (payload_offset, body_kind) = if already_decoded {
-        (0, ComparableBodyKind::WireBytes)
+        (
+            0,
+            if version == ProtocolVersion::Motan1 && rpc_status == Some("value") {
+                ComparableBodyKind::Motan1Hessian2Value
+            } else {
+                ComparableBodyKind::WireBytes
+            },
+        )
     } else {
         business_body(version, serialization, &body)
     };
@@ -220,7 +230,7 @@ fn frame_business_body(frame: &Frame, label: &str) -> Result<(usize, ComparableB
                 .len()
                 .checked_sub(payload.len())
                 .context("Motan1 response payload exceeds its ObjectStream body")?,
-            ComparableBodyKind::WireBytes,
+            ComparableBodyKind::Motan1Hessian2Value,
         )),
         Motan1Response::Void => Ok((frame.body.len(), ComparableBodyKind::WireBytes)),
         Motan1Response::Exception | Motan1Response::Attachment => {

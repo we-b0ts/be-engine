@@ -18,12 +18,15 @@ fn process_time_does_not_affect_response_assertion() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(report.passed);
-    assert_eq!(report.body_codec, ResponseBodyCodec::ExactBytes);
+    assert_eq!(report.body_codec, ResponseBodyCodec::Hessian2);
+    assert!(report.body_diagnosis.unwrap().used_for_verdict);
     assert!(report.differences.is_empty());
 }
 
 #[test]
 fn body_length_does_not_duplicate_a_body_mismatch() {
+    let expected = hessian2_string_list(&["short"]);
+    let actual = hessian2_string_list(&["a longer response"]);
     let (_temp, options) = write_motan_case_with_rules(
         ProtocolVersion::Motan1,
         "",
@@ -31,8 +34,8 @@ fn body_length_does_not_duplicate_a_body_mismatch() {
         None,
         "",
         "",
-        b"short",
-        b"a longer response",
+        &expected,
+        &actual,
         1,
     );
 
@@ -42,7 +45,7 @@ fn body_length_does_not_duplicate_a_body_mismatch() {
     assert_eq!(report.differences.len(), 1);
     assert_eq!(
         report.differences[0].kind,
-        ResponseDifferenceKind::ExactBodyMismatch
+        ResponseDifferenceKind::ValueMismatch
     );
 }
 
@@ -69,9 +72,36 @@ fn object_stream_envelope_exposes_hessian2_payload() {
     assert_eq!(report.differences.len(), 1);
     assert_eq!(
         report.differences[0].kind,
-        ResponseDifferenceKind::ExactBodyMismatch
+        ResponseDifferenceKind::ValueMismatch
     );
-    assert!(report.body_diagnosis.is_some());
+    let diagnosis = report.body_diagnosis.unwrap();
+    assert!(!diagnosis.configured);
+    assert!(diagnosis.used_for_verdict);
+}
+
+#[test]
+fn protocol_hessian2_comparison_ignores_map_wire_order() {
+    let expected = hessian2_string_map(&[("businessId", "11"), ("sourceLog", "a,b")]);
+    let actual = hessian2_string_map(&[("sourceLog", "a,b"), ("businessId", "11")]);
+    assert_ne!(expected, actual);
+    let (_temp, options) = write_motan_case_with_rules(
+        ProtocolVersion::Motan1,
+        "",
+        None,
+        None,
+        "",
+        "",
+        &expected,
+        &actual,
+        1,
+    );
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(report.passed);
+    assert_eq!(report.body_codec, ResponseBodyCodec::Hessian2);
+    assert!(report.body_diagnosis.unwrap().used_for_verdict);
+    assert!(report.differences.is_empty());
 }
 
 #[test]
@@ -118,4 +148,24 @@ fn hessian2_unordered_rule_compares_the_business_body() {
     assert!(report.passed);
     assert_eq!(report.body_codec, ResponseBodyCodec::Hessian2);
     assert!(report.differences.is_empty());
+}
+
+fn hessian2_string_map(entries: &[(&str, &str)]) -> Vec<u8> {
+    fn compact_string(value: &str) -> Vec<u8> {
+        assert!(value.len() < 32 && value.is_ascii());
+        let mut encoded = vec![u8::try_from(value.len()).unwrap()];
+        encoded.extend_from_slice(value.as_bytes());
+        encoded
+    }
+
+    let mut payload = vec![b'H'];
+    for (key, value) in entries {
+        payload.extend(compact_string(key));
+        payload.extend(compact_string(value));
+    }
+    payload.push(b'Z');
+    let mut body = vec![3];
+    body.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());
+    body.extend(payload);
+    body
 }

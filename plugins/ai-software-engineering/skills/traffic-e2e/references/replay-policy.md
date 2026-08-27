@@ -398,6 +398,13 @@ backend-rewrite rule plan \
   --body-codec protobuf
 ```
 
+Motan1 `value` is protocol-defined as Hessian2. Replay and comparison remove
+its Java ObjectStream wrapper and use Hessian2 semantic equality by default;
+map wire order is ignored, while list order and business values remain exact.
+Explicit body-codec rules still take priority, and other Motan1 response kinds
+keep exact handling. `body_diagnosis.used_for_verdict` identifies this
+protocol-selected verdict; decoder-only candidates leave it false.
+
 An unordered selector does relax comparison and therefore requires one-line
 source proof on every selected path. A diagnostic candidate proves only that
 multiset comparison explains observed bytes; it does not prove order is absent

@@ -103,6 +103,7 @@ pub(in crate::replay) fn diagnose_response_body(
                 codec,
                 envelope: discovery.envelope.as_str().to_string(),
                 configured: false,
+                used_for_verdict: false,
                 codec_candidates: vec![codec],
                 unordered_path_candidates: discovery
                     .unordered_paths
@@ -125,6 +126,7 @@ pub(in crate::replay) fn diagnose_response_body(
                 codec,
                 envelope: discovery.envelope.as_str().to_string(),
                 configured: false,
+                used_for_verdict: false,
                 codec_candidates: vec![codec],
                 unordered_path_candidates: discovery
                     .unordered_paths
@@ -323,6 +325,7 @@ fn comparison_assertion_body(
         serialization,
         body,
         response.rpc_body_decoded == Some(true),
+        response.rpc_status.as_deref(),
     )))
 }
 
@@ -416,6 +419,18 @@ impl AssertionBody {
                 expected.gateway_context_matches(actual)
             }
             _ => false,
+        }
+    }
+
+    fn protocol_body_codec(&self) -> Option<ResponseBodyCodec> {
+        let body_kind = match self {
+            Self::MotanFrame(frame) => frame.body_kind(),
+            Self::MotanBody(body) => body.body_kind(),
+            Self::Bytes(_) => return None,
+        };
+        match body_kind {
+            motan::ComparableBodyKind::Motan1Hessian2Value => Some(ResponseBodyCodec::Hessian2),
+            _ => None,
         }
     }
 
@@ -550,6 +565,7 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                         codec: rule.codec,
                         envelope: discovery.envelope.as_str().to_string(),
                         configured: true,
+                        used_for_verdict: true,
                         codec_candidates: vec![rule.codec],
                         unordered_path_candidates: discovery
                             .unordered_paths
@@ -611,6 +627,7 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                         codec: rule.codec,
                         envelope: discovery.envelope.as_str().to_string(),
                         configured: true,
+                        used_for_verdict: true,
                         codec_candidates: vec![rule.codec],
                         unordered_path_candidates: discovery
                             .unordered_paths
@@ -641,7 +658,7 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
             if !body_matches {
                 report
                     .differences
-                    .push(ResponseDifference::exact_body_mismatch());
+                    .push(ResponseDifference::body_value_mismatch());
             }
             if let Some(difference) = body_type_difference {
                 report.differences.push(difference);
@@ -653,6 +670,54 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
             }
         }
         report.finish(&[], std::slice::from_ref(&rule.id));
+        return Ok(report);
+    }
+
+    if expected_body.protocol_body_codec() == Some(ResponseBodyCodec::Hessian2)
+        && actual_body.protocol_body_codec() == Some(ResponseBodyCodec::Hessian2)
+    {
+        ensure!(
+            response_fields.is_empty(),
+            "JSON response rules cannot apply to a Motan1 Hessian2 value response"
+        );
+        report.body_codec = ResponseBodyCodec::Hessian2;
+        let (body_matches, discovery) =
+            hessian2::evaluate_hessian2(expected_body.body(), actual_body.body(), &[], &[])
+                .context("failed to compare Motan1 Hessian2 value response bodies")?;
+        report.body_diagnosis = Some(ResponseBodyAssertionReport {
+            codec: ResponseBodyCodec::Hessian2,
+            envelope: discovery.envelope.as_str().to_string(),
+            configured: false,
+            used_for_verdict: true,
+            codec_candidates: vec![ResponseBodyCodec::Hessian2],
+            unordered_path_candidates: discovery
+                .unordered_paths
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            unordered_joined_string_candidates: discovery
+                .unordered_joined_string_paths
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            differences: discovery.differences.into_iter().map(Into::into).collect(),
+            candidates_explain_all_differences: discovery.candidates_explain_all_differences,
+            order_only: discovery.order_only,
+        });
+        if !body_matches {
+            report
+                .differences
+                .push(ResponseDifference::body_value_mismatch());
+        }
+        if let Some(difference) = expected_body.type_difference(&actual_body) {
+            report.differences.push(difference);
+        }
+        if !expected_body.gateway_metadata_matches(&actual_body) {
+            report
+                .differences
+                .push(ResponseDifference::gateway_metadata_mismatch());
+        }
+        report.finish(&[], &[]);
         return Ok(report);
     }
 

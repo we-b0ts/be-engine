@@ -202,6 +202,38 @@ fn decoded_motan1_payload_uses_hessian2_comparison() {
     );
 }
 
+#[test]
+fn decoded_motan1_value_defaults_to_hessian2_semantic_comparison() {
+    let temp = tempdir().unwrap();
+    let expected = hessian2_string_map(&[("businessId", "11"), ("sourceLog", "a,b")]);
+    let actual = hessian2_string_map(&[("sourceLog", "a,b"), ("businessId", "11")]);
+    assert_ne!(expected, actual);
+    let run = write_run(
+        temp.path(),
+        None,
+        &expected,
+        &actual,
+        None,
+        None,
+        ResponseEnvelope::DecodedMotan1,
+    );
+    let policy = write_policy(temp.path(), "");
+
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run.clone(),
+        policy,
+        report: run.join("comparison-report.json"),
+    })
+    .unwrap();
+
+    assert!(report.passed);
+    let response = report.cases[0].response.as_ref().unwrap();
+    assert_eq!(response.body_codec, ResponseBodyCodec::Hessian2);
+    let diagnosis = response.body_diagnosis.as_ref().unwrap();
+    assert!(!diagnosis.configured);
+    assert!(diagnosis.used_for_verdict);
+}
+
 fn simple_string(value: &str) -> Vec<u8> {
     motan_simple::to_vec(value, SimpleLimits::default()).unwrap()
 }
@@ -218,6 +250,23 @@ fn protobuf_repeated_strings(values: &[&[u8]]) -> Vec<u8> {
         payload.extend_from_slice(value);
     }
     payload
+}
+
+fn hessian2_string_map(entries: &[(&str, &str)]) -> Vec<u8> {
+    fn compact_string(value: &str) -> Vec<u8> {
+        assert!(value.len() < 32 && value.is_ascii());
+        let mut encoded = vec![u8::try_from(value.len()).unwrap()];
+        encoded.extend_from_slice(value.as_bytes());
+        encoded
+    }
+
+    let mut body = vec![b'H'];
+    for (key, value) in entries {
+        body.extend(compact_string(key));
+        body.extend(compact_string(value));
+    }
+    body.push(b'Z');
+    body
 }
 
 #[derive(Clone, Copy)]
