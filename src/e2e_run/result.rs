@@ -59,6 +59,8 @@ pub struct E2eRunResult {
     pub gates: E2eVerificationGates,
     pub diagnosis: E2eDiagnosis,
     pub progress: PathBuf,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_outputs: Vec<crate::RuntimeOutputLocation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +73,8 @@ pub struct E2eApiRunResult {
     pub gates: E2eVerificationGates,
     pub diagnosis: E2eDiagnosis,
     pub progress: PathBuf,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_outputs: Vec<crate::RuntimeOutputLocation>,
 }
 
 pub(super) fn run_result(layout: &RunLayout, state: &ActiveRunState) -> E2eRunResult {
@@ -82,6 +86,7 @@ pub(super) fn run_result(layout: &RunLayout, state: &ActiveRunState) -> E2eRunRe
         gates: verification_gates(state),
         diagnosis: diagnosis(layout, state),
         progress: layout.progress_path.clone(),
+        runtime_outputs: state.runtime_outputs.clone(),
     }
 }
 
@@ -100,6 +105,7 @@ pub(super) fn api_result(
         gates: verification_gates(state),
         diagnosis: diagnosis(layout, state),
         progress: layout.progress_path.clone(),
+        runtime_outputs: state.runtime_outputs.clone(),
     }
 }
 

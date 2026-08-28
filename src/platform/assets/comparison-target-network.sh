@@ -54,6 +54,15 @@ start_target() {
         if [[ "$writable" == true ]]; then access=""; else access=",readonly"; fi
         mounts+=(--mount "type=bind,source=${prepared_mount_source},target=${target}${access}")
     done <"$TRAFFIC_E2E_TARGET_STARTUP_MOUNTS_FILE"
+    prepare_runtime_outputs target
+    local output_id output_target
+    for output_id in "${runtime_output_ids[@]}"; do
+        output_target=${runtime_output_targets[$output_id]}
+        mounts+=(--mount "type=bind,source=${runtime_outputs_root}/target/${output_id},target=${output_target}")
+        printf 'target runtime output %s: %s -> %s\n' \
+            "$output_id" "$output_target" \
+            "$runtime_outputs_root/target/${output_id}" >&2
+    done
     if "$breeze_enabled"; then
         mounts+=(
             --mount type=bind,source=/data1/breeze/socks,target=/data1/breeze/socks,readonly

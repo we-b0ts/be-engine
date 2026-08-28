@@ -5,6 +5,11 @@ project:
   target:
     dockerfile: .traffic-e2e/Dockerfile.e2e
     startup: {}
+    runtime_outputs:
+    - id: application-logs
+      container_path: /data1/weibo/logs
+      mode: read_write
+      retention: keep
   replay:
     policy: config/verification.example.yaml
   recording:

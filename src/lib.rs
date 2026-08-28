@@ -35,6 +35,7 @@ mod replay;
 mod repository;
 mod request_headers;
 mod rewrite;
+mod runtime_output;
 mod startup;
 mod target_container;
 mod tcp_gateway;
@@ -237,6 +238,7 @@ pub use rewrite::{
     start_rewrite_recording, status_rewrite, status_rewrite_for_api,
     status_rewrite_for_process_output, transfer_rewrite_worker, verify_rewrite_repair,
 };
+pub use runtime_output::RuntimeOutputLocation;
 pub use startup::{StartupConfig, StartupSnapshotReport};
 pub use target_container::TargetImage;
 pub use tls::MitmCa;

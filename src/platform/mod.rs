@@ -24,6 +24,7 @@ mod preflight;
 mod recording_input;
 mod recovery;
 mod replay_preflight;
+mod runtime_outputs;
 mod startup;
 
 use assets::{stage_assets, write_asset};
@@ -128,6 +129,8 @@ pub struct ManagedRecordingResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub breeze_container: Option<String>,
     pub manifest: PathBuf,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub runtime_outputs: Vec<crate::RuntimeOutputLocation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub motan: Option<ManagedMotanRecordingResult>,
     pub managed_by: &'static str,
@@ -139,6 +142,7 @@ struct ManagedRuntimeResult {
     source_container: String,
     breeze_container: Option<String>,
     manifest: PathBuf,
+    runtime_outputs: Vec<crate::RuntimeOutputLocation>,
     motan: Option<MotanRuntimeContext>,
 }
 
@@ -172,6 +176,7 @@ pub async fn run_managed_recording(
         source_container: result.source_container,
         breeze_container: result.breeze_container,
         manifest: result.manifest,
+        runtime_outputs: result.runtime_outputs,
         motan,
         managed_by: "traffic-e2e",
     })
@@ -420,6 +425,31 @@ async fn run_managed_runtime(
     ensure_executable(&executable, "traffic-e2e binary")?;
     let assets = stage_assets(&target_root)?;
     startup::stage_assets(&assets, &target_root, &config)?;
+    runtime_outputs::stage_assets(&assets, &config.target_runtime_outputs)?;
+    let runtime_output_root = target_root
+        .join(crate::repository::LOCAL_RUNTIME_OUTPUTS_ROOT)
+        .join(runtime_operation.script_name())
+        .join(&run_id);
+    ensure!(
+        !runtime_output_root
+            .to_string_lossy()
+            .contains([',', '\r', '\n']),
+        "target runtime output host path contains an unsupported delimiter"
+    );
+    let mut runtime_output_locations = crate::runtime_output::locations(
+        &runtime_output_root.join("source"),
+        "source",
+        &config.target_runtime_outputs,
+    );
+    if runtime_operation
+        == ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
+    {
+        runtime_output_locations.extend(crate::runtime_output::locations(
+            &runtime_output_root.join("target"),
+            "target",
+            &config.target_runtime_outputs,
+        ));
+    }
     let mut command = Command::new("bash");
     command
         .arg(assets.join("manage-platform.sh"))
@@ -439,6 +469,10 @@ async fn run_managed_runtime(
         .env(
             "TRAFFIC_E2E_TARGET_STARTUP_ENV_FILE",
             assets.join("target-startup.env"),
+        )
+        .env(
+            "TRAFFIC_E2E_TARGET_RUNTIME_OUTPUTS_FILE",
+            assets.join("target-runtime-outputs.tsv"),
         )
         .env("TRAFFIC_E2E_TARGET_PORT", config.target_port.to_string())
         .env(
@@ -574,6 +608,7 @@ async fn run_managed_runtime(
         source_container: config.source_container,
         breeze_container: config.breeze_container,
         manifest,
+        runtime_outputs: runtime_output_locations,
         motan,
     })
 }
