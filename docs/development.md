@@ -1343,6 +1343,12 @@ target:
     # Optional application-owned names:
     # port_environment: PORT
     # replay_ca_environment: SSL_CERT_FILE
+  # Optional application outputs written by the target at runtime.
+  runtime_outputs:
+    - id: application-logs
+      container_path: /data1/weibo/logs
+      mode: read_write
+      retention: keep
   # Optional override; omit to infer the standard Rust gates when Cargo.toml exists.
   # quality_gates:
   #   - name: project-check
@@ -1418,6 +1424,29 @@ directories with their original `rw`/`ro` access. Docker-managed host files
 (`/etc/hosts`, `/etc/hostname`, and `/etc/resolv.conf`) are not copied, and the
 engine-managed Breeze mounts keep their existing shared behavior. Runtime mount
 copies are removed after their owning container or managed run stops.
+
+`target.runtime_outputs` is a separate output-only contract. Every configured
+container path is mounted read-write from an engine-created, run-scoped host
+directory below `.traffic-e2e/local/runtime-outputs/`. Managed `record` mounts
+the path into the source container. Managed `record-comparison` mounts separate
+`source/<id>` and `target/<id>` directories into the source and target
+containers, respectively; Replay mounts only `target/<id>`. Replay uses the
+logical run and sequence in its host path, while managed recording uses the
+recording run ID. The resolved paths and their roles are printed when a
+container starts and returned by run/status or managed recording results.
+`retention: keep` preserves them after container cleanup for host-side
+analysis. Runtime output paths must not overlap each other, startup mounts,
+Replay-owned paths, or managed Breeze mounts.
+
+Runtime output contents do not update the startup snapshot and do not trigger
+startup recapture. The host directory is below `.traffic-e2e/local/`, which the
+required `.dockerignore` excludes from the target build context, so writes do
+not invalidate target image build layers. Adding or changing the declaration
+in `project.yaml` changes project configuration once, but subsequent log writes
+remain runtime-only. Runtime outputs may contain sensitive application data;
+they stay Git-ignored and are not consumed as Replay inputs or expected
+responses. Remove retained run directories only under the exact
+`.traffic-e2e/local/runtime-outputs/` root when they are no longer needed.
 
 Source-derived environment names are an allowlist, not name/value assignments:
 the engine reads their values from Docker's source-container configuration and

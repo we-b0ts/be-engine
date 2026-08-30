@@ -158,6 +158,7 @@ fn clean_reclassification_advances_without_replacing_standard_recording() {
             lifecycle_errors: Vec::new(),
         },
         progress: PathBuf::from("replay-progress.yaml"),
+        runtime_outputs: Vec::new(),
     };
 
     transition::from_e2e_result(

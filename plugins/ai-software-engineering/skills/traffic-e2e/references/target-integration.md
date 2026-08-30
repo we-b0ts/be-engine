@@ -27,6 +27,15 @@ names this path. Target TLS clients must additionally trust it through their
 normal Rust TLS configuration. The image must not inspect Replay sessions or
 receive a CA private key.
 
+Optional `target.runtime_outputs` are application-output-only writable mounts.
+The engine creates retained host directories per run, role, and output below
+`.traffic-e2e/local/runtime-outputs/`, prints and reports each resolved host
+path, and mounts it at the configured absolute container path. Managed Record
+mounts the source role, managed Comparison mounts separate source and target
+roles, and Replay mounts the target role. These paths must not overlap startup
+inputs. Their contents never enter the startup snapshot, target build context,
+Replay inputs, or expected-response evidence.
+
 Use the pinned shared Rust builder/runtime images and stable BuildKit cache
 mount IDs. The target stays alive for every case in one focused/full round.
 

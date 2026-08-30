@@ -10,8 +10,8 @@ use super::build::validate_image_id;
 use super::model::{
     TargetRuntimeState, TargetStartEvidence, TargetStartOptions, TargetStopEvidence,
 };
-use super::startup_mounts;
 use super::{NETWORK_ANCHOR_IMAGE, TARGET_REPLAY_CA_PATH, TARGET_USER};
+use super::{runtime_outputs, startup_mounts};
 use crate::{TRAFFIC_PROCESS_GID, TRAFFIC_PROCESS_UID, TRAFFIC_PROCESS_USER};
 
 const DOCKER_TIMEOUT: Duration = Duration::from_secs(60);
@@ -162,6 +162,29 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
             return Err(error);
         }
     };
+    let prepared_outputs =
+        match runtime_outputs::prepare(&options.runtime_output_root, options.runtime_outputs).await
+        {
+            Ok(outputs) => outputs,
+            Err(error) => {
+                if let Err(cleanup) =
+                    startup_mounts::cleanup(&options.config.target_root, &options.container_name)
+                        .await
+                {
+                    return Err(error.context(format!(
+                        "target startup mount cleanup also failed: {cleanup:#}"
+                    )));
+                }
+                if let Err(cleanup) =
+                    remove_environment_file(&environment_file, has_environment).await
+                {
+                    return Err(error.context(format!(
+                        "target environment cleanup also failed: {cleanup:#}"
+                    )));
+                }
+                return Err(error);
+            }
+        };
 
     let mut command = Command::new("docker");
     command
@@ -193,6 +216,16 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
                 &mount.source,
                 &mount.target.to_string_lossy(),
                 mount.writable,
+            )?,
+        ]);
+    }
+    for output in &prepared_outputs {
+        command.args([
+            "--mount",
+            &bind_mount(
+                &output.host_path,
+                &output.container_path.to_string_lossy(),
+                true,
             )?,
         ]);
     }
@@ -273,6 +306,7 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
             .iter()
             .map(|mount| mount.path.clone())
             .collect(),
+        runtime_outputs: prepared_outputs,
         port: options.config.port,
         replay_ca_cert: options
             .replay_ca_cert
@@ -306,6 +340,7 @@ pub(crate) async fn verify_target_identity(container: &str) -> Result<()> {
 pub(crate) async fn verify_runtime_mounts(
     container: &str,
     mounts: &[crate::startup::StartupSnapshotMount],
+    runtime_outputs: &[crate::runtime_output::RuntimeOutputConfig],
     replay_ca: bool,
     breeze_enabled: bool,
 ) -> Result<()> {
@@ -322,6 +357,15 @@ pub(crate) async fn verify_runtime_mounts(
             "target startup mount is missing or has the wrong access mode: {} expected {}",
             expected.path.display(),
             if expected.writable { "rw" } else { "ro" }
+        );
+    }
+    for expected in runtime_outputs {
+        ensure!(
+            inspection.mounts.iter().any(|mount| {
+                Path::new(&mount.destination) == expected.container_path && mount.rw
+            }),
+            "target runtime output mount is missing or read-only: {}",
+            expected.container_path.display()
         );
     }
     let managed_read_only_mounts = replay_ca

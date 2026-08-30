@@ -41,6 +41,8 @@ pub(crate) struct TargetStartOptions<'a> {
     pub(crate) operation: &'static str,
     pub(crate) run_id: String,
     pub(crate) replay_ca_cert: Option<PathBuf>,
+    pub(crate) runtime_outputs: &'a [crate::runtime_output::RuntimeOutputConfig],
+    pub(crate) runtime_output_root: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -52,6 +54,8 @@ pub(crate) struct TargetStartEvidence {
     pub(crate) user: &'static str,
     pub(crate) startup_snapshot_id: String,
     pub(crate) startup_mounts: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) runtime_outputs: Vec<crate::RuntimeOutputLocation>,
     pub(crate) port: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) replay_ca_cert: Option<&'static str>,

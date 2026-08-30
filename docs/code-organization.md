@@ -81,6 +81,12 @@ is unclear.
   by engine-managed mutable state. The directory is inspectable but not a
   stable API; coordinator commands remain the primary interface and all state
   mutation stays with the owning engine module.
+- `runtime_output` owns validated application-output declarations and the
+  stable host-location projection for retained, run-scoped writable output
+  mounts. `target_container/runtime_outputs.rs` prepares Replay-owned host
+  directories, while `platform/runtime_outputs.rs` projects the same validated
+  contract into managed Record source and Comparison source/target runtimes.
+  Runtime outputs are never startup inputs or image build inputs.
 - `rewrite` owns migration sequencing, the single coordinator state with
   API-scoped AI work slices, the serialized recording/Replay/comparison runtime
   lease, bounded action/evidence projection, rule routing, and the whole-target

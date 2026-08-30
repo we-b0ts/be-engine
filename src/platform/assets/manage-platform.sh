@@ -11,6 +11,7 @@ required_environment=(
     TRAFFIC_E2E_SOURCE_CONTAINER
     TRAFFIC_E2E_TARGET_STARTUP_MOUNTS_FILE
     TRAFFIC_E2E_TARGET_STARTUP_ENV_FILE
+    TRAFFIC_E2E_TARGET_RUNTIME_OUTPUTS_FILE
     TRAFFIC_E2E_TARGET_PORT
     TRAFFIC_E2E_TARGET_READY_PATH
     TRAFFIC_E2E_TARGET_READY_STATUS
@@ -263,6 +264,7 @@ diagnostics_dir="$local_dir/diagnostics/${operation}-${token}"
 control_dir="$local_dir/control/${token}"
 platform_mounts_parent="$local_dir/mounts"
 platform_mounts_root="$platform_mounts_parent/${operation}-${token}"
+runtime_outputs_root="$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/local/runtime-outputs/${operation}/${run_id}"
 startup_snapshot_mounts_root="$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/local/startup/mounts"
 mkdir -p "$data_dir" "$artifacts_dir" "$diagnostics_dir" "$control_dir"
 mkdir -p "$platform_mounts_parent"
@@ -521,6 +523,7 @@ load_runtime_spec() {
         if [[ "$mount_mode" == recording ]]; then
             resolve_recording_mount_source "$destination" "$writable" "$source"
             source=$prepared_mount_source
+            writable=$prepared_mount_writable
         fi
         if [[ "$writable" == true ]]; then
             runtime_args+=(--volume "${source}:${destination}:rw")
@@ -528,6 +531,7 @@ load_runtime_spec() {
             runtime_args+=(--volume "${source}:${destination}:ro")
         fi
     done < <(jq -r '.[0].Mounts[]? | [.Source, .Destination, .RW, (.Name // "")] | @tsv' <<<"$inspect_json")
+    [[ "$mount_mode" != recording ]] || append_source_runtime_output_args
 
     if [[ "$launch_mode" == exact ]]; then
         entries=()

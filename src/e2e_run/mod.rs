@@ -117,6 +117,8 @@ pub struct E2eRunStatus {
     pub status: String,
     pub progress: PathBuf,
     pub focused_apis: Vec<E2eFocusedApiStatus>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub runtime_outputs: Vec<crate::RuntimeOutputLocation>,
 }
 
 #[derive(Debug, Serialize)]
@@ -124,6 +126,8 @@ pub struct E2eFocusedApiStatus {
     pub api: String,
     pub status: String,
     pub active: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub runtime_outputs: Vec<crate::RuntimeOutputLocation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -216,14 +220,20 @@ pub fn status_e2e_run(context: E2eRunContext) -> Result<E2eRunStatus> {
     )?;
     let active_state = layout.active_dir.join("state.yaml");
     let latest_state = layout.latest_dir.join("state.yaml");
-    let status = if active_state.is_file() {
+    let (status, runtime_outputs) = if active_state.is_file() {
         let state = store::read_active(&layout)?;
-        run_status_label(state.status).to_string()
+        (
+            run_status_label(state.status).to_string(),
+            state.runtime_outputs,
+        )
     } else if latest_state.is_file() {
         let state: model::ActiveRunState = store::read_yaml(&latest_state)?;
-        run_status_label(state.status).to_string()
+        (
+            run_status_label(state.status).to_string(),
+            state.runtime_outputs,
+        )
     } else {
-        "not_started".to_string()
+        ("not_started".to_string(), Vec::new())
     };
     let focused_apis = if layout.group_index_path.is_file() {
         load_case_group_inventory(&layout.group_index_path, &layout.case_source)?
@@ -236,19 +246,29 @@ pub fn status_e2e_run(context: E2eRunContext) -> Result<E2eRunStatus> {
                     .join(support::api_directory(&group.group_id));
                 let active = root.join(".active/state.yaml").is_file();
                 let latest_state = root.join("latest/state.yaml");
-                let status = if active {
-                    "running".to_string()
+                let (status, runtime_outputs) = if active {
+                    match store::read_yaml::<model::ActiveRunState>(
+                        &root.join(".active/state.yaml"),
+                    ) {
+                        Ok(state) => ("running".to_string(), state.runtime_outputs),
+                        Err(_) => ("invalid".to_string(), Vec::new()),
+                    }
                 } else if latest_state.is_file() {
-                    store::read_yaml::<model::ActiveRunState>(&latest_state)
-                        .map(|state| run_status_label(state.status).to_string())
-                        .unwrap_or_else(|_| "invalid".to_string())
+                    match store::read_yaml::<model::ActiveRunState>(&latest_state) {
+                        Ok(state) => (
+                            run_status_label(state.status).to_string(),
+                            state.runtime_outputs,
+                        ),
+                        Err(_) => ("invalid".to_string(), Vec::new()),
+                    }
                 } else {
-                    "not_started".to_string()
+                    ("not_started".to_string(), Vec::new())
                 };
                 E2eFocusedApiStatus {
                     api: group.group_id,
                     status,
                     active,
+                    runtime_outputs,
                 }
             })
             .collect()
@@ -260,6 +280,7 @@ pub fn status_e2e_run(context: E2eRunContext) -> Result<E2eRunStatus> {
         status,
         progress: layout.progress_path,
         focused_apis,
+        runtime_outputs,
     })
 }
 

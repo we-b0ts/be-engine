@@ -140,6 +140,17 @@ pub(super) async fn start_target_with_replay_ca(
         layout.target_root.clone(),
         config,
     );
+    let output_scope = layout
+        .run_root
+        .strip_prefix(&layout.internal_root)
+        .context("E2E run root is outside the internal runtime root")?;
+    let runtime_output_root = layout
+        .target_root
+        .join(crate::repository::LOCAL_RUNTIME_OUTPUTS_ROOT)
+        .join("replay")
+        .join(output_scope)
+        .join(format!("sequence-{:06}", state.sequence))
+        .join("target");
     let evidence =
         crate::target_container::start_target(crate::target_container::TargetStartOptions {
             config: &target,
@@ -149,8 +160,20 @@ pub(super) async fn start_target_with_replay_ca(
             operation: "replay",
             run_id: runtime_id,
             replay_ca_cert: Some(replay_ca_cert_path.to_path_buf()),
+            runtime_outputs: &config.target_runtime_outputs,
+            runtime_output_root,
         })
         .await?;
+    state.runtime_outputs = evidence.runtime_outputs.clone();
+    for output in &state.runtime_outputs {
+        eprintln!(
+            "target runtime output {}: {} -> {}",
+            output.id,
+            output.container_path.display(),
+            output.host_path.display()
+        );
+    }
+    store::write_active(layout, state)?;
     store::write_json(
         &layout.active_dir.join("reports/target-start.json"),
         &evidence,
@@ -183,6 +206,7 @@ pub(super) async fn verify_target_runtime_contract(
     crate::target_container::verify_runtime_mounts(
         container,
         snapshot.mounts(),
+        &config.target_runtime_outputs,
         true,
         target.breeze_enabled,
     )
@@ -504,6 +528,7 @@ mod tests {
         ResolvedProjectConfig {
             target_dockerfile,
             target_startup: crate::startup::StartupConfig::default(),
+            target_runtime_outputs: Vec::new(),
             target_http_origin: "http://127.0.0.1:8081".to_string(),
             target_port: 8081,
             target_http_readiness_enabled: true,

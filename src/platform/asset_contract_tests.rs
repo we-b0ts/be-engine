@@ -76,6 +76,13 @@ fn embedded_platform_manager_is_valid_bash() {
             .contains("--network \"container:${target_anchor_name}\" --user 998:998")
     );
     assert!(COMPARISON_TARGET_NETWORK.contains("TRAFFIC_E2E_TARGET_STARTUP_MOUNTS_FILE"));
+    assert!(MANAGER.contains("TRAFFIC_E2E_TARGET_RUNTIME_OUTPUTS_FILE"));
+    assert!(MANAGER.contains("append_source_runtime_output_args"));
+    assert!(PLATFORM_MOUNTS.contains("prepare_runtime_outputs"));
+    assert!(PLATFORM_MOUNTS.contains("append_source_runtime_output_args"));
+    assert!(PLATFORM_MOUNTS.contains("chmod 2770"));
+    assert!(COMPARISON_TARGET_NETWORK.contains("prepare_runtime_outputs target"));
+    assert!(COMPARISON_TARGET_NETWORK.contains("target runtime output %s"));
     assert!(
         COMPARISON_TARGET_NETWORK.contains("--env-file \"$TRAFFIC_E2E_TARGET_STARTUP_ENV_FILE\"")
     );

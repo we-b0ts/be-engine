@@ -70,6 +70,8 @@ pub(super) struct TargetProjectConfig {
     #[serde(default = "default_target_startup_timeout_seconds")]
     pub startup_timeout_seconds: u64,
     pub startup: crate::startup::StartupConfig,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_outputs: Vec<crate::runtime_output::RuntimeOutputConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality_gates: Option<Vec<TargetQualityGateConfig>>,
 }
@@ -116,6 +118,7 @@ fn default_runtime_root() -> PathBuf {
 pub(crate) struct ResolvedProjectConfig {
     pub(crate) target_dockerfile: PathBuf,
     pub(crate) target_startup: crate::startup::StartupConfig,
+    pub(crate) target_runtime_outputs: Vec<crate::runtime_output::RuntimeOutputConfig>,
     pub(crate) target_http_origin: String,
     pub(crate) target_port: u16,
     pub(crate) target_http_readiness_enabled: bool,
@@ -264,6 +267,8 @@ pub(super) struct ActiveRunState {
     pub target_anchor_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_image_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_outputs: Vec<crate::RuntimeOutputLocation>,
     pub replay_finalized: bool,
     pub aggregate_complete: bool,
     pub aggregate_clean: bool,
@@ -328,6 +333,7 @@ impl ActiveRunState {
             target_container_name: None,
             target_anchor_name: None,
             target_image_id: None,
+            runtime_outputs: Vec::new(),
             replay_finalized: false,
             aggregate_complete: false,
             aggregate_clean: false,

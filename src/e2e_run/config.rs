@@ -130,6 +130,7 @@ pub(crate) fn render_project_config(
                 dockerfile: options.target_dockerfile.clone(),
                 startup_timeout_seconds: DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS,
                 startup: crate::startup::normalized_config(options.target_startup.clone())?,
+                runtime_outputs: Vec::new(),
                 quality_gates: None,
             },
             replay: ReplayProjectConfig {
@@ -263,6 +264,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         ResolvedProjectConfig {
             target_dockerfile: resolve_under(&target_root, &config.project.target.dockerfile),
             target_startup: config.project.target.startup,
+            target_runtime_outputs: config.project.target.runtime_outputs,
             target_http_origin: format!("http://127.0.0.1:{target_port}"),
             target_port,
             target_http_readiness_enabled,
@@ -375,6 +377,10 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         "target.startup_timeout_seconds must be between 1 and {MAX_TARGET_STARTUP_TIMEOUT_SECONDS}"
     );
     crate::startup::validate_config(&project.target.startup)?;
+    crate::runtime_output::validate_configs(
+        &project.target.runtime_outputs,
+        &project.target.startup,
+    )?;
     if let Some(gates) = &project.target.quality_gates {
         validate_target_quality_gates(gates)?;
     }
@@ -670,6 +676,31 @@ mod tests {
             config.target_startup_timeout,
             Duration::from_secs(DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS)
         );
+    }
+
+    #[test]
+    fn managed_project_resolves_runtime_outputs_without_startup_snapshot_changes() {
+        let target = target();
+        initialize(options(target.path())).unwrap();
+        let config_path = target.path().join(".traffic-e2e/project.yaml");
+        let mut project: ProjectConfig =
+            serde_yaml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        project.project.target.runtime_outputs = vec![crate::runtime_output::RuntimeOutputConfig {
+            id: "application-logs".to_string(),
+            container_path: PathBuf::from("/data1/weibo/logs"),
+            mode: crate::runtime_output::RuntimeOutputMode::ReadWrite,
+            retention: crate::runtime_output::RuntimeOutputRetention::Keep,
+        }];
+        fs::write(config_path, serde_yaml::to_string(&project).unwrap()).unwrap();
+
+        let (_, resolved) = resolve_project(target.path()).unwrap();
+
+        assert_eq!(resolved.target_runtime_outputs.len(), 1);
+        assert_eq!(
+            resolved.target_runtime_outputs[0].container_path,
+            Path::new("/data1/weibo/logs")
+        );
+        assert!(resolved.target_startup.mounts.is_empty());
     }
 
     #[test]

@@ -153,6 +153,7 @@ fn clean_state() -> ActiveRunState {
         target_container_name: None,
         target_anchor_name: None,
         target_image_id: None,
+        runtime_outputs: Vec::new(),
         replay_finalized: true,
         aggregate_complete: true,
         aggregate_clean: true,
