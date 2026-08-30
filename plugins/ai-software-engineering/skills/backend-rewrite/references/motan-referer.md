@@ -69,7 +69,8 @@ async fn echo_through_motan(
         )
         .await?;
     let options = Motan1RefererOptions::new(SOURCE_APPLICATION, SOURCE_GROUP)
-        .with_request_timeout(request_timeout);
+        .with_request_timeout(request_timeout)
+        .with_retries(SOURCE_RETRIES);
     let referer: EchoServiceReferer = match client.motan1_referer(options).await {
         Ok(referer) => referer,
         Err(error) => {
@@ -87,22 +88,35 @@ async fn echo_through_motan(
 }
 ```
 
-Every `SOURCE_*` value and `request_timeout` above must come from source code,
-source configuration, or recorded operational evidence. The client loads
-TokenProxy credentials during readiness, and the referer injects a freshly
-signed attachment for every call while hiding discovery and authentication
-details from the caller.
+Every `SOURCE_*` value, `request_timeout`, and retry count above must come from
+source code, source configuration, or recorded operational evidence. The
+client loads TokenProxy credentials during readiness, and the referer injects
+a freshly signed attachment for every call while hiding discovery and
+authentication details from the caller.
 
 ## Set the request timeout explicitly
 
-Every target integration must call `with_request_timeout`. The SDK fallback is
-not a business contract: effective Motan timeouts differ across services and
-may be configured in source XML, annotations, client builders, or runtime
-configuration. Preserve the source's effective per-call timeout when it is
-available and keep it within the enclosing request's end-to-end deadline. Do
-not copy a timeout from an example or silently replace missing evidence with a
-new value. If the source value cannot be established, report that assumption
-in the worker handoff instead of claiming exact compatibility.
+Every target integration must call `with_request_timeout`. It bounds each
+physical request attempt, not the whole logical call. The SDK fallback is not
+a business contract: effective Motan timeouts differ across services and may
+be configured in source XML, annotations, client builders, or runtime
+configuration. Preserve the source's effective attempt timeout when it is
+available. With `N` retries, reserve roughly `(N + 1) * request_timeout` inside
+the enclosing request's end-to-end deadline. Do not copy a timeout from an
+example or silently replace missing evidence with a new value. If the source
+value cannot be established, report that assumption in the worker handoff
+instead of claiming exact compatibility.
+
+Set `with_retries` from source behavior as well, including zero when the source
+does not retry. A referer performs one additional attempt by default and only
+retries transport/admission failures such as unavailable, overload, timeout,
+closed connection, or I/O failure. The additional attempt uses a different
+discovered replica when one exists. Because a timeout or connection failure
+can occur after the server has executed the request, enabling retries gives
+the logical call at-least-once execution semantics. Do not enable or increase
+retries for a non-idempotent method without source evidence that duplicate
+execution is acceptable, and do not add another application retry around the
+referer.
 
 `with_connect_timeout` controls each endpoint connection attempt during startup
 or reconnect, while `with_shutdown_grace` bounds shutdown draining. Override
@@ -122,17 +136,18 @@ business referer does not close the shared authentication dependency, so the
 remaining referers continue to work.
 
 `Motan1RefererOptions::new` applies the SDK's standard limits, capacities,
-request envelope, and 80% Vintage node threshold-protection policy. Do not
-duplicate those defaults in application code. Apart from the required request
-timeout, override a value only when source or runtime evidence proves that the
-standard policy does not apply.
+request envelope, one additional retry, and 80% Vintage node
+threshold-protection policy. Do not duplicate those defaults in application
+code. Set the evidence-proven timeout and retry count explicitly; override any
+other value only when source or runtime evidence proves that the standard
+policy does not apply.
 
 ## Check before delivery
 
 1. Test every generated method's Hessian argument encoding, response decoding,
    nullability, DTO field contract, and remote-exception mapping.
-2. Test that the configured request timeout is enforced without an implicit
-   retry and remains inside the caller's end-to-end budget.
+2. Test timeout, unavailable, and overload behavior with the configured retry
+   count; verify distinct-replica failover and the full logical-call budget.
 3. When authentication is enabled, verify that all compatible referers share
    one TokenProxy discovery and one `getAllTokens` dependency.
 4. Replay the relevant cases and run the target repository's normal checks.
