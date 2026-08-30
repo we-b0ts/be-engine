@@ -19,7 +19,7 @@ use crate::replay::{
 pub(super) const STATE_VERSION: u32 = 3;
 pub(super) const ASSERTION_REPORT_VERSION: u32 = 3;
 pub(super) const DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS: u64 = 60;
-pub(super) const DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS: u64 = 60;
+pub(super) const DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS: u64 = 180;
 pub(super) const MAX_TARGET_STARTUP_TIMEOUT_SECONDS: u64 = 30 * 60;
 pub(super) const DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS: u64 = 30;
 pub(super) const MAX_RESPONSE_DIFFERENCE_INDEX: usize = 256;

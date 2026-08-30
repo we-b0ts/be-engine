@@ -207,32 +207,6 @@ fn applicable_rule_planners(
                 }),
         );
     }
-    if query_kind == QUERY_REPRESENTATIVES
-        && matches!(
-            issue_kind,
-            RewriteIssueKind::Response
-                | RewriteIssueKind::Dependency
-                | RewriteIssueKind::Comparison
-        )
-        && response_body::body_diagnosis(facts).is_none()
-    {
-        planners.push(RewriteApplicableRulePlanner {
-            kind: "recorder_capture".to_string(),
-            capability: "breeze_dns_bypass".to_string(),
-            evidence_id: evidence_id.to_string(),
-            command: super::action::command(
-                target_root,
-                vec![
-                    "recorder-capture".to_string(),
-                    "plan".to_string(),
-                    "--evidence-id".to_string(),
-                    evidence_id.to_string(),
-                    "--help".to_string(),
-                ],
-                Vec::new(),
-            ),
-        });
-    }
     if issue_kind == RewriteIssueKind::Response
         && query_kind == QUERY_SOURCE_PROCESS_TRAFFIC
         && has_redis_bootstrap_traffic(facts)

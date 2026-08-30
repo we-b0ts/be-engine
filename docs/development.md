@@ -1320,7 +1320,9 @@ recorder native HTTP upstream `http://127.0.0.1:8080`, readiness `/healthz`
 with status `404`, and upstream DNS `10.10.10.11:53`. Only the gateway port is
 an initialization port argument. Change a non-standard native endpoint under
 `recorder` in `project.yaml`, which is its sole static configuration owner. Source and Breeze
-containers need only be inspectable, not running.
+containers need only be inspectable, not running. Generated Recorder
+configuration uses an empty DNS bypass strategy list, so Breeze snapshot
+backend domains are captured by default when they are accessed directly.
 
 The command atomically generates version-14 `.traffic-e2e/project.yaml`,
 `.traffic-e2e/source-traffic-policy.yaml`, and `.traffic-e2e/verification.yaml`.
@@ -1334,7 +1336,7 @@ target section is:
 target:
   dockerfile: .traffic-e2e/Dockerfile.e2e
   # Maximum time from target launch until every enabled endpoint is ready.
-  startup_timeout_seconds: 60
+  startup_timeout_seconds: 180
   startup:
     mounts:
       - /data1/weibo/confs
@@ -1357,7 +1359,7 @@ target:
 
 Target readiness path and status come from the project document's
 `recorder.http_gateway.ready` section. Target startup readiness uses
-`project.target.startup_timeout_seconds`, which defaults to 60 seconds when
+`project.target.startup_timeout_seconds`, which defaults to 180 seconds when
 omitted and accepts values through 1800 seconds. Target request timeout comes
 from `comparison_recording.upstream_timeout_ms`; the Replay service startup
 timeout remains a coordinator-owned default. The target's native HTTP port is the port in

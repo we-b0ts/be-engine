@@ -649,16 +649,16 @@ mod tests {
         let config_path = target.path().join(".traffic-e2e/project.yaml");
         let mut project: ProjectConfig =
             serde_yaml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
-        project.project.target.startup_timeout_seconds = 180;
+        project.project.target.startup_timeout_seconds = 240;
         fs::write(config_path, serde_yaml::to_string(&project).unwrap()).unwrap();
 
         let (_, config) = resolve_project(target.path()).unwrap();
 
-        assert_eq!(config.target_startup_timeout, Duration::from_secs(180));
+        assert_eq!(config.target_startup_timeout, Duration::from_secs(240));
     }
 
     #[test]
-    fn existing_project_without_target_startup_timeout_defaults_to_sixty_seconds() {
+    fn existing_project_without_target_startup_timeout_defaults_to_180_seconds() {
         let target = target();
         initialize(options(target.path())).unwrap();
         let config_path = target.path().join(".traffic-e2e/project.yaml");

@@ -13,7 +13,9 @@ traffic-e2e config init --source-container <existing-source-container> [--breeze
 ```
 
 The generated Recorder HTTP gateway listens on port `17171` by default; use
-`--http-gateway-port` only when that port is unavailable.
+`--http-gateway-port` only when that port is unavailable. Generated Recorder
+configuration has no Breeze snapshot bypass strategy, so directly accessed
+snapshot backend domains are captured by default.
 
 The generated version-14 project configuration has separate `source`, optional
 `breeze`, `target`, `replay`, `recording`, `delivery`, and `state` settings plus
@@ -21,7 +23,7 @@ an embedded static `recorder` section. AI-managed source-traffic evidence
 acquisition and classification policy is kept in the separate
 `.traffic-e2e/source-traffic-policy.yaml` document.
 Relevant target fields are `.traffic-e2e/Dockerfile.e2e`, explicit startup
-mount paths and environment names, `startup_timeout_seconds` (60 by default,
+mount paths and environment names, `startup_timeout_seconds` (180 by default,
 at most 1800), and optional quality gates. The timeout bounds the interval from
 target launch until every enabled endpoint passes readiness. Native HTTP port,
 readiness probes, and request policy come from the embedded recorder. Do not

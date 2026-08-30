@@ -44,8 +44,8 @@ route an ordinary complete comparison difference this way.
 A configured Breeze resource bypassed during recording is reported as
 `missing-recorded-resource` and becomes an API-scoped recorder-capture refresh,
 not system repair. Follow
-[coordinator-evidence-actions.md](coordinator-evidence-actions.md) when that
-planner is available.
+[coordinator-evidence-actions.md](coordinator-evidence-actions.md) after source
+inspection proves the explicit route inputs.
 
 ## Status And Recovery
 
