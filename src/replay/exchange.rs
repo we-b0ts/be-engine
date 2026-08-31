@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::io::ErrorKind;
 use std::time::Duration;
 
@@ -87,6 +88,36 @@ impl ReplayExchangeTiming {
                 ));
             }
         }
+        if elapsed + CLIENT_TERMINATION_EARLY_TOLERANCE < self.duration {
+            return Err(anyhow!(
+                "client terminated dependency connection too early: observed {}ms, recorded {}ms",
+                elapsed.as_millis(),
+                self.duration.as_millis()
+            ));
+        }
+        Ok(elapsed)
+    }
+
+    pub(super) async fn await_client_termination_signal<F>(self, termination: F) -> Result<Duration>
+    where
+        F: Future<Output = Result<()>>,
+    {
+        if !self.outcome.is_client_terminated() {
+            return Err(anyhow!(
+                "cannot await client termination for a response exchange"
+            ));
+        }
+        let started = Instant::now();
+        let deadline = started + self.duration + CLIENT_TERMINATION_LATE_TOLERANCE;
+        match timeout_at(deadline, termination).await {
+            Ok(result) => result?,
+            Err(_) => {
+                return Err(anyhow!(
+                    "client did not terminate dependency connection within recorded timing window"
+                ));
+            }
+        }
+        let elapsed = started.elapsed();
         if elapsed + CLIENT_TERMINATION_EARLY_TOLERANCE < self.duration {
             return Err(anyhow!(
                 "client terminated dependency connection too early: observed {}ms, recorded {}ms",

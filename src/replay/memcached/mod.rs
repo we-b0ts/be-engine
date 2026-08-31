@@ -25,9 +25,8 @@ use crate::memcached::{
 mod builtins;
 mod expiration;
 use super::command_matching::{
-    CaseConnectionBinding, CommandExchangeScope, PreferredMatch,
-    is_connection_independent_background, lane_blocked_diagnostic, preferred_match,
-    unmatched_diagnostic,
+    CommandExchangeScope, PreferredMatch, is_connection_independent_background,
+    lane_blocked_diagnostic, preferred_match, unmatched_diagnostic,
 };
 use super::report::command::{
     CommandMatchDiagnostic, CommandMatchedReport, CommandProtocolReport, CommandRequestReport,
@@ -106,10 +105,8 @@ struct ReplayExchange {
 #[derive(Debug, Clone)]
 struct MatchedMemcachedExchange {
     index: usize,
-    connection_id: Uuid,
     response_frames: Vec<Vec<u8>>,
     timing: ReplayExchangeTiming,
-    connection_independent: bool,
     policy_decision: DependencyRuleDecision,
     report: CommandMatchedReport,
 }
@@ -117,7 +114,6 @@ struct MatchedMemcachedExchange {
 struct MemcachedMatchContext<'a> {
     active_case_id: Option<&'a str>,
     target: &'a TargetKey,
-    bound_connection: Option<Uuid>,
     wire_protocol: MemcachedWireProtocol,
     request: &'a MemcachedRequest,
     policy: Option<&'a ReplayPolicyRuntime>,
@@ -263,7 +259,6 @@ impl MemcachedReplayState {
         let MemcachedMatchContext {
             active_case_id,
             target,
-            bound_connection,
             wire_protocol,
             request,
             policy,
@@ -272,8 +267,6 @@ impl MemcachedReplayState {
         let wire = wire_protocol.as_str();
         let matched = preferred_match(&self.exchanges, active_case_id, |exchange| {
             exchange.status.is_available()
-                && (exchange.connection_independent
-                    || bound_connection.is_none_or(|id| exchange.record.connection_id == id))
                 && target_matches(
                     target,
                     &exchange.record.target_host,
@@ -319,7 +312,6 @@ impl MemcachedReplayState {
                         memcached_mismatch_fields(
                             exchange,
                             target,
-                            bound_connection,
                             wire_protocol,
                             request,
                             observed_at,
@@ -348,10 +340,8 @@ impl MemcachedReplayState {
         };
         Ok(MatchedMemcachedExchange {
             index,
-            connection_id: exchange.record.connection_id,
             response_frames: exchange.response_frames.clone(),
             timing: exchange.timing,
-            connection_independent: exchange.connection_independent,
             policy_decision,
             report: CommandMatchedReport {
                 case_id: exchange.case_id.clone(),
@@ -426,7 +416,6 @@ pub(super) async fn handle_connection(
     } else {
         MemcachedWireProtocol::Text
     };
-    let mut connection_binding = CaseConnectionBinding::default();
     match wire {
         MemcachedWireProtocol::Text => {
             let mut reader = MemcachedBufferedReader::new(&mut stream, 64 * 1024 * 1024);
@@ -447,14 +436,7 @@ pub(super) async fn handle_connection(
                         return Err(error);
                     }
                 };
-                let matched = match_memcached_request(
-                    &state,
-                    &target_key,
-                    &mut connection_binding,
-                    wire,
-                    &request,
-                )
-                .await;
+                let matched = match_memcached_request(&state, &target_key, wire, &request).await;
                 match matched {
                     Some(matched) => {
                         if deliver_memcached_exchange(&mut reader, &state, &matched).await? {
@@ -510,14 +492,7 @@ pub(super) async fn handle_connection(
                         return Err(error);
                     }
                 };
-                let matched = match_memcached_request(
-                    &state,
-                    &target_key,
-                    &mut connection_binding,
-                    wire,
-                    &request,
-                )
-                .await;
+                let matched = match_memcached_request(&state, &target_key, wire, &request).await;
                 match matched {
                     Some(mut matched) => {
                         if let Err(reason) = adapt_binary_get_responses(
@@ -622,7 +597,6 @@ async fn record_runtime_unsafe(
 async fn match_memcached_request(
     state: &Arc<Mutex<ReplayState>>,
     target: &TargetKey,
-    connection_binding: &mut CaseConnectionBinding,
     wire: MemcachedWireProtocol,
     request: &MemcachedRequest,
 ) -> Option<MatchedMemcachedExchange> {
@@ -643,7 +617,6 @@ async fn match_memcached_request(
             });
         return None;
     }
-    let bound_connection = connection_binding.connection(active_case_id.as_deref());
     let ReplayState {
         memcached,
         replay_policy,
@@ -652,16 +625,12 @@ async fn match_memcached_request(
     match memcached.match_memcached(MemcachedMatchContext {
         active_case_id: active_case_id.as_deref(),
         target,
-        bound_connection,
         wire_protocol: wire,
         request,
         policy: replay_policy.as_ref(),
         observed_at,
     }) {
         Ok(matched) => {
-            if !matched.connection_independent {
-                connection_binding.bind(active_case_id.as_deref(), matched.connection_id);
-            }
             if let Some(policy) = replay_policy {
                 policy.commit(active_case_id.as_deref(), matched.policy_decision.clone());
             }
@@ -825,17 +794,11 @@ impl CommandExchangeScope for ReplayExchange {
 fn memcached_mismatch_fields(
     exchange: &ReplayExchange,
     target: &TargetKey,
-    bound_connection: Option<Uuid>,
     wire_protocol: MemcachedWireProtocol,
     request: &MemcachedRequest,
     observed_at: DateTime<Utc>,
 ) -> Vec<&'static str> {
     let mut fields = Vec::new();
-    if !exchange.connection_independent
-        && bound_connection.is_some_and(|id| exchange.record.connection_id != id)
-    {
-        fields.push("connection");
-    }
     if !target_matches(
         target,
         &exchange.record.target_host,
