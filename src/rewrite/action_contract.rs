@@ -75,11 +75,15 @@ impl Serialize for RewriteAction {
             Self::RecordingInProgress {
                 summary,
                 run_id,
+                status_poll_after_seconds,
                 status,
             } => RewriteActionView {
                 kind: "recording_in_progress",
                 summary,
-                details: RewriteRecordingRunDetails { run_id },
+                details: RewriteRecordingInProgressDetails {
+                    run_id,
+                    status_poll_after_seconds: *status_poll_after_seconds,
+                },
                 commands: RewriteStatusCommands { status },
             }
             .serialize(serializer),
@@ -227,6 +231,12 @@ struct RewriteRecordingRequiredDetails<'a> {
 #[derive(Serialize)]
 struct RewriteRecordingRunDetails<'a> {
     run_id: &'a str,
+}
+
+#[derive(Serialize)]
+struct RewriteRecordingInProgressDetails<'a> {
+    run_id: &'a str,
+    status_poll_after_seconds: u64,
 }
 
 #[derive(Serialize)]

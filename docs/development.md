@@ -1073,10 +1073,14 @@ the preallocated run. The coordinator either reuses one exact-scope atomic
 real-traffic input or opens a fresh external-live-traffic recording window;
 callers do not add curl loops, replayers, shell pipelines, backgrounding, or
 driver parameters. `execute` starts a detached coordinator-owned worker and
-returns immediately. Poll
-`backend-rewrite status`; `recording_in_progress` never returns a second execute action,
-and `advance_required` means finalization and cleanup completed, so its exact
-`action.commands.advance` can advance coordinator state. It does not mean
+returns immediately. A start report that requires delayed observation includes
+`status_poll_after_seconds`; wait that interval and execute its exact `status`
+command without repeating `execute`. `already_completed` omits the delay so
+its status can be queried immediately. While the worker remains live,
+`recording_in_progress.action.details.status_poll_after_seconds` carries the
+same polling delay and `action.commands.status` remains the only polling
+command. `advance_required` means finalization and cleanup completed, so its
+exact `action.commands.advance` can advance coordinator state. It does not mean
 rerunning the completed action. Historical
 input is reused only when its API selector exactly equals the requested
 selector; recordings are never split or merged. When no exact atomic input

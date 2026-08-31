@@ -188,6 +188,10 @@ fn status_reports_a_live_recording_without_returning_execute_again() {
         Some(&serde_json::json!("recording_in_progress"))
     );
     assert_eq!(
+        status.pointer("/action/details/status_poll_after_seconds"),
+        Some(&serde_json::json!(30))
+    );
+    assert_eq!(
         status.pointer("/action/commands/status/argv"),
         Some(&serde_json::json!([
             "backend-rewrite",

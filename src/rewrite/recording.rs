@@ -25,6 +25,8 @@ use super::traffic_operation::{
 };
 use crate::{ManagedRecordingOperation, ManagedRecordingOptions, RecordingApi};
 
+pub(super) const STATUS_POLL_AFTER_SECONDS: u64 = 30;
+
 #[derive(Debug, Clone)]
 pub struct RewriteRecordingRequestOptions {
     pub target_root: PathBuf,
@@ -556,6 +558,9 @@ fn start_report(
         run_id,
         operation: operation.script_name().to_string(),
         execution_state,
+        status_poll_after_seconds: (execution_state
+            != RewriteRecordingStartState::AlreadyCompleted)
+            .then_some(STATUS_POLL_AFTER_SECONDS),
         waiting_on: None,
         status: action::status_command(target_root),
     }
@@ -574,6 +579,7 @@ fn waiting_start_report(
         run_id,
         operation: operation.script_name().to_string(),
         execution_state: RewriteRecordingStartState::WaitingForTrafficRuntime,
+        status_poll_after_seconds: Some(STATUS_POLL_AFTER_SECONDS),
         waiting_on: active.as_ref().map(traffic_operation::view),
         status: action::status_command_for_api(target_root, (!api.is_empty()).then_some(api)),
     }
@@ -715,6 +721,14 @@ mod tests {
             report.execution_state,
             RewriteRecordingStartState::WaitingForTrafficRuntime
         );
+        assert_eq!(
+            report.status_poll_after_seconds,
+            Some(STATUS_POLL_AFTER_SECONDS)
+        );
+        assert_eq!(
+            serde_json::to_value(&report).unwrap()["status_poll_after_seconds"],
+            STATUS_POLL_AFTER_SECONDS
+        );
         assert!(report.waiting_on.is_none());
         assert_eq!(
             report.status.argv,
@@ -727,6 +741,36 @@ mod tests {
                 "GET /api"
             ]
         );
+    }
+
+    #[test]
+    fn recording_execute_only_delays_status_polling_for_waiting_states() {
+        let target = Path::new("/target");
+        for execution_state in [
+            RewriteRecordingStartState::Started,
+            RewriteRecordingStartState::AlreadyRunning,
+        ] {
+            let report = start_report(
+                target,
+                "recording-a",
+                ManagedRecordingOperation::RecordComparison,
+                "run-a".to_string(),
+                execution_state,
+            );
+            assert_eq!(
+                serde_json::to_value(report).unwrap()["status_poll_after_seconds"],
+                STATUS_POLL_AFTER_SECONDS
+            );
+        }
+        let completed = start_report(
+            target,
+            "recording-a",
+            ManagedRecordingOperation::RecordComparison,
+            "run-a".to_string(),
+            RewriteRecordingStartState::AlreadyCompleted,
+        );
+
+        assert!(serde_json::to_value(completed).unwrap()["status_poll_after_seconds"].is_null());
     }
 
     #[test]
