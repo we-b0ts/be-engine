@@ -47,6 +47,7 @@ pub(super) fn status_action(
                         "{label} recording run {run_id} is executing under coordinator ownership"
                     ),
                     run_id: run_id.to_string(),
+                    status_poll_after_seconds: recording::STATUS_POLL_AFTER_SECONDS,
                     status: action::status_command(target_root),
                 }
             }

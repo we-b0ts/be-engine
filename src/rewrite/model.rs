@@ -666,6 +666,7 @@ pub enum RewriteAction {
     RecordingInProgress {
         summary: String,
         run_id: String,
+        status_poll_after_seconds: u64,
         status: RewriteCommandSpec,
     },
     ImplementationRequired {
@@ -809,6 +810,8 @@ pub struct RewriteRecordingStartReport {
     pub run_id: String,
     pub operation: String,
     pub execution_state: RewriteRecordingStartState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_poll_after_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waiting_on: Option<RewriteTrafficOperationView>,
     pub status: RewriteCommandSpec,
