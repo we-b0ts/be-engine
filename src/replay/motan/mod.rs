@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
@@ -7,12 +7,13 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::net::{TcpStream, tcp::OwnedWriteHalf};
+use tokio::sync::{Mutex, mpsc, watch};
+use tokio::time::{Duration, Instant, sleep_until};
 use uuid::Uuid;
 
 use crate::DependencyExchangeOutcome;
-use crate::motan::{RequestIdentity, patch_request_id, read_frame};
+use crate::motan::{Frame, RequestIdentity, patch_request_id, read_frame};
 
 use super::command_matching::{
     CaseConnectionBinding, CommandExchangeScope, PreferredMatch, lane_blocked_diagnostic,
@@ -24,13 +25,28 @@ use super::report::command::{
 };
 use super::{
     ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplayReportWriter, ReplaySource,
-    ReplayState, ReplayTarget, TargetKey, normalize_host, push_success_detail,
-    register_replay_target_at,
+    ReplayState, ReplayTarget, TargetKey, is_connection_termination, normalize_host,
+    push_success_detail, register_replay_target_at,
 };
 
 mod auth;
 
 use auth::Authentication;
+
+const LANE_BLOCK_WAIT_TIMEOUT: Duration = Duration::from_millis(100);
+const INCOMING_FRAME_QUEUE_CAPACITY: usize = 256;
+
+struct PendingRequest {
+    frame: Frame,
+    identity: RequestIdentity,
+    request_match: Option<RequestMatch>,
+    lane_wait_deadline: Instant,
+}
+
+enum IncomingEvent {
+    Frame(Frame),
+    Closed(Result<()>),
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct RecordedConnection {
@@ -127,10 +143,11 @@ struct MatchedExchange {
     report: CommandMatchedReport,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct MotanReplayState {
     exchanges: Vec<ReplayExchange>,
     heartbeats: Vec<HeartbeatTemplate>,
+    lane_progress: watch::Sender<u64>,
     pub(super) events: MotanReplayEvents,
 }
 
@@ -142,6 +159,18 @@ pub(super) struct MotanReplayEvents {
     unmatched: Vec<CommandRequestReport>,
     unsupported: Vec<CommandRequestReport>,
     unsafe_events: Vec<CommandRequestReport>,
+}
+
+impl Default for MotanReplayState {
+    fn default() -> Self {
+        let (lane_progress, _) = watch::channel(0);
+        Self {
+            exchanges: Vec::new(),
+            heartbeats: Vec::new(),
+            lane_progress,
+            events: MotanReplayEvents::default(),
+        }
+    }
 }
 
 impl MotanReplayState {
@@ -362,6 +391,8 @@ impl MotanReplayState {
             &mut self.events.matched,
             matched.report.clone(),
         );
+        self.lane_progress
+            .send_modify(|progress| *progress = (*progress).wrapping_add(1));
     }
 
     fn fail(&mut self, matched: &MatchedExchange, reason: String) {
@@ -391,7 +422,7 @@ impl MotanReplayState {
 }
 
 pub(super) async fn handle_connection(
-    mut stream: TcpStream,
+    stream: TcpStream,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
     report_writer: ReplayReportWriter,
@@ -402,105 +433,293 @@ pub(super) async fn handle_connection(
     };
     state.lock().await.motan.events.connections += 1;
     report_writer.request();
-    let mut connection_binding = CaseConnectionBinding::default();
-    loop {
-        let Some(frame) = read_frame(&mut stream, 64 * 1024 * 1024).await? else {
-            break;
+    let (reader, mut writer) = stream.into_split();
+    let (incoming_sender, mut incoming) = mpsc::channel(INCOMING_FRAME_QUEUE_CAPACITY);
+    let reader_task = tokio::spawn(async move {
+        let mut reader = reader;
+        let closed = loop {
+            match read_frame(&mut reader, 64 * 1024 * 1024).await {
+                Ok(Some(frame)) => {
+                    if incoming_sender
+                        .send(IncomingEvent::Frame(frame))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                Ok(None) => break Ok(()),
+                Err(error) => break Err(error),
+            }
         };
-        if !frame.request {
-            return Err(anyhow!("Motan replay client sent a response frame"));
-        }
-        let request_metadata = frame.request_metadata()?;
-        let identity = request_metadata.identity;
-        let request_match = RequestMatch::from_frame(&frame)?;
-        if request_metadata.heartbeat {
-            let template = {
-                state
-                    .lock()
-                    .await
-                    .motan
-                    .heartbeat(&target_key, frame.codec_version)
+        let _ = incoming_sender.send(IncomingEvent::Closed(closed)).await;
+    });
+
+    let result = drive_connection(
+        &mut writer,
+        &target_key,
+        &state,
+        &report_writer,
+        &mut incoming,
+    )
+    .await;
+    reader_task.abort();
+    result
+}
+
+async fn drive_connection(
+    writer: &mut OwnedWriteHalf,
+    target: &TargetKey,
+    state: &Arc<Mutex<ReplayState>>,
+    report_writer: &ReplayReportWriter,
+    incoming: &mut mpsc::Receiver<IncomingEvent>,
+) -> Result<()> {
+    let mut connection_binding = CaseConnectionBinding::default();
+    let mut lane_progress = state.lock().await.motan.lane_progress.subscribe();
+    let mut pending = VecDeque::<PendingRequest>::new();
+    let mut read_closed = false;
+    while !read_closed || !pending.is_empty() {
+        if pending.is_empty() {
+            let Some(frame) = receive_frame(incoming).await? else {
+                read_closed = true;
+                continue;
             };
-            let Some(mut template) = template else {
-                let mut replay = state.lock().await;
-                let case_id = replay.active_case_id.clone();
-                replay.motan.events.unsupported.push(CommandRequestReport {
-                    case_id,
-                    target: target_key.clone(),
-                    command: identity.command(),
-                    reason: "no recorded Motan heartbeat response template".to_string(),
-                    diagnostic: None,
-                });
-                report_writer.request();
-                return Err(anyhow!("no recorded Motan heartbeat response template"));
-            };
-            template.timing.delay_response().await;
-            patch_request_id(&mut template.response, frame.request_id)?;
-            stream.write_all(&template.response).await?;
+            enqueue_request(writer, target, state, report_writer, &mut pending, frame).await?;
             continue;
         }
 
-        let matched = {
-            let mut replay = state.lock().await;
-            let active_case_id = replay.active_case_id.clone();
-            let bound_connection = connection_binding.connection(active_case_id.as_deref());
-            match replay.motan.match_exchange(
-                active_case_id.as_deref(),
-                &target_key,
-                bound_connection,
-                frame.codec_version,
-                &identity,
-                request_match.as_ref(),
-            ) {
-                Ok(matched) => {
+        let mut selected = None;
+        let mut unmatched = None;
+        for (index, request) in pending.iter().enumerate() {
+            let match_result = {
+                let mut replay = state.lock().await;
+                let active_case_id = replay.active_case_id.clone();
+                let bound_connection = connection_binding.connection(active_case_id.as_deref());
+                replay
+                    .motan
+                    .match_exchange(
+                        active_case_id.as_deref(),
+                        target,
+                        bound_connection,
+                        request.frame.codec_version,
+                        &request.identity,
+                        request.request_match.as_ref(),
+                    )
+                    .map(|matched| (active_case_id.clone(), matched))
+                    .map_err(|diagnostic| (active_case_id, diagnostic))
+            };
+            match match_result {
+                Ok((active_case_id, matched)) => {
                     connection_binding.bind(active_case_id.as_deref(), matched.connection_id);
-                    Some(matched)
-                }
-                Err(diagnostic) => {
-                    let reason = motan_unmatched_reason(&diagnostic);
-                    replay.motan.events.unmatched.push(CommandRequestReport {
-                        case_id: active_case_id,
-                        target: target_key.clone(),
-                        command: identity.command(),
-                        reason,
-                        diagnostic: Some(diagnostic),
-                    });
-                    None
-                }
-            }
-        };
-        let Some(mut matched) = matched else {
-            report_writer.request();
-            return Err(anyhow!("no recorded Motan dependency matched"));
-        };
-        if matched.timing.outcome().is_client_terminated() {
-            match matched.timing.await_client_termination(&mut stream).await {
-                Ok(_) => {
-                    state.lock().await.motan.complete(&matched);
-                    report_writer.request();
+                    selected = Some((index, matched));
                     break;
                 }
-                Err(error) => {
+                Err((_, CommandMatchDiagnostic::LaneBlocked { .. }))
+                    if Instant::now() < request.lane_wait_deadline =>
+                {
+                    continue;
+                }
+                Err((active_case_id, diagnostic)) => {
+                    unmatched = Some((index, active_case_id, diagnostic));
+                    break;
+                }
+            }
+        }
+
+        if let Some((index, active_case_id, diagnostic)) = unmatched {
+            let request = pending
+                .remove(index)
+                .expect("unmatched Motan pending-request index disappeared");
+            record_unmatched_request(state, active_case_id, target, &request.identity, diagnostic)
+                .await;
+            report_writer.request();
+            return Err(anyhow!("no recorded Motan dependency matched"));
+        }
+
+        if let Some((index, mut matched)) = selected {
+            let request = pending
+                .remove(index)
+                .expect("matched Motan pending-request index disappeared");
+            if matched.timing.outcome().is_client_terminated() {
+                if !pending.is_empty() {
+                    let error = anyhow!(
+                        "client sent another dependency request instead of terminating the connection"
+                    );
                     state.lock().await.motan.fail(&matched, error.to_string());
                     report_writer.request();
                     return Err(error);
                 }
+                match matched
+                    .timing
+                    .await_client_termination_signal(wait_for_connection_close(incoming))
+                    .await
+                {
+                    Ok(_) => {
+                        state.lock().await.motan.complete(&matched);
+                        report_writer.request();
+                        return Ok(());
+                    }
+                    Err(error) => {
+                        state.lock().await.motan.fail(&matched, error.to_string());
+                        report_writer.request();
+                        return Err(error);
+                    }
+                }
             }
-        }
-        matched.timing.delay_response().await;
-        patch_request_id(&mut matched.response, frame.request_id)?;
-        if let Err(error) = stream.write_all(&matched.response).await {
-            state.lock().await.motan.fail(
-                &matched,
-                format!("failed to deliver recorded Motan response: {error}"),
-            );
+            matched.timing.delay_response().await;
+            patch_request_id(&mut matched.response, request.frame.request_id)?;
+            if let Err(error) = writer.write_all(&matched.response).await {
+                state.lock().await.motan.fail(
+                    &matched,
+                    format!("failed to deliver recorded Motan response: {error}"),
+                );
+                report_writer.request();
+                return Err(error.into());
+            }
+            state.lock().await.motan.complete(&matched);
+            refresh_lane_wait_deadlines(&mut pending);
             report_writer.request();
-            return Err(error.into());
+            continue;
         }
-        state.lock().await.motan.complete(&matched);
-        report_writer.request();
+
+        if read_closed {
+            for request in &mut pending {
+                request.lane_wait_deadline = Instant::now();
+            }
+            continue;
+        }
+
+        let next_deadline = pending
+            .iter()
+            .map(|request| request.lane_wait_deadline)
+            .min()
+            .expect("non-empty Motan pending queue has no deadline");
+        tokio::select! {
+            frame = receive_frame(incoming) => {
+                match frame? {
+                    Some(frame) => {
+                        enqueue_request(writer, target, state, report_writer, &mut pending, frame).await?;
+                    }
+                    None => read_closed = true,
+                }
+            }
+            progress = lane_progress.changed() => {
+                progress.map_err(|_| anyhow!("Motan lane progress channel closed"))?;
+                refresh_lane_wait_deadlines(&mut pending);
+            }
+            _ = sleep_until(next_deadline) => {}
+        }
     }
     Ok(())
+}
+
+async fn enqueue_request(
+    writer: &mut OwnedWriteHalf,
+    target: &TargetKey,
+    state: &Arc<Mutex<ReplayState>>,
+    report_writer: &ReplayReportWriter,
+    pending: &mut VecDeque<PendingRequest>,
+    frame: Frame,
+) -> Result<()> {
+    if !frame.request {
+        return Err(anyhow!("Motan replay client sent a response frame"));
+    }
+    let request_metadata = frame.request_metadata()?;
+    let identity = request_metadata.identity;
+    let request_match = RequestMatch::from_frame(&frame)?;
+    if request_metadata.heartbeat {
+        let template = state
+            .lock()
+            .await
+            .motan
+            .heartbeat(target, frame.codec_version);
+        let Some(mut template) = template else {
+            let mut replay = state.lock().await;
+            let case_id = replay.active_case_id.clone();
+            replay.motan.events.unsupported.push(CommandRequestReport {
+                case_id,
+                target: target.clone(),
+                command: identity.command(),
+                reason: "no recorded Motan heartbeat response template".to_string(),
+                diagnostic: None,
+            });
+            report_writer.request();
+            return Err(anyhow!("no recorded Motan heartbeat response template"));
+        };
+        template.timing.delay_response().await;
+        patch_request_id(&mut template.response, frame.request_id)?;
+        writer.write_all(&template.response).await?;
+        return Ok(());
+    }
+    if pending.len() >= INCOMING_FRAME_QUEUE_CAPACITY {
+        return Err(anyhow!(
+            "Motan replay connection exceeded {INCOMING_FRAME_QUEUE_CAPACITY} pending requests"
+        ));
+    }
+    pending.push_back(PendingRequest {
+        frame,
+        identity,
+        request_match,
+        lane_wait_deadline: Instant::now() + LANE_BLOCK_WAIT_TIMEOUT,
+    });
+    Ok(())
+}
+
+async fn receive_frame(incoming: &mut mpsc::Receiver<IncomingEvent>) -> Result<Option<Frame>> {
+    match incoming.recv().await {
+        Some(IncomingEvent::Frame(frame)) => Ok(Some(frame)),
+        Some(IncomingEvent::Closed(result)) => result.map(|()| None),
+        None => Ok(None),
+    }
+}
+
+async fn wait_for_connection_close(incoming: &mut mpsc::Receiver<IncomingEvent>) -> Result<()> {
+    match incoming.recv().await {
+        Some(IncomingEvent::Frame(_)) => Err(anyhow!(
+            "client sent another dependency request instead of terminating the connection"
+        )),
+        Some(IncomingEvent::Closed(Err(error)))
+            if error.chain().any(|cause| {
+                cause
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| is_connection_termination(error.kind()))
+            }) =>
+        {
+            Ok(())
+        }
+        Some(IncomingEvent::Closed(result)) => result,
+        None => Ok(()),
+    }
+}
+
+fn refresh_lane_wait_deadlines(pending: &mut VecDeque<PendingRequest>) {
+    let deadline = Instant::now() + LANE_BLOCK_WAIT_TIMEOUT;
+    for request in pending {
+        request.lane_wait_deadline = deadline;
+    }
+}
+
+async fn record_unmatched_request(
+    state: &Arc<Mutex<ReplayState>>,
+    active_case_id: Option<String>,
+    target: &TargetKey,
+    identity: &RequestIdentity,
+    diagnostic: CommandMatchDiagnostic,
+) {
+    let reason = motan_unmatched_reason(&diagnostic);
+    state
+        .lock()
+        .await
+        .motan
+        .events
+        .unmatched
+        .push(CommandRequestReport {
+            case_id: active_case_id,
+            target: target.clone(),
+            command: identity.command(),
+            reason,
+            diagnostic: Some(diagnostic),
+        });
 }
 
 impl RecordedCapture {

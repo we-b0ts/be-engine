@@ -2089,6 +2089,22 @@ mode, or unsafe cache connection prevents a case from being published and
 prevents unsafe Global replay from starting. The recording directory is
 sensitive because ordinary cache keys and values are needed for exact replay.
 
+Case-owned Memcached matching treats recorded physical connections as source
+lanes, not as a required one-to-one connection topology. One target connection
+may consume matching exchanges from multiple recorded source lanes, which
+allows source and target connection pools to have different widths. Replay
+still preserves the order within every recorded source lane and still requires
+the exact target, wire protocol, command, key, arguments, value, CAS, quiet,
+and noreply semantics. Redis retains its session connection binding.
+
+Motan also preserves every recorded source lane's order. When concurrent target
+connections or multiplexed frames arrive in a different order, Replay keeps a
+bounded per-connection pending queue. A request matching a later exchange waits
+briefly for the recorded predecessors instead of failing immediately.
+Completing a predecessor wakes blocked connections and retries queued frames in
+lane order. If a predecessor never arrives, Replay retains the `lane_blocked`
+diagnostic. Non-ordering mismatches still fail immediately.
+
 Semantic MySQL, Redis, Memcached, Kafka, and Motan business exchanges also carry
 `outcome` and `duration_ms`. Replay waits the recorded duration before a normal
 response. If `outcome` is `client_terminated`, replay sends no response and
