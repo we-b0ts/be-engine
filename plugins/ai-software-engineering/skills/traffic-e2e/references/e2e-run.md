@@ -19,7 +19,9 @@ snapshot backend domains are captured by default.
 
 The generated version-14 project configuration has separate `source`, optional
 `breeze`, `target`, `replay`, `recording`, `delivery`, and `state` settings plus
-an embedded static `recorder` section. AI-managed source-traffic evidence
+an embedded static `recorder` section. `replay.case_dependency_post_response_window_ms`
+keeps the active Replay case open for dependencies admitted just after the
+primary response and defaults to 10 ms. AI-managed source-traffic evidence
 acquisition and classification policy is kept in the separate
 `.traffic-e2e/source-traffic-policy.yaml` document.
 Relevant target fields are `.traffic-e2e/Dockerfile.e2e`, explicit startup

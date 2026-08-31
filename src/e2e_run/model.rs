@@ -28,6 +28,10 @@ fn default_target_startup_timeout_seconds() -> u64 {
     DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS
 }
 
+fn default_replay_case_dependency_post_response_window_ms() -> u64 {
+    crate::replay::DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ProjectConfig {
@@ -87,6 +91,8 @@ pub(crate) struct TargetQualityGateConfig {
 #[serde(deny_unknown_fields)]
 pub(super) struct ReplayProjectConfig {
     pub policy: PathBuf,
+    #[serde(default = "default_replay_case_dependency_post_response_window_ms")]
+    pub case_dependency_post_response_window_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +142,7 @@ pub(crate) struct ResolvedProjectConfig {
     pub(crate) process_outputs: Vec<crate::process_output::ProcessOutputConfig>,
     pub(crate) breeze_container: Option<String>,
     pub(crate) replay_policy: PathBuf,
+    pub(crate) replay_case_dependency_post_response_window: Duration,
     pub(crate) replay_startup_timeout: Duration,
     pub(crate) pr_base: String,
     pub(crate) recorder_config: PathBuf,

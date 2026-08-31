@@ -70,6 +70,19 @@ These requirements apply to an existing initialized target repository. Use
 - Keep `unsafe` behind a narrow safe interface with documented invariants and
   boundary tests. Do not introduce it for an unmeasured performance claim.
 
+### Source Executor And Thread-Pool Submissions
+
+When source code submits fire-and-forget work to an executor or thread pool,
+implement the target equivalent with a long-lived worker backed by a bounded
+`tokio::sync::mpsc` queue. Complete queue admission before returning from the
+request. Do not translate each submitted job into a detached per-job
+`tokio::spawn`.
+
+Use `tokio::spawn` only to start the long-lived queue worker during service
+startup. Define the queue capacity, full and closed behavior, worker
+concurrency, error reporting, cancellation, and shutdown or drain behavior,
+and keep each choice compatible with the source submission contract.
+
 ## Repository Structure
 
 - A changed product unit and its parent MUST continue to have one clear owner

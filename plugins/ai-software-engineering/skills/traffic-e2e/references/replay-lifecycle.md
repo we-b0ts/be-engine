@@ -93,6 +93,10 @@ For each focused API attempt or full round, the runner performs:
 7. compare the actual response with the assertion-only expected response under
    the validated replay policy;
 8. call `traffic-e2e diagnose replay-control end <case-id> --fail-on-dirty`;
+   Replay keeps that case active for the configured dependency post-response
+   window before closing it (10 ms by default), so dependencies started just
+   after the primary response retain the case ownership observed at request
+   admission;
 9. repeat begin through end for every exact selected case;
 10. send `SIGTERM`, require a clean target exit, remove its namespace, and call
     `traffic-e2e diagnose replay-control finalize --fail-on-dirty --fail-on-incomplete`.

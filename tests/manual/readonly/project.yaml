@@ -7,6 +7,7 @@ project:
     startup: {}
   replay:
     policy: config/verification.example.yaml
+    case_dependency_post_response_window_ms: 10
   recording:
     source_traffic_policy: source-traffic-policy.yaml
   delivery:

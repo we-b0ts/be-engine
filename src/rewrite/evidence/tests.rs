@@ -560,6 +560,22 @@ fn dirty_cluster_facts_omit_the_duplicate_full_startup_summary() {
 }
 
 #[test]
+fn motan_dirty_cluster_guidance_rules_out_business_argument_mismatch() {
+    let limitations = dirty_cluster_limitations(&serde_json::json!({
+        "clusters": [{"protocol": "motan", "reason": "unmatched_target"}]
+    }));
+
+    assert_eq!(
+        limitations,
+        [
+            "dirty event counts do not prove process ownership",
+            "they do not prove response causality",
+            "Motan dirty evidence does not indicate a business-argument mismatch",
+        ]
+    );
+}
+
+#[test]
 fn dirty_cluster_evidence_returns_only_protocol_specific_rule_planners() {
     let target = tempfile::tempdir().unwrap();
     let planners = applicable_rule_planners(

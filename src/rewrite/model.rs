@@ -367,6 +367,10 @@ pub(super) struct RewriteRecordingRefreshState {
     pub applied: Vec<RewriteRecorderCaptureAppliedRecord>,
     #[serde(default)]
     pub dependency_rules: Vec<RewriteDependencyRuleAppliedRecord>,
+    #[serde(default)]
+    pub required_apis: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_case_source: Option<PathBuf>,
     pub project_config_revision: String,
     pub source_traffic_policy_revision: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -825,6 +829,8 @@ pub struct RewriteDependencyRuleReport {
     pub traffic_e2e_report: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence_reclassification: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_snapshot_overlay: Option<Value>,
     pub next_command: RewriteCommandSpec,
 }
 

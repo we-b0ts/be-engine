@@ -57,6 +57,16 @@ pub(in crate::replay) struct CommandUnusedReport {
     pub(in crate::replay) command: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct CommandSnapshotOverlayReport {
+    pub rule_name: String,
+    pub evidence_fingerprint: String,
+    pub reusable_seeds: usize,
+    pub derived_seeds: usize,
+    pub matching_global_exchanges: usize,
+    pub matching_case_exchanges: usize,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub(in crate::replay) struct CommandProtocolReport {
     pub(in crate::replay) connections: usize,
@@ -67,6 +77,8 @@ pub(in crate::replay) struct CommandProtocolReport {
     pub(in crate::replay) unsafe_events: Vec<CommandRequestReport>,
     pub(in crate::replay) unused_case: Vec<CommandUnusedReport>,
     pub(in crate::replay) unused_global: Vec<CommandUnusedReport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) snapshot_overlays: Vec<CommandSnapshotOverlayReport>,
     pub(in crate::replay) warnings: Vec<String>,
 }
 

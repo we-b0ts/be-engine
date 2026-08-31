@@ -94,6 +94,28 @@ client loads TokenProxy credentials during readiness, and the referer injects
 a freshly signed attachment for every call while hiding discovery and
 authentication details from the caller.
 
+## Preserve Hessian Date types in collection contracts
+
+Java `java.util.Date` is a distinct Hessian wire type, encoded with the `J` or
+`K` tag; it is not a Java `Long` even though both can be represented as Unix-
+epoch milliseconds in Rust. Declare Date values used as map keys, list items,
+or top-level values with `brz_motan::hessian2::HessianDateMillis`. For example,
+a source return type of `Map<Date, Integer>` maps to:
+
+```rust
+use std::collections::HashMap;
+
+use brz_motan::hessian2::HessianDateMillis;
+
+type SourceByDate = HashMap<HessianDateMillis, i32>;
+```
+
+Do not substitute `HashMap<i64, i32>`: the `i64` decoder accepts Hessian integer
+and long tags, not Date tags. Use `HessianDateMillis::as_millis` only after the
+wire value has been decoded, for business ordering or timestamp conversion.
+For Date-valued DTO fields, continue to use `#[hessian(date)]`; that field
+attribute does not apply automatically to generic collection keys or items.
+
 ## Set the request timeout explicitly
 
 Every target integration must call `with_request_timeout`. It bounds each

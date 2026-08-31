@@ -264,6 +264,10 @@ fn cross_lane_fallback_preserves_recorded_lane_order() {
             Some(&request_match),
         )
         .unwrap_err();
+    assert_eq!(
+        motan_unmatched_reason(&diagnostic),
+        "a matching recorded Motan exchange is blocked by an earlier unconsumed exchange on the same recorded connection lane"
+    );
     let CommandMatchDiagnostic::LaneBlocked {
         candidate,
         blocked_by,
@@ -275,6 +279,20 @@ fn cross_lane_fallback_preserves_recorded_lane_order() {
     assert_eq!(candidate.sequence, 2);
     assert_eq!(blocked_by.connection_id, second_connection);
     assert_eq!(blocked_by.sequence, 1);
+}
+
+#[test]
+fn unmatched_reason_describes_the_diagnostic_without_implying_other_mismatches() {
+    assert_eq!(
+        motan_unmatched_reason(&CommandMatchDiagnostic::NoScopedCandidate),
+        "no available recorded Motan exchange exists in the current replay scope"
+    );
+    assert_eq!(
+        motan_unmatched_reason(&CommandMatchDiagnostic::Mismatch {
+            fields: vec!["method_identity".to_string(), "auth_parameters".to_string(),],
+        }),
+        "the closest available recorded Motan exchange differs in matching fields: method_identity, auth_parameters"
+    );
 }
 
 #[test]

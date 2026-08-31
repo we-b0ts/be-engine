@@ -1,6 +1,7 @@
 mod action;
 mod action_contract;
 mod artifacts;
+mod background_reclassification;
 mod case_dependencies;
 mod comparison_issue;
 mod dependency_rule;
@@ -103,9 +104,6 @@ use store::{RewriteLockState, RewriteStore};
 #[cfg(test)]
 pub(in crate::rewrite) use test_support::test_state;
 
-use crate::e2e_run::{
-    FocusedBackgroundReclassification, reclassify_focused_background_dependencies,
-};
 use crate::{
     ComparisonVerificationOptions, E2eRunContext, ManagedRecordingOperation, RecordingApi,
     run_e2e_api, update_comparison_progress, verify_comparison_recording,
@@ -690,7 +688,7 @@ pub fn apply_rewrite_dependency_rule(
     context: RewriteContext,
     plan_id: &str,
 ) -> Result<RewriteDependencyRuleReport> {
-    let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
+    let (target_root, project) = crate::e2e_run::resolve_project(&context.target_root)?;
     let store = RewriteStore::new(&target_root)?;
     let _lock = store.lock()?;
     let mut state = store
@@ -710,37 +708,49 @@ pub fn apply_rewrite_dependency_rule(
                 dependency_rule::pending_cache_snapshot_refresh(state, plan_id)?;
             let mut report = dependency_rule::apply(&target_root, state, plan_id)?;
             if let Some(applied) = cache_snapshot_refresh {
-                dependency_rule::schedule_cache_snapshot_refresh(&target_root, state, applied)?;
-                report.next_command = action::next_command_for_api(&target_root, &state.api);
-                return Ok((report, true));
+                let case_source = state
+                    .case_source
+                    .as_deref()
+                    .context("rewrite workflow has no case source for Redis snapshot derivation")?;
+                match crate::replay::inspect_case_source_snapshot_overlay(
+                    case_source,
+                    &project.source_traffic_policy,
+                    &applied.rule_name,
+                ) {
+                    Ok(overlay) => {
+                        report.cache_snapshot_overlay = Some(serde_json::json!({
+                            "status": "reused_old_global_evidence",
+                            "recording_required": false,
+                            "overlay": overlay,
+                        }));
+                        report.evidence_reclassification =
+                            Some(background_reclassification::apply(&target_root, state)?);
+                        report.next_command =
+                            action::next_command_for_api(&target_root, &state.api);
+                        return Ok((report, false));
+                    }
+                    Err(error) => {
+                        report.cache_snapshot_overlay = Some(serde_json::json!({
+                            "status": "fresh_recording_required",
+                            "recording_required": true,
+                            "reason": format!("{error:#}"),
+                        }));
+                        dependency_rule::schedule_cache_snapshot_refresh(
+                            &target_root,
+                            state,
+                            applied,
+                        )?;
+                        report.next_command =
+                            action::next_command_for_api(&target_root, &state.api);
+                        return Ok((report, true));
+                    }
+                }
             }
             if dependency_payload {
                 return Ok((report, false));
             }
-            let case_source = state
-                .case_source
-                .clone()
-                .context("rewrite workflow has no case source to reclassify")?;
-            let api = state
-                .group_id
-                .clone()
-                .context("rewrite workflow has no focused API to reclassify")?;
-            let reclassification: FocusedBackgroundReclassification =
-                reclassify_focused_background_dependencies(
-                    E2eRunContext {
-                        target_root: target_root.clone(),
-                        case_source,
-                        run_key: None,
-                    },
-                    &api,
-                )?;
-            transition::from_e2e_result(
-                &target_root,
-                state,
-                &reclassification.result,
-                transition::AttemptTransition::ReclassifyCurrent,
-            )?;
-            report.evidence_reclassification = Some(serde_json::to_value(&reclassification)?);
+            report.evidence_reclassification =
+                Some(background_reclassification::apply(&target_root, state)?);
             report.next_command = action::next_command_for_api(&target_root, &state.api);
             Ok((report, false))
         })?;

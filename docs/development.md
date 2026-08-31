@@ -1921,9 +1921,16 @@ Recorder use applies the rule during future capture. In the managed
 `backend-rewrite` workflow, non-Redis dependency-rule apply can derive a
 current case/global ownership view from the existing immutable capture,
 rewrite only the generated replay report and dependency-evidence sidecar, and
-revise the same focused attempt. Redis rule apply changes the first-value
-capture contract, so it queues the affected API for one consolidated fresh
-standard recording instead of retroactively reclassifying the old artifact.
+revise the same focused attempt. Redis rule apply first attempts a read-only
+snapshot overlay from the existing immutable capture. The overlay groups
+matching Global and Case exchanges by exact target/session/command/arguments,
+requires a successful untruncated `bootstrap_window` Global seed, rejects
+conflicting responses or ambiguous/unsafe evidence, and references one
+original exchange without rewriting or copying the recording. Replay then
+reuses that seed with first-value semantics. If any configured key or observed
+logical identity cannot be proved safe, the coordinator keeps the existing
+behavior and queues the affected API for one consolidated fresh standard
+recording.
 The coordinator also detects an already-finalized attempt whose effective
 dependency view is clean but whose persisted errors still contain the obsolete
 strict dirty-finalize result. `backend-rewrite next` removes only that
@@ -1993,13 +2000,15 @@ traffic-e2e config recorder apply process-owned-dependencies \
   --initial-load-timeout-ms 60000
 ```
 
-Planning requires every configured exact key in replay-safe, unused case
-evidence. In the fresh recording, Recorder forwards the first successful
-matching read and holds that response for the rest of the run. Replay reuses
-the marked first-value seed for repeated exact target, session, command, and
-argument matches without inheriting the source connection binding or earlier
-unrelated lane commands. Case and unmarked bootstrap exchanges retain
-connection-order semantics.
+Planning requires every configured exact key in replay-safe immutable
+evidence. When old Global bootstrap evidence and every matching Case response
+are byte-consistent, Replay derives a read-only snapshot overlay and reuses one
+referenced Global seed for repeated exact target, session, command, and
+argument matches. Otherwise a fresh recording is required; Recorder forwards
+the first successful matching read and holds that response for the rest of the
+run. Neither path inherits the source connection binding or earlier unrelated
+lane commands. Case and unmarked bootstrap exchanges retain connection-order
+semantics.
 
 For example, replace `get` above with `scard` or `hgetall` while retaining the
 same `--port`, repeated `--key`, and `--initial-load-timeout-ms` inputs. These

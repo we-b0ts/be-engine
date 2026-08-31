@@ -90,7 +90,7 @@ fn verifies_motan_payloads_through_the_common_api_report() {
             "method": "MOTAN",
             "uri": "/rpc/alchemy-get-config",
             "api_pattern": "/rpc/alchemy-get-config",
-            "api_key": "motan:abtest/com.weibo.AlchemyRpcService#getConfig(java.lang.String)"
+            "api_key": "motan:com.weibo.AlchemyRpcService#getConfig(java.lang.String)"
         }))
         .unwrap(),
     )
@@ -145,7 +145,7 @@ fn protobuf_response_body_rule_reuses_comparison_bodies_for_offline_verification
             "method": "MOTAN",
             "uri": "/rpc/example",
             "api_pattern": "/rpc/example",
-            "api_key": "motan:test/example#method()"
+            "api_key": "motan:example#method()"
         }))
         .unwrap(),
     )
@@ -287,7 +287,7 @@ fn protobuf_joined_string_rule_reuses_comparison_bodies_for_offline_verification
             "method": "MOTAN",
             "uri": "/rpc/example",
             "api_pattern": "/rpc/example",
-            "api_key": "motan:test/example#method()"
+            "api_key": "motan:example#method()"
         }))
         .unwrap(),
     )
@@ -410,7 +410,7 @@ fn protobuf_codec_configuration_rejects_non_protobuf_bodies() {
             "method": "MOTAN",
             "uri": "/rpc/example",
             "api_pattern": "/rpc/example",
-            "api_key": "motan:test/example#method()"
+            "api_key": "motan:example#method()"
         }))
         .unwrap(),
     )
@@ -475,7 +475,7 @@ fn response_body_rule_reports_that_a_value_difference_has_no_ordering_rule() {
             "method": "MOTAN",
             "uri": "/rpc/hessian-value",
             "api_pattern": "/rpc/hessian-value",
-            "api_key": "motan:test/example#result()"
+            "api_key": "motan:example#result()"
         }))
         .unwrap(),
     )
@@ -569,7 +569,7 @@ fn motan_gateway_hessian2_body_rule_accepts_a_raw_body_envelope() {
             "method": "MOTAN",
             "uri": "/rpc/hessian-object",
             "api_pattern": "/rpc/hessian-object",
-            "api_key": "motan:test/example#result()"
+            "api_key": "motan:example#result()"
         }))
         .unwrap(),
     )
@@ -683,7 +683,7 @@ fn response_body_rule_can_apply_one_reviewed_path_while_another_difference_remai
             "method": "MOTAN",
             "uri": "/rpc/hessian-multiple-paths",
             "api_pattern": "/rpc/hessian-multiple-paths",
-            "api_key": "motan:test/example#result()"
+            "api_key": "motan:example#result()"
         }))
         .unwrap(),
     )
@@ -819,7 +819,7 @@ fn motan_gateway_hessian2_body_rule_reuses_comparison_bodies_offline() {
             "method": "MOTAN",
             "uri": "/rpc/hessian",
             "api_pattern": "/rpc/hessian",
-            "api_key": "motan:test/example#hessian()"
+            "api_key": "motan:example#hessian()"
         }))
         .unwrap(),
     )
@@ -935,7 +935,7 @@ fn protobuf_response_body_rule_uses_reviewed_type_for_packed_integer_order() {
             "method": "MOTAN",
             "uri": "/rpc/packed",
             "api_pattern": "/rpc/packed",
-            "api_key": "motan:test/example#packed()"
+            "api_key": "motan:example#packed()"
         }))
         .unwrap(),
     )

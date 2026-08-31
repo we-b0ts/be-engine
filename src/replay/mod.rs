@@ -80,6 +80,23 @@ pub struct ReplayConfig {
     pub allowed_unused_http: Option<ReplayAllowedUnusedHttpConfig>,
 }
 
+pub const DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS: u64 = 10;
+
+#[derive(Debug, Clone, Copy)]
+pub struct ReplayLifecycleConfig {
+    pub case_dependency_post_response_window: std::time::Duration,
+}
+
+impl Default for ReplayLifecycleConfig {
+    fn default() -> Self {
+        Self {
+            case_dependency_post_response_window: std::time::Duration::from_millis(
+                DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS,
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ReplayAllowedUnusedHttpConfig {
     pub config_path: PathBuf,
@@ -129,6 +146,7 @@ pub use policy::{
     plan_comparison_response_rule, plan_memcached_timestamp_rule, plan_response_body_rule,
     plan_response_rule, validate_replay_policy,
 };
+pub(crate) use redis::snapshot_overlay::inspect_case_source_snapshot_overlay;
 pub use report::aggregate::{
     ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,
     aggregate_replay_reports_with_options,
@@ -152,6 +170,13 @@ pub(crate) fn allocate_control_socket() -> PathBuf {
 }
 
 pub async fn run_replay(config: ReplayConfig) -> Result<()> {
+    run_replay_with_lifecycle(config, ReplayLifecycleConfig::default()).await
+}
+
+pub async fn run_replay_with_lifecycle(
+    config: ReplayConfig,
+    lifecycle: ReplayLifecycleConfig,
+) -> Result<()> {
     validate_replay_request_headers(&config).await?;
     let tcp_listener = TcpListener::bind(config.tcp_listen)
         .await
@@ -170,7 +195,8 @@ pub async fn run_replay(config: ReplayConfig) -> Result<()> {
     let dns_listen = dns_socket
         .local_addr()
         .context("failed to read dependency replay DNS listen address")?;
-    let runtime = ReplayRuntime::load(config, dns_listen, tcp_listen).await?;
+    let runtime =
+        ReplayRuntime::load_with_lifecycle(config, dns_listen, tcp_listen, lifecycle).await?;
     runtime.write_report().await?;
     info!(
         dns_listen = %dns_listen,
@@ -201,10 +227,26 @@ struct ReplayRuntime {
 }
 
 impl ReplayRuntime {
+    #[cfg(test)]
     async fn load(
         config: ReplayConfig,
         dns_listen: SocketAddr,
         tcp_listen: SocketAddr,
+    ) -> Result<Self> {
+        Self::load_with_lifecycle(
+            config,
+            dns_listen,
+            tcp_listen,
+            ReplayLifecycleConfig::default(),
+        )
+        .await
+    }
+
+    async fn load_with_lifecycle(
+        config: ReplayConfig,
+        dns_listen: SocketAddr,
+        tcp_listen: SocketAddr,
+        lifecycle: ReplayLifecycleConfig,
     ) -> Result<Self> {
         let root_dir = config.case_dir;
         let process_owned_dependencies = &config.process_owned_dependencies;
@@ -305,6 +347,7 @@ impl ReplayRuntime {
                 next_progress_percent = (progress_percent / 5 + 1).saturating_mul(5);
             }
         }
+        redis.apply_snapshot_overlays(&root_dir, process_owned_dependencies);
 
         let recording_network_path =
             network_access::apply_recorded_endpoint_allowlist(&root_dir, &mut targets)?;
@@ -358,6 +401,7 @@ impl ReplayRuntime {
             root_dir,
             cases,
             active_case_id,
+            case_dependency_post_response_window: lifecycle.case_dependency_post_response_window,
             global_path,
             targets,
             mysql,
@@ -485,6 +529,7 @@ struct ReplayState {
     root_dir: PathBuf,
     cases: BTreeMap<String, ReplayCase>,
     active_case_id: Option<String>,
+    case_dependency_post_response_window: std::time::Duration,
     global_path: Option<PathBuf>,
     targets: Vec<ReplayTarget>,
     mysql: mysql::MysqlReplayState,

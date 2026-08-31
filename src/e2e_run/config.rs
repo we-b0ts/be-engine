@@ -135,6 +135,8 @@ pub(crate) fn render_project_config(
             },
             replay: ReplayProjectConfig {
                 policy: options.replay_policy.clone(),
+                case_dependency_post_response_window_ms:
+                    crate::replay::DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS,
             },
             recording: RecordingProjectConfig {
                 _legacy_rule: None,
@@ -284,6 +286,12 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
             process_outputs: config.project.process_outputs,
             breeze_container: config.project.breeze.map(|breeze| breeze.container),
             replay_policy: policy_path,
+            replay_case_dependency_post_response_window: Duration::from_millis(
+                config
+                    .project
+                    .replay
+                    .case_dependency_post_response_window_ms,
+            ),
             replay_startup_timeout: Duration::from_secs(
                 super::model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
             ),
@@ -620,6 +628,13 @@ mod tests {
             config.project.replay.policy,
             PathBuf::from("config/replay.yaml")
         );
+        assert_eq!(
+            config
+                .project
+                .replay
+                .case_dependency_post_response_window_ms,
+            crate::replay::DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS
+        );
         let raw = fs::read_to_string(&result.config).unwrap();
         for duplicate in [
             "readiness_path",
@@ -675,6 +690,29 @@ mod tests {
         assert_eq!(
             config.target_startup_timeout,
             Duration::from_secs(DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS)
+        );
+    }
+
+    #[test]
+    fn existing_project_without_replay_post_response_window_defaults_to_10ms() {
+        let target = target();
+        initialize(options(target.path())).unwrap();
+        let config_path = target.path().join(".traffic-e2e/project.yaml");
+        let raw = fs::read_to_string(&config_path)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.contains("case_dependency_post_response_window_ms:"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&config_path, format!("{raw}\n")).unwrap();
+
+        let (_, config) = resolve_project(target.path()).unwrap();
+
+        assert_eq!(
+            config.replay_case_dependency_post_response_window,
+            Duration::from_millis(
+                crate::replay::DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS
+            )
         );
     }
 

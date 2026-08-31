@@ -101,8 +101,11 @@ still compare against the current baseline. When no runnable item remains, the
 coordinator atomically returns one `recording_required` refresh.
 
 The new finalized recording replaces the shared baseline atomically and
-invalidates old Replay/comparison evidence. It never creates per-API recording
-generations.
+invalidates old Replay/comparison evidence. Until validation succeeds, the
+refresh state retains the old case source and its required API inventory. A
+replacement that omits any previously published API, including a rare case
+that did not recur, is rejected and cannot silently shrink the workflow
+inventory. The refresh never creates per-API recording generations.
 
 After a system repair, do not choose fresh traffic yourself. The
 coordinator-issued repair verification decides whether to allocate fresh
