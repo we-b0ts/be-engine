@@ -117,11 +117,6 @@ fn render_recorder_template(scope: &str, options: &RecorderConfigInitOptions) ->
     let fallback_body = render_yaml_scalar(&format!(
         r#"{{"code":"40401","msg":"not_in_{scope}_record_api"}}"#
     ))?;
-    let breeze_dns = if options.breeze_enabled {
-        PLATFORM_BREEZE_DNS_YAML
-    } else {
-        "  bypass_strategies: []\n  hosts: {}\n"
-    };
     let response_rewrite = if options.breeze_enabled {
         PLATFORM_RESPONSE_REWRITE_YAML
     } else {
@@ -165,7 +160,7 @@ fn render_recorder_template(scope: &str, options: &RecorderConfigInitOptions) ->
             &options.readiness_status.to_string(),
         )
         .replace("__FALLBACK_BODY__", &fallback_body)
-        .replace("__BREEZE_DNS__", breeze_dns)
+        .replace("__DNS_CAPTURE_POLICY__", CAPTURE_ALL_DNS_YAML)
         .replace("__RESPONSE_REWRITE__", response_rewrite)
         .replace("__ENCRYPTED_HEADERS__", encrypted_headers))
 }
@@ -176,11 +171,7 @@ fn render_yaml_scalar(value: &str) -> Result<String> {
         .context("failed to render generated recorder YAML scalar")
 }
 
-const PLATFORM_BREEZE_DNS_YAML: &str = r#"  bypass_strategies:
-  - strategy: breeze
-    snapshot_dir: /data1/breeze/snapshot
-  hosts: {}
-"#;
+const CAPTURE_ALL_DNS_YAML: &str = "  bypass_strategies: []\n  hosts: {}\n";
 
 const PLATFORM_RESPONSE_REWRITE_YAML: &str = r#"http_response_rewrite:
   enabled: true
@@ -237,7 +228,7 @@ dns_mock:
   ttl_seconds: 60
   registry_path: ./.traffic-e2e/local/artifacts/fake_dns_registry.json
   bypass_domains: []
-__BREEZE_DNS__
+__DNS_CAPTURE_POLICY__
 tcp_gateway:
   enabled: true
   listen: 127.0.0.1:__TCP_GATEWAY_PORT__
@@ -367,8 +358,10 @@ mod tests {
         );
         assert_eq!(config.udp_gateway.listen.port(), DEFAULT_UDP_GATEWAY_PORT);
         assert_eq!(config.recording.encrypt_request_headers, ["authorization"]);
-        assert_eq!(config.dns_mock.bypass_strategies.len(), 1);
+        assert!(config.dns_mock.bypass_strategies.is_empty());
         assert!(config.dns_mock.hosts.is_empty());
+        assert!(!raw.contains("strategy: breeze"));
+        assert!(!raw.contains("snapshot_dir: /data1/breeze/snapshot"));
         assert_eq!(config.http_response_rewrite.rules.len(), 2);
         assert_eq!(config.http_gateway.rules[0].methods, ["GET"]);
         assert_eq!(

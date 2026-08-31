@@ -24,6 +24,7 @@ use super::{
 };
 
 mod builtins;
+pub(super) mod snapshot_overlay;
 use super::command_matching::{
     CaseConnectionBinding, CommandExchangeScope, PreferredMatch,
     is_connection_independent_background, lane_blocked_diagnostic, preferred_match,
@@ -65,6 +66,8 @@ pub(super) struct RecordedExchange {
     #[serde(default)]
     cache_snapshot_hit: bool,
     #[serde(default)]
+    session_setup: bool,
+    #[serde(default)]
     global_dependency_reason: Option<String>,
 }
 
@@ -104,6 +107,8 @@ struct MatchedRedisExchange {
 pub(super) struct RedisReplayState {
     exchanges: Vec<ReplayExchange>,
     pub(super) events: RedisReplayEvents,
+    snapshot_overlays: Vec<super::report::command::CommandSnapshotOverlayReport>,
+    snapshot_overlay_warnings: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -401,7 +406,8 @@ impl RedisReplayState {
             unsafe_events: self.events.unsafe_events.clone(),
             unused_case: unused(&self.exchanges, ReplaySource::Case),
             unused_global: unused(&self.exchanges, ReplaySource::Global),
-            ..Default::default()
+            snapshot_overlays: self.snapshot_overlays.clone(),
+            warnings: self.snapshot_overlay_warnings.clone(),
         }
     }
 }
@@ -825,6 +831,7 @@ mod tests {
                     replay_safe: true,
                     cache_snapshot_rule: Some("snapshot-get".to_string()),
                     cache_snapshot_hit: false,
+                    session_setup: false,
                     global_dependency_reason: Some("background_rule".to_string()),
                 },
                 ReplaySource::Global,

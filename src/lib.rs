@@ -176,15 +176,16 @@ pub use recording_control::{
 };
 pub use replay::{
     ComparisonResponseRuleFeedback, ComparisonSourceMatch, ComparisonVerificationPolicy,
-    Hessian2BodyDifference, Hessian2BodyDifferenceKind, Hessian2JoinedStringCandidate,
-    Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath, Hessian2ValuePathCandidate,
+    DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS, Hessian2BodyDifference,
+    Hessian2BodyDifferenceKind, Hessian2JoinedStringCandidate, Hessian2JoinedStringPath,
+    Hessian2UnorderedPath, Hessian2ValuePath, Hessian2ValuePathCandidate,
     JsonJoinedStringCandidate, MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan,
     MemcachedTimestampRuleReport, MysqlReplayConfig, MysqlReplayControlConfig,
     ProtobufBodyDifference, ProtobufBodyDifferenceKind, ProtobufFieldPath,
     ProtobufFieldPathCandidate, ProtobufJoinedStringCandidate, ProtobufJoinedStringFieldType,
     ProtobufJoinedStringPath, ProtobufRepeatedElementType, ProtobufUnorderedPath,
     ReplayAggregateOptions, ReplayAggregateReport, ReplayAllowedUnusedHttpConfig, ReplayConfig,
-    ReplayControlConfig, ReplayPolicyInitOptions, ReplayPolicyInitResult,
+    ReplayControlConfig, ReplayLifecycleConfig, ReplayPolicyInitOptions, ReplayPolicyInitResult,
     ReplayPolicyValidationReport, ResponseAssertionOptions, ResponseBodyAssertionReport,
     ResponseBodyCodec, ResponseBodyDifferenceDetail, ResponseBodyJoinedStringCandidate,
     ResponseBodyJoinedStringPath, ResponseBodyRuleEvidence, ResponseBodyRuleEvidenceKind,
@@ -195,7 +196,8 @@ pub use replay::{
     ResponseRuleReport, aggregate_replay_reports, aggregate_replay_reports_with_options,
     assert_recorded_response, initialize_replay_policy, plan_comparison_response_rule,
     plan_memcached_timestamp_rule, plan_response_body_rule, plan_response_rule, run_mysql_replay,
-    run_mysql_replay_control, run_replay, run_replay_control, validate_replay_policy,
+    run_mysql_replay_control, run_replay, run_replay_control, run_replay_with_lifecycle,
+    validate_replay_policy,
 };
 pub use rewrite::{
     RewriteAction, RewriteActionEnvelope, RewriteApiInventoryDetails, RewriteApiInventoryView,

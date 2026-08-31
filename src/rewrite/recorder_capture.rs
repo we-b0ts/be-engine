@@ -218,17 +218,37 @@ pub(super) fn apply(
     let config_revision = fingerprint::project_config_revision(target_root)?;
     let rules_revision = fingerprint::source_traffic_policy_revision(target_root)?;
     let api = state.api.clone();
+    let mut required_apis = state
+        .api_inventory
+        .iter()
+        .map(|item| item.api.clone())
+        .collect::<Vec<_>>();
+    if required_apis.is_empty() && !state.api.is_empty() {
+        required_apis.push(state.api.clone());
+    }
+    let baseline_case_source = state.case_source.clone();
     let refresh = state
         .recording_refresh
         .get_or_insert_with(|| RewriteRecordingRefreshState {
             applied: Vec::new(),
             dependency_rules: Vec::new(),
+            required_apis: required_apis.clone(),
+            baseline_case_source: baseline_case_source.clone(),
             project_config_revision: config_revision.clone(),
             source_traffic_policy_revision: rules_revision.clone(),
             recording_run_id: None,
         });
     refresh.project_config_revision = config_revision;
     refresh.source_traffic_policy_revision = rules_revision;
+    if refresh.baseline_case_source.is_none() {
+        refresh.baseline_case_source = baseline_case_source;
+    }
+    for required in required_apis {
+        if !refresh.required_apis.contains(&required) {
+            refresh.required_apis.push(required);
+        }
+    }
+    refresh.required_apis.sort();
     if !refresh
         .applied
         .iter()
@@ -509,6 +529,8 @@ mod tests {
                 rule_name: "snapshot-get".to_string(),
                 source_evidence: "Cache.java:42".to_string(),
             }],
+            required_apis: vec!["GET /api".to_string(), "POST /other".to_string()],
+            baseline_case_source: Some(PathBuf::from("old-recording")),
             project_config_revision: "fnv1a64:config".to_string(),
             source_traffic_policy_revision: "fnv1a64:rules".to_string(),
             recording_run_id: None,

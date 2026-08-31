@@ -66,9 +66,14 @@ semantics. Unmatched, unsupported, unsafe, and unused evidence remains dirty.
 Match Case evidence before run-level Global evidence. Consume ordinary
 exchanges once. A marked Redis background cache-snapshot seed is the narrow
 exception: Replay may return its first successful recorded response for every
-identical logical read. Unmarked Redis, Memcached, HTTP, MySQL, Kafka, and Motan
-evidence remains finite inventory. The target must issue genuine dependency
-calls and build its own local state from replayed responses.
+identical logical read. Replay may also mark one old `bootstrap_window` Global
+exchange in memory when the current Redis rule has complete configured-key
+coverage and all matching Global and Case responses for the same exact logical
+identity agree. This derived overlay never edits recording files and is
+rejected as a whole on unsafe, truncated, failed, conflicting, or ambiguous
+evidence. Other unmarked Redis, Memcached, HTTP, MySQL, Kafka, and Motan evidence
+remains finite inventory. The target must issue genuine dependency calls and
+build its own local state from replayed responses.
 
 A legacy, Case-local `tcp_gateway_connection` with no recorded error and zero
 bytes in both directions is finite evidence for one dependency connection that

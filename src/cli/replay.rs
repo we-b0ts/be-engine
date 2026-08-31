@@ -7,7 +7,8 @@ use clap::{ArgAction, Args};
 use serde::Deserialize;
 use traffic_e2e::{
     AppConfig, DEFAULT_DNS_MOCK_LISTEN, DEFAULT_FAKE_CIDR, DEFAULT_TCP_GATEWAY_LISTEN,
-    DEFAULT_UDP_GATEWAY_PORT, ReplayAllowedUnusedHttpConfig, ReplayConfig, run_replay,
+    DEFAULT_UDP_GATEWAY_PORT, ReplayAllowedUnusedHttpConfig, ReplayConfig, ReplayLifecycleConfig,
+    run_replay_with_lifecycle,
 };
 use uuid::Uuid;
 
@@ -53,6 +54,9 @@ pub(super) struct ReplayArgs {
     ca_key: Option<PathBuf>,
     #[arg(long = "http-ignore-query-param")]
     http_ignore_query_params: Vec<String>,
+    /// Keep the active case open for dependencies started just after the primary response.
+    #[arg(long)]
+    case_dependency_post_response_window_ms: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -77,6 +81,7 @@ struct ReplayFileValues {
     user: Option<serde_yaml::Value>,
     record_user: Option<serde_yaml::Value>,
     all_users: Option<serde_yaml::Value>,
+    case_dependency_post_response_window_ms: Option<u64>,
 }
 
 struct ResolvedReplay {
@@ -95,6 +100,7 @@ struct ResolvedReplay {
     ca_cert: Option<PathBuf>,
     ca_key: Option<PathBuf>,
     http_ignore_query_params: Vec<String>,
+    case_dependency_post_response_window_ms: u64,
 }
 
 pub(super) async fn run(args: ReplayArgs) -> Result<()> {
@@ -119,22 +125,30 @@ pub(super) async fn run(args: ReplayArgs) -> Result<()> {
     } else {
         None
     };
-    let replay = run_replay(ReplayConfig {
-        case_dir: resolved.case,
-        selected_case_ids: resolved.case_ids,
-        dns_listen: resolved.dns_listen,
-        tcp_listen: resolved.tcp_listen,
-        fake_cidr: resolved.fake_cidr,
-        report_path: Some(resolved.report),
-        session_path: Some(resolved.session),
-        control_socket_path: Some(resolved.control_socket),
-        ca_cert_path: resolved.ca_cert,
-        ca_key_path: resolved.ca_key,
-        policy_path: resolved.policy,
-        http_ignore_query_params: resolved.http_ignore_query_params,
-        process_owned_dependencies,
-        allowed_unused_http,
-    });
+    let lifecycle = ReplayLifecycleConfig {
+        case_dependency_post_response_window: std::time::Duration::from_millis(
+            resolved.case_dependency_post_response_window_ms,
+        ),
+    };
+    let replay = run_replay_with_lifecycle(
+        ReplayConfig {
+            case_dir: resolved.case,
+            selected_case_ids: resolved.case_ids,
+            dns_listen: resolved.dns_listen,
+            tcp_listen: resolved.tcp_listen,
+            fake_cidr: resolved.fake_cidr,
+            report_path: Some(resolved.report),
+            session_path: Some(resolved.session),
+            control_socket_path: Some(resolved.control_socket),
+            ca_cert_path: resolved.ca_cert,
+            ca_key_path: resolved.ca_key,
+            policy_path: resolved.policy,
+            http_ignore_query_params: resolved.http_ignore_query_params,
+            process_owned_dependencies,
+            allowed_unused_http,
+        },
+        lifecycle,
+    );
     tokio::pin!(replay);
     let result = tokio::select! {
         result = &mut replay => result,
@@ -290,6 +304,10 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
             path.display()
         );
     }
+    let case_dependency_post_response_window_ms = args
+        .case_dependency_post_response_window_ms
+        .or(file.replay.case_dependency_post_response_window_ms)
+        .unwrap_or(traffic_e2e::DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS);
     Ok(ResolvedReplay {
         case,
         case_ids: args.case_ids,
@@ -306,6 +324,7 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
         ca_cert: args.ca_cert.map(|path| absolute_from(&cwd, &path)),
         ca_key: args.ca_key.map(|path| absolute_from(&cwd, &path)),
         http_ignore_query_params: args.http_ignore_query_params,
+        case_dependency_post_response_window_ms,
     })
 }
 
@@ -466,6 +485,27 @@ mod tests {
         assert_eq!(resolved.dns_listen.port(), 4_053);
         assert_eq!(resolved.tcp_listen.port(), 4_001);
         assert_eq!(resolved.udp_port, 4_002);
+        assert_eq!(
+            resolved.case_dependency_post_response_window_ms,
+            traffic_e2e::DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS
+        );
+    }
+
+    #[test]
+    fn command_line_post_response_window_overrides_replay_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("replay.yaml");
+        std::fs::write(
+            &config,
+            "replay:\n  case: .\n  case_dependency_post_response_window_ms: 25\n",
+        )
+        .unwrap();
+        let mut args = replay_args(None, Some(config));
+        args.case_dependency_post_response_window_ms = Some(5);
+
+        let resolved = resolve(args).unwrap();
+
+        assert_eq!(resolved.case_dependency_post_response_window_ms, 5);
     }
 
     #[test]
@@ -510,6 +550,7 @@ mod tests {
             ca_cert: None,
             ca_key: None,
             http_ignore_query_params: Vec::new(),
+            case_dependency_post_response_window_ms: None,
         }
     }
 }

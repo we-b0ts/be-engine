@@ -19,13 +19,17 @@ use crate::replay::{
 pub(super) const STATE_VERSION: u32 = 3;
 pub(super) const ASSERTION_REPORT_VERSION: u32 = 3;
 pub(super) const DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS: u64 = 60;
-pub(super) const DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS: u64 = 60;
+pub(super) const DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS: u64 = 180;
 pub(super) const MAX_TARGET_STARTUP_TIMEOUT_SECONDS: u64 = 30 * 60;
 pub(super) const DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS: u64 = 30;
 pub(super) const MAX_RESPONSE_DIFFERENCE_INDEX: usize = 256;
 
 fn default_target_startup_timeout_seconds() -> u64 {
     DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS
+}
+
+fn default_replay_case_dependency_post_response_window_ms() -> u64 {
+    crate::replay::DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +91,8 @@ pub(crate) struct TargetQualityGateConfig {
 #[serde(deny_unknown_fields)]
 pub(super) struct ReplayProjectConfig {
     pub policy: PathBuf,
+    #[serde(default = "default_replay_case_dependency_post_response_window_ms")]
+    pub case_dependency_post_response_window_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +142,7 @@ pub(crate) struct ResolvedProjectConfig {
     pub(crate) process_outputs: Vec<crate::process_output::ProcessOutputConfig>,
     pub(crate) breeze_container: Option<String>,
     pub(crate) replay_policy: PathBuf,
+    pub(crate) replay_case_dependency_post_response_window: Duration,
     pub(crate) replay_startup_timeout: Duration,
     pub(crate) pr_base: String,
     pub(crate) recorder_config: PathBuf,

@@ -60,6 +60,10 @@ explicit user authorization
 
 source-proven bypassed backend -> apply capture rule -> API waits
            -> drain other runnable API work -> one full-scope fresh recording
+
+source-proven Redis rule -> derive safe snapshot overlay from old Global evidence
+           -> reuse the same immutable recording
+           -> on strict derivation failure only, join the full-scope fresh recording fallback
 ```
 
 Repeatedly execute `backend-rewrite next` or the opaque command returned by the

@@ -207,32 +207,6 @@ fn applicable_rule_planners(
                 }),
         );
     }
-    if query_kind == QUERY_REPRESENTATIVES
-        && matches!(
-            issue_kind,
-            RewriteIssueKind::Response
-                | RewriteIssueKind::Dependency
-                | RewriteIssueKind::Comparison
-        )
-        && response_body::body_diagnosis(facts).is_none()
-    {
-        planners.push(RewriteApplicableRulePlanner {
-            kind: "recorder_capture".to_string(),
-            capability: "breeze_dns_bypass".to_string(),
-            evidence_id: evidence_id.to_string(),
-            command: super::action::command(
-                target_root,
-                vec![
-                    "recorder-capture".to_string(),
-                    "plan".to_string(),
-                    "--evidence-id".to_string(),
-                    evidence_id.to_string(),
-                    "--help".to_string(),
-                ],
-                Vec::new(),
-            ),
-        });
-    }
     if issue_kind == RewriteIssueKind::Response
         && query_kind == QUERY_SOURCE_PROCESS_TRAFFIC
         && has_redis_bootstrap_traffic(facts)
@@ -418,12 +392,11 @@ fn facts(
         }
         QUERY_DIRTY_CLUSTERS => {
             let counts = query_e2e_dirty_counts(e2e_context(target_root, state)?, group_id(state)?)?;
+            let facts = dirty_cluster_facts(target_root, counts);
+            let limitations = dirty_cluster_limitations(&facts);
             Ok((
-                dirty_cluster_facts(target_root, counts),
-                vec![
-                    "dirty event counts do not prove process ownership".to_string(),
-                    "they do not prove response causality".to_string(),
-                ],
+                facts,
+                limitations,
                 "Start with the largest endpoint cluster. Execute representative_dependencies_command when present to summarize that case's dependency targets, then select a returned detail_command before proving request or process ownership and response causality in source code."
                     .to_string(),
             ))
@@ -481,6 +454,25 @@ fn dirty_cluster_facts(target_root: &Path, counts: E2eDirtyCounts) -> Value {
         "omitted_clusters": counts.omitted_clusters,
         "representative_dependencies_command": representative_dependencies_command,
     })
+}
+
+fn dirty_cluster_limitations(facts: &Value) -> Vec<String> {
+    let mut limitations = vec![
+        "dirty event counts do not prove process ownership".to_string(),
+        "they do not prove response causality".to_string(),
+    ];
+    if facts
+        .get("clusters")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|cluster| cluster.get("protocol").and_then(Value::as_str) == Some("motan"))
+    {
+        limitations.push(
+            "Motan dirty evidence does not indicate a business-argument mismatch".to_string(),
+        );
+    }
+    limitations
 }
 
 fn representative_facts(

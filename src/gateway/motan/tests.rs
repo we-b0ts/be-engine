@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -64,7 +65,7 @@ async fn matched_motan1_and_motan2_requests_are_forwarded_and_published() {
             descriptor["api_key"]
                 .as_str()
                 .unwrap()
-                .starts_with("motan:motan-rust-interop/")
+                .starts_with("motan:com.weibo.breeze.motan.EchoService#")
         );
         match request["protocol_version"].as_str().unwrap() {
             "motan1" => assert_eq!(response["status"], "void"),
@@ -73,6 +74,76 @@ async fn matched_motan1_and_motan2_requests_are_forwarded_and_published() {
         }
         assert!(published.join("dependencies.jsonl").is_file());
     }
+
+    drop(client);
+    stop_gateway(gateway).await;
+    drop(temp);
+}
+
+#[tokio::test]
+async fn same_motan_api_from_distinct_groups_shares_one_api_directory() {
+    let limits = Limits::default();
+    let (upstream, source) = fixed_response_source(3, limits).await;
+    let (temp, state, listen, gateway) = gateway_state(upstream.to_string(), Vec::new()).await;
+    wait_for_source_ready(&state).await;
+    let mut client = connect_retry(listen).await;
+
+    round_trip(
+        &mut client,
+        &motan2_request_for_group(201, "wq-weibo-abtest-rpc-core-motan2-simple"),
+        limits,
+    )
+    .await;
+    wait_for_published_case_count(&state.recorder().run_dir, 1).await;
+    assert!(
+        state
+            .inner
+            .active_cases
+            .wait_for_no_active_case(Duration::from_secs(2))
+            .await
+    );
+    round_trip(
+        &mut client,
+        &motan2_request_for_group(202, "aliyun-weibo-abtest-rpc-core-motan2-simple"),
+        limits,
+    )
+    .await;
+
+    await_source(source).await;
+    assert!(
+        state
+            .inner
+            .active_cases
+            .wait_for_no_active_case(Duration::from_secs(2))
+            .await
+    );
+    wait_for_published_case_count(&state.recorder().run_dir, 2).await;
+    let cases = published_case_dirs(&state.recorder().run_dir);
+    assert_eq!(cases.len(), 2);
+    assert_eq!(
+        cases
+            .iter()
+            .map(|case| case.parent().unwrap().to_path_buf())
+            .collect::<BTreeSet<_>>()
+            .len(),
+        1
+    );
+    let groups = cases
+        .iter()
+        .map(|case| {
+            read_json(case.join("case.json"))["source_binding"]["group"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        groups,
+        BTreeSet::from([
+            "aliyun-weibo-abtest-rpc-core-motan2-simple".to_string(),
+            "wq-weibo-abtest-rpc-core-motan2-simple".to_string(),
+        ])
+    );
 
     drop(client);
     stop_gateway(gateway).await;
@@ -294,8 +365,12 @@ async fn round_trip(
 }
 
 fn motan2_request(request_id: u64) -> Vec<u8> {
+    motan2_request_for_group(request_id, "motan-rust-interop")
+}
+
+fn motan2_request_for_group(request_id: u64, group: &str) -> Vec<u8> {
     let mut metadata = Metadata::new();
-    metadata.insert(META_GROUP, "motan-rust-interop");
+    metadata.insert(META_GROUP, group);
     metadata.insert(META_PATH, "com.weibo.breeze.motan.EchoService");
     metadata.insert(META_METHOD, "echo");
     metadata.insert(META_METHOD_DESC, "java.lang.String");
@@ -322,6 +397,19 @@ async fn await_source(source: tokio::task::JoinHandle<()>) {
         .await
         .expect("Motan test upstream did not finish")
         .expect("Motan test upstream task failed");
+}
+
+async fn wait_for_published_case_count(run_dir: &Path, expected: usize) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if published_case_dirs(run_dir).len() == expected {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("expected {expected} published Motan cases"));
 }
 
 async fn stop_gateway(gateway: tokio::task::JoinHandle<Result<()>>) {

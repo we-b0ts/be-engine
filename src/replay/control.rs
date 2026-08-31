@@ -462,17 +462,31 @@ pub(super) async fn end_case(
     let Some(case_id) = request.case_id.as_deref() else {
         return serde_json::json!({"ok": false, "error": "end requires case_id"});
     };
-    let mut state = state.lock().await;
-    if !state.cases.contains_key(case_id) {
-        return serde_json::json!({
-            "ok": false,
-            "error": format!("unknown replay case {case_id}")
-        });
+    let post_response_window = {
+        let state = state.lock().await;
+        if !state.cases.contains_key(case_id) {
+            return serde_json::json!({
+                "ok": false,
+                "error": format!("unknown replay case {case_id}")
+            });
+        }
+        if state.active_case_id.as_deref() != Some(case_id) {
+            return serde_json::json!({
+                "ok": false,
+                "error": format!("replay case {case_id} is not active")
+            });
+        }
+        state.case_dependency_post_response_window
+    };
+    if !post_response_window.is_zero() {
+        tokio::time::sleep(post_response_window).await;
     }
+
+    let mut state = state.lock().await;
     if state.active_case_id.as_deref() != Some(case_id) {
         return serde_json::json!({
             "ok": false,
-            "error": format!("replay case {case_id} is not active")
+            "error": format!("replay case {case_id} is no longer active")
         });
     }
     state.active_case_id = None;

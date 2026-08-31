@@ -350,6 +350,7 @@ mod tests {
             source_container: "source".to_string(),
             breeze_container: None,
             replay_policy: PathBuf::from("replay.yaml"),
+            replay_case_dependency_post_response_window: Duration::from_millis(10),
             replay_startup_timeout: Duration::from_secs(1),
             pr_base: "main".to_string(),
             recorder_config: PathBuf::from("project.yaml"),

@@ -322,7 +322,7 @@ fn write_run(
         "method": "MOTAN",
         "uri": API_PATH,
         "api_pattern": API_PATH,
-        "api_key": "motan:test/com.example.Service#getConfigJson"
+        "api_key": "motan:com.example.Service#getConfigJson"
     });
     if let Some(frame) = request_frame {
         request["body"] = captured_body(frame);

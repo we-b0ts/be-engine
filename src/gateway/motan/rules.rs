@@ -139,11 +139,11 @@ mod tests {
         assert_eq!(matched.rule_name, "default");
         assert_eq!(
             matched.descriptor.api_key,
-            "motan:abtest/com.weibo.AlchemyRpcService#getConfig(java.lang.String)"
+            "motan:com.weibo.AlchemyRpcService#getConfig(java.lang.String)"
         );
         assert_eq!(
             matched.directory,
-            "AlchemyRpcService-getConfig-String-bcf3bd52547daefb"
+            "AlchemyRpcService-getConfig-String-7fffc7627051a903"
         );
     }
 
@@ -166,6 +166,21 @@ mod tests {
         let mut other_group = envelope();
         other_group.group = Some("production".to_string());
         assert!(evaluate_request(&rules, &other_group).is_none());
+    }
+
+    #[test]
+    fn different_groups_share_the_same_api_directory() {
+        let first = evaluate_request(&[], &envelope()).unwrap();
+        let mut other_group = envelope();
+        other_group.group = Some("production".to_string());
+        let second = evaluate_request(&[], &other_group).unwrap();
+
+        assert_eq!(first.descriptor.api_key, second.descriptor.api_key);
+        assert_eq!(first.directory, second.directory);
+        assert_ne!(
+            first.descriptor.source_binding,
+            second.descriptor.source_binding
+        );
     }
 
     #[test]
@@ -194,7 +209,7 @@ mod tests {
 
         assert_eq!(
             api_directory(&descriptor),
-            "AlchemyRpcService-getConfig-ConfigRequest-80fc5b0d5ce479a4"
+            "AlchemyRpcService-getConfig-ConfigRequest-444028e2c132700d"
         );
     }
 
@@ -217,11 +232,11 @@ mod tests {
 
         assert_eq!(
             api_directory(&primitives),
-            "AlchemyRpcService-getList-long-long-ac8b465ce0481234"
+            "AlchemyRpcService-getList-long-long-70e0606b37b3fedf"
         );
         assert_eq!(
             api_directory(&array),
-            "AlchemyRpcService-getExperimentTrafficRule-byteArray-8cd698b4fea1fb48"
+            "AlchemyRpcService-getExperimentTrafficRule-byteArray-843a9bd3356df6bb"
         );
     }
 }

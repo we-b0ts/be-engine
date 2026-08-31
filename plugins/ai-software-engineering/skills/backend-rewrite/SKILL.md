@@ -84,6 +84,10 @@ When an assigned API worker uses memcache `CacheService`, read
 [memcache.md](references/memcache.md) before constructing the cache or calling
 `get`/`set`.
 
+When an assigned API worker uses `brz-redis`, read
+[redis.md](references/redis.md) before choosing a `RedisService` topology or
+calling its typed Redis contract.
+
 Read [project-init.md](references/project-init.md) only when the caller
 explicitly asks to initialize an uninitialized target repository. Project
 initialization is manual and one-time; normal rewrite and resumed sessions

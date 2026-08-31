@@ -457,11 +457,12 @@ pub(super) async fn handle_connection(
                     Some(matched)
                 }
                 Err(diagnostic) => {
+                    let reason = motan_unmatched_reason(&diagnostic);
                     replay.motan.events.unmatched.push(CommandRequestReport {
                         case_id: active_case_id,
                         target: target_key.clone(),
                         command: identity.command(),
-                        reason: "no recorded Motan exchange matched method identity, authentication, and recorded lane order".to_string(),
+                        reason,
                         diagnostic: Some(diagnostic),
                     });
                     None
@@ -587,6 +588,21 @@ impl CommandExchangeScope for ReplayExchange {
 
     fn is_consumed(&self) -> bool {
         self.status.is_consumed()
+    }
+}
+
+fn motan_unmatched_reason(diagnostic: &CommandMatchDiagnostic) -> String {
+    match diagnostic {
+        CommandMatchDiagnostic::NoScopedCandidate => {
+            "no available recorded Motan exchange exists in the current replay scope".to_string()
+        }
+        CommandMatchDiagnostic::Mismatch { fields } => format!(
+            "the closest available recorded Motan exchange differs in matching fields: {}",
+            fields.join(", ")
+        ),
+        CommandMatchDiagnostic::LaneBlocked { .. } => {
+            "a matching recorded Motan exchange is blocked by an earlier unconsumed exchange on the same recorded connection lane".to_string()
+        }
     }
 }
 

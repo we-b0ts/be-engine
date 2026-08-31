@@ -152,6 +152,26 @@ pub(crate) fn resolve_published_case_dir(case_source: &Path, case_id: &str) -> R
         })
 }
 
+pub(crate) fn published_case_dependency_paths(case_source: &Path) -> Result<Vec<PathBuf>> {
+    let case_source = fs::canonicalize(case_source)
+        .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
+    let cases = discover_published_cases(&case_source)?;
+    ensure!(!cases.is_empty(), "case source contains no published cases");
+    reject_duplicate_case_ids(&cases)?;
+    cases
+        .into_iter()
+        .map(|case| {
+            let path = case.dir.join("dependencies.jsonl");
+            ensure!(
+                path.is_file(),
+                "published case {} has no dependencies.jsonl",
+                case.dir.display()
+            );
+            Ok(path)
+        })
+        .collect()
+}
+
 pub fn ensure_case_group(options: CaseGroupOptions) -> Result<CaseGroupEnsureResult> {
     validate_options(&options)?;
     let case_source = fs::canonicalize(&options.case_source).with_context(|| {

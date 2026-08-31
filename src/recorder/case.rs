@@ -98,11 +98,10 @@ impl PrimaryCaseDescriptor {
             (_, _, _, Some(method_sign)) => format!("method-sign:{method_sign}"),
             _ => "unknown".to_string(),
         };
-        let api_group = group.unwrap_or("default");
         Self {
             version: 1,
             kind: PrimaryCaseKind::MotanRpc,
-            api_key: format!("motan:{api_group}/{display_name}"),
+            api_key: format!("motan:{display_name}"),
             display_name,
             source_binding: PrimarySourceBinding::Motan {
                 group: group.map(str::to_string),
@@ -120,7 +119,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn motan_descriptor_has_protocol_neutral_identity_and_explicit_binding() {
+    fn motan_descriptor_excludes_group_from_api_identity_and_retains_it_in_binding() {
         let descriptor = PrimaryCaseDescriptor::motan(
             Some("abtest"),
             Some("com.weibo.AlchemyRpcService"),
@@ -131,8 +130,23 @@ mod tests {
 
         assert_eq!(
             descriptor.api_key,
-            "motan:abtest/com.weibo.AlchemyRpcService#getConfig(java.lang.String)"
+            "motan:com.weibo.AlchemyRpcService#getConfig(java.lang.String)"
         );
+        assert_eq!(
+            PrimaryCaseDescriptor::motan(
+                Some("production"),
+                Some("com.weibo.AlchemyRpcService"),
+                Some("getConfig"),
+                Some("java.lang.String"),
+                None,
+            )
+            .api_key,
+            descriptor.api_key
+        );
+        assert!(matches!(
+            descriptor.source_binding,
+            PrimarySourceBinding::Motan { ref group, .. } if group.as_deref() == Some("abtest")
+        ));
         assert_eq!(descriptor.kind, PrimaryCaseKind::MotanRpc);
     }
 }

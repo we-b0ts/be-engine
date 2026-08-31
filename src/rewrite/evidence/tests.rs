@@ -395,24 +395,7 @@ fn representatives_return_the_exact_recorded_case_directory_and_response_differe
             .get("replay_result_dir")
             .is_none()
     );
-    assert_eq!(report.applicable_rule_planners.len(), 1);
-    let planner = &report.applicable_rule_planners[0];
-    assert_eq!(planner.kind, "recorder_capture");
-    assert_eq!(planner.capability, "breeze_dns_bypass");
-    assert_eq!(planner.evidence_id, report.evidence_id);
-    assert_eq!(
-        planner.command.argv,
-        [
-            "backend-rewrite",
-            "--target-root",
-            target.path().to_str().unwrap(),
-            "recorder-capture",
-            "plan",
-            "--evidence-id",
-            report.evidence_id.as_str(),
-            "--help",
-        ]
-    );
+    assert!(report.applicable_rule_planners.is_empty());
 }
 
 #[test]
@@ -574,6 +557,22 @@ fn dirty_cluster_facts_omit_the_duplicate_full_startup_summary() {
     assert_eq!(facts["clusters"], serde_json::json!([]));
     assert_eq!(facts["complete"], true);
     assert!(facts["representative_dependencies_command"].is_null());
+}
+
+#[test]
+fn motan_dirty_cluster_guidance_rules_out_business_argument_mismatch() {
+    let limitations = dirty_cluster_limitations(&serde_json::json!({
+        "clusters": [{"protocol": "motan", "reason": "unmatched_target"}]
+    }));
+
+    assert_eq!(
+        limitations,
+        [
+            "dirty event counts do not prove process ownership",
+            "they do not prove response causality",
+            "Motan dirty evidence does not indicate a business-argument mismatch",
+        ]
+    );
 }
 
 #[test]

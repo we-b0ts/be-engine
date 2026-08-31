@@ -84,6 +84,16 @@ Redis error responses. Other case, bootstrap-only, legacy, HTTP, Motan, and
 Memcached exchanges retain their existing consumption and connection-order
 semantics. This replay treatment does not replace destination behavior.
 
+When a Redis rule is added after an immutable recording already exists, Replay
+may derive the same reusable-seed behavior without editing that recording. It
+does so only when every matching exchange has complete replay-safe evidence,
+each observed logical target/session/command/argument identity has a
+successful `bootstrap_window` Global seed, and all matching Global and Case
+responses for that identity are byte-consistent. The bounded overlay references
+the original exchange and is regenerated from the current rule and case source;
+errors, truncation, conflicts, incomplete configured-key coverage, or ambiguous
+Global ownership reject the whole rule overlay.
+
 Supply the logical resource to `plan|apply`. The tool requires one compatible
 `mc` descriptor, persists its stable identity without the dynamic port, and
 resolves the port when the source-created descriptor is available. Recorder
@@ -257,7 +267,9 @@ The observation window defaults to 60000 ms and starts when the source HTTP
 ready probe succeeds. Recorder logs incomplete progress as a warning and
 continues case admission when the window elapses.
 
-After recorder ownership-rule changes, create a new standard recording. The
-rewrite coordinator consolidates Redis rule changes with other pending
+After a Redis ownership-rule change, let the rewrite coordinator attempt the
+read-only old-Global snapshot overlay first. If it reports
+`reused_old_global_evidence`, continue with the same recording. If strict
+derivation fails, the coordinator consolidates the rule with other pending
 recording-contract changes and schedules one fresh recording after runnable API
-work drains.
+work drains. Do not modify old recording JSONL to manufacture a seed.

@@ -61,7 +61,14 @@ pub(super) fn spawn_replay(
         .arg("--control-socket")
         .arg(allocate_control_socket())
         .arg("--policy")
-        .arg(&config.replay_policy);
+        .arg(&config.replay_policy)
+        .arg("--case-dependency-post-response-window-ms")
+        .arg(
+            config
+                .replay_case_dependency_post_response_window
+                .as_millis()
+                .to_string(),
+        );
     command.args(recorder_config_args(config));
     for case_id in inventory
         .groups
@@ -546,6 +553,7 @@ mod tests {
             source_container: "source".to_string(),
             breeze_container: Some("breeze".to_string()),
             replay_policy: PathBuf::from("/target/config/replay.yaml"),
+            replay_case_dependency_post_response_window: Duration::from_millis(10),
             replay_startup_timeout: Duration::from_secs(1),
             pr_base: "dev-migration".to_string(),
             recorder_config: "project.yaml".into(),

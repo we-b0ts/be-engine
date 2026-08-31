@@ -109,9 +109,7 @@ query ID.
   only the exact `facts.next_page.command`; never construct a cursor;
 - `representatives`: the representative case ID, exact immutable standard or
   comparison `case_dir`, and bounded structured response or dependency
-  difference; it does not prove the cause. For response, dependency, and
-  comparison issues it may advertise a `recorder_capture` planner; planner
-  availability does not prove that traffic was omitted;
+  difference; it does not prove the cause;
 - `source_variation`: source values across recorded cases; variation alone
   does not prove nondeterminism or cache ownership;
 - `collection_equivalence`: array multiset equality; equality does not prove

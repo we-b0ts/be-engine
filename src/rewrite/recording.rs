@@ -897,6 +897,7 @@ mod tests {
         for item in &mut state.api_inventory {
             item.status = super::super::model::RewriteApiStatus::AwaitingRecordingRefresh;
         }
+        state.case_source = Some(PathBuf::from("old-recording"));
         state.current_api_index = None;
         state.recording_refresh = Some(super::super::model::RewriteRecordingRefreshState {
             applied: vec![super::super::model::RewriteRecorderCaptureAppliedRecord {
@@ -910,6 +911,8 @@ mod tests {
                 source_evidence: "CounterService.java:88".to_string(),
             }],
             dependency_rules: Vec::new(),
+            required_apis: vec!["GET /a".to_string(), "POST /b".to_string()],
+            baseline_case_source: Some(PathBuf::from("old-recording")),
             project_config_revision: super::super::fingerprint::project_config_revision(
                 target.path(),
             )
@@ -927,6 +930,13 @@ mod tests {
         );
         assert!(state.recording_apis.is_empty());
         assert!(state.api_inventory.is_empty());
+        assert_eq!(
+            state
+                .recording_refresh
+                .as_ref()
+                .and_then(|refresh| refresh.baseline_case_source.as_deref()),
+            Some(Path::new("old-recording"))
+        );
         assert_eq!(
             state
                 .recording_refresh

@@ -182,7 +182,7 @@ fn unresolved_classification_preserves_source_investigation_without_a_rule_plan(
 }
 
 #[test]
-fn redis_rule_application_is_queued_for_a_fresh_snapshot_recording() {
+fn rejected_redis_snapshot_derivation_can_schedule_a_fresh_recording_fallback() {
     let target = tempdir().unwrap();
     fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
     crate::rewrite::test_support::install_project_config(
@@ -203,5 +203,6 @@ fn redis_rule_application_is_queued_for_a_fresh_snapshot_recording() {
     assert!(refresh.applied.is_empty());
     assert_eq!(refresh.dependency_rules.len(), 1);
     assert_eq!(refresh.dependency_rules[0].rule_name, "cache-warm");
+    assert_eq!(refresh.required_apis, vec!["GET /api"]);
     assert!(refresh.recording_run_id.is_none());
 }
