@@ -100,11 +100,12 @@ and keep each choice compatible with the source submission contract.
 
 Every used Breeze or platform SDK capability MUST be its own workspace package
 at `crates/breeze/<capability>` and be exposed through the corresponding
-`brz-<capability>` library. Use the canonical capability names `memcache`,
-`redis`, `mysql`, `vintage`, `motan`, `auth`, `mcq`, and `kafka`. `brz-auth`
-owns authentication SDK implementations, including TAuth and TAuth2;
-Memcache-backed MCQ belongs in `brz-mcq`. Product code MUST use the `brz-*`
-library rather than a raw SDK or driver. Create only packages the product uses.
+`brz-<capability>` library. Use the canonical capability names `http`,
+`memcache`, `redis`, `mysql`, `vintage`, `motan`, `auth`, `mcq`, `kafka`, and
+`logs`. `brz-auth` owns authentication SDK implementations, including TAuth
+and TAuth2; Memcache-backed MCQ belongs in `brz-mcq`. Product code MUST use the
+`brz-*` library rather than a raw SDK or driver. Create only packages the
+product uses.
 
 ## Verification Ownership
 

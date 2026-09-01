@@ -186,10 +186,8 @@ pub(super) fn validate_comparison_recording(
         "comparison recording is dirty"
     );
     let (_, project) = crate::e2e_run::resolve_project(target_root)?;
-    let process_outputs = crate::process_output::configs_for_observation(
-        &project.process_outputs,
-        crate::process_output::ProcessOutputObservation::Comparison,
-    );
+    let process_outputs =
+        super::process_outputs::comparison_configs(state, &project.process_outputs);
     let process_output_root = comparison_run(target_root, run_id).join("process-outputs");
     crate::process_output::validate_capture_set(
         &process_outputs,

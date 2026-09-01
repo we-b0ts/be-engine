@@ -17,6 +17,10 @@ pub(super) enum ProcessOutputActivation {
     Deferred,
 }
 
+/// Profile logs are emitted periodically and need enough configured runtime
+/// for initialization and at least several complete flush intervals.
+const MIN_PROFILE_COMPARISON_DURATION_SECONDS: u64 = 60;
+
 pub(super) fn install(
     state: &mut RewriteState,
     configs: &[crate::process_output::ProcessOutputConfig],
@@ -198,10 +202,7 @@ pub(super) fn comparison_issue(
     target_fingerprint: &str,
     configs: &[crate::process_output::ProcessOutputConfig],
 ) -> Result<Option<RewriteIssue>> {
-    let configs = crate::process_output::configs_for_observation(
-        configs,
-        crate::process_output::ProcessOutputObservation::Comparison,
-    );
+    let configs = comparison_configs(state, configs);
     if configs.is_empty() {
         return Ok(None);
     }
@@ -220,6 +221,27 @@ pub(super) fn comparison_issue(
         }
     }
     Ok(None)
+}
+
+pub(super) fn comparison_configs(
+    state: &RewriteState,
+    configs: &[crate::process_output::ProcessOutputConfig],
+) -> Vec<crate::process_output::ProcessOutputConfig> {
+    let profile_enabled =
+        state.recording_settings.duration_seconds.get() >= MIN_PROFILE_COMPARISON_DURATION_SECONDS;
+    crate::process_output::configs_for_observation(
+        configs,
+        crate::process_output::ProcessOutputObservation::Comparison,
+    )
+    .into_iter()
+    .filter(|config| {
+        profile_enabled
+            || !matches!(
+                &config.comparison,
+                crate::process_output::ProcessOutputComparison::ProfileByType { .. }
+            )
+    })
+    .collect()
 }
 
 fn ensure_eligible(
@@ -278,6 +300,19 @@ fn missing_issue(
     target_fingerprint: &str,
     attempt: u64,
 ) -> RewriteIssue {
+    let summary = if result.classification == "candidate_missing" {
+        format!(
+            "the target process did not generate process output {} at {}",
+            result.id,
+            result.path.display()
+        )
+    } else {
+        format!(
+            "the target process output {} at {} did not satisfy its configured comparison",
+            result.id,
+            result.path.display()
+        )
+    };
     let recommended_checks = if result.id == "metrics-profile" {
         vec![
             "Verify that the metrics component is loaded by the target process.".to_string(),
@@ -306,11 +341,7 @@ fn missing_issue(
         ]),
         kind: RewriteIssueKind::ProcessOutput,
         owner: RewriteIssueOwner::TargetCode,
-        summary: format!(
-            "the target process did not generate process output {} at {}",
-            result.id,
-            result.path.display()
-        ),
+        summary,
         pointer_pattern: None,
         representative: None,
         response_diagnosis: None,
@@ -322,9 +353,10 @@ fn missing_issue(
             "classification": result.classification,
             "process_output_id": result.id,
             "path": result.path,
-            "comparison": "regular_file_exists",
+            "comparison": &result.comparison,
             "source": { "present": result.source_present },
-            "candidate": { "present": result.target_present }
+            "candidate": { "present": result.target_present },
+            "detail": &result.detail
         })),
     }
 }
@@ -481,6 +513,32 @@ mod tests {
     }
 
     #[test]
+    fn profile_comparison_requires_a_configured_sixty_second_recording() {
+        let mut state = crate::rewrite::test_state();
+        let mut profile = process_output_config(
+            "metrics-profile",
+            crate::process_output::ProcessOutputObservation::Comparison,
+        );
+        profile.comparison = crate::process_output::ProcessOutputComparison::ProfileByType {
+            rules: crate::process_output::ProfileByTypeRules {
+                exact_total_count: vec!["RPC_SERVICE_WHOLE".to_string()],
+                source_positive_exists: vec!["REDIS".to_string()],
+            },
+        };
+
+        state.recording_settings.duration_seconds = std::num::NonZeroU64::new(59).unwrap();
+        assert!(comparison_configs(&state, &[profile.clone()]).is_empty());
+        let regular = process_output_config(
+            "startup-report",
+            crate::process_output::ProcessOutputObservation::Comparison,
+        );
+        assert_eq!(comparison_configs(&state, &[regular]).len(), 1);
+
+        state.recording_settings.duration_seconds = std::num::NonZeroU64::new(60).unwrap();
+        assert_eq!(comparison_configs(&state, &[profile]).len(), 1);
+    }
+
+    #[test]
     fn comparison_output_missing_from_target_becomes_current_api_issue() {
         let target = tempfile::tempdir().unwrap();
         let mut state = crate::rewrite::test_state();
@@ -546,10 +604,12 @@ mod tests {
             &crate::process_output::ProcessOutputComparisonResult {
                 id: "metrics-profile".to_string(),
                 path: PathBuf::from("/data1/weibo/logs/profile.log"),
+                comparison: crate::process_output::ProcessOutputComparison::RegularFileExists,
                 passed: false,
                 classification: "candidate_missing",
                 source_present: true,
                 target_present: false,
+                detail: None,
             },
             "target-a",
             1,
@@ -578,10 +638,12 @@ mod tests {
             &crate::process_output::ProcessOutputComparisonResult {
                 id: "metrics-profile".to_string(),
                 path: PathBuf::from("/data1/weibo/logs/profile.log"),
+                comparison: crate::process_output::ProcessOutputComparison::RegularFileExists,
                 passed: false,
                 classification: "candidate_missing",
                 source_present: true,
                 target_present: false,
+                detail: None,
             },
             "target-a",
             1,
@@ -595,6 +657,59 @@ mod tests {
         assert!(text.contains("initialization and startup are executed"));
         assert!(text.contains("/data1/weibo/logs/profile.log"));
         assert!(!text.to_ascii_lowercase().contains("permission"));
+    }
+
+    #[test]
+    fn metrics_profile_issue_exposes_one_example_and_count_for_each_mismatched_type() {
+        let issue = missing_issue(
+            &crate::process_output::ProcessOutputComparisonResult {
+                id: "metrics-profile".to_string(),
+                path: PathBuf::from("/data1/weibo/logs/profile.log"),
+                comparison: crate::process_output::ProcessOutputComparison::ProfileByType {
+                    rules: crate::process_output::ProfileByTypeRules {
+                        exact_total_count: vec!["RPC_SERVICE_WHOLE".to_string()],
+                        source_positive_exists: vec!["HTTP".to_string()],
+                    },
+                },
+                passed: false,
+                classification: "profile_mismatch",
+                source_present: true,
+                target_present: true,
+                detail: Some(crate::process_output::ProcessOutputComparisonDetail {
+                    compared_type_count: 2,
+                    mismatched_type_count: 1,
+                    total_difference_count: 12,
+                    types: vec![crate::process_output::ProfileTypeComparisonDetail {
+                        record_type: "HTTP".to_string(),
+                        policy: crate::process_output::ProfileByTypePolicy::SourcePositiveExists,
+                        difference_count: 12,
+                        example: crate::process_output::ProfileDifferenceDetail {
+                            classification: "profile_required_name_missing",
+                            name: "api.demo.test:443".to_string(),
+                            source_total_count: Some(23),
+                            target_total_count: None,
+                            source_slow_thresholds: Some(vec![50]),
+                            target_slow_thresholds: None,
+                        },
+                    }],
+                }),
+            },
+            "target-a",
+            2,
+        );
+        let json = serde_json::to_value(issue).unwrap();
+        let detail = &json["comparison_observation"]["detail"];
+
+        assert_eq!(
+            json["comparison_observation"]["classification"],
+            "profile_mismatch"
+        );
+        assert_eq!(detail["compared_type_count"], 2);
+        assert_eq!(detail["mismatched_type_count"], 1);
+        assert_eq!(detail["total_difference_count"], 12);
+        assert_eq!(detail["types"][0]["type"], "HTTP");
+        assert_eq!(detail["types"][0]["difference_count"], 12);
+        assert_eq!(detail["types"][0]["example"]["name"], "api.demo.test:443");
     }
 
     fn api(api: &str, status: RewriteApiStatus) -> RewriteApiProgress {

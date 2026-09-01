@@ -452,8 +452,12 @@ recordings, reports, source-process memory, or remote responses. Keep
 credentials and generated trust below `.traffic-e2e/local/` and never copy
 them into an image layer.
 
-The entrypoint must emit application logs to stdout/stderr, remain attached to
-the target process, and handle `SIGTERM` with bounded graceful shutdown. It must
+The entrypoint must remain attached to the target process and handle `SIGTERM`
+with bounded graceful shutdown. A Rust target uses `brz-logs` for application
+logs as specified in [logs.md](logs.md); it does not duplicate those events to
+stdout or stderr. Bootstrap failures before logging initializes may use
+stderr. The image must create the configured log directory and make it writable
+by UID 998; do not mount or copy source log content into it. The entrypoint must
 not daemonize, write a PID file, run a build, or manage its own container.
 traffic-e2e starts the container with `--user 998:998`, verifies that identity,
 joins it to the run-owned network namespace, probes readiness from
@@ -466,8 +470,10 @@ when genuine product startup is not implemented yet. The mock is the current
 image entrypoint, not a fallback selected after a real startup failure. It must
 honor the same declared mounts and application-owned environment, verify that
 required mounts exist and are readable, bind `0.0.0.0` on the configured port,
-satisfy the configured readiness path/status, stay in the foreground, log to
-stdout/stderr, and exit cleanly on `SIGTERM`. It must not emulate
+satisfy the configured readiness path/status, stay in the foreground, emit
+bounded lifecycle diagnostics through the target logging contract, and exit
+cleanly on `SIGTERM`. A bootstrap-only mock that has no product logger yet may
+use stdout or stderr. It must not emulate
 business responses, dependencies, Replay, or Comparison. Replace it through
 ordinary product implementation later without changing the container
 contract. A mock that passes a real Replay proves only launch integration; it
@@ -536,9 +542,9 @@ are ready, then the coordinator verifies:
    when enabled are present with the required access mode.
 3. The configured readiness path reaches its final status and the target is
    listening on `0.0.0.0` at the configured port.
-4. Bounded stdout/stderr output is available. At the end of Replay, normal
-   `SIGTERM` shutdown exits cleanly and the target container and namespace are
-   removed.
+4. Captured stdout/stderr remains bounded and may be empty after `brz-logs`
+   initializes. At the end of Replay, normal `SIGTERM` shutdown exits cleanly
+   and the target container and namespace are removed.
 
 The run stores the successful launch checks in
 `reports/target-runtime-checks.json`; target start, bounded logs, runtime state,

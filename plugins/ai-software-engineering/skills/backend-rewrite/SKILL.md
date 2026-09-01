@@ -80,6 +80,10 @@ adapters, or export endpoints. When target code calls a Motan dependency, read
 contract, client, authentication, or lifecycle. Read both only when the same
 work scope owns both directions.
 
+When an assigned API worker calls an outbound HTTP dependency through
+`brz-http`, read [http.md](references/http.md) before constructing the client,
+defining endpoints, or implementing request and response handling.
+
 When an assigned API worker uses memcache `CacheService`, read
 [memcache.md](references/memcache.md) before constructing the cache or calling
 `get`/`set`.
@@ -87,6 +91,11 @@ When an assigned API worker uses memcache `CacheService`, read
 When an assigned API worker uses `brz-redis`, read
 [redis.md](references/redis.md) before choosing a `RedisService` topology or
 calling its typed Redis contract.
+
+When target startup installs process logging through `brz-logs`, or a worker
+changes application log routing, buffering, flushing, or shutdown, read
+[logs.md](references/logs.md) before changing the subscriber or emitting
+product logs.
 
 Read [project-init.md](references/project-init.md) only when the caller
 explicitly asks to initialize an uninitialized target repository. Project

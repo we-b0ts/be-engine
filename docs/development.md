@@ -1113,6 +1113,51 @@ though v1 does not compare contents. A missing source output rejects the owning
 recording as an engine input problem. A missing target output becomes a
 target-code `implementation_required` work item.
 
+`profile_by_type` compares timestamp-prefixed JSON records from a profile log
+by configured record `type` and `name`. Each selected record's `total_count`
+and `slowThreshold` accepts either a JSON unsigned integer or its decimal
+string representation. The configuration is strict for every participating
+record. A type may appear in multiple policy lists; `exact_total_count` takes
+precedence because it is the stricter check. The coordinator enables all
+`profile_by_type` comparisons only when the configured comparison recording
+duration is at least 60 seconds. Shorter diagnostic recordings may still
+capture the files, but neither validate their presence nor compare their
+metrics.
+
+```yaml
+comparison:
+  kind: profile_by_type
+  rules:
+    exact_total_count:
+    - RPC_SERVICE_WHOLE
+    source_positive_exists:
+    - REDIS
+    - MC
+    - MCDETAIL
+    - HTTP
+    - SERVICE
+    - RPC_SERVICE_CLIENT
+    - RPC_SERVICE_CLIENT_V2
+    - RPC_SERVICE_CLIENT_REAL
+    - RPC_SERVICE_CLIENT_REAL_V2
+```
+
+`exact_total_count` requires the source and target to have exactly the same
+names for that type. It sums every `total_count` in each `(type, name)` group
+and requires equal sums. For every group, the source and target sets of
+`slowThreshold` values must share at least one value; the individual records do
+not need to align. Records without a source `slowThreshold` are ignored by
+both policies; this excludes non-latency rows that reuse a selected type, such
+as MC socket-pool snapshots. `source_positive_exists` is one-way: for every
+source `(type, name)` group whose summed `total_count` is greater than zero, the
+target must contain that type/name group. It intentionally ignores target
+counts and extra target groups. A failed profile comparison reports the number
+of compared and mismatched types, the total number of mismatched `(type, name)`
+groups, and one deterministic example for every mismatched type. Each per-type
+entry identifies its policy and full difference count. The example includes
+the relevant counts or thresholds and is selected by name order, so evidence is
+stable and bounded by the maximum number of configured profile types.
+
 The coordinator first traverses and dispatches every API work item. It then
 traverses pending `before_shutdown` process outputs with
 `next --process-output <id>` and assigns
