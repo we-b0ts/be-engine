@@ -16,6 +16,7 @@ const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_CAPTURE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_PROFILE_BY_TYPE_RULES: usize = 32;
 const MAX_PROFILE_TYPE_LENGTH: usize = 128;
+const DEFAULT_MIN_PROFILE_RECORDING_DURATION_SECONDS: u64 = 60;
 const MISSING_EXIT_CODE: i32 = 44;
 const INVALID_TYPE_EXIT_CODE: i32 = 45;
 
@@ -39,7 +40,15 @@ const fn default_max_bytes() -> u64 {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ProcessOutputComparison {
     RegularFileExists,
-    ProfileByType { rules: ProfileByTypeRules },
+    ProfileByType {
+        #[serde(default = "default_min_profile_recording_duration_seconds")]
+        min_recording_duration_seconds: u64,
+        rules: ProfileByTypeRules,
+    },
+}
+
+const fn default_min_profile_recording_duration_seconds() -> u64 {
+    DEFAULT_MIN_PROFILE_RECORDING_DURATION_SECONDS
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,10 +69,20 @@ pub(crate) enum ProfileByTypePolicy {
 
 impl ProcessOutputComparison {
     fn validate(&self, output_id: &str) -> Result<()> {
-        let Self::ProfileByType { rules } = self else {
+        let Self::ProfileByType { rules, .. } = self else {
             return Ok(());
         };
         rules.validate(output_id)
+    }
+
+    pub(crate) fn enabled_for_recording_duration(&self, duration_seconds: u64) -> bool {
+        match self {
+            Self::RegularFileExists => true,
+            Self::ProfileByType {
+                min_recording_duration_seconds,
+                ..
+            } => duration_seconds >= *min_recording_duration_seconds,
+        }
     }
 }
 
@@ -447,7 +466,7 @@ pub(crate) fn compare_capture(
                 detail: None,
             }
         }
-        ProcessOutputComparison::ProfileByType { rules } => profile::compare(
+        ProcessOutputComparison::ProfileByType { rules, .. } => profile::compare(
             &source_root
                 .join(&config.id)
                 .join(ProcessOutputCaptureSide::Source.data_file()),
@@ -961,6 +980,7 @@ mod tests {
     ) -> ProcessOutputConfig {
         ProcessOutputConfig {
             comparison: ProcessOutputComparison::ProfileByType {
+                min_recording_duration_seconds: DEFAULT_MIN_PROFILE_RECORDING_DURATION_SECONDS,
                 rules: ProfileByTypeRules {
                     exact_total_count: exact_total_count
                         .iter()
