@@ -8,10 +8,14 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+mod profile;
+
 const CAPTURE_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_CAPTURE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_PROFILE_BY_TYPE_RULES: usize = 32;
+const MAX_PROFILE_TYPE_LENGTH: usize = 128;
 const MISSING_EXIT_CODE: i32 = 44;
 const INVALID_TYPE_EXIT_CODE: i32 = 45;
 
@@ -31,10 +35,77 @@ const fn default_max_bytes() -> u64 {
     DEFAULT_MAX_BYTES
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ProcessOutputComparison {
     RegularFileExists,
+    ProfileByType { rules: ProfileByTypeRules },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProfileByTypeRules {
+    #[serde(default)]
+    pub(crate) exact_total_count: Vec<String>,
+    #[serde(default)]
+    pub(crate) source_positive_exists: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ProfileByTypePolicy {
+    ExactTotalCount,
+    SourcePositiveExists,
+}
+
+impl ProcessOutputComparison {
+    fn validate(&self, output_id: &str) -> Result<()> {
+        let Self::ProfileByType { rules } = self else {
+            return Ok(());
+        };
+        rules.validate(output_id)
+    }
+}
+
+impl ProfileByTypeRules {
+    fn validate(&self, output_id: &str) -> Result<()> {
+        let rule_count = self.exact_total_count.len() + self.source_positive_exists.len();
+        ensure!(
+            (1..=MAX_PROFILE_BY_TYPE_RULES).contains(&rule_count),
+            "process output {output_id} profile_by_type rules must contain 1-{MAX_PROFILE_BY_TYPE_RULES} entries"
+        );
+        for record_type in self
+            .exact_total_count
+            .iter()
+            .chain(&self.source_positive_exists)
+        {
+            ensure!(
+                !record_type.is_empty()
+                    && record_type == record_type.trim()
+                    && record_type.len() <= MAX_PROFILE_TYPE_LENGTH
+                    && !record_type.contains(['\r', '\n']),
+                "process output {output_id} profile_by_type rule type must be a trimmed single-line value up to {MAX_PROFILE_TYPE_LENGTH} bytes"
+            );
+        }
+        Ok(())
+    }
+
+    pub(super) fn policies(&self) -> std::collections::BTreeMap<&str, ProfileByTypePolicy> {
+        self.source_positive_exists
+            .iter()
+            .map(|record_type| {
+                (
+                    record_type.as_str(),
+                    ProfileByTypePolicy::SourcePositiveExists,
+                )
+            })
+            .chain(
+                self.exact_total_count.iter().map(|record_type| {
+                    (record_type.as_str(), ProfileByTypePolicy::ExactTotalCount)
+                }),
+            )
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,10 +162,43 @@ struct ProcessOutputManifest {
 pub(crate) struct ProcessOutputComparisonResult {
     pub(crate) id: String,
     pub(crate) path: PathBuf,
+    pub(crate) comparison: ProcessOutputComparison,
     pub(crate) passed: bool,
     pub(crate) classification: &'static str,
     pub(crate) source_present: bool,
     pub(crate) target_present: bool,
+    pub(crate) detail: Option<ProcessOutputComparisonDetail>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ProcessOutputComparisonDetail {
+    pub(crate) compared_type_count: usize,
+    pub(crate) mismatched_type_count: usize,
+    pub(crate) total_difference_count: usize,
+    pub(crate) types: Vec<ProfileTypeComparisonDetail>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ProfileTypeComparisonDetail {
+    #[serde(rename = "type")]
+    pub(crate) record_type: String,
+    pub(crate) policy: ProfileByTypePolicy,
+    pub(crate) difference_count: usize,
+    pub(crate) example: ProfileDifferenceDetail,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ProfileDifferenceDetail {
+    pub(crate) classification: &'static str,
+    pub(crate) name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) source_total_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) target_total_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) source_slow_thresholds: Option<Vec<u64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) target_slow_thresholds: Option<Vec<u64>>,
 }
 
 pub(crate) fn validate_configs(configs: &[ProcessOutputConfig]) -> Result<()> {
@@ -113,6 +217,7 @@ pub(crate) fn validate_configs(configs: &[ProcessOutputConfig]) -> Result<()> {
             "process output {} max_bytes must be between 1 and {MAX_FILE_BYTES}",
             config.id
         );
+        config.comparison.validate(&config.id)?;
         total_max_bytes = total_max_bytes
             .checked_add(config.max_bytes)
             .context("process output max_bytes total overflowed")?;
@@ -224,7 +329,7 @@ fn capture_into_staging(
                 id: config.id.clone(),
                 side,
                 path: config.path.clone(),
-                comparison: config.comparison,
+                comparison: config.comparison.clone(),
                 observation: config.observation,
                 present: false,
                 size_bytes: None,
@@ -245,7 +350,7 @@ fn capture_into_staging(
                     id: config.id.clone(),
                     side,
                     path: config.path.clone(),
-                    comparison: config.comparison,
+                    comparison: config.comparison.clone(),
                     observation: config.observation,
                     present: true,
                     size_bytes: Some(size),
@@ -325,16 +430,42 @@ pub(crate) fn compare_capture(
         "source process output {} is missing",
         config.id
     );
-    let passed = match config.comparison {
-        ProcessOutputComparison::RegularFileExists => target.present,
+    let outcome = match &config.comparison {
+        ProcessOutputComparison::RegularFileExists => profile::ComparisonOutcome {
+            passed: target.present,
+            classification: if target.present {
+                "equal"
+            } else {
+                "candidate_missing"
+            },
+            detail: None,
+        },
+        ProcessOutputComparison::ProfileByType { .. } if !target.present => {
+            profile::ComparisonOutcome {
+                passed: false,
+                classification: "candidate_missing",
+                detail: None,
+            }
+        }
+        ProcessOutputComparison::ProfileByType { rules } => profile::compare(
+            &source_root
+                .join(&config.id)
+                .join(ProcessOutputCaptureSide::Source.data_file()),
+            &target_root
+                .join(&config.id)
+                .join(ProcessOutputCaptureSide::Target.data_file()),
+            rules,
+        )?,
     };
     Ok(ProcessOutputComparisonResult {
         id: config.id.clone(),
         path: config.path.clone(),
-        passed,
-        classification: if passed { "equal" } else { "candidate_missing" },
+        comparison: config.comparison.clone(),
+        passed: outcome.passed,
+        classification: outcome.classification,
         source_present: source.present,
         target_present: target.present,
+        detail: outcome.detail,
     })
 }
 
@@ -576,7 +707,7 @@ pub(crate) fn write_test_capture(
             id: config.id.clone(),
             side,
             path: config.path.clone(),
-            comparison: config.comparison,
+            comparison: config.comparison.clone(),
             observation: config.observation,
             present,
             size_bytes,
@@ -673,7 +804,175 @@ mod tests {
         assert_eq!(result.classification, "candidate_missing");
     }
 
+    #[test]
+    fn profile_by_type_exact_aggregates_total_count_and_matches_one_threshold() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let target = root.path().join("target");
+        let config = profile_config(&["RPC_SERVICE_WHOLE"], &[]);
+        write_capture_for(
+            &source,
+            &config,
+            ProcessOutputCaptureSide::Source,
+            br#"2026-09-01 12:31:29 {"type":"RPC_SERVICE_WHOLE","name":"getConfig","slowThreshold":"200","total_count":"12"}
+2026-09-01 12:31:39 {"type":"RPC_SERVICE_WHOLE","name":"getConfig","slowThreshold":"500","total_count":85}
+"#,
+        );
+        write_capture_for(
+            &target,
+            &config,
+            ProcessOutputCaptureSide::Target,
+            br#"2026-09-01 12:31:29 {"type":"RPC_SERVICE_WHOLE","name":"getConfig","slowThreshold":200,"total_count":97}
+"#,
+        );
+
+        let result = compare_capture(&config, &source, &target).unwrap();
+
+        assert!(result.passed);
+        assert_eq!(result.classification, "equal");
+    }
+
+    #[test]
+    fn profile_by_type_exact_reports_one_mismatched_name_and_counts() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let target = root.path().join("target");
+        let config = profile_config(&["RPC_SERVICE_WHOLE"], &[]);
+        write_capture_for(
+            &source,
+            &config,
+            ProcessOutputCaptureSide::Source,
+            br#"2026-09-01 {"type":"RPC_SERVICE_WHOLE","name":"getConfig","slowThreshold":200,"total_count":12}
+"#,
+        );
+        write_capture_for(
+            &target,
+            &config,
+            ProcessOutputCaptureSide::Target,
+            br#"2026-09-01 {"type":"RPC_SERVICE_WHOLE","name":"getConfig","slowThreshold":200,"total_count":11}
+"#,
+        );
+
+        let result = compare_capture(&config, &source, &target).unwrap();
+
+        assert!(!result.passed);
+        assert_eq!(result.classification, "profile_mismatch");
+        let detail = result.detail.as_ref().unwrap();
+        assert_eq!(detail.compared_type_count, 1);
+        assert_eq!(detail.mismatched_type_count, 1);
+        assert_eq!(detail.total_difference_count, 1);
+        assert_eq!(detail.types[0].record_type, "RPC_SERVICE_WHOLE");
+        assert_eq!(detail.types[0].difference_count, 1);
+        assert_eq!(
+            detail.types[0].example.classification,
+            "profile_total_count_mismatch"
+        );
+        assert_eq!(detail.types[0].example.name, "getConfig");
+        assert_eq!(detail.types[0].example.source_total_count, Some(12));
+        assert_eq!(detail.types[0].example.target_total_count, Some(11));
+    }
+
+    #[test]
+    fn profile_by_type_exact_requires_one_common_slow_threshold() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let target = root.path().join("target");
+        let config = profile_config(&["RPC_SERVICE_WHOLE"], &[]);
+        write_capture_for(
+            &source,
+            &config,
+            ProcessOutputCaptureSide::Source,
+            br#"2026-09-01 {"type":"RPC_SERVICE_WHOLE","name":"getConfig","slowThreshold":200,"total_count":12}
+"#,
+        );
+        write_capture_for(
+            &target,
+            &config,
+            ProcessOutputCaptureSide::Target,
+            br#"2026-09-01 {"type":"RPC_SERVICE_WHOLE","name":"getConfig","slowThreshold":500,"total_count":12}
+"#,
+        );
+
+        let result = compare_capture(&config, &source, &target).unwrap();
+
+        assert!(!result.passed);
+        assert_eq!(result.classification, "profile_mismatch");
+        let example = &result.detail.as_ref().unwrap().types[0].example;
+        assert_eq!(example.classification, "profile_slow_threshold_no_match");
+        assert_eq!(example.source_slow_thresholds, Some(vec![200]));
+        assert_eq!(example.target_slow_thresholds, Some(vec![500]));
+    }
+
+    #[test]
+    fn profile_by_type_requires_a_target_redis_name_only_when_source_count_is_positive() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let target = root.path().join("target");
+        let config = profile_config(&[], &["REDIS"]);
+        write_capture_for(
+            &source,
+            &config,
+            ProcessOutputCaptureSide::Source,
+            br#"2026-09-01 {"type":"REDIS","name":"active","slowThreshold":50,"total_count":3}
+2026-09-01 {"type":"REDIS","name":"idle","slowThreshold":50,"total_count":0}
+"#,
+        );
+        write_capture_for(
+            &target,
+            &config,
+            ProcessOutputCaptureSide::Target,
+            br#"2026-09-01 {"type":"REDIS","name":"idle"}
+"#,
+        );
+
+        let result = compare_capture(&config, &source, &target).unwrap();
+
+        assert!(!result.passed);
+        assert_eq!(result.classification, "profile_mismatch");
+        let example = &result.detail.as_ref().unwrap().types[0].example;
+        assert_eq!(example.classification, "profile_required_name_missing");
+        assert_eq!(example.name, "active");
+        assert_eq!(example.source_total_count, Some(3));
+    }
+
+    #[test]
+    fn profile_by_type_allows_one_type_in_both_policies() {
+        let config = profile_config(&["REDIS"], &["REDIS"]);
+
+        validate_configs(&[config]).unwrap();
+    }
+
     fn write_capture(root: &Path, side: ProcessOutputCaptureSide, present: bool, bytes: &[u8]) {
         write_test_capture(root, &config(), side, present.then_some(bytes)).unwrap();
+    }
+
+    fn write_capture_for(
+        root: &Path,
+        config: &ProcessOutputConfig,
+        side: ProcessOutputCaptureSide,
+        bytes: &[u8],
+    ) {
+        write_test_capture(root, config, side, Some(bytes)).unwrap();
+    }
+
+    fn profile_config(
+        exact_total_count: &[&str],
+        source_positive_exists: &[&str],
+    ) -> ProcessOutputConfig {
+        ProcessOutputConfig {
+            comparison: ProcessOutputComparison::ProfileByType {
+                rules: ProfileByTypeRules {
+                    exact_total_count: exact_total_count
+                        .iter()
+                        .map(|record_type| (*record_type).to_string())
+                        .collect(),
+                    source_positive_exists: source_positive_exists
+                        .iter()
+                        .map(|record_type| (*record_type).to_string())
+                        .collect(),
+                },
+            },
+            ..config()
+        }
     }
 }
