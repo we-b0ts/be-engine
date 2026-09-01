@@ -17,10 +17,6 @@ pub(super) enum ProcessOutputActivation {
     Deferred,
 }
 
-/// Profile logs are emitted periodically and need enough configured runtime
-/// for initialization and at least several complete flush intervals.
-const MIN_PROFILE_COMPARISON_DURATION_SECONDS: u64 = 60;
-
 pub(super) fn install(
     state: &mut RewriteState,
     configs: &[crate::process_output::ProcessOutputConfig],
@@ -223,23 +219,22 @@ pub(super) fn comparison_issue(
     Ok(None)
 }
 
+/// Profile logs are emitted periodically and need enough configured runtime
+/// for initialization and at least several complete flush intervals.
 pub(super) fn comparison_configs(
     state: &RewriteState,
     configs: &[crate::process_output::ProcessOutputConfig],
 ) -> Vec<crate::process_output::ProcessOutputConfig> {
-    let profile_enabled =
-        state.recording_settings.duration_seconds.get() >= MIN_PROFILE_COMPARISON_DURATION_SECONDS;
+    let duration_seconds = state.recording_settings.duration_seconds.get();
     crate::process_output::configs_for_observation(
         configs,
         crate::process_output::ProcessOutputObservation::Comparison,
     )
     .into_iter()
     .filter(|config| {
-        profile_enabled
-            || !matches!(
-                &config.comparison,
-                crate::process_output::ProcessOutputComparison::ProfileByType { .. }
-            )
+        config
+            .comparison
+            .enabled_for_recording_duration(duration_seconds)
     })
     .collect()
 }
@@ -513,20 +508,21 @@ mod tests {
     }
 
     #[test]
-    fn profile_comparison_requires_a_configured_sixty_second_recording() {
+    fn profile_comparison_uses_its_configured_recording_duration_threshold() {
         let mut state = crate::rewrite::test_state();
         let mut profile = process_output_config(
             "metrics-profile",
             crate::process_output::ProcessOutputObservation::Comparison,
         );
         profile.comparison = crate::process_output::ProcessOutputComparison::ProfileByType {
+            min_recording_duration_seconds: 75,
             rules: crate::process_output::ProfileByTypeRules {
                 exact_total_count: vec!["RPC_SERVICE_WHOLE".to_string()],
                 source_positive_exists: vec!["REDIS".to_string()],
             },
         };
 
-        state.recording_settings.duration_seconds = std::num::NonZeroU64::new(59).unwrap();
+        state.recording_settings.duration_seconds = std::num::NonZeroU64::new(74).unwrap();
         assert!(comparison_configs(&state, &[profile.clone()]).is_empty());
         let regular = process_output_config(
             "startup-report",
@@ -534,8 +530,19 @@ mod tests {
         );
         assert_eq!(comparison_configs(&state, &[regular]).len(), 1);
 
-        state.recording_settings.duration_seconds = std::num::NonZeroU64::new(60).unwrap();
+        state.recording_settings.duration_seconds = std::num::NonZeroU64::new(75).unwrap();
         assert_eq!(comparison_configs(&state, &[profile]).len(), 1);
+    }
+
+    #[test]
+    fn profile_comparison_duration_threshold_defaults_to_sixty_seconds() {
+        let comparison: crate::process_output::ProcessOutputComparison = serde_yaml::from_str(
+            "kind: profile_by_type\nrules:\n  exact_total_count: [RPC_SERVICE_WHOLE]\n",
+        )
+        .unwrap();
+
+        assert!(!comparison.enabled_for_recording_duration(59));
+        assert!(comparison.enabled_for_recording_duration(60));
     }
 
     #[test]
@@ -666,6 +673,7 @@ mod tests {
                 id: "metrics-profile".to_string(),
                 path: PathBuf::from("/data1/weibo/logs/profile.log"),
                 comparison: crate::process_output::ProcessOutputComparison::ProfileByType {
+                    min_recording_duration_seconds: 60,
                     rules: crate::process_output::ProfileByTypeRules {
                         exact_total_count: vec!["RPC_SERVICE_WHOLE".to_string()],
                         source_positive_exists: vec!["HTTP".to_string()],

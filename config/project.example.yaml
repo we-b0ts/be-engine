@@ -24,6 +24,7 @@ project:
     path: /data1/weibo/logs/profile.log
     comparison:
       kind: profile_by_type
+      min_recording_duration_seconds: 60
       rules:
         exact_total_count:
         - RPC_SERVICE_WHOLE

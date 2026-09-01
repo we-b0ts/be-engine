@@ -1120,13 +1120,15 @@ string representation. The configuration is strict for every participating
 record. A type may appear in multiple policy lists; `exact_total_count` takes
 precedence because it is the stricter check. The coordinator enables all
 `profile_by_type` comparisons only when the configured comparison recording
-duration is at least 60 seconds. Shorter diagnostic recordings may still
-capture the files, but neither validate their presence nor compare their
-metrics.
+duration reaches `min_recording_duration_seconds`, which defaults to 60.
+Shorter diagnostic recordings may still capture the files, but neither
+validate their presence nor compare their metrics. Set the threshold to `0`
+to enable the comparison for every configured recording duration.
 
 ```yaml
 comparison:
   kind: profile_by_type
+  min_recording_duration_seconds: 60
   rules:
     exact_total_count:
     - RPC_SERVICE_WHOLE
