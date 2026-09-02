@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use tokio::process::Command;
 use uuid::Uuid;
 
@@ -12,6 +13,8 @@ use super::model::{TargetContainerConfig, TargetImage};
 
 const BUILD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const DOCKER_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_BUILD_STREAM_TAIL_BYTES: usize = 16 * 1024;
+const MAX_BUILD_DIAGNOSTIC_CHARS: usize = 1_536;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -54,10 +57,8 @@ pub(crate) fn image_tag(target_root: &Path) -> Result<String> {
 }
 
 pub(crate) async fn build_image(config: &TargetContainerConfig) -> Result<TargetImage> {
-    let ssh_required = validate_build_contract(config)?;
-    if ssh_required {
-        require_ssh_agent()?;
-    }
+    validate_build_contract(config)?;
+    let ssh_agent = super::ssh_agent::ManagedSshAgent::prepare(&config.target_root)?;
     let tag = image_tag(&config.target_root)?;
     let control_root =
         crate::internal_runtime::root(&config.target_root).join("target-container/build");
@@ -74,9 +75,7 @@ pub(crate) async fn build_image(config: &TargetContainerConfig) -> Result<Target
         .args(["--build-arg", "HTTPS_PROXY"])
         .args(["--build-arg", "ALL_PROXY"])
         .args(["--build-arg", "NO_PROXY"]);
-    if ssh_required {
-        command.args(["--ssh", "default"]);
-    }
+    ssh_agent.apply_to(&mut command);
     command
         .arg("--iidfile")
         .arg(&iid_path)
@@ -89,23 +88,45 @@ pub(crate) async fn build_image(config: &TargetContainerConfig) -> Result<Target
         .env("DOCKER_BUILDKIT", "1")
         .env_remove(crate::request_headers::ENCRYPTION_KEY_ENV)
         .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .kill_on_drop(true);
     let mut child = command
         .spawn()
         .context("failed to start target image build")?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("target image build stdout was not captured")?;
+    let stderr = child
+        .stderr
+        .take()
+        .context("target image build stderr was not captured")?;
+    let stdout_task = tokio::spawn(tee_bounded_tail(stdout, tokio::io::stdout()));
+    let stderr_task = tokio::spawn(tee_bounded_tail(stderr, tokio::io::stderr()));
     let status = match tokio::time::timeout(BUILD_TIMEOUT, child.wait()).await {
-        Ok(status) => status.context("failed to wait for target image build")?,
+        Ok(status) => Some(status.context("failed to wait for target image build")?),
         Err(_) => {
             let _ = child.kill().await;
-            let _ = tokio::fs::remove_file(&iid_path).await;
-            bail!("target image build exceeded the 1800 second limit");
+            None
         }
+    };
+    let stdout_tail = stdout_task
+        .await
+        .context("target image build stdout capture task failed")?
+        .context("failed to read target image build stdout")?;
+    let stderr_tail = stderr_task
+        .await
+        .context("target image build stderr capture task failed")?
+        .context("failed to read target image build stderr")?;
+    let diagnostic = build_failure_diagnostic(&stdout_tail, &stderr_tail);
+    let Some(status) = status else {
+        let _ = tokio::fs::remove_file(&iid_path).await;
+        bail!("target image build exceeded the 1800 second limit; {diagnostic}");
     };
     if !status.success() {
         let _ = tokio::fs::remove_file(&iid_path).await;
-        bail!("target image build exited with {status}");
+        bail!("target image build exited with {status}; {diagnostic}");
     }
 
     let iid = tokio::fs::read_to_string(&iid_path)
@@ -124,7 +145,131 @@ pub(crate) async fn build_image(config: &TargetContainerConfig) -> Result<Target
     Ok(TargetImage { tag, id: iid })
 }
 
-fn validate_build_contract(config: &TargetContainerConfig) -> Result<bool> {
+async fn tee_bounded_tail<R, W>(mut reader: R, mut writer: W) -> std::io::Result<Vec<u8>>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut tail = Vec::new();
+    let mut buffer = [0u8; 8 * 1024];
+    loop {
+        let read = reader.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        let chunk = &buffer[..read];
+        let _ = writer.write_all(chunk).await;
+        append_bounded_tail(&mut tail, chunk);
+    }
+    let _ = writer.flush().await;
+    Ok(tail)
+}
+
+fn append_bounded_tail(tail: &mut Vec<u8>, chunk: &[u8]) {
+    if chunk.len() >= MAX_BUILD_STREAM_TAIL_BYTES {
+        tail.clear();
+        tail.extend_from_slice(&chunk[chunk.len() - MAX_BUILD_STREAM_TAIL_BYTES..]);
+        return;
+    }
+    let excess = tail
+        .len()
+        .saturating_add(chunk.len())
+        .saturating_sub(MAX_BUILD_STREAM_TAIL_BYTES);
+    if excess > 0 {
+        tail.drain(..excess);
+    }
+    tail.extend_from_slice(chunk);
+}
+
+fn build_failure_diagnostic(stdout: &[u8], stderr: &[u8]) -> String {
+    let mut diagnostics = Vec::new();
+    if let Some(summary) = stream_failure_summary("docker stderr", stderr) {
+        diagnostics.push(summary);
+    }
+    if let Some(summary) = stream_failure_summary("docker stdout", stdout) {
+        diagnostics.push(summary);
+    }
+    if diagnostics.is_empty() {
+        return "no Docker build output was captured".to_string();
+    }
+
+    let mut diagnostic = diagnostics.join("; ");
+    if diagnostic.chars().count() <= MAX_BUILD_DIAGNOSTIC_CHARS {
+        return diagnostic;
+    }
+    let suffix = "… [build output truncated]";
+    diagnostic = diagnostic
+        .chars()
+        .take(MAX_BUILD_DIAGNOSTIC_CHARS.saturating_sub(suffix.chars().count()))
+        .collect();
+    diagnostic.push_str(suffix);
+    diagnostic
+}
+
+fn stream_failure_summary(label: &str, bytes: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(bytes);
+    let lines = text
+        .lines()
+        .map(strip_terminal_control)
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return None;
+    }
+    let mut selected = lines
+        .iter()
+        .rev()
+        .filter(|line| is_failure_line(line))
+        .take(8)
+        .cloned()
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        selected = lines.iter().rev().take(8).cloned().collect();
+    }
+    selected.reverse();
+    Some(format!("{label}: {}", selected.join(" | ")))
+}
+
+fn is_failure_line(line: &str) -> bool {
+    let line = line.to_ascii_lowercase();
+    [
+        "error",
+        "failed",
+        "fatal",
+        "permission denied",
+        "publickey",
+        "ssh",
+        "cargo",
+        "could not",
+        "unable to",
+    ]
+    .iter()
+    .any(|needle| line.contains(needle))
+}
+
+fn strip_terminal_control(line: &str) -> String {
+    let mut cleaned = String::with_capacity(line.len());
+    let mut characters = line.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\u{1b}' {
+            if characters.next_if_eq(&'[').is_some() {
+                for control in characters.by_ref() {
+                    if ('@'..='~').contains(&control) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if !character.is_control() || character == '\t' {
+            cleaned.push(character);
+        }
+    }
+    cleaned
+}
+
+fn validate_build_contract(config: &TargetContainerConfig) -> Result<()> {
     require_regular_file(&config.dockerfile, "target Dockerfile")?;
     ensure!(
         config.dockerfile == config.target_root.join(super::TARGET_DOCKERFILE_RELATIVE),
@@ -146,52 +291,6 @@ fn validate_build_contract(config: &TargetContainerConfig) -> Result<bool> {
             ".dockerignore must exclude {required}/ from the target build context"
         );
     }
-    Ok(dockerfile_requires_ssh(&dockerfile))
-}
-
-fn dockerfile_requires_ssh(dockerfile: &str) -> bool {
-    dockerfile.lines().any(|line| {
-        let line = line.trim_start();
-        !line.starts_with('#') && line.contains("--mount=type=ssh")
-    })
-}
-
-fn require_ssh_agent() -> Result<()> {
-    let socket = std::env::var_os("SSH_AUTH_SOCK")
-        .filter(|value| !value.is_empty())
-        .context(
-            "target Dockerfile requires BuildKit SSH forwarding; start ssh-agent and run ssh-add",
-        )?;
-    let metadata = std::fs::metadata(&socket).with_context(|| {
-        format!(
-            "target Dockerfile requires BuildKit SSH forwarding, but SSH_AUTH_SOCK {} is not usable",
-            Path::new(&socket).display()
-        )
-    })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::FileTypeExt as _;
-        ensure!(
-            metadata.file_type().is_socket(),
-            "target Dockerfile requires BuildKit SSH forwarding, but SSH_AUTH_SOCK is not a socket"
-        );
-    }
-    #[cfg(not(unix))]
-    ensure!(
-        !metadata.is_dir(),
-        "target Dockerfile requires BuildKit SSH forwarding, but SSH_AUTH_SOCK is not usable"
-    );
-    let status = std::process::Command::new("ssh-add")
-        .arg("-l")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .context("failed to inspect ssh-agent identities with ssh-add -l")?;
-    ensure!(
-        status.success(),
-        "target Dockerfile requires BuildKit SSH forwarding; start ssh-agent and run ssh-add"
-    );
     Ok(())
 }
 
@@ -213,6 +312,9 @@ fn validate_dockerfile_contract(config: &TargetContainerConfig, dockerfile: &str
         "target Dockerfile must be a multi-stage build"
     );
     for required in [
+        "--mount=type=ssh,required=true",
+        "ssh-keyscan -p 2222 git.intra.demo.test",
+        "git ls-remote --exit-code ssh://git@git.intra.demo.test:2222/platform/breeze/logs.git refs/tags/v0.0.1",
         "id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked",
         "id=traffic-e2e-cargo-git,target=/opt/rust/cargo/git,sharing=locked",
         "cargo build --locked --release",
@@ -381,18 +483,45 @@ mod tests {
             breeze_enabled: false,
         };
         let dockerfile = format!(
-            "FROM {} AS builder\nRUN --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked --mount=type=cache,id=traffic-e2e-cargo-git,target=/opt/rust/cargo/git,sharing=locked --mount=type=cache,id=traffic-e2e-service-target,target=/build/target,sharing=locked cargo build --locked --release\nFROM {}\nENTRYPOINT [\"/app/bin/service\"]\n",
+            "FROM {} AS builder\nRUN ssh-keyscan -p 2222 git.intra.demo.test\nRUN --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked --mount=type=cache,id=traffic-e2e-cargo-git,target=/opt/rust/cargo/git,sharing=locked --mount=type=cache,id=traffic-e2e-service-target,target=/build/target,sharing=locked git ls-remote --exit-code ssh://git@git.intra.demo.test:2222/platform/breeze/logs.git refs/tags/v0.0.1 && cargo build --locked --release\nFROM {}\nENTRYPOINT [\"/app/bin/service\"]\n",
             super::super::TARGET_BUILDER_IMAGE,
             super::super::TARGET_RUNTIME_IMAGE,
         );
 
-        validate_dockerfile_contract(&config, &dockerfile).unwrap();
-        assert!(!dockerfile_requires_ssh(&dockerfile));
+        assert!(
+            validate_dockerfile_contract(&config, &dockerfile)
+                .unwrap_err()
+                .to_string()
+                .contains("--mount=type=ssh,required=true")
+        );
 
         let dockerfile = dockerfile.replace(
             "RUN --mount=type=cache",
             "RUN --mount=type=ssh,required=true --mount=type=cache",
         );
-        assert!(dockerfile_requires_ssh(&dockerfile));
+        validate_dockerfile_contract(&config, &dockerfile).unwrap();
+    }
+
+    #[test]
+    fn build_failure_diagnostic_prioritizes_actionable_lines() {
+        let stdout =
+            b"#1 compiling\n\x1b[31m#2 ERROR: failed to fetch git dependency\x1b[0m\n#3 canceled\n";
+        let stderr = b"warning\nPermission denied (publickey)\nfatal: could not read repository\n";
+        let diagnostic = build_failure_diagnostic(stdout, stderr);
+
+        assert!(diagnostic.contains("Permission denied (publickey)"));
+        assert!(diagnostic.contains("fatal: could not read repository"));
+        assert!(diagnostic.contains("ERROR: failed to fetch git dependency"));
+        assert!(!diagnostic.contains("[31m"));
+        assert!(!diagnostic.contains("compiling"));
+        assert!(!diagnostic.contains("canceled"));
+    }
+
+    #[test]
+    fn build_stream_tail_is_bounded_to_latest_bytes() {
+        let mut tail = b"old".to_vec();
+        append_bounded_tail(&mut tail, &vec![b'x'; MAX_BUILD_STREAM_TAIL_BYTES + 4]);
+        assert_eq!(tail.len(), MAX_BUILD_STREAM_TAIL_BYTES);
+        assert!(tail.iter().all(|byte| *byte == b'x'));
     }
 }

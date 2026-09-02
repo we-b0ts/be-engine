@@ -87,6 +87,11 @@ is unclear.
   directories, while `platform/runtime_outputs.rs` projects the same validated
   contract into managed Record source and Comparison source/target runtimes.
   Runtime outputs are never startup inputs or image build inputs.
+- `target_container/build.rs` owns target Dockerfile validation, Docker build
+  execution, immutable-image validation, and bounded build-failure diagnostics.
+  Its `ssh_agent` child owns the repository-local target-build agent socket,
+  stale-agent recovery, default-identity loading, and projection of that exact
+  socket into BuildKit. It never owns or persists private-key material.
 - `rewrite` owns migration sequencing, the single coordinator state with
   API-scoped AI work slices, the serialized recording/Replay/comparison runtime
   lease, bounded action/evidence projection, rule routing, and the whole-target

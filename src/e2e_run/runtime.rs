@@ -106,7 +106,9 @@ pub(super) async fn build_target_image(
         layout.target_root.clone(),
         config,
     );
-    crate::target_container::build_image(&target).await
+    crate::target_container::build_image(&target)
+        .await
+        .context("target image build failed")
 }
 
 pub(super) async fn start_target_with_replay_ca(

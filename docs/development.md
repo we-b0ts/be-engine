@@ -1461,17 +1461,22 @@ requires administrator repair rather than an AI-directed workflow mutation.
 
 The initialized target repository contains `.traffic-e2e/Dockerfile.e2e`. It
 is a BuildKit multi-stage build whose final image has a non-empty OCI entrypoint
-and defaults to `USER 998:998`. When its build uses an SSH mount, the host must
-expose an agent with an authorized identity through `SSH_AUTH_SOCK`;
-traffic-e2e validates the agent and passes `--ssh default` automatically. The
-key remains a build-time mount and is not copied into the image. traffic-e2e builds it from the repository root,
-tags the cache as `traffic-e2e/<project>-target:cache`, validates the resulting
-immutable image ID, and runs that ID directly. A target start receives each
-declared startup path at the same absolute path. If the declaration exactly
-matches a Docker mount destination on the source container, the snapshot
-inherits that mount's `rw`/`ro` access; a path supplied by the source image
-defaults to read-only. Partial parent/child overlap with a source Docker mount
-is rejected, so the user must make the declaration exact. For example:
+and defaults to `USER 998:998`. Every target build requires a BuildKit SSH
+mount. traffic-e2e manages its agent at
+`.traffic-e2e/local/socks/ssh-agent.sock`, recreates a stale socket, loads the
+calling account's default OpenSSH identities with `ssh-add`, and passes that
+exact socket to `docker build --ssh`. The agent exposes signing only; keys
+remain build-time inputs and are not copied into the image. Build output
+continues to stream to the caller, while a bounded actionable tail is returned
+through preflight and E2E API errors when Docker or Cargo fails. traffic-e2e
+builds the image from the repository root, tags the cache as
+`traffic-e2e/<project>-target:cache`, validates the resulting immutable image
+ID, and runs that ID directly. A target start receives each declared startup
+path at the same absolute path. If the declaration exactly matches a Docker
+mount destination on the source container, the snapshot inherits that mount's
+`rw`/`ro` access; a path supplied by the source image defaults to read-only.
+Partial parent/child overlap with a source Docker mount is rejected, so the
+user must make the declaration exact. For example:
 
 ```text
 .traffic-e2e/local/startup/mounts/data1/weibo/confs
