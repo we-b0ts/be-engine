@@ -38,7 +38,7 @@ COPY config/source-traffic-policy.example.yaml /data/config/source-traffic-polic
 
 WORKDIR /data
 
-EXPOSE 17171
+EXPOSE 4080
 
 ENTRYPOINT ["/usr/local/bin/traffic-e2e"]
 CMD ["record", "--config", "/data/config/project.yaml", "--no-dns"]

@@ -277,17 +277,10 @@ fn parses_the_bounded_rewrite_surface() {
         traffic_e2e::DEFAULT_HTTP_GATEWAY_PORT
     );
     assert!(default_init.command.is_none());
-    let RewriteCommand::Init(preflight) = Cli::try_parse_from([
-        "test",
-        "init",
-        "preflight",
-        "--duration-seconds",
-        "30",
-        "--api",
-        "POST /traffic-api/v1/get-config",
-    ])
-    .unwrap()
-    .command
+    let RewriteCommand::Init(preflight) =
+        Cli::try_parse_from(["test", "init", "preflight", "--duration-seconds", "30"])
+            .unwrap()
+            .command
     else {
         panic!("expected init command");
     };
@@ -296,6 +289,7 @@ fn parses_the_bounded_rewrite_surface() {
         Some(project_init::ProjectInitCommand::Preflight(_))
     ));
     assert!(Cli::try_parse_from(["test", "init", "preflight", "--duration-seconds", "0"]).is_err());
+    assert!(Cli::try_parse_from(["test", "init", "preflight", "--api", "GET /business"]).is_err());
     assert!(
         Cli::try_parse_from([
             "test",

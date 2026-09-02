@@ -1353,20 +1353,20 @@ restores the issue's target-code owner, and returns the coordinator-owned
 advance command. It does not cancel external-data repairs, delete evidence, or
 provide an ordinary AI workflow bypass.
 
-Initialize a rewrite target's three generated documents once, before its first
-coordinator session:
+Initialize a rewrite target once, before its first coordinator session:
 
 ```bash
 backend-rewrite --target-root ../target init \
   --source-container <existing-source-container> [--breeze] \
-  [--startup-mount /data1/weibo/confs] \
-  [--startup-env WEIBO_CONF_PATH] \
-  [--http-gateway-port 17171]
+  [--startup-mount /absolute/path/to/config] \
+  [--startup-mount /absolute/path/.env] \
+  [--startup-env <APPLICATION_ENV_NAME>] \
+  [--http-gateway-port 4080]
 ```
 
 From the target root, `--target-root` is unnecessary. `--breeze` uses the
 conventional existing container named `breeze`; use `--breeze=<container>` only
-for a non-standard name. Defaults are Recorder HTTP gateway port `17171`,
+for a non-standard name. Defaults are Recorder HTTP gateway port `4080`,
 recorder native HTTP upstream `http://127.0.0.1:8080`, readiness `/healthz`
 with status `404`, and upstream DNS `10.10.10.11:53`. Only the gateway port is
 an initialization port argument. Change a non-standard native endpoint under
@@ -1377,6 +1377,12 @@ backend domains are captured by default when they are accessed directly.
 
 The command atomically generates version-14 `.traffic-e2e/project.yaml`,
 `.traffic-e2e/source-traffic-policy.yaml`, and `.traffic-e2e/verification.yaml`.
+When the root `Cargo.toml`, `Cargo.lock`, and `src/main.rs` are all absent, it
+also generates a runnable readiness-only Rust target using `brz-logs` from the
+fixed `v0.0.1` Git tag. It generates `.traffic-e2e/Dockerfile.e2e` only when
+absent and creates or safely extends the root `.gitignore` and `.dockerignore`
+with canonical local-state, Rust build, recording, data, credential, and
+environment-file exclusions; existing regular target files are preserved.
 `project.yaml` combines project settings with the static recorder settings;
 `source-traffic-policy.yaml` is wholly AI/coordinator managed. Project settings
 have explicit source, optional Breeze, target, replay, recording, delivery,
@@ -1424,8 +1430,10 @@ most 32 arguments each. `quality_gates: []` explicitly disables inference.
 Managed replay reads its target response limit from
 `recorder.recording.max_body_bytes` in `project.yaml`.
 
-Existing configuration is never overwritten. If any generated file exists,
-the whole initialization refuses without creating another file. Normal
+Existing configuration is never overwritten. If any of the three required
+configuration files exists, the whole initialization refuses without creating
+another configuration file. Existing target source, Dockerfile, and unrelated
+ignore-file rules are preserved. Normal
 execution does not migrate or dual-read obsolete project schemas; migration
 and repair require administrator-owned tooling outside `backend-rewrite`. When
 an administrator intentionally changes `target.startup`, recapture the exact
@@ -1438,9 +1446,9 @@ backend-rewrite --target-root <target> init preflight
 ```
 
 Recapture requires the configured source container to be stopped. Preflight is
-read-only validation and does not repair a stale snapshot. The
-initializer idempotently adds `/.traffic-e2e/local/` to the repository `.gitignore`; all
-non-versioned runtime data lives below that root. It copies every declared
+read-only validation and does not repair a stale snapshot. The initializer owns
+the baseline `.gitignore` and `.dockerignore` generation described above; all
+non-versioned runtime data lives below `.traffic-e2e/local/`. It copies every declared
 absolute path from the stopped source container into
 `.traffic-e2e/local/startup/mounts`, freezes only the named source environment
 values in mode-0600 `.traffic-e2e/local/startup/environment.json`, and writes
@@ -1451,9 +1459,12 @@ does not expose post-initialization commands that replace, refresh, or inspect
 them. An initialized repository with missing, stale, or damaged startup inputs
 requires administrator repair rather than an AI-directed workflow mutation.
 
-The target repository supplies `.traffic-e2e/Dockerfile.e2e`. It is a
-BuildKit multi-stage build whose final image has a non-empty OCI entrypoint and
-defaults to `USER 998:998`. traffic-e2e builds it from the repository root,
+The initialized target repository contains `.traffic-e2e/Dockerfile.e2e`. It
+is a BuildKit multi-stage build whose final image has a non-empty OCI entrypoint
+and defaults to `USER 998:998`. When its build uses an SSH mount, the host must
+expose an agent with an authorized identity through `SSH_AUTH_SOCK`;
+traffic-e2e validates the agent and passes `--ssh default` automatically. The
+key remains a build-time mount and is not copied into the image. traffic-e2e builds it from the repository root,
 tags the cache as `traffic-e2e/<project>-target:cache`, validates the resulting
 immutable image ID, and runs that ID directly. A target start receives each
 declared startup path at the same absolute path. If the declaration exactly
@@ -1503,10 +1514,19 @@ responses. Remove retained run directories only under the exact
 
 Source-derived environment names are an allowlist, not name/value assignments:
 the engine reads their values from Docker's source-container configuration and
-freezes them in the snapshot. A source default that is not present in Docker
-`Config.Env` cannot be discovered; declare its absolute path as a mount and let
-the application keep using that default. The engine does not rewrite such a
-default and does not infer startup inputs from target source code.
+freezes them in the snapshot. At target startup it writes the selected values
+to a mode-0600 temporary file and passes that file through Docker `--env-file`.
+This also covers values originally supplied to the source container through a
+Docker env file because they are expanded into `Config.Env`; Docker does not
+retain the original host env-file path. General environment configuration files
+used by Node, Python, shell launchers, frameworks, or the application itself
+(`.env`, `.env.production`, `.flaskenv`, `env.conf`, and similar files) remain
+filesystem inputs. Resolve them against the source working directory and
+declare each normalized absolute path as a startup mount. A source default that
+is not present in Docker `Config.Env` cannot be discovered; declare its absolute
+path as a mount and let the application keep using that default. The engine does
+not rewrite such a default and does not infer startup inputs from target source
+code.
 
 `port_environment` and `replay_ca_environment` are optional native application
 variable names. When declared, the engine assigns the configured target port
@@ -1586,17 +1606,20 @@ the target in one run-owned bridge namespace. Replay starts the target once for
 the selected cases, intercepts dependency traffic by fixed UID, and prevents
 uncontrolled external egress.
 
-After the initialization AI has supplied both Dockerfiles and any target mock,
-run the existing authoritative preflight:
+After initialization has generated the target template and the initialization
+AI has supplied `Dockerfile.recording`, run the authoritative preflight:
 
 ```bash
 backend-rewrite init preflight
 ```
 
 It first validates the startup snapshot, then builds and statically inspects
-the target image without starting it, starts the recording-environment
-preflight, and finally starts a real Replay session with the fixed network
-probe image. Recording publishes exactly one marked
+the target image, starts the recording-environment preflight, and finally starts
+a real Replay session with the fixed network probe image and the same target
+image. The system automatically records exactly one `GET` for the configured
+readiness path with its finalized source response; this validates standard
+recording and is not a business sample. Recording also publishes exactly one
+marked
 `demo.test` Global dependency; Replay must consume it through fake DNS, reject
 payload sent to unrecorded `example.com:443` with `unrecorded_targets`
 evidence, and block direct external egress for UID `998`.
@@ -1605,34 +1628,22 @@ For a Breeze-enabled project, recording preflight also resolves
 finalized `recording-network.json` proves Recorder observed that DNS query.
 Source-local port `880` is not a preflight dependency and receives no managed
 switch commands; the configured HTTP Gateway readiness contract remains
-authoritative. When a
-selected case reaches its limit before the system HTTPS probe finishes,
-`--preflight-probe` keeps Recorder available for a fixed 15-second grace period
-without waiting for a probe-recorded condition. The Java probe command has a
-10-second execution bound. The ordinary duration timer starts only after the
-probe returns, so duration shutdown does not add another grace period.
-Ordinary recording and comparison do not repeat this initialization gate.
-When Motan is enabled, the business-input phase also prints the exact
-`motan-replay` copy command. A successfully published Motan case reports
-`recording.motan.status: verified`. If the window observes no Motan request,
-that absence is not a failure: the result is
-`status: passed_with_deferred_validation` with
-`recording.motan.status: not_observed` and asks whether validation should be
-rerun now or deferred to the first managed recording. A malformed Motan request,
-gateway processing error, or admitted case that fails source forwarding or
-publication makes preflight fail; observed failure is never reported as a
-successful initialization.
+authoritative. The HTTPS probe runs before the one-case readiness request. The
+Java probe command has a 10-second execution bound. Ordinary recording and
+comparison do not repeat this initialization gate, and Motan business traffic
+is not requested or evaluated during initialization preflight.
 
-If validation is deferred, `traffic-e2e record` applies the same Motan gateway
-failure check. Its result reports `motan.status: verified` after at least one
+Later, `traffic-e2e record` applies the Motan gateway failure check. Its result
+reports `motan.status: verified` after at least one
 published Motan case or `not_observed` when that recording still contains no
 Motan request. Gateway errors and failed admitted cases make the recording
 command fail instead of silently completing.
 
 Full success returns overall `status: passed` with separate `target_image`,
-`recording`, and `replay_network` results. Target identity, startup environment,
-mount access, listener, and readiness are validated after the target starts
-with recorded dependencies in each real Replay; the successful checks are
+`recording`, `replay_network`, and `target_runtime` results. Target identity,
+startup environment, mount access, listener, readiness, clean `SIGTERM`
+shutdown, and cleanup are validated after the target starts with dependencies
+from the preflight recording; the successful checks are
 written to `reports/target-runtime-checks.json`, while normal stop evidence
 proves clean shutdown and cleanup. A failure prints bounded JSON
 containing `status: failed`, the failing stage, and a reason, exits nonzero, and

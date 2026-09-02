@@ -30,7 +30,7 @@ mod startup;
 use assets::{stage_assets, write_asset};
 
 pub use preflight::{
-    ManagedMotanPreflightResult, ManagedMotanRecordingResult, ManagedRecordingPreflightOptions,
+    ManagedMotanRecordingResult, ManagedRecordingPreflightOptions,
     ManagedRecordingPreflightRecordingResult, ManagedRecordingPreflightResult,
     ManagedTargetImagePreflightChecks, ManagedTargetImagePreflightResult, MotanPreflightStatus,
 };
@@ -40,7 +40,8 @@ pub use recording_input::{
 };
 pub use recovery::{ManagedRecordingRecoveryResult, recover_managed_recording};
 pub use replay_preflight::{
-    ManagedReplayNetworkPreflightResult, ReplayDirectEgressProbeResult, ReplayNegativeProbeResult,
+    ManagedReplayNetworkPreflightResult, ManagedTargetRuntimePreflightChecks,
+    ManagedTargetRuntimePreflightResult, ReplayDirectEgressProbeResult, ReplayNegativeProbeResult,
     ReplayPositiveProbeResult,
 };
 const MANAGER: &str = include_str!("assets/manage-platform.sh");
@@ -48,7 +49,7 @@ const COMPARISON_PROCESS_OUTPUTS: &str = include_str!("assets/comparison-process
 const COMPARISON_TARGET_NETWORK: &str = include_str!("assets/comparison-target-network.sh");
 const RECORDER_RUNTIME: &str = include_str!("assets/recorder-runtime.sh");
 const PLATFORM_MOUNTS: &str = include_str!("assets/platform-mounts.sh");
-const PREFLIGHT_BUSINESS_INPUT: &str = include_str!("assets/preflight-business-input.sh");
+const PREFLIGHT_READINESS: &str = include_str!("assets/preflight-readiness.sh");
 const HTTPS_PROBE: &[u8] = include_bytes!("assets/HttpsProbe.class");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -147,11 +148,7 @@ struct ManagedRuntimeResult {
 }
 
 #[derive(Debug, Clone)]
-struct MotanRuntimeContext {
-    source_port: u16,
-    gateway_port: u16,
-    motan_replay_command: String,
-}
+struct MotanRuntimeContext;
 
 pub async fn run_managed_recording(
     options: ManagedRecordingOptions,
@@ -186,6 +183,13 @@ pub async fn run_managed_recording_preflight(
     options: ManagedRecordingPreflightOptions,
 ) -> Result<ManagedRecordingPreflightResult> {
     let (target_root, project) = resolve_project(&options.target_root)?;
+    ensure!(
+        project.target_http_readiness_enabled,
+        "initialization preflight requires enabled HTTP readiness"
+    );
+    let readiness_api = format!("GET {}", project.target_readiness_path)
+        .parse::<RecordingApi>()
+        .context("configured readiness path cannot form the initialization recording selector")?;
     crate::startup::load_startup_snapshot(&target_root, &project.target_startup)
         .context("target_image preflight failed")?;
     let target_image = crate::target_container::build_image(
@@ -203,49 +207,29 @@ pub async fn run_managed_recording_preflight(
             run_id: None,
             duration_seconds: options.duration_seconds,
             baseline_recheck: false,
-            apis: options.apis,
-            per_api_case_limit: options.per_api_case_limit,
+            apis: vec![readiness_api],
+            per_api_case_limit: NonZeroUsize::new(1),
             request_source: None,
         },
         ManagedRuntimeOperation::Preflight,
     )
     .await?;
     let breeze_enabled = runtime.breeze_container.is_some();
-    let evidence = preflight::validate(&runtime.manifest, runtime.motan.is_some(), breeze_enabled)?;
-    let replay_network = replay_preflight::run(
+    let evidence = preflight::validate(
+        &runtime.manifest,
+        breeze_enabled,
+        &project.target_readiness_path,
+    )?;
+    let (replay_network, target_runtime) = replay_preflight::run(
         &runtime.target_root,
         &project,
         &runtime.run_id,
         &runtime.manifest,
+        &target_image,
     )
-    .await
-    .context("replay_network preflight failed")?;
-    let motan = runtime.motan.as_ref().map(|motan| {
-        let status = evidence
-            .motan_status
-            .expect("enabled Motan preflight must have a status");
-        preflight::ManagedMotanPreflightResult {
-            status,
-            observed_cases: evidence.motan_cases,
-            source_port: motan.source_port,
-            gateway_port: motan.gateway_port,
-            validation_deferred: status == preflight::MotanPreflightStatus::NotObserved,
-            motan_replay_command: motan.motan_replay_command.clone(),
-            required_action: (status == preflight::MotanPreflightStatus::NotObserved).then_some(
-                "No Motan request was observed. Ask whether to rerun preflight with controlled \
-                 traffic now or defer Motan validation to the first managed recording.",
-            ),
-        }
-    });
-    let validation_deferred = motan
-        .as_ref()
-        .is_some_and(|motan| motan.validation_deferred);
+    .await?;
     Ok(ManagedRecordingPreflightResult {
-        status: if validation_deferred {
-            "passed_with_deferred_validation"
-        } else {
-            "passed"
-        },
+        status: "passed",
         target_image: ManagedTargetImagePreflightResult {
             status: "passed",
             image: target_image,
@@ -256,11 +240,7 @@ pub async fn run_managed_recording_preflight(
             },
         },
         recording: ManagedRecordingPreflightRecordingResult {
-            status: if validation_deferred {
-                "passed_with_deferred_validation"
-            } else {
-                "passed"
-            },
+            status: "passed",
             run_id: runtime.run_id,
             target_root: runtime.target_root,
             source_container: runtime.source_container,
@@ -272,9 +252,9 @@ pub async fn run_managed_recording_preflight(
             global_probe_dependency_verified: evidence.global_probe_dependency_verified,
             breeze_dns_resolution_verified: breeze_enabled
                 .then_some(evidence.breeze_dns_resolution_verified),
-            motan,
         },
         replay_network,
+        target_runtime,
         managed_by: "traffic-e2e",
     })
 }
@@ -307,25 +287,14 @@ async fn run_managed_runtime(
     )?;
     let motan = if recorder.motan_gateway.enabled
         && runtime_operation
-            != ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
+            == ManagedRuntimeOperation::Recording(ManagedRecordingOperation::Record)
     {
         ensure!(
             recorder.recording.traffic_jsonl != crate::config::TrafficJsonlMode::Off,
             "managed Motan recording requires recording.traffic_jsonl to be errors or full so \
              gateway failures remain verifiable"
         );
-        let source_port = endpoint_port(
-            &recorder.motan_gateway.matched_upstream,
-            "motan_gateway.matched_upstream",
-        )?;
-        let gateway_port = recorder.motan_gateway.listen.port();
-        Some(MotanRuntimeContext {
-            source_port,
-            gateway_port,
-            motan_replay_command: format!(
-                "motan-replay --input-raw :{source_port} --output-rpc 127.0.0.1:{gateway_port}"
-            ),
-        })
+        Some(MotanRuntimeContext)
     } else {
         None
     };
@@ -504,11 +473,6 @@ async fn run_managed_runtime(
             motan_recording_upstream,
         )
         .env(
-            "TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED",
-            (runtime_operation == ManagedRuntimeOperation::Preflight && motan.is_some())
-                .to_string(),
-        )
-        .env(
             "TRAFFIC_E2E_SOURCE_READY_PATH",
             &recorder.http_gateway.ready.path,
         )
@@ -545,23 +509,6 @@ async fn run_managed_runtime(
     }
     if let Some(port) = comparison_motan_port {
         command.env("TRAFFIC_E2E_TARGET_MOTAN_PORT", port.to_string());
-    }
-    if runtime_operation == ManagedRuntimeOperation::Preflight
-        && let Some(motan) = &motan
-    {
-        command
-            .env(
-                "TRAFFIC_E2E_MOTAN_SOURCE_PORT",
-                motan.source_port.to_string(),
-            )
-            .env(
-                "TRAFFIC_E2E_MOTAN_GATEWAY_PORT",
-                motan.gateway_port.to_string(),
-            )
-            .env(
-                "TRAFFIC_E2E_MOTAN_REPLAY_COMMAND",
-                &motan.motan_replay_command,
-            );
     }
     if let Some(image) = target_image {
         command.env("TRAFFIC_E2E_TARGET_IMAGE_ID", image.id);

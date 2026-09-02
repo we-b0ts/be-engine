@@ -144,15 +144,15 @@ pub use e2e_run::{
 pub use mysql::operation::MysqlWriteOperation;
 pub use network_probe::PreflightProbeKind;
 pub use platform::{
-    ManagedMotanPreflightResult, ManagedMotanRecordingResult, ManagedRecordingInputCompletion,
-    ManagedRecordingInputOptions, ManagedRecordingInputResult, ManagedRecordingOperation,
-    ManagedRecordingOptions, ManagedRecordingPreflightOptions,
-    ManagedRecordingPreflightRecordingResult, ManagedRecordingPreflightResult,
-    ManagedRecordingRecoveryResult, ManagedRecordingResult, ManagedReplayNetworkPreflightResult,
-    ManagedTargetImagePreflightChecks, ManagedTargetImagePreflightResult, MotanPreflightStatus,
-    ReplayDirectEgressProbeResult, ReplayNegativeProbeResult, ReplayPositiveProbeResult,
-    drive_managed_recording_input, recover_managed_recording, run_managed_recording,
-    run_managed_recording_preflight,
+    ManagedMotanRecordingResult, ManagedRecordingInputCompletion, ManagedRecordingInputOptions,
+    ManagedRecordingInputResult, ManagedRecordingOperation, ManagedRecordingOptions,
+    ManagedRecordingPreflightOptions, ManagedRecordingPreflightRecordingResult,
+    ManagedRecordingPreflightResult, ManagedRecordingRecoveryResult, ManagedRecordingResult,
+    ManagedReplayNetworkPreflightResult, ManagedTargetImagePreflightChecks,
+    ManagedTargetImagePreflightResult, ManagedTargetRuntimePreflightChecks,
+    ManagedTargetRuntimePreflightResult, MotanPreflightStatus, ReplayDirectEgressProbeResult,
+    ReplayNegativeProbeResult, ReplayPositiveProbeResult, drive_managed_recording_input,
+    recover_managed_recording, run_managed_recording, run_managed_recording_preflight,
 };
 pub use process_output::{
     ProcessOutputCaptureReport, ProcessOutputCaptureSide, ProcessOutputObservation,

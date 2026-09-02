@@ -9,10 +9,10 @@ Initialize all repository configuration once from the target root:
 
 ```bash
 traffic-e2e config init --source-container <existing-source-container> [--breeze] \
-  [--startup-mount /data1/weibo/confs] [--startup-env WEIBO_CONF_PATH]
+  [--startup-mount /absolute/path/to/config] [--startup-env <APPLICATION_ENV_NAME>]
 ```
 
-The generated Recorder HTTP gateway listens on port `17171` by default; use
+The generated Recorder HTTP gateway listens on port `4080` by default; use
 `--http-gateway-port` only when that port is unavailable. Generated Recorder
 configuration has no Breeze snapshot bypass strategy, so directly accessed
 snapshot backend domains are captured by default.

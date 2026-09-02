@@ -5,6 +5,35 @@ uninitialized target repository. Initialization is a manual, one-time setup;
 ordinary `next`, `status`, worker dispatch, and resumed rewrite sessions must
 not read this reference or rerun initialization.
 
+## Discover Startup Inputs First
+
+Before running initialization, inspect the source container, its launch
+arguments and working directory, and the source startup code. Record only the
+inputs required to reproduce startup:
+
+- configuration files or directories read during startup, including general
+  environment files used by Node, Python, shell launchers, frameworks, or the
+  application itself (`.env`, `.env.production`, `.flaskenv`, `env.conf`, and
+  similar files); resolve each path against the source working directory and
+  pass its normalized absolute container path through `--startup-mount`;
+- application-owned environment variable names required at startup; pass each
+  name through `--startup-env`; and
+- directories the process must write at runtime, such as logs, caches, PID or
+  temporary state directories. Ensure those paths exist and are writable by
+  `998:998` in both `Dockerfile.recording` and `Dockerfile.e2e`. Declare durable
+  output paths under `target.runtime_outputs` when traffic-e2e should retain
+  them after the container stops.
+
+`--startup-env` is a variable-name selector, not an env-file path. traffic-e2e
+reads the selected values from the source container's `Config.Env`, stores them
+only in the ignored startup snapshot, creates a mode-0600 runtime env file, and
+passes it to Docker with `--env-file`. Values originally supplied by
+`docker run --env-file` are already present in `Config.Env`; Docker inspection
+cannot recover, and does not need, the original host file path. Any environment
+configuration that must remain a file is a startup filesystem input: declare it
+with `--startup-mount`, and traffic-e2e snapshots and mounts it back at the same
+absolute path. Never commit either form of secret input.
+
 ## Generate The Repository Contract
 
 Run from the target repository, or bind it with global `--target-root`:
@@ -13,11 +42,11 @@ Run from the target repository, or bind it with global `--target-root`:
 backend-rewrite init \
   --source-container <existing-source-container> \
   [--breeze[=<container>]] \
-  [--startup-mount /data1/weibo/confs] \
-  [--startup-env WEIBO_CONF_PATH] \
-  [--target-port-env PORT] \
-  [--replay-ca-env SSL_CERT_FILE] \
-  [--http-gateway-port 17171]
+  [--startup-mount /absolute/path/to/config] \
+  [--startup-mount /absolute/path/.env] \
+  [--startup-env <APPLICATION_ENV_NAME>] \
+  [--target-port-env <PORT_ENV_NAME>] \
+  [--http-gateway-port 4080]
 ```
 
 `--breeze` selects the conventional existing container named `breeze`;
@@ -36,7 +65,7 @@ The recording port is the Recorder HTTP gateway that accepts selected source
 traffic. It is distinct from the native HTTP service port.
 Defaults are:
 
-- HTTP recording gateway `17171`;
+- HTTP recording gateway `4080`;
 - recorder native HTTP upstream `http://127.0.0.1:8080`;
 - readiness `/healthz` with final status `404`; and
 - upstream DNS `10.10.10.11:53`.
@@ -46,7 +75,8 @@ For a non-standard native service port, update
 `http_gateway.matched_upstream` in the generated recorder configuration; the
 target uses that same port in its isolated runtime namespace.
 
-The command atomically creates exactly these source-controlled files:
+The command atomically creates these required source-controlled configuration
+files:
 
 ```text
 .traffic-e2e/project.yaml
@@ -73,11 +103,15 @@ The admin command reads the complete startup declaration already stored in
 atomically replaces the local snapshot only after capture succeeds. Preflight
 validates the repaired contract; it never recaptures inputs itself.
 
-It also idempotently adds `/.traffic-e2e/local/` to `.gitignore`. It refuses
-the whole initialization when any generated file already exists, and it does
-not start containers, record traffic, or create runtime evidence. It captures
-the declared startup inputs below `.traffic-e2e/local/startup/` from the
-configured stopped source container.
+In the same one-time operation it creates the target template described below,
+unless a complete root Cargo target already exists, and creates
+`.traffic-e2e/Dockerfile.e2e` only when absent. The initializer also creates or
+safely extends the root `.gitignore` and `.dockerignore` with its canonical
+local-state, Rust build, recording, data, credential, and environment-file
+exclusions. It refuses the whole initialization when any required configuration
+file already exists, and it does not start containers, record traffic, or
+create runtime evidence. It captures the declared startup inputs below
+`.traffic-e2e/local/startup/` from the configured stopped source container.
 
 ## Generate The Recording Source Adaptor
 
@@ -105,6 +139,12 @@ incompatible identity collision or when the real application command cannot be
 determined. Declare `ARG SOURCE_IMAGE` before `FROM` and use
 `FROM ${SOURCE_IMAGE}` so the managed runtime can bind the build to the exact
 image ID inspected from the configured source container.
+
+For every image-local runtime-writable path discovered before initialization,
+create the directory in `Dockerfile.recording` and assign it to `998:998` before
+restoring the final application user. Do not recursively change ownership of
+configuration or credential trees. Exact writable source mounts are recreated
+by the managed runtime and do not need image-layer content.
 
 The adapted source must retain its port `880` listener while running as
 `998:998`. Because `880` is a privileged port, grant
@@ -186,106 +226,40 @@ the inspected Breeze container's runtime arguments.
 
 ## Complete The Initialization Preflight
 
-After both repository image contracts are ready, invoke the single
-coordinator-owned initialization preflight before reporting initialization
-complete:
+After the generated target files and `Dockerfile.recording` are ready, invoke
+the single coordinator-owned initialization preflight:
 
 ```bash
 backend-rewrite init preflight \
-  --api '<METHOD path-or-pattern>' \
   --duration-seconds 60
 ```
 
-Do not create another target-validation command. `backend-rewrite init
-preflight` owns three ordered phases: `target_image`, defined below,
-`recording`, and `replay_network`. Run it from the target repository after the
-generated configuration, `Dockerfile.recording`,
-`.traffic-e2e/Dockerfile.e2e`, and `.dockerignore` exist. The recording phase
-builds the adaptor image when it is absent or bound to another source image.
-The configured source container must remain stopped. Provide the
-same `TRAFFIC_E2E_ENCRYPTION_KEY_B64` required by managed recording. The command
-defaults each selected API to one admitted case and opens a bounded recording
-window; while it is running, send one deterministic
-controlled business request to the configured HTTP gateway port. The system
-independently sends one exact HTTPS probe. The business request must match the
-selected API. The command does
-not invent its path, request body, or business input because those values must
-come from the inspected source contract.
+The configured source container remains stopped; the command builds and runs
+only disposable managed containers. Provide the same
+`TRAFFIC_E2E_ENCRYPTION_KEY_B64` required by normal managed recording. Do not
+pass `--api`, send business traffic, create another validation command, or run
+`backend-rewrite next` for this check.
 
-1. Start Recorder first so it creates its runtime CA. When Java was detected,
-   create a Java truststore from that public certificate without copying the CA
-   private key into either image.
-2. When Breeze is enabled, start the fixed Breeze image with the inspected
-   Breeze runtime arguments.
-3. Start the source adaptor with runtime inputs inspected from the configured,
-   stopped source container and its preserved entrypoint. Mount the
-   generated truststore read-only only when the system detected Java.
-4. Verify the source entrypoint runs as UID/GID `998:998`, Breeze is ready when
-   enabled, the configured source readiness contract passes, and Recorder
-   admits cases. Do not wait for or send commands to source port `880`.
-5. When Breeze is enabled, resolve `breeze.recording` explicitly inside the
-   source adaptor as UID/GID `998:998` after Recorder is ready. Require a
-   non-empty IPv4 result, then after finalization require
-   `recording-network.json` to contain the canonical `breeze.recording` DNS
-   observation. A local hosts-file result or another DNS path that Recorder did
-   not observe does not pass initialization.
-6. After source readiness, send exactly one GET to `https://demo.test/`. When
-   the system detected Java, execute the bundled Java 8 class inside the source
-   adaptor and require it to
-   use the mounted Java truststore through `JAVA_TOOL_OPTIONS`, the same trust
-   path as the source application. Otherwise execute the pinned
-   `traffic-e2e-network-probe:0.0.1` image as `998:998` in the Recorder
-   anchor namespace with the public Recorder CA mounted read-only. Probe
-   failure fails the phase; never fall back from the Java probe to the generic
-   probe because doing so would mask a Java truststore defect.
-7. After the command reports
-   `phase = "preflight-business-input-required"`, admit the controlled request
-   matching the configured HTTP gateway rule,
-   using the rule's declared method without a separate read-only-method
-   restriction. Finalize the disposable run and require a clean manifest with
-   at least one published case and its source response.
-8. Require Recorder to publish exactly that successful `demo.test` exchange
-   once in `global-dependencies.jsonl` with
-   `global_dependency_reason = "preflight_probe"`, runtime phase, and
-   `java_truststore` or `system_network` attribution. Do not enable full
-   `traffic.jsonl`, accept an arbitrary HTTPS exchange, or synthesize Global
-   evidence from another file.
-   If the selected business case reaches its limit while this probe is still
-   starting, `--preflight-probe` keeps Recorder listeners available for one
-   fixed 15-second grace period before case-limit shutdown. This grace does not
-   wait for probe evidence and the Java probe command itself is bounded to 10
-   seconds, so a broken source container cannot hold shutdown indefinitely.
-9. Start a disposable real Replay session over the recording run. In a
-   Replay-owned host network namespace, run the fixed network probe image as
-   `998:998`: require `demo.test` to resolve to its assigned fake IP, return the
-   recorded response, and consume one Global HTTP exchange; require
-   `example.com:443` to be absent from recorded Replay targets, have its
-   connection rejected, and appear exactly once in `unrecorded_targets` with
-   the canonical unrecorded-endpoint reason; and require a direct real-IP
-   egress attempt to be rejected. This phase does not start the target or
-   activate a business case. Stop Replay and remove the namespace before
-   returning.
-10. Await the final result. Do not infer success from probe output alone. Only
-    overall `status = "passed"` with all three phase results is authoritative.
+The command owns four ordered phases:
 
-Run this through the same managed recording machinery used by backend-rewrite
-for normal source recording, including Recorder, network isolation, the source
-adaptor, optional Breeze, CA creation, readiness, finalization, and cleanup.
-Keep its run identity and artifacts in a dedicated preflight area below
-`.traffic-e2e/local/preflight/<run-id>/`; never publish them as the workflow's
-standard recording, Replay, or comparison evidence. Success output reports
-`status = "passed"`, the isolated manifest, `published_cases`, exact Global
-probe verification, Breeze DNS verification when configured, and the bounded
-Replay positive/negative/egress result.
-The command fails when the target image cannot be built or violates its static
-image contract, no complete case is recorded, the required probe is not
-published exactly once, Replay cannot consume it, an unrecorded endpoint is
-not rejected with evidence, or external egress is available. No initialization phase starts the target;
-`replay_network` starts Replay and its probe but not the target. No phase initializes API inventory or
-advances coordinator workflow state. Do not invoke
-`backend-rewrite next` to manufacture this check. If image construction, source
-identity, source readiness, CA truststore setup, request admission, case
-publication, finalization, or cleanup fails, initialization is incomplete.
+1. `target_image` builds the exact target image and validates its pinned build,
+   platform, user, entrypoint, cache, and secret-exclusion contracts.
+2. `recording` starts the managed source adaptor, verifies Recorder trust and
+   optional Breeze DNS, sends the system HTTPS probe, then automatically records
+   exactly one `GET` for the configured readiness path with a finalized source
+   response.
+3. `replay_network` starts Replay from that disposable recording, consumes the
+   recorded HTTPS dependency, rejects an unrecorded endpoint, and verifies that
+   direct external egress is blocked.
+4. `target_runtime` starts the exact phase-one image inside the recording-derived
+   Replay namespace and verifies readiness, `0.0.0.0` listening, UID/GID
+   `998:998`, startup inputs, bounded diagnostics, clean `SIGTERM`, and cleanup.
+
+Artifacts stay below `.traffic-e2e/local/preflight/<run-id>/` and never enter
+the rewrite API inventory or normal recording evidence. The readiness response
+body is not compared with source business behavior. Treat only overall
+`status = "passed"` with all four phase results as success; any phase or cleanup
+failure leaves initialization incomplete.
 
 ## Analyze Source Startup Reference Evidence
 
@@ -316,20 +290,11 @@ they do not by themselves prove process ownership, cache causality, or a
 required target implementation. Correlate them with source startup and cache
 code before recording a conclusion.
 
-Declare each source-proven authoritative local configuration file or root by
-its normalized absolute source path through repeatable `--startup-mount`
-arguments. Source containers commonly keep runtime configuration below
-`/data1` or `/data0`; inspect both locations together with the proved startup
-loader and container mounts. Initialization copies every declared path below
-`.traffic-e2e/local/startup/mounts` with its source path preserved, for example
-`/data1/authconfs` as
-`.traffic-e2e/local/startup/mounts/data1/authconfs`. Declare each required
-Docker `Config.Env` name through repeatable `--startup-env` arguments; the
-engine freezes its value without printing it. Do not copy selected keys,
-generated loader or SDK snapshots, local caches, decrypted output, remote
-responses, logs, or process memory into startup inputs. Keep credentials and
-other sensitive values out of commands and summaries and never commit the
-local startup snapshot.
+Confirm that the mounts, environment names, and writable directories discovered
+before initialization cover the observed startup behavior. Do not add selected
+keys, generated SDK snapshots, caches, decrypted output, remote responses, logs,
+or process memory to startup inputs. Keep credentials out of commands and
+summaries and never commit the local startup snapshot.
 
 Write a concise, redacted summary of the configuration, Vintage,
 background-traffic, and local-cache findings to
@@ -347,85 +312,78 @@ it.
 
 ## Provide The Target Container Contract
 
-The same initialization task must create this source-controlled target build
-and launch contract:
+The repository initialization command creates one source-controlled, runnable
+Rust target template together with the three repository configuration files:
 
 ```text
+Cargo.toml
+Cargo.lock
+src/main.rs
 .traffic-e2e/Dockerfile.e2e
+.gitignore
 .dockerignore
 ```
+
+This happens only during the one-time initialization command. The generated
+`Cargo.toml` pins `brz-logs` to `tag = "v0.0.1"` with its `metrics` feature and
+declares the public dependencies used by the bootstrap server. The generated
+`src/main.rs` binds `0.0.0.0`, honors the configured application-owned target
+port environment, satisfies the configured readiness path and status, stays in
+the foreground, and shuts down on `SIGTERM`; every other path returns 404. It
+does not implement business behavior.
+
+The template exists only to make initialization runnable. After initialization,
+the target AI owns the generated `Cargo.toml`, `Cargo.lock`, `src/main.rs`, and
+`.traffic-e2e/Dockerfile.e2e`; it may replace the bootstrap implementation while
+preserving the target build, startup, readiness, identity, and shutdown
+contracts below.
+
+Never overwrite existing target source or build files. Generate the Cargo
+template only when `Cargo.toml`, `Cargo.lock`, and `src/main.rs` are all absent;
+otherwise require all three to exist as regular files. Generate
+`.traffic-e2e/Dockerfile.e2e` only when it is absent and preserve an existing
+regular file. Create `.gitignore` and `.dockerignore` when absent; when either
+already exists, preserve its contents and append only missing canonical rules.
+Report every newly created file and whether either ignore file changed in the
+initialization result. The target AI does not need to reproduce those rules
+from this document.
 
 The target image's OCI entrypoint is the target launch contract used by
 traffic-e2e. traffic-e2e owns `docker build`, `docker run`, readiness,
 `docker stop`, and `docker rm`.
 
-The target AI owns only the source-controlled Dockerfile, `.dockerignore`, and
-target or mock implementation. It invokes `backend-rewrite init preflight` for
-the build and static image contract, then consumes coordinator-owned Replay
-results for the runtime contract; direct Docker commands, AI narration, and
-self-reported checks are never evidence.
+The target AI invokes `backend-rewrite init preflight` for the build and static
+image contract, then consumes coordinator-owned Replay results for the runtime
+contract; direct Docker commands, AI narration, and self-reported checks are
+never evidence.
 
 ### Build One Reproducible Target Image
 
-`Dockerfile.e2e` must be a BuildKit multi-stage build. Use the pinned shared
-Rust builder and target runtime images:
+The generated `.traffic-e2e/Dockerfile.e2e` is the canonical starting point.
+When adapting it to an existing workspace, preserve these contracts:
 
-```dockerfile
-FROM registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-builder:1.97.1@sha256:99663c03c7da6d638f9bef5d84d923840e2069e3f32067851b43ea7abf3f0004 AS builder
+- a BuildKit multi-stage build using the pinned traffic-e2e Rust builder and
+  runtime images already present in the generated file;
+- repository-root context, `cargo build --locked --release`, shared Cargo
+  registry/Git caches, and one project-specific `/build/target` cache;
+- `--mount=type=ssh,required=true`, known-host setup, and the fixed
+  `git ls-remote` check for the private Breeze `v0.0.1` tag;
+- a final stage containing only the release binary and explicit runtime assets,
+  with a non-empty entrypoint, no default command arguments, and final
+  `USER 998:998`; and
+- no external `# syntax=` frontend, credentials, source tree, build cache,
+  generated trust, recordings, or traffic-e2e binary in the final image.
 
-WORKDIR /build
-COPY Cargo.toml Cargo.lock ./
-COPY .cargo ./.cargo
-COPY . .
-RUN --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked \
-    --mount=type=cache,id=traffic-e2e-cargo-git,target=/opt/rust/cargo/git,sharing=locked \
-    --mount=type=cache,id=traffic-e2e-<project>-target,target=/build/target,sharing=locked \
-    cargo build --locked --release --bin <project> \
-    && binary="$(find /build/target -type f -path '*/release/<project>' -print -quit)" \
-    && test -n "${binary}" \
-    && install --directory /out \
-    && install --mode 0755 "${binary}" /out/<project>
+Before preflight, expose an SSH agent containing an identity authorized for
+`git.intra.demo.test`; for example, run `ssh-add ~/.ssh/id_ed25519` and verify
+`SSH_AUTH_SOCK` is set. traffic-e2e validates the agent and automatically passes
+`--ssh default`. The key remains a build-time mount and is never copied into an
+image.
 
-FROM registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.2@sha256:d322b050229334c2fec00cdce366a066697a7bafaf9b6842d77793eb1e4f10d2
-COPY --from=builder --chown=998:998 /out/<project> /app/bin/<project>
-ENTRYPOINT ["/app/bin/<project>"]
-```
-
-Adapt copied manifests, paths, and the normal Cargo command to the proved
-workspace, but preserve the contract. Copy manifests before the source tree
-when the workspace layout permits it. The build context is the target
-repository root. Include all source and source-controlled build inputs required
-by the normal release build; exclude `.git/`, `.traffic-e2e/local/`, `target/`,
-recordings, credentials, and other runtime data through the root
-`.dockerignore`. BuildKit cache mounts may persist Cargo registry, Cargo Git,
-and `target` compilation data between builds. Use stable shared IDs for Cargo
-registry and Git caches and a stable project-specific ID for the `target`
-cache. A source-only change reruns `cargo build` but does not redownload cached
-dependencies or rebuild unaffected dependency artifacts. Copy the finished
-binary to a non-cache path such as `/out` in the same `RUN`. The caches are not
-final-image content. Do not bind-mount a host binary, source tree, Cargo
-registry, or `target` directory when the target container runs.
-
-Do not add an external Dockerfile `# syntax=` frontend. The managed build uses
-the Docker daemon's BuildKit frontend so initialization never depends on
-Docker Hub; the required cache-mount syntax is validated by the real build.
-
-The final stage contains only the release binary and its proved runtime assets.
-It inherits `trp-record` UID/GID `998:998` and `USER 998:998` from the shared
-runtime. Do not recreate that account. A target Dockerfile that temporarily
-uses root to install an asset must restore `USER 998:998` before its
-entrypoint. Do not add nscd, systemd, sudo, Docker, iptables, a daemon
-supervisor, or a traffic-e2e binary to the target image.
-
-During initialization, traffic-e2e builds from the repository root with
-BuildKit and tags the local result as `traffic-e2e/<project>-target:cache`,
-where `<project>` is the lowercase normalized repository directory name.
-Building is required; pushing a project-specific target image is not. Later
-workflow runs rebuild only when the target build fingerprint changes and
-otherwise reuse the cache. traffic-e2e resolves the tag to one immutable image
-ID before a validation round and uses that exact image ID for both Replay and
-Comparison. It never rebuilds between the two phases for the same target
-revision.
+traffic-e2e owns the build from the repository root, the local
+`traffic-e2e/<project>-target:cache` tag, immutable image-ID resolution, cache
+reuse, and use of the same image ID for a validation round. Do not substitute a
+host-built binary or a manually started target container.
 
 ### Run The Normal Target Process
 
@@ -451,6 +409,12 @@ not depend on generic `TRAFFIC_E2E_*` variables. Never derive inputs from
 recordings, reports, source-process memory, or remote responses. Keep
 credentials and generated trust below `.traffic-e2e/local/` and never copy
 them into an image layer.
+
+Create every image-local runtime-writable directory discovered during startup
+inspection in `Dockerfile.e2e` with ownership `998:998`; the generated log
+directory is only the bootstrap example. Use declared writable startup mounts
+or `target.runtime_outputs` for paths supplied by traffic-e2e at runtime, and do
+not bake their contents into the image.
 
 The entrypoint must remain attached to the target process and handle `SIGTERM`
 with bounded graceful shutdown. A Rust target uses `brz-logs` for application
@@ -506,60 +470,13 @@ Target code and configuration must never read cases, expected responses,
 dependency recordings, Replay sessions, reports, coordinator state, or request
 header encryption keys.
 
-### Target-Image Phase Of The Initialization Preflight
-
-As the first phase of the existing `backend-rewrite init preflight`,
-traffic-e2e builds `traffic-e2e/<project>-target:cache` without starting its
-entrypoint. The system, not the target AI, performs every step below:
-
-1. Validate the immutable startup snapshot, pinned multi-stage Dockerfile,
-   required BuildKit caches, and root `.dockerignore` exclusions.
-2. Build the image from the target repository root, resolve the cache tag to
-   the exact immutable image ID produced by that build, and inspect that image.
-3. Require `linux/amd64`, default `USER 998:998`, a non-empty OCI entrypoint,
-   no default command arguments, and no persisted proxy or traffic-e2e secret
-   environment variables.
-
-Fail initialization when the build or static image contract fails. The command
-returns one bounded structured result containing overall `status`, separate
-`target_image`, `recording`, and `replay_network` phase results, the immutable
-target image ID, named static checks, and one failure stage/reason when
-applicable. It starts `recording` only after `target_image` passes. Only overall
-system-reported `status = "passed"` is authoritative.
-
-### Target Runtime Checks During Replay
-
-Do not start the target in a dependency-free initialization namespace. A
-completed implementation may require Vintage or another dynamic startup
-dependency, so that launch would be neither stable nor representative. Every
-real Replay starts the immutable target image only after Replay dependencies
-are ready, then the coordinator verifies:
-
-1. PID 1 runs as UID/GID `998:998`; declared startup environment is present;
-   generic `TRAFFIC_E2E_*` environment is absent; and `MESH_CONNECT_HOST` is
-   present for Breeze-enabled targets.
-2. Declared startup mounts, the public Replay CA, and managed Breeze mounts
-   when enabled are present with the required access mode.
-3. The configured readiness path reaches its final status and the target is
-   listening on `0.0.0.0` at the configured port.
-4. Captured stdout/stderr remains bounded and may be empty after `brz-logs`
-   initializes. At the end of Replay, normal `SIGTERM` shutdown exits cleanly
-   and the target container and namespace are removed.
-
-The run stores the successful launch checks in
-`reports/target-runtime-checks.json`; target start, bounded logs, runtime state,
-and stop evidence remain in the same Replay report directory. A failed runtime
-check fails that Replay and is returned through the normal implementation
-repair path. The target AI may repair the named source-controlled cause and
-rerun the coordinator-issued Replay command; it must not substitute manual
-Docker output or its own conclusion.
-
 ## Initialization Completion
 
 Do not report initialization complete until all of the following are true:
 
-- the initialization command succeeded and all three generated configuration
-  files exist;
+- the initialization command succeeded, all three generated configuration
+  files exist, and the root Cargo target template exists or an existing
+  complete Cargo target was preserved;
 - `Dockerfile.recording` exists, and the adaptor builds successfully without
   runtime secrets or generated trust material as
   `traffic-e2e/<project>-recording:cache`, bound to the configured source
@@ -568,14 +485,12 @@ Do not report initialization complete until all of the following are true:
   and `.traffic-e2e/CommonSwitcher.class` exactly match the bundled assets; both
   replacements in the source Breeze SDK JAR are verified byte-for-byte,
   and the inspected source entrypoint and command remain unchanged;
-- the repository `.gitignore` contains the root-scoped
-  `/.traffic-e2e/local/` entry;
+- the initializer-created or extended `.gitignore` and `.dockerignore` retain
+  their canonical local-state, build-output, recording, data, credential, and
+  environment exclusions;
 - `.traffic-e2e/Dockerfile.e2e` exists, uses the pinned builder and target
   runtime, and the system reports that it built successfully from the target
   repository root as `traffic-e2e/<project>-target:cache`;
-- the root `.dockerignore` excludes `.git/`, `.traffic-e2e/local/`, `target/`,
-  recordings, credentials, and other runtime-only inputs from the build
-  context;
 - the built target image defaults to `998:998`, contains its executable OCI
   entrypoint, and contains no source, build cache, credential, generated trust,
   recording, or `.traffic-e2e/local/` content;
@@ -586,12 +501,16 @@ Do not report initialization complete until all of the following are true:
 - the disposable recording preflight passed with the adapted source process
   running as `998:998`, system-owned Java probe execution and truststore setup
   completed when applicable, exactly one `demo.test` probe published as a
-  Global dependency, one cleanly published case, and, when Breeze is enabled,
-  a successful `breeze.recording` lookup observed in `recording-network.json`;
+  Global dependency, exactly one cleanly published readiness case with its
+  finalized source response, and, when Breeze is enabled, a successful
+  `breeze.recording` lookup observed in `recording-network.json`;
 - the disposable Replay network preflight consumed that Global probe through
   its assigned fake IP, rejected payload sent to unrecorded `example.com:443`
   with canonical endpoint evidence, rejected direct external egress for UID `998`, and
   completed cleanup;
+- `target_runtime.status = "passed"` proves the same immutable target image
+  satisfied readiness, identity, startup input, listener, graceful shutdown,
+  and cleanup checks inside the recording-derived Replay namespace;
 - one disposable source-adaptor startup was analyzed for configuration and
   Vintage access, background destinations and counts, and local-cache loading
   or refresh behavior, with temporary findings summarized only in the ignored
@@ -600,10 +519,10 @@ Do not report initialization complete until all of the following are true:
   recordings, or `.traffic-e2e/local/` content.
 
 Initialization ends after these repository requirements are delivered. It
-does not start the target, compare, or invoke or advance the `backend-rewrite
-next` workflow. Its disposable source recording and Replay network probe exist
-only to validate the initialized recording environment. The first real Replay
-that starts a target validates the runtime launch contract.
+does not compare business behavior or invoke or advance the `backend-rewrite
+next` workflow. Its disposable readiness recording, Replay network probes, and
+target readiness run validate only the initialized recording and runtime
+contracts; they are not API-compatibility evidence.
 
 ## Optional Initialization PR
 
@@ -623,10 +542,10 @@ If the user confirms:
 3. Commit only the three generated configuration files,
    `Dockerfile.recording`, the Breeze-only `.traffic-e2e/MeshConnectUtil.class`,
    and `.traffic-e2e/CommonSwitcher.class` when applicable,
-   `.traffic-e2e/Dockerfile.e2e`, the root `.dockerignore`, the root-scoped
-   `.gitignore` update, and any minimal target scaffold required for its
-   release build. Exclude unrelated work and all `.traffic-e2e/local/`
-   content.
+   the generated or preserved root `Cargo.toml`, `Cargo.lock`, and
+   `src/main.rs`, `.traffic-e2e/Dockerfile.e2e`, and the generated or extended
+   root `.gitignore` and `.dockerignore`. Exclude unrelated work and all
+   `.traffic-e2e/local/` content.
 4. Push the necessary branches and create a PR whose target branch is
    `dev-migration`. Report the branch names and PR URL to the user.
 

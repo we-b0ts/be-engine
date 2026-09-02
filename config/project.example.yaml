@@ -110,7 +110,7 @@ recorder:
         proxy_listen: 127.0.0.1:8001
   http_gateway:
     enabled: true
-    listen: 0.0.0.0:17171
+    listen: 0.0.0.0:4080
     matched_upstream: http://127.0.0.1:7171
     fallback_upstream: http://10.37.254.56:7171
     fallback_mode: fixed_response

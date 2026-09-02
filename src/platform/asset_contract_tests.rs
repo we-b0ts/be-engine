@@ -352,14 +352,12 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(MANAGER.contains("timeout --foreground 10 docker exec \"$source_name\""));
     assert!(!MANAGER.contains("command -v javac"));
     assert!(!MANAGER.contains("getent ahostsv4 demo.test"));
-    assert!(PREFLIGHT_BUSINESS_INPUT.contains("phase: \"preflight-business-input-required\""));
-    assert!(MANAGER.contains("TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED"));
-    assert!(PREFLIGHT_BUSINESS_INPUT.contains("TRAFFIC_E2E_MOTAN_REPLAY_COMMAND"));
-    assert!(PREFLIGHT_BUSINESS_INPUT.contains("optional_when_no_request_is_observed"));
-    assert!(
-        PREFLIGHT_BUSINESS_INPUT
-            .contains("replace 127.0.0.1 with this preflight host when capturing remotely")
-    );
+    assert!(PREFLIGHT_READINESS.contains("phase: \"preflight-readiness-recorded\""));
+    assert!(PREFLIGHT_READINESS.contains("TRAFFIC_E2E_SOURCE_READY_PATH"));
+    assert!(PREFLIGHT_READINESS.contains("TRAFFIC_E2E_SOURCE_READY_STATUS"));
+    assert!(MANAGER.contains("record_preflight_readiness"));
+    assert!(!MANAGER.contains("TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED"));
+    assert!(!PREFLIGHT_READINESS.contains("business"));
     assert!(MANAGER.contains("wait_for_recorder_or_duration"));
     let standard_recording = MANAGER
         .split("run_standard_recording() {")
@@ -454,7 +452,7 @@ fn stages_private_executable_assets() {
     );
     assert!(!assets.join("brz-no-fallback.sh").exists());
     assert_eq!(
-        fs::metadata(assets.join("preflight-business-input.sh"))
+        fs::metadata(assets.join("preflight-readiness.sh"))
             .unwrap()
             .permissions()
             .mode()

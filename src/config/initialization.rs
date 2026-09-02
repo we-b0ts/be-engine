@@ -9,7 +9,7 @@ use super::{
 use anyhow::{Context, Result, ensure};
 use hyper::StatusCode;
 
-pub const DEFAULT_HTTP_GATEWAY_PORT: u16 = 17_171;
+pub const DEFAULT_HTTP_GATEWAY_PORT: u16 = 4_080;
 
 #[derive(Debug, Clone)]
 pub(crate) struct RecorderConfigInitOptions {

@@ -36,7 +36,7 @@ struct CapturedBody {
     truncated: bool,
 }
 
-pub(super) async fn wait_until_ready(config: &ResolvedProjectConfig) -> Result<()> {
+pub(crate) async fn wait_until_ready(config: &ResolvedProjectConfig) -> Result<()> {
     let client = client();
     let readiness_uri = target_uri(&config.target_http_origin, &config.target_readiness_path)?;
     let deadline = tokio::time::Instant::now() + config.target_startup_timeout;

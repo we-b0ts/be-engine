@@ -1,12 +1,12 @@
 use std::net::SocketAddr;
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use serde::Serialize;
 use traffic_e2e::{
-    DEFAULT_HTTP_GATEWAY_PORT, InspectedContainer, ManagedRecordingPreflightOptions, RecordingApi,
+    DEFAULT_HTTP_GATEWAY_PORT, InspectedContainer, ManagedRecordingPreflightOptions,
     RepositoryConfigInitOptions, RepositoryConfigInitResult, StartupConfig, StartupSnapshotReport,
     initialize_repository_config, run_managed_recording_preflight,
 };
@@ -58,12 +58,6 @@ pub(super) struct ProjectPreflightArgs {
     /// Keep the disposable recording window open for at most this many seconds.
     #[arg(long, default_value = "60")]
     duration_seconds: NonZeroU64,
-    /// Record only this API; repeat for multiple METHOD/path selectors.
-    #[arg(long = "api", value_name = "METHOD PATH_OR_PATTERN")]
-    apis: Vec<RecordingApi>,
-    /// Override the per-API case limit for every selected API.
-    #[arg(long = "per-api-case-limit", value_name = "N", default_value = "1")]
-    per_api_case_limit: NonZeroUsize,
 }
 
 #[derive(Debug, Serialize)]
@@ -76,6 +70,8 @@ struct ProjectInitReport {
     local_dir: PathBuf,
     gitignore: PathBuf,
     gitignore_updated: bool,
+    dockerignore: PathBuf,
+    dockerignore_updated: bool,
     startup: StartupSnapshotReport,
     target_dockerfile: PathBuf,
     target_image_tag: String,
@@ -103,8 +99,6 @@ pub(super) async fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: boo
                 let result = run_managed_recording_preflight(ManagedRecordingPreflightOptions {
                     target_root,
                     duration_seconds: args.duration_seconds,
-                    apis: args.apis,
-                    per_api_case_limit: Some(args.per_api_case_limit),
                 })
                 .await;
                 match result {
@@ -167,6 +161,8 @@ fn preflight_failure_stage(reason: &str) -> &'static str {
         "target_image"
     } else if reason.contains("replay_network preflight failed") {
         "replay_network"
+    } else if reason.contains("target_runtime preflight failed") {
+        "target_runtime"
     } else {
         "recording"
     }
@@ -182,6 +178,8 @@ impl From<RepositoryConfigInitResult> for ProjectInitReport {
             local_dir: result.local_dir,
             gitignore: result.gitignore,
             gitignore_updated: result.gitignore_updated,
+            dockerignore: result.dockerignore,
+            dockerignore_updated: result.dockerignore_updated,
             startup: result.startup,
             target_dockerfile: result.target_dockerfile,
             target_image_tag: result.target_image_tag,
@@ -204,6 +202,10 @@ mod tests {
         assert_eq!(
             preflight_failure_stage("replay_network preflight failed: DNS leaked"),
             "replay_network"
+        );
+        assert_eq!(
+            preflight_failure_stage("target_runtime preflight failed: readiness timed out"),
+            "target_runtime"
         );
         assert_eq!(
             preflight_failure_stage("source adaptor did not become ready"),
