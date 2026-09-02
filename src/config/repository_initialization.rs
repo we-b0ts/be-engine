@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, ensure};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::initialization::{RecorderConfigInitOptions, render_validated_recorder_config};
 use crate::e2e_run::{E2eRunInitOptions, render_project_config};
@@ -11,8 +11,51 @@ use crate::e2e_run::{E2eRunInitOptions, render_project_config};
 const PROJECT_CONFIG_PATH: &str = ".traffic-e2e/project.yaml";
 const SOURCE_TRAFFIC_POLICY_PATH: &str = ".traffic-e2e/source-traffic-policy.yaml";
 const VERIFICATION_POLICY_PATH: &str = ".traffic-e2e/verification.yaml";
+const TARGET_CARGO_PATH: &str = "Cargo.toml";
+const TARGET_CARGO_LOCK_PATH: &str = "Cargo.lock";
+const TARGET_MAIN_PATH: &str = "src/main.rs";
+const TARGET_DOCKERFILE_PATH: &str = ".traffic-e2e/Dockerfile.e2e";
+const TARGET_GITIGNORE_PATH: &str = ".gitignore";
+const TARGET_DOCKERIGNORE_PATH: &str = ".dockerignore";
 const LOCAL_DIR: &str = crate::repository::LOCAL_ROOT;
 const DEFAULT_NATIVE_HTTP_PORT: u16 = 8080;
+const TARGET_CARGO_TEMPLATE: &str = include_str!("templates/target/Cargo.toml");
+const TARGET_CARGO_LOCK_TEMPLATE: &str = include_str!("templates/target/Cargo.lock");
+const TARGET_MAIN_TEMPLATE: &str = include_str!("templates/target/src/main.rs");
+const TARGET_DOCKERFILE_TEMPLATE: &str = include_str!("templates/target/Dockerfile.e2e");
+const TARGET_TEMPLATE_PACKAGE: &str = "traffic-e2e-target-template";
+const TARGET_TEMPLATE_CACHE_ID: &str = "traffic-e2e-template-target";
+const TARGET_GITIGNORE_RULES: &[&str] = &[
+    crate::repository::LOCAL_GITIGNORE_RULE,
+    "/target/",
+    "**/target/",
+    "/data/",
+    "/recordings/",
+    "**/recordings/",
+    "*.pem",
+    "*.key",
+    "*.jks",
+    "*.p12",
+    "*.pfx",
+    ".env",
+    ".env.*",
+];
+const TARGET_DOCKERIGNORE_RULES: &[&str] = &[
+    "/.git/",
+    "/.traffic-e2e/local/",
+    "/target/",
+    "**/target/",
+    "/data/",
+    "/recordings/",
+    "**/recordings/",
+    "*.pem",
+    "*.key",
+    "*.jks",
+    "*.p12",
+    "*.pfx",
+    ".env",
+    ".env.*",
+];
 
 #[derive(Debug, Clone)]
 pub struct RepositoryConfigInitOptions {
@@ -38,6 +81,8 @@ pub struct RepositoryConfigInitResult {
     pub local_dir: PathBuf,
     pub gitignore: PathBuf,
     pub gitignore_updated: bool,
+    pub dockerignore: PathBuf,
+    pub dockerignore_updated: bool,
     pub startup: crate::startup::StartupSnapshotReport,
     pub target_dockerfile: PathBuf,
     pub target_image_tag: String,
@@ -79,13 +124,13 @@ fn initialize_repository_config_with(
         )
     })?;
     ensure!(target_root.is_dir(), "target root must be a directory");
-    let generated = [
+    let configuration_targets = [
         PROJECT_CONFIG_PATH,
         SOURCE_TRAFFIC_POLICY_PATH,
         VERIFICATION_POLICY_PATH,
     ]
     .map(|relative| target_root.join(relative));
-    require_configuration_targets_absent(&generated)?;
+    require_configuration_targets_absent(&configuration_targets)?;
     let source = inspect(&options.source_container)?;
     let breeze = options
         .breeze_container
@@ -112,7 +157,7 @@ fn initialize_repository_config_with(
             target_root: target_root.clone(),
             source_container: source.name.clone(),
             breeze_container: breeze.as_ref().map(|container| container.name.clone()),
-            target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
+            target_dockerfile: PathBuf::from(TARGET_DOCKERFILE_PATH),
             target_startup: options.startup.clone(),
             replay_policy: PathBuf::from(VERIFICATION_POLICY_PATH),
             pr_base: "dev-migration".to_string(),
@@ -123,19 +168,37 @@ fn initialize_repository_config_with(
     )?;
     let source_traffic_policy = super::SourceTrafficPolicyConfig::repository_defaults().render()?;
 
-    let (gitignore, gitignore_updated) = ensure_local_gitignore(&target_root)?;
+    let (gitignore, gitignore_updated, gitignore_created) = ensure_target_gitignore(&target_root)?;
+    let (dockerignore, dockerignore_updated, dockerignore_created) =
+        ensure_target_dockerignore(&target_root)?;
+    let mut target_files = render_missing_target_delivery(&target_root, &options)?;
     let startup = crate::startup::normalized_config(options.startup)?;
     let startup = capture(&target_root, &options.source_container, &startup)?;
-    super::edit::create_many_atomic(&[
-        (generated[0].clone(), project),
-        (generated[1].clone(), source_traffic_policy.into_bytes()),
-        (generated[2].clone(), verification.into_bytes()),
-    ])?;
+    let mut files = vec![
+        (configuration_targets[0].clone(), project),
+        (
+            configuration_targets[1].clone(),
+            source_traffic_policy.into_bytes(),
+        ),
+        (configuration_targets[2].clone(), verification.into_bytes()),
+    ];
+    files.append(&mut target_files);
+    let mut generated = files
+        .iter()
+        .map(|(path, _)| path.clone())
+        .collect::<Vec<_>>();
+    if dockerignore_created {
+        generated.push(dockerignore.clone());
+    }
+    if gitignore_created {
+        generated.push(gitignore.clone());
+    }
+    super::edit::create_many_atomic(&files)?;
     let target_image_tag = crate::target_container::image_tag(&target_root)?;
 
     Ok(RepositoryConfigInitResult {
         target_root,
-        generated: generated.into_iter().collect(),
+        generated,
         source_container: source,
         breeze_container: breeze,
         upstream_dns: options.upstream_dns,
@@ -143,8 +206,10 @@ fn initialize_repository_config_with(
         local_dir: PathBuf::from(LOCAL_DIR),
         gitignore,
         gitignore_updated,
+        dockerignore,
+        dockerignore_updated,
         startup,
-        target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
+        target_dockerfile: PathBuf::from(TARGET_DOCKERFILE_PATH),
         target_image_tag,
         target_runtime_contract: "traffic-e2e builds Dockerfile.e2e, runs its OCI entrypoint as \
                                   998:998 with source-compatible startup inputs mounted with \
@@ -155,6 +220,200 @@ fn initialize_repository_config_with(
         record_command: "traffic-e2e record --target-root .",
         comparison_command: "traffic-e2e record-comparison --target-root .",
     })
+}
+
+#[derive(Debug, Deserialize)]
+struct TargetCargoManifest {
+    package: Option<TargetCargoPackage>,
+    #[serde(default)]
+    bin: Vec<TargetCargoBin>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TargetCargoPackage {
+    name: String,
+    #[serde(rename = "default-run")]
+    default_run: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TargetCargoBin {
+    name: Option<String>,
+}
+
+fn render_missing_target_delivery(
+    target_root: &Path,
+    options: &RepositoryConfigInitOptions,
+) -> Result<Vec<(PathBuf, Vec<u8>)>> {
+    let cargo = target_root.join(TARGET_CARGO_PATH);
+    let cargo_lock = target_root.join(TARGET_CARGO_LOCK_PATH);
+    let main = target_root.join(TARGET_MAIN_PATH);
+    let dockerfile = target_root.join(TARGET_DOCKERFILE_PATH);
+    let cargo_exists = path_exists(&cargo)?;
+    let cargo_lock_exists = path_exists(&cargo_lock)?;
+    let main_exists = path_exists(&main)?;
+    let dockerfile_exists = path_exists(&dockerfile)?;
+
+    let template_target = !cargo_exists && !cargo_lock_exists && !main_exists;
+    ensure!(
+        template_target || cargo_exists && cargo_lock_exists && main_exists,
+        "target initialization requires Cargo.toml, Cargo.lock, and src/main.rs to either all exist or all be absent"
+    );
+
+    let binary = if template_target {
+        target_package_name(target_root)?
+    } else {
+        require_regular_file(&cargo, "target Cargo.toml")?;
+        require_regular_file(&cargo_lock, "target Cargo.lock")?;
+        require_regular_file(&main, "target src/main.rs")?;
+        target_binary_name(&cargo)?
+    };
+    validate_target_binary_name(&binary)?;
+
+    let mut files = Vec::new();
+    if template_target {
+        files.push((
+            cargo,
+            TARGET_CARGO_TEMPLATE
+                .replace(TARGET_TEMPLATE_PACKAGE, &binary)
+                .into_bytes(),
+        ));
+        files.push((
+            cargo_lock,
+            TARGET_CARGO_LOCK_TEMPLATE
+                .replace(TARGET_TEMPLATE_PACKAGE, &binary)
+                .into_bytes(),
+        ));
+        files.push((
+            main,
+            render_target_main(
+                options.startup.port_environment.as_deref(),
+                &options.readiness_path,
+                options.readiness_status,
+            )
+            .into_bytes(),
+        ));
+    }
+    if !dockerfile_exists {
+        let project = target_cache_project(target_root)?;
+        let dockerfile = TARGET_DOCKERFILE_TEMPLATE
+            .replace(
+                TARGET_TEMPLATE_CACHE_ID,
+                &format!("traffic-e2e-{project}-target"),
+            )
+            .replace(TARGET_TEMPLATE_PACKAGE, &binary);
+        files.push((
+            target_root.join(TARGET_DOCKERFILE_PATH),
+            dockerfile.into_bytes(),
+        ));
+    } else {
+        require_regular_file(&dockerfile, "target Dockerfile")?;
+    }
+    Ok(files)
+}
+
+fn path_exists(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error).with_context(|| format!("failed to inspect {}", path.display())),
+    }
+}
+
+fn require_regular_file(path: &Path, label: &str) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {label} {}", path.display()))?;
+    ensure!(
+        metadata.is_file() && !metadata.file_type().is_symlink(),
+        "{label} must be a regular file and not a symlink: {}",
+        path.display()
+    );
+    Ok(())
+}
+
+fn target_package_name(target_root: &Path) -> Result<String> {
+    let name = crate::repository::directory_name(target_root)?;
+    let mut normalized = String::with_capacity(name.len());
+    let mut previous_separator = false;
+    for character in name.chars() {
+        if character.is_ascii_alphanumeric() {
+            normalized.push(character.to_ascii_lowercase());
+            previous_separator = false;
+        } else if !previous_separator {
+            normalized.push('-');
+            previous_separator = true;
+        }
+    }
+    let normalized = normalized.trim_matches('-').to_string();
+    ensure!(
+        !normalized.is_empty(),
+        "target repository name cannot form a Cargo package name"
+    );
+    Ok(normalized)
+}
+
+fn target_binary_name(cargo_path: &Path) -> Result<String> {
+    let contents = std::fs::read_to_string(cargo_path)
+        .with_context(|| format!("failed to read {}", cargo_path.display()))?;
+    let manifest: TargetCargoManifest = toml::from_str(&contents)
+        .with_context(|| format!("failed to parse {}", cargo_path.display()))?;
+    let package = manifest
+        .package
+        .context("target Cargo.toml must contain [package] when Dockerfile.e2e is generated")?;
+    if let Some(default_run) = package.default_run {
+        return Ok(default_run);
+    }
+    let named_bins = manifest
+        .bin
+        .into_iter()
+        .filter_map(|binary| binary.name)
+        .collect::<Vec<_>>();
+    if named_bins.len() == 1 {
+        return Ok(named_bins.into_iter().next().expect("one named binary"));
+    }
+    Ok(package.name)
+}
+
+fn validate_target_binary_name(name: &str) -> Result<()> {
+    ensure!(
+        !name.is_empty()
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')),
+        "target binary name contains unsupported Dockerfile characters: {name:?}"
+    );
+    Ok(())
+}
+
+fn target_cache_project(target_root: &Path) -> Result<String> {
+    let tag = crate::target_container::image_tag(target_root)?;
+    tag.strip_prefix("traffic-e2e/")
+        .and_then(|value| value.strip_suffix("-target:cache"))
+        .map(str::to_string)
+        .context("failed to derive target cache identity")
+}
+
+fn render_target_main(
+    port_environment: Option<&str>,
+    readiness_path: &str,
+    readiness_status: u16,
+) -> String {
+    let port_environment = port_environment
+        .map(|name| format!("Some({name:?})"))
+        .unwrap_or_else(|| "None".to_string());
+    TARGET_MAIN_TEMPLATE
+        .replace(
+            "const TARGET_PORT_ENV: Option<&str> = None;",
+            &format!("const TARGET_PORT_ENV: Option<&str> = {port_environment};"),
+        )
+        .replace(
+            "const READINESS_PATH: &str = \"/healthz\";",
+            &format!("const READINESS_PATH: &str = {readiness_path:?};"),
+        )
+        .replace(
+            "const READINESS_STATUS: u16 = 404;",
+            &format!("const READINESS_STATUS: u16 = {readiness_status};"),
+        )
 }
 
 fn require_configuration_targets_absent(paths: &[PathBuf]) -> Result<()> {
@@ -173,8 +432,26 @@ fn require_configuration_targets_absent(paths: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
-fn ensure_local_gitignore(target_root: &Path) -> Result<(PathBuf, bool)> {
-    let path = target_root.join(".gitignore");
+fn ensure_target_dockerignore(target_root: &Path) -> Result<(PathBuf, bool, bool)> {
+    ensure_ignore_rules(
+        target_root,
+        TARGET_DOCKERIGNORE_PATH,
+        TARGET_DOCKERIGNORE_RULES,
+    )
+}
+
+fn ensure_target_gitignore(target_root: &Path) -> Result<(PathBuf, bool, bool)> {
+    let result = ensure_ignore_rules(target_root, TARGET_GITIGNORE_PATH, TARGET_GITIGNORE_RULES)?;
+    require_ignored(target_root, LOCAL_DIR)?;
+    Ok(result)
+}
+
+fn ensure_ignore_rules(
+    target_root: &Path,
+    relative_path: &str,
+    rules: &[&str],
+) -> Result<(PathBuf, bool, bool)> {
+    let path = target_root.join(relative_path);
     let (mut contents, exists) = match std::fs::symlink_metadata(&path) {
         Ok(metadata) => {
             ensure!(
@@ -193,22 +470,27 @@ fn ensure_local_gitignore(target_root: &Path) -> Result<(PathBuf, bool)> {
             return Err(error).with_context(|| format!("failed to inspect {}", path.display()));
         }
     };
-    let rule = crate::repository::LOCAL_GITIGNORE_RULE;
-    let updated = !contents.lines().any(|line| line.trim() == rule);
+    let missing = rules
+        .iter()
+        .filter(|rule| !contents.lines().any(|line| line.trim() == **rule))
+        .copied()
+        .collect::<Vec<_>>();
+    let updated = !missing.is_empty();
     if updated {
         if !contents.is_empty() && !contents.ends_with('\n') {
             contents.push('\n');
         }
-        contents.push_str(rule);
-        contents.push('\n');
+        for rule in missing {
+            contents.push_str(rule);
+            contents.push('\n');
+        }
         if exists {
             super::edit::write_atomic(&path, contents.as_bytes())?;
         } else {
             super::edit::create_atomic(&path, contents.as_bytes())?;
         }
     }
-    require_ignored(target_root, LOCAL_DIR)?;
-    Ok((path, updated))
+    Ok((path, updated, !exists))
 }
 
 fn require_ignored(target_root: &Path, relative_dir: &str) -> Result<()> {
@@ -373,7 +655,7 @@ mod tests {
                 target_root: target.path().to_path_buf(),
                 source_container: "friendship".to_string(),
                 breeze_container: Some("breeze".to_string()),
-                http_gateway_port: 17_171,
+                http_gateway_port: 4_080,
                 readiness_path: "/healthz".to_string(),
                 readiness_status: 404,
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
@@ -384,21 +666,21 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result.generated.len(), 3);
-        assert_eq!(result.http_gateway_port, 17_171);
+        assert_eq!(result.generated.len(), 9);
+        assert_eq!(result.http_gateway_port, 4_080);
         assert_eq!(result.local_dir, PathBuf::from(LOCAL_DIR));
         assert_eq!(result.gitignore, target.path().join(".gitignore"));
         assert!(result.gitignore_updated);
-        assert_eq!(
-            fs::read_to_string(&result.gitignore).unwrap(),
-            "/.traffic-e2e/local/\n"
-        );
-        let (_, updated) = ensure_local_gitignore(target.path()).unwrap();
+        assert_eq!(result.dockerignore, target.path().join(".dockerignore"));
+        assert!(result.dockerignore_updated);
+        let gitignore = fs::read_to_string(&result.gitignore).unwrap();
+        for rule in TARGET_GITIGNORE_RULES {
+            assert!(gitignore.lines().any(|line| line == *rule));
+        }
+        let (_, updated, created) = ensure_target_gitignore(target.path()).unwrap();
         assert!(!updated);
-        assert_eq!(
-            fs::read_to_string(&result.gitignore).unwrap(),
-            "/.traffic-e2e/local/\n"
-        );
+        assert!(!created);
+        assert_eq!(fs::read_to_string(&result.gitignore).unwrap(), gitignore);
         assert_eq!(
             result.rewrite_command,
             "backend-rewrite next --api '<METHOD path-or-pattern>'"
@@ -412,6 +694,33 @@ mod tests {
         assert!(target.path().join(PROJECT_CONFIG_PATH).is_file());
         assert!(target.path().join(SOURCE_TRAFFIC_POLICY_PATH).is_file());
         assert!(target.path().join(VERIFICATION_POLICY_PATH).is_file());
+        assert!(target.path().join(TARGET_CARGO_PATH).is_file());
+        assert!(target.path().join(TARGET_CARGO_LOCK_PATH).is_file());
+        assert!(target.path().join(TARGET_MAIN_PATH).is_file());
+        assert!(target.path().join(TARGET_DOCKERFILE_PATH).is_file());
+        let cargo = fs::read_to_string(target.path().join(TARGET_CARGO_PATH)).unwrap();
+        assert!(cargo.contains("tag = \"v0.0.1\""));
+        assert!(cargo.contains("features = [\"metrics\"]"));
+        let lock = fs::read_to_string(target.path().join(TARGET_CARGO_LOCK_PATH)).unwrap();
+        assert!(lock.contains(
+            "git+ssh://git@git.intra.demo.test:2222/platform/breeze/logs.git?tag=v0.0.1"
+        ));
+        let main = fs::read_to_string(target.path().join(TARGET_MAIN_PATH)).unwrap();
+        assert!(main.contains("const TARGET_PORT_ENV: Option<&str> = None;"));
+        assert!(main.contains("const READINESS_PATH: &str = \"/healthz\";"));
+        assert!(main.contains("const READINESS_STATUS: u16 = 404;"));
+        let dockerfile = fs::read_to_string(target.path().join(TARGET_DOCKERFILE_PATH)).unwrap();
+        assert!(dockerfile.contains("--mount=type=ssh,required=true"));
+        assert!(dockerfile.contains("git ls-remote --exit-code"));
+        assert!(!dockerfile.contains("__TARGET_"));
+        for rule in TARGET_DOCKERIGNORE_RULES {
+            assert!(
+                fs::read_to_string(&result.dockerignore)
+                    .unwrap()
+                    .lines()
+                    .any(|line| line == *rule)
+            );
+        }
         assert_eq!(
             result.startup.root,
             PathBuf::from(crate::repository::LOCAL_STARTUP_ROOT)
@@ -449,7 +758,7 @@ mod tests {
         );
         let recorder =
             crate::config::AppConfig::load(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
-        assert_eq!(recorder.http_gateway.listen.to_string(), "0.0.0.0:17171");
+        assert_eq!(recorder.http_gateway.listen.to_string(), "0.0.0.0:4080");
         assert_eq!(
             recorder.http_gateway.matched_upstream,
             "http://127.0.0.1:8080"
@@ -471,7 +780,7 @@ mod tests {
                 target_root: target.path().to_path_buf(),
                 source_container: "friendship".to_string(),
                 breeze_container: Some("breeze".to_string()),
-                http_gateway_port: 17_171,
+                http_gateway_port: 4_080,
                 readiness_path: "/healthz".to_string(),
                 readiness_status: 404,
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
@@ -482,5 +791,113 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("refusing to initialize any"));
+    }
+
+    #[test]
+    fn target_delivery_preserves_an_existing_dockerfile() {
+        let target = tempdir().unwrap();
+        let dockerfile = target.path().join(TARGET_DOCKERFILE_PATH);
+        fs::create_dir_all(dockerfile.parent().unwrap()).unwrap();
+        fs::write(&dockerfile, "FROM existing\n").unwrap();
+        let files = render_missing_target_delivery(
+            target.path(),
+            &RepositoryConfigInitOptions {
+                target_root: target.path().to_path_buf(),
+                source_container: "source".to_string(),
+                breeze_container: None,
+                http_gateway_port: 4_080,
+                readiness_path: "/ready".to_string(),
+                readiness_status: 204,
+                upstream_dns: "10.10.10.11:53".parse().unwrap(),
+                startup: crate::startup::StartupConfig {
+                    port_environment: Some("SERVICE_PORT".to_string()),
+                    ..crate::startup::StartupConfig::default()
+                },
+            },
+        )
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(&dockerfile).unwrap(), "FROM existing\n");
+        assert_eq!(files.len(), 3);
+        assert!(files.iter().all(|(path, _)| path != &dockerfile));
+        let main = files
+            .iter()
+            .find(|(path, _)| path.ends_with(TARGET_MAIN_PATH))
+            .map(|(_, contents)| String::from_utf8_lossy(contents))
+            .unwrap();
+        assert!(main.contains("Some(\"SERVICE_PORT\")"));
+        assert!(main.contains("const READINESS_PATH: &str = \"/ready\";"));
+        assert!(main.contains("const READINESS_STATUS: u16 = 204;"));
+    }
+
+    #[test]
+    fn target_delivery_refuses_a_partial_existing_cargo_target() {
+        let target = tempdir().unwrap();
+        fs::write(
+            target.path().join(TARGET_CARGO_PATH),
+            "[package]\nname='partial'\n",
+        )
+        .unwrap();
+        let error = render_missing_target_delivery(
+            target.path(),
+            &RepositoryConfigInitOptions {
+                target_root: target.path().to_path_buf(),
+                source_container: "source".to_string(),
+                breeze_container: None,
+                http_gateway_port: 4_080,
+                readiness_path: "/healthz".to_string(),
+                readiness_status: 404,
+                upstream_dns: "10.10.10.11:53".parse().unwrap(),
+                startup: crate::startup::StartupConfig::default(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("either all exist or all be absent")
+        );
+    }
+
+    #[test]
+    fn ignore_generation_preserves_existing_rules_and_is_idempotent() {
+        let target = tempdir().unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "-q"])
+                .arg(target.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::write(target.path().join(TARGET_GITIGNORE_PATH), "/vendor/\n").unwrap();
+        fs::write(target.path().join(TARGET_DOCKERIGNORE_PATH), "/fixtures/\n").unwrap();
+
+        let (_, git_updated, git_created) = ensure_target_gitignore(target.path()).unwrap();
+        let (_, docker_updated, docker_created) =
+            ensure_target_dockerignore(target.path()).unwrap();
+        assert!(git_updated);
+        assert!(!git_created);
+        assert!(docker_updated);
+        assert!(!docker_created);
+
+        let gitignore = fs::read_to_string(target.path().join(TARGET_GITIGNORE_PATH)).unwrap();
+        let dockerignore =
+            fs::read_to_string(target.path().join(TARGET_DOCKERIGNORE_PATH)).unwrap();
+        assert!(gitignore.starts_with("/vendor/\n"));
+        assert!(dockerignore.starts_with("/fixtures/\n"));
+        for rule in TARGET_GITIGNORE_RULES {
+            assert_eq!(gitignore.lines().filter(|line| *line == *rule).count(), 1);
+        }
+        for rule in TARGET_DOCKERIGNORE_RULES {
+            assert_eq!(
+                dockerignore.lines().filter(|line| *line == *rule).count(),
+                1
+            );
+        }
+
+        assert!(!ensure_target_gitignore(target.path()).unwrap().1);
+        assert!(!ensure_target_dockerignore(target.path()).unwrap().1);
     }
 }

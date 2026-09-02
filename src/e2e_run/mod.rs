@@ -47,6 +47,7 @@ pub use evidence::{
 };
 pub(crate) use execute::recover_focused_e2e_api;
 pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};
+pub(crate) use http_driver::wait_until_ready;
 use model::RunStatus;
 pub(crate) use model::{ResolvedProjectConfig, TargetQualityGateConfig};
 pub(crate) use reclassify::{

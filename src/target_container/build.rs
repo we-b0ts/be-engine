@@ -54,7 +54,10 @@ pub(crate) fn image_tag(target_root: &Path) -> Result<String> {
 }
 
 pub(crate) async fn build_image(config: &TargetContainerConfig) -> Result<TargetImage> {
-    validate_build_contract(config)?;
+    let ssh_required = validate_build_contract(config)?;
+    if ssh_required {
+        require_ssh_agent()?;
+    }
     let tag = image_tag(&config.target_root)?;
     let control_root =
         crate::internal_runtime::root(&config.target_root).join("target-container/build");
@@ -70,7 +73,11 @@ pub(crate) async fn build_image(config: &TargetContainerConfig) -> Result<Target
         .args(["--build-arg", "HTTP_PROXY"])
         .args(["--build-arg", "HTTPS_PROXY"])
         .args(["--build-arg", "ALL_PROXY"])
-        .args(["--build-arg", "NO_PROXY"])
+        .args(["--build-arg", "NO_PROXY"]);
+    if ssh_required {
+        command.args(["--ssh", "default"]);
+    }
+    command
         .arg("--iidfile")
         .arg(&iid_path)
         .arg("--tag")
@@ -117,7 +124,7 @@ pub(crate) async fn build_image(config: &TargetContainerConfig) -> Result<Target
     Ok(TargetImage { tag, id: iid })
 }
 
-fn validate_build_contract(config: &TargetContainerConfig) -> Result<()> {
+fn validate_build_contract(config: &TargetContainerConfig) -> Result<bool> {
     require_regular_file(&config.dockerfile, "target Dockerfile")?;
     ensure!(
         config.dockerfile == config.target_root.join(super::TARGET_DOCKERFILE_RELATIVE),
@@ -139,6 +146,52 @@ fn validate_build_contract(config: &TargetContainerConfig) -> Result<()> {
             ".dockerignore must exclude {required}/ from the target build context"
         );
     }
+    Ok(dockerfile_requires_ssh(&dockerfile))
+}
+
+fn dockerfile_requires_ssh(dockerfile: &str) -> bool {
+    dockerfile.lines().any(|line| {
+        let line = line.trim_start();
+        !line.starts_with('#') && line.contains("--mount=type=ssh")
+    })
+}
+
+fn require_ssh_agent() -> Result<()> {
+    let socket = std::env::var_os("SSH_AUTH_SOCK")
+        .filter(|value| !value.is_empty())
+        .context(
+            "target Dockerfile requires BuildKit SSH forwarding; start ssh-agent and run ssh-add",
+        )?;
+    let metadata = std::fs::metadata(&socket).with_context(|| {
+        format!(
+            "target Dockerfile requires BuildKit SSH forwarding, but SSH_AUTH_SOCK {} is not usable",
+            Path::new(&socket).display()
+        )
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt as _;
+        ensure!(
+            metadata.file_type().is_socket(),
+            "target Dockerfile requires BuildKit SSH forwarding, but SSH_AUTH_SOCK is not a socket"
+        );
+    }
+    #[cfg(not(unix))]
+    ensure!(
+        !metadata.is_dir(),
+        "target Dockerfile requires BuildKit SSH forwarding, but SSH_AUTH_SOCK is not usable"
+    );
+    let status = std::process::Command::new("ssh-add")
+        .arg("-l")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("failed to inspect ssh-agent identities with ssh-add -l")?;
+    ensure!(
+        status.success(),
+        "target Dockerfile requires BuildKit SSH forwarding; start ssh-agent and run ssh-add"
+    );
     Ok(())
 }
 
@@ -334,5 +387,12 @@ mod tests {
         );
 
         validate_dockerfile_contract(&config, &dockerfile).unwrap();
+        assert!(!dockerfile_requires_ssh(&dockerfile));
+
+        let dockerfile = dockerfile.replace(
+            "RUN --mount=type=cache",
+            "RUN --mount=type=ssh,required=true --mount=type=cache",
+        );
+        assert!(dockerfile_requires_ssh(&dockerfile));
     }
 }

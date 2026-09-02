@@ -306,7 +306,20 @@ then the normal target boundary:
 3. configured port and readiness endpoint/status;
 4. Replay CA trust and dependency client construction;
 5. container identity, foreground process ownership, and bounded `SIGTERM`
-   shutdown behavior.
+   shutdown behavior; and
+6. runtime-writable directories. When logs contain `Permission denied` or
+   `EACCES`, confirm each image-local path exists and is writable by numeric
+   UID/GID `998:998`. Repair both `Dockerfile.recording` and `Dockerfile.e2e`,
+   for example:
+
+   ```dockerfile
+   USER 0:0
+   RUN install -d -o 998 -g 998 -m 0775 /data1/weibo/data
+   USER 998:998
+   ```
+
+   Do not recursively change ownership of configuration or credential trees;
+   runtime-provided writable mounts do not require image-layer ownership.
 
 Repair product startup, composition, configuration loading, or
 `.traffic-e2e/Dockerfile.e2e`. Do not add case execution, report parsing,

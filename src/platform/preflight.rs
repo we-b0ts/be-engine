@@ -1,12 +1,12 @@
 use std::fs::{self, File};
 use std::io::BufReader;
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use crate::{PreflightProbeKind, RecordingApi};
+use crate::PreflightProbeKind;
 
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_CASE_DESCRIPTOR_BYTES: u64 = 64 * 1024;
@@ -19,8 +19,6 @@ const MAX_MOTAN_FAILURE_BYTES: usize = 512;
 pub struct ManagedRecordingPreflightOptions {
     pub target_root: PathBuf,
     pub duration_seconds: NonZeroU64,
-    pub apis: Vec<RecordingApi>,
-    pub per_api_case_limit: Option<NonZeroUsize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -29,6 +27,7 @@ pub struct ManagedRecordingPreflightResult {
     pub target_image: ManagedTargetImagePreflightResult,
     pub recording: ManagedRecordingPreflightRecordingResult,
     pub replay_network: super::ManagedReplayNetworkPreflightResult,
+    pub target_runtime: super::ManagedTargetRuntimePreflightResult,
     pub managed_by: &'static str,
 }
 
@@ -61,20 +60,6 @@ pub struct ManagedRecordingPreflightRecordingResult {
     pub global_probe_dependency_verified: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub breeze_dns_resolution_verified: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub motan: Option<ManagedMotanPreflightResult>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ManagedMotanPreflightResult {
-    pub status: MotanPreflightStatus,
-    pub observed_cases: usize,
-    pub source_port: u16,
-    pub gateway_port: u16,
-    pub validation_deferred: bool,
-    pub motan_replay_command: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub required_action: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -106,8 +91,6 @@ pub(super) struct PreflightEvidence {
     pub global_probe_dependency_verified: bool,
     pub breeze_dns_resolution_verified: bool,
     pub probe_kind: PreflightProbeKind,
-    pub motan_status: Option<MotanPreflightStatus>,
-    pub motan_cases: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -137,6 +120,16 @@ struct DependencyEventProbe {
 #[derive(Debug, Deserialize)]
 struct CaseDescriptorProbe {
     kind: String,
+    source_binding: Option<CaseSourceBindingProbe>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CaseSourceBindingProbe {
+    #[serde(default)]
+    protocol: String,
+    #[serde(default)]
+    method: String,
+    path_pattern: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -151,8 +144,8 @@ struct TrafficEventProbe {
 
 pub(super) fn validate(
     manifest_path: &Path,
-    motan_enabled: bool,
     breeze_enabled: bool,
+    readiness_path: &str,
 ) -> Result<PreflightEvidence> {
     let manifest_metadata = regular_file_metadata(manifest_path, "preflight manifest")?;
     ensure!(
@@ -182,12 +175,11 @@ pub(super) fn validate(
         manifest.failed_cases == 0 && manifest.errors.is_empty(),
         "preflight recording contains failed cases or errors"
     );
-    if !motan_enabled {
-        ensure!(
-            manifest.published_cases > 0,
-            "preflight recording published no cases; send a controlled request through the recording gateway while the command is running"
-        );
-    }
+    ensure!(
+        manifest.published_cases == 1,
+        "preflight recording must publish exactly one readiness case; found {}",
+        manifest.published_cases
+    );
 
     let run_dir = manifest_path
         .parent()
@@ -200,9 +192,11 @@ pub(super) fn validate(
         observation.responses >= manifest.published_cases,
         "preflight recording is missing finalized source responses"
     );
-    if motan_enabled {
-        validate_motan_gateway_observation(run_dir)?;
-    }
+    ensure!(
+        observation.readiness_cases == 1
+            && observation.readiness_path.as_deref() == Some(readiness_path),
+        "preflight recording did not publish exactly one GET readiness case for {readiness_path:?}"
+    );
     let (probe_count, probe_kind) =
         count_global_probe_dependencies(&run_dir.join("global-dependencies.jsonl"))?;
     ensure!(
@@ -217,12 +211,6 @@ pub(super) fn validate(
         global_probe_dependency_verified: true,
         breeze_dns_resolution_verified: breeze_enabled,
         probe_kind,
-        motan_status: motan_enabled.then_some(if observation.motan_cases > 0 {
-            MotanPreflightStatus::Verified
-        } else {
-            MotanPreflightStatus::NotObserved
-        }),
-        motan_cases: observation.motan_cases,
     })
 }
 
@@ -383,6 +371,8 @@ fn count_global_probe_dependencies(path: &Path) -> Result<(usize, Option<Preflig
 struct RunObservation {
     responses: usize,
     motan_cases: usize,
+    readiness_cases: usize,
+    readiness_path: Option<String>,
 }
 
 fn inspect_run(run_dir: &Path) -> Result<RunObservation> {
@@ -450,8 +440,19 @@ fn inspect_run(run_dir: &Path) -> Result<RunObservation> {
                                 path.display()
                             )
                         })?;
-                    if descriptor.kind == "motan_rpc" {
-                        observation.motan_cases += 1;
+                    match descriptor.kind.as_str() {
+                        "motan_rpc" => observation.motan_cases += 1,
+                        "http"
+                            if descriptor.source_binding.as_ref().is_some_and(|binding| {
+                                binding.protocol == "http" && binding.method == "GET"
+                            }) =>
+                        {
+                            observation.readiness_cases += 1;
+                            observation.readiness_path = descriptor
+                                .source_binding
+                                .and_then(|binding| binding.path_pattern);
+                        }
+                        _ => {}
                     }
                 }
                 _ => {}
@@ -506,6 +507,11 @@ mod tests {
         let case = run.join("apis/example/case-1");
         fs::create_dir_all(&case).unwrap();
         fs::write(case.join("expected-response.json"), "{}\n").unwrap();
+        fs::write(
+            case.join("case.json"),
+            r#"{"kind":"http","source_binding":{"protocol":"http","method":"GET","path_pattern":"/healthz"}}"#,
+        )
+        .unwrap();
         let manifest = run.join("recording-run.json");
         fs::write(
             &manifest,
@@ -536,15 +542,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            validate(&manifest, false, false).unwrap(),
+            validate(&manifest, false, "/healthz").unwrap(),
             PreflightEvidence {
                 published_cases: 1,
                 https_interception_verified: true,
                 global_probe_dependency_verified: true,
                 breeze_dns_resolution_verified: false,
                 probe_kind: PreflightProbeKind::JavaTruststore,
-                motan_status: None,
-                motan_cases: 0,
             }
         );
     }
@@ -560,7 +564,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            validate(&manifest, false, false).unwrap().probe_kind,
+            validate(&manifest, false, "/healthz").unwrap().probe_kind,
             PreflightProbeKind::SystemNetwork
         );
     }
@@ -571,7 +575,9 @@ mod tests {
         let run = manifest.parent().unwrap();
         fs::write(run.join("traffic.jsonl"), probe_event("java_truststore")).unwrap();
 
-        let error = validate(&manifest, false, false).unwrap_err().to_string();
+        let error = validate(&manifest, false, "/healthz")
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("global-dependencies.jsonl"));
     }
 
@@ -584,7 +590,9 @@ mod tests {
             probe_event("declared_language"),
         )
         .unwrap();
-        let error = validate(&manifest, false, false).unwrap_err().to_string();
+        let error = validate(&manifest, false, "/healthz")
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("system-selected runtime attribution"));
 
         fs::write(
@@ -597,33 +605,22 @@ mod tests {
         )
         .unwrap();
 
-        let error = validate(&manifest, false, false).unwrap_err().to_string();
+        let error = validate(&manifest, false, "/healthz")
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("found 2"));
     }
 
     #[test]
-    fn motan_preflight_defers_when_no_motan_case_is_observed() {
+    fn managed_motan_recording_defers_when_no_motan_case_is_observed() {
         let (_temp, manifest) = fixture();
-        let run = manifest.parent().unwrap();
-        fs::write(
-            run.join("global-dependencies.jsonl"),
-            probe_event("system_network"),
-        )
-        .unwrap();
-
-        let evidence = validate(&manifest, true, false).unwrap();
-        assert_eq!(
-            evidence.motan_status,
-            Some(MotanPreflightStatus::NotObserved)
-        );
-        assert_eq!(evidence.motan_cases, 0);
         let recording = validate_motan_recording(&manifest).unwrap();
         assert_eq!(recording.status, MotanPreflightStatus::NotObserved);
         assert!(recording.validation_deferred);
     }
 
     #[test]
-    fn motan_preflight_allows_a_window_with_no_business_cases() {
+    fn preflight_rejects_a_window_without_one_readiness_case() {
         let (_temp, manifest) = fixture();
         let run = manifest.parent().unwrap();
         fs::remove_dir_all(run.join("apis")).unwrap();
@@ -638,43 +635,27 @@ mod tests {
         )
         .unwrap();
 
-        let evidence = validate(&manifest, true, false).unwrap();
-        assert_eq!(evidence.published_cases, 0);
-        assert_eq!(
-            evidence.motan_status,
-            Some(MotanPreflightStatus::NotObserved)
-        );
+        let error = validate(&manifest, false, "/healthz")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("exactly one readiness case"));
     }
 
     #[test]
-    fn motan_preflight_verifies_a_published_motan_case() {
+    fn managed_motan_recording_verifies_a_published_motan_case() {
         let (_temp, manifest) = fixture();
         let run = manifest.parent().unwrap();
         let case = run.join("apis/example/case-1");
         fs::write(case.join("case.json"), r#"{"kind":"motan_rpc"}"#).unwrap();
-        fs::write(
-            run.join("global-dependencies.jsonl"),
-            probe_event("system_network"),
-        )
-        .unwrap();
-
-        let evidence = validate(&manifest, true, false).unwrap();
-        assert_eq!(evidence.motan_status, Some(MotanPreflightStatus::Verified));
-        assert_eq!(evidence.motan_cases, 1);
         let recording = validate_motan_recording(&manifest).unwrap();
         assert_eq!(recording.status, MotanPreflightStatus::Verified);
         assert!(!recording.validation_deferred);
     }
 
     #[test]
-    fn motan_preflight_rejects_observed_gateway_failures() {
+    fn managed_motan_recording_rejects_observed_gateway_failures() {
         let (_temp, manifest) = fixture();
         let run = manifest.parent().unwrap();
-        fs::write(
-            run.join("global-dependencies.jsonl"),
-            probe_event("system_network"),
-        )
-        .unwrap();
         fs::write(
             run.join("traffic.jsonl"),
             r#"{"event_type":"proxy_error","protocol":"motan_gateway","error":"bad frame"}
@@ -682,9 +663,6 @@ mod tests {
         )
         .unwrap();
 
-        let error = validate(&manifest, true, false).unwrap_err().to_string();
-        assert!(error.contains("Motan traffic reached"));
-        assert!(error.contains("bad frame"));
         assert!(validate_motan_recording(&manifest).is_err());
     }
 
@@ -703,7 +681,7 @@ mod tests {
         )
         .unwrap();
 
-        let evidence = validate(&manifest, false, true).unwrap();
+        let evidence = validate(&manifest, true, "/healthz").unwrap();
         assert!(evidence.breeze_dns_resolution_verified);
 
         fs::write(
@@ -711,7 +689,9 @@ mod tests {
             r#"{"version":1,"resolved_domains":[],"accessed_endpoints":[]}"#,
         )
         .unwrap();
-        let error = validate(&manifest, false, true).unwrap_err().to_string();
+        let error = validate(&manifest, true, "/healthz")
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("did not resolve breeze.recording through Recorder DNS"));
     }
 }

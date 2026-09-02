@@ -29,6 +29,28 @@ pub struct ManagedReplayNetworkPreflightResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ManagedTargetRuntimePreflightResult {
+    pub status: &'static str,
+    pub image_id: String,
+    pub container_name: String,
+    pub process_user: &'static str,
+    pub readiness_path: String,
+    pub readiness_status: u16,
+    pub checks: ManagedTargetRuntimePreflightChecks,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ManagedTargetRuntimePreflightChecks {
+    pub process_identity: bool,
+    pub startup_environment: bool,
+    pub runtime_mounts: bool,
+    pub listen_all_interfaces: bool,
+    pub readiness: bool,
+    pub graceful_shutdown: bool,
+    pub cleanup: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ReplayPositiveProbeResult {
     pub authority: &'static str,
     pub http_status: u16,
@@ -55,7 +77,11 @@ pub(super) async fn run(
     project: &ResolvedProjectConfig,
     run_id: &str,
     manifest: &Path,
-) -> Result<ManagedReplayNetworkPreflightResult> {
+    target_image: &crate::TargetImage,
+) -> Result<(
+    ManagedReplayNetworkPreflightResult,
+    ManagedTargetRuntimePreflightResult,
+)> {
     let run_dir = manifest
         .parent()
         .context("preflight recording manifest has no run directory")?;
@@ -88,19 +114,140 @@ pub(super) async fn run(
     )?;
     let anchor =
         crate::target_container::runtime_name(target_root, "preflight-replay", run_id, "anchor")?;
-    let result = run_checks(project, &session, &anchor, run_id).await;
-    let cleanup = cleanup(target_root, &session, &control_socket, &anchor, &mut child).await;
+    let target =
+        crate::target_container::runtime_name(target_root, "preflight-replay", run_id, "target")?;
+    let result = async {
+        let ca_cert = wait_replay_ready(project, &session)
+            .await
+            .context("replay_network preflight failed")?;
+        let network = run_checks(&session, &anchor, run_id, &ca_cert)
+            .await
+            .context("replay_network preflight failed")?;
+        let target_runtime = run_target_runtime(
+            target_root,
+            project,
+            run_id,
+            &runtime_dir,
+            &anchor,
+            &target,
+            &ca_cert,
+            target_image,
+        )
+        .await
+        .context("target_runtime preflight failed")?;
+        Ok::<_, anyhow::Error>((network, target_runtime))
+    }
+    .await;
+    let cleanup = cleanup(
+        target_root,
+        &session,
+        &control_socket,
+        &target,
+        &anchor,
+        &mut child,
+    )
+    .await;
     match (result, cleanup) {
-        (Ok(mut result), Ok(())) => {
-            result.cleanup = true;
-            Ok(result)
+        (Ok((mut network, mut target_runtime)), Ok(())) => {
+            network.cleanup = true;
+            target_runtime.checks.cleanup = true;
+            Ok((network, target_runtime))
         }
-        (Ok(_), Err(error)) => Err(error).context("Replay network preflight cleanup failed"),
+        (Ok(_), Err(error)) => Err(error).context("target_runtime preflight cleanup failed"),
         (Err(error), Ok(())) => Err(error),
         (Err(error), Err(cleanup_error)) => Err(error.context(format!(
-            "Replay network preflight cleanup also failed: {cleanup_error:#}"
+            "initialization preflight cleanup also failed: {cleanup_error:#}"
         ))),
     }
+}
+
+async fn wait_replay_ready(project: &ResolvedProjectConfig, session: &Path) -> Result<PathBuf> {
+    let ready = control(session, "wait_ready", Some(project.replay_startup_timeout))
+        .await
+        .context("Replay network preflight did not become ready")?;
+    let ca_cert = ready
+        .pointer("/session/ca_cert_path")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .context("Replay network preflight readiness has no CA certificate")?;
+    require_regular_file(&ca_cert, "Replay CA certificate")?;
+    Ok(ca_cert)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_target_runtime(
+    target_root: &Path,
+    project: &ResolvedProjectConfig,
+    run_id: &str,
+    runtime_dir: &Path,
+    anchor: &str,
+    container: &str,
+    ca_cert: &Path,
+    image: &crate::TargetImage,
+) -> Result<ManagedTargetRuntimePreflightResult> {
+    let target = crate::target_container::TargetContainerConfig::from_project(
+        target_root.to_path_buf(),
+        project,
+    );
+    crate::target_container::start_target(crate::target_container::TargetStartOptions {
+        config: &target,
+        image,
+        container_name: container.to_string(),
+        network_container: anchor.to_string(),
+        operation: "preflight-replay",
+        run_id: run_id.to_string(),
+        replay_ca_cert: Some(ca_cert.to_path_buf()),
+        runtime_outputs: &project.target_runtime_outputs,
+        runtime_output_root: runtime_dir.join("target-runtime-outputs"),
+    })
+    .await?;
+
+    crate::e2e_run::wait_until_ready(project)
+        .await
+        .context("target did not satisfy the configured readiness contract")?;
+    crate::target_container::verify_target_identity(container).await?;
+    crate::target_container::verify_startup_environment(
+        container,
+        &target.startup,
+        true,
+        target.breeze_enabled,
+    )
+    .await?;
+    let snapshot = crate::startup::load_startup_snapshot(target_root, &target.startup)?;
+    crate::target_container::verify_runtime_mounts(
+        container,
+        snapshot.mounts(),
+        &project.target_runtime_outputs,
+        true,
+        target.breeze_enabled,
+    )
+    .await?;
+    crate::target_container::verify_listen_address(container, target.port).await?;
+    crate::target_container::capture_diagnostics(container, runtime_dir).await?;
+    let stop = crate::target_container::stop_target(target_root, container).await?;
+    ensure!(
+        stop.exit_code == 0 && stop.removed,
+        "target did not stop cleanly after SIGTERM: exit code {}",
+        stop.exit_code
+    );
+
+    Ok(ManagedTargetRuntimePreflightResult {
+        status: "passed",
+        image_id: image.id.clone(),
+        container_name: container.to_string(),
+        process_user: crate::TRAFFIC_PROCESS_USER,
+        readiness_path: project.target_readiness_path.clone(),
+        readiness_status: project.target_readiness_status,
+        checks: ManagedTargetRuntimePreflightChecks {
+            process_identity: true,
+            startup_environment: true,
+            runtime_mounts: true,
+            listen_all_interfaces: true,
+            readiness: true,
+            graceful_shutdown: true,
+            cleanup: false,
+        },
+    })
 }
 
 fn spawn_replay(
@@ -148,21 +295,11 @@ fn spawn_replay(
 }
 
 async fn run_checks(
-    project: &ResolvedProjectConfig,
     session: &Path,
     anchor: &str,
     run_id: &str,
+    ca_cert: &Path,
 ) -> Result<ManagedReplayNetworkPreflightResult> {
-    let ready = control(session, "wait_ready", Some(project.replay_startup_timeout))
-        .await
-        .context("Replay network preflight did not become ready")?;
-    let ca_cert = ready
-        .pointer("/session/ca_cert_path")
-        .and_then(Value::as_str)
-        .map(PathBuf::from)
-        .context("Replay network preflight readiness has no CA certificate")?;
-    require_regular_file(&ca_cert, "Replay CA certificate")?;
-
     let before = report(session).await?;
     let fake_ip = replay_target_ip(&before, crate::network_probe::POSITIVE_AUTHORITY, 443)?;
     ensure!(
@@ -178,7 +315,7 @@ async fn run_checks(
     crate::target_container::create_anchor(anchor, true, "preflight-replay", run_id).await?;
     let positive = run_probe(
         anchor,
-        Some(&ca_cert),
+        Some(ca_cert),
         &[
             "--silent",
             "--show-error",
@@ -215,7 +352,7 @@ async fn run_checks(
 
     let negative = run_probe(
         anchor,
-        Some(&ca_cert),
+        Some(ca_cert),
         &[
             "--silent",
             "--show-error",
@@ -468,6 +605,7 @@ async fn cleanup(
     target_root: &Path,
     session: &Path,
     control_socket: &Path,
+    target: &str,
     anchor: &str,
     child: &mut Child,
 ) -> Result<()> {
@@ -507,7 +645,7 @@ async fn cleanup(
     }
     .await;
     let anchor_cleanup =
-        crate::target_container::force_remove_runtime(target_root, &[anchor]).await;
+        crate::target_container::force_remove_runtime(target_root, &[target, anchor]).await;
     let socket_cleanup = match tokio::fs::remove_file(control_socket).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -552,6 +690,33 @@ mod tests {
         );
         assert!(parse_positive_output(b"000").is_err());
         assert!(parse_positive_output(b"200 10.0.0.1 trailing").is_err());
+    }
+
+    #[test]
+    fn target_runtime_result_reports_the_readiness_smoke_contract() {
+        let result = ManagedTargetRuntimePreflightResult {
+            status: "passed",
+            image_id: format!("sha256:{}", "a".repeat(64)),
+            container_name: "traffic-e2e-example-preflight-target".to_string(),
+            process_user: "998:998",
+            readiness_path: "/healthz".to_string(),
+            readiness_status: 404,
+            checks: ManagedTargetRuntimePreflightChecks {
+                process_identity: true,
+                startup_environment: true,
+                runtime_mounts: true,
+                listen_all_interfaces: true,
+                readiness: true,
+                graceful_shutdown: true,
+                cleanup: true,
+            },
+        };
+
+        let value = serde_json::to_value(result).unwrap();
+        assert_eq!(value["readiness_path"], "/healthz");
+        assert_eq!(value["readiness_status"], 404);
+        assert_eq!(value["checks"]["graceful_shutdown"], true);
+        assert_eq!(value["checks"]["cleanup"], true);
     }
 
     #[test]

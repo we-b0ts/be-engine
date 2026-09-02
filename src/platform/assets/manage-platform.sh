@@ -44,7 +44,7 @@ case "$TRAFFIC_E2E_HTTP_RECORDING_ENABLED" in
         ;;
 esac
 http_recording_enabled=$TRAFFIC_E2E_HTTP_RECORDING_ENABLED
-source "$TRAFFIC_E2E_PLATFORM_ASSETS/preflight-business-input.sh"
+source "$TRAFFIC_E2E_PLATFORM_ASSETS/preflight-readiness.sh"
 source "$TRAFFIC_E2E_PLATFORM_ASSETS/comparison-process-outputs.sh"
 validate_comparison_process_output_environment
 
@@ -113,11 +113,6 @@ if [[ "$operation" != record-comparison && "$baseline_recheck" == true ]]; then
     printf 'error: baseline recheck is comparison-only\n' >&2
     exit 2
 fi
-[[ "${TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED-false}" == true || \
-   "${TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED-false}" == false ]] || {
-    printf 'error: TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED must be true or false\n' >&2
-    exit 2
-}
 [[ "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true || \
    "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == false ]] || {
     printf 'error: TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED must be true or false\n' >&2
@@ -129,14 +124,6 @@ if [[ "$operation" == record-comparison && \
         printf 'error: missing comparison target Motan port\n' >&2
         exit 2
     }
-fi
-if [[ "$operation" == preflight && "${TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED-false}" == true ]]; then
-    for name in TRAFFIC_E2E_MOTAN_SOURCE_PORT TRAFFIC_E2E_MOTAN_GATEWAY_PORT TRAFFIC_E2E_MOTAN_REPLAY_COMMAND; do
-        [[ -n "${!name-}" ]] || {
-            printf 'error: missing Motan preflight environment %s\n' "$name" >&2
-            exit 2
-        }
-    done
 fi
 
 for command_name in docker jq curl nc timeout base64 id date find awk wc tr rm tar mktemp; do
@@ -879,7 +866,7 @@ run_standard_recording() {
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-ready --control-socket "$control_socket"
     run_preflight_breeze_dns_probe
     run_preflight_https_probe
-    announce_preflight_business_input
+    record_preflight_readiness
     start_recording_input
     wait_for_recorder_or_duration
     stop_recording_input
@@ -889,7 +876,7 @@ run_standard_recording() {
         --observation before-shutdown \
         --output-root "$artifacts_dir/recordings/$run_id/process-outputs"
     local manifest_filter='.status == "completed" and .failed_cases == 0 and (.errors | length == 0)'
-    if [[ "$operation" == preflight && "${TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED-false}" != true ]]; then
+    if [[ "$operation" == preflight ]]; then
         manifest_filter+=' and .published_cases > 0'
     fi
     jq -e "$manifest_filter" "$artifacts_dir/recordings/$run_id/recording-run.json" >/dev/null
