@@ -98,13 +98,13 @@ and keep each choice compatible with the source submission contract.
   final product-code edit when the target repository does not enforce an
   equivalent source-size gate.
 
-Every used Breeze or platform SDK capability MUST be its own workspace package
-at `crates/breeze/<capability>` and be exposed through the corresponding
-`brz-<capability>` library. Use the canonical capability names `http`,
+Every used Breeze or platform SDK capability MUST be added as a Git dependency
+pinned to the fixed `v0.0.1` tag and exposed through the corresponding
+`brz-<capability>` dependency name. Use the canonical capability names `http`,
 `memcache`, `redis`, `mysql`, `vintage`, `motan`, `auth`, `mcq`, `kafka`, and
 `logs`. `brz-auth` owns authentication SDK implementations, including TAuth
 and TAuth2; Memcache-backed MCQ belongs in `brz-mcq`. Product code MUST use the
-`brz-*` library rather than a raw SDK or driver. Create only packages the
+`brz-*` dependency rather than a raw SDK or driver. Add only dependencies the
 product uses.
 
 ## Verification Ownership

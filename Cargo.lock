@@ -1007,6 +1007,7 @@ dependencies = [
 [[package]]
 name = "motan-breeze"
 version = "0.1.0"
+source = "git+ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git?tag=v0.0.1#02f1c274092a26d1c42294b737338b445f26f335"
 dependencies = [
  "motan-json",
  "serde",
@@ -1016,6 +1017,7 @@ dependencies = [
 [[package]]
 name = "motan-codec"
 version = "0.1.0"
+source = "git+ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git?tag=v0.0.1#02f1c274092a26d1c42294b737338b445f26f335"
 dependencies = [
  "cesu8",
  "flate2",
@@ -1026,6 +1028,7 @@ dependencies = [
 [[package]]
 name = "motan-hessian2"
 version = "0.1.0"
+source = "git+ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git?tag=v0.0.1#02f1c274092a26d1c42294b737338b445f26f335"
 dependencies = [
  "cesu8",
  "motan-json",
@@ -1037,6 +1040,7 @@ dependencies = [
 [[package]]
 name = "motan-json"
 version = "0.1.0"
+source = "git+ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git?tag=v0.0.1#02f1c274092a26d1c42294b737338b445f26f335"
 dependencies = [
  "serde",
  "serde_json",
@@ -1046,6 +1050,7 @@ dependencies = [
 [[package]]
 name = "motan-protocol"
 version = "0.1.0"
+source = "git+ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git?tag=v0.0.1#02f1c274092a26d1c42294b737338b445f26f335"
 dependencies = [
  "bytes",
  "thiserror 2.0.20",
@@ -1054,6 +1059,7 @@ dependencies = [
 [[package]]
 name = "motan-simple"
 version = "0.1.0"
+source = "git+ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git?tag=v0.0.1#02f1c274092a26d1c42294b737338b445f26f335"
 dependencies = [
  "bytes",
  "motan-json",
