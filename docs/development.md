@@ -1523,9 +1523,10 @@ Replay traffic-e2e mounts the public Replay CA at
 `/traffic-e2e/trust/replay-ca.pem`; when `replay_ca_environment` is declared it
 sets that application-owned variable to this path. Target TLS clients must add
 that certificate to their normal trust store without reading Replay sessions
-or private key material. The entrypoint must log to stdout/stderr, remain in
-the foreground, and stop cleanly on `SIGTERM`. traffic-e2e owns network
-namespaces, readiness, signals, and cleanup.
+or private key material. The entrypoint must remain in the foreground and stop
+cleanly on `SIGTERM`. Application logs belong in a configured writable runtime
+output such as `/data1/weibo/logs`; stdout/stderr output is not required.
+traffic-e2e owns network namespaces, readiness, signals, and cleanup.
 
 Use the pinned shared Rust builder/runtime images and stable BuildKit cache
 mount IDs described by the backend-rewrite initialization contract. A source
@@ -1630,10 +1631,10 @@ command fail instead of silently completing.
 
 Full success returns overall `status: passed` with separate `target_image`,
 `recording`, and `replay_network` results. Target identity, startup environment,
-mount access, listener, readiness, and stdout/stderr are validated after the
-target starts with recorded dependencies in each real Replay; the successful
-checks are written to `reports/target-runtime-checks.json`, while normal stop
-evidence proves clean shutdown and cleanup. A failure prints bounded JSON
+mount access, listener, and readiness are validated after the target starts
+with recorded dependencies in each real Replay; the successful checks are
+written to `reports/target-runtime-checks.json`, while normal stop evidence
+proves clean shutdown and cleanup. A failure prints bounded JSON
 containing `status: failed`, the failing stage, and a reason, exits nonzero, and
 does not advance rewrite state. Manual `docker build`/`docker run` output is
 diagnostic only.

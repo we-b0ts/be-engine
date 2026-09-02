@@ -11,9 +11,9 @@ pub(crate) use build::{build_image, image_tag};
 pub use model::TargetImage;
 pub(crate) use model::{TargetContainerConfig, TargetStartOptions};
 pub(crate) use runtime::{
-    bounded_logs, capture_diagnostics, create_anchor, force_remove_runtime, runtime_name,
-    start_target, stop_target, verify_listen_address, verify_runtime_mounts,
-    verify_startup_environment, verify_target_identity,
+    capture_diagnostics, create_anchor, force_remove_runtime, runtime_name, start_target,
+    stop_target, verify_listen_address, verify_runtime_mounts, verify_startup_environment,
+    verify_target_identity,
 };
 
 pub(crate) const TARGET_DOCKERFILE_RELATIVE: &str = ".traffic-e2e/Dockerfile.e2e";

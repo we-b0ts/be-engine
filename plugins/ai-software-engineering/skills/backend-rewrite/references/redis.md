@@ -26,10 +26,10 @@ async fn build_redis(
 }
 ```
 
-Pin the dependency to the project-approved revision:
+Pin the dependency to the fixed `v0.0.1` tag and enable `metrics` by default:
 
 ```toml
-brz-redis = { package = "redis", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/redis.git", rev = "<approved-revision>" }
+brz-redis = { package = "redis", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/redis.git", tag = "v0.0.1", features = ["metrics"] }
 ```
 
 Pass source hostnames through unchanged instead of resolving them in

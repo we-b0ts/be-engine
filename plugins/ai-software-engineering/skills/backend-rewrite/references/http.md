@@ -38,12 +38,11 @@ fn build_http_dependencies(user_service_url: &str) -> Result<HttpDependencies> {
 }
 ```
 
-Pin the dependency to the project-approved revision. Enable only the optional
-capabilities used by the target; enable `metrics` when profile output is part
-of the target contract and `json` when using the typed JSON body methods:
+Pin the dependency to the fixed `v0.0.1` tag. Enable `metrics` by default and
+enable `json` when using the typed JSON body methods:
 
 ```toml
-brz-http = { package = "http", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/http.git", rev = "<approved-revision>", features = ["json", "metrics"] }
+brz-http = { package = "http", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/http.git", tag = "v0.0.1", features = ["json", "metrics"] }
 ```
 
 Use `ClientBuilder::configure` for an uncommon reqwest transport option while

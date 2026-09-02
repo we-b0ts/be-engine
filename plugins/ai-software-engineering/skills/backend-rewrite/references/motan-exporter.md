@@ -18,10 +18,17 @@ generated-adapter path.
 
 ## Follow the generated-adapter path
 
-Reuse the target's project-approved `brz-motan` dependency. If the target does
-not have one, add the approved revision and enable the feature required by the
-recorded outer serialization. Product code depends only on `brz-motan`; never
-add a direct codec-crate dependency.
+Add `brz-motan` at the fixed `v0.0.1` tag, enable `metrics` by default, and
+enable the feature required by the recorded outer serialization. This guide's
+Breeze example uses:
+
+```toml
+brz-motan = { package = "motan", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.1", features = ["breeze", "metrics"] }
+```
+
+Use `hessian2` or `simple` instead of `breeze` when that is the proven outer
+serialization. Product code depends only on `brz-motan`; never add a direct
+codec-crate dependency.
 
 Keep the RPC adapter in an API-boundary module and business logic in domain
 modules. One Motan interface maps to one service type annotated with
