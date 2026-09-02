@@ -13,8 +13,7 @@ use tokio::sync::oneshot;
 
 use super::*;
 
-const MOTAN1_REQUEST: &[u8] =
-    include_bytes!("../../../tests/fixtures/motan/motan1-request.bin");
+const MOTAN1_REQUEST: &[u8] = include_bytes!("../../../tests/fixtures/motan/motan1-request.bin");
 
 #[tokio::test]
 async fn matched_motan1_and_motan2_requests_are_forwarded_and_published() {
