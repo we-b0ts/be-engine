@@ -449,27 +449,6 @@ pub(crate) async fn verify_listen_address(container: &str, port: u16) -> Result<
     Ok(())
 }
 
-pub(crate) async fn bounded_logs(container: &str) -> Result<String> {
-    validate_name(container)?;
-    let output = docker_output(
-        Command::new("docker").args(["logs", "--tail", "20", container]),
-        "read target logs",
-    )
-    .await?;
-    ensure!(
-        output.status.success(),
-        "failed to read target logs: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
-    let mut logs = output.stdout;
-    logs.extend_from_slice(&output.stderr);
-    const MAX_LOG_BYTES: usize = 64 * 1024;
-    if logs.len() > MAX_LOG_BYTES {
-        logs.truncate(MAX_LOG_BYTES);
-    }
-    Ok(String::from_utf8_lossy(&logs).into_owned())
-}
-
 pub(crate) async fn capture_diagnostics(container: &str, reports_dir: &Path) -> Result<()> {
     validate_name(container)?;
     let output = docker_output(

@@ -8,8 +8,10 @@ The target repository exposes one conventional build contract:
 
 The Dockerfile is a BuildKit multi-stage build. Its final image must declare a
 non-empty OCI entrypoint, default to `USER 998:998`, run the normal target and
-genuine dependency clients in the foreground, log to stdout/stderr, and stop
-cleanly on `SIGTERM`. Each configured source-compatible startup path is mounted
+genuine dependency clients in the foreground, and stop cleanly on `SIGTERM`.
+Application logs belong in a configured writable runtime output such as
+`/data1/weibo/logs`; stdout/stderr output is not required. Each configured
+source-compatible startup path is mounted
 read-only at the same absolute path it had in the source container. Only
 allowlisted, application-owned source environment names are supplied with
 values frozen from the source container. Optional application-owned port and

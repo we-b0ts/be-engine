@@ -7,6 +7,19 @@ effective timeout exactly; never infer them from a method name or payload.
 
 ## Keep the generated referer at the dependency boundary
 
+Add `brz-motan` at the fixed `v0.0.1` tag. Motan1 referers use Hessian2,
+metrics, and Vintage discovery:
+
+```toml
+brz-motan = { package = "motan", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.1", features = ["hessian2", "metrics", "vintage"] }
+```
+
+When the source uses TokenProxy-backed TAuth2, also add:
+
+```toml
+brz-motan-token-proxy = { package = "motan-token-proxy", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.1" }
+```
+
 For a Motan1 Java/Hessian dependency, declare its contract with
 `#[brz_motan::referer]` and let the generated referer own Hessian argument and
 response handling. Create it with `MotanClient::motan1_referer` so the client

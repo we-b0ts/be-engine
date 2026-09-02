@@ -7,12 +7,12 @@ then use `tracing` events from libraries and application modules.
 
 ## Install one process logger
 
-Pin the dependency to the project-approved revision. Product packages emit
-events through `tracing`; only the final binary depends on `brz-logs` to install
-the global subscriber:
+Pin the dependency to the fixed `v0.0.1` tag and enable `metrics` by default.
+Product packages emit events through `tracing`; only the final binary depends
+on `brz-logs` to install the global subscriber:
 
 ```toml
-brz-logs = { package = "logs", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/logs.git", rev = "<approved-revision>", features = ["metrics"] }
+brz-logs = { package = "logs", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/logs.git", tag = "v0.0.1", features = ["metrics"] }
 ```
 
 Initialize logging after startup arguments and native configuration needed to

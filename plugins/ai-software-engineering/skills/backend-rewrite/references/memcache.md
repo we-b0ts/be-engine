@@ -29,12 +29,12 @@ async fn build_cache(
 }
 ```
 
-Pin both dependencies to project-approved revisions and enable memcache's
-`service` feature for this construction path:
+Pin both dependencies to the fixed `v0.0.1` tag. Enable `metrics` by default
+and enable memcache's `service` feature for this construction path:
 
 ```toml
-brz-memcache = { package = "memcache", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/memcache.git", rev = "<approved-revision>", features = ["service"] }
-brz-vintage = { package = "vintage", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/vintage.git", rev = "<approved-revision>" }
+brz-memcache = { package = "memcache", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/memcache.git", tag = "v0.0.1", features = ["metrics", "service"] }
+brz-vintage = { package = "vintage", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/vintage.git", tag = "v0.0.1" }
 ```
 
 If the source explicitly uses a local mesh, one fixed endpoint, or an already

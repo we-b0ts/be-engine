@@ -32,7 +32,6 @@ struct TargetRuntimeChecks {
     runtime_mount_access: bool,
     listen_all_interfaces: bool,
     readiness: bool,
-    stdout_stderr_logging: bool,
 }
 
 pub(super) fn spawn_replay(
@@ -225,11 +224,6 @@ pub(super) async fn verify_target_runtime_contract(
         let port = crate::platform::endpoint_port(upstream, "target Motan endpoint")?;
         crate::target_container::verify_listen_address(container, port).await?;
     }
-    let logs = crate::target_container::bounded_logs(container).await?;
-    ensure!(
-        !logs.trim().is_empty(),
-        "target emitted no stdout or stderr after reaching Replay readiness"
-    );
     store::write_json(
         &layout.active_dir.join("reports/target-runtime-checks.json"),
         &TargetRuntimeChecks {
@@ -240,7 +234,6 @@ pub(super) async fn verify_target_runtime_contract(
             runtime_mount_access: true,
             listen_all_interfaces: true,
             readiness: true,
-            stdout_stderr_logging: true,
         },
     )?;
     Ok(())
