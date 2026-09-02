@@ -171,8 +171,7 @@ mod tests {
 
     use super::*;
 
-    const MOTAN1_REQUEST: &[u8] =
-        include_bytes!("../../../breeze/motan/interop/golden/motan1-request.bin");
+    const MOTAN1_REQUEST: &[u8] = include_bytes!("../../tests/fixtures/motan/motan1-request.bin");
 
     #[tokio::test]
     async fn adapter_reads_java_motan1_and_shared_codec_decodes_identity() {

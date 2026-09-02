@@ -20,11 +20,11 @@ hyper-rustls = { version = "0.27", features = ["http1", "webpki-roots"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "server", "tokio"] }
 kafka-protocol = { version = "0.17", default-features = false, features = ["broker", "client", "messages_enums"] }
 libc = "0.2"
-motan-codec = { path = "../breeze/motan/crates/motan-codec" }
-motan-breeze = { path = "../breeze/motan/crates/motan-breeze" }
-motan-hessian2 = { path = "../breeze/motan/crates/motan-hessian2", default-features = false }
-motan-protocol = { path = "../breeze/motan/crates/motan-protocol" }
-motan-simple = { path = "../breeze/motan/crates/motan-simple" }
+motan-codec = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.1" }
+motan-breeze = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.1" }
+motan-hessian2 = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.1", default-features = false }
+motan-protocol = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.1" }
+motan-simple = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.1" }
 rcgen = { version = "0.13", features = ["pem", "x509-parser"] }
 redis-protocol = { version = "6", features = ["bytes"] }
 rustls = "0.23"
@@ -43,6 +43,6 @@ webpki-roots = "1"
 x509-parser = "0.16"
 
 [dev-dependencies]
-motan-json = { path = "../breeze/motan/crates/motan-json" }
+motan-json = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.1" }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
