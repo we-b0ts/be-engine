@@ -5,17 +5,18 @@ use std::time::Duration;
 
 use super::model::{
     BreezeProjectConfig, DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS, DeliveryProjectConfig,
-    MAX_TARGET_STARTUP_TIMEOUT_SECONDS, ProjectConfig, ProjectSettings, RecordingProjectConfig,
+    ProcessOutputSettings, ProjectConfig, ProjectSettings, RecordingProjectConfig,
     ReplayProjectConfig, ResolvedProjectConfig, RunLayout, SourceProjectConfig, StateProjectConfig,
     TargetProjectConfig,
 };
-use super::target_quality_config::{inferred_target_quality_gates, validate_target_quality_gates};
+use super::project_validation::validate_project_config;
+use super::target_quality_config::inferred_target_quality_gates;
 use super::{E2eRunInitOptions, E2eRunInitResult, branch};
 use crate::replay::validate_replay_policy;
 use anyhow::{Context, Result, bail, ensure};
 
-pub(super) const CONFIG_VERSION: u32 = 14;
-const DEFAULT_RUNTIME_ROOT: &str = crate::internal_runtime::PROJECT_RELATIVE_ROOT;
+pub(super) const CONFIG_VERSION: u32 = 15;
+pub(super) const DEFAULT_RUNTIME_ROOT: &str = crate::internal_runtime::PROJECT_RELATIVE_ROOT;
 pub(crate) const PROJECT_CONFIG_FILE: &str = "project.yaml";
 
 pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult> {
@@ -261,6 +262,19 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         .target
         .quality_gates
         .unwrap_or_else(|| inferred_target_quality_gates(&target_root));
+    let process_outputs = config
+        .project
+        .process_outputs
+        .iter()
+        .filter(|output| output.enabled)
+        .map(ProcessOutputSettings::config)
+        .collect::<Vec<_>>();
+    for output_id in policy.process_output_rules.keys() {
+        ensure!(
+            process_outputs.iter().any(|output| output.id == *output_id),
+            "verification process_output_rules references disabled or unknown process output {output_id:?}"
+        );
+    }
     Ok((
         target_root.clone(),
         ResolvedProjectConfig {
@@ -283,7 +297,8 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
             target_quality_gates,
             target_max_response_bytes,
             source_container: config.project.source.container,
-            process_outputs: config.project.process_outputs,
+            process_outputs,
+            process_output_rules: policy.process_output_rules,
             breeze_container: config.project.breeze.map(|breeze| breeze.container),
             replay_policy: policy_path,
             replay_case_dependency_post_response_window: Duration::from_millis(
@@ -352,65 +367,6 @@ pub(super) fn load_project_config(target_root: &Path, config_path: &Path) -> Res
     })?;
     branch::validate_pr_base(target_root, &config.project.delivery.pr_base)?;
     Ok(config)
-}
-
-pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
-    let project = &config.project;
-    ensure!(
-        config.version == CONFIG_VERSION,
-        "unsupported traffic E2E config version {}; expected {CONFIG_VERSION}",
-        config.version
-    );
-    ensure!(
-        !project.source.container.trim().is_empty(),
-        "source.container must not be empty"
-    );
-    if let Some(breeze) = &project.breeze {
-        ensure!(
-            !breeze.container.trim().is_empty(),
-            "breeze.container must not be empty"
-        );
-    }
-    crate::process_output::validate_configs(&project.process_outputs)?;
-    ensure!(
-        !project.target.dockerfile.as_os_str().is_empty(),
-        "target.dockerfile must not be empty"
-    );
-    ensure!(
-        project.target.dockerfile == Path::new(".traffic-e2e/Dockerfile.e2e"),
-        "target.dockerfile must be .traffic-e2e/Dockerfile.e2e"
-    );
-    ensure!(
-        (1..=MAX_TARGET_STARTUP_TIMEOUT_SECONDS).contains(&project.target.startup_timeout_seconds),
-        "target.startup_timeout_seconds must be between 1 and {MAX_TARGET_STARTUP_TIMEOUT_SECONDS}"
-    );
-    crate::startup::validate_config(&project.target.startup)?;
-    crate::runtime_output::validate_configs(
-        &project.target.runtime_outputs,
-        &project.target.startup,
-    )?;
-    if let Some(gates) = &project.target.quality_gates {
-        validate_target_quality_gates(gates)?;
-    }
-    ensure!(
-        !project.replay.policy.as_os_str().is_empty(),
-        "replay.policy must not be empty"
-    );
-    ensure!(
-        !project.delivery.pr_base.trim().is_empty(),
-        "delivery.pr_base must not be empty"
-    );
-    ensure!(
-        project.state.runtime_root == Path::new(DEFAULT_RUNTIME_ROOT),
-        "state.runtime_root must be {DEFAULT_RUNTIME_ROOT:?}"
-    );
-    ensure!(
-        project.recording.source_traffic_policy
-            == Path::new(crate::config::SOURCE_TRAFFIC_POLICY_FILE),
-        "project.recording.source_traffic_policy must be {:?}",
-        crate::config::SOURCE_TRAFFIC_POLICY_FILE
-    );
-    Ok(())
 }
 
 fn recorder_target_http_port(matched_upstream: &str) -> Result<u16> {
@@ -486,6 +442,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::e2e_run::model::MAX_TARGET_STARTUP_TIMEOUT_SECONDS;
 
     fn write_input_project(root: &Path, recorder: &crate::config::AppConfig) {
         let recorder = serde_yaml::to_string(recorder).unwrap();
@@ -655,6 +612,54 @@ mod tests {
             config.project.state.runtime_root,
             PathBuf::from(DEFAULT_RUNTIME_ROOT)
         );
+    }
+
+    #[test]
+    fn process_output_project_setting_only_exposes_enabled() {
+        let setting: ProcessOutputSettings = serde_yaml::from_str(
+            "id: metrics-profile\npath: /data1/weibo/logs/profile.log\nenabled: true\n",
+        )
+        .unwrap();
+        let config = setting.config();
+
+        assert_eq!(config.id, "metrics-profile");
+        assert_eq!(config.path, PathBuf::from("/data1/weibo/logs/profile.log"));
+        assert_eq!(
+            config.observation,
+            crate::process_output::ProcessOutputObservation::Comparison
+        );
+        assert_eq!(config.max_bytes, 8 * 1024 * 1024);
+        assert_eq!(
+            config.comparison,
+            crate::process_output::ProcessOutputComparison::ProfileByType {
+                min_recording_duration_seconds: 60,
+            }
+        );
+
+        let error = serde_yaml::from_str::<ProcessOutputSettings>(
+            "id: metrics-profile\npath: /data1/weibo/logs/profile.log\nenabled: true\nkind: profile_by_type\n",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown field `kind`"));
+    }
+
+    #[test]
+    fn disabled_process_output_is_valid_but_not_resolved() {
+        let target = target();
+        initialize(options(target.path())).unwrap();
+        let config_path = target.path().join(".traffic-e2e/project.yaml");
+        let mut project: ProjectConfig =
+            serde_yaml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        project.project.process_outputs = vec![ProcessOutputSettings {
+            id: "metrics-profile".to_string(),
+            path: PathBuf::from("/data1/weibo/logs/profile.log"),
+            enabled: false,
+        }];
+        fs::write(config_path, serde_yaml::to_string(&project).unwrap()).unwrap();
+
+        let (_, resolved) = resolve_project(target.path()).unwrap();
+
+        assert!(resolved.process_outputs.is_empty());
     }
 
     #[test]

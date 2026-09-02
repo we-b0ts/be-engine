@@ -61,8 +61,8 @@ ID, configured path, classification, comparison contract, and source/target
 presence. Do not look for an API representative or `case_dir`, execute API
 evidence queries, inspect dependency traffic, or invent a recording operation.
 
-For `comparison=regular_file_exists` with source present and target absent,
-trace the ordinary product output path:
+For a missing metrics profile with source present and target absent, trace the
+ordinary product output path:
 
 ```text
 configured output -> component loading -> initialization -> startup -> write

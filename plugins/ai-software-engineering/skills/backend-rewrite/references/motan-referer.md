@@ -7,18 +7,24 @@ effective timeout exactly; never infer them from a method name or payload.
 
 ## Keep the generated referer at the dependency boundary
 
-Add `brz-motan` at the fixed `v0.0.3` tag. Motan1 referers use Hessian2,
+Add `brz-motan` at the fixed `v0.0.4` tag. Motan1 referers use Hessian2,
 metrics, and Vintage discovery:
 
 ```toml
-brz-motan = { package = "motan", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.3", features = ["hessian2", "metrics", "vintage"] }
+brz-motan = { package = "motan", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4", features = ["hessian2", "metrics", "vintage"] }
 ```
 
 When the source uses TokenProxy-backed TAuth2, also add:
 
 ```toml
-brz-motan-token-proxy = { package = "motan-token-proxy", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.3" }
+brz-motan-token-proxy = { package = "motan-token-proxy", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4" }
 ```
+
+Starting with `v0.0.4`, TokenProxy credential loads use the same generated
+Motan1 referer path as business methods. Initial loads, retries, and periodic
+refreshes therefore emit `RPC_SERVICE_CLIENT`, `RPC_SERVICE_CLIENT_REAL`, both
+V2 aliases, and the `token-proxy` cluster profile automatically. Application
+code must not add duplicate TokenProxy metrics.
 
 For a Motan1 Java/Hessian dependency, declare its contract with
 `#[brz_motan::referer]` and let the generated referer own Hessian argument and
@@ -164,8 +170,8 @@ Create exactly one `MotanClient` for referers that share the same TokenProxy
 source and ordered signing-parameter values. Enable authentication once with
 `with_auth_proxy`, then create every generated Motan1 referer through
 `motan1_referer`. Omit `with_auth_proxy` when the source call is unauthenticated.
-The client performs TokenProxy discovery and `getAllTokens` once, while each
-business referer still performs its own service discovery. During shutdown,
+The client owns one TokenProxy discovery and credential-refresh runtime, while
+each business referer still performs its own service discovery. During shutdown,
 close all business referers first and close the client last. Closing one
 business referer does not close the shared authentication dependency, so the
 remaining referers continue to work.

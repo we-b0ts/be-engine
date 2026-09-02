@@ -47,12 +47,29 @@ pub(super) struct ProjectSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub breeze: Option<BreezeProjectConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub process_outputs: Vec<crate::process_output::ProcessOutputConfig>,
+    pub process_outputs: Vec<ProcessOutputSettings>,
     pub target: TargetProjectConfig,
     pub replay: ReplayProjectConfig,
     pub recording: RecordingProjectConfig,
     pub delivery: DeliveryProjectConfig,
     pub state: StateProjectConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ProcessOutputSettings {
+    pub(super) id: String,
+    pub(super) path: PathBuf,
+    pub(super) enabled: bool,
+}
+
+impl ProcessOutputSettings {
+    pub(super) fn config(&self) -> crate::process_output::ProcessOutputConfig {
+        crate::process_output::ProcessOutputConfig::profile_by_type(
+            self.id.clone(),
+            self.path.clone(),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,6 +157,7 @@ pub(crate) struct ResolvedProjectConfig {
     pub(crate) target_max_response_bytes: usize,
     pub(crate) source_container: String,
     pub(crate) process_outputs: Vec<crate::process_output::ProcessOutputConfig>,
+    pub(crate) process_output_rules: BTreeMap<String, crate::ProfileByTypeVerificationRules>,
     pub(crate) breeze_container: Option<String>,
     pub(crate) replay_policy: PathBuf,
     pub(crate) replay_case_dependency_post_response_window: Duration,

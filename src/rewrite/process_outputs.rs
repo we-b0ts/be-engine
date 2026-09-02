@@ -114,6 +114,7 @@ pub(super) fn activate_and_compare(
     id: &str,
     target_fingerprint: &str,
     configs: &[crate::process_output::ProcessOutputConfig],
+    verification_rules: &std::collections::BTreeMap<String, crate::ProfileByTypeVerificationRules>,
 ) -> Result<ProcessOutputActivation> {
     ensure_inventory_matches(state, configs)?;
     let configs = workflow_configs(configs);
@@ -173,7 +174,12 @@ pub(super) fn activate_and_compare(
         .context("process output configuration disappeared")?;
     let source_root = super::artifacts::recording_run(target_root, &state.recording_run_id)
         .join("process-outputs");
-    let result = crate::process_output::compare_capture(config, &source_root, &evidence.root)?;
+    let result = crate::process_output::compare_capture_with_verification(
+        config,
+        &source_root,
+        &evidence.root,
+        verification_rules.get(&config.id),
+    )?;
     let item = &mut state.process_outputs.inventory[index];
     item.attempts = item.attempts.saturating_add(1);
     if result.passed {
@@ -197,6 +203,7 @@ pub(super) fn comparison_issue(
     state: &RewriteState,
     target_fingerprint: &str,
     configs: &[crate::process_output::ProcessOutputConfig],
+    verification_rules: &std::collections::BTreeMap<String, crate::ProfileByTypeVerificationRules>,
 ) -> Result<Option<RewriteIssue>> {
     let configs = comparison_configs(state, configs);
     if configs.is_empty() {
@@ -211,7 +218,12 @@ pub(super) fn comparison_issue(
     let target_root = root.join("target");
     let attempt = state.attempts.last().map_or(0, |attempt| attempt.attempt);
     for config in &configs {
-        let result = crate::process_output::compare_capture(config, &source_root, &target_root)?;
+        let result = crate::process_output::compare_capture_with_verification(
+            config,
+            &source_root,
+            &target_root,
+            verification_rules.get(&config.id),
+        )?;
         if !result.passed {
             return Ok(Some(missing_issue(&result, target_fingerprint, attempt)));
         }
@@ -308,7 +320,7 @@ fn missing_issue(
             result.path.display()
         )
     };
-    let recommended_checks = if result.id == "metrics-profile" {
+    let mut recommended_checks = if result.id == "metrics-profile" {
         vec![
             "Verify that the metrics component is loaded by the target process.".to_string(),
             "Verify that metrics initialization and startup are executed.".to_string(),
@@ -327,6 +339,47 @@ fn missing_issue(
             ),
         ]
     };
+    let allow_target_missing_example = result.detail.as_ref().and_then(|detail| {
+        detail.types.iter().find(|detail| {
+            detail.policy == crate::process_output::ProfileByTypePolicy::SourcePositiveExists
+                && detail.example.classification == "profile_required_name_missing"
+        })
+    });
+    if allow_target_missing_example.is_some() {
+        recommended_checks.push(
+            "If current repository code calls, constructs, registers, initializes, or starts this interaction, implement it in the target; allow_target_missing is forbidden."
+                .to_string(),
+        );
+        recommended_checks.push(
+            "Only when an indirect dependency independently emits the interaction, use the evidence-backed config comparison allow-target-missing plan/apply workflow."
+                .to_string(),
+        );
+    }
+    let allow_target_missing_rule = allow_target_missing_example.map(|detail| {
+        json!({
+            "name": "allow_target_missing",
+            "policy": ".traffic-e2e/verification.yaml",
+            "example_metric": crate::process_output::canonical_profile_metric(
+                &detail.record_type,
+                &detail.example.name,
+            ),
+            "plan_apply_required": true,
+            "plan_command": "traffic-e2e config comparison plan allow-target-missing --help",
+            "apply_command": "traffic-e2e config comparison apply allow-target-missing --help",
+            "required_fields": [
+                "process_output",
+                "metric",
+                "source_revision",
+                "dependency_path",
+                "emitter_evidence",
+                "repository_search_evidence",
+                "comparison_run"
+            ],
+            "eligibility": "indirect_dependency_only",
+            "direct_repository_trigger": "implementation_required",
+            "evidence_boundary": "dependency_path must prove a direct dependency followed by the indirect emitter; repository_search_evidence must prove no direct call, construction, registration, initialization, or startup in current repository code"
+        })
+    });
     RewriteIssue {
         id: super::fingerprint::id(&[
             "rewrite-process-output-issue-v1",
@@ -351,7 +404,8 @@ fn missing_issue(
             "comparison": &result.comparison,
             "source": { "present": result.source_present },
             "candidate": { "present": result.target_present },
-            "detail": &result.detail
+            "detail": &result.detail,
+            "applicable_rule": allow_target_missing_rule
         })),
     }
 }
@@ -467,13 +521,10 @@ mod tests {
     fn active_workflow_rejects_a_new_unrecorded_process_output_config() {
         let mut state = crate::rewrite::test_state();
         state.api_inventory = vec![api("GET /a", RewriteApiStatus::Complete)];
-        let configs = vec![crate::process_output::ProcessOutputConfig {
-            id: "metrics-profile".to_string(),
-            path: PathBuf::from("/data1/weibo/logs/profile.log"),
-            comparison: crate::process_output::ProcessOutputComparison::RegularFileExists,
-            observation: crate::process_output::ProcessOutputObservation::BeforeShutdown,
-            max_bytes: 1024,
-        }];
+        let configs = vec![process_output_config(
+            "metrics-profile",
+            crate::process_output::ProcessOutputObservation::BeforeShutdown,
+        )];
 
         let error = ensure_inventory_matches(&state, &configs).unwrap_err();
 
@@ -516,30 +567,19 @@ mod tests {
         );
         profile.comparison = crate::process_output::ProcessOutputComparison::ProfileByType {
             min_recording_duration_seconds: 75,
-            rules: crate::process_output::ProfileByTypeRules {
-                exact_total_count: vec!["RPC_SERVICE_WHOLE".to_string()],
-                source_positive_exists: vec!["REDIS".to_string()],
-            },
         };
 
         state.recording_settings.duration_seconds = std::num::NonZeroU64::new(74).unwrap();
         assert!(comparison_configs(&state, &[profile.clone()]).is_empty());
-        let regular = process_output_config(
-            "startup-report",
-            crate::process_output::ProcessOutputObservation::Comparison,
-        );
-        assert_eq!(comparison_configs(&state, &[regular]).len(), 1);
-
         state.recording_settings.duration_seconds = std::num::NonZeroU64::new(75).unwrap();
         assert_eq!(comparison_configs(&state, &[profile]).len(), 1);
     }
 
     #[test]
     fn profile_comparison_duration_threshold_defaults_to_sixty_seconds() {
-        let comparison: crate::process_output::ProcessOutputComparison = serde_yaml::from_str(
-            "kind: profile_by_type\nrules:\n  exact_total_count: [RPC_SERVICE_WHOLE]\n",
-        )
-        .unwrap();
+        let comparison = crate::process_output::ProcessOutputComparison::ProfileByType {
+            min_recording_duration_seconds: 60,
+        };
 
         assert!(!comparison.enabled_for_recording_duration(59));
         assert!(comparison.enabled_for_recording_duration(60));
@@ -572,9 +612,15 @@ mod tests {
         )
         .unwrap();
 
-        let issue = comparison_issue(target.path(), &state, "target-a", &[config])
-            .unwrap()
-            .unwrap();
+        let issue = comparison_issue(
+            target.path(),
+            &state,
+            "target-a",
+            &[config],
+            &Default::default(),
+        )
+        .unwrap()
+        .unwrap();
 
         assert_eq!(issue.kind, RewriteIssueKind::ProcessOutput);
         assert_eq!(issue.owner, RewriteIssueOwner::TargetCode);
@@ -611,7 +657,9 @@ mod tests {
             &crate::process_output::ProcessOutputComparisonResult {
                 id: "metrics-profile".to_string(),
                 path: PathBuf::from("/data1/weibo/logs/profile.log"),
-                comparison: crate::process_output::ProcessOutputComparison::RegularFileExists,
+                comparison: crate::process_output::ProcessOutputComparison::ProfileByType {
+                    min_recording_duration_seconds: 60,
+                },
                 passed: false,
                 classification: "candidate_missing",
                 source_present: true,
@@ -645,7 +693,9 @@ mod tests {
             &crate::process_output::ProcessOutputComparisonResult {
                 id: "metrics-profile".to_string(),
                 path: PathBuf::from("/data1/weibo/logs/profile.log"),
-                comparison: crate::process_output::ProcessOutputComparison::RegularFileExists,
+                comparison: crate::process_output::ProcessOutputComparison::ProfileByType {
+                    min_recording_duration_seconds: 60,
+                },
                 passed: false,
                 classification: "candidate_missing",
                 source_present: true,
@@ -674,10 +724,6 @@ mod tests {
                 path: PathBuf::from("/data1/weibo/logs/profile.log"),
                 comparison: crate::process_output::ProcessOutputComparison::ProfileByType {
                     min_recording_duration_seconds: 60,
-                    rules: crate::process_output::ProfileByTypeRules {
-                        exact_total_count: vec!["RPC_SERVICE_WHOLE".to_string()],
-                        source_positive_exists: vec!["HTTP".to_string()],
-                    },
                 },
                 passed: false,
                 classification: "profile_mismatch",
@@ -694,6 +740,7 @@ mod tests {
                         example: crate::process_output::ProfileDifferenceDetail {
                             classification: "profile_required_name_missing",
                             name: "api.demo.test:443".to_string(),
+                            observed_type: None,
                             source_total_count: Some(23),
                             target_total_count: None,
                             source_slow_thresholds: Some(vec![50]),
@@ -718,6 +765,14 @@ mod tests {
         assert_eq!(detail["types"][0]["type"], "HTTP");
         assert_eq!(detail["types"][0]["difference_count"], 12);
         assert_eq!(detail["types"][0]["example"]["name"], "api.demo.test:443");
+        let applicable = &json["comparison_observation"]["applicable_rule"];
+        assert_eq!(applicable["name"], "allow_target_missing");
+        assert_eq!(applicable["example_metric"], "HTTP.api.demo.test:443");
+        assert_eq!(applicable["eligibility"], "indirect_dependency_only");
+        assert_eq!(
+            applicable["direct_repository_trigger"],
+            "implementation_required"
+        );
     }
 
     fn api(api: &str, status: RewriteApiStatus) -> RewriteApiProgress {
@@ -746,12 +801,11 @@ mod tests {
         id: &str,
         observation: crate::process_output::ProcessOutputObservation,
     ) -> crate::process_output::ProcessOutputConfig {
-        crate::process_output::ProcessOutputConfig {
-            id: id.to_string(),
-            path: PathBuf::from("/data1/weibo/logs/profile.log"),
-            comparison: crate::process_output::ProcessOutputComparison::RegularFileExists,
-            observation,
-            max_bytes: 1024,
-        }
+        let mut config = crate::process_output::ProcessOutputConfig::profile_by_type(
+            id.to_string(),
+            PathBuf::from("/data1/weibo/logs/profile.log"),
+        );
+        config.observation = observation;
+        config
     }
 }

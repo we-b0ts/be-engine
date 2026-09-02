@@ -50,8 +50,9 @@ fn validates_comparison_source_match_and_requires_version_three() {
     .unwrap();
     let error = validate_replay_policy(&path).unwrap_err();
     assert!(
-        format!("{error:#}")
-            .contains("response_settings and response_rules require replay policy version 3")
+        format!("{error:#}").contains(
+            "response_settings and response_rules, plus process_output_rules, require replay policy version 3"
+        )
     );
 }
 

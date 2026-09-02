@@ -24,6 +24,9 @@ pub(in crate::replay) struct ReplayPolicyDocument {
     pub(in crate::replay) response_settings: ResponseSettings,
     #[serde(default, skip_serializing_if = "ResponseRules::is_empty")]
     pub(in crate::replay) response_rules: ResponseRules,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(in crate::replay) process_output_rules:
+        BTreeMap<String, crate::ProfileByTypeVerificationRules>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -199,6 +202,7 @@ pub struct ReplayPolicyValidationReport {
     pub comparison: ComparisonVerificationPolicy,
     pub dependency_rule_ids: Vec<String>,
     pub response_rule_ids: Vec<String>,
+    pub process_output_rules: BTreeMap<String, crate::ProfileByTypeVerificationRules>,
     pub runner_owned_response_assertions: bool,
 }
 
@@ -226,6 +230,7 @@ pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationRepor
             .map(|rule| rule.id)
             .collect(),
         response_rule_ids,
+        process_output_rules: loaded.document.process_output_rules,
         runner_owned_response_assertions: loaded.document.version >= 3,
     })
 }
@@ -255,10 +260,15 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
     );
     ensure!(
         document.version >= 3
-            || (document.response_settings.is_empty() && document.response_rules.is_empty()),
-        "response_settings and response_rules require replay policy version 3"
+            || (document.response_settings.is_empty()
+                && document.response_rules.is_empty()
+                && document.process_output_rules.is_empty()),
+        "response_settings and response_rules, plus process_output_rules, require replay policy version 3"
     );
     validate_response_rules(&document.response_rules)?;
+    for (output_id, rules) in &document.process_output_rules {
+        crate::process_output::validate_verification_rules(output_id, rules)?;
+    }
     let mut ids = BTreeSet::new();
     for rule in &document.dependency_rules {
         validate_rule(rule)?;

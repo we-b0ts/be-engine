@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 use traffic_e2e::{
-    ComparisonResponseRuleFeedback, ResponseRuleKind, plan_comparison_response_rule,
+    ComparisonResponseRuleFeedback, ProfileTargetMissingFeedback, ResponseRuleKind,
+    plan_comparison_response_rule, plan_profile_target_missing,
 };
 
 #[derive(Debug, Args)]
@@ -36,6 +37,29 @@ struct ApplyArgs {
 enum ComparisonStrategy {
     /// Add an evidence-backed comparison-only response rule.
     ResponseRule(ResponseRuleArgs),
+    /// Allow one source-only profile metric proven to come from an indirect dependency.
+    AllowTargetMissing(ProfileTargetMissingArgs),
+}
+
+#[derive(Debug, Args)]
+struct ProfileTargetMissingArgs {
+    #[arg(long)]
+    process_output: String,
+    /// Exact profile metric in <type>.<name> format.
+    #[arg(long)]
+    metric: String,
+    #[arg(long)]
+    source_revision: String,
+    /// Dependency coordinates ordered from the direct dependency to the indirect emitter.
+    #[arg(long, required = true)]
+    dependency_path: Vec<String>,
+    #[arg(long)]
+    emitter_evidence: String,
+    #[arg(long)]
+    repository_search_evidence: String,
+    /// Exact finalized comparison recording directory.
+    #[arg(long)]
+    comparison_run: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -76,6 +100,10 @@ fn plan(target_root: PathBuf, strategy: ComparisonStrategy) -> Result<()> {
             let plan = response_rule_plan(target_root, args)?;
             super::print_json(plan.report())
         }
+        ComparisonStrategy::AllowTargetMissing(args) => {
+            let plan = profile_target_missing_plan(target_root, args)?;
+            super::print_json(plan.report())
+        }
     }
 }
 
@@ -85,7 +113,28 @@ fn apply(target_root: PathBuf, strategy: ComparisonStrategy) -> Result<()> {
             let report = response_rule_plan(target_root, args)?.apply()?;
             super::print_json(&report)
         }
+        ComparisonStrategy::AllowTargetMissing(args) => {
+            let report = profile_target_missing_plan(target_root, args)?.apply()?;
+            super::print_json(&report)
+        }
     }
+}
+
+fn profile_target_missing_plan(
+    target_root: PathBuf,
+    args: ProfileTargetMissingArgs,
+) -> Result<traffic_e2e::ProfileTargetMissingPlan> {
+    plan_profile_target_missing(ProfileTargetMissingFeedback {
+        project_config_path: target_root.join(".traffic-e2e/project.yaml"),
+        policy_path: target_root.join(".traffic-e2e/verification.yaml"),
+        process_output_id: args.process_output,
+        metric: args.metric,
+        source_revision: args.source_revision,
+        dependency_path: args.dependency_path,
+        emitter_evidence: args.emitter_evidence,
+        repository_search_evidence: args.repository_search_evidence,
+        comparison_run: args.comparison_run,
+    })
 }
 
 fn response_rule_plan(
@@ -139,6 +188,34 @@ mod tests {
                 "1",
                 "--target-example",
                 "2",
+                "--comparison-run",
+                "/comparison/run",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn target_missing_rule_requires_structured_indirect_dependency_evidence() {
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "plan",
+                "allow-target-missing",
+                "--process-output",
+                "metrics-profile",
+                "--metric",
+                "HTTP.http://telemetry.example/ping",
+                "--source-revision",
+                "0123456789abcdef",
+                "--dependency-path",
+                "com.example:client:1.0.0",
+                "--dependency-path",
+                "com.vendor:telemetry:2.0.0",
+                "--emitter-evidence",
+                "TelemetryInitializer#start emits /ping",
+                "--repository-search-evidence",
+                "No direct call or startup registration at the source revision",
                 "--comparison-run",
                 "/comparison/run",
             ])

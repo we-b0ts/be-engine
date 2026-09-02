@@ -12,6 +12,7 @@ use uuid::Uuid;
 use super::model::{
     ComparisonRecordingCase, ComparisonRecordingRequest, ComparisonRecordingResponse,
 };
+use super::order::UpstreamDispatchOrder;
 use super::runtime::{ComparisonRecordingRuntime, UpstreamRole, update_upstream_counts};
 use super::upstream::{UpstreamCapture, UpstreamErrorKind, request_body_capture};
 use crate::gateway::motan::{rules, transport};
@@ -175,15 +176,30 @@ async fn handle_connection(
             api_key: Some(matched.descriptor.api_key.clone()),
         };
 
-        let baseline = fetch(&runtime, &request, &runtime.motan_gateway.matched_upstream).await;
-        update_upstream_counts(&runtime, UpstreamRole::Baseline, &baseline.capture).await;
+        let dispatch_order = runtime.dispatch_schedule.next();
+        let (baseline, candidate) = match dispatch_order {
+            UpstreamDispatchOrder::BaselineThenCandidate => {
+                let baseline =
+                    fetch(&runtime, &request, &runtime.motan_gateway.matched_upstream).await;
+                update_upstream_counts(&runtime, UpstreamRole::Baseline, &baseline.capture).await;
+                let candidate = fetch(&runtime, &request, &runtime.candidate_motan_upstream).await;
+                update_upstream_counts(&runtime, UpstreamRole::Candidate, &candidate.capture).await;
+                (baseline, candidate)
+            }
+            UpstreamDispatchOrder::CandidateThenBaseline => {
+                let candidate = fetch(&runtime, &request, &runtime.candidate_motan_upstream).await;
+                update_upstream_counts(&runtime, UpstreamRole::Candidate, &candidate.capture).await;
+                let baseline =
+                    fetch(&runtime, &request, &runtime.motan_gateway.matched_upstream).await;
+                update_upstream_counts(&runtime, UpstreamRole::Baseline, &baseline.capture).await;
+                (baseline, candidate)
+            }
+        };
         // Preserve what `write_downstream` needs from the baseline before
         // `baseline.capture.record` is moved into the case below. `response` is
         // cloned (an `Option<Frame>`); `error_kind` is `Copy`.
         let baseline_response = baseline.response.clone();
         let baseline_error_kind = baseline.capture.error_kind;
-        let candidate = fetch(&runtime, &request, &runtime.candidate_motan_upstream).await;
-        update_upstream_counts(&runtime, UpstreamRole::Candidate, &candidate.capture).await;
         let baseline_recheck = if runtime.comparison_recording.baseline_recheck {
             let capture = fetch(&runtime, &request, &runtime.motan_gateway.matched_upstream).await;
             update_upstream_counts(&runtime, UpstreamRole::BaselineRecheck, &capture.capture).await;

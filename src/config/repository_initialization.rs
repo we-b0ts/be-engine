@@ -732,7 +732,7 @@ mod tests {
                 .exists()
         );
         let project = fs::read_to_string(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
-        assert!(project.contains("version: 14"));
+        assert!(project.contains("version: 15"));
         assert!(project.contains("dockerfile: .traffic-e2e/Dockerfile.e2e"));
         assert!(!project.contains("http_host:"));
         assert!(!project.contains("motan_port:"));

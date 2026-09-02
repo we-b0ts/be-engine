@@ -18,12 +18,12 @@ generated-adapter path.
 
 ## Follow the generated-adapter path
 
-Add `brz-motan` at the fixed `v0.0.3` tag, enable `metrics` by default, and
+Add `brz-motan` at the fixed `v0.0.4` tag, enable `metrics` by default, and
 enable the feature required by the recorded outer serialization. This guide's
 Breeze example uses:
 
 ```toml
-brz-motan = { package = "motan", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.3", features = ["breeze", "metrics"] }
+brz-motan = { package = "motan", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4", features = ["breeze", "metrics"] }
 ```
 
 Use `hessian2` or `simple` instead of `breeze` when that is the proven outer

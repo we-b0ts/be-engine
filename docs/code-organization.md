@@ -36,7 +36,7 @@ is unclear.
 - Top-level `mysql`, `redis`, `memcached`, and `kafka` modules own reusable
   protocol parsing and encoding only. Top-level `motan` is a traffic-e2e
   adapter over `motan-protocol` and `motan-codec` from the Breeze Motan Git
-  dependency pinned to `v0.0.3`; reusable Motan framing, encoding, and
+  dependency pinned to `v0.0.4`; reusable Motan framing, encoding, and
   request-envelope semantics stay in that companion repository. None of these
   modules owns recording or replay.
 - Top-level `http` owns reusable HTTP forwarding policy. `proxy/http` and
