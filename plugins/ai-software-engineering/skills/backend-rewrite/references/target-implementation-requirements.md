@@ -99,7 +99,7 @@ and keep each choice compatible with the source submission contract.
   equivalent source-size gate.
 
 Every used Breeze or platform SDK capability MUST be added as a Git dependency
-pinned to the fixed `v0.0.1` tag and exposed through the corresponding
+pinned to its documented release tag and exposed through the corresponding
 `brz-<capability>` dependency name. Use the canonical capability names `http`,
 `memcache`, `redis`, `mysql`, `vintage`, `motan`, `auth`, `mcq`, `kafka`, and
 `logs`. `brz-auth` owns authentication SDK implementations, including TAuth
