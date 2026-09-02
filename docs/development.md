@@ -544,7 +544,7 @@ local preflight `<recorder-ip>` is `127.0.0.1`; when capture runs remotely, use
 the address of the host running preflight. The preflight prompt returns this
 command instead of fabricating RPC argument values.
 The gateway decodes Motan1 and Motan2 through the Breeze Motan Git dependency
-pinned to `v0.0.1`. A matched request is forwarded to `matched_upstream`, and
+pinned to `v0.0.3`. A matched request is forwarded to `matched_upstream`, and
 its raw protocol request and response are published as one primary case.
 Heartbeats, unmatched calls, overlapping calls while another case is active,
 and calls after the per-API limit receive a protocol-valid empty success
