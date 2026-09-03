@@ -35,6 +35,8 @@ Before a run, the runner requires:
 
 - a regular `.traffic-e2e/Dockerfile.e2e` and a root `.dockerignore` that
   excludes `.git/`, `.traffic-e2e/local/`, and `target/`;
+- a required BuildKit SSH mount in the target Dockerfile and at least one
+  default OpenSSH identity loadable by the repository-local managed agent;
 - valid project, source traffic policy, and replay config;
 - ignored `.traffic-e2e/local/`, ensured by repository initialization;
 - a matching `.traffic-e2e/local/startup/` snapshot captured by initialization;
@@ -77,6 +79,10 @@ One attempt:
 BuildKit cache mounts preserve Cargo registry, git, and target artifacts across
 builds. Source changes may rerun Cargo, but must not force dependency downloads
 when the pinned builder and stable cache IDs are unchanged.
+traffic-e2e manages the build agent at
+`.traffic-e2e/local/socks/ssh-agent.sock`, recreates it when the socket is
+stale, and forwards it directly to BuildKit. Failed builds return a bounded
+actionable Docker/Cargo output tail in `diagnosis.lifecycle_errors`.
 
 Keeping one target lifetime preserves observable local-cache, connection-pool,
 startup, and warmup behavior. The target never reads a case or writes an actual

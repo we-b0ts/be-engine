@@ -38,8 +38,14 @@ roles, and Replay mounts the target role. These paths must not overlap startup
 inputs. Their contents never enter the startup snapshot, target build context,
 Replay inputs, or expected-response evidence.
 
-Use the pinned shared Rust builder/runtime images and stable BuildKit cache
-mount IDs. The target stays alive for every case in one focused/full round.
+Use the pinned shared Rust builder/runtime images, the required BuildKit SSH
+mount, and stable BuildKit cache mount IDs. traffic-e2e owns the repository-local
+SSH agent at `.traffic-e2e/local/socks/ssh-agent.sock`: it reuses a usable agent,
+recreates a stale socket, loads the calling account's default OpenSSH identities,
+and forwards that exact socket to Docker. The private keys never enter the
+image. The target stays alive for every case in one focused/full round. A
+Docker or Cargo build failure must remain bounded but include actionable build
+output in preflight and E2E APIs.
 
 Do not add traffic-specific `status`, `e2e`, test, check, recording,
 comparison, case execution, response capture, assertion, Replay lifecycle, or

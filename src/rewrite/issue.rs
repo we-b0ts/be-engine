@@ -57,20 +57,26 @@ pub(super) fn from_e2e(
                 },
             )
         }
-        _ if result.diagnosis.counts.executed == 0 => (
-            RewriteIssueKind::TargetRuntime,
-            RewriteIssueOwner::TargetRuntime,
-            result.diagnosis.lifecycle_errors.first().map_or_else(
-                || "target lifecycle failed before any response assertion completed".to_string(),
-                |error| format!("target lifecycle failed before assertions: {error}"),
-            ),
-            None,
-            vec![
-                "target_startup_or_readiness".to_string(),
-                "source_compatible_configuration".to_string(),
-                "replay_interception_environment".to_string(),
-            ],
-        ),
+        _ if result.diagnosis.counts.executed == 0 => {
+            let lifecycle_error = result
+                .diagnosis
+                .lifecycle_errors
+                .first()
+                .map(String::as_str);
+            (
+                RewriteIssueKind::TargetRuntime,
+                RewriteIssueOwner::TargetRuntime,
+                lifecycle_error.map_or_else(
+                    || {
+                        "target lifecycle failed before any response assertion completed"
+                            .to_string()
+                    },
+                    |error| format!("target lifecycle failed before assertions: {error}"),
+                ),
+                None,
+                target_runtime_possible_causes(lifecycle_error),
+            )
+        }
         _ if result.gates.replay == E2eReplayGate::Incomplete => (
             RewriteIssueKind::Replay,
             RewriteIssueOwner::TrafficE2eSystem,
@@ -156,6 +162,28 @@ pub(super) fn response_possible_causes(kind: Option<ResponseDifferenceKind>) -> 
     causes.iter().map(|cause| (*cause).to_string()).collect()
 }
 
+fn target_runtime_possible_causes(error: Option<&str>) -> Vec<String> {
+    let causes: &[&str] = if error.is_some_and(|error| {
+        let error = error.to_ascii_lowercase();
+        error.contains("target image build")
+            || error.contains("target-build ssh")
+            || error.contains("target dockerfile")
+    }) {
+        &[
+            "target_build_ssh_identity",
+            "target_dockerfile_build_contract",
+            "target_cargo_or_image_build",
+        ]
+    } else {
+        &[
+            "target_startup_or_readiness",
+            "source_compatible_configuration",
+            "replay_interception_environment",
+        ]
+    };
+    causes.iter().map(|cause| (*cause).to_string()).collect()
+}
+
 pub(super) fn id(api: &str, kind: &str, pointer: &str) -> String {
     format!(
         "issue-{}",
@@ -194,5 +222,24 @@ mod tests {
                 .any(|cause| cause.contains("connection_close"))
         );
         assert!(!causes.iter().any(|cause| cause.contains("nondeterminism")));
+    }
+
+    #[test]
+    fn target_build_failure_causes_point_to_ssh_contract_and_cargo() {
+        let causes = target_runtime_possible_causes(Some(
+            "target image build failed: managed target-build SSH agent has no identity",
+        ));
+
+        assert!(
+            causes
+                .iter()
+                .any(|cause| cause == "target_build_ssh_identity")
+        );
+        assert!(
+            causes
+                .iter()
+                .any(|cause| cause == "target_dockerfile_build_contract")
+        );
+        assert!(!causes.iter().any(|cause| cause.contains("readiness")));
     }
 }

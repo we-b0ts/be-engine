@@ -374,11 +374,13 @@ When adapting it to an existing workspace, preserve these contracts:
 - no external `# syntax=` frontend, credentials, source tree, build cache,
   generated trust, recordings, or traffic-e2e binary in the final image.
 
-Before preflight, expose an SSH agent containing an identity authorized for
-`git.intra.demo.test`; for example, run `ssh-add ~/.ssh/id_ed25519` and verify
-`SSH_AUTH_SOCK` is set. traffic-e2e validates the agent and automatically passes
-`--ssh default`. The key remains a build-time mount and is never copied into an
-image.
+traffic-e2e creates or reuses the target repository's managed SSH agent at
+`.traffic-e2e/local/socks/ssh-agent.sock`, recreates a stale socket, and uses
+plain `ssh-add` to load the calling account's default OpenSSH identities. It
+forwards the exact repository-local socket to BuildKit; keys remain build-time
+inputs and are never copied into an image. If no default identity can be
+loaded, or the private repository rejects it, preflight returns a bounded
+`target_image` failure with the actionable SSH/Docker/Cargo reason.
 
 traffic-e2e owns the build from the repository root, the local
 `traffic-e2e/<project>-target:cache` tag, immutable image-ID resolution, cache
