@@ -13,6 +13,8 @@ from the target repository, or bind it with global `--target-root`:
 backend-rewrite init \
   --source-container <existing-source-container> \
   [--env-file /path/to/initial.env] \
+  [--readiness-path /healthz] \
+  [--readiness-status 404] \
   [--http-gateway-port 4080]
 ```
 
