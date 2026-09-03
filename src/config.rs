@@ -69,7 +69,7 @@ pub use http_gateway::{HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig};
 pub use http_response_rewrite::{
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
 };
-pub use initialization::DEFAULT_HTTP_GATEWAY_PORT;
+pub use initialization::{DEFAULT_HTTP_BACKEND_PORT, DEFAULT_HTTP_GATEWAY_PORT};
 pub use motan_gateway::{MotanGatewayConfig, MotanGatewayRuleConfig};
 pub use process_owned_dependencies::{BackgroundDependencyRuleConfig, RedisKeyPatternConfig};
 pub use recording::{

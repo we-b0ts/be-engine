@@ -8,6 +8,10 @@ use serde::{Deserialize, Serialize};
 use super::initialization::{RecorderConfigInitOptions, render_validated_recorder_config};
 use crate::e2e_run::{E2eRunInitOptions, render_project_config};
 
+mod target_template;
+
+use target_template::{render_target_main, render_target_startup_probe};
+
 const PROJECT_CONFIG_PATH: &str = ".traffic-e2e/project.yaml";
 const SOURCE_TRAFFIC_POLICY_PATH: &str = ".traffic-e2e/source-traffic-policy.yaml";
 const VERIFICATION_POLICY_PATH: &str = ".traffic-e2e/verification.yaml";
@@ -21,7 +25,6 @@ const TARGET_GITIGNORE_PATH: &str = ".gitignore";
 const TARGET_DOCKERIGNORE_PATH: &str = ".dockerignore";
 const LOCAL_DIR: &str = crate::repository::LOCAL_ROOT;
 const PR_BASE: &str = "dev-migration";
-const DEFAULT_NATIVE_HTTP_PORT: u16 = 8080;
 const TARGET_CARGO_TEMPLATE: &str = include_str!("templates/target/Cargo.toml");
 const TARGET_CARGO_LOCK_TEMPLATE: &str = include_str!("templates/target/Cargo.lock");
 const TARGET_MAIN_TEMPLATE: &str = include_str!("templates/target/src/main.rs");
@@ -68,6 +71,7 @@ pub struct RepositoryConfigInitOptions {
     pub target_root: PathBuf,
     pub source_container: String,
     pub breeze_container: Option<String>,
+    pub http_backend_port: u16,
     pub http_gateway_port: u16,
     pub readiness_path: String,
     pub upstream_dns: SocketAddr,
@@ -82,6 +86,7 @@ pub struct RepositoryConfigInitResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub breeze_container: Option<InspectedContainer>,
     pub upstream_dns: SocketAddr,
+    pub http_backend_port: u16,
     pub http_gateway_port: u16,
     pub local_dir: PathBuf,
     pub target_environment: PathBuf,
@@ -148,8 +153,8 @@ fn initialize_repository_config_with(
 
     let recorder_options = RecorderConfigInitOptions {
         target_root: target_root.clone(),
-        source_http_port: DEFAULT_NATIVE_HTTP_PORT,
-        candidate_http_port: DEFAULT_NATIVE_HTTP_PORT,
+        source_http_port: options.http_backend_port,
+        candidate_http_port: options.http_backend_port,
         http_gateway_port: options.http_gateway_port,
         readiness_path: options.readiness_path.clone(),
         upstream_dns: options.upstream_dns,
@@ -211,6 +216,7 @@ fn initialize_repository_config_with(
         source_container: source,
         breeze_container: breeze,
         upstream_dns: options.upstream_dns,
+        http_backend_port: options.http_backend_port,
         http_gateway_port: options.http_gateway_port,
         local_dir: PathBuf::from(LOCAL_DIR),
         target_environment: target_environment.path,
@@ -307,7 +313,7 @@ fn render_missing_target_delivery(
         ));
         files.push((
             main,
-            render_target_main(&options.readiness_path).into_bytes(),
+            render_target_main(&options.readiness_path, options.http_backend_port).into_bytes(),
         ));
         files.push((
             target_root.join(TARGET_STARTUP_PROBE_PATH),
@@ -411,25 +417,6 @@ fn target_cache_project(target_root: &Path) -> Result<String> {
         .and_then(|value| value.strip_suffix("-target:cache"))
         .map(str::to_string)
         .context("failed to derive target cache identity")
-}
-
-fn render_target_main(readiness_path: &str) -> String {
-    TARGET_MAIN_TEMPLATE.replace(
-        "const READINESS_PATH: &str = \"/healthz\";",
-        &format!("const READINESS_PATH: &str = {readiness_path:?};"),
-    )
-}
-
-fn render_target_startup_probe() -> String {
-    TARGET_STARTUP_PROBE_TEMPLATE
-        .replace(
-            "__TRAFFIC_E2E_PROBE_ORIGIN_HEADER__",
-            crate::network_probe::ORIGIN_HEADER,
-        )
-        .replace(
-            "__TRAFFIC_E2E_PROBE_ORIGIN__",
-            crate::network_probe::TARGET_ORIGIN,
-        )
 }
 
 fn require_configuration_targets_absent(paths: &[PathBuf]) -> Result<()> {
@@ -701,6 +688,7 @@ mod tests {
                 target_root: target.path().to_path_buf(),
                 source_container: "friendship".to_string(),
                 breeze_container: Some("breeze".to_string()),
+                http_backend_port: 8_181,
                 http_gateway_port: 4_080,
                 readiness_path: "/healthz".to_string(),
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
@@ -712,6 +700,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.generated.len(), 11);
+        assert_eq!(result.http_backend_port, 8_181);
         assert_eq!(result.http_gateway_port, 4_080);
         assert_eq!(result.local_dir, PathBuf::from(LOCAL_DIR));
         assert_eq!(
@@ -855,7 +844,7 @@ mod tests {
         assert_eq!(recorder.http_gateway.listen.to_string(), "0.0.0.0:4080");
         assert_eq!(
             recorder.http_gateway.matched_upstream,
-            "http://127.0.0.1:8080"
+            "http://127.0.0.1:8181"
         );
         assert_eq!(
             recorder
@@ -863,7 +852,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .candidate_upstream,
-            "http://comparison-target.traffic-e2e.invalid:8080"
+            "http://comparison-target.traffic-e2e.invalid:8181"
         );
         assert_eq!(recorder.recording.max_body_bytes, DEFAULT_BODY_LIMIT_BYTES);
         crate::replay::validate_replay_policy(&target.path().join(VERIFICATION_POLICY_PATH))
@@ -874,6 +863,7 @@ mod tests {
                 target_root: target.path().to_path_buf(),
                 source_container: "friendship".to_string(),
                 breeze_container: Some("breeze".to_string()),
+                http_backend_port: 8_181,
                 http_gateway_port: 4_080,
                 readiness_path: "/healthz".to_string(),
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
@@ -900,6 +890,7 @@ mod tests {
                 target_root: target.path().to_path_buf(),
                 source_container: "source".to_string(),
                 breeze_container: None,
+                http_backend_port: 8_181,
                 http_gateway_port: 4_080,
                 readiness_path: "/ready".to_string(),
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
@@ -922,6 +913,7 @@ mod tests {
             .map(|(_, contents)| String::from_utf8_lossy(contents))
             .unwrap();
         assert!(!main.contains("TARGET_PORT_ENV"));
+        assert!(main.contains("const DEFAULT_PORT: u16 = 8181;"));
         assert!(main.contains("const READINESS_PATH: &str = \"/ready\";"));
         assert!(main.contains("const READINESS_STATUS: u16 = 200;"));
     }
@@ -940,6 +932,7 @@ mod tests {
                 target_root: target.path().to_path_buf(),
                 source_container: "source".to_string(),
                 breeze_container: None,
+                http_backend_port: 8_080,
                 http_gateway_port: 4_080,
                 readiness_path: "/healthz".to_string(),
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),

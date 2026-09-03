@@ -1389,18 +1389,19 @@ backend-rewrite --target-root ../target init \
   --source-container <existing-source-container> \
   [--env-file /path/to/initial.env] \
   [--readiness-path /healthz] \
+  [--http-backend-port 8080] \
   [--http-gateway-port 4080]
 ```
 
-From the target root, `--target-root` is unnecessary. Defaults are Recorder
-HTTP gateway port `4080`, recorder native HTTP upstream
-`http://127.0.0.1:8080`, readiness `/healthz` with fixed success status `200`,
-and upstream DNS `10.10.10.11:53`. Initialization accepts a readiness path but
-no readiness status argument; generated `project.yaml` retains the explicit
-`success_status: 200` contract. Only the gateway port is an initialization port
-argument. Change a non-standard native endpoint under `recorder` in
-`project.yaml`, which is its sole static configuration owner. The source
-container needs only to be inspectable, not running.
+From the target root, `--target-root` is unnecessary. Defaults are backend HTTP
+port `8080`, Recorder HTTP gateway port `4080`, readiness `/healthz` with fixed
+success status `200`, and upstream DNS `10.10.10.11:53`. The backend port is
+shared by the source and target processes and drives the generated Recorder
+upstream, managed Comparison candidate, target readiness endpoint, and Replay
+request destination. It must differ from the gateway listener port.
+Initialization accepts a readiness path but no readiness status argument;
+generated `project.yaml` retains the explicit `success_status: 200` contract.
+The source container needs only to be inspectable, not running.
 
 The command atomically generates version-16 `.traffic-e2e/project.yaml`,
 `.traffic-e2e/source-traffic-policy.yaml`, and `.traffic-e2e/verification.yaml`.

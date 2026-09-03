@@ -9,6 +9,7 @@ use super::{
 use anyhow::{Context, Result, ensure};
 
 pub const DEFAULT_HTTP_GATEWAY_PORT: u16 = 4_080;
+pub const DEFAULT_HTTP_BACKEND_PORT: u16 = 8_080;
 pub(crate) const INITIAL_READINESS_SUCCESS_STATUS: u16 = 200;
 
 #[derive(Debug, Clone)]

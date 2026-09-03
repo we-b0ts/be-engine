@@ -9,11 +9,16 @@ Initialize all repository configuration once from the target root:
 
 ```bash
 traffic-e2e config init --source-container <existing-source-container> \
-  [--env-file /path/to/initial.env]
+  [--env-file /path/to/initial.env] \
+  [--http-backend-port 8080] \
+  [--http-gateway-port 4080]
 ```
 
-The generated Recorder HTTP gateway listens on port `4080` by default; use
-`--http-gateway-port` only when that port is unavailable.
+The source and target backend HTTP port defaults to `8080`; use
+`--http-backend-port` when both backends listen on another port. The generated
+Recorder HTTP gateway listens on port `4080` by default; use
+`--http-gateway-port` only when that listener port is unavailable. The two
+ports must differ.
 
 The generated version-16 project configuration has separate `source`, `target`,
 `replay`, `recording`, `delivery`, and `state` settings plus an embedded static

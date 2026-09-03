@@ -15,8 +15,13 @@ backend-rewrite init \
   --source-container <existing-source-container> \
   [--env-file /path/to/initial.env] \
   [--readiness-path /healthz] \
+  [--http-backend-port 8080] \
   [--http-gateway-port 4080]
 ```
+
+Run `backend-rewrite` as the current user; do not add `sudo`. The current user
+only needs access to Docker. An environment whose current user is already root
+may run it normally.
 
 `--env-file` is optional and may name an empty dotenv file. Initialization
 imports it into the ignored, mode-0600 project file
@@ -27,6 +32,12 @@ missing.
 `--readiness-path` defaults to `/healthz`. Initialization requires status `200`
 and writes it explicitly as `success_status: 200` in `project.yaml`; there is no
 readiness status argument.
+
+`--http-backend-port` is the native HTTP port shared by the source and target
+backend processes and defaults to `8080`. It determines the generated source
+upstream, managed Comparison candidate, target readiness endpoint, and Replay
+request destination. `--http-gateway-port` is the Recorder gateway listener and
+defaults to `4080`; it must differ from the backend port.
 
 Initialization creates the local `dev-migration` pull-request base branch from
 the current `HEAD` when it is missing, without switching the current branch. It

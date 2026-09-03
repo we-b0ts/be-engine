@@ -277,6 +277,10 @@ fn parses_the_bounded_rewrite_surface() {
         default_init.http_gateway_port,
         traffic_e2e::DEFAULT_HTTP_GATEWAY_PORT
     );
+    assert_eq!(
+        default_init.http_backend_port,
+        traffic_e2e::DEFAULT_HTTP_BACKEND_PORT
+    );
     assert!(default_init.command.is_none());
     let RewriteCommand::Init(preflight) =
         Cli::try_parse_from(["test", "init", "preflight", "--duration-seconds", "30"])
@@ -298,6 +302,8 @@ fn parses_the_bounded_rewrite_surface() {
             "--source-container",
             "friendship",
             "--breeze=custom-breeze",
+            "--http-backend-port",
+            "8081",
             "--http-gateway-port",
             "18181",
         ])

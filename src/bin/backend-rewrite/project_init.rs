@@ -6,9 +6,9 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use serde::Serialize;
 use traffic_e2e::{
-    DEFAULT_HTTP_GATEWAY_PORT, InspectedContainer, ManagedRecordingPreflightOptions,
-    RepositoryConfigInitOptions, RepositoryConfigInitResult, StartupSnapshotReport,
-    initialize_repository_config, run_managed_recording_preflight,
+    DEFAULT_HTTP_BACKEND_PORT, DEFAULT_HTTP_GATEWAY_PORT, InspectedContainer,
+    ManagedRecordingPreflightOptions, RepositoryConfigInitOptions, RepositoryConfigInitResult,
+    StartupSnapshotReport, initialize_repository_config, run_managed_recording_preflight,
 };
 
 #[derive(Debug, Args)]
@@ -21,6 +21,9 @@ pub(super) struct ProjectInitArgs {
     /// Enable Breeze using the conventional `breeze` container, or provide a non-standard name.
     #[arg(long, num_args = 0..=1, default_missing_value = "breeze", value_name = "CONTAINER")]
     breeze: Option<String>,
+    /// Native HTTP port listened to by the source and target backend processes.
+    #[arg(long, default_value_t = DEFAULT_HTTP_BACKEND_PORT)]
+    pub(super) http_backend_port: u16,
     /// HTTP gateway port that receives traffic selected for recording.
     #[arg(long, default_value_t = DEFAULT_HTTP_GATEWAY_PORT)]
     pub(super) http_gateway_port: u16,
@@ -54,6 +57,7 @@ struct ProjectInitReport {
     source_container: InspectedContainer,
     #[serde(skip_serializing_if = "Option::is_none")]
     breeze_container: Option<InspectedContainer>,
+    http_backend_port: u16,
     http_gateway_port: u16,
     local_dir: PathBuf,
     target_environment: PathBuf,
@@ -117,6 +121,7 @@ pub(super) async fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: boo
         target_root,
         source_container,
         breeze_container: args.breeze,
+        http_backend_port: args.http_backend_port,
         http_gateway_port: args.http_gateway_port,
         readiness_path: args.readiness_path,
         upstream_dns: args.upstream_dns,
@@ -158,6 +163,7 @@ impl From<RepositoryConfigInitResult> for ProjectInitReport {
             generated: result.generated,
             source_container: result.source_container,
             breeze_container: result.breeze_container,
+            http_backend_port: result.http_backend_port,
             http_gateway_port: result.http_gateway_port,
             local_dir: result.local_dir,
             target_environment: result.target_environment,

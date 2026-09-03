@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use traffic_e2e::{
-    DEFAULT_HTTP_GATEWAY_PORT, RepositoryConfigInitOptions, initialize_repository_config,
+    DEFAULT_HTTP_BACKEND_PORT, DEFAULT_HTTP_GATEWAY_PORT, RepositoryConfigInitOptions,
+    initialize_repository_config,
 };
 
 mod comparison;
@@ -40,6 +41,9 @@ struct InitArgs {
     /// Enable Breeze using the conventional `breeze` container, or provide a non-standard name.
     #[arg(long, num_args = 0..=1, default_missing_value = "breeze", value_name = "CONTAINER")]
     breeze: Option<String>,
+    /// Native HTTP port listened to by the source and target backend processes.
+    #[arg(long, default_value_t = DEFAULT_HTTP_BACKEND_PORT)]
+    http_backend_port: u16,
     /// HTTP gateway port that receives traffic selected for recording.
     #[arg(long, default_value_t = DEFAULT_HTTP_GATEWAY_PORT)]
     http_gateway_port: u16,
@@ -61,6 +65,7 @@ pub(super) fn run(args: ConfigArgs) -> Result<()> {
                 target_root: args.target_root,
                 source_container: init.source_container,
                 breeze_container: init.breeze,
+                http_backend_port: init.http_backend_port,
                 http_gateway_port: init.http_gateway_port,
                 readiness_path: init.readiness_path,
                 upstream_dns: init.upstream_dns,
@@ -105,6 +110,7 @@ mod tests {
             panic!("expected init command");
         };
         assert_eq!(init.breeze.as_deref(), Some("breeze"));
+        assert_eq!(init.http_backend_port, DEFAULT_HTTP_BACKEND_PORT);
         assert_eq!(init.http_gateway_port, DEFAULT_HTTP_GATEWAY_PORT);
         assert_eq!(init.readiness_path, "/healthz");
         assert_eq!(init.upstream_dns, "10.10.10.11:53".parse().unwrap());
@@ -155,6 +161,8 @@ mod tests {
             "--source-container",
             "source",
             "--breeze=custom-breeze",
+            "--http-backend-port",
+            "8081",
             "--http-gateway-port",
             "18181",
         ])
@@ -163,6 +171,7 @@ mod tests {
             panic!("expected init command");
         };
         assert_eq!(init.breeze.as_deref(), Some("custom-breeze"));
+        assert_eq!(init.http_backend_port, 8_081);
         assert_eq!(init.http_gateway_port, 18_181);
     }
 }
