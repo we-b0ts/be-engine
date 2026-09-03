@@ -123,6 +123,6 @@ pub(super) fn command(
             "execute".to_string(),
             recording_action_id(state, comparison),
         ],
-        vec!["TRAFFIC_E2E_ENCRYPTION_KEY_B64".to_string()],
+        Vec::new(),
     )
 }

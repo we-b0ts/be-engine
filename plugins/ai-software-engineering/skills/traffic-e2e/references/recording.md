@@ -54,10 +54,12 @@ one case across both protocols may own process dependencies at a time; an
 overlapping matched request follows its gateway's configured non-admitted
 response path and does not create another case.
 
-When request-header encryption is configured,
-`TRAFFIC_E2E_ENCRYPTION_KEY_B64` must decode to exactly 32 bytes. Keep it only
-in the Recorder/record-comparison process environment; never print it, commit
-it, or inject it into source, target, Breeze, commands, or policy.
+When request-header encryption is configured, managed operations create and
+reuse the mode-0600 project key at
+`.traffic-e2e/local/secrets/traffic-e2e-enc.sec`; the AI does not provide it.
+An explicit `TRAFFIC_E2E_ENCRYPTION_KEY_B64` is accepted only to initialize an
+absent managed key and must decode to exactly 32 bytes. Never print or commit
+the key, or inject it into source, target, Breeze, commands, or policy.
 
 ## Recorder Rules
 

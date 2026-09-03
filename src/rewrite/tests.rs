@@ -30,9 +30,10 @@ fn action_commands_are_argv_and_do_not_contain_secret_values() {
         value.pointer("/action/commands/execute/cwd"),
         Some(&serde_json::json!(target))
     );
-    assert_eq!(
-        value.pointer("/action/commands/execute/required_env_names/0"),
-        Some(&Value::String("TRAFFIC_E2E_ENCRYPTION_KEY_B64".to_string()))
+    assert!(
+        value
+            .pointer("/action/commands/execute/required_env_names")
+            .is_none()
     );
     assert_eq!(
         value.pointer("/action/commands/execute/argv/0"),

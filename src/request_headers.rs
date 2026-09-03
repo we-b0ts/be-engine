@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aes_gcm::aead::{Aead, Payload};
@@ -82,14 +82,14 @@ impl RequestHeaderCapture {
 pub(crate) fn decrypt_request_file(path: &Path) -> Result<Option<Vec<u8>>> {
     let raw = std::fs::read(path)
         .with_context(|| format!("failed to read recorded request {}", path.display()))?;
-    decrypt_request_payload(&raw)
+    decrypt_request_payload(&raw, Some(path))
         .with_context(|| format!("failed to decrypt recorded request {}", path.display()))
 }
 
 pub(crate) fn load_request_file(path: &Path) -> Result<Vec<u8>> {
     let raw = std::fs::read(path)
         .with_context(|| format!("failed to read recorded request {}", path.display()))?;
-    Ok(decrypt_request_payload(&raw)
+    Ok(decrypt_request_payload(&raw, Some(path))
         .with_context(|| format!("failed to decrypt recorded request {}", path.display()))?
         .unwrap_or(raw))
 }
@@ -99,7 +99,7 @@ pub(crate) fn validate_request_file(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn decrypt_request_payload(raw: &[u8]) -> Result<Option<Vec<u8>>> {
+fn decrypt_request_payload(raw: &[u8], request_path: Option<&Path>) -> Result<Option<Vec<u8>>> {
     let mut request: Value =
         serde_json::from_slice(raw).context("recorded request is not valid JSON")?;
     let Some(headers) = request.get_mut("headers").and_then(Value::as_object_mut) else {
@@ -109,7 +109,7 @@ fn decrypt_request_payload(raw: &[u8]) -> Result<Option<Vec<u8>>> {
         return Ok(None);
     }
 
-    let cipher = RequestHeaderCipher::from_environment()?;
+    let cipher = RequestHeaderCipher::from_environment_or_request_path(request_path)?;
     decrypt_headers(headers, &cipher)?;
     let mut payload =
         serde_json::to_vec_pretty(&request).context("failed to serialize decrypted request")?;
@@ -167,13 +167,37 @@ impl RequestHeaderCipher {
         Self::from_encoded_key(&encoded)
     }
 
+    fn from_environment_or_request_path(request_path: Option<&Path>) -> Result<Self> {
+        match std::env::var(ENCRYPTION_KEY_ENV) {
+            Ok(encoded) => Self::from_encoded_key(&encoded),
+            Err(std::env::VarError::NotUnicode(_)) => {
+                bail!("{ENCRYPTION_KEY_ENV} must contain valid UTF-8")
+            }
+            Err(std::env::VarError::NotPresent) => {
+                let request_path = request_path.context(format!(
+                    "{ENCRYPTION_KEY_ENV} is required for encrypted request headers"
+                ))?;
+                let key_path = project_encryption_key_path(request_path).context(format!(
+                    "{ENCRYPTION_KEY_ENV} is missing and {request_path:?} is not under an initialized .traffic-e2e/local directory"
+                ))?;
+                let encoded = std::fs::read_to_string(&key_path).with_context(|| {
+                    format!(
+                        "failed to read managed request-header encryption key {}",
+                        key_path.display()
+                    )
+                })?;
+                Self::from_encoded_key(&encoded)
+            }
+        }
+    }
+
     fn from_encoded_key(encoded: &str) -> Result<Self> {
         ensure!(
-            !encoded.trim().is_empty(),
+            !encoded.is_empty(),
             "{ENCRYPTION_KEY_ENV} must not be empty"
         );
         let key = STANDARD
-            .decode(encoded.trim())
+            .decode(encoded)
             .with_context(|| format!("{ENCRYPTION_KEY_ENV} must contain valid Base64"))?;
         ensure!(
             key.len() == AES_256_KEY_BYTES,
@@ -246,6 +270,34 @@ impl RequestHeaderCipher {
     }
 }
 
+pub(crate) fn generate_encryption_key() -> Result<String> {
+    let mut key = [0_u8; AES_256_KEY_BYTES];
+    getrandom::fill(&mut key).map_err(|error| {
+        anyhow::anyhow!("failed to generate request-header encryption key: {error}")
+    })?;
+    Ok(STANDARD.encode(key))
+}
+
+pub(crate) fn validate_encryption_key(encoded: &str) -> Result<()> {
+    let _ = RequestHeaderCipher::from_encoded_key(encoded)?;
+    ensure!(
+        STANDARD.encode(STANDARD.decode(encoded)?) == encoded,
+        "{ENCRYPTION_KEY_ENV} must use canonical Base64"
+    );
+    Ok(())
+}
+
+fn project_encryption_key_path(request_path: &Path) -> Option<PathBuf> {
+    request_path.ancestors().find_map(|ancestor| {
+        let is_local = ancestor.file_name().is_some_and(|name| name == "local")
+            && ancestor
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|name| name == ".traffic-e2e");
+        is_local.then(|| ancestor.join(crate::repository::LOCAL_ENCRYPTION_KEY_FROM_LOCAL))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use hyper::header::{AUTHORIZATION, HeaderValue};
@@ -310,6 +362,22 @@ mod tests {
         assert!(RequestHeaderCipher::from_encoded_key("").is_err());
         assert!(RequestHeaderCipher::from_encoded_key("not-base64").is_err());
         assert!(RequestHeaderCipher::from_encoded_key(&STANDARD.encode([0_u8; 31])).is_err());
+    }
+
+    #[test]
+    fn generates_a_strict_project_key_and_resolves_its_fixed_location() {
+        let encoded = generate_encryption_key().unwrap();
+        validate_encryption_key(&encoded).unwrap();
+        assert_eq!(STANDARD.decode(encoded).unwrap().len(), AES_256_KEY_BYTES);
+
+        let request = Path::new(
+            "/target/.traffic-e2e/local/artifacts/recordings/20260903132752/apis/get/case/request.json",
+        );
+        assert_eq!(
+            project_encryption_key_path(request).unwrap(),
+            PathBuf::from("/target/.traffic-e2e/local/secrets/traffic-e2e-enc.sec")
+        );
+        assert!(project_encryption_key_path(Path::new("/external/request.json")).is_none());
     }
 
     #[test]

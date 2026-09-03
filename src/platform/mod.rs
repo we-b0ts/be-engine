@@ -15,6 +15,7 @@ use crate::recording_api::RecordingApi;
 #[cfg(test)]
 mod asset_contract_tests;
 mod assets;
+mod encryption_key;
 mod listen_preflight;
 #[cfg(test)]
 mod manager_tests;
@@ -392,6 +393,7 @@ async fn run_managed_runtime(
     );
     let executable = crate::engine_binary::executable()?;
     ensure_executable(&executable, "traffic-e2e binary")?;
+    let encryption_key = encryption_key::load_or_create(&target_root)?;
     let assets = stage_assets(&target_root)?;
     startup::stage_assets(&assets, &target_root, &config)?;
     runtime_outputs::stage_assets(&assets, &config.target_runtime_outputs)?;
@@ -428,6 +430,7 @@ async fn run_managed_runtime(
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .kill_on_drop(true)
+        .env(crate::request_headers::ENCRYPTION_KEY_ENV, encryption_key)
         .env("TRAFFIC_E2E_BIN", executable)
         .env("TRAFFIC_E2E_TARGET_ROOT", &target_root)
         .env("TRAFFIC_E2E_SOURCE_CONTAINER", &config.source_container)
