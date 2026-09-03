@@ -25,7 +25,9 @@ Common semantic records:
 - `mysql_exchange`: structured SQL request and response; preferred for replay
 - `mysql_connection`: connection metadata
 - `redis_connection` / `redis_exchange`: RESP version and session identity,
-  normalized command, binary-safe arguments, and exact response frame
+  normalized command, binary-safe arguments, and exact response frame; bounded
+  RESP2 Pub/Sub evidence may contain one subscription confirmation but never
+  represents asynchronous message delivery
 - `memcached_connection` / `memcached_exchange`: Text/Binary wire protocol,
   request semantics, CAS/quiet/noreply metadata, and exact response frames
 - `kafka_connection`: business target and replay-safety metadata

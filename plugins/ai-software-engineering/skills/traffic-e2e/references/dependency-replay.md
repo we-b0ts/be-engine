@@ -62,6 +62,12 @@ prepared parameters, column schema, or untruncated rows is a recording risk.
 
 For Redis and Memcached, preserve connection-lane ordering and protocol
 semantics. Unmatched, unsupported, unsafe, and unused evidence remains dirty.
+Redis RESP2 `SUBSCRIBE`, `PSUBSCRIBE`, and `SSUBSCRIBE` evidence is replayable
+only when one command argument produced one exact three-element subscription
+confirmation (or an ordinary Redis error). Replay returns that recorded
+confirmation and leaves the connection open. Multiple subscription arguments,
+asynchronous Pub/Sub messages, unsubscribe commands, and RESP3 push frames are
+unsupported and remain dirty.
 
 Match Case evidence before run-level Global evidence. Consume ordinary
 exchanges once. A marked Redis background cache-snapshot seed is the narrow

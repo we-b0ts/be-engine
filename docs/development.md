@@ -2172,6 +2172,13 @@ mode, or unsafe cache connection prevents a case from being published and
 prevents unsafe Global replay from starting. The recording directory is
 sensitive because ordinary cache keys and values are needed for exact replay.
 
+Redis Pub/Sub support is intentionally bounded to a single RESP2 subscription
+argument for `SUBSCRIBE`, `PSUBSCRIBE`, or `SSUBSCRIBE`. Recorder accepts only
+the exact three-element subscription confirmation (or an ordinary Redis error),
+and Replay returns that frame while keeping the connection open. Multiple
+subscription arguments, asynchronous message delivery, unsubscribe commands,
+and RESP3 push frames remain unsupported.
+
 Case-owned Memcached matching treats recorded physical connections as source
 lanes, not as a required one-to-one connection topology. One target connection
 may consume matching exchanges from multiple recorded source lanes, which

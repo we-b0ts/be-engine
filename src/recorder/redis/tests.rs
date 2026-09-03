@@ -35,6 +35,79 @@ fn authentication_secrets_are_never_recorded() {
     assert_eq!(args[3], b"<redacted>");
 }
 
+#[test]
+fn only_single_subscription_confirmations_are_classified_as_replay_safe() {
+    let single = RedisCommand {
+        name: "PSUBSCRIBE".to_string(),
+        args: vec![b"/0.celery.pidbox".to_vec()],
+    };
+    let (_, _, replay_safe, warnings) = sanitize_and_classify(&single);
+    assert!(replay_safe);
+    assert!(warnings.is_empty());
+
+    let multiple = RedisCommand {
+        name: "SUBSCRIBE".to_string(),
+        args: vec![b"one".to_vec(), b"two".to_vec()],
+    };
+    let (_, _, replay_safe, warnings) = sanitize_and_classify(&multiple);
+    assert!(!replay_safe);
+    assert!(warnings[0].contains("exactly one"));
+
+    let unsubscribe = RedisCommand {
+        name: "PUNSUBSCRIBE".to_string(),
+        args: vec![b"events.*".to_vec()],
+    };
+    let (_, _, replay_safe, warnings) = sanitize_and_classify(&unsubscribe);
+    assert!(!replay_safe);
+    assert!(warnings[0].contains("unsupported"));
+}
+
+#[tokio::test]
+async fn single_subscription_confirmation_is_recorded_as_replay_safe() {
+    let (state, _temp) = test_state(RecordingAccessPolicy::Unrestricted).await;
+    let (mut client, proxy_client) = tcp_pair().await;
+    let (mut upstream, proxy_upstream) = tcp_pair().await;
+    let upstream_addr = upstream.peer_addr().unwrap();
+    let handler = spawn_handler(proxy_client, proxy_upstream, state.clone(), upstream_addr);
+
+    let request = b"*2\r\n$10\r\nPSUBSCRIBE\r\n$16\r\n/0.celery.pidbox\r\n";
+    client.write_all(request).await.unwrap();
+    let mut received_request = vec![0_u8; request.len()];
+    upstream.read_exact(&mut received_request).await.unwrap();
+    assert_eq!(received_request, request);
+
+    let response = b"*3\r\n$10\r\npsubscribe\r\n$16\r\n/0.celery.pidbox\r\n:1\r\n";
+    upstream.write_all(response).await.unwrap();
+    let mut received_response = vec![0_u8; response.len()];
+    client.read_exact(&mut received_response).await.unwrap();
+    assert_eq!(received_response, response);
+
+    client.shutdown().await.unwrap();
+    drop(client);
+    let mut eof = [0_u8; 1];
+    assert_eq!(upstream.read(&mut eof).await.unwrap(), 0);
+    drop(upstream);
+    tokio::time::timeout(Duration::from_secs(1), handler)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    state.recorder().flush_traffic().await.unwrap();
+    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+        .await
+        .unwrap();
+    let exchange = raw
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|value| value["event_type"] == "redis_exchange")
+        .unwrap();
+    assert_eq!(exchange["command"], "PSUBSCRIBE");
+    assert_eq!(exchange["response_kind"], "array");
+    assert_eq!(exchange["replay_safe"], true);
+    assert_eq!(exchange["parse_warnings"], serde_json::json!([]));
+}
+
 #[tokio::test]
 async fn blocked_write_returns_ordered_error_without_reaching_upstream() {
     let (state, _temp) = test_state(RecordingAccessPolicy::BlockKnownWrites).await;

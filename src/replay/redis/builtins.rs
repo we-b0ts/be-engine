@@ -1,4 +1,4 @@
-use crate::redis::RedisCommand;
+use crate::redis::{RedisCommand, is_subscription_command};
 
 pub(super) fn redis_builtin(
     command: &RedisCommand,
@@ -87,20 +87,47 @@ pub(super) fn redis_is_builtin(command: &str) -> bool {
 pub(super) fn redis_is_unsupported(command: &RedisCommand) -> bool {
     matches!(
         command.name.as_str(),
-        "SUBSCRIBE"
-            | "PSUBSCRIBE"
-            | "SSUBSCRIBE"
+        "UNSUBSCRIBE"
+            | "PUNSUBSCRIBE"
+            | "SUNSUBSCRIBE"
             | "MONITOR"
             | "CLUSTER"
             | "ACL"
             | "CONFIG"
             | "MIGRATE"
             | "SENTINEL"
-    ) || (command.name == "CLIENT"
-        && command.args.first().is_some_and(|subcommand| {
-            subcommand.eq_ignore_ascii_case(b"TRACKING")
-                || subcommand.eq_ignore_ascii_case(b"CACHING")
-        }))
+    ) || (is_subscription_command(&command.name) && command.args.len() != 1)
+        || (command.name == "CLIENT"
+            && command.args.first().is_some_and(|subcommand| {
+                subcommand.eq_ignore_ascii_case(b"TRACKING")
+                    || subcommand.eq_ignore_ascii_case(b"CACHING")
+            }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subscription_confirmations_are_recorded_exchanges() {
+        let subscribe = RedisCommand {
+            name: "PSUBSCRIBE".to_string(),
+            args: vec![b"events.*".to_vec()],
+        };
+        assert!(!redis_is_unsupported(&subscribe));
+
+        let multiple = RedisCommand {
+            name: "SUBSCRIBE".to_string(),
+            args: vec![b"one".to_vec(), b"two".to_vec()],
+        };
+        assert!(redis_is_unsupported(&multiple));
+
+        let unsubscribe = RedisCommand {
+            name: "PUNSUBSCRIBE".to_string(),
+            args: vec![b"events.*".to_vec()],
+        };
+        assert!(redis_is_unsupported(&unsubscribe));
+    }
 }
 
 fn hello_response(version: u8) -> Vec<u8> {
