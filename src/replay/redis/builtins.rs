@@ -104,6 +104,14 @@ pub(super) fn redis_is_unsupported(command: &RedisCommand) -> bool {
             }))
 }
 
+fn hello_response(version: u8) -> Vec<u8> {
+    if version == 3 {
+        b"%6\r\n+server\r\n+redis\r\n+version\r\n+7.0.0-replay\r\n+proto\r\n:3\r\n+id\r\n:1\r\n+mode\r\n+standalone\r\n+role\r\n+master\r\n".to_vec()
+    } else {
+        b"*12\r\n$6\r\nserver\r\n$5\r\nredis\r\n$7\r\nversion\r\n$12\r\n7.0.0-replay\r\n$5\r\nproto\r\n:2\r\n$2\r\nid\r\n:1\r\n$4\r\nmode\r\n$10\r\nstandalone\r\n$4\r\nrole\r\n$6\r\nmaster\r\n".to_vec()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,13 +135,5 @@ mod tests {
             args: vec![b"events.*".to_vec()],
         };
         assert!(redis_is_unsupported(&unsubscribe));
-    }
-}
-
-fn hello_response(version: u8) -> Vec<u8> {
-    if version == 3 {
-        b"%6\r\n+server\r\n+redis\r\n+version\r\n+7.0.0-replay\r\n+proto\r\n:3\r\n+id\r\n:1\r\n+mode\r\n+standalone\r\n+role\r\n+master\r\n".to_vec()
-    } else {
-        b"*12\r\n$6\r\nserver\r\n$5\r\nredis\r\n$7\r\nversion\r\n$12\r\n7.0.0-replay\r\n$5\r\nproto\r\n:2\r\n$2\r\nid\r\n:1\r\n$4\r\nmode\r\n$10\r\nstandalone\r\n$4\r\nrole\r\n$6\r\nmaster\r\n".to_vec()
     }
 }
