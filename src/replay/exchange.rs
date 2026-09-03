@@ -57,7 +57,7 @@ impl ReplayExchangeTiming {
 
     pub(super) async fn await_client_termination<R>(self, reader: &mut R) -> Result<Duration>
     where
-        R: AsyncRead + Unpin,
+        R: AsyncRead + Unpin + ?Sized,
     {
         if !self.outcome.is_client_terminated() {
             return Err(anyhow!(

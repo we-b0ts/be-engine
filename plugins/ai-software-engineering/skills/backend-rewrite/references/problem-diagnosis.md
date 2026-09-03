@@ -232,6 +232,11 @@ Classify exactly one cause:
 - `missing_external_evidence`: one exact required external value or exchange is
   absent and cannot be derived without invention.
 
+Environment handling is not limited to this failure classification. If source
+analysis proves during implementation that target logic requires an
+application-owned environment variable, follow [startup.md](startup.md)
+immediately and return the startup input without waiting for a runtime failure.
+
 For a status mismatch, inspect authentication/preconditions, source error
 mapping, boot/request context, and dependency-driven branches before inspecting
 body-field policy. For array order, prove both equal contents and a source

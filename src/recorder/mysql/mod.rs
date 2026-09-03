@@ -4,10 +4,11 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
+use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -23,8 +24,7 @@ use crate::mysql::wire::{
 };
 use crate::recorder::{
     MysqlConnectionEvent, MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket,
-    MysqlTlsRejectedEvent, ProxyErrorEvent, RecorderEvent, capture_body,
-    capture_body_with_original_len,
+    ProxyErrorEvent, RecorderEvent, capture_body, capture_body_with_original_len,
 };
 use crate::recording_control::RecordingListener;
 
@@ -35,6 +35,7 @@ mod response;
 mod semantic;
 #[cfg(test)]
 mod tests;
+mod tls;
 mod tracker;
 
 use ownership::{QueryDependencyOwnerships, record_event, record_query_completion};
@@ -42,6 +43,12 @@ use ownership::{QueryDependencyOwnerships, record_event, record_query_completion
 use response::MysqlResponseTracker;
 use semantic::MysqlExchangeContext;
 use tracker::MysqlQueryTracker;
+
+trait MysqlIo: AsyncRead + AsyncWrite + Unpin + Send {}
+
+impl<T> MysqlIo for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
+
+type BoxedMysqlIo = Box<dyn MysqlIo>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct MysqlConnectionContext {
@@ -176,50 +183,54 @@ pub(crate) async fn handle_connected_mysql(
         .context("MySQL client closed before login packet")?;
     clear_client_compression_capability(&mut login_packet);
     client_to_server_bytes += login_packet.encoded_len() as u64;
-    let login = parse_handshake_response(&login_packet);
+    let mut login = parse_handshake_response(&login_packet);
 
-    if login.tls_requested {
-        let event = MysqlTlsRejectedEvent {
-            id: Uuid::new_v4(),
-            connection_id,
-            timestamp: Utc::now(),
-            route_name: route_name.clone(),
-            listen_addr: listen_addr.clone(),
-            client_addr: client_addr.clone(),
-            upstream_addr: upstream_addr.clone(),
-            target_host: target_host.clone(),
-            target_port,
-            target_addr: target_addr.clone(),
-            capability_flags: login.capability_flags,
-            reason: "MySQL TLS is detected but not implemented in v1".to_string(),
+    let (client, upstream): (BoxedMysqlIo, BoxedMysqlIo) = if login.tls_requested {
+        upstream
+            .write_all(&login_packet.to_wire_bytes())
+            .await
+            .context("failed to forward MySQL SSL request")?;
+
+        let tls_host = target_host
+            .clone()
+            .unwrap_or_else(|| "localhost".to_string());
+        let downstream_config = state.ca().mysql_server_config_for_host(&tls_host)?;
+        let server_name = rustls::pki_types::ServerName::try_from(tls_host.clone())
+            .with_context(|| format!("invalid MySQL TLS server name {tls_host}"))?;
+        let accept_downstream = async {
+            TlsAcceptor::from(downstream_config)
+                .accept(client)
+                .await
+                .context("failed to accept MySQL client TLS")
         };
-        record_event_and_case_dependency(&state, RecorderEvent::MysqlTlsRejected(event)).await?;
-        record_connection(
-            &state,
-            connection_id,
-            route_name,
-            listen_addr,
-            client_addr,
-            target_host,
-            target_port,
-            target_addr,
-            upstream_addr,
-            login.username,
-            login.database,
-            Some(login.capability_flags),
-            Some(started.elapsed().as_millis()),
-            client_to_server_bytes,
-            server_to_client_bytes,
-            Some("MySQL TLS requested and rejected".to_string()),
-        )
-        .await?;
-        return Ok(());
-    }
+        let connect_upstream = async {
+            TlsConnector::from(tls::upstream_client_config())
+                .connect(server_name, upstream)
+                .await
+                .context("failed to establish MySQL upstream TLS")
+        };
+        let (mut client_tls, mut upstream_tls) =
+            tokio::try_join!(accept_downstream, connect_upstream)?;
 
-    upstream
-        .write_all(&login_packet.to_wire_bytes())
-        .await
-        .context("failed to forward MySQL login packet")?;
+        let mut secure_login_packet = read_packet(&mut client_tls)
+            .await
+            .context("failed to read MySQL TLS login packet")?
+            .context("MySQL TLS client closed before login packet")?;
+        clear_client_compression_capability(&mut secure_login_packet);
+        client_to_server_bytes += secure_login_packet.encoded_len() as u64;
+        login = parse_handshake_response(&secure_login_packet);
+        upstream_tls
+            .write_all(&secure_login_packet.to_wire_bytes())
+            .await
+            .context("failed to forward MySQL TLS login packet")?;
+        (Box::new(client_tls), Box::new(upstream_tls))
+    } else {
+        upstream
+            .write_all(&login_packet.to_wire_bytes())
+            .await
+            .context("failed to forward MySQL login packet")?;
+        (Box::new(client), Box::new(upstream))
+    };
 
     let redacted_connection = MysqlConnectionEvent {
         id: connection_id,
@@ -259,8 +270,8 @@ pub(crate) async fn handle_connected_mysql(
     )));
     let dependency_ownerships = QueryDependencyOwnerships::default();
     let termination = ConnectionTermination::default();
-    let (mut client_read, client_write) = client.into_split();
-    let (mut upstream_read, mut upstream_write) = upstream.into_split();
+    let (mut client_read, client_write) = tokio::io::split(client);
+    let (mut upstream_read, mut upstream_write) = tokio::io::split(upstream);
     let client_write = Arc::new(Mutex::new(client_write));
 
     let c2s_state = state.clone();

@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use traffic_e2e::{
-    DEFAULT_HTTP_GATEWAY_PORT, RepositoryConfigInitOptions, initialize_repository_config,
+    DEFAULT_HTTP_BACKEND_PORT, DEFAULT_HTTP_GATEWAY_PORT, RepositoryConfigInitOptions,
+    initialize_repository_config,
 };
 
 mod comparison;
@@ -37,33 +38,21 @@ struct InitArgs {
     /// Existing genuine source application container to inspect and reproduce.
     #[arg(long)]
     source_container: String,
-    /// Enable Breeze using the conventional `breeze` container, or provide a non-standard name.
-    #[arg(long, num_args = 0..=1, default_missing_value = "breeze", value_name = "CONTAINER")]
-    breeze: Option<String>,
+    /// Native HTTP port listened to by the source and target backend processes.
+    #[arg(long, default_value_t = DEFAULT_HTTP_BACKEND_PORT)]
+    http_backend_port: u16,
     /// HTTP gateway port that receives traffic selected for recording.
     #[arg(long, default_value_t = DEFAULT_HTTP_GATEWAY_PORT)]
     http_gateway_port: u16,
     /// Readiness path shared by source recording and target startup.
     #[arg(long, default_value = "/healthz")]
     readiness_path: String,
-    /// Final HTTP status that indicates readiness.
-    #[arg(long, default_value_t = 404)]
-    readiness_status: u16,
     /// DNS server for queries not owned by the recorder.
     #[arg(long, default_value = "10.10.10.11:53")]
     upstream_dns: SocketAddr,
-    /// Source-compatible absolute file or directory to copy and mount read-only.
-    #[arg(long = "startup-mount", value_name = "ABSOLUTE_PATH")]
-    startup_mounts: Vec<PathBuf>,
-    /// Application-owned environment variable captured from the source container.
-    #[arg(long = "startup-env", value_name = "NAME")]
-    startup_environment: Vec<String>,
-    /// Application-owned environment variable that receives the recorder-owned native HTTP port.
-    #[arg(long, value_name = "NAME")]
-    target_port_env: Option<String>,
-    /// Application-owned environment variable that receives the Replay CA path.
-    #[arg(long, value_name = "NAME")]
-    replay_ca_env: Option<String>,
+    /// Optional dotenv file used to initialize .traffic-e2e/local/target.env.
+    #[arg(long, value_name = "PATH")]
+    env_file: Option<PathBuf>,
 }
 
 pub(super) fn run(args: ConfigArgs) -> Result<()> {
@@ -72,17 +61,11 @@ pub(super) fn run(args: ConfigArgs) -> Result<()> {
             RepositoryConfigInitOptions {
                 target_root: args.target_root,
                 source_container: init.source_container,
-                breeze_container: init.breeze,
+                http_backend_port: init.http_backend_port,
                 http_gateway_port: init.http_gateway_port,
                 readiness_path: init.readiness_path,
-                readiness_status: init.readiness_status,
                 upstream_dns: init.upstream_dns,
-                startup: traffic_e2e::StartupConfig {
-                    mounts: init.startup_mounts,
-                    environment_from_source: init.startup_environment,
-                    port_environment: init.target_port_env,
-                    replay_ca_environment: init.replay_ca_env,
-                },
+                env_file: init.env_file,
             },
         )?),
         ConfigCommand::Recorder(command) => recorder::run(args.target_root, command),
@@ -111,26 +94,19 @@ mod tests {
 
     #[test]
     fn init_uses_repository_conventions_by_default() {
-        let parsed = TestCli::try_parse_from([
-            "test",
-            "init",
-            "--source-container",
-            "friendship",
-            "--breeze",
-        ])
-        .unwrap();
+        let parsed =
+            TestCli::try_parse_from(["test", "init", "--source-container", "friendship"]).unwrap();
         let ConfigCommand::Init(init) = parsed.config.command else {
             panic!("expected init command");
         };
-        assert_eq!(init.breeze.as_deref(), Some("breeze"));
+        assert_eq!(init.http_backend_port, DEFAULT_HTTP_BACKEND_PORT);
         assert_eq!(init.http_gateway_port, DEFAULT_HTTP_GATEWAY_PORT);
         assert_eq!(init.readiness_path, "/healthz");
-        assert_eq!(init.readiness_status, 404);
         assert_eq!(init.upstream_dns, "10.10.10.11:53".parse().unwrap());
     }
 
     #[test]
-    fn init_does_not_accept_native_service_ports() {
+    fn init_does_not_accept_derived_runtime_inputs() {
         assert!(
             TestCli::try_parse_from([
                 "test",
@@ -153,16 +129,38 @@ mod tests {
             ])
             .is_err()
         );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "init",
+                "--source-container",
+                "friendship",
+                "--readiness-status",
+                "204",
+            ])
+            .is_err()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "init",
+                "--source-container",
+                "friendship",
+                "--breeze",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
-    fn init_accepts_a_non_standard_breeze_container_as_the_flag_value() {
+    fn init_accepts_explicit_http_ports() {
         let parsed = TestCli::try_parse_from([
             "test",
             "init",
             "--source-container",
             "source",
-            "--breeze=custom-breeze",
+            "--http-backend-port",
+            "8081",
             "--http-gateway-port",
             "18181",
         ])
@@ -170,7 +168,7 @@ mod tests {
         let ConfigCommand::Init(init) = parsed.config.command else {
             panic!("expected init command");
         };
-        assert_eq!(init.breeze.as_deref(), Some("custom-breeze"));
+        assert_eq!(init.http_backend_port, 8_081);
         assert_eq!(init.http_gateway_port, 18_181);
     }
 }

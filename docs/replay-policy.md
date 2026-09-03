@@ -5,7 +5,7 @@ Each target repository owns one source-controlled
 and comparison verification:
 
 ```bash
-traffic-e2e config init --source-container <container> [--breeze]
+traffic-e2e config init --source-container <container>
 traffic-e2e replay --policy .traffic-e2e/verification.yaml /path/to/case-group
 ```
 

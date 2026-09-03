@@ -56,7 +56,8 @@ Treat these as unsafe or incomplete MySQL replay evidence:
 - non-empty `parse_warnings` or `response.rows_truncated == true`
 - global use of the connection-local `statement_id`
 - stateful SQL replay without required ordering or connection state
-- `mysql_tls_rejected`, because MySQL TLS MITM is intentionally unsupported
+- `mysql_tls_rejected` from a newly produced recording, because current
+  recording and replay both support MySQL TLS
 
 Use `dependencies-debug.jsonl` to explain parser gaps, not as the primary
 replay source. Raw/base64 payloads are less reliable than semantic

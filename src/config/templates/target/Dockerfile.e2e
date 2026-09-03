@@ -4,7 +4,7 @@ WORKDIR /build
 RUN install --directory --mode 0700 /root/.ssh \
     && ssh-keyscan -p 2222 git.intra.demo.test >> /root/.ssh/known_hosts
 COPY Cargo.toml Cargo.lock ./
-COPY . .
+COPY src ./src
 RUN --mount=type=ssh,required=true \
     --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked \
     --mount=type=cache,id=traffic-e2e-cargo-git,target=/opt/rust/cargo/git,sharing=locked \

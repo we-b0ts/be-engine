@@ -100,6 +100,9 @@ fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
             service: Some("yf-rpc".to_string()),
             cluster: Some("user/service".to_string()),
         }],
+        global_dependency_reason: None,
+        global_dependency_phase: None,
+        global_dependency_matched_by: None,
         error: None,
     };
     let mut exchanges = Vec::new();
@@ -377,6 +380,59 @@ async fn searches_past_same_target_global_exchange_for_active_case_match() {
             .is_empty()
     );
     assert!(!super::super::report_is_dirty(&state.snapshot_report()));
+    task.abort();
+}
+
+#[tokio::test]
+async fn preflight_probe_global_exchange_is_repeatable_for_system_and_target_checks() {
+    let temp = tempdir().unwrap();
+    let dependency = serde_json::json!({
+        "event_type": "http_exchange",
+        "scheme": "fake_ip_http",
+        "method": "POST",
+        "uri": "/probe",
+        "authority": "api.example.test",
+        "request_body": body_capture(""),
+        "response_status": 200,
+        "response_headers": {"content-type": ["text/plain"], "content-length": ["2"]},
+        "response_body": body_capture("ok"),
+        "global_dependency_reason": "preflight_probe",
+        "global_dependency_phase": "runtime",
+        "global_dependency_matched_by": "system_network",
+        "error": null
+    });
+    tokio::fs::write(
+        temp.path().join("global-dependencies.jsonl"),
+        format!("{}\n", serde_json::to_string(&dependency).unwrap()),
+    )
+    .await
+    .unwrap();
+    let case_dir = temp.path().join("case-http");
+    write_http_case(
+        &case_dir,
+        "fake_ip_http",
+        "api.example.test",
+        "/case",
+        "",
+        "case",
+    )
+    .await;
+    let (addr, runtime, task) = spawn_http_replay(&case_dir, Vec::new()).await;
+
+    for _ in 0..2 {
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let response = send_request(TokioIo::new(stream), "api.example.test", "/probe", "").await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let state = runtime.state.lock().await;
+    assert_eq!(state.http_events.matched.len(), 2);
+    assert!(state.http_events.unmatched.is_empty());
+    assert!(
+        state
+            .unused_http_exchanges(ReplaySource::Global, false)
+            .is_empty()
+    );
     task.abort();
 }
 

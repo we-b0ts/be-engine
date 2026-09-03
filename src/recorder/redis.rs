@@ -20,7 +20,8 @@ use crate::recorder::{RecorderEvent, RedisConnectionEvent, RedisExchangeEvent, c
 
 use crate::redis::access::classify_command;
 use crate::redis::{
-    BufferedReader, RedisCommand, RedisFrameKind, frame_kind, read_frame, redis_command,
+    BufferedReader, RedisCommand, RedisFrameKind, frame_kind, is_subscription_command, read_frame,
+    redis_command, validate_subscription_confirmation,
 };
 
 #[derive(Debug, Clone)]
@@ -612,12 +613,37 @@ async fn record_exchange(
     state: &AppState,
     connection_id: Uuid,
     context: &ConnectionContext,
-    pending: PendingRedisExchange,
+    mut pending: PendingRedisExchange,
     response_kind: RedisFrameKind,
     response: &[u8],
     outcome: DependencyExchangeOutcome,
     max_frame_bytes: usize,
 ) -> Result<()> {
+    let subscription_replay_safe = if is_subscription_command(&pending.command.name) {
+        match response_kind {
+            RedisFrameKind::Error => true,
+            RedisFrameKind::Array => {
+                if let Err(error) = validate_subscription_confirmation(&pending.command, response) {
+                    pending.warnings.push(format!(
+                        "Redis {} confirmation is unsafe for replay: {error}",
+                        pending.command.name
+                    ));
+                    false
+                } else {
+                    true
+                }
+            }
+            _ => {
+                pending.warnings.push(format!(
+                    "Redis {} did not receive a supported subscription confirmation",
+                    pending.command.name
+                ));
+                false
+            }
+        }
+    } else {
+        true
+    };
     let args = pending
         .recorded_args
         .iter()
@@ -626,6 +652,7 @@ async fn record_exchange(
     let response = capture_body(response, max_frame_bytes);
     let terminal_quit = is_terminal_quit(&pending.command);
     let replay_safe = pending.replay_safe
+        && subscription_replay_safe
         && !response.truncated
         && args.iter().all(|argument| !argument.truncated)
         && (response_kind != RedisFrameKind::Other
@@ -755,7 +782,22 @@ fn sanitize_and_classify(command: &RedisCommand) -> (Vec<Vec<u8>>, bool, bool, V
             }
             true
         }
-        "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" | "MONITOR" | "CLUSTER" => {
+        "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" => {
+            if command.args.len() == 1 {
+                true
+            } else {
+                warnings.push(format!(
+                    "Redis {} confirmation replay requires exactly one subscription argument",
+                    command.name
+                ));
+                false
+            }
+        }
+        "UNSUBSCRIBE" | "PUNSUBSCRIBE" | "SUNSUBSCRIBE" => {
+            warnings.push(format!("Redis {} mode is unsupported", command.name));
+            false
+        }
+        "MONITOR" | "CLUSTER" => {
             warnings.push(format!("Redis {} push mode is unsupported", command.name));
             false
         }

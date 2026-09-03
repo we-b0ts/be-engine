@@ -23,7 +23,7 @@ pub(in crate::replay) enum SessionDirective {
 }
 
 async fn deliver_matched(
-    stream: &mut TcpStream,
+    stream: &mut (impl MysqlReplayIo + ?Sized),
     state: Arc<Mutex<ReplayState>>,
     session: &ReplaySession,
     matched: MatchedExchange,
@@ -59,7 +59,7 @@ async fn deliver_matched(
 }
 
 pub(in crate::replay) async fn handle_query(
-    stream: &mut TcpStream,
+    stream: &mut (impl MysqlReplayIo + ?Sized),
     state: Arc<Mutex<ReplayState>>,
     session: &ReplaySession,
     sql: &str,
@@ -112,7 +112,7 @@ pub(in crate::replay) async fn handle_query(
 }
 
 pub(in crate::replay) async fn handle_stmt_prepare(
-    stream: &mut TcpStream,
+    stream: &mut (impl MysqlReplayIo + ?Sized),
     state: Arc<Mutex<ReplayState>>,
     session: &mut ReplaySession,
     sql: &str,
@@ -153,7 +153,7 @@ pub(in crate::replay) async fn handle_stmt_prepare(
 }
 
 pub(in crate::replay) async fn handle_stmt_execute(
-    stream: &mut TcpStream,
+    stream: &mut (impl MysqlReplayIo + ?Sized),
     state: Arc<Mutex<ReplayState>>,
     session: &mut ReplaySession,
     packet: &MysqlPacket,

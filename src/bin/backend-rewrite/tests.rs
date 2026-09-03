@@ -15,6 +15,7 @@ fn exposes_only_the_rewrite_coordinator_surface() {
         visible,
         [
             "init",
+            "startup",
             "config",
             "next",
             "status",
@@ -59,6 +60,7 @@ fn compact_json_is_default_and_pretty_is_explicit() {
 
 #[test]
 fn parses_the_bounded_rewrite_surface() {
+    assert!(Cli::try_parse_from(["test", "init", "--source-container", "friendship"]).is_ok());
     assert!(
         Cli::try_parse_from([
             "test",
@@ -67,7 +69,7 @@ fn parses_the_bounded_rewrite_surface() {
             "friendship",
             "--breeze",
         ])
-        .is_ok()
+        .is_err()
     );
     let hessian2_unordered_path = r#"{"value_path":["result","groups","*","whiteList"],"display_path":"$.result.groups[*].whiteList","source_evidence":"src/rule.rs:whiteList is a Set"}"#;
     assert!(
@@ -276,6 +278,10 @@ fn parses_the_bounded_rewrite_surface() {
         default_init.http_gateway_port,
         traffic_e2e::DEFAULT_HTTP_GATEWAY_PORT
     );
+    assert_eq!(
+        default_init.http_backend_port,
+        traffic_e2e::DEFAULT_HTTP_BACKEND_PORT
+    );
     assert!(default_init.command.is_none());
     let RewriteCommand::Init(preflight) =
         Cli::try_parse_from(["test", "init", "preflight", "--duration-seconds", "30"])
@@ -296,7 +302,8 @@ fn parses_the_bounded_rewrite_surface() {
             "init",
             "--source-container",
             "friendship",
-            "--breeze=custom-breeze",
+            "--http-backend-port",
+            "8081",
             "--http-gateway-port",
             "18181",
         ])
@@ -309,20 +316,61 @@ fn parses_the_bounded_rewrite_surface() {
             "init",
             "--source-container",
             "friendship",
-            "--startup-mount",
-            "/data1/weibo/confs",
-            "--startup-env",
-            "WEIBO_CONF_PATH",
-            "--target-port-env",
-            "PORT",
-            "--replay-ca-env",
-            "SSL_CERT_FILE",
+            "--env-file",
+            "/tmp/target.env",
         ])
         .is_ok()
     );
-    for command in ["update", "refresh", "status"] {
-        assert!(Cli::try_parse_from(["test", "startup", command]).is_err());
+    for removed in [
+        "--startup-mount",
+        "--startup-env",
+        "--target-port-env",
+        "--replay-ca-env",
+        "--readiness-status",
+    ] {
+        assert!(
+            Cli::try_parse_from([
+                "test",
+                "init",
+                "--source-container",
+                "friendship",
+                removed,
+                "VALUE",
+            ])
+            .is_err()
+        );
     }
+    assert!(Cli::try_parse_from(["test", "startup", "env", "list"]).is_ok());
+    assert!(Cli::try_parse_from(["test", "startup", "env", "equals", "DATABASE_URL"]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "startup",
+            "env",
+            "ensure",
+            "DATABASE_URL",
+            "--value",
+            "mysql://source-compatible",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "startup",
+            "env",
+            "ensure",
+            "DATABASE_URL",
+            "--value",
+            "one",
+            "--from-env",
+            "SOURCE_DATABASE_URL",
+        ])
+        .is_err()
+    );
+    assert!(
+        Cli::try_parse_from(["test", "startup", "mount", "ensure", "/data1/authconfs",]).is_ok()
+    );
     assert!(
         Cli::try_parse_from([
             "test",

@@ -1,6 +1,7 @@
 mod access_policy;
 mod active_case;
 mod artifact_file;
+mod artifact_owner;
 mod breeze;
 mod build_info;
 mod case_group;
@@ -77,6 +78,7 @@ pub const TRAFFIC_PROCESS_GID: u32 = 998;
 /// OCI user specification for containerized processes whose dependency traffic is intercepted.
 pub const TRAFFIC_PROCESS_USER: &str = "998:998";
 
+pub use artifact_owner::ArtifactOwner;
 pub use build_info::BINARY_VERSION;
 
 pub use case_group::{
@@ -102,10 +104,10 @@ pub use config::{
     BreezeMemcachedBackgroundDependencyReport, BreezeResourceCaptureFeedback,
     BreezeResourceCapturePlan, BreezeResourceCaptureReport, CasePathPatternAuthority,
     CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport, ComparisonRecordingConfig,
-    DEFAULT_DNS_MOCK_LISTEN, DEFAULT_DNS_MOCK_PORT, DEFAULT_FAKE_CIDR, DEFAULT_HTTP_GATEWAY_PORT,
-    DEFAULT_TCP_GATEWAY_LISTEN, DEFAULT_TCP_GATEWAY_PORT, DEFAULT_UDP_GATEWAY_LISTEN,
-    DEFAULT_UDP_GATEWAY_PORT, DnsBypassStrategyConfig, DnsMockConfig, HttpConfig,
-    HttpGatewayCaseLimitsConfig, HttpGatewayConfig, HttpGatewayFallbackMode,
+    DEFAULT_DNS_MOCK_LISTEN, DEFAULT_DNS_MOCK_PORT, DEFAULT_FAKE_CIDR, DEFAULT_HTTP_BACKEND_PORT,
+    DEFAULT_HTTP_GATEWAY_PORT, DEFAULT_TCP_GATEWAY_LISTEN, DEFAULT_TCP_GATEWAY_PORT,
+    DEFAULT_UDP_GATEWAY_LISTEN, DEFAULT_UDP_GATEWAY_PORT, DnsBypassStrategyConfig, DnsMockConfig,
+    HttpConfig, HttpGatewayCaseLimitsConfig, HttpGatewayConfig, HttpGatewayFallbackMode,
     HttpGatewayFixedResponseConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig,
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
     InspectedContainer, MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
@@ -134,12 +136,14 @@ pub use e2e_run::{
     E2eRunInitResult, E2eRunPrepareOptions, E2eRunPrepareResult, E2eRunResult, E2eRunStatus,
     E2eSourcePreReadiness, E2eSourcePreReadinessEndpoint, E2eSourceValueCount, E2eSourceVariation,
     E2eTargetLog, E2eTargetRuntimeDiagnostics, E2eValueObservation, E2eValuePresence,
-    E2eVerificationGates, StartupSnapshotRecaptureOptions, StartupSnapshotRecaptureResult,
-    abort_e2e_run, initialize_e2e_run, prepare_e2e_run, query_e2e_case_response_differences,
+    E2eVerificationGates, StartupMountChange, StartupMountChangeStatus, StartupMountEntry,
+    StartupMountList, StartupMountPresence, StartupSnapshotRecaptureOptions,
+    StartupSnapshotRecaptureResult, abort_e2e_run, ensure_startup_mount, initialize_e2e_run,
+    list_startup_mounts, prepare_e2e_run, query_e2e_case_response_differences,
     query_e2e_dependency_correlation, query_e2e_dirty_counts, query_e2e_source_variation,
     query_e2e_target_runtime_diagnostics, recapture_startup_snapshot, recover_e2e_run,
     resolve_e2e_response_rule_evidence, resolve_single_e2e_response_rule_evidence, run_e2e_api,
-    run_e2e_round, status_e2e_run,
+    run_e2e_round, startup_mount_exists, status_e2e_run,
 };
 pub use mysql::operation::MysqlWriteOperation;
 pub use network_probe::PreflightProbeKind;
@@ -163,15 +167,15 @@ pub use process_output::{
     ProfileTargetMissingEmitterEvidence,
 };
 pub use recorder::{
-    AccessPolicyAllowEvent, ArtifactOwner, BodyCapture, CaseBodyCapture, CaseContext,
-    HeaderMapSnapshot, HttpExchangeEvent, KafkaConnectionEvent, KafkaDeliveryEvent,
-    KafkaFetchEvent, KafkaHeaderCapture, KafkaProduceEvent, MemcachedConnectionEvent,
-    MemcachedExchangeEvent, MotanConnectionEvent, MotanExchangeEvent, MysqlColumn,
-    MysqlConnectionEvent, MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent,
-    MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue,
-    ProxyErrorEvent, ReadonlyRejectionEvent, Recorder, RecorderEvent, RedisConnectionEvent,
-    RedisExchangeEvent, TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body,
-    capture_body_with_original_len, capture_case_body, redact_headers,
+    AccessPolicyAllowEvent, BodyCapture, CaseBodyCapture, CaseContext, HeaderMapSnapshot,
+    HttpExchangeEvent, KafkaConnectionEvent, KafkaDeliveryEvent, KafkaFetchEvent,
+    KafkaHeaderCapture, KafkaProduceEvent, MemcachedConnectionEvent, MemcachedExchangeEvent,
+    MotanConnectionEvent, MotanExchangeEvent, MysqlColumn, MysqlConnectionEvent,
+    MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent, MysqlQueryEvent,
+    MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue, ProxyErrorEvent,
+    ReadonlyRejectionEvent, Recorder, RecorderEvent, RedisConnectionEvent, RedisExchangeEvent,
+    TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body, capture_body_with_original_len,
+    capture_case_body, redact_headers,
 };
 pub use recording_api::RecordingApi;
 pub use recording_control::{
@@ -246,7 +250,14 @@ pub use rewrite::{
     status_rewrite_for_process_output, transfer_rewrite_worker, verify_rewrite_repair,
 };
 pub use runtime_output::RuntimeOutputLocation;
-pub use startup::{StartupConfig, StartupSnapshotReport};
+pub use startup::{
+    StartupConfig, StartupEnvironmentChange, StartupEnvironmentChangeStatus,
+    StartupEnvironmentComparison, StartupEnvironmentImport, StartupEnvironmentList,
+    StartupEnvironmentPresence, StartupEnvironmentValidation, StartupSnapshotReport,
+    ensure_startup_environment, import_startup_environment, initialize_startup_environment,
+    list_startup_environment, remove_startup_environment, startup_environment_equals,
+    startup_environment_exists, validate_startup_environment,
+};
 pub use target_container::TargetImage;
 pub use tls::MitmCa;
 

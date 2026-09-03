@@ -82,15 +82,39 @@ pub(super) async fn run(
     ManagedReplayNetworkPreflightResult,
     ManagedTargetRuntimePreflightResult,
 )> {
-    let run_dir = manifest
-        .parent()
-        .context("preflight recording manifest has no run directory")?;
     let runtime_dir = target_root
         .join(crate::repository::LOCAL_ROOT)
         .join("preflight")
         .join(run_id)
         .join("replay-network");
-    tokio::fs::create_dir_all(&runtime_dir)
+    let result = run_in_runtime_dir(
+        target_root,
+        project,
+        run_id,
+        manifest,
+        target_image,
+        &runtime_dir,
+    )
+    .await;
+    let ownership = restore_artifact_ownership(&runtime_dir).await;
+    combine_artifact_ownership(result, ownership)
+}
+
+async fn run_in_runtime_dir(
+    target_root: &Path,
+    project: &ResolvedProjectConfig,
+    run_id: &str,
+    manifest: &Path,
+    target_image: &crate::TargetImage,
+    runtime_dir: &Path,
+) -> Result<(
+    ManagedReplayNetworkPreflightResult,
+    ManagedTargetRuntimePreflightResult,
+)> {
+    let run_dir = manifest
+        .parent()
+        .context("preflight recording manifest has no run directory")?;
+    tokio::fs::create_dir_all(runtime_dir)
         .await
         .with_context(|| {
             format!(
@@ -98,7 +122,7 @@ pub(super) async fn run(
                 runtime_dir.display()
             )
         })?;
-    tokio::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700)).await?;
+    tokio::fs::set_permissions(runtime_dir, std::fs::Permissions::from_mode(0o700)).await?;
 
     let session = runtime_dir.join("session.json");
     let report = runtime_dir.join("replay-report.json");
@@ -107,7 +131,7 @@ pub(super) async fn run(
         target_root,
         project,
         run_dir,
-        &runtime_dir,
+        runtime_dir,
         &session,
         &report,
         &control_socket,
@@ -127,7 +151,7 @@ pub(super) async fn run(
             target_root,
             project,
             run_id,
-            &runtime_dir,
+            runtime_dir,
             &anchor,
             &target,
             &ca_cert,
@@ -157,6 +181,37 @@ pub(super) async fn run(
         (Err(error), Ok(())) => Err(error),
         (Err(error), Err(cleanup_error)) => Err(error.context(format!(
             "initialization preflight cleanup also failed: {cleanup_error:#}"
+        ))),
+    }
+}
+
+async fn restore_artifact_ownership(runtime_dir: &Path) -> Result<()> {
+    match tokio::fs::symlink_metadata(runtime_dir).await {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to inspect Replay preflight artifact directory {}",
+                    runtime_dir.display()
+                )
+            });
+        }
+    }
+    let owner = crate::ArtifactOwner::invoking()?;
+    owner
+        .assign_to(runtime_dir)
+        .await
+        .context("failed to restore Replay preflight artifacts to the invoking user")
+}
+
+fn combine_artifact_ownership<T>(result: Result<T>, ownership: Result<()>) -> Result<T> {
+    match (result, ownership) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(ownership_error)) => Err(error.context(format!(
+            "Replay preflight artifact ownership also failed: {ownership_error:#}"
         ))),
     }
 }
@@ -208,8 +263,7 @@ async fn run_target_runtime(
     crate::target_container::verify_target_identity(container).await?;
     crate::target_container::verify_startup_environment(
         container,
-        &target.startup,
-        true,
+        target_root,
         target.breeze_enabled,
     )
     .await?;
@@ -690,6 +744,18 @@ mod tests {
         );
         assert!(parse_positive_output(b"000").is_err());
         assert!(parse_positive_output(b"200 10.0.0.1 trailing").is_err());
+    }
+
+    #[test]
+    fn preserves_preflight_and_ownership_errors() {
+        let error = combine_artifact_ownership::<()>(
+            Err(anyhow::anyhow!("preflight error")),
+            Err(anyhow::anyhow!("ownership error")),
+        )
+        .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("preflight error"));
+        assert!(message.contains("ownership error"));
     }
 
     #[test]

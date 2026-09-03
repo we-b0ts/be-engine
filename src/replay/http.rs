@@ -46,6 +46,12 @@ pub(super) struct RecordedHttpExchange {
     response_body: Option<RecordedBodyCapture>,
     #[serde(default)]
     discovered_tcp_targets: Vec<DiscoveredTcpTarget>,
+    #[serde(default)]
+    global_dependency_reason: Option<String>,
+    #[serde(default)]
+    global_dependency_phase: Option<String>,
+    #[serde(default)]
+    global_dependency_matched_by: Option<String>,
     error: Option<String>,
 }
 
@@ -417,7 +423,7 @@ impl ReplayState {
         let mut closest_mismatch = None;
         'sources: for source in [ReplaySource::Case, ReplaySource::Global] {
             for (index, exchange) in self.http_exchanges.iter().enumerate() {
-                if exchange.consumed
+                if exchange.consumed && !exchange.is_repeatable_preflight_probe()
                     || exchange.source != source
                     || !active_http_case_matches(active_case_id.as_deref(), exchange)
                     || exchange.identity.scheme != scheme
@@ -579,6 +585,18 @@ impl ReplayState {
                 status: exchange.record.response_status,
             })
             .collect()
+    }
+}
+
+impl ReplayHttpExchange {
+    fn is_repeatable_preflight_probe(&self) -> bool {
+        self.source == ReplaySource::Global
+            && self.record.global_dependency_reason.as_deref() == Some("preflight_probe")
+            && self.record.global_dependency_phase.as_deref() == Some("runtime")
+            && matches!(
+                self.record.global_dependency_matched_by.as_deref(),
+                Some("java_truststore" | "system_network")
+            )
     }
 }
 

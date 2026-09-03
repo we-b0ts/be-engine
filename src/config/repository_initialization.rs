@@ -8,20 +8,29 @@ use serde::{Deserialize, Serialize};
 use super::initialization::{RecorderConfigInitOptions, render_validated_recorder_config};
 use crate::e2e_run::{E2eRunInitOptions, render_project_config};
 
+mod target_template;
+
+use target_template::{render_target_main, render_target_startup_probe};
+
 const PROJECT_CONFIG_PATH: &str = ".traffic-e2e/project.yaml";
 const SOURCE_TRAFFIC_POLICY_PATH: &str = ".traffic-e2e/source-traffic-policy.yaml";
 const VERIFICATION_POLICY_PATH: &str = ".traffic-e2e/verification.yaml";
 const TARGET_CARGO_PATH: &str = "Cargo.toml";
 const TARGET_CARGO_LOCK_PATH: &str = "Cargo.lock";
 const TARGET_MAIN_PATH: &str = "src/main.rs";
+const TARGET_STARTUP_PROBE_PATH: &str = "src/startup_probe.rs";
+const RECORDING_DOCKERFILE_PATH: &str = ".traffic-e2e/Dockerfile.recording";
 const TARGET_DOCKERFILE_PATH: &str = ".traffic-e2e/Dockerfile.e2e";
 const TARGET_GITIGNORE_PATH: &str = ".gitignore";
 const TARGET_DOCKERIGNORE_PATH: &str = ".dockerignore";
 const LOCAL_DIR: &str = crate::repository::LOCAL_ROOT;
-const DEFAULT_NATIVE_HTTP_PORT: u16 = 8080;
+const PR_BASE: &str = "dev-migration";
 const TARGET_CARGO_TEMPLATE: &str = include_str!("templates/target/Cargo.toml");
 const TARGET_CARGO_LOCK_TEMPLATE: &str = include_str!("templates/target/Cargo.lock");
 const TARGET_MAIN_TEMPLATE: &str = include_str!("templates/target/src/main.rs");
+const TARGET_STARTUP_PROBE_TEMPLATE: &str = include_str!("templates/target/src/startup_probe.rs");
+const RECORDING_DOCKERFILE_TEMPLATE: &str =
+    include_str!("templates/recording/Dockerfile.recording");
 const TARGET_DOCKERFILE_TEMPLATE: &str = include_str!("templates/target/Dockerfile.e2e");
 const TARGET_TEMPLATE_PACKAGE: &str = "traffic-e2e-target-template";
 const TARGET_TEMPLATE_CACHE_ID: &str = "traffic-e2e-template-target";
@@ -61,12 +70,11 @@ const TARGET_DOCKERIGNORE_RULES: &[&str] = &[
 pub struct RepositoryConfigInitOptions {
     pub target_root: PathBuf,
     pub source_container: String,
-    pub breeze_container: Option<String>,
+    pub http_backend_port: u16,
     pub http_gateway_port: u16,
     pub readiness_path: String,
-    pub readiness_status: u16,
     pub upstream_dns: SocketAddr,
-    pub startup: crate::startup::StartupConfig,
+    pub env_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,16 +82,17 @@ pub struct RepositoryConfigInitResult {
     pub target_root: PathBuf,
     pub generated: Vec<PathBuf>,
     pub source_container: InspectedContainer,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub breeze_container: Option<InspectedContainer>,
     pub upstream_dns: SocketAddr,
+    pub http_backend_port: u16,
     pub http_gateway_port: u16,
     pub local_dir: PathBuf,
+    pub target_environment: PathBuf,
     pub gitignore: PathBuf,
     pub gitignore_updated: bool,
     pub dockerignore: PathBuf,
     pub dockerignore_updated: bool,
     pub startup: crate::startup::StartupSnapshotReport,
+    pub recording_dockerfile: PathBuf,
     pub target_dockerfile: PathBuf,
     pub target_image_tag: String,
     pub target_runtime_contract: &'static str,
@@ -131,22 +140,17 @@ fn initialize_repository_config_with(
     ]
     .map(|relative| target_root.join(relative));
     require_configuration_targets_absent(&configuration_targets)?;
+    ensure_pr_base_branch(&target_root)?;
     let source = inspect(&options.source_container)?;
-    let breeze = options
-        .breeze_container
-        .as_deref()
-        .map(inspect)
-        .transpose()?;
 
     let recorder_options = RecorderConfigInitOptions {
         target_root: target_root.clone(),
-        source_http_port: DEFAULT_NATIVE_HTTP_PORT,
-        candidate_http_port: DEFAULT_NATIVE_HTTP_PORT,
+        source_http_port: options.http_backend_port,
+        candidate_http_port: options.http_backend_port,
         http_gateway_port: options.http_gateway_port,
         readiness_path: options.readiness_path.clone(),
-        readiness_status: options.readiness_status,
         upstream_dns: options.upstream_dns,
-        breeze_enabled: breeze.is_some(),
+        breeze_enabled: false,
     };
     let (_, recorder) = render_validated_recorder_config(&recorder_options)?;
     let verification = crate::replay::render_validated_replay_policy()?;
@@ -156,11 +160,11 @@ fn initialize_repository_config_with(
         &E2eRunInitOptions {
             target_root: target_root.clone(),
             source_container: source.name.clone(),
-            breeze_container: breeze.as_ref().map(|container| container.name.clone()),
+            breeze_container: None,
             target_dockerfile: PathBuf::from(TARGET_DOCKERFILE_PATH),
-            target_startup: options.startup.clone(),
+            target_startup: crate::startup::StartupConfig::default(),
             replay_policy: PathBuf::from(VERIFICATION_POLICY_PATH),
-            pr_base: "dev-migration".to_string(),
+            pr_base: PR_BASE.to_string(),
             recorder_config: PathBuf::from(PROJECT_CONFIG_PATH),
             force: false,
         },
@@ -172,7 +176,9 @@ fn initialize_repository_config_with(
     let (dockerignore, dockerignore_updated, dockerignore_created) =
         ensure_target_dockerignore(&target_root)?;
     let mut target_files = render_missing_target_delivery(&target_root, &options)?;
-    let startup = crate::startup::normalized_config(options.startup)?;
+    let target_environment =
+        crate::startup::initialize_startup_environment(&target_root, options.env_file.as_deref())?;
+    let startup = crate::startup::StartupConfig::default();
     let startup = capture(&target_root, &options.source_container, &startup)?;
     let mut files = vec![
         (configuration_targets[0].clone(), project),
@@ -200,20 +206,22 @@ fn initialize_repository_config_with(
         target_root,
         generated,
         source_container: source,
-        breeze_container: breeze,
         upstream_dns: options.upstream_dns,
+        http_backend_port: options.http_backend_port,
         http_gateway_port: options.http_gateway_port,
         local_dir: PathBuf::from(LOCAL_DIR),
+        target_environment: target_environment.path,
         gitignore,
         gitignore_updated,
         dockerignore,
         dockerignore_updated,
         startup,
+        recording_dockerfile: PathBuf::from(RECORDING_DOCKERFILE_PATH),
         target_dockerfile: PathBuf::from(TARGET_DOCKERFILE_PATH),
         target_image_tag,
         target_runtime_contract: "traffic-e2e builds Dockerfile.e2e, runs its OCI entrypoint as \
-                                  998:998 with source-compatible startup inputs mounted with \
-                                  source-compatible access, \
+                                  998:998 with target.env loaded and source-compatible startup \
+                                  mounts using source-compatible access, \
                                   and owns readiness, signals, network namespace, and cleanup",
         rewrite_command: "backend-rewrite next --api '<METHOD path-or-pattern>'",
         preflight_command: "backend-rewrite init preflight",
@@ -248,10 +256,12 @@ fn render_missing_target_delivery(
     let cargo = target_root.join(TARGET_CARGO_PATH);
     let cargo_lock = target_root.join(TARGET_CARGO_LOCK_PATH);
     let main = target_root.join(TARGET_MAIN_PATH);
+    let recording_dockerfile = target_root.join(RECORDING_DOCKERFILE_PATH);
     let dockerfile = target_root.join(TARGET_DOCKERFILE_PATH);
     let cargo_exists = path_exists(&cargo)?;
     let cargo_lock_exists = path_exists(&cargo_lock)?;
     let main_exists = path_exists(&main)?;
+    let recording_dockerfile_exists = path_exists(&recording_dockerfile)?;
     let dockerfile_exists = path_exists(&dockerfile)?;
 
     let template_target = !cargo_exists && !cargo_lock_exists && !main_exists;
@@ -271,6 +281,14 @@ fn render_missing_target_delivery(
     validate_target_binary_name(&binary)?;
 
     let mut files = Vec::new();
+    if !recording_dockerfile_exists {
+        files.push((
+            recording_dockerfile,
+            RECORDING_DOCKERFILE_TEMPLATE.as_bytes().to_vec(),
+        ));
+    } else {
+        require_regular_file(&recording_dockerfile, "recording Dockerfile")?;
+    }
     if template_target {
         files.push((
             cargo,
@@ -286,12 +304,11 @@ fn render_missing_target_delivery(
         ));
         files.push((
             main,
-            render_target_main(
-                options.startup.port_environment.as_deref(),
-                &options.readiness_path,
-                options.readiness_status,
-            )
-            .into_bytes(),
+            render_target_main(&options.readiness_path, options.http_backend_port).into_bytes(),
+        ));
+        files.push((
+            target_root.join(TARGET_STARTUP_PROBE_PATH),
+            render_target_startup_probe().into_bytes(),
         ));
     }
     if !dockerfile_exists {
@@ -393,29 +410,6 @@ fn target_cache_project(target_root: &Path) -> Result<String> {
         .context("failed to derive target cache identity")
 }
 
-fn render_target_main(
-    port_environment: Option<&str>,
-    readiness_path: &str,
-    readiness_status: u16,
-) -> String {
-    let port_environment = port_environment
-        .map(|name| format!("Some({name:?})"))
-        .unwrap_or_else(|| "None".to_string());
-    TARGET_MAIN_TEMPLATE
-        .replace(
-            "const TARGET_PORT_ENV: Option<&str> = None;",
-            &format!("const TARGET_PORT_ENV: Option<&str> = {port_environment};"),
-        )
-        .replace(
-            "const READINESS_PATH: &str = \"/healthz\";",
-            &format!("const READINESS_PATH: &str = {readiness_path:?};"),
-        )
-        .replace(
-            "const READINESS_STATUS: u16 = 404;",
-            &format!("const READINESS_STATUS: u16 = {readiness_status};"),
-        )
-}
-
 fn require_configuration_targets_absent(paths: &[PathBuf]) -> Result<()> {
     for path in paths {
         match std::fs::symlink_metadata(path) {
@@ -429,6 +423,35 @@ fn require_configuration_targets_absent(paths: &[PathBuf]) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+fn ensure_pr_base_branch(target_root: &Path) -> Result<()> {
+    let reference = format!("refs/heads/{PR_BASE}");
+    let exists = Command::new("git")
+        .arg("-C")
+        .arg(target_root)
+        .args(["show-ref", "--verify", "--quiet", &reference])
+        .status()
+        .context("failed to inspect the initialization pull-request base branch")?;
+    if exists.success() {
+        return Ok(());
+    }
+    ensure!(
+        exists.code() == Some(1),
+        "failed to inspect the initialization pull-request base branch"
+    );
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(target_root)
+        .args(["branch", PR_BASE, "HEAD"])
+        .output()
+        .context("failed to create the initialization pull-request base branch")?;
+    ensure!(
+        output.status.success(),
+        "failed to create pr_base {PR_BASE:?} from HEAD: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
     Ok(())
 }
 
@@ -585,9 +608,11 @@ mod tests {
     }
 
     #[test]
-    fn unified_init_allows_dev_migration_to_be_created_afterward() {
+    fn unified_init_creates_dev_migration_from_head_without_switching() {
         let target = tempdir().unwrap();
         fs::write(target.path().join("README.md"), "# target\n").unwrap();
+        let environment = target.path().join("input.env");
+        fs::write(&environment, "DATABASE_URL='postgres://local/$db'\n").unwrap();
         assert!(
             Command::new("git")
                 .args(["init", "-q", "-b", "initialization-work"])
@@ -645,7 +670,6 @@ mod tests {
                     root: PathBuf::from(crate::repository::LOCAL_STARTUP_ROOT),
                     mounts: config.mounts.clone(),
                     writable_mounts: Vec::new(),
-                    environment: config.environment_from_source.clone(),
                     source_container_id: "container-id".to_string(),
                     source_image_id: "image-id".to_string(),
                 })
@@ -654,21 +678,35 @@ mod tests {
             RepositoryConfigInitOptions {
                 target_root: target.path().to_path_buf(),
                 source_container: "friendship".to_string(),
-                breeze_container: Some("breeze".to_string()),
+                http_backend_port: 8_181,
                 http_gateway_port: 4_080,
                 readiness_path: "/healthz".to_string(),
-                readiness_status: 404,
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
-                startup: crate::startup::StartupConfig::default(),
+                env_file: Some(environment),
             },
             inspect,
             capture,
         )
         .unwrap();
 
-        assert_eq!(result.generated.len(), 9);
+        assert_eq!(result.generated.len(), 11);
+        assert_eq!(result.http_backend_port, 8_181);
         assert_eq!(result.http_gateway_port, 4_080);
         assert_eq!(result.local_dir, PathBuf::from(LOCAL_DIR));
+        assert_eq!(
+            result.target_environment,
+            PathBuf::from(crate::repository::LOCAL_TARGET_ENV_PATH)
+        );
+        assert!(target.path().join(&result.target_environment).is_file());
+        assert!(
+            crate::startup::startup_environment_equals(
+                target.path(),
+                "DATABASE_URL",
+                "postgres://local/$db",
+            )
+            .unwrap()
+            .equal
+        );
         assert_eq!(result.gitignore, target.path().join(".gitignore"));
         assert!(result.gitignore_updated);
         assert_eq!(result.dockerignore, target.path().join(".dockerignore"));
@@ -687,6 +725,10 @@ mod tests {
         );
         assert_eq!(result.preflight_command, "backend-rewrite init preflight");
         assert_eq!(
+            result.recording_dockerfile,
+            PathBuf::from(".traffic-e2e/Dockerfile.recording")
+        );
+        assert_eq!(
             result.target_dockerfile,
             PathBuf::from(".traffic-e2e/Dockerfile.e2e")
         );
@@ -697,6 +739,8 @@ mod tests {
         assert!(target.path().join(TARGET_CARGO_PATH).is_file());
         assert!(target.path().join(TARGET_CARGO_LOCK_PATH).is_file());
         assert!(target.path().join(TARGET_MAIN_PATH).is_file());
+        assert!(target.path().join(TARGET_STARTUP_PROBE_PATH).is_file());
+        assert!(target.path().join(RECORDING_DOCKERFILE_PATH).is_file());
         assert!(target.path().join(TARGET_DOCKERFILE_PATH).is_file());
         let cargo = fs::read_to_string(target.path().join(TARGET_CARGO_PATH)).unwrap();
         assert!(cargo.contains("tag = \"v0.0.1\""));
@@ -706,10 +750,24 @@ mod tests {
             "git+ssh://git@git.intra.demo.test:2222/platform/breeze/logs.git?tag=v0.0.1"
         ));
         let main = fs::read_to_string(target.path().join(TARGET_MAIN_PATH)).unwrap();
-        assert!(main.contains("const TARGET_PORT_ENV: Option<&str> = None;"));
+        assert!(!main.contains("TARGET_PORT_ENV"));
         assert!(main.contains("const READINESS_PATH: &str = \"/healthz\";"));
-        assert!(main.contains("const READINESS_STATUS: u16 = 404;"));
+        assert!(main.contains("const READINESS_STATUS: u16 = 200;"));
+        assert!(main.contains("Delete this module declaration"));
+        assert!(main.contains("startup_probe::run().await?;"));
+        let probe = fs::read_to_string(target.path().join(TARGET_STARTUP_PROBE_PATH)).unwrap();
+        assert!(probe.contains(crate::network_probe::ORIGIN_HEADER));
+        assert!(probe.contains(crate::network_probe::TARGET_ORIGIN));
+        let recording_dockerfile =
+            fs::read_to_string(target.path().join(RECORDING_DOCKERFILE_PATH)).unwrap();
+        assert!(recording_dockerfile.contains("ARG SOURCE_IMAGE"));
+        assert!(recording_dockerfile.contains("FROM ${SOURCE_IMAGE}"));
+        assert!(recording_dockerfile.contains("USER 998:998"));
+        assert!(!recording_dockerfile.contains("java"));
         let dockerfile = fs::read_to_string(target.path().join(TARGET_DOCKERFILE_PATH)).unwrap();
+        assert!(dockerfile.contains("COPY Cargo.toml Cargo.lock ./"));
+        assert!(dockerfile.contains("COPY src ./src"));
+        assert!(!dockerfile.contains("COPY . ."));
         assert!(dockerfile.contains("--mount=type=ssh,required=true"));
         assert!(dockerfile.contains("git ls-remote --exit-code"));
         assert!(!dockerfile.contains("__TARGET_"));
@@ -732,36 +790,51 @@ mod tests {
                 .exists()
         );
         let project = fs::read_to_string(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
-        assert!(project.contains("version: 15"));
+        assert!(project.contains("version: 16"));
         assert!(project.contains("dockerfile: .traffic-e2e/Dockerfile.e2e"));
+        assert!(project.contains("success_status: 200"));
         assert!(!project.contains("http_host:"));
         assert!(!project.contains("motan_port:"));
         assert!(project.contains("runtime_root: local/runtime"));
         assert!(project.contains("startup:"));
-        assert!(project.contains("container: breeze"));
+        assert!(!project.contains("breeze:"));
         assert!(project.contains("pr_base: dev-migration"));
         assert!(!project.contains("max_response_bytes"));
         assert!(!project.contains("protocol_detection:"));
-        assert!(
-            !Command::new("git")
-                .arg("-C")
-                .arg(target.path())
-                .args([
-                    "show-ref",
-                    "--verify",
-                    "--quiet",
-                    "refs/heads/dev-migration"
-                ])
-                .status()
-                .unwrap()
-                .success()
+        let dev_migration = Command::new("git")
+            .arg("-C")
+            .arg(target.path())
+            .args(["rev-parse", "dev-migration^{commit}"])
+            .output()
+            .unwrap();
+        let initialization_head = Command::new("git")
+            .arg("-C")
+            .arg(target.path())
+            .args(["rev-parse", "initialization-work^{commit}"])
+            .output()
+            .unwrap();
+        assert!(dev_migration.status.success());
+        assert_eq!(dev_migration.stdout, initialization_head.stdout);
+        assert_eq!(
+            String::from_utf8(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(target.path())
+                    .args(["branch", "--show-current"])
+                    .output()
+                    .unwrap()
+                    .stdout
+            )
+            .unwrap()
+            .trim(),
+            "initialization-work"
         );
         let recorder =
             crate::config::AppConfig::load(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
         assert_eq!(recorder.http_gateway.listen.to_string(), "0.0.0.0:4080");
         assert_eq!(
             recorder.http_gateway.matched_upstream,
-            "http://127.0.0.1:8080"
+            "http://127.0.0.1:8181"
         );
         assert_eq!(
             recorder
@@ -769,7 +842,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .candidate_upstream,
-            "http://comparison-target.traffic-e2e.invalid:8080"
+            "http://comparison-target.traffic-e2e.invalid:8181"
         );
         assert_eq!(recorder.recording.max_body_bytes, DEFAULT_BODY_LIMIT_BYTES);
         crate::replay::validate_replay_policy(&target.path().join(VERIFICATION_POLICY_PATH))
@@ -779,12 +852,11 @@ mod tests {
             RepositoryConfigInitOptions {
                 target_root: target.path().to_path_buf(),
                 source_container: "friendship".to_string(),
-                breeze_container: Some("breeze".to_string()),
+                http_backend_port: 8_181,
                 http_gateway_port: 4_080,
                 readiness_path: "/healthz".to_string(),
-                readiness_status: 404,
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
-                startup: crate::startup::StartupConfig::default(),
+                env_file: None,
             },
             inspect,
             capture,
@@ -794,40 +866,44 @@ mod tests {
     }
 
     #[test]
-    fn target_delivery_preserves_an_existing_dockerfile() {
+    fn target_delivery_preserves_existing_dockerfiles() {
         let target = tempdir().unwrap();
         let dockerfile = target.path().join(TARGET_DOCKERFILE_PATH);
+        let recording_dockerfile = target.path().join(RECORDING_DOCKERFILE_PATH);
         fs::create_dir_all(dockerfile.parent().unwrap()).unwrap();
         fs::write(&dockerfile, "FROM existing\n").unwrap();
+        fs::write(&recording_dockerfile, "FROM existing-recording\n").unwrap();
         let files = render_missing_target_delivery(
             target.path(),
             &RepositoryConfigInitOptions {
                 target_root: target.path().to_path_buf(),
                 source_container: "source".to_string(),
-                breeze_container: None,
+                http_backend_port: 8_181,
                 http_gateway_port: 4_080,
                 readiness_path: "/ready".to_string(),
-                readiness_status: 204,
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
-                startup: crate::startup::StartupConfig {
-                    port_environment: Some("SERVICE_PORT".to_string()),
-                    ..crate::startup::StartupConfig::default()
-                },
+                env_file: None,
             },
         )
         .unwrap();
 
         assert_eq!(fs::read_to_string(&dockerfile).unwrap(), "FROM existing\n");
-        assert_eq!(files.len(), 3);
+        assert_eq!(
+            fs::read_to_string(&recording_dockerfile).unwrap(),
+            "FROM existing-recording\n"
+        );
+        assert_eq!(files.len(), 4);
         assert!(files.iter().all(|(path, _)| path != &dockerfile));
+        assert!(files.iter().all(|(path, _)| path != &recording_dockerfile));
         let main = files
             .iter()
             .find(|(path, _)| path.ends_with(TARGET_MAIN_PATH))
             .map(|(_, contents)| String::from_utf8_lossy(contents))
             .unwrap();
-        assert!(main.contains("Some(\"SERVICE_PORT\")"));
+        assert!(!main.contains("TARGET_PORT_ENV"));
+        assert!(main.contains("const DEFAULT_PORT: u16 = 8181;"));
         assert!(main.contains("const READINESS_PATH: &str = \"/ready\";"));
-        assert!(main.contains("const READINESS_STATUS: u16 = 204;"));
+        assert!(main.contains("const READINESS_STATUS: u16 = 200;"));
     }
 
     #[test]
@@ -843,12 +919,11 @@ mod tests {
             &RepositoryConfigInitOptions {
                 target_root: target.path().to_path_buf(),
                 source_container: "source".to_string(),
-                breeze_container: None,
+                http_backend_port: 8_080,
                 http_gateway_port: 4_080,
                 readiness_path: "/healthz".to_string(),
-                readiness_status: 404,
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
-                startup: crate::startup::StartupConfig::default(),
+                env_file: None,
             },
         )
         .unwrap_err();

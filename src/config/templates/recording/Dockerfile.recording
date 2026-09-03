@@ -1,0 +1,12 @@
+# Initialization scaffold: review and adapt this file to the inspected source
+# image before running `backend-rewrite init preflight`.
+ARG SOURCE_IMAGE
+FROM ${SOURCE_IMAGE}
+
+# The base image's ENTRYPOINT, CMD, and WORKDIR are intentionally inherited.
+# Add only source-image-specific file or permission changes that the real
+# launch contract requires. Create and chown only exact writable paths; do not
+# recursively change configuration or credential trees. Probe tooling is
+# supplied by traffic-e2e and must not be installed in this image.
+
+USER 998:998

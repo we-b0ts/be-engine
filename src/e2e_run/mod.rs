@@ -14,6 +14,7 @@ mod reclassify;
 mod request_view;
 mod result;
 mod runtime;
+mod startup_inputs;
 mod store;
 mod support;
 mod target_quality_config;
@@ -63,6 +64,10 @@ pub use result::{
     E2eVerificationGates,
 };
 pub(crate) use result::{response_pointer_pattern, response_pointer_scope};
+pub use startup_inputs::{
+    StartupMountChange, StartupMountChangeStatus, StartupMountEntry, StartupMountList,
+    StartupMountPresence, ensure_startup_mount, list_startup_mounts, startup_mount_exists,
+};
 
 #[derive(Debug, Clone)]
 pub struct E2eRunInitOptions {

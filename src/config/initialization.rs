@@ -7,9 +7,10 @@ use super::{
     DEFAULT_UDP_GATEWAY_PORT,
 };
 use anyhow::{Context, Result, ensure};
-use hyper::StatusCode;
 
 pub const DEFAULT_HTTP_GATEWAY_PORT: u16 = 4_080;
+pub const DEFAULT_HTTP_BACKEND_PORT: u16 = 8_080;
+pub(crate) const INITIAL_READINESS_SUCCESS_STATUS: u16 = 200;
 
 #[derive(Debug, Clone)]
 pub(crate) struct RecorderConfigInitOptions {
@@ -18,7 +19,6 @@ pub(crate) struct RecorderConfigInitOptions {
     pub candidate_http_port: u16,
     pub http_gateway_port: u16,
     pub readiness_path: String,
-    pub readiness_status: u16,
     pub upstream_dns: SocketAddr,
     pub breeze_enabled: bool,
 }
@@ -44,12 +44,6 @@ pub(crate) fn render_validated_recorder_config(
         "http_gateway_port must differ from source_http_port and candidate_http_port"
     );
     validate_readiness_path(&options.readiness_path)?;
-    let readiness_status = StatusCode::from_u16(options.readiness_status)
-        .context("readiness_status must be a valid HTTP status")?;
-    ensure!(
-        !readiness_status.is_informational(),
-        "readiness_status must be a final HTTP status"
-    );
 
     let target_root = fs::canonicalize(&options.target_root).with_context(|| {
         format!(
@@ -157,7 +151,7 @@ fn render_recorder_template(scope: &str, options: &RecorderConfigInitOptions) ->
         .replace("__READINESS_PATH__", &readiness_path)
         .replace(
             "__READINESS_STATUS__",
-            &options.readiness_status.to_string(),
+            &INITIAL_READINESS_SUCCESS_STATUS.to_string(),
         )
         .replace("__FALLBACK_BODY__", &fallback_body)
         .replace("__DNS_CAPTURE_POLICY__", CAPTURE_ALL_DNS_YAML)
@@ -313,7 +307,6 @@ mod tests {
             candidate_http_port: 8081,
             http_gateway_port: 18_181,
             readiness_path: "/healthy".to_string(),
-            readiness_status: 404,
             upstream_dns: "10.10.10.11:53".parse().unwrap(),
             breeze_enabled: true,
         })
@@ -349,6 +342,10 @@ mod tests {
             crate::config::comparison_recording::DEFAULT_PROCESS_OUTPUT_FLUSH_AFTER_LAST_CASE_MS
         );
         assert_eq!(config.http_gateway.listen.to_string(), "0.0.0.0:18181");
+        assert_eq!(
+            config.http_gateway.ready.success_status,
+            INITIAL_READINESS_SUCCESS_STATUS
+        );
         assert_eq!(config.dns_mock.listen.port(), DEFAULT_DNS_MOCK_PORT);
         assert_eq!(config.tcp_gateway.listen.port(), DEFAULT_TCP_GATEWAY_PORT);
         assert!(config.tcp_gateway.protocol_detection.enabled);
@@ -399,6 +396,7 @@ mod tests {
             "__TCP_GATEWAY_PORT__",
             "__UDP_GATEWAY_PORT__",
             "__HTTP_GATEWAY_PORT__",
+            "__READINESS_STATUS__",
         ] {
             assert!(!raw.contains(placeholder));
         }
@@ -417,7 +415,6 @@ mod tests {
             candidate_http_port: 0,
             http_gateway_port: 0,
             readiness_path: "healthy".to_string(),
-            readiness_status: 99,
             upstream_dns: "10.10.10.11:53".parse().unwrap(),
             breeze_enabled: false,
         })
@@ -434,7 +431,6 @@ mod tests {
             candidate_http_port: 8080,
             http_gateway_port: 18_181,
             readiness_path: "/healthz".to_string(),
-            readiness_status: 404,
             upstream_dns: "10.10.10.11:53".parse().unwrap(),
             breeze_enabled: false,
         })
@@ -470,7 +466,6 @@ mod tests {
             candidate_http_port: 8081,
             http_gateway_port: 8081,
             readiness_path: "/healthz".to_string(),
-            readiness_status: 404,
             upstream_dns: "10.10.10.11:53".parse().unwrap(),
             breeze_enabled: false,
         })

@@ -205,8 +205,7 @@ pub(super) async fn verify_target_runtime_contract(
     crate::target_container::verify_target_identity(container).await?;
     crate::target_container::verify_startup_environment(
         container,
-        &target.startup,
-        true,
+        &layout.target_root,
         target.breeze_enabled,
     )
     .await?;

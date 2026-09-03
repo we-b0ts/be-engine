@@ -23,6 +23,10 @@ These requirements apply to an existing initialized target repository. Use
 - Do not silently convert an existing repository to another Cargo workspace or
   package shape. Initialization and explicitly scoped architecture migrations
   own those changes.
+- `.traffic-e2e/Dockerfile.recording` and `.traffic-e2e/Dockerfile.e2e` remain
+  target-owned build contracts. Change either when the current work scope
+  requires source-adaptor or target-runtime integration; the coordinator
+  validates the result but does not own their contents.
 - Product behavior must not depend on tests, fixtures, debug branches, or
   developer-only defaults.
 
@@ -36,6 +40,11 @@ These requirements apply to an existing initialized target repository. Use
   dependency replacements.
 - Do not modify source behavior or coordinator evidence to manufacture a
   passing result.
+- When source behavior proves that implemented target logic requires an
+  application-owned environment variable, follow [startup.md](startup.md)
+  immediately. Preserve the runtime lookup in target code and return the
+  source-proven startup input for the main orchestrator; do not wait for a
+  connection or startup failure and do not hardcode the effective value.
 - Never print, persist, or hard-code credentials, private keys, tokens, remote
   configuration values, source-process memory, or generated SDK snapshots.
   A constant proven in source code or a pinned compiled artifact may remain

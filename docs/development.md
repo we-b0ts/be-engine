@@ -206,21 +206,18 @@ encrypt_request_headers = ["authorization"]
 ```
 
 Header-name matching is case-insensitive, so this protects `Authorization` as
-well. Set a Base64-encoded 32-byte AES-256-GCM key before standard recording,
-comparison recording, and replay:
+well. Managed preflight, recording, Comparison, and Replay create and reuse one
+project key at `.traffic-e2e/local/secrets/traffic-e2e-enc.sec`. The ignored
+directory is mode `0700` and the strict Base64-encoded 32-byte key is mode
+`0600`. An explicitly supplied `TRAFFIC_E2E_ENCRYPTION_KEY_B64` is imported
+only when the managed key is absent; a later mismatch is rejected.
 
-```bash
-export TRAFFIC_E2E_ENCRYPTION_KEY_B64="$(openssl rand -base64 32)"
-```
-
-The value is written only as versioned ciphertext in `request.json`. Keep
-`authorization` in `redact_headers` too: request encryption takes precedence,
-while response headers remain redacted. If encrypted headers are configured
-and the environment variable is missing, invalid, or decodes to any length
-other than 32 bytes, recording startup fails. Replay also fails with missing
-or wrong key material. Repository wrappers must preserve the variable for
-Recorder or `record-comparison`, not inject it into source, candidate, or
-supporting services.
+The plaintext header value is written only as versioned ciphertext in
+`request.json`. Keep `authorization` in `redact_headers` too: request
+encryption takes precedence, while response headers remain redacted. Missing,
+invalid, or wrong managed key material blocks Replay. The system passes the key
+only to Recorder and Comparison processes; it is never injected into source,
+target, Breeze, commands, or policy.
 
 Comparison recording does not compare responses. It returns the baseline
 response and records the request plus baseline and candidate responses under
@@ -308,10 +305,8 @@ becomes `completed_with_errors` if the number of delivered templates differs
 from the number of published cases. Comparison without finite managed input
 continues to use the configured listener and observe the full duration.
 
-`traffic-e2e config init --source-container <container> --breeze` installs the
-Breeze-aware recorder defaults together with project and verification
-configuration. The target repository provides no recording or comparison
-wrapper. `traffic-e2e record-comparison` owns the adapted source application,
+The target repository provides no recording or comparison wrapper.
+`traffic-e2e record-comparison` owns the adapted source application,
 optional Breeze runtime and candidate Breeze mounts, the candidate's fixed
 start/stop contract, recording, signals, finalization, and cleanup. The source
 keeps the host recording namespace while the candidate runs in a run-owned
@@ -743,7 +738,7 @@ a source-controlled `.traffic-e2e/verification.yaml`, not product code or record
 overrides. Initialize it once and load it explicitly:
 
 ```bash
-traffic-e2e config init --target-root ../target --source-container <container> [--breeze]
+traffic-e2e config init --target-root ../target --source-container <container>
 traffic-e2e replay --policy ../target/.traffic-e2e/verification.yaml path/to/case-dir
 ```
 
@@ -1386,32 +1381,34 @@ Initialize a rewrite target once, before its first coordinator session:
 
 ```bash
 backend-rewrite --target-root ../target init \
-  --source-container <existing-source-container> [--breeze] \
-  [--startup-mount /absolute/path/to/config] \
-  [--startup-mount /absolute/path/.env] \
-  [--startup-env <APPLICATION_ENV_NAME>] \
+  --source-container <existing-source-container> \
+  [--env-file /path/to/initial.env] \
+  [--readiness-path /healthz] \
+  [--http-backend-port 8080] \
   [--http-gateway-port 4080]
 ```
 
-From the target root, `--target-root` is unnecessary. `--breeze` uses the
-conventional existing container named `breeze`; use `--breeze=<container>` only
-for a non-standard name. Defaults are Recorder HTTP gateway port `4080`,
-recorder native HTTP upstream `http://127.0.0.1:8080`, readiness `/healthz`
-with status `404`, and upstream DNS `10.10.10.11:53`. Only the gateway port is
-an initialization port argument. Change a non-standard native endpoint under
-`recorder` in `project.yaml`, which is its sole static configuration owner. Source and Breeze
-containers need only be inspectable, not running. Generated Recorder
-configuration uses an empty DNS bypass strategy list, so Breeze snapshot
-backend domains are captured by default when they are accessed directly.
+From the target root, `--target-root` is unnecessary. Defaults are backend HTTP
+port `8080`, Recorder HTTP gateway port `4080`, readiness `/healthz` with fixed
+success status `200`, and upstream DNS `10.10.10.11:53`. The backend port is
+shared by the source and target processes and drives the generated Recorder
+upstream, managed Comparison candidate, target readiness endpoint, and Replay
+request destination. It must differ from the gateway listener port.
+Initialization accepts a readiness path but no readiness status argument;
+generated `project.yaml` retains the explicit `success_status: 200` contract.
+The source container needs only to be inspectable, not running.
 
-The command atomically generates version-14 `.traffic-e2e/project.yaml`,
+The command atomically generates version-16 `.traffic-e2e/project.yaml`,
 `.traffic-e2e/source-traffic-policy.yaml`, and `.traffic-e2e/verification.yaml`.
 When the root `Cargo.toml`, `Cargo.lock`, and `src/main.rs` are all absent, it
-also generates a runnable readiness-only Rust target using `brz-logs` from the
-fixed `v0.0.1` Git tag. It generates `.traffic-e2e/Dockerfile.e2e` only when
-absent and creates or safely extends the root `.gitignore` and `.dockerignore`
-with canonical local-state, Rust build, recording, data, credential, and
-environment-file exclusions; existing regular target files are preserved.
+also generates a runnable readiness-only Rust target with a temporary
+`src/startup_probe.rs` initialization module. Keep that module and its
+`src/main.rs` call through initialization preflight, then delete the module,
+declaration, and call when real target implementation begins. It generates
+`.traffic-e2e/Dockerfile.e2e` only when absent and creates or safely extends the
+root `.gitignore` and `.dockerignore` with canonical local-state, Rust build,
+recording, data, credential, and environment-file exclusions; existing regular
+target files are preserved.
 `project.yaml` combines project settings with the static recorder settings;
 `source-traffic-policy.yaml` is wholly AI/coordinator managed. Project settings
 have explicit source, optional Breeze, target, replay, recording, delivery,
@@ -1423,14 +1420,7 @@ target:
   dockerfile: .traffic-e2e/Dockerfile.e2e
   # Maximum time from target launch until every enabled endpoint is ready.
   startup_timeout_seconds: 180
-  startup:
-    mounts:
-      - /data1/weibo/confs
-    environment_from_source:
-      - WEIBO_CONF_PATH
-    # Optional application-owned names:
-    # port_environment: PORT
-    # replay_ca_environment: SSL_CERT_FILE
+  startup: {}
   # Optional application outputs written by the target at runtime.
   runtime_outputs:
     - id: application-logs
@@ -1464,9 +1454,11 @@ configuration files exists, the whole initialization refuses without creating
 another configuration file. Existing target source, Dockerfile, and unrelated
 ignore-file rules are preserved. Normal
 execution does not migrate or dual-read obsolete project schemas; migration
-and repair require administrator-owned tooling outside `backend-rewrite`. When
-an administrator intentionally changes `target.startup`, recapture the exact
-new declaration and then run preflight:
+and repair require administrator-owned tooling outside `backend-rewrite`. Use
+`backend-rewrite startup mount ensure <ABSOLUTE_PATH>` to add a path omitted
+during initialization. When an administrator intentionally replaces or
+refreshes captured content, recapture the exact declaration and then run
+preflight:
 
 ```bash
 backend-rewrite-admin --target-root <target> \
@@ -1477,16 +1469,17 @@ backend-rewrite --target-root <target> init preflight
 Recapture requires the configured source container to be stopped. Preflight is
 read-only validation and does not repair a stale snapshot. The initializer owns
 the baseline `.gitignore` and `.dockerignore` generation described above; all
-non-versioned runtime data lives below `.traffic-e2e/local/`. It copies every declared
-absolute path from the stopped source container into
-`.traffic-e2e/local/startup/mounts`, freezes only the named source environment
-values in mode-0600 `.traffic-e2e/local/startup/environment.json`, and writes
-matching `manifest.json`. Do not hand-write generated state.
+non-versioned runtime data lives below `.traffic-e2e/local/`. It creates an
+empty mount snapshot under `.traffic-e2e/local/startup/` and a mode-0600
+`.traffic-e2e/local/target.env`, importing the optional `--env-file` when
+provided. Do not hand-write generated snapshot state.
 
-Startup declarations and snapshots are initialization-owned. `backend-rewrite`
-does not expose post-initialization commands that replace, refresh, or inspect
-them. An initialized repository with missing, stale, or damaged startup inputs
-requires administrator repair rather than an AI-directed workflow mutation.
+`backend-rewrite startup env` lists names, checks presence or exact equality,
+ensures or removes a value, imports a dotenv file, and validates the canonical
+file without returning stored values. `backend-rewrite startup mount` lists,
+checks, or adds a missing source-compatible absolute path while preserving
+existing captured content. Replacing or refreshing content remains
+administrator-owned.
 
 The initialized target repository contains `.traffic-e2e/Dockerfile.e2e`. It
 is a BuildKit multi-stage build whose final image has a non-empty OCI entrypoint
@@ -1510,7 +1503,8 @@ user must make the declaration exact. For example:
 ```text
 .traffic-e2e/local/startup/mounts/data1/weibo/confs
   -> /data1/weibo/confs (source-compatible rw/ro)
-WEIBO_CONF_PATH=<value captured from the source container>
+.traffic-e2e/local/target.env
+  -> target container environment (values are never returned by startup APIs)
 ```
 
 Read-only startup inputs bind directly from the immutable snapshot. Writable
@@ -1546,27 +1540,13 @@ they stay Git-ignored and are not consumed as Replay inputs or expected
 responses. Remove retained run directories only under the exact
 `.traffic-e2e/local/runtime-outputs/` root when they are no longer needed.
 
-Source-derived environment names are an allowlist, not name/value assignments:
-the engine reads their values from Docker's source-container configuration and
-freezes them in the snapshot. At target startup it writes the selected values
-to a mode-0600 temporary file and passes that file through Docker `--env-file`.
-This also covers values originally supplied to the source container through a
-Docker env file because they are expanded into `Config.Env`; Docker does not
-retain the original host env-file path. General environment configuration files
-used by Node, Python, shell launchers, frameworks, or the application itself
-(`.env`, `.env.production`, `.flaskenv`, `env.conf`, and similar files) remain
-filesystem inputs. Resolve them against the source working directory and
-declare each normalized absolute path as a startup mount. A source default that
-is not present in Docker `Config.Env` cannot be discovered; declare its absolute
-path as a mount and let the application keep using that default. The engine does
-not rewrite such a default and does not infer startup inputs from target source
-code.
-
-`port_environment` and `replay_ca_environment` are optional native application
-variable names. When declared, the engine assigns the configured target port
-or the container Replay CA path at startup. The target contract contains no
-generic `TRAFFIC_E2E_CONFIG_DIR`, `TRAFFIC_E2E_TARGET_PORT`, or
-`TRAFFIC_E2E_REPLAY_CA_CERT_PATH` variables.
+Every target start loads the project-level `.traffic-e2e/local/target.env`.
+Initialization may seed it from an optional dotenv file, but does not inspect
+source code to infer variables or mounts. Implementation uses the startup APIs
+only after actual target behavior proves an input is needed. The engine does
+not define a generic port variable or adapt framework-specific environment
+names. The target contract contains no generic `TRAFFIC_E2E_CONFIG_DIR`,
+`TRAFFIC_E2E_TARGET_PORT`, or `TRAFFIC_E2E_REPLAY_CA_CERT_PATH` variables.
 
 When Breeze is configured, traffic-e2e also mounts `/data1/breeze/socks` and
 `/data1/breeze/snapshot` read-only and injects
@@ -1574,8 +1554,9 @@ When Breeze is configured, traffic-e2e also mounts `/data1/breeze/socks` and
 startup declaration. This engine-managed address keeps target Breeze clients
 on the same managed connection path as the adapted recording source. During
 Replay traffic-e2e mounts the public Replay CA at
-`/traffic-e2e/trust/replay-ca.pem`; when `replay_ca_environment` is declared it
-sets that application-owned variable to this path. Target TLS clients must add
+`/traffic-e2e/trust/replay-ca.pem`. If a target runtime needs an
+application-owned environment variable for this fixed path, implementation
+adds it to `target.env` through the startup API. Target TLS clients must add
 that certificate to their normal trust store without reading Replay sessions
 or private key material. The entrypoint must remain in the foreground and stop
 cleanly on `SIGTERM`. Application logs belong in a configured writable runtime
@@ -1641,7 +1622,8 @@ the selected cases, intercepts dependency traffic by fixed UID, and prevents
 uncontrolled external egress.
 
 After initialization has generated the target template and the initialization
-AI has supplied `Dockerfile.recording`, run the authoritative preflight:
+AI has reviewed and completed the generated `Dockerfile.recording` scaffold,
+run the authoritative preflight:
 
 ```bash
 backend-rewrite init preflight
@@ -2185,6 +2167,13 @@ evidence. Any truncated frame, parse/correlation failure, unsupported cache
 mode, or unsafe cache connection prevents a case from being published and
 prevents unsafe Global replay from starting. The recording directory is
 sensitive because ordinary cache keys and values are needed for exact replay.
+
+Redis Pub/Sub support is intentionally bounded to a single RESP2 subscription
+argument for `SUBSCRIBE`, `PSUBSCRIBE`, or `SSUBSCRIBE`. Recorder accepts only
+the exact three-element subscription confirmation (or an ordinary Redis error),
+and Replay returns that frame while keeping the connection open. Multiple
+subscription arguments, asynchronous message delivery, unsubscribe commands,
+and RESP3 push frames remain unsupported.
 
 Case-owned Memcached matching treats recorded physical connections as source
 lanes, not as a required one-to-one connection topology. One target connection

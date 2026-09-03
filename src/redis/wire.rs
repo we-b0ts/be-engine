@@ -129,9 +129,91 @@ pub(crate) fn redis_command(raw: &Bytes) -> Result<RedisCommand> {
     Ok(RedisCommand { name, args })
 }
 
+pub(crate) fn is_subscription_command(name: &str) -> bool {
+    name.eq_ignore_ascii_case("SUBSCRIBE")
+        || name.eq_ignore_ascii_case("PSUBSCRIBE")
+        || name.eq_ignore_ascii_case("SSUBSCRIBE")
+}
+
+pub(crate) fn validate_subscription_confirmation(command: &RedisCommand, raw: &[u8]) -> Result<()> {
+    if !is_subscription_command(&command.name) {
+        return Err(anyhow!(
+            "Redis {} is not a supported subscription command",
+            command.name
+        ));
+    }
+    if command.args.len() != 1 {
+        return Err(anyhow!(
+            "Redis {} confirmation replay requires exactly one subscription argument",
+            command.name
+        ));
+    }
+
+    let raw = Bytes::copy_from_slice(raw);
+    let Some((frame, consumed)) =
+        redis_protocol::resp2::decode::decode_bytes(&raw).map_err(|err| anyhow!(err))?
+    else {
+        return Err(anyhow!("incomplete Redis subscription confirmation"));
+    };
+    if consumed != raw.len() {
+        return Err(anyhow!(
+            "Redis subscription confirmation contains trailing bytes"
+        ));
+    }
+    let Resp2Frame::Array(values) = frame else {
+        return Err(anyhow!(
+            "Redis subscription confirmation must be a RESP2 array"
+        ));
+    };
+    if values.len() != 3 {
+        return Err(anyhow!(
+            "Redis subscription confirmation must contain three elements"
+        ));
+    }
+    let Some(kind) = resp2_bytes_ref(&values[0]) else {
+        return Err(anyhow!(
+            "Redis subscription confirmation command must be a string"
+        ));
+    };
+    if !kind.eq_ignore_ascii_case(command.name.as_bytes()) {
+        return Err(anyhow!(
+            "Redis subscription confirmation command does not match {}",
+            command.name
+        ));
+    }
+    let Some(subject) = resp2_bytes_ref(&values[1]) else {
+        return Err(anyhow!(
+            "Redis subscription confirmation subject must be a string"
+        ));
+    };
+    if subject != command.args[0] {
+        return Err(anyhow!(
+            "Redis subscription confirmation subject does not match the request"
+        ));
+    }
+    let Resp2Frame::Integer(count) = values[2] else {
+        return Err(anyhow!(
+            "Redis subscription confirmation count must be an integer"
+        ));
+    };
+    if count < 1 {
+        return Err(anyhow!(
+            "Redis subscription confirmation count must be positive"
+        ));
+    }
+    Ok(())
+}
+
 fn resp2_bytes(frame: Resp2Frame) -> Option<Vec<u8>> {
     match frame {
         Resp2Frame::BulkString(value) | Resp2Frame::SimpleString(value) => Some(value.to_vec()),
+        _ => None,
+    }
+}
+
+fn resp2_bytes_ref(frame: &Resp2Frame) -> Option<&[u8]> {
+    match frame {
+        Resp2Frame::BulkString(value) | Resp2Frame::SimpleString(value) => Some(value.as_ref()),
         _ => None,
     }
 }
@@ -202,6 +284,52 @@ mod tests {
             frame_kind(&Bytes::from_static(b"$5\r\nvalue\r\n")).unwrap(),
             RedisFrameKind::BulkString
         );
+    }
+
+    #[test]
+    fn validates_single_subscription_confirmation() {
+        let command = RedisCommand {
+            name: "PSUBSCRIBE".to_string(),
+            args: vec![b"/0.celery.pidbox".to_vec()],
+        };
+
+        validate_subscription_confirmation(
+            &command,
+            b"*3\r\n$10\r\npsubscribe\r\n$16\r\n/0.celery.pidbox\r\n:1\r\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn rejects_mismatched_subscription_confirmation() {
+        let command = RedisCommand {
+            name: "SUBSCRIBE".to_string(),
+            args: vec![b"events".to_vec()],
+        };
+
+        let error = validate_subscription_confirmation(
+            &command,
+            b"*3\r\n$9\r\nsubscribe\r\n$5\r\nother\r\n:1\r\n",
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("subject does not match"));
+    }
+
+    #[test]
+    fn rejects_multiple_subscription_arguments() {
+        let command = RedisCommand {
+            name: "SSUBSCRIBE".to_string(),
+            args: vec![b"one".to_vec(), b"two".to_vec()],
+        };
+
+        let error = validate_subscription_confirmation(
+            &command,
+            b"*3\r\n$10\r\nssubscribe\r\n$3\r\none\r\n:1\r\n",
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("exactly one"));
     }
 
     #[tokio::test]

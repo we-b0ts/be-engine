@@ -100,12 +100,15 @@ or recorder behavior.
 Configured sensitive request-header values may be stored as
 `traffic-e2e:enc:v1:aes-256-gcm:<nonce-base64>:<ciphertext-and-tag-base64>`.
 The header name is authenticated and matching is case-insensitive. The
-standard runner requires `TRAFFIC_E2E_ENCRYPTION_KEY_B64`, authenticates and
-decrypts these values into a private short-lived case view, and gives only that
-view to the system HTTP driver. It never rewrites the published `request.json`.
-Missing or wrong key material blocks replay startup. A legacy `<redacted>`
-request value is not recoverable and must be re-recorded when the original
-value is required for behavior or dependency association.
+standard runner loads the project-managed key from
+`.traffic-e2e/local/secrets/traffic-e2e-enc.sec`, authenticates and decrypts
+these values into a private short-lived case view, and gives only that view to
+the system HTTP driver. It never rewrites the published `request.json`.
+Missing or wrong key material blocks replay startup. An explicit
+`TRAFFIC_E2E_ENCRYPTION_KEY_B64` remains a compatibility override and must
+equal the managed key. A legacy `<redacted>` request value is not recoverable
+and must be re-recorded when the original value is required for behavior or
+dependency association.
 
 `expected-response.json` records the upstream response observed for that request:
 

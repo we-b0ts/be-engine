@@ -136,14 +136,7 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
     let environment_file = crate::internal_runtime::root(&options.config.target_root)
         .join("target-container")
         .join(format!("{}.env", options.container_name));
-    let has_environment = crate::startup::write_docker_environment_file(
-        &environment_file,
-        &snapshot,
-        &options.config.startup,
-        options.config.port,
-        options.replay_ca_cert.is_some(),
-        TARGET_REPLAY_CA_PATH,
-    )?;
+    crate::startup::write_docker_environment_file(&environment_file, &options.config.target_root)?;
     let prepared_mounts = match startup_mounts::prepare(
         &options.config.target_root,
         &options.container_name,
@@ -153,8 +146,7 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
     {
         Ok(mounts) => mounts,
         Err(error) => {
-            if let Err(cleanup) = remove_environment_file(&environment_file, has_environment).await
-            {
+            if let Err(cleanup) = remove_environment_file(&environment_file).await {
                 return Err(error.context(format!(
                     "target environment cleanup also failed: {cleanup:#}"
                 )));
@@ -175,9 +167,7 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
                         "target startup mount cleanup also failed: {cleanup:#}"
                     )));
                 }
-                if let Err(cleanup) =
-                    remove_environment_file(&environment_file, has_environment).await
-                {
+                if let Err(cleanup) = remove_environment_file(&environment_file).await {
                     return Err(error.context(format!(
                         "target environment cleanup also failed: {cleanup:#}"
                     )));
@@ -243,15 +233,13 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
     if let Some(replay_ca_mount) = &replay_ca_mount {
         command.args(["--mount", replay_ca_mount]);
     }
-    if has_environment {
-        command.arg("--env-file").arg(&environment_file);
-    }
+    command.arg("--env-file").arg(&environment_file);
     if let Some(environment) = breeze_connect_host_environment(options.config.breeze_enabled) {
         command.args(["--env", environment]);
     }
     command.arg(&options.image.id);
     let output = docker_output(&mut command, "start target container").await;
-    if let Err(error) = remove_environment_file(&environment_file, has_environment).await {
+    if let Err(error) = remove_environment_file(&environment_file).await {
         let runtime_cleanup = if output.as_ref().is_ok_and(|output| output.status.success()) {
             force_remove_runtime(&options.config.target_root, &[&options.container_name]).await
         } else {
@@ -391,8 +379,7 @@ pub(crate) async fn verify_runtime_mounts(
 
 pub(crate) async fn verify_startup_environment(
     container: &str,
-    config: &crate::startup::StartupConfig,
-    replay_ca: bool,
+    target_root: &Path,
     breeze_enabled: bool,
 ) -> Result<()> {
     let inspection = inspect_container(container).await?;
@@ -404,12 +391,7 @@ pub(crate) async fn verify_startup_environment(
         }),
         "target container must not receive traffic-e2e-owned environment variables"
     );
-    let mut expected = config.environment_from_source.clone();
-    expected.extend(config.port_environment.iter().cloned());
-    if replay_ca {
-        expected.extend(config.replay_ca_environment.iter().cloned());
-    }
-    for expected in expected {
+    for expected in crate::startup::startup_environment_variable_names(target_root)? {
         ensure!(
             inspection.config.env.iter().any(|value| {
                 value
@@ -617,10 +599,7 @@ fn require_regular_file(path: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
-async fn remove_environment_file(path: &Path, created: bool) -> Result<()> {
-    if !created {
-        return Ok(());
-    }
+async fn remove_environment_file(path: &Path) -> Result<()> {
     match tokio::fs::remove_file(path).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),

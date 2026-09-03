@@ -190,7 +190,6 @@ mod tests {
             &[output("application-logs", "/data1/weibo/logs")],
             &crate::startup::StartupConfig {
                 mounts: vec![PathBuf::from("/data1/weibo")],
-                ..crate::startup::StartupConfig::default()
             },
         )
         .unwrap_err();

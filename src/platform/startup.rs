@@ -9,16 +9,7 @@ pub(super) fn stage_assets(
 ) -> Result<()> {
     let snapshot = crate::startup::load_startup_snapshot(target_root, &config.target_startup)?;
     let environment_path = assets.join("target-startup.env");
-    if !crate::startup::write_docker_environment_file(
-        &environment_path,
-        &snapshot,
-        &config.target_startup,
-        config.target_port,
-        false,
-        crate::target_container::TARGET_REPLAY_CA_PATH,
-    )? {
-        super::write_asset(&environment_path, "", 0o600)?;
-    }
+    crate::startup::write_docker_environment_file(&environment_path, target_root)?;
     let mut mounts = String::new();
     for mount in snapshot.mounts() {
         let source = crate::startup::startup_mount_source(target_root, &mount.path)?;

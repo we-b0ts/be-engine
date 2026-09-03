@@ -126,6 +126,10 @@ fn preflight_probe_dependency(user_agent: &str) -> RecorderEvent {
     exchange
         .request_headers
         .insert("user-agent".to_string(), vec![user_agent.to_string()]);
+    exchange.request_headers.insert(
+        crate::network_probe::ORIGIN_HEADER.to_string(),
+        vec![crate::network_probe::SOURCE_ORIGIN.to_string()],
+    );
     event
 }
 

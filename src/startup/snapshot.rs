@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read as _, Write as _};
 use std::os::unix::fs::OpenOptionsExt as _;
@@ -11,8 +10,7 @@ use uuid::Uuid;
 
 use super::{StartupConfig, StartupSnapshotReport, validate_config, validate_mount_path};
 
-const SNAPSHOT_SCHEMA_VERSION: u32 = 2;
-const ENVIRONMENT_FILE_MODE: u32 = 0o600;
+const SNAPSHOT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -23,7 +21,6 @@ pub(crate) struct StartupManifest {
     pub(crate) source_container_id: String,
     pub(crate) source_image_id: String,
     mounts: Vec<StartupSnapshotMount>,
-    environment: Vec<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -33,18 +30,9 @@ pub(crate) struct StartupSnapshotMount {
     pub(crate) writable: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StartupEnvironment {
-    schema_version: u32,
-    snapshot_id: String,
-    values: BTreeMap<String, String>,
-}
-
 #[derive(Debug)]
 pub(crate) struct LoadedStartupSnapshot {
     pub(crate) manifest: StartupManifest,
-    pub(crate) environment: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,7 +43,6 @@ pub(super) struct SourceInspection {
     pub(super) state: SourceState,
     #[serde(default)]
     pub(super) mounts: Vec<SourceMountInspection>,
-    config: SourceConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -72,12 +59,6 @@ pub(super) struct SourceState {
     pub(super) running: bool,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct SourceConfig {
-    env: Option<Vec<String>>,
-}
-
 pub(crate) fn capture_startup_snapshot(
     target_root: &Path,
     source_container: &str,
@@ -89,23 +70,7 @@ pub(crate) fn capture_startup_snapshot(
         !source.state.running,
         "configured source container {source_container:?} must be stopped before capturing startup inputs"
     );
-    let source_environment = parse_source_environment(source.config.env.unwrap_or_default());
     let mounts = resolve_startup_mounts(&config.mounts, &source.mounts)?;
-    let values = config
-        .environment_from_source
-        .iter()
-        .map(|name| {
-            source_environment
-                .get(name)
-                .cloned()
-                .map(|value| (name.clone(), value))
-                .with_context(|| {
-                    format!(
-                        "configured source container {source_container:?} does not declare required environment {name:?}"
-                    )
-                })
-        })
-        .collect::<Result<BTreeMap<_, _>>>()?;
     let snapshot_id = Uuid::new_v4().simple().to_string();
     let local_root = target_root.join(crate::repository::LOCAL_ROOT);
     fs::create_dir_all(&local_root).with_context(|| {
@@ -122,7 +87,7 @@ pub(crate) fn capture_startup_snapshot(
         for mount in &config.mounts {
             copy_mount(source_container, mount, &mounts_root)?;
         }
-        let content_revision = snapshot_content_revision(&mounts_root, &values)?;
+        let content_revision = snapshot_content_revision(&mounts_root)?;
         let manifest = StartupManifest {
             schema_version: SNAPSHOT_SCHEMA_VERSION,
             snapshot_id: snapshot_id.clone(),
@@ -130,19 +95,8 @@ pub(crate) fn capture_startup_snapshot(
             source_container_id: source.id.clone(),
             source_image_id: source.image.clone(),
             mounts: mounts.clone(),
-            environment: config.environment_from_source.clone(),
-        };
-        let environment = StartupEnvironment {
-            schema_version: SNAPSHOT_SCHEMA_VERSION,
-            snapshot_id: snapshot_id.clone(),
-            values,
         };
         write_json(&staging.join("manifest.json"), &manifest, 0o600)?;
-        write_json(
-            &staging.join("environment.json"),
-            &environment,
-            ENVIRONMENT_FILE_MODE,
-        )?;
         publish_staging(&local_root, &staging, &snapshot_id)?;
         Ok(StartupSnapshotReport {
             status: "captured",
@@ -154,7 +108,6 @@ pub(crate) fn capture_startup_snapshot(
                 .filter(|mount| mount.writable)
                 .map(|mount| mount.path.clone())
                 .collect(),
-            environment: config.environment_from_source.clone(),
             source_container_id: source.id,
             source_image_id: source.image,
         })
@@ -163,6 +116,134 @@ pub(crate) fn capture_startup_snapshot(
         let _ = fs::remove_dir_all(&staging);
     }
     result
+}
+
+pub(crate) fn extend_startup_snapshot(
+    target_root: &Path,
+    source_container: &str,
+    current: &StartupConfig,
+    mount: &Path,
+) -> Result<StartupSnapshotReport> {
+    validate_config(current)?;
+    validate_mount_path(mount)?;
+    ensure!(
+        !current.mounts.iter().any(|configured| configured == mount),
+        "startup mount is already configured: {}",
+        mount.display()
+    );
+    let mut updated = current.clone();
+    updated.mounts.push(mount.to_path_buf());
+    let updated = super::normalized_config(updated)?;
+    let existing = load_startup_snapshot(target_root, current)?;
+    let source = inspect_source(source_container)?;
+    ensure!(
+        !source.state.running,
+        "configured source container {source_container:?} must be stopped before capturing startup inputs"
+    );
+    ensure!(
+        source.id == existing.manifest.source_container_id
+            && source.image == existing.manifest.source_image_id,
+        "configured source container changed since initialization; use administrator startup recapture before adding a mount"
+    );
+    let new_mount = resolve_startup_mounts(&[mount.to_path_buf()], &source.mounts)?
+        .into_iter()
+        .next()
+        .expect("one requested startup mount");
+
+    let snapshot_id = Uuid::new_v4().simple().to_string();
+    let local_root = target_root.join(crate::repository::LOCAL_ROOT);
+    let staging = local_root.join(format!(".startup-{snapshot_id}.staging"));
+    ensure!(!staging.exists(), "startup staging path already exists");
+    fs::create_dir(&staging).context("failed to create startup snapshot staging root")?;
+    let mounts_root = staging.join("mounts");
+    let current_mounts = target_root.join(crate::repository::LOCAL_STARTUP_MOUNTS_ROOT);
+    if let Err(error) = clone_snapshot_tree(&current_mounts, &mounts_root) {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+    let result = (|| -> Result<StartupSnapshotReport> {
+        copy_mount(source_container, mount, &mounts_root)?;
+        let mut mounts = existing.manifest.mounts.clone();
+        mounts.push(new_mount);
+        mounts.sort_by(|left, right| left.path.cmp(&right.path));
+        let manifest = StartupManifest {
+            schema_version: SNAPSHOT_SCHEMA_VERSION,
+            snapshot_id: snapshot_id.clone(),
+            content_revision: snapshot_content_revision(&mounts_root)?,
+            source_container_id: source.id.clone(),
+            source_image_id: source.image.clone(),
+            mounts: mounts.clone(),
+        };
+        write_json(&staging.join("manifest.json"), &manifest, 0o600)?;
+        publish_staging(&local_root, &staging, &snapshot_id)?;
+        Ok(StartupSnapshotReport {
+            status: "captured",
+            snapshot_id,
+            root: PathBuf::from(crate::repository::LOCAL_STARTUP_ROOT),
+            mounts: updated.mounts,
+            writable_mounts: mounts
+                .iter()
+                .filter(|mount| mount.writable)
+                .map(|mount| mount.path.clone())
+                .collect(),
+            source_container_id: source.id,
+            source_image_id: source.image,
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    result
+}
+
+fn clone_snapshot_tree(source: &Path, destination: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(source).with_context(|| {
+        format!(
+            "failed to inspect startup snapshot path {}",
+            source.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() {
+        let target = fs::read_link(source)?;
+        std::os::unix::fs::symlink(target, destination)?;
+        return Ok(());
+    }
+    if metadata.is_dir() {
+        fs::create_dir(destination).with_context(|| {
+            format!(
+                "failed to create startup snapshot directory {}",
+                destination.display()
+            )
+        })?;
+        fs::set_permissions(destination, metadata.permissions())?;
+        let mut children = fs::read_dir(source)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        children.sort();
+        for child in children {
+            clone_snapshot_tree(
+                &child,
+                &destination.join(child.file_name().expect("snapshot child has a name")),
+            )?;
+        }
+        return Ok(());
+    }
+    ensure!(
+        metadata.is_file(),
+        "startup snapshot contains an unsupported file type: {}",
+        source.display()
+    );
+    if fs::hard_link(source, destination).is_err() {
+        fs::copy(source, destination).with_context(|| {
+            format!(
+                "failed to copy startup snapshot file {} to {}",
+                source.display(),
+                destination.display()
+            )
+        })?;
+        fs::set_permissions(destination, metadata.permissions())?;
+    }
+    Ok(())
 }
 
 pub(super) fn inspect_source(container: &str) -> Result<SourceInspection> {
@@ -190,16 +271,6 @@ pub(super) fn inspect_source(container: &str) -> Result<SourceInspection> {
         values.len()
     );
     Ok(values.remove(0))
-}
-
-fn parse_source_environment(values: Vec<String>) -> BTreeMap<String, String> {
-    let mut parsed = BTreeMap::new();
-    for value in values {
-        if let Some((name, value)) = value.split_once('=') {
-            parsed.insert(name.to_string(), value.to_string());
-        }
-    }
-    parsed
 }
 
 fn copy_mount(container: &str, mount: &Path, mounts_root: &Path) -> Result<()> {
@@ -259,12 +330,14 @@ fn publish_staging(local_root: &Path, staging: &Path, snapshot_id: &str) -> Resu
         }
         return Err(error).context("failed to publish startup snapshot");
     }
+    // The new snapshot is authoritative after the second rename. Cleanup and
+    // directory syncing are best effort from this point so callers never roll
+    // project.yaml back to a configuration that disagrees with the published
+    // manifest.
     if previous.exists() {
-        fs::remove_dir_all(&previous).context("failed to remove previous startup snapshot")?;
+        let _ = fs::remove_dir_all(&previous);
     }
-    File::open(local_root)
-        .and_then(|directory| directory.sync_all())
-        .context("failed to sync startup snapshot parent")?;
+    let _ = File::open(local_root).and_then(|directory| directory.sync_all());
     Ok(())
 }
 
@@ -274,44 +347,22 @@ pub(crate) fn load_startup_snapshot(
 ) -> Result<LoadedStartupSnapshot> {
     validate_config(config)?;
     let manifest_path = target_root.join(crate::repository::LOCAL_STARTUP_MANIFEST_PATH);
-    let environment_path = target_root.join(crate::repository::LOCAL_STARTUP_ENVIRONMENT_PATH);
     let manifest: StartupManifest =
         serde_json::from_slice(&fs::read(&manifest_path).with_context(|| {
             format!("startup snapshot is missing: {}", manifest_path.display())
         })?)
         .context("startup manifest is invalid")?;
-    let environment: StartupEnvironment =
-        serde_json::from_slice(&fs::read(&environment_path).with_context(|| {
-            format!(
-                "startup environment is missing: {}",
-                environment_path.display()
-            )
-        })?)
-        .context("startup environment snapshot is invalid")?;
     ensure!(
-        manifest.schema_version == SNAPSHOT_SCHEMA_VERSION
-            && environment.schema_version == SNAPSHOT_SCHEMA_VERSION,
+        manifest.schema_version == SNAPSHOT_SCHEMA_VERSION,
         "unsupported startup snapshot schema"
-    );
-    ensure!(
-        manifest.snapshot_id == environment.snapshot_id,
-        "startup manifest and environment snapshot do not match"
     );
     ensure!(
         manifest
             .mounts
             .iter()
             .map(|mount| &mount.path)
-            .eq(config.mounts.iter())
-            && manifest.environment == config.environment_from_source,
+            .eq(config.mounts.iter()),
         "startup snapshot is stale; initialized startup inputs require administrator repair"
-    );
-    ensure!(
-        environment
-            .values
-            .keys()
-            .eq(config.environment_from_source.iter()),
-        "startup environment snapshot does not match configured names"
     );
     for mount in &manifest.mounts {
         let source = startup_mount_source(target_root, &mount.path)?;
@@ -323,13 +374,10 @@ pub(crate) fn load_startup_snapshot(
     }
     let mounts_root = target_root.join(crate::repository::LOCAL_STARTUP_MOUNTS_ROOT);
     ensure!(
-        manifest.content_revision == snapshot_content_revision(&mounts_root, &environment.values)?,
+        manifest.content_revision == snapshot_content_revision(&mounts_root)?,
         "startup snapshot content changed; initialized startup inputs require administrator repair"
     );
-    Ok(LoadedStartupSnapshot {
-        manifest,
-        environment: environment.values,
-    })
+    Ok(LoadedStartupSnapshot { manifest })
 }
 
 pub(crate) fn startup_snapshot_revision(target_root: &Path) -> Result<String> {
@@ -351,18 +399,8 @@ pub(crate) fn startup_snapshot_revision(target_root: &Path) -> Result<String> {
     }
 }
 
-fn snapshot_content_revision(
-    mounts_root: &Path,
-    environment: &BTreeMap<String, String>,
-) -> Result<String> {
+fn snapshot_content_revision(mounts_root: &Path) -> Result<String> {
     let mut hash = SnapshotHash::default();
-    hash.update(b"environment\0");
-    for (name, value) in environment {
-        hash.update(name.as_bytes());
-        hash.update(&[0]);
-        hash.update(value.as_bytes());
-        hash.update(&[0]);
-    }
     hash.update(b"mounts\0");
     hash_snapshot_path(mounts_root, mounts_root, &mut hash)?;
     Ok(hash.finish())
@@ -496,6 +534,10 @@ pub(crate) fn startup_mount_source(target_root: &Path, mount: &Path) -> Result<P
 }
 
 impl LoadedStartupSnapshot {
+    pub(crate) fn snapshot_id(&self) -> &str {
+        &self.manifest.snapshot_id
+    }
+
     pub(crate) fn mounts(&self) -> &[StartupSnapshotMount] {
         &self.manifest.mounts
     }
@@ -506,18 +548,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn snapshot_content_revision_changes_with_mount_or_environment() {
+    fn snapshot_content_revision_changes_with_mount_content() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("config"), "one").unwrap();
-        let environment = BTreeMap::from([("WEIBO_CONF_PATH".to_string(), "/one".to_string())]);
-        let first = snapshot_content_revision(root.path(), &environment).unwrap();
+        let first = snapshot_content_revision(root.path()).unwrap();
         fs::write(root.path().join("config"), "two").unwrap();
-        let second = snapshot_content_revision(root.path(), &environment).unwrap();
-        let changed_environment =
-            BTreeMap::from([("WEIBO_CONF_PATH".to_string(), "/two".to_string())]);
-        let third = snapshot_content_revision(root.path(), &changed_environment).unwrap();
+        let second = snapshot_content_revision(root.path()).unwrap();
         assert_ne!(first, second);
-        assert_ne!(second, third);
     }
 
     #[test]

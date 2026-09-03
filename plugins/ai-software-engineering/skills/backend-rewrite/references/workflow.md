@@ -156,6 +156,12 @@ evidence queries, proves one cause, runs local tests, and returns the unchanged
 acceptance command. The main orchestrator integrates the tested handoff and
 executes acceptance only from the canonical worktree.
 
+When the handoff contains `startup_environment` inputs, apply each one to the
+canonical target root through `startup env ensure` as specified by
+[startup.md](startup.md) after integrating the implementation and before
+target quality or acceptance. The resulting startup-environment revision is
+part of the target fingerprint used for validation.
+
 After all API items have been traversed and their implementation workers have
 been confirmed, execute each returned `next --process-output <id>` command.
 Dispatch and confirm each process-output worker, then keep advancing other

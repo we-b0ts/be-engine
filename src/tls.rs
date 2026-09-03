@@ -122,12 +122,26 @@ impl MitmCa {
     }
 
     pub fn server_config_for_host(&self, host: &str) -> Result<Arc<ServerConfig>> {
+        self.server_config_for_host_and_alpn(host, "http", vec![b"http/1.1".to_vec()])
+    }
+
+    pub(crate) fn mysql_server_config_for_host(&self, host: &str) -> Result<Arc<ServerConfig>> {
+        self.server_config_for_host_and_alpn(host, "mysql", Vec::new())
+    }
+
+    fn server_config_for_host_and_alpn(
+        &self,
+        host: &str,
+        profile: &str,
+        alpn_protocols: Vec<Vec<u8>>,
+    ) -> Result<Arc<ServerConfig>> {
         let normalized = normalize_host(host);
+        let cache_key = format!("{profile}:{normalized}");
         if let Some(config) = self
             .cache
             .lock()
             .expect("cert cache poisoned")
-            .get(&normalized)
+            .get(&cache_key)
         {
             return Ok(config.clone());
         }
@@ -156,13 +170,13 @@ impl MitmCa {
             .with_no_client_auth()
             .with_single_cert(cert_chain, key)
             .with_context(|| format!("failed to build rustls server config for {normalized}"))?;
-        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        config.alpn_protocols = alpn_protocols;
 
         let config = Arc::new(config);
         self.cache
             .lock()
             .expect("cert cache poisoned")
-            .insert(normalized, config.clone());
+            .insert(cache_key, config.clone());
         Ok(config)
     }
 
@@ -243,7 +257,10 @@ mod tests {
 
         let ca = MitmCa::load_or_generate(&cert, &key).unwrap();
         assert_eq!(ca.ca_cert_pem(), persisted_pem);
-        let _ = ca.server_config_for_host("example.com:443").unwrap();
+        let http = ca.server_config_for_host("example.com:443").unwrap();
+        let mysql = ca.mysql_server_config_for_host("example.com:3306").unwrap();
+        assert_eq!(http.alpn_protocols, vec![b"http/1.1".to_vec()]);
+        assert!(mysql.alpn_protocols.is_empty());
 
         #[cfg(unix)]
         {

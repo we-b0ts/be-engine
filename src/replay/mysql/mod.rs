@@ -16,9 +16,19 @@ pub(super) use values::*;
 
 use super::*;
 use crate::mysql::wire::{
-    CLIENT_CONNECT_WITH_DB, CLIENT_SECURE_CONNECTION, MysqlPacket, parse_client_command,
-    parse_handshake_response, read_packet,
+    CLIENT_CONNECT_WITH_DB, CLIENT_SECURE_CONNECTION, CLIENT_SSL, MysqlPacket,
+    parse_client_command, parse_handshake_response, read_packet,
 };
+use tokio::io::{AsyncRead, AsyncWrite};
+
+pub(in crate::replay) trait MysqlReplayIo:
+    AsyncRead + AsyncWrite + Unpin + Send
+{
+}
+
+impl<T> MysqlReplayIo for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
+
+pub(in crate::replay) type BoxedMysqlReplayIo = Box<dyn MysqlReplayIo>;
 
 pub(in crate::replay) const CLIENT_LONG_PASSWORD: u32 = 0x0000_0001;
 pub(in crate::replay) const CLIENT_LONG_FLAG: u32 = 0x0000_0004;

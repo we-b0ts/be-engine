@@ -9,10 +9,12 @@ pub(crate) const LOCAL_ARTIFACTS_RELATIVE_ROOT: &str = "local/artifacts";
 pub(crate) const LOCAL_ARTIFACTS_ROOT: &str = ".traffic-e2e/local/artifacts";
 pub(crate) const LOCAL_STARTUP_ROOT: &str = ".traffic-e2e/local/startup";
 pub(crate) const LOCAL_STARTUP_MOUNTS_ROOT: &str = ".traffic-e2e/local/startup/mounts";
-pub(crate) const LOCAL_STARTUP_ENVIRONMENT_PATH: &str =
-    ".traffic-e2e/local/startup/environment.json";
 pub(crate) const LOCAL_STARTUP_MANIFEST_PATH: &str = ".traffic-e2e/local/startup/manifest.json";
+pub(crate) const LOCAL_TARGET_ENV_PATH: &str = ".traffic-e2e/local/target.env";
 pub(crate) const LOCAL_DATA_ROOT: &str = ".traffic-e2e/local/data";
+pub(crate) const LOCAL_SECRETS_ROOT: &str = ".traffic-e2e/local/secrets";
+pub(crate) const LOCAL_ENCRYPTION_KEY_PATH: &str = ".traffic-e2e/local/secrets/traffic-e2e-enc.sec";
+pub(crate) const LOCAL_ENCRYPTION_KEY_FROM_LOCAL: &str = "secrets/traffic-e2e-enc.sec";
 pub(crate) const LOCAL_RUNTIME_OUTPUTS_ROOT: &str = ".traffic-e2e/local/runtime-outputs";
 
 pub(crate) fn directory_name(target_root: &Path) -> Result<String> {
