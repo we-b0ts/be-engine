@@ -51,7 +51,7 @@ Use `traffic-e2e` for direct traffic operations and `backend-rewrite` for
 migration orchestration:
 
 ```bash
-traffic-e2e config init --source-container <container> [--breeze]
+traffic-e2e config init --source-container <container>
 backend-rewrite next --api 'GET /api/widgets/*' \
   --source-route '/api/widgets/:id'
 backend-rewrite status
@@ -71,11 +71,10 @@ traffic-e2e abort ...
 ```
 
 From a target repository root, the conventional initialization is simply
-`traffic-e2e config init --source-container <container> --breeze`.
-`--breeze` selects the existing container named `breeze`; omit it when the
-source does not use Breeze. Initialization adds `/.traffic-e2e/local/` to the
-target `.gitignore`; all non-versioned runtime data, including recordings,
-boot inputs, internal state, and rewrite worktrees, lives below that root.
+`traffic-e2e config init --source-container <container>`. Initialization adds
+`/.traffic-e2e/local/` to the target `.gitignore`; all non-versioned runtime
+data, including recordings, boot inputs, internal state, and rewrite
+worktrees, lives below that root.
 
 For a backend migration, `backend-rewrite next` is the normal facade. It
 returns one argv-based action, automatically owns Prepare/E2E/Compare
@@ -204,7 +203,7 @@ For runtime-generated UUIDs, timestamps, signed query fields, and reviewed
 response-comparison exemptions, keep a
 source-controlled `.traffic-e2e/verification.yaml` in the target project and pass it with
 `--policy`. Initialize it with `traffic-e2e config init --source-container
-<container> [--breeze]` from the target root; initialization, strategy application, replay, and comparison each
+<container>` from the target root; initialization, strategy application, replay, and comparison each
 validate the policy. See
 [Dependency Replay And Response Verification Policy](docs/replay-policy.md).
 

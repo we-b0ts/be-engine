@@ -70,7 +70,6 @@ const TARGET_DOCKERIGNORE_RULES: &[&str] = &[
 pub struct RepositoryConfigInitOptions {
     pub target_root: PathBuf,
     pub source_container: String,
-    pub breeze_container: Option<String>,
     pub http_backend_port: u16,
     pub http_gateway_port: u16,
     pub readiness_path: String,
@@ -83,8 +82,6 @@ pub struct RepositoryConfigInitResult {
     pub target_root: PathBuf,
     pub generated: Vec<PathBuf>,
     pub source_container: InspectedContainer,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub breeze_container: Option<InspectedContainer>,
     pub upstream_dns: SocketAddr,
     pub http_backend_port: u16,
     pub http_gateway_port: u16,
@@ -145,11 +142,6 @@ fn initialize_repository_config_with(
     require_configuration_targets_absent(&configuration_targets)?;
     ensure_pr_base_branch(&target_root)?;
     let source = inspect(&options.source_container)?;
-    let breeze = options
-        .breeze_container
-        .as_deref()
-        .map(inspect)
-        .transpose()?;
 
     let recorder_options = RecorderConfigInitOptions {
         target_root: target_root.clone(),
@@ -158,7 +150,7 @@ fn initialize_repository_config_with(
         http_gateway_port: options.http_gateway_port,
         readiness_path: options.readiness_path.clone(),
         upstream_dns: options.upstream_dns,
-        breeze_enabled: breeze.is_some(),
+        breeze_enabled: false,
     };
     let (_, recorder) = render_validated_recorder_config(&recorder_options)?;
     let verification = crate::replay::render_validated_replay_policy()?;
@@ -168,7 +160,7 @@ fn initialize_repository_config_with(
         &E2eRunInitOptions {
             target_root: target_root.clone(),
             source_container: source.name.clone(),
-            breeze_container: breeze.as_ref().map(|container| container.name.clone()),
+            breeze_container: None,
             target_dockerfile: PathBuf::from(TARGET_DOCKERFILE_PATH),
             target_startup: crate::startup::StartupConfig::default(),
             replay_policy: PathBuf::from(VERIFICATION_POLICY_PATH),
@@ -214,7 +206,6 @@ fn initialize_repository_config_with(
         target_root,
         generated,
         source_container: source,
-        breeze_container: breeze,
         upstream_dns: options.upstream_dns,
         http_backend_port: options.http_backend_port,
         http_gateway_port: options.http_gateway_port,
@@ -687,7 +678,6 @@ mod tests {
             RepositoryConfigInitOptions {
                 target_root: target.path().to_path_buf(),
                 source_container: "friendship".to_string(),
-                breeze_container: Some("breeze".to_string()),
                 http_backend_port: 8_181,
                 http_gateway_port: 4_080,
                 readiness_path: "/healthz".to_string(),
@@ -807,7 +797,7 @@ mod tests {
         assert!(!project.contains("motan_port:"));
         assert!(project.contains("runtime_root: local/runtime"));
         assert!(project.contains("startup:"));
-        assert!(project.contains("container: breeze"));
+        assert!(!project.contains("breeze:"));
         assert!(project.contains("pr_base: dev-migration"));
         assert!(!project.contains("max_response_bytes"));
         assert!(!project.contains("protocol_detection:"));
@@ -862,7 +852,6 @@ mod tests {
             RepositoryConfigInitOptions {
                 target_root: target.path().to_path_buf(),
                 source_container: "friendship".to_string(),
-                breeze_container: Some("breeze".to_string()),
                 http_backend_port: 8_181,
                 http_gateway_port: 4_080,
                 readiness_path: "/healthz".to_string(),
@@ -889,7 +878,6 @@ mod tests {
             &RepositoryConfigInitOptions {
                 target_root: target.path().to_path_buf(),
                 source_container: "source".to_string(),
-                breeze_container: None,
                 http_backend_port: 8_181,
                 http_gateway_port: 4_080,
                 readiness_path: "/ready".to_string(),
@@ -931,7 +919,6 @@ mod tests {
             &RepositoryConfigInitOptions {
                 target_root: target.path().to_path_buf(),
                 source_container: "source".to_string(),
-                breeze_container: None,
                 http_backend_port: 8_080,
                 http_gateway_port: 4_080,
                 readiness_path: "/healthz".to_string(),

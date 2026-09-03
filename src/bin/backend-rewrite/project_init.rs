@@ -18,9 +18,6 @@ pub(super) struct ProjectInitArgs {
     /// Existing genuine source application container to inspect and reproduce.
     #[arg(long)]
     source_container: Option<String>,
-    /// Enable Breeze using the conventional `breeze` container, or provide a non-standard name.
-    #[arg(long, num_args = 0..=1, default_missing_value = "breeze", value_name = "CONTAINER")]
-    breeze: Option<String>,
     /// Native HTTP port listened to by the source and target backend processes.
     #[arg(long, default_value_t = DEFAULT_HTTP_BACKEND_PORT)]
     pub(super) http_backend_port: u16,
@@ -55,8 +52,6 @@ pub(super) struct ProjectPreflightArgs {
 struct ProjectInitReport {
     generated: Vec<PathBuf>,
     source_container: InspectedContainer,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    breeze_container: Option<InspectedContainer>,
     http_backend_port: u16,
     http_gateway_port: u16,
     local_dir: PathBuf,
@@ -120,7 +115,6 @@ pub(super) async fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: boo
     let result = initialize_repository_config(RepositoryConfigInitOptions {
         target_root,
         source_container,
-        breeze_container: args.breeze,
         http_backend_port: args.http_backend_port,
         http_gateway_port: args.http_gateway_port,
         readiness_path: args.readiness_path,
@@ -162,7 +156,6 @@ impl From<RepositoryConfigInitResult> for ProjectInitReport {
         Self {
             generated: result.generated,
             source_container: result.source_container,
-            breeze_container: result.breeze_container,
             http_backend_port: result.http_backend_port,
             http_gateway_port: result.http_gateway_port,
             local_dir: result.local_dir,

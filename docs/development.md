@@ -305,10 +305,8 @@ becomes `completed_with_errors` if the number of delivered templates differs
 from the number of published cases. Comparison without finite managed input
 continues to use the configured listener and observe the full duration.
 
-`traffic-e2e config init --source-container <container> --breeze` installs the
-Breeze-aware recorder defaults together with project and verification
-configuration. The target repository provides no recording or comparison
-wrapper. `traffic-e2e record-comparison` owns the adapted source application,
+The target repository provides no recording or comparison wrapper.
+`traffic-e2e record-comparison` owns the adapted source application,
 optional Breeze runtime and candidate Breeze mounts, the candidate's fixed
 start/stop contract, recording, signals, finalization, and cleanup. The source
 keeps the host recording namespace while the candidate runs in a run-owned
@@ -740,7 +738,7 @@ a source-controlled `.traffic-e2e/verification.yaml`, not product code or record
 overrides. Initialize it once and load it explicitly:
 
 ```bash
-traffic-e2e config init --target-root ../target --source-container <container> [--breeze]
+traffic-e2e config init --target-root ../target --source-container <container>
 traffic-e2e replay --policy ../target/.traffic-e2e/verification.yaml path/to/case-dir
 ```
 

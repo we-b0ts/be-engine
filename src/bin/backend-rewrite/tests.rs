@@ -60,6 +60,7 @@ fn compact_json_is_default_and_pretty_is_explicit() {
 
 #[test]
 fn parses_the_bounded_rewrite_surface() {
+    assert!(Cli::try_parse_from(["test", "init", "--source-container", "friendship"]).is_ok());
     assert!(
         Cli::try_parse_from([
             "test",
@@ -68,7 +69,7 @@ fn parses_the_bounded_rewrite_surface() {
             "friendship",
             "--breeze",
         ])
-        .is_ok()
+        .is_err()
     );
     let hessian2_unordered_path = r#"{"value_path":["result","groups","*","whiteList"],"display_path":"$.result.groups[*].whiteList","source_evidence":"src/rule.rs:whiteList is a Set"}"#;
     assert!(
@@ -301,7 +302,6 @@ fn parses_the_bounded_rewrite_surface() {
             "init",
             "--source-container",
             "friendship",
-            "--breeze=custom-breeze",
             "--http-backend-port",
             "8081",
             "--http-gateway-port",

@@ -38,9 +38,6 @@ struct InitArgs {
     /// Existing genuine source application container to inspect and reproduce.
     #[arg(long)]
     source_container: String,
-    /// Enable Breeze using the conventional `breeze` container, or provide a non-standard name.
-    #[arg(long, num_args = 0..=1, default_missing_value = "breeze", value_name = "CONTAINER")]
-    breeze: Option<String>,
     /// Native HTTP port listened to by the source and target backend processes.
     #[arg(long, default_value_t = DEFAULT_HTTP_BACKEND_PORT)]
     http_backend_port: u16,
@@ -64,7 +61,6 @@ pub(super) fn run(args: ConfigArgs) -> Result<()> {
             RepositoryConfigInitOptions {
                 target_root: args.target_root,
                 source_container: init.source_container,
-                breeze_container: init.breeze,
                 http_backend_port: init.http_backend_port,
                 http_gateway_port: init.http_gateway_port,
                 readiness_path: init.readiness_path,
@@ -98,18 +94,11 @@ mod tests {
 
     #[test]
     fn init_uses_repository_conventions_by_default() {
-        let parsed = TestCli::try_parse_from([
-            "test",
-            "init",
-            "--source-container",
-            "friendship",
-            "--breeze",
-        ])
-        .unwrap();
+        let parsed =
+            TestCli::try_parse_from(["test", "init", "--source-container", "friendship"]).unwrap();
         let ConfigCommand::Init(init) = parsed.config.command else {
             panic!("expected init command");
         };
-        assert_eq!(init.breeze.as_deref(), Some("breeze"));
         assert_eq!(init.http_backend_port, DEFAULT_HTTP_BACKEND_PORT);
         assert_eq!(init.http_gateway_port, DEFAULT_HTTP_GATEWAY_PORT);
         assert_eq!(init.readiness_path, "/healthz");
@@ -151,16 +140,25 @@ mod tests {
             ])
             .is_err()
         );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "init",
+                "--source-container",
+                "friendship",
+                "--breeze",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
-    fn init_accepts_a_non_standard_breeze_container_as_the_flag_value() {
+    fn init_accepts_explicit_http_ports() {
         let parsed = TestCli::try_parse_from([
             "test",
             "init",
             "--source-container",
             "source",
-            "--breeze=custom-breeze",
             "--http-backend-port",
             "8081",
             "--http-gateway-port",
@@ -170,7 +168,6 @@ mod tests {
         let ConfigCommand::Init(init) = parsed.config.command else {
             panic!("expected init command");
         };
-        assert_eq!(init.breeze.as_deref(), Some("custom-breeze"));
         assert_eq!(init.http_backend_port, 8_081);
         assert_eq!(init.http_gateway_port, 18_181);
     }
