@@ -341,6 +341,7 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(MANAGER.contains("recorder_command+=(--breeze)"));
     assert!(MANAGER.contains("recorder_command+=(--preflight-probe java-truststore)"));
     assert!(MANAGER.contains("recorder_command+=(--preflight-probe system-network)"));
+    assert!(!MANAGER.contains("chmod 0644 \"$data_dir/traffic-recorder-ca.pem\""));
     assert!(MANAGER.contains("detect_source_java_runtime"));
     assert!(MANAGER.contains("--entrypoint java \"$adapter_image_id\" -version"));
     assert!(!MANAGER.contains("TRAFFIC_E2E_SOURCE_LANGUAGE"));

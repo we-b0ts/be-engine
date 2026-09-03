@@ -857,8 +857,6 @@ run_standard_recording() {
                     -storepass changeit >/dev/null
                 chmod 0644 /workspace/data/traffic-recorder-ca.pem /workspace/data/source-truststore.jks
             '
-    else
-        chmod 0644 "$data_dir/traffic-recorder-ca.pem"
     fi
     if "$breeze_enabled"; then
         start_breeze "container:${anchor_name}"
