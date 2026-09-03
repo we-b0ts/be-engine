@@ -1148,11 +1148,13 @@ while their observed counts remain separate.
 
 An implementation may allow one source-positive metric to be absent from the
 target only when source revision evidence proves that an indirect dependency
-emits it independently and a repository search proves that current repository
-code does not directly call, construct, register, initialize, or start that
-interaction. Direct product behavior must be implemented in the target. Add an
-allowance with the evidence-validating plan/apply workflow; do not hand-edit
-the policy:
+emits it independently. Before returning rule inputs, the target AI must inspect
+the relevant source startup/configuration and dependency-emitter paths and
+confirm both that source code does not start the interaction and that the
+interaction does not affect source behavior. Either finding requires target
+implementation. These conclusions are eligibility preconditions, not persisted
+booleans. Add an allowance with the evidence-validating plan/apply workflow; do
+not hand-edit the policy:
 
 ```bash
 traffic-e2e config comparison plan allow-target-missing \
@@ -1162,8 +1164,7 @@ traffic-e2e config comparison plan allow-target-missing \
   --source-revision 0123456789abcdef \
   --dependency-path 'com.example:client:1.0.0' \
   --dependency-path 'com.vendor:telemetry:2.0.0' \
-  --emitter-evidence 'TelemetryInitializer#start emits /ping' \
-  --repository-search-evidence 'No direct endpoint call, client construction, bean, initializer, or startup registration' \
+  --emitter-evidence '{"inspected_paths":["pom.xml","vendor/src/com/vendor/TelemetryInitializer.java"],"description":"TelemetryInitializer independently emits /ping without affecting source behavior"}' \
   --comparison-run <exact-finalized-comparison-run>
 ```
 
@@ -1179,8 +1180,11 @@ process_output_rules:
       dependency_path:
       - com.example:client:1.0.0
       - com.vendor:telemetry:2.0.0
-      emitter_evidence: TelemetryInitializer#start emits /ping
-      repository_search_evidence: No direct endpoint call, client construction, bean, initializer, or startup registration
+      emitter_evidence:
+        inspected_paths:
+        - pom.xml
+        - vendor/src/com/vendor/TelemetryInitializer.java
+        description: TelemetryInitializer independently emits /ping without affecting source behavior
 ```
 
 The plan proves that the exact finalized capture has a positive source metric

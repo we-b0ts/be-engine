@@ -12,7 +12,10 @@ mod profile;
 mod profile_rules;
 
 pub(crate) use profile_rules::{ProfileByTypePolicy, ProfileByTypeRules};
-pub use profile_rules::{ProfileByTypeVerificationRules, ProfileTargetMissingAllowance};
+pub use profile_rules::{
+    ProfileByTypeVerificationRules, ProfileTargetMissingAllowance,
+    ProfileTargetMissingEmitterEvidence,
+};
 
 const CAPTURE_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_MAX_BYTES: u64 = 8 * 1024 * 1024;

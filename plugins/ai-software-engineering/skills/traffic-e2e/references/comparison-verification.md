@@ -110,16 +110,20 @@ require source-positive `HTTP` plus the logical `RPC_SERVICE_CLIENT` Motan
 group on target. Redis, Memcached, and service-internal metrics are not product
 comparison policies.
 
-If a source-only HTTP or Motan client metric is independently emitted by an
-indirect dependency, `action.details.comparison_observation.applicable_rule`
-describes `allow_target_missing`. Use its exact `config comparison plan` and
-`apply` commands. The rule requires a source revision, a dependency path from
-the direct dependency to the indirect emitter, emitter evidence, and repository
-search evidence proving there is no direct endpoint call, client construction,
-bean, initializer, or startup registration. If repository code directly owns
-the interaction, implement it in the target; an allowance is forbidden. Plan
-must validate an exact finalized comparison capture and apply remains bound to
-unchanged project, policy, and capture evidence.
+For a source-only HTTP or Motan client metric,
+`action.details.comparison_observation.rule_candidate` describes
+`allow_target_missing`. It is a diagnosis candidate, not authorization. The
+target AI must inspect the returned metric's source startup/configuration and
+indirect-emitter paths. Return exactly the canonical metric, dependency path,
+and structured emitter evidence only after proving that source code does not
+start the interaction and that the interaction does not affect source behavior;
+otherwise implement it in the target. `emitter_evidence.inspected_paths` names
+the source and dependency source paths actually inspected, and `description`
+states why the indirect dependency emits independently without affecting source
+behavior. These two eligibility conclusions are not rule fields. The
+coordinator supplies the process output, source revision, and comparison run to
+the plan/apply workflow. Plan validates the exact finalized comparison capture,
+and apply remains bound to unchanged project, policy, and capture evidence.
 
 When one repaired immutable case passes replay but the first otherwise-valid
 fresh comparison does not observe it, retain a non-blocking

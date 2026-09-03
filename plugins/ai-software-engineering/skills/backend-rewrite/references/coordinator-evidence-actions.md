@@ -1,16 +1,17 @@
 # Coordinator Evidence Actions
 
-Read this guide only after the API worker is confirmed and returns source-proven
-inputs for a response rule, recorder capture, or a process-owned dependency
-rule, or when the current action exposes one of those planners. Workers may run
-returned read-only help commands but never execute the state-mutating commands
-here.
+Read this guide only after the assigned worker is confirmed and returns
+source-proven inputs for a response rule, recorder capture, process-owned
+dependency rule, or process-output rule, or when the current action exposes one
+of those planners. Workers may run returned read-only help commands but never
+execute the state-mutating commands here.
 
 ## Contents
 
 - Recorder-capture planning and refresh
 - Typed response-rule planning
 - Process-owned dependency-rule planning and reclassification
+- Process-output target-missing planning
 - Evidence gate and ownership invariants
 - Bootstrap dependency overlays
 
@@ -113,6 +114,24 @@ scoped waiting API, poll current `status`; never execute its stale acceptance.
 Do not follow capture apply with `recording request`. Continue runnable work and
 read [recording-lifecycle.md](recording-lifecycle.md) when the coordinator
 returns the consolidated refresh.
+
+## Process-Output Target-Missing Rules
+
+Use this route only when a confirmed process-output worker returns the exact
+`metric`, `dependency_path`, and structured `emitter_evidence` requested by
+`comparison_observation.rule_candidate`. The worker must have inspected the
+listed source paths and proved both that source code does not start the
+interaction and that the interaction does not affect source behavior. Either
+contrary finding requires target implementation and forbids this rule.
+
+The main orchestrator supplies the current process-output ID, source revision,
+and finalized comparison run to `traffic-e2e config comparison plan
+allow-target-missing`, then reviews the preview and repeats the same arguments
+with `apply`. Do not hand-edit `.traffic-e2e/verification.yaml`. The structured
+emitter evidence is JSON with exactly `inspected_paths` and `description`.
+Applying the policy changes the repository fingerprint; resume only through the
+coordinator, which reruns the normal quality, Replay, and comparison flow. One
+passing post-apply workflow is sufficient.
 
 ## Process-Owned Dependency Rules
 

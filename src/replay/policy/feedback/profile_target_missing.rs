@@ -15,8 +15,7 @@ pub struct ProfileTargetMissingFeedback {
     pub metric: String,
     pub source_revision: String,
     pub dependency_path: Vec<String>,
-    pub emitter_evidence: String,
-    pub repository_search_evidence: String,
+    pub emitter_evidence: crate::ProfileTargetMissingEmitterEvidence,
     pub comparison_run: PathBuf,
 }
 
@@ -31,8 +30,7 @@ pub struct ProfileTargetMissingReport {
     pub metric: String,
     pub source_revision: String,
     pub dependency_path: Vec<String>,
-    pub emitter_evidence: String,
-    pub repository_search_evidence: String,
+    pub emitter_evidence: crate::ProfileTargetMissingEmitterEvidence,
     pub changed: bool,
     pub applied: bool,
     pub diff: String,
@@ -118,7 +116,6 @@ pub fn plan_profile_target_missing(
         source_revision: feedback.source_revision,
         dependency_path: feedback.dependency_path,
         emitter_evidence: feedback.emitter_evidence,
-        repository_search_evidence: feedback.repository_search_evidence,
     };
     let rules = loaded
         .document
@@ -174,7 +171,6 @@ pub fn plan_profile_target_missing(
             source_revision: allowance.source_revision,
             dependency_path: allowance.dependency_path,
             emitter_evidence: allowance.emitter_evidence,
-            repository_search_evidence: allowance.repository_search_evidence,
             changed,
             applied: false,
             diff,
@@ -315,6 +311,11 @@ mod tests {
         assert!(report.applied);
         let policy = fs::read_to_string(&fixture.policy).unwrap();
         assert!(policy.contains("metric: HTTP.http://telemetry.example/ping"));
+        assert!(policy.contains("inspected_paths:"));
+        assert!(policy.contains("vendor/src/com/vendor/TelemetryInitializer.java"));
+        assert!(!policy.contains("source_started"));
+        assert!(!policy.contains("source_impact"));
+        assert!(!policy.contains("repository_search_evidence"));
         let validated = crate::replay::validate_replay_policy(&fixture.policy).unwrap();
         assert_eq!(
             validated.process_output_rules["metrics-profile"].allow_target_missing[0].metric,
@@ -434,9 +435,14 @@ mod tests {
                 "com.example:client:1.0.0".to_string(),
                 "com.vendor:telemetry:2.0.0".to_string(),
             ],
-            emitter_evidence: "TelemetryInitializer#start emits the interaction".to_string(),
-            repository_search_evidence: "No direct endpoint call, client construction, bean, initializer, or startup registration at source revision"
-                .to_string(),
+            emitter_evidence: crate::ProfileTargetMissingEmitterEvidence {
+                inspected_paths: vec![
+                    "pom.xml".to_string(),
+                    "vendor/src/com/vendor/TelemetryInitializer.java".to_string(),
+                ],
+                description: "TelemetryInitializer independently emits the interaction without affecting source behavior"
+                    .to_string(),
+            },
             comparison_run: fixture.run.clone(),
         }
     }

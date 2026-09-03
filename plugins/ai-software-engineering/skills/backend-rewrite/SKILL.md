@@ -28,9 +28,10 @@ Choose exactly one role before taking action:
 - **Assigned process-output worker:** use this role only when the handoff
   contains `action.details.work_scope.kind=process_output`, its ID, the complete
   action, and an absolute worker worktree. Own diagnosis of the returned
-  `comparison_observation`, target startup/output implementation, and local
-  tests. Do not expect API evidence commands, invent traffic operations,
-  advance coordinator state, execute acceptance, or operate another work item.
+  `comparison_observation`, source-path analysis required by a returned profile
+  rule candidate, target startup/output implementation, and local tests. Do not
+  expect API evidence commands, invent traffic operations, advance coordinator
+  state, execute acceptance, or operate another work item.
 
 If the handoff omits an exact work scope, complete action, or absolute
 worktree, remain the main orchestrator rather than inferring a worker role.
@@ -49,8 +50,9 @@ file only when their trigger occurs:
 - Read
   [coordinator-evidence-actions.md](references/coordinator-evidence-actions.md)
   only after worker confirmation and only when that worker returns inputs for
-  response-rule, recorder-capture, or dependency-rule planning, or confirmed
-  evidence exposes one of those coordinator-owned planners.
+  response-rule, recorder-capture, dependency-rule, or process-output-rule
+  planning, or confirmed evidence exposes one of those coordinator-owned
+  planners.
 - Read
   [recovery-and-system-repair.md](references/recovery-and-system-repair.md) only
   for `recovery_required`, `system_repair_required`, or a coordinator-issued

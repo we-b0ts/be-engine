@@ -158,7 +158,10 @@ pub use process_output::{
     ProcessOutputCaptureReport, ProcessOutputCaptureSide, ProcessOutputObservation,
     capture_project_process_outputs, capture_project_process_outputs_for_observation,
 };
-pub use process_output::{ProfileByTypeVerificationRules, ProfileTargetMissingAllowance};
+pub use process_output::{
+    ProfileByTypeVerificationRules, ProfileTargetMissingAllowance,
+    ProfileTargetMissingEmitterEvidence,
+};
 pub use recorder::{
     AccessPolicyAllowEvent, ArtifactOwner, BodyCapture, CaseBodyCapture, CaseContext,
     HeaderMapSnapshot, HttpExchangeEvent, KafkaConnectionEvent, KafkaDeliveryEvent,

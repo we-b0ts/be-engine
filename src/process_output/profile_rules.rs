@@ -8,6 +8,8 @@ const MAX_PROFILE_TYPE_LENGTH: usize = 128;
 const MAX_PROFILE_NAME_LENGTH: usize = 512;
 const MAX_DEPENDENCY_COORDINATE_LENGTH: usize = 256;
 const MAX_PROFILE_EVIDENCE_LENGTH: usize = 1_024;
+const MAX_PROFILE_EVIDENCE_PATHS: usize = 16;
+const MAX_PROFILE_EVIDENCE_PATH_LENGTH: usize = 512;
 const MOTAN_CLIENT_PROFILE_TYPES: [&str; 4] = [
     "RPC_SERVICE_CLIENT",
     "RPC_SERVICE_CLIENT_V2",
@@ -32,8 +34,14 @@ pub struct ProfileTargetMissingAllowance {
     pub metric: String,
     pub source_revision: String,
     pub dependency_path: Vec<String>,
-    pub emitter_evidence: String,
-    pub repository_search_evidence: String,
+    pub emitter_evidence: ProfileTargetMissingEmitterEvidence,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileTargetMissingEmitterEvidence {
+    pub inspected_paths: Vec<String>,
+    pub description: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,16 +268,30 @@ fn validate_evidence(output_id: &str, allowance: &ProfileTargetMissingAllowance)
         );
     }
     ensure!(
-        valid_single_line(&allowance.emitter_evidence, MAX_PROFILE_EVIDENCE_LENGTH),
-        "process output {output_id} profile_by_type allow_target_missing metric {:?} emitter_evidence must be a trimmed single-line value up to {MAX_PROFILE_EVIDENCE_LENGTH} bytes",
+        (2..=MAX_PROFILE_EVIDENCE_PATHS)
+            .contains(&allowance.emitter_evidence.inspected_paths.len()),
+        "process output {output_id} profile_by_type allow_target_missing metric {:?} emitter_evidence.inspected_paths must contain 2-{MAX_PROFILE_EVIDENCE_PATHS} source or dependency source paths",
         allowance.metric
     );
+    let mut inspected_paths = BTreeSet::new();
+    for path in &allowance.emitter_evidence.inspected_paths {
+        ensure!(
+            valid_single_line(path, MAX_PROFILE_EVIDENCE_PATH_LENGTH),
+            "process output {output_id} profile_by_type allow_target_missing metric {:?} emitter_evidence.inspected_paths entries must be trimmed single-line paths up to {MAX_PROFILE_EVIDENCE_PATH_LENGTH} bytes",
+            allowance.metric
+        );
+        ensure!(
+            inspected_paths.insert(path.as_str()),
+            "process output {output_id} profile_by_type allow_target_missing metric {:?} emitter_evidence.inspected_paths contains duplicate path {path:?}",
+            allowance.metric
+        );
+    }
     ensure!(
         valid_single_line(
-            &allowance.repository_search_evidence,
+            &allowance.emitter_evidence.description,
             MAX_PROFILE_EVIDENCE_LENGTH
         ),
-        "process output {output_id} profile_by_type allow_target_missing metric {:?} repository_search_evidence must be a trimmed single-line value up to {MAX_PROFILE_EVIDENCE_LENGTH} bytes",
+        "process output {output_id} profile_by_type allow_target_missing metric {:?} emitter_evidence.description must be a trimmed single-line value up to {MAX_PROFILE_EVIDENCE_LENGTH} bytes",
         allowance.metric
     );
     Ok(())
@@ -338,6 +360,32 @@ mod tests {
                 .to_string()
                 .contains("direct dependency followed by at least one indirect dependency")
         );
+
+        let mut missing_inspected_path = rules();
+        missing_inspected_path.allow_target_missing[0]
+            .emitter_evidence
+            .inspected_paths
+            .pop();
+        assert!(
+            missing_inspected_path
+                .validate("metrics-profile")
+                .unwrap_err()
+                .to_string()
+                .contains("inspected_paths must contain 2-")
+        );
+
+        let mut empty_description = rules();
+        empty_description.allow_target_missing[0]
+            .emitter_evidence
+            .description
+            .clear();
+        assert!(
+            empty_description
+                .validate("metrics-profile")
+                .unwrap_err()
+                .to_string()
+                .contains("emitter_evidence.description")
+        );
     }
 
     #[test]
@@ -376,10 +424,14 @@ mod tests {
                     "com.example:direct-client:1.0.0".to_string(),
                     "com.vendor:indirect-emitter:2.0.0".to_string(),
                 ],
-                emitter_evidence: "com.vendor.Emitter#start issues the metric operation"
-                    .to_string(),
-                repository_search_evidence: "At revision 0123456789abcdef, searches found no direct call, bean/init registration, or startup hook"
-                    .to_string(),
+                emitter_evidence: ProfileTargetMissingEmitterEvidence {
+                    inspected_paths: vec![
+                        "pom.xml".to_string(),
+                        "vendor/src/com/vendor/Emitter.java".to_string(),
+                    ],
+                    description: "com.vendor.Emitter independently issues the metric operation without affecting source behavior"
+                        .to_string(),
+                },
             }],
         }
     }

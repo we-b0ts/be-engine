@@ -163,8 +163,8 @@ eligible work instead of waiting. If a process-output repair changes target
 content, completed APIs become stale; let the coordinator drain their final
 revalidation before it performs the process-output comparison again.
 
-If the worker returns source-proven response-rule, recorder-capture, or
-process-owned-rule inputs, read
+If the worker returns source-proven response-rule, recorder-capture,
+process-owned-rule, or process-output-rule inputs, read
 [coordinator-evidence-actions.md](coordinator-evidence-actions.md) before the
 main orchestrator performs the coordinator-owned mutation.
 

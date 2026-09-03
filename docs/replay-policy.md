@@ -587,7 +587,9 @@ Target-specific metrics-profile allowances live at
 `process_output_rules.<output-id>.allow_target_missing`. Each rule selects one
 canonical `<type>.<name>` interaction and carries `source_revision`, an ordered
 `dependency_path` with at least a direct dependency and its indirect emitter,
-one-line `emitter_evidence`, and one-line `repository_search_evidence`.
+and structured `emitter_evidence`. The evidence contains at least two paths the
+target AI inspected in source or dependency source plus one single-line
+description of the independently emitted interaction.
 
 Use `traffic-e2e config comparison plan|apply allow-target-missing`; do not
 hand-edit these entries. Planning requires an exact finalized comparison run
@@ -596,7 +598,10 @@ interaction absent on target. Apply rejects project, policy, or capture changes
 since planning. The rule is valid only for an independently emitting indirect
 dependency. A direct endpoint call, client construction, bean registration,
 initializer, or startup hook in repository code requires target implementation.
-It never applies to exact-count metrics and never suppresses target extras.
+An interaction that affects source behavior also requires target
+implementation. These two eligibility conclusions are preconditions for
+submitting rule evidence and are not persisted as boolean fields. The rule
+never applies to exact-count metrics and never suppresses target extras.
 
 HTTP `all_http://x`/`http://x` and `all_https://x`/`https://x` canonicalize to
 one allowance, without merging their observed counts. The four Motan client

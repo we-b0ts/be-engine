@@ -53,10 +53,9 @@ struct ProfileTargetMissingArgs {
     /// Dependency coordinates ordered from the direct dependency to the indirect emitter.
     #[arg(long, required = true)]
     dependency_path: Vec<String>,
-    #[arg(long)]
-    emitter_evidence: String,
-    #[arg(long)]
-    repository_search_evidence: String,
+    /// JSON evidence with inspected_paths and description from source analysis.
+    #[arg(long, value_parser = parse_profile_emitter_evidence)]
+    emitter_evidence: traffic_e2e::ProfileTargetMissingEmitterEvidence,
     /// Exact finalized comparison recording directory.
     #[arg(long)]
     comparison_run: PathBuf,
@@ -132,8 +131,15 @@ fn profile_target_missing_plan(
         source_revision: args.source_revision,
         dependency_path: args.dependency_path,
         emitter_evidence: args.emitter_evidence,
-        repository_search_evidence: args.repository_search_evidence,
         comparison_run: args.comparison_run,
+    })
+}
+
+fn parse_profile_emitter_evidence(
+    value: &str,
+) -> std::result::Result<traffic_e2e::ProfileTargetMissingEmitterEvidence, String> {
+    serde_json::from_str(value).map_err(|error| {
+        format!("--emitter-evidence must be JSON with inspected_paths and description: {error}")
     })
 }
 
@@ -213,9 +219,7 @@ mod tests {
                 "--dependency-path",
                 "com.vendor:telemetry:2.0.0",
                 "--emitter-evidence",
-                "TelemetryInitializer#start emits /ping",
-                "--repository-search-evidence",
-                "No direct call or startup registration at the source revision",
+                r#"{"inspected_paths":["pom.xml","vendor/src/com/vendor/TelemetryInitializer.java"],"description":"TelemetryInitializer independently emits /ping without affecting source behavior"}"#,
                 "--comparison-run",
                 "/comparison/run",
             ])

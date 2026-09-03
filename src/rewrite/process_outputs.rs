@@ -347,37 +347,40 @@ fn missing_issue(
     });
     if allow_target_missing_example.is_some() {
         recommended_checks.push(
-            "If current repository code calls, constructs, registers, initializes, or starts this interaction, implement it in the target; allow_target_missing is forbidden."
+            "Inspect the relevant source startup/configuration paths and the indirect dependency emitter before choosing a repair."
                 .to_string(),
         );
         recommended_checks.push(
-            "Only when an indirect dependency independently emits the interaction, use the evidence-backed config comparison allow-target-missing plan/apply workflow."
+            "Return allow_target_missing rule inputs only when source code does not start the interaction and the interaction does not affect source behavior; otherwise implement it in the target."
                 .to_string(),
         );
     }
-    let allow_target_missing_rule = allow_target_missing_example.map(|detail| {
+    let allow_target_missing_candidate = allow_target_missing_example.map(|detail| {
+        let metric = crate::process_output::canonical_profile_metric(
+            &detail.record_type,
+            &detail.example.name,
+        );
         json!({
             "name": "allow_target_missing",
             "policy": ".traffic-e2e/verification.yaml",
-            "example_metric": crate::process_output::canonical_profile_metric(
-                &detail.record_type,
-                &detail.example.name,
-            ),
+            "metric": metric,
             "plan_apply_required": true,
             "plan_command": "traffic-e2e config comparison plan allow-target-missing --help",
             "apply_command": "traffic-e2e config comparison apply allow-target-missing --help",
-            "required_fields": [
+            "analysis_instruction": "Inspect source startup/configuration and indirect emitter paths. Return this rule input only when source code does not start the interaction and the interaction does not affect source behavior; otherwise target implementation is required.",
+            "required_analysis_output": {
+                "metric": metric,
+                "dependency_path": ["<direct_dependency>", "<indirect_emitter>"],
+                "emitter_evidence": {
+                    "inspected_paths": ["<source_startup_or_configuration_path>", "<indirect_emitter_source_path>"],
+                    "description": "<why_the_indirect_dependency_emits_independently_without_affecting_source_behavior>"
+                }
+            },
+            "system_bound_fields": [
                 "process_output",
-                "metric",
                 "source_revision",
-                "dependency_path",
-                "emitter_evidence",
-                "repository_search_evidence",
                 "comparison_run"
-            ],
-            "eligibility": "indirect_dependency_only",
-            "direct_repository_trigger": "implementation_required",
-            "evidence_boundary": "dependency_path must prove a direct dependency followed by the indirect emitter; repository_search_evidence must prove no direct call, construction, registration, initialization, or startup in current repository code"
+            ]
         })
     });
     RewriteIssue {
@@ -405,7 +408,7 @@ fn missing_issue(
             "source": { "present": result.source_present },
             "candidate": { "present": result.target_present },
             "detail": &result.detail,
-            "applicable_rule": allow_target_missing_rule
+            "rule_candidate": allow_target_missing_candidate
         })),
     }
 }
@@ -765,14 +768,31 @@ mod tests {
         assert_eq!(detail["types"][0]["type"], "HTTP");
         assert_eq!(detail["types"][0]["difference_count"], 12);
         assert_eq!(detail["types"][0]["example"]["name"], "api.demo.test:443");
-        let applicable = &json["comparison_observation"]["applicable_rule"];
-        assert_eq!(applicable["name"], "allow_target_missing");
-        assert_eq!(applicable["example_metric"], "HTTP.api.demo.test:443");
-        assert_eq!(applicable["eligibility"], "indirect_dependency_only");
+        let candidate = &json["comparison_observation"]["rule_candidate"];
+        assert_eq!(candidate["name"], "allow_target_missing");
+        assert_eq!(candidate["metric"], "HTTP.api.demo.test:443");
         assert_eq!(
-            applicable["direct_repository_trigger"],
-            "implementation_required"
+            candidate["required_analysis_output"]["metric"],
+            "HTTP.api.demo.test:443"
         );
+        assert_eq!(
+            candidate["required_analysis_output"]["dependency_path"],
+            serde_json::json!(["<direct_dependency>", "<indirect_emitter>"])
+        );
+        assert_eq!(
+            candidate["required_analysis_output"]["emitter_evidence"]["inspected_paths"],
+            serde_json::json!([
+                "<source_startup_or_configuration_path>",
+                "<indirect_emitter_source_path>"
+            ])
+        );
+        assert!(
+            candidate["analysis_instruction"]
+                .as_str()
+                .unwrap()
+                .contains("does not affect source behavior")
+        );
+        assert!(json["comparison_observation"]["applicable_rule"].is_null());
     }
 
     fn api(api: &str, status: RewriteApiStatus) -> RewriteApiProgress {

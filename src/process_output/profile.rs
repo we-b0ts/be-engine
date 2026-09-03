@@ -436,7 +436,9 @@ fn side_name(side: ProcessOutputCaptureSide) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::process_output::ProfileTargetMissingAllowance;
+    use crate::process_output::{
+        ProfileTargetMissingAllowance, ProfileTargetMissingEmitterEvidence,
+    };
 
     #[test]
     fn source_positive_ignores_source_records_without_slow_threshold() {
@@ -519,10 +521,14 @@ mod tests {
                     "com.example:client-core:2.4.1".to_string(),
                     "com.vendor:telemetry:1.8.0".to_string(),
                 ],
-                emitter_evidence: "com.vendor.telemetry.TelemetryInitializer#start emits this request"
-                    .to_string(),
-                repository_search_evidence: "At source revision 0123456789abcdef, repository searches found no endpoint call, client construction, bean registration, init method, or startup hook"
-                    .to_string(),
+                emitter_evidence: ProfileTargetMissingEmitterEvidence {
+                    inspected_paths: vec![
+                        "pom.xml".to_string(),
+                        "vendor/src/com/vendor/telemetry/TelemetryInitializer.java".to_string(),
+                    ],
+                    description: "TelemetryInitializer independently emits this request without affecting source behavior"
+                        .to_string(),
+                },
             }],
         };
         let result = compare_bytes(
@@ -665,11 +671,14 @@ mod tests {
                     "com.example:client-core:2.4.1".to_string(),
                     "com.vendor:telemetry:1.8.0".to_string(),
                 ],
-                emitter_evidence:
-                    "com.vendor.telemetry.TelemetryInitializer#start emits this request"
+                emitter_evidence: ProfileTargetMissingEmitterEvidence {
+                    inspected_paths: vec![
+                        "pom.xml".to_string(),
+                        "vendor/src/com/vendor/telemetry/TelemetryInitializer.java".to_string(),
+                    ],
+                    description: "TelemetryInitializer independently emits this request without affecting source behavior"
                         .to_string(),
-                repository_search_evidence: "At source revision 0123456789abcdef, repository searches found no endpoint call, client construction, bean registration, init method, or startup hook"
-                    .to_string(),
+                },
             }],
         }
     }
