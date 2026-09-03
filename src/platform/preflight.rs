@@ -50,7 +50,7 @@ pub struct ManagedRecordingPreflightRecordingResult {
     pub status: &'static str,
     pub run_id: String,
     pub target_root: PathBuf,
-    pub source_container: String,
+    pub source_snapshot_id: String,
     pub probe_kind: PreflightProbeKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub breeze_container: Option<String>,

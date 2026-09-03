@@ -77,8 +77,7 @@ pub use recording::{
     TrafficJsonlMode,
 };
 pub use repository_initialization::{
-    InspectedContainer, RepositoryConfigInitOptions, RepositoryConfigInitResult,
-    initialize_repository_config,
+    RepositoryConfigInitOptions, RepositoryConfigInitResult, initialize_repository_config,
 };
 pub use repository_protocol::{
     MotanProtocolConfigOptions, MotanProtocolConfigResult, enable_repository_motan_protocol,

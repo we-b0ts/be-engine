@@ -4,143 +4,98 @@ Read this reference only when the caller explicitly asks to initialize an
 uninitialized target repository. Initialization is manual and one-time. Normal
 rewrite work and resumed sessions must not rerun it.
 
-## 1. Initialize The Repository Contract
+## Initialize
 
-At command time, `--source-container` must name a present, inspectable, stopped
-local source container. Run from the target repository, or bind it with global
-`--target-root`:
+The first provider version accepts one running, ready Kubernetes Pod. Run from
+the target repository, or bind it with global `--target-root`:
 
 ```bash
 backend-rewrite init \
-  --source-container <existing-source-container> \
+  --source-pod <pod> \
+  --namespace <namespace> \
+  [--pod-container <regular-container>] \
+  [--kubeconfig /path/to/kubeconfig] \
+  [--context <context>] \
   [--env-file /path/to/initial.env] \
   [--readiness-path /healthz] \
   [--http-backend-port 8080] \
   [--http-gateway-port 4080]
 ```
 
+Omit `--pod-container` only when the Pod has exactly one regular container.
+The command pins the selected container's exact immutable image in local
+Docker and snapshots its image identity, effective environment, command and
+arguments, supported security settings, and supported ConfigMap/Secret mounts
+into the ignored `.traffic-e2e/local/source/` directory. It may pull the exact
+registry digest. The Pod is an initialization input only: later preflight,
+recording, Comparison, Replay, and startup-input APIs use the local snapshot
+and do not require access to the original Pod.
+
 Run `backend-rewrite` as the current user; do not add `sudo`. The current user
-only needs access to Docker. An environment whose current user is already root
-may run it normally.
+needs access to Docker and must be able to get and exec the named Pod.
+Initialization captures the effective container environment directly, so later
+target starts automatically receive source application variables even when a
+referenced ConfigMap or Secret is no longer API-readable.
 
-`--env-file` is optional and may name an empty dotenv file. Initialization
-imports it into the ignored, mode-0600 project file
-`.traffic-e2e/local/target.env`; without the option, that file starts empty.
-The same file is loaded for every target start and is recreated empty if it is
-missing.
+`--env-file` is optional and may name an empty dotenv file. It initializes the
+ignored mode-0600 `.traffic-e2e/local/target.env`. That file contains only
+target overrides or additions; source application environment is injected from
+the source snapshot first, then `target.env` wins by name. There is one project
+environment file, never one per case.
 
-`--readiness-path` defaults to `/healthz`. Initialization requires status `200`
-and writes it explicitly as `success_status: 200` in `project.yaml`; there is no
-readiness status argument.
+`--readiness-path` defaults to `/healthz`. The generated configuration records
+status `200`; there is no readiness-status argument. The backend port defaults
+to `8080`, the Recorder HTTP gateway defaults to `4080`, and the two ports must
+differ. traffic-e2e does not infer or special-case an application `PORT`
+variable.
 
-`--http-backend-port` is the native HTTP port shared by the source and target
-backend processes and defaults to `8080`. It determines the generated source
-upstream, managed Comparison candidate, target readiness endpoint, and Replay
-request destination. `--http-gateway-port` is the Recorder gateway listener and
-defaults to `4080`; it must differ from the backend port.
-
-Initialization creates the local `dev-migration` pull-request base branch from
-the current `HEAD` when it is missing, without switching the current branch. It
-also creates schema-version-16 repository configuration, an empty startup mount
-snapshot, a minimal `.traffic-e2e/Dockerfile.recording` scaffold, the target
-bootstrap when target files are absent, and the required ignore rules. It
-preserves an existing `dev-migration` branch, existing Dockerfiles, and an
-existing complete target, and refuses partial or conflicting initialization
-state.
+Initialization creates local `dev-migration` from the current `HEAD` when it is
+missing without switching branches. It writes schema-version-17 project,
+source-traffic-policy, and verification configuration; an empty startup mount
+snapshot; missing Dockerfile scaffolds; a target bootstrap when target files
+are absent; and required ignore rules. Existing complete target files and
+Dockerfiles are preserved. Partial or conflicting initialization state is
+rejected.
 
 Do not scan source or target code before this command merely to enumerate
 environment variables, dotenv files, mounts, or writable directories. Do not
-add framework-specific port or trust variable mappings during initialization.
+add framework-specific port or trust mappings during initialization.
 
-## 2. Complete The Two Build Contracts
+## Complete The Build Contracts
 
 `.traffic-e2e/Dockerfile.recording` and `.traffic-e2e/Dockerfile.e2e` are
 target-owned build contracts. The Target AI may edit either file to satisfy the
-source adaptor or target runtime contract. Initialization supplies only missing
-scaffolds; managed preflight validates the resulting images.
-
-Review and finish the generated `.traffic-e2e/Dockerfile.recording` scaffold
-against the inspected source image and its real launch contract. Preserve the
-real entrypoint, arguments, working directory, and required runtime files. The
-adapted application must run as UID/GID `998:998`. Do not embed credentials,
-generated trust, recordings, probe tooling, or machine-local state.
-
-Preserve the generated or existing `.traffic-e2e/Dockerfile.e2e`. Its final
-image must run the target entrypoint in the foreground as UID/GID `998:998`,
-remain buildable through the managed command, and contain no credentials,
+source adaptor or target runtime contract. Both final processes must run in the
+foreground as UID/GID `998:998`; neither image may contain credentials,
 recordings, generated trust, build cache, or `.traffic-e2e/local/` content.
 
-The generated bootstrap target contains the temporary module
-`src/startup_probe.rs`, and `src/main.rs` calls it during startup. Keep both in
-place through initialization preflight. As soon as real target implementation
-work begins, delete that module, its `mod startup_probe;` declaration, and its
-`startup_probe::run()` call. The generated comments mark all three locations.
-This temporary initialization code must never become product behavior.
+The generated bootstrap target temporarily contains `src/startup_probe.rs`,
+and `src/main.rs` calls it during startup. Keep it through initialization
+preflight. Delete the module, declaration, and call when real target
+implementation begins, as marked by generated comments.
 
-If either image needs an image-local writable directory, follow
-[startup.md](startup.md) and update the applicable Dockerfile for UID/GID
-`998:998`. Do not assume a fixed Dockerfile structure or mutate configuration
-and credential trees recursively.
+If an image needs an image-local writable directory, follow
+[startup.md](startup.md) and update the applicable Dockerfile after inspecting
+its real structure. Do not assume a fixed base image or available shell tool.
 
-## 3. Run The Managed Initialization Check
+## Verify Initialization
 
-After both Dockerfiles are ready, run:
+Run:
 
 ```bash
 backend-rewrite init preflight --duration-seconds 60
 ```
 
-Provide any required named caller environment without printing its value.
-Treat only the returned overall `status = "passed"` as success. On failure,
-change the repository build/startup contract or managed startup inputs named by
-the result, then rerun the same command. Additional local checks may help
-diagnosis, but only the managed preflight result completes initialization.
+Only overall `status = "passed"` completes the check. On failure, adjust the
+reported build/startup contract or managed input and rerun the same command.
+Preflight checks initialization plumbing; it is not business API evidence and
+must not advance `backend-rewrite next`.
 
-Initialization preflight validates only the initialized build, recording,
-network, target startup, and cleanup contracts. It is not business API
-compatibility evidence and must not run or advance `backend-rewrite next`.
+During later implementation, read [startup.md](startup.md) only when target
+behavior proves another startup input is needed. Use `startup env` and
+`startup mount` APIs rather than editing `project.yaml` or snapshot files.
 
-## 4. Add Omitted Startup Inputs Only When Proven Necessary
-
-During later implementation, read [startup.md](startup.md) only when actual
-target behavior proves that an input is missing. Use the managed API rather
-than hand-editing `project.yaml` or local snapshot state:
-
-```bash
-backend-rewrite --target-root <target> startup env list
-backend-rewrite --target-root <target> startup env equals <NAME> \
-  [--from-env <CALLER_NAME>]
-backend-rewrite --target-root <target> startup env ensure <NAME> \
-  [--from-env <CALLER_NAME>]
-backend-rewrite --target-root <target> startup env import <PATH>
-
-backend-rewrite --target-root <target> startup mount list
-backend-rewrite --target-root <target> startup mount exists <ABSOLUTE_PATH>
-backend-rewrite --target-root <target> startup mount ensure <ABSOLUTE_PATH>
-```
-
-Environment APIs never return stored values. Mount `ensure` captures only a
-missing absolute source-compatible path from the retained stopped source
-container and preserves existing snapshot content. Replacing or refreshing
-captured content remains an explicitly authorized administrator operation.
-
-## 5. Finish Initialization
-
-Initialization is complete only when:
-
-- `backend-rewrite init` succeeded;
-- both Dockerfiles are present and contain the reviewed launch contracts;
-- `.traffic-e2e/local/target.env` exists with mode `0600`;
-- `backend-rewrite init preflight` returned overall `passed`; and
-- no credential, recording, generated trust, or `.traffic-e2e/local/` content
-  is included in source-controlled changes.
-
-Leave the configured source container present and stopped after initialization;
-it is a retained system input, not a container owned by the initialization AI
-for cleanup.
-
-Stop there. Do not begin the rewrite workflow as part of initialization.
-
-If the caller asks for Git delivery, confirm the intended baseline and target
-branch before creating a feature branch, commit, push, or pull request. Keep
-runtime-local files out of the commit. Otherwise leave delivery to the caller.
+Initialization is complete when init succeeded, both Dockerfiles are ready,
+`.traffic-e2e/local/target.env` exists with mode `0600`, preflight passed, and
+no local snapshot or credential entered source control. Stop there unless the
+caller separately asks to begin the rewrite workflow or deliver Git changes.

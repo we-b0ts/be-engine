@@ -37,6 +37,7 @@ mod repository;
 mod request_headers;
 mod rewrite;
 mod runtime_output;
+mod source_snapshot;
 mod startup;
 mod target_container;
 mod tcp_gateway;
@@ -110,7 +111,7 @@ pub use config::{
     HttpConfig, HttpGatewayCaseLimitsConfig, HttpGatewayConfig, HttpGatewayFallbackMode,
     HttpGatewayFixedResponseConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig,
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
-    InspectedContainer, MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
+    MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
     MotanBackgroundDependencyReport, MotanGatewayConfig, MotanGatewayRuleConfig,
     MotanProtocolConfigOptions, MotanProtocolConfigResult, MysqlConfig, MysqlRouteConfig,
     RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
@@ -250,6 +251,17 @@ pub use rewrite::{
     status_rewrite_for_process_output, transfer_rewrite_worker, verify_rewrite_repair,
 };
 pub use runtime_output::RuntimeOutputLocation;
+pub use source_snapshot::{
+    KubernetesSourceOptions, SourceIgnoredMount, SourceImage, SourceProviderEvidence,
+    SourceSnapshotReport, capture_kubernetes_source_snapshot,
+};
+
+pub fn source_environment_value(
+    target_root: &std::path::Path,
+    name: &str,
+) -> anyhow::Result<String> {
+    source_snapshot::environment_value(target_root, name)
+}
 pub use startup::{
     StartupConfig, StartupEnvironmentChange, StartupEnvironmentChangeStatus,
     StartupEnvironmentComparison, StartupEnvironmentImport, StartupEnvironmentList,

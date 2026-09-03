@@ -166,8 +166,10 @@ mod tests {
             "traffic-e2e",
             "config",
             "init",
-            "--source-container",
+            "--source-pod",
             "source",
+            "--namespace",
+            "wb-plat-ide",
         ])
         .unwrap();
 
@@ -190,8 +192,10 @@ mod tests {
                 "config",
                 "project",
                 "init",
-                "--source-container",
+                "--source-pod",
                 "source",
+                "--namespace",
+                "wb-plat-ide",
             ])
             .is_err()
         );

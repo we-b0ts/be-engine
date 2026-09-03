@@ -14,8 +14,9 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         config.version
     );
     ensure!(
-        !project.source.container.trim().is_empty(),
-        "source.container must not be empty"
+        project.source.snapshot == Path::new(crate::repository::LOCAL_SOURCE_ROOT),
+        "source.snapshot must be {:?}",
+        crate::repository::LOCAL_SOURCE_ROOT
     );
     if let Some(breeze) = &project.breeze {
         ensure!(

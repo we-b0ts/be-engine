@@ -104,46 +104,8 @@ fn hash_repository_path(target_root: &Path, relative: &str, hash: &mut Fnv1a) ->
     Ok(())
 }
 
-pub(super) fn source_container_revision(container: &str) -> Result<String> {
-    let (_, image_id) = source_container_identity(container)?;
-    Ok(image_id)
-}
-
-fn source_container_identity(container: &str) -> Result<(String, String)> {
-    let output = Command::new("docker")
-        .args([
-            "container",
-            "inspect",
-            "--format",
-            "{{.State.Running}}\t{{.Id}}\t{{.Image}}",
-            container,
-        ])
-        .output()
-        .with_context(|| format!("failed to inspect source container {container:?}"))?;
-    ensure!(
-        output.status.success(),
-        "configured source container {container:?} must be retained in a stopped state: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
-    let identity =
-        String::from_utf8(output.stdout).context("source container identity is not UTF-8")?;
-    parse_source_container_identity(container, &identity)
-}
-
-fn parse_source_container_identity(container: &str, identity: &str) -> Result<(String, String)> {
-    let mut fields = identity.trim().split('\t');
-    let running = fields.next().unwrap_or_default();
-    let container_id = fields.next().unwrap_or_default();
-    let image_id = fields.next().unwrap_or_default();
-    ensure!(
-        running == "false",
-        "configured source container {container:?} must be stopped; the managed source adaptor owns its recording ports"
-    );
-    ensure!(
-        fields.next().is_none() && !container_id.is_empty() && !image_id.is_empty(),
-        "source container {container:?} has an invalid Docker identity"
-    );
-    Ok((container_id.to_string(), image_id.to_string()))
+pub(super) fn source_image_revision(target_root: &Path) -> Result<String> {
+    crate::source_snapshot::source_image_revision(target_root)
 }
 
 pub(super) fn traffic_e2e_revision() -> Result<String> {
@@ -188,15 +150,9 @@ fn config_file_revision(target_root: &Path, relative: &str, label: &str) -> Resu
     Ok(hash.finish())
 }
 
-pub(super) fn source_runtime_inputs_revision(
-    target_root: &Path,
-    source_container: &str,
-) -> Result<String> {
-    let (container_id, source_revision) = source_container_identity(source_container)?;
+pub(super) fn source_runtime_inputs_revision(target_root: &Path) -> Result<String> {
     let mut hash = Fnv1a::default();
-    hash.update(source_revision.as_bytes());
-    hash.update(&[0]);
-    hash.update(container_id.as_bytes());
+    hash.update(crate::source_snapshot::source_runtime_revision(target_root)?.as_bytes());
     hash.update(&[0]);
     hash.update(crate::startup::startup_snapshot_revision(target_root)?.as_bytes());
     hash.update(&[0]);
@@ -258,22 +214,6 @@ mod tests {
     fn ids_are_stable_and_framed() {
         assert_eq!(id(&["ab", "c"]), id(&["ab", "c"]));
         assert_ne!(id(&["ab", "c"]), id(&["a", "bc"]));
-    }
-
-    #[test]
-    fn source_container_identity_requires_a_stopped_container() {
-        assert_eq!(
-            parse_source_container_identity("source", "false\tcontainer-id\tsha256:image\n")
-                .unwrap(),
-            ("container-id".to_string(), "sha256:image".to_string())
-        );
-        assert!(
-            parse_source_container_identity("source", "true\tcontainer-id\tsha256:image\n")
-                .unwrap_err()
-                .to_string()
-                .contains("must be stopped")
-        );
-        assert!(parse_source_container_identity("source", "false\tcontainer-id\n").is_err());
     }
 
     #[test]

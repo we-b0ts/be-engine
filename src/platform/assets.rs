@@ -6,8 +6,8 @@ use anyhow::{Context, Result};
 use uuid::Uuid;
 
 use super::{
-    COMPARISON_PROCESS_OUTPUTS, COMPARISON_TARGET_NETWORK, HTTPS_PROBE, MANAGER, PLATFORM_MOUNTS,
-    PREFLIGHT_READINESS, RECORDER_RUNTIME,
+    COMPARISON_PROCESS_OUTPUTS, COMPARISON_TARGET_NETWORK, CONTAINER_RUNTIME, HTTPS_PROBE, MANAGER,
+    PLATFORM_MOUNTS, PREFLIGHT_READINESS, RECORDER_RUNTIME,
 };
 
 pub(super) fn stage_assets(target_root: &Path) -> Result<PathBuf> {
@@ -29,6 +29,7 @@ pub(super) fn stage_assets(target_root: &Path) -> Result<PathBuf> {
     )?;
     write_asset(&root.join("recorder-runtime.sh"), RECORDER_RUNTIME, 0o600)?;
     write_asset(&root.join("platform-mounts.sh"), PLATFORM_MOUNTS, 0o600)?;
+    write_asset(&root.join("container-runtime.sh"), CONTAINER_RUNTIME, 0o600)?;
     write_asset(
         &root.join("preflight-readiness.sh"),
         PREFLIGHT_READINESS,

@@ -62,9 +62,9 @@ pub(in crate::rewrite) fn install_project_config(
         target["quality_gates"] = quality_gates;
     }
     let document = serde_json::json!({
-        "version": 16,
+        "version": 17,
         "project": {
-            "source": { "container": "source" },
+            "source": { "snapshot": ".traffic-e2e/local/source" },
             "target": target,
             "replay": { "policy": ".traffic-e2e/verification.yaml" },
             "recording": {

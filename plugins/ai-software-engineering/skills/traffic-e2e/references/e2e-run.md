@@ -8,7 +8,9 @@ lifecycle, HTTP requests, assertions, aggregation, progress, and publication.
 Initialize all repository configuration once from the target root:
 
 ```bash
-traffic-e2e config init --source-container <existing-source-container> \
+traffic-e2e config init --source-pod <pod> --namespace <namespace> \
+  [--pod-container <regular-container>] \
+  [--kubeconfig /path/to/kubeconfig] \
   [--env-file /path/to/initial.env] \
   [--http-backend-port 8080] \
   [--http-gateway-port 4080]
@@ -20,7 +22,7 @@ Recorder HTTP gateway listens on port `4080` by default; use
 `--http-gateway-port` only when that listener port is unavailable. The two
 ports must differ.
 
-The generated version-16 project configuration has separate `source`, `target`,
+The generated version-17 project configuration has separate `source`, `target`,
 `replay`, `recording`, `delivery`, and `state` settings plus an embedded static
 `recorder` section. `replay.case_dependency_post_response_window_ms`
 keeps the active Replay case open for dependencies admitted just after the
@@ -47,9 +49,12 @@ Before a run, the runner requires:
   default OpenSSH identity loadable by the repository-local managed agent;
 - valid project, source traffic policy, and replay config;
 - ignored `.traffic-e2e/local/`, ensured by repository initialization;
+- a validated `.traffic-e2e/local/source/` snapshot containing the immutable
+  source image identity and Kubernetes runtime inputs;
 - a matching `.traffic-e2e/local/startup/` snapshot captured by initialization;
 - a mode-0600 `.traffic-e2e/local/target.env`, created empty when no optional
-  initialization env file is provided;
+  initialization env file is provided; source application environment is
+  loaded first and this file supplies overrides or additions;
 - a feature branch distinct from the configured PR base.
 
 ## Prepare One Canonical API

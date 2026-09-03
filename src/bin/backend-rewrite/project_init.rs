@@ -6,18 +6,34 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use serde::Serialize;
 use traffic_e2e::{
-    DEFAULT_HTTP_BACKEND_PORT, DEFAULT_HTTP_GATEWAY_PORT, InspectedContainer,
+    DEFAULT_HTTP_BACKEND_PORT, DEFAULT_HTTP_GATEWAY_PORT, KubernetesSourceOptions,
     ManagedRecordingPreflightOptions, RepositoryConfigInitOptions, RepositoryConfigInitResult,
-    StartupSnapshotReport, initialize_repository_config, run_managed_recording_preflight,
+    SourceSnapshotReport, StartupSnapshotReport, initialize_repository_config,
+    run_managed_recording_preflight,
 };
 
 #[derive(Debug, Args)]
 pub(super) struct ProjectInitArgs {
     #[command(subcommand)]
     pub(super) command: Option<ProjectInitCommand>,
-    /// Existing genuine source application container to inspect and reproduce.
+    /// Running Kubernetes Pod whose application container is snapshotted during initialization.
     #[arg(long)]
-    source_container: Option<String>,
+    source_pod: Option<String>,
+    /// Kubernetes namespace containing the source Pod.
+    #[arg(long)]
+    namespace: Option<String>,
+    /// Regular Pod container to snapshot; omit when the Pod has exactly one regular container.
+    #[arg(long)]
+    pod_container: Option<String>,
+    /// Kubeconfig used only while creating the source snapshot.
+    #[arg(long, value_name = "PATH")]
+    kubeconfig: Option<PathBuf>,
+    /// Kubeconfig context used only while creating the source snapshot.
+    #[arg(long)]
+    context: Option<String>,
+    /// kubectl executable used during initialization.
+    #[arg(long, default_value = "kubectl", value_name = "PATH")]
+    kubectl_binary: PathBuf,
     /// Native HTTP port listened to by the source and target backend processes.
     #[arg(long, default_value_t = DEFAULT_HTTP_BACKEND_PORT)]
     pub(super) http_backend_port: u16,
@@ -51,7 +67,7 @@ pub(super) struct ProjectPreflightArgs {
 #[derive(Debug, Serialize)]
 struct ProjectInitReport {
     generated: Vec<PathBuf>,
-    source_container: InspectedContainer,
+    source_snapshot: SourceSnapshotReport,
     http_backend_port: u16,
     http_gateway_port: u16,
     local_dir: PathBuf,
@@ -109,12 +125,22 @@ pub(super) async fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: boo
             }
         };
     }
-    let source_container = args
-        .source_container
-        .context("--source-container is required when creating repository configuration")?;
+    let source_pod = args
+        .source_pod
+        .context("--source-pod is required when creating repository configuration")?;
+    let namespace = args
+        .namespace
+        .context("--namespace is required when creating repository configuration")?;
     let result = initialize_repository_config(RepositoryConfigInitOptions {
         target_root,
-        source_container,
+        source: KubernetesSourceOptions {
+            pod: source_pod,
+            namespace,
+            container: args.pod_container,
+            kubeconfig: args.kubeconfig,
+            context: args.context,
+            kubectl_binary: args.kubectl_binary,
+        },
         http_backend_port: args.http_backend_port,
         http_gateway_port: args.http_gateway_port,
         readiness_path: args.readiness_path,
@@ -155,7 +181,7 @@ impl From<RepositoryConfigInitResult> for ProjectInitReport {
     fn from(result: RepositoryConfigInitResult) -> Self {
         Self {
             generated: result.generated,
-            source_container: result.source_container,
+            source_snapshot: result.source_snapshot,
             http_backend_port: result.http_backend_port,
             http_gateway_port: result.http_gateway_port,
             local_dir: result.local_dir,

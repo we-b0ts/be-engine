@@ -95,12 +95,7 @@ pub fn ensure_startup_mount(target_root: &Path, path: &Path) -> Result<StartupMo
     let payload = render_project(&project)?;
     crate::config::edit::write_atomic(&config_path, &payload)?;
 
-    let snapshot = match crate::startup::extend_startup_snapshot(
-        &target_root,
-        &project.project.source.container,
-        &current,
-        path,
-    ) {
+    let snapshot = match crate::startup::extend_startup_snapshot(&target_root, &current, path) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             if let Err(rollback) = crate::config::edit::write_atomic(&config_path, &original) {

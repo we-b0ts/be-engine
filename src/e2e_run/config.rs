@@ -15,7 +15,7 @@ use super::{E2eRunInitOptions, E2eRunInitResult, branch};
 use crate::replay::validate_replay_policy;
 use anyhow::{Context, Result, bail, ensure};
 
-pub(super) const CONFIG_VERSION: u32 = 16;
+pub(super) const CONFIG_VERSION: u32 = 17;
 pub(super) const DEFAULT_RUNTIME_ROOT: &str = crate::internal_runtime::PROJECT_RELATIVE_ROOT;
 pub(crate) const PROJECT_CONFIG_FILE: &str = "project.yaml";
 
@@ -106,10 +106,6 @@ pub(crate) fn render_project_config(
     options: &E2eRunInitOptions,
     recorder: crate::config::AppConfig,
 ) -> Result<Vec<u8>> {
-    ensure!(
-        !options.source_container.trim().is_empty(),
-        "source_container must not be empty"
-    );
     if let Some(container) = &options.breeze_container {
         ensure!(
             !container.trim().is_empty(),
@@ -120,7 +116,7 @@ pub(crate) fn render_project_config(
         version: CONFIG_VERSION,
         project: ProjectSettings {
             source: SourceProjectConfig {
-                container: options.source_container.clone(),
+                snapshot: PathBuf::from(crate::repository::LOCAL_SOURCE_ROOT),
             },
             breeze: options
                 .breeze_container
@@ -296,7 +292,6 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
             target_request_timeout,
             target_quality_gates,
             target_max_response_bytes,
-            source_container: config.project.source.container,
             process_outputs,
             process_output_rules: policy.process_output_rules,
             breeze_container: config.project.breeze.map(|breeze| breeze.container),
@@ -347,7 +342,7 @@ pub(super) fn load_project_config(target_root: &Path, config_path: &Path) -> Res
     if !config_path.exists() {
         bail!(
             "{} is missing; from the target repository run `backend-rewrite init \
-             --source-container <container>`",
+             --source-pod <pod> --namespace <namespace>`",
             config_path.display()
         );
     }
@@ -546,7 +541,6 @@ mod tests {
     fn options(target_root: &Path) -> E2eRunInitOptions {
         E2eRunInitOptions {
             target_root: target_root.to_path_buf(),
-            source_container: "source-app".to_string(),
             breeze_container: Some("breeze".to_string()),
             target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
             target_startup: crate::startup::StartupConfig::default(),
@@ -572,7 +566,10 @@ mod tests {
         let config: ProjectConfig =
             serde_yaml::from_str(&fs::read_to_string(&result.config).unwrap()).unwrap();
         assert_eq!(config.version, CONFIG_VERSION);
-        assert_eq!(config.project.source.container, "source-app");
+        assert_eq!(
+            config.project.source.snapshot,
+            PathBuf::from(crate::repository::LOCAL_SOURCE_ROOT)
+        );
         assert_eq!(
             config.project.target.dockerfile,
             PathBuf::from(".traffic-e2e/Dockerfile.e2e")
@@ -890,21 +887,6 @@ mod tests {
         replacement.force = true;
         let result = initialize(replacement).unwrap();
         assert!(result.replaced);
-    }
-
-    #[test]
-    fn initialize_requires_source_container() {
-        let target = target();
-        let mut options = options(target.path());
-        options.source_container.clear();
-
-        let error = initialize(options).unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("source_container must not be empty")
-        );
     }
 
     #[test]

@@ -12,9 +12,10 @@ genuine dependency clients in the foreground, and stop cleanly on `SIGTERM`.
 Application logs belong in a configured writable runtime output such as
 `/data1/weibo/logs`; stdout/stderr output is not required. Each configured
 source-compatible startup path is mounted at the same absolute path it had in
-the source container. Exact source Docker mounts preserve `rw`/`ro` access;
-image-local source paths default to read-only. Every target start loads the ignored
-project-level `.traffic-e2e/local/target.env`; it may be empty. There is no
+the source snapshot. Captured ConfigMap/Secret access is preserved and
+image-local source paths default to read-only. Every target start loads source
+application environment from that snapshot, followed by the ignored
+project-level `.traffic-e2e/local/target.env` overrides. There is no
 generic or application-specific port mapping. The Breeze connection host below
 is runtime-owned and does not require a declaration. Target code must not
 depend on generic `TRAFFIC_E2E_*` environment variables.
@@ -62,10 +63,11 @@ Target production behavior must not depend on:
 
 The managed startup snapshot captures declared authoritative inputs below
 `.traffic-e2e/local/startup/mounts`, preserving each absolute source path.
-Application environment lives separately in the mode-0600
-`.traffic-e2e/local/target.env`. Never materialize configuration from
-source-process memory, remote responses, recordings, logs, or diagnostics. A complete
-source-SDK-owned snapshot may be transported only in its native format.
+Application environment comes from `.traffic-e2e/local/source/`; the mode-0600
+`.traffic-e2e/local/target.env` contains overrides and additions. Never
+materialize configuration from remote responses, recordings, logs, or
+diagnostics. A complete source-SDK-owned snapshot may be transported only in
+its native format.
 
 The port in recorder `http_gateway.matched_upstream` is the single native HTTP
 port source for readiness, the replay HTTP driver, and the Platform comparison

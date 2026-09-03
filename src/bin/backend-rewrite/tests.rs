@@ -60,14 +60,48 @@ fn compact_json_is_default_and_pretty_is_explicit() {
 
 #[test]
 fn parses_the_bounded_rewrite_surface() {
-    assert!(Cli::try_parse_from(["test", "init", "--source-container", "friendship"]).is_ok());
+    let init = [
+        "test",
+        "init",
+        "--source-pod",
+        "friendship",
+        "--namespace",
+        "wb-plat-ide",
+    ];
+    assert!(Cli::try_parse_from(init).is_ok());
     assert!(
         Cli::try_parse_from([
             "test",
             "init",
-            "--source-container",
+            "--source-pod",
             "friendship",
+            "--namespace",
+            "wb-plat-ide",
             "--breeze",
+        ])
+        .is_err()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "startup",
+            "env",
+            "ensure",
+            "DATABASE_URL",
+            "--from-source",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "startup",
+            "env",
+            "ensure",
+            "DATABASE_URL",
+            "--from-source",
+            "--value",
+            "one",
         ])
         .is_err()
     );
@@ -247,8 +281,10 @@ fn parses_the_bounded_rewrite_surface() {
         Cli::try_parse_from([
             "test",
             "init",
-            "--source-container",
+            "--source-pod",
             "friendship",
+            "--namespace",
+            "wb-plat-ide",
             "--recording-port",
             "18181",
         ])
@@ -259,19 +295,17 @@ fn parses_the_bounded_rewrite_surface() {
             Cli::try_parse_from([
                 "test",
                 "init",
-                "--source-container",
+                "--source-pod",
                 "friendship",
+                "--namespace",
+                "wb-plat-ide",
                 native_port_flag,
                 "8081",
             ])
             .is_err()
         );
     }
-    let RewriteCommand::Init(default_init) =
-        Cli::try_parse_from(["test", "init", "--source-container", "friendship"])
-            .unwrap()
-            .command
-    else {
+    let RewriteCommand::Init(default_init) = Cli::try_parse_from(init).unwrap().command else {
         panic!("expected init command");
     };
     assert_eq!(
@@ -300,8 +334,10 @@ fn parses_the_bounded_rewrite_surface() {
         Cli::try_parse_from([
             "test",
             "init",
-            "--source-container",
+            "--source-pod",
             "friendship",
+            "--namespace",
+            "wb-plat-ide",
             "--http-backend-port",
             "8081",
             "--http-gateway-port",
@@ -309,13 +345,15 @@ fn parses_the_bounded_rewrite_surface() {
         ])
         .is_ok()
     );
-    assert!(Cli::try_parse_from(["test", "init", "--source-container", "friendship"]).is_ok());
+    assert!(Cli::try_parse_from(init).is_ok());
     assert!(
         Cli::try_parse_from([
             "test",
             "init",
-            "--source-container",
+            "--source-pod",
             "friendship",
+            "--namespace",
+            "wb-plat-ide",
             "--env-file",
             "/tmp/target.env",
         ])
@@ -332,8 +370,10 @@ fn parses_the_bounded_rewrite_surface() {
             Cli::try_parse_from([
                 "test",
                 "init",
-                "--source-container",
+                "--source-pod",
                 "friendship",
+                "--namespace",
+                "wb-plat-ide",
                 removed,
                 "VALUE",
             ])

@@ -104,10 +104,12 @@ required environment variable, dotenv import, configuration mount, or
 image-local writable directory, read [startup.md](references/startup.md)
 before changing startup inputs or either Dockerfile. A required environment
 variable is actionable as soon as source behavior proves the target logic needs
-it; do not wait for a target failure. Workers return the startup input and the
-main orchestrator applies it through the documented startup API. Do not load
-this reference during one-time initialization merely to search for possible
-inputs.
+it; do not wait for a target failure. Source application environment captured
+during initialization is already injected into every target start. Workers
+return a startup input only for an override or addition, and the main
+orchestrator applies it through the documented startup API, using
+`--from-source` when appropriate. Do not load this reference during one-time
+initialization merely to search for possible inputs.
 
 Read [project-init.md](references/project-init.md) only when the caller
 explicitly asks to initialize an uninitialized target repository. Project

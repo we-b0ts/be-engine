@@ -1,7 +1,7 @@
-version: 16
+version: 17
 project:
   source:
-    container: readonly-source
+    snapshot: .traffic-e2e/local/source
   target:
     dockerfile: .traffic-e2e/Dockerfile.e2e
     startup: {}

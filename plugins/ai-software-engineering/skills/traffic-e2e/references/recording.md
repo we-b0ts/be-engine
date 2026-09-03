@@ -12,12 +12,11 @@ traffic-e2e record --target-root <target> \
   --api '<METHOD path>'
 ```
 
-Project config supplies the stopped source container used as the authoritative
-runtime inspection source and the optional Breeze container. traffic-e2e
-selects the runtime internally and owns the adapted source, Recorder, optional
-Breeze, readiness, finalization, signals, and cleanup. For Platform Java/Tomcat
-it builds its capture-only source adaptor. Do not generate or invoke repository
-recording wrappers.
+Project config supplies the ignored initialization-owned source snapshot and
+the optional Breeze container. traffic-e2e selects the runtime internally and
+owns the adapted source, Recorder, optional Breeze, readiness, finalization,
+signals, and cleanup. It builds the capture-only source adaptor from the exact
+snapshotted image. Do not generate or invoke repository recording wrappers.
 
 For a Breeze-enabled initialized project, the source adaptor preserves the
 source entrypoint and all source Mesh routing switches. It does not force
@@ -32,13 +31,12 @@ preflight`, not every ordinary recording, actively resolves
 observation in `recording-network.json`.
 
 The managed runtime retains a target-scoped adaptor image. Every managed run
-requires the configured source container to remain present and stopped, then
-inspects its immutable image ID and runtime inputs without changing it. A
-missing adaptor or one labeled for another source image or build-contract
-revision triggers a build/refresh. Run-private build state and the temporary
-exact-image alias are removed during cleanup. Do not start, remove, rename, or
-replace the configured source container, and do not retag or substitute the
-adaptor image.
+loads the immutable image ID, effective environment, command, security
+settings, and supported mounts from `.traffic-e2e/local/source/`; it never
+reconnects to the initialization Pod. A missing adaptor or one labeled for
+another source image or build-contract revision triggers a build/refresh.
+Run-private build state and the temporary exact-image alias are removed during
+cleanup. Do not retag or substitute the adaptor image.
 
 The fixed adapter may only establish Platform transport interception. It must
 not alter source business code, caches, feature switches, or response behavior.

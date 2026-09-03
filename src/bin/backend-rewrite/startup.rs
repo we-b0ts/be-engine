@@ -56,11 +56,14 @@ struct StartupEnvNameArgs {
 struct StartupEnvValueArgs {
     name: String,
     /// Candidate value supplied directly by the implementation Agent.
-    #[arg(long, conflicts_with = "from_env")]
+    #[arg(long, conflicts_with_all = ["from_env", "from_source"])]
     value: Option<String>,
     /// Caller environment variable containing the candidate value; defaults to NAME.
-    #[arg(long, value_name = "CALLER_NAME", conflicts_with = "value")]
+    #[arg(long, value_name = "CALLER_NAME", conflicts_with_all = ["value", "from_source"])]
     from_env: Option<String>,
+    /// Use the value captured for NAME in the initialization source snapshot.
+    #[arg(long, conflicts_with_all = ["value", "from_env"])]
+    from_source: bool,
 }
 
 #[derive(Debug, Args)]
@@ -81,7 +84,7 @@ enum StartupMountCommand {
     List,
     /// Report whether one absolute startup path is captured.
     Exists(StartupMountPathArgs),
-    /// Capture one missing absolute path from the configured stopped source container.
+    /// Capture one missing absolute path from the initialization source snapshot.
     Ensure(StartupMountPathArgs),
 }
 
@@ -102,14 +105,14 @@ pub(super) fn run(target_root: PathBuf, args: StartupArgs, pretty: bool) -> Resu
                 pretty,
             ),
             StartupEnvCommand::Equals(args) => {
-                let value = caller_value(&args)?;
+                let value = caller_value(&target_root, &args)?;
                 super::print_json(
                     &startup_environment_equals(&target_root, &args.name, &value)?,
                     pretty,
                 )
             }
             StartupEnvCommand::Ensure(args) => {
-                let value = caller_value(&args)?;
+                let value = caller_value(&target_root, &args)?;
                 super::print_json(
                     &ensure_startup_environment(&target_root, &args.name, &value)?,
                     pretty,
@@ -141,9 +144,12 @@ pub(super) fn run(target_root: PathBuf, args: StartupArgs, pretty: bool) -> Resu
     }
 }
 
-fn caller_value(args: &StartupEnvValueArgs) -> Result<String> {
+fn caller_value(target_root: &std::path::Path, args: &StartupEnvValueArgs) -> Result<String> {
     if let Some(value) = &args.value {
         return Ok(value.clone());
+    }
+    if args.from_source {
+        return traffic_e2e::source_environment_value(target_root, &args.name);
     }
     let source = args.from_env.as_deref().unwrap_or(&args.name);
     std::env::var(source).with_context(|| {
@@ -161,8 +167,12 @@ mod tests {
             name: "DATABASE_URL".to_string(),
             value: Some("mysql://source-compatible".to_string()),
             from_env: None,
+            from_source: false,
         };
 
-        assert_eq!(caller_value(&args).unwrap(), "mysql://source-compatible");
+        assert_eq!(
+            caller_value(std::path::Path::new("."), &args).unwrap(),
+            "mysql://source-compatible"
+        );
     }
 }
