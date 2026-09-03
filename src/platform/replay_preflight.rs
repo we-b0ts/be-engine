@@ -82,15 +82,39 @@ pub(super) async fn run(
     ManagedReplayNetworkPreflightResult,
     ManagedTargetRuntimePreflightResult,
 )> {
-    let run_dir = manifest
-        .parent()
-        .context("preflight recording manifest has no run directory")?;
     let runtime_dir = target_root
         .join(crate::repository::LOCAL_ROOT)
         .join("preflight")
         .join(run_id)
         .join("replay-network");
-    tokio::fs::create_dir_all(&runtime_dir)
+    let result = run_in_runtime_dir(
+        target_root,
+        project,
+        run_id,
+        manifest,
+        target_image,
+        &runtime_dir,
+    )
+    .await;
+    let ownership = restore_artifact_ownership(&runtime_dir).await;
+    combine_artifact_ownership(result, ownership)
+}
+
+async fn run_in_runtime_dir(
+    target_root: &Path,
+    project: &ResolvedProjectConfig,
+    run_id: &str,
+    manifest: &Path,
+    target_image: &crate::TargetImage,
+    runtime_dir: &Path,
+) -> Result<(
+    ManagedReplayNetworkPreflightResult,
+    ManagedTargetRuntimePreflightResult,
+)> {
+    let run_dir = manifest
+        .parent()
+        .context("preflight recording manifest has no run directory")?;
+    tokio::fs::create_dir_all(runtime_dir)
         .await
         .with_context(|| {
             format!(
@@ -98,7 +122,7 @@ pub(super) async fn run(
                 runtime_dir.display()
             )
         })?;
-    tokio::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700)).await?;
+    tokio::fs::set_permissions(runtime_dir, std::fs::Permissions::from_mode(0o700)).await?;
 
     let session = runtime_dir.join("session.json");
     let report = runtime_dir.join("replay-report.json");
@@ -107,7 +131,7 @@ pub(super) async fn run(
         target_root,
         project,
         run_dir,
-        &runtime_dir,
+        runtime_dir,
         &session,
         &report,
         &control_socket,
@@ -127,7 +151,7 @@ pub(super) async fn run(
             target_root,
             project,
             run_id,
-            &runtime_dir,
+            runtime_dir,
             &anchor,
             &target,
             &ca_cert,
@@ -147,34 +171,47 @@ pub(super) async fn run(
         &mut child,
     )
     .await;
-    let ownership = match crate::ArtifactOwner::invoking() {
-        Ok(owner) => owner.assign_to(&runtime_dir).await,
-        Err(error) => Err(error),
-    }
-    .context("failed to restore Replay preflight artifacts to the invoking user");
-    let finalization = combine_finalization(cleanup, ownership);
-    match (result, finalization) {
+    match (result, cleanup) {
         (Ok((mut network, mut target_runtime)), Ok(())) => {
             network.cleanup = true;
             target_runtime.checks.cleanup = true;
             Ok((network, target_runtime))
         }
-        (Ok(_), Err(error)) => Err(error),
+        (Ok(_), Err(error)) => Err(error).context("target_runtime preflight cleanup failed"),
         (Err(error), Ok(())) => Err(error),
-        (Err(error), Err(finalization_error)) => Err(error.context(format!(
-            "initialization preflight finalization also failed: {finalization_error:#}"
+        (Err(error), Err(cleanup_error)) => Err(error.context(format!(
+            "initialization preflight cleanup also failed: {cleanup_error:#}"
         ))),
     }
 }
 
-fn combine_finalization(cleanup: Result<()>, ownership: Result<()>) -> Result<()> {
-    match (cleanup, ownership) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(error), Ok(())) => Err(error).context("target_runtime preflight cleanup failed"),
-        (Ok(()), Err(error)) => Err(error),
+async fn restore_artifact_ownership(runtime_dir: &Path) -> Result<()> {
+    match tokio::fs::symlink_metadata(runtime_dir).await {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to inspect Replay preflight artifact directory {}",
+                    runtime_dir.display()
+                )
+            });
+        }
+    }
+    let owner = crate::ArtifactOwner::invoking()?;
+    owner
+        .assign_to(runtime_dir)
+        .await
+        .context("failed to restore Replay preflight artifacts to the invoking user")
+}
+
+fn combine_artifact_ownership<T>(result: Result<T>, ownership: Result<()>) -> Result<T> {
+    match (result, ownership) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), Ok(())) => Err(error),
         (Err(error), Err(ownership_error)) => Err(error.context(format!(
-            "target_runtime preflight cleanup failed; artifact ownership also failed: \
-             {ownership_error:#}"
+            "Replay preflight artifact ownership also failed: {ownership_error:#}"
         ))),
     }
 }
@@ -710,14 +747,14 @@ mod tests {
     }
 
     #[test]
-    fn preserves_cleanup_and_ownership_finalization_errors() {
-        let error = combine_finalization(
-            Err(anyhow::anyhow!("cleanup error")),
+    fn preserves_preflight_and_ownership_errors() {
+        let error = combine_artifact_ownership::<()>(
+            Err(anyhow::anyhow!("preflight error")),
             Err(anyhow::anyhow!("ownership error")),
         )
         .unwrap_err();
         let message = format!("{error:#}");
-        assert!(message.contains("cleanup error"));
+        assert!(message.contains("preflight error"));
         assert!(message.contains("ownership error"));
     }
 
