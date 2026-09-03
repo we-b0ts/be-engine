@@ -337,6 +337,32 @@ fn parses_the_bounded_rewrite_surface() {
     assert!(Cli::try_parse_from(["test", "startup", "env", "list"]).is_ok());
     assert!(Cli::try_parse_from(["test", "startup", "env", "equals", "DATABASE_URL"]).is_ok());
     assert!(
+        Cli::try_parse_from([
+            "test",
+            "startup",
+            "env",
+            "ensure",
+            "DATABASE_URL",
+            "--value",
+            "mysql://source-compatible",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "startup",
+            "env",
+            "ensure",
+            "DATABASE_URL",
+            "--value",
+            "one",
+            "--from-env",
+            "SOURCE_DATABASE_URL",
+        ])
+        .is_err()
+    );
+    assert!(
         Cli::try_parse_from(["test", "startup", "mount", "ensure", "/data1/authconfs",]).is_ok()
     );
     assert!(

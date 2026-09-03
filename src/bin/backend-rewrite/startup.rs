@@ -35,9 +35,9 @@ enum StartupEnvCommand {
     List,
     /// Report whether one variable exists without displaying its value.
     Exists(StartupEnvNameArgs),
-    /// Compare one value with the same-named caller environment variable.
+    /// Compare one directly supplied value or caller environment variable.
     Equals(StartupEnvValueArgs),
-    /// Create or update one value from the same-named caller environment variable.
+    /// Create or update one directly supplied value or caller environment variable.
     Ensure(StartupEnvValueArgs),
     /// Remove one variable without displaying its previous value.
     Remove(StartupEnvNameArgs),
@@ -55,8 +55,11 @@ struct StartupEnvNameArgs {
 #[derive(Debug, Args)]
 struct StartupEnvValueArgs {
     name: String,
+    /// Candidate value supplied directly by the implementation Agent.
+    #[arg(long, conflicts_with = "from_env")]
+    value: Option<String>,
     /// Caller environment variable containing the candidate value; defaults to NAME.
-    #[arg(long, value_name = "CALLER_NAME")]
+    #[arg(long, value_name = "CALLER_NAME", conflicts_with = "value")]
     from_env: Option<String>,
 }
 
@@ -139,8 +142,27 @@ pub(super) fn run(target_root: PathBuf, args: StartupArgs, pretty: bool) -> Resu
 }
 
 fn caller_value(args: &StartupEnvValueArgs) -> Result<String> {
+    if let Some(value) = &args.value {
+        return Ok(value.clone());
+    }
     let source = args.from_env.as_deref().unwrap_or(&args.name);
     std::env::var(source).with_context(|| {
         format!("caller environment variable {source:?} is required; its value is never printed")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn directly_supplied_value_takes_the_api_path() {
+        let args = StartupEnvValueArgs {
+            name: "DATABASE_URL".to_string(),
+            value: Some("mysql://source-compatible".to_string()),
+            from_env: None,
+        };
+
+        assert_eq!(caller_value(&args).unwrap(), "mysql://source-compatible");
+    }
 }

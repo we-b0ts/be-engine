@@ -118,6 +118,14 @@ recording, rule plan/apply, route or repair verification, recover, Replay, and
 comparison. A worker returns source-proven proposed inputs for those transitions
 and never starts an unreturned coordinator operation.
 
+The canonical `.traffic-e2e/local/target.env` is also orchestrator-owned shared
+runtime state. When implementation proves that target logic needs an
+application-owned environment variable, the worker follows
+[startup.md](startup.md) and returns a `startup_environment` input with its
+exact name, effective value, and source evidence. It must not write a separate
+`target.env` in its worktree. The orchestrator applies the input to the
+canonical target root before integrated quality and acceptance.
+
 ## Post-Dispatch Scheduler
 
 After a worker starts, inspect the current inventory instead of waiting for the
@@ -167,8 +175,9 @@ The worker handoff is ready after local tests when it returns:
 - proven root cause and supporting evidence;
 - changed files and shared-module impact;
 - patch or commit identity and test outcomes; and
-- required coordinator transition inputs, the unchanged acceptance command,
-  and unresolved risks.
+- required coordinator transition inputs, including every source-proven
+  `startup_environment` input, the unchanged acceptance command, and unresolved
+  risks.
 
 The worker's current turn becomes idle after handoff and does not wait for
 Replay or process-output comparison. Retain the

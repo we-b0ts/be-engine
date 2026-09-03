@@ -99,11 +99,15 @@ changes application log routing, buffering, flushing, or shutdown, read
 [logs.md](references/logs.md) before changing the subscriber or emitting
 product logs.
 
-When implementation or startup diagnosis identifies a required environment
-variable, dotenv import, configuration mount, or image-local writable
-directory, read [startup.md](references/startup.md) before changing startup
-inputs or either Dockerfile. Do not load it during one-time initialization merely
-to search for possible inputs.
+When source analysis, target implementation, or startup diagnosis identifies a
+required environment variable, dotenv import, configuration mount, or
+image-local writable directory, read [startup.md](references/startup.md)
+before changing startup inputs or either Dockerfile. A required environment
+variable is actionable as soon as source behavior proves the target logic needs
+it; do not wait for a target failure. Workers return the startup input and the
+main orchestrator applies it through the documented startup API. Do not load
+this reference during one-time initialization merely to search for possible
+inputs.
 
 Read [project-init.md](references/project-init.md) only when the caller
 explicitly asks to initialize an uninitialized target repository. Project
