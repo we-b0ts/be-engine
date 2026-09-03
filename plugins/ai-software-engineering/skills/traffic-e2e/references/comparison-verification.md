@@ -49,9 +49,13 @@ window before admitting input, then admits one complete source/candidate case
 at a time.
 
 HTTP and Motan comparison listeners share that same single process-wide case
-slot. A case retains it through source, candidate, optional source recheck, and
-publication; an overlapping request on either protocol reaches neither
-upstream and receives the protocol adapter's fixed response.
+slot. A case retains it through source and candidate dispatches, an optional
+source recheck, and publication; an overlapping request on either protocol
+reaches neither upstream and receives the protocol adapter's fixed response.
+Each run chooses a fresh random, pair-balanced source/candidate dispatch
+schedule. The schedule is fixed for the lifetime of that run, but different
+runs can send the same workload to source or candidate first. Dispatch order
+is intentionally not published in comparison evidence or reports.
 
 When Breeze is absent, the same command selects the configured runtime without
 starting Breeze. Comparison sends every admitted request symmetrically to
@@ -71,8 +75,8 @@ the published comparison case count; a mismatch finalizes with errors instead
 of silently accepting missing evidence. Without finite input or a completed
 explicit case limit, comparison keeps the full recording window.
 
-For `project.process_outputs` whose `observation` is `comparison`, the final
-quiet period is extended to
+For each enabled `project.process_outputs` metrics profile, the final quiet
+period is extended to
 `comparison_recording.process_output_flush_after_last_case_ms` (15 seconds by
 default). Source and candidate files are copied after that wait and before
 their containers stop. The capture is scoped to this single-API comparison
@@ -98,6 +102,28 @@ normal operation. Map/object key order and JSON formatting are already
 structural; array order, presence, type, and value differences remain explicit
 engine facts. Policy changes use evidence-validating `config ... plan|apply`;
 the engine does not infer source causality or authorize a migration repair.
+For profile `exact_total_count` comparisons, a `(type, name)` group absent from
+one side has numeric count zero: a one-sided zero-count group is equal to
+absence, while a one-sided positive-count group remains a difference.
+The engine-owned profile policies compare exact `RPC_SERVICE_WHOLE` counts and
+require source-positive `HTTP` plus the logical `RPC_SERVICE_CLIENT` Motan
+group on target. Redis, Memcached, and service-internal metrics are not product
+comparison policies.
+
+For a source-only HTTP or Motan client metric,
+`action.details.comparison_observation.rule_candidate` describes
+`allow_target_missing`. It is a diagnosis candidate, not authorization. The
+target AI must inspect the returned metric's source startup/configuration and
+indirect-emitter paths. Return exactly the canonical metric, dependency path,
+and structured emitter evidence only after proving that source code does not
+start the interaction and that the interaction does not affect source behavior;
+otherwise implement it in the target. `emitter_evidence.inspected_paths` names
+the source and dependency source paths actually inspected, and `description`
+states why the indirect dependency emits independently without affecting source
+behavior. These two eligibility conclusions are not rule fields. The
+coordinator supplies the process output, source revision, and comparison run to
+the plan/apply workflow. Plan validates the exact finalized comparison capture,
+and apply remains bound to unchanged project, policy, and capture evidence.
 
 When one repaired immutable case passes replay but the first otherwise-valid
 fresh comparison does not observe it, retain a non-blocking

@@ -9,6 +9,7 @@ mod final_evidence;
 mod http_driver;
 mod model;
 mod progress;
+mod project_validation;
 mod reclassify;
 mod request_view;
 mod result;

@@ -61,8 +61,8 @@ ID, configured path, classification, comparison contract, and source/target
 presence. Do not look for an API representative or `case_dir`, execute API
 evidence queries, inspect dependency traffic, or invent a recording operation.
 
-For `comparison=regular_file_exists` with source present and target absent,
-trace the ordinary product output path:
+For a missing metrics profile with source present and target absent, trace the
+ordinary product output path:
 
 ```text
 configured output -> component loading -> initialization -> startup -> write
@@ -70,15 +70,32 @@ or flush -> observation timing -> shutdown
 ```
 
 Confirm the configured path and source-side presence from the action, then
-inspect the corresponding source and target component wiring. Repair the
-target's normal startup, configuration, output creation, flush, or shutdown
-behavior. Do not create a replay-only file, copy a recorded output into the
-target, or make target code read coordinator artifacts.
+inspect the corresponding source and target component wiring.
 
-Return the exact work scope and issue ID, proven cause, changed files and shared
-impact, patch or commit, local test results, unchanged acceptance command, and
-unresolved risks. The main orchestrator integrates the change and executes
-acceptance; the worker does not run process-output comparison itself.
+When `comparison_observation.rule_candidate` names
+`allow_target_missing`, first inspect the source startup/configuration and
+indirect-emitter paths described by the candidate. The candidate is not an
+allowance. Return its `metric`, a dependency path ordered from the direct
+dependency to the indirect emitter, and one structured `emitter_evidence`
+object only when source code does not start the interaction and the interaction
+does not affect source behavior. `emitter_evidence.inspected_paths` must name
+the source and dependency source paths actually read, and `description` must
+explain why the indirect dependency emits independently without affecting
+source behavior. Do not include boolean eligibility fields. If either
+eligibility condition is not proven, do not return rule inputs; repair the
+target's normal startup, configuration, output creation, flush, or shutdown
+behavior.
+
+Do not create a replay-only file, copy a recorded output into the target, or
+make target code read coordinator artifacts.
+
+For a target repair, return the exact work scope and issue ID, proven cause,
+changed files and shared impact, patch or commit, local test results, unchanged
+acceptance command, and unresolved risks. For an eligible rule candidate,
+return the same work scope and issue identity plus only the three requested rule
+inputs and unresolved risks; no target patch or local test is required. The
+main orchestrator owns rule planning/application and acceptance; the worker
+does not run process-output comparison itself.
 
 ## API Evidence Queries
 

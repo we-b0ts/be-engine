@@ -390,7 +390,40 @@ async fn returns_baseline_after_the_serial_comparison_case_is_complete() {
 }
 
 #[tokio::test]
-async fn optional_baseline_recheck_records_source_candidate_source_in_order() {
+async fn comparison_dispatch_order_is_pair_balanced_within_a_run() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
+    install_crypto();
+    let temp = tempdir().unwrap();
+    let observed = Arc::new(StdMutex::new(Vec::new()));
+    let (baseline, baseline_requests) =
+        spawn_order_observing_upstream("baseline", observed.clone(), 2).await;
+    let (candidate, candidate_requests) =
+        spawn_order_observing_upstream("candidate", observed.clone(), 2).await;
+    let gateway = free_addr();
+    let run_id = "20260902131500";
+    let config = comparison_recording_config(&temp, gateway, baseline, candidate);
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording(
+        config,
+        Some(run_id.to_string()),
+    ));
+    wait_for_port(gateway).await;
+
+    assert!(raw_get(gateway, "/api/first").await.contains("baseline"));
+    assert!(raw_get(gateway, "/api/second").await.contains("baseline"));
+    wait_for_counter(&baseline_requests, 2).await;
+    wait_for_counter(&candidate_requests, 2).await;
+
+    let observed = observed.lock().unwrap().clone();
+    assert_eq!(observed.len(), 4);
+    for pair in observed.chunks_exact(2) {
+        assert_ne!(pair[0], pair[1]);
+    }
+    assert_ne!(observed[0], observed[2]);
+    task.abort();
+}
+
+#[tokio::test]
+async fn optional_baseline_recheck_records_baseline_before_and_after_observations() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
@@ -583,8 +616,13 @@ async fn overload_returns_fixed_response_without_single_sided_dispatch() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
-    let (baseline, baseline_requests) =
-        spawn_counting_upstream(StatusCode::OK, "baseline", 1, None).await;
+    let (baseline, baseline_requests) = spawn_counting_upstream(
+        StatusCode::OK,
+        "baseline",
+        1,
+        Some(Duration::from_millis(300)),
+    )
+    .await;
     let (candidate, candidate_requests) = spawn_counting_upstream(
         StatusCode::OK,
         "candidate",
@@ -603,7 +641,10 @@ async fn overload_returns_fixed_response_without_single_sided_dispatch() {
     wait_for_port(gateway).await;
 
     let first = tokio::spawn(raw_get(gateway, "/api/one"));
-    wait_for_counter(&baseline_requests, 1).await;
+    tokio::select! {
+        _ = wait_for_counter(&baseline_requests, 1) => {},
+        _ = wait_for_counter(&candidate_requests, 1) => {},
+    }
     assert!(raw_get(gateway, "/api/two").await.contains("fixed"));
     assert!(first.await.unwrap().contains("baseline"));
     wait_for_counter(&candidate_requests, 1).await;
@@ -624,8 +665,13 @@ async fn http_and_motan_comparison_share_one_process_wide_case_slot() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
-    let (baseline, baseline_requests) =
-        spawn_counting_upstream(StatusCode::OK, "baseline", 1, None).await;
+    let (baseline, baseline_requests) = spawn_counting_upstream(
+        StatusCode::OK,
+        "baseline",
+        1,
+        Some(Duration::from_millis(300)),
+    )
+    .await;
     let (candidate, candidate_requests) = spawn_counting_upstream(
         StatusCode::OK,
         "candidate",
@@ -668,7 +714,10 @@ async fn http_and_motan_comparison_share_one_process_wide_case_slot() {
     .unwrap();
 
     let http_case = tokio::spawn(raw_get(http_gateway, "/api/one"));
-    wait_for_counter(&baseline_requests, 1).await;
+    tokio::select! {
+        _ = wait_for_counter(&baseline_requests, 1) => {},
+        _ = wait_for_counter(&candidate_requests, 1) => {},
+    }
     let request = motan_request(43);
     let mut stream = TcpStream::connect(motan_gateway).await.unwrap();
     stream.write_all(request.raw()).await.unwrap();
@@ -922,6 +971,32 @@ async fn spawn_counting_upstream(
                 status.canonical_reason().unwrap_or("Unknown"),
                 body.len(),
                 body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+    (address, requests)
+}
+
+async fn spawn_order_observing_upstream(
+    name: &'static str,
+    observed: Arc<StdMutex<Vec<&'static str>>>,
+    count: usize,
+) -> (SocketAddr, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let task_requests = requests.clone();
+    tokio::spawn(async move {
+        for _ in 0..count {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = [0_u8; 2048];
+            let _ = stream.read(&mut buffer).await.unwrap();
+            observed.lock().unwrap().push(name);
+            task_requests.fetch_add(1, Ordering::SeqCst);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{name}",
+                name.len()
             );
             stream.write_all(response.as_bytes()).await.unwrap();
         }

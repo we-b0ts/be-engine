@@ -1099,75 +1099,104 @@ before executing evidence, and each worker owns evidence, diagnosis, target
 code, and local tests for only its API. With multiple APIs, the orchestrator
 uses `backend-rewrite inventory` to choose an exact pending item and continues
 with `next --api` after dispatch rather than waiting for the current worker.
-Configured `project.process_outputs` select their capture lifecycle with
-`observation`. `before_shutdown` retains the global workflow: source evidence
-comes from the standard recording and target evidence from focused Replay
-immediately before shutdown. `comparison` starts fresh source and target
-containers for each API comparison, waits
-`comparison_recording.process_output_flush_after_last_case_ms` after its final
-case (15 seconds by default), captures both files, and makes the result part of
-that API's comparison gate. Focused Replay does not capture `comparison`
-outputs. The v1 `regular_file_exists` comparison passes when both captures are
-regular files; their bytes, sizes, and fingerprints remain in the evidence even
-though v1 does not compare contents. A missing source output rejects the owning
-recording as an engine input problem. A missing target output becomes a
-target-code `implementation_required` work item.
-
-`profile_by_type` compares timestamp-prefixed JSON records from a profile log
-by configured record `type` and `name`. Each selected record's `total_count`
-and `slowThreshold` accepts either a JSON unsigned integer or its decimal
-string representation. The configuration is strict for every participating
-record. A type may appear in multiple policy lists; `exact_total_count` takes
-precedence because it is the stricter check. The coordinator enables all
-`profile_by_type` comparisons only when the configured comparison recording
-duration reaches `min_recording_duration_seconds`, which defaults to 60.
-Shorter diagnostic recordings may still capture the files, but neither
-validate their presence nor compare their metrics. Set the threshold to `0`
-to enable the comparison for every configured recording duration.
+An enabled `project.process_outputs` entry records the supported metrics
+profile during each API comparison:
 
 ```yaml
-comparison:
-  kind: profile_by_type
-  min_recording_duration_seconds: 60
-  rules:
-    exact_total_count:
-    - RPC_SERVICE_WHOLE
-    source_positive_exists:
-    - REDIS
-    - MC
-    - MCDETAIL
-    - HTTP
-    - SERVICE
-    - RPC_SERVICE_CLIENT
-    - RPC_SERVICE_CLIENT_V2
-    - RPC_SERVICE_CLIENT_REAL
-    - RPC_SERVICE_CLIENT_REAL_V2
+process_outputs:
+- id: metrics-profile
+  path: /data1/weibo/logs/profile.log
+  enabled: true
 ```
 
-`exact_total_count` requires the source and target to have exactly the same
-names for that type. It sums every `total_count` in each `(type, name)` group
-and requires equal sums. For every group, the source and target sets of
-`slowThreshold` values must share at least one value; the individual records do
-not need to align. Records without a source `slowThreshold` are ignored by
-both policies; this excludes non-latency rows that reuse a selected type, such
-as MC socket-pool snapshots. `source_positive_exists` is one-way: for every
+The comparison contract is engine-owned rather than business configuration.
+It starts fresh source and target containers for each API comparison, waits
+`comparison_recording.process_output_flush_after_last_case_ms` after its final
+case (15 seconds by default), captures both files, and makes the result part of
+that API's comparison gate. Focused Replay does not capture the profile.
+A missing source output rejects the owning recording as an engine input
+problem. A missing target output becomes a target-code
+`implementation_required` work item. `enabled: false` retains the stable
+project entry without capturing or comparing it.
+
+The fixed profile comparator reads timestamp-prefixed JSON records by record
+`type` and `name`. Each selected record's `total_count`
+and `slowThreshold` accepts either a JSON unsigned integer or its decimal
+string representation. Comparison starts at a 60-second recording duration;
+shorter diagnostic recordings may capture the file but do not validate its
+presence or metrics. The fixed policies are `exact_total_count` for
+`RPC_SERVICE_WHOLE`, and `source_positive_exists` for `HTTP` and the logical
+Motan client group `RPC_SERVICE_CLIENT`.
+
+`exact_total_count` sums every `total_count` in each `(type, name)` group and
+requires equal sums, treating a group absent from one side as a numeric zero.
+Consequently, a zero-count group present on only one side is equal to absence,
+while a positive-count group present on only one side remains a mismatch. When
+a group is present on both sides, their sets of `slowThreshold` values must
+share at least one value; the individual records do not need to align. Records
+without a source `slowThreshold` are ignored by both policies; this excludes
+non-latency rows that reuse a selected type, such as MC socket-pool snapshots.
+`source_positive_exists` is one-way: for every
 source `(type, name)` group whose summed `total_count` is greater than zero, the
 target must contain that type/name group. It intentionally ignores target
-counts and extra target groups. A failed profile comparison reports the number
+counts and extra target groups. `RPC_SERVICE_CLIENT` expands internally to
+`RPC_SERVICE_CLIENT`, `RPC_SERVICE_CLIENT_V2`, `RPC_SERVICE_CLIENT_REAL`, and
+`RPC_SERVICE_CLIENT_REAL_V2`; they are checked independently but reported as
+one logical type with one representative example. For HTTP only,
+`all_http://x` and `http://x` (likewise HTTPS) share one logical allowance,
+while their observed counts remain separate.
+
+An implementation may allow one source-positive metric to be absent from the
+target only when source revision evidence proves that an indirect dependency
+emits it independently. Before returning rule inputs, the target AI must inspect
+the relevant source startup/configuration and dependency-emitter paths and
+confirm both that source code does not start the interaction and that the
+interaction does not affect source behavior. Either finding requires target
+implementation. These conclusions are eligibility preconditions, not persisted
+booleans. Add an allowance with the evidence-validating plan/apply workflow; do
+not hand-edit the policy:
+
+```bash
+traffic-e2e config comparison plan allow-target-missing \
+  --target-root <target> \
+  --process-output metrics-profile \
+  --metric 'HTTP.http://telemetry.example/ping' \
+  --source-revision 0123456789abcdef \
+  --dependency-path 'com.example:client:1.0.0' \
+  --dependency-path 'com.vendor:telemetry:2.0.0' \
+  --emitter-evidence '{"inspected_paths":["pom.xml","vendor/src/com/vendor/TelemetryInitializer.java"],"description":"TelemetryInitializer independently emits /ping without affecting source behavior"}' \
+  --comparison-run <exact-finalized-comparison-run>
+```
+
+The command writes target-specific policy under
+`.traffic-e2e/verification.yaml`:
+
+```yaml
+process_output_rules:
+  metrics-profile:
+    allow_target_missing:
+    - metric: HTTP.http://telemetry.example/ping
+      source_revision: 0123456789abcdef
+      dependency_path:
+      - com.example:client:1.0.0
+      - com.vendor:telemetry:2.0.0
+      emitter_evidence:
+        inspected_paths:
+        - pom.xml
+        - vendor/src/com/vendor/TelemetryInitializer.java
+        description: TelemetryInitializer independently emits /ping without affecting source behavior
+```
+
+The plan proves that the exact finalized capture has a positive source metric
+and that the entire logical metric is absent on target. Apply is rejected if
+project configuration, verification policy, or either capture changes after
+planning. An allowance cannot apply to an exact-count metric. A failed profile
+comparison reports the number
 of compared and mismatched types, the total number of mismatched `(type, name)`
 groups, and one deterministic example for every mismatched type. Each per-type
 entry identifies its policy and full difference count. The example includes
 the relevant counts or thresholds and is selected by name order, so evidence is
 stable and bounded by the maximum number of configured profile types.
-
-The coordinator first traverses and dispatches every API work item. It then
-traverses pending `before_shutdown` process outputs with
-`next --process-output <id>` and assigns
-each failure its own dedicated worker, without waiting for already-confirmed
-API workers. AI work therefore overlaps while traffic and capture operations
-remain serialized. `inventory` includes a separate bounded
-`process_output_inventory`; use `status --process-output <id>` to reconstruct a
-specific process-output action.
 
 After status returns
 `advance_required`, the returned `next` validates the

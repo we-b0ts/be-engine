@@ -62,7 +62,7 @@ pub(in crate::rewrite) fn install_project_config(
         target["quality_gates"] = quality_gates;
     }
     let document = serde_json::json!({
-        "version": 14,
+        "version": 15,
         "project": {
             "source": { "container": "source" },
             "target": target,

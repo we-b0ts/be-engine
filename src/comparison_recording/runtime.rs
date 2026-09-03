@@ -18,6 +18,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::model::{ComparisonRecordingCase, ComparisonRecordingRequest};
+use super::order::{ComparisonDispatchSchedule, UpstreamDispatchOrder};
 use super::store::{ComparisonRecordingStore, Reservation};
 use super::tasks::BackgroundTasks;
 use super::upstream::{
@@ -61,6 +62,7 @@ pub(super) struct ComparisonRecordingRuntime {
     pub(super) recording_lifecycle: RecordingLifecycle,
     request_header_capture: RequestHeaderCapture,
     pub(super) active_case_permits: Arc<Semaphore>,
+    pub(super) dispatch_schedule: Arc<ComparisonDispatchSchedule>,
     background: BackgroundTasks,
 }
 
@@ -200,6 +202,7 @@ pub async fn run_with_options(
         .candidate_motan_upstream
         .clone()
         .unwrap_or_default();
+    let dispatch_schedule = Arc::new(ComparisonDispatchSchedule::randomized()?);
     let initially_ready = !(gateway.enabled && gateway.ready.enabled || motan_gateway.enabled);
     let runtime = ComparisonRecordingRuntime {
         config: Arc::new(config),
@@ -216,6 +219,7 @@ pub async fn run_with_options(
         recording_lifecycle: recording_lifecycle.clone(),
         request_header_capture,
         active_case_permits: Arc::new(Semaphore::new(comparison_recording.max_in_flight)),
+        dispatch_schedule,
         background: BackgroundTasks::new(),
     };
     if runtime.ready.load(Ordering::Acquire) {
@@ -599,6 +603,7 @@ async fn handle_request(
     };
     let (sender, receiver) = oneshot::channel();
     let task_runtime = runtime.clone();
+    let dispatch_order = runtime.dispatch_schedule.next();
     runtime.background.spawn(async move {
         run_dual(
             task_runtime,
@@ -612,6 +617,7 @@ async fn handle_request(
             reservation,
             permit,
             sender,
+            dispatch_order,
         )
         .await;
     });
@@ -637,31 +643,61 @@ async fn run_dual(
     reservation: Reservation,
     permit: OwnedSemaphorePermit,
     baseline_sender: oneshot::Sender<UpstreamCapture>,
+    dispatch_order: UpstreamDispatchOrder,
 ) {
     let recording_api = format!("{method} {pattern}");
-    let baseline = fetch_upstream(
-        &runtime,
-        &runtime.baseline_upstream,
-        &method,
-        &uri,
-        &headers,
-        body.clone(),
-        ResponseDisposition::Downstream,
-    )
-    .await;
-    update_upstream_counts(&runtime, UpstreamRole::Baseline, &baseline).await;
-
-    let candidate = fetch_upstream(
-        &runtime,
-        &runtime.comparison_recording.candidate_upstream,
-        &method,
-        &uri,
-        &headers,
-        body.clone(),
-        ResponseDisposition::CaptureOnly,
-    )
-    .await;
-    update_upstream_counts(&runtime, UpstreamRole::Candidate, &candidate).await;
+    let (baseline, candidate) = match dispatch_order {
+        UpstreamDispatchOrder::BaselineThenCandidate => {
+            let baseline = fetch_upstream(
+                &runtime,
+                &runtime.baseline_upstream,
+                &method,
+                &uri,
+                &headers,
+                body.clone(),
+                ResponseDisposition::Downstream,
+            )
+            .await;
+            update_upstream_counts(&runtime, UpstreamRole::Baseline, &baseline).await;
+            let candidate = fetch_upstream(
+                &runtime,
+                &runtime.comparison_recording.candidate_upstream,
+                &method,
+                &uri,
+                &headers,
+                body.clone(),
+                ResponseDisposition::CaptureOnly,
+            )
+            .await;
+            update_upstream_counts(&runtime, UpstreamRole::Candidate, &candidate).await;
+            (baseline, candidate)
+        }
+        UpstreamDispatchOrder::CandidateThenBaseline => {
+            let candidate = fetch_upstream(
+                &runtime,
+                &runtime.comparison_recording.candidate_upstream,
+                &method,
+                &uri,
+                &headers,
+                body.clone(),
+                ResponseDisposition::CaptureOnly,
+            )
+            .await;
+            update_upstream_counts(&runtime, UpstreamRole::Candidate, &candidate).await;
+            let baseline = fetch_upstream(
+                &runtime,
+                &runtime.baseline_upstream,
+                &method,
+                &uri,
+                &headers,
+                body.clone(),
+                ResponseDisposition::Downstream,
+            )
+            .await;
+            update_upstream_counts(&runtime, UpstreamRole::Baseline, &baseline).await;
+            (baseline, candidate)
+        }
+    };
 
     let baseline_recheck = if runtime.comparison_recording.baseline_recheck {
         let capture = fetch_upstream(

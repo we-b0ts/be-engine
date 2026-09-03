@@ -1,4 +1,4 @@
-version: 14
+version: 15
 project:
   source:
     container: source-app
@@ -22,24 +22,7 @@ project:
   process_outputs:
   - id: metrics-profile
     path: /data1/weibo/logs/profile.log
-    comparison:
-      kind: profile_by_type
-      min_recording_duration_seconds: 60
-      rules:
-        exact_total_count:
-        - RPC_SERVICE_WHOLE
-        source_positive_exists:
-        - REDIS
-        - MC
-        - MCDETAIL
-        - HTTP
-        - SERVICE
-        - RPC_SERVICE_CLIENT
-        - RPC_SERVICE_CLIENT_V2
-        - RPC_SERVICE_CLIENT_REAL
-        - RPC_SERVICE_CLIENT_REAL_V2
-    observation: comparison
-    max_bytes: 8388608
+    enabled: true
 recorder:
   # Static recorder example. Project initialization embeds these settings under
   # `recorder` in `.traffic-e2e/project.yaml`. Coordinator-managed source-traffic

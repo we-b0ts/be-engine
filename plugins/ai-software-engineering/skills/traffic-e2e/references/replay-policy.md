@@ -512,3 +512,26 @@ only in response pairs where its Pointer resolves on both sides; absence from
 the sampled response shapes does not affect case or API completion. Completion
 requires zero unused applicable rules and a direct audit proving the expected
 response and dependency recordings did not flow into actual behavior.
+
+## Process-output target-missing allowances
+
+Use `traffic-e2e config comparison plan|apply allow-target-missing` for a
+source-positive profile interaction only when source-revision evidence proves
+that an indirect dependency independently emits it. The target AI must inspect
+the relevant source startup/configuration and dependency-emitter paths before
+returning the canonical metric, dependency path, and structured emitter
+evidence. If source code starts the interaction or the interaction affects
+source behavior, it must be implemented in the target. These eligibility
+conclusions are not persisted as boolean rule fields. The structured rule belongs under
+`process_output_rules.<output-id>.allow_target_missing` in
+`.traffic-e2e/verification.yaml` and records the canonical metric, source
+revision, ordered dependency path, and emitter evidence with the inspected
+source paths and one description. Planning validates the exact finalized
+source/target captures; apply is bound to unchanged project, policy, and
+capture evidence.
+
+One HTTP allowance covers `all_http://x` and `http://x` (and the HTTPS pair)
+only when the entire logical interaction is target-missing. One canonical
+`RPC_SERVICE_CLIENT` allowance covers its CLIENT/V2/REAL/REAL_V2 aliases, which
+remain independently compared but produce one logical evidence item. Exact
+count metrics and target-only extras cannot be suppressed.

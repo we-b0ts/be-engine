@@ -494,13 +494,10 @@ mod tests {
 
         validate_standard_recording_with_process_outputs(target.path(), &state, &[]).unwrap();
 
-        let comparison_output = crate::process_output::ProcessOutputConfig {
-            id: "metrics-profile".to_string(),
-            path: PathBuf::from("/data1/weibo/logs/profile.log"),
-            comparison: crate::process_output::ProcessOutputComparison::RegularFileExists,
-            observation: crate::process_output::ProcessOutputObservation::Comparison,
-            max_bytes: 1024,
-        };
+        let comparison_output = crate::process_output::ProcessOutputConfig::profile_by_type(
+            "metrics-profile".to_string(),
+            PathBuf::from("/data1/weibo/logs/profile.log"),
+        );
         validate_standard_recording_with_process_outputs(
             target.path(),
             &state,

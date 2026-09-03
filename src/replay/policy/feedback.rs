@@ -3,6 +3,7 @@ mod evidence;
 mod justification;
 mod memcached;
 mod model;
+mod profile_target_missing;
 mod response_body;
 
 use std::collections::BTreeSet;
@@ -32,6 +33,10 @@ pub use memcached::{
     plan_memcached_timestamp_rule,
 };
 pub use model::{ComparisonResponseRuleFeedback, ResponseRuleFeedback, ResponseRuleReport};
+pub use profile_target_missing::{
+    ProfileTargetMissingFeedback, ProfileTargetMissingPlan, ProfileTargetMissingReport,
+    plan_profile_target_missing,
+};
 pub use response_body::{
     ResponseBodyRuleEvidence, ResponseBodyRuleEvidenceKind, ResponseBodyRuleFeedback,
     ResponseBodyRulePlan, ResponseBodyRuleReport, ResponseBodyRuleVerificationOutcome,

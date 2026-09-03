@@ -279,6 +279,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                     id,
                     &target_fingerprint,
                     &project.process_outputs,
+                    &project.process_output_rules,
                 )?;
                 store.save(&state)?;
                 progress_publication::synchronize_if_complete(&target_root, &state)?;
@@ -869,6 +870,7 @@ fn compare_and_transition(target_root: &Path, state: &mut RewriteState) -> Resul
             state,
             &target_fingerprint,
             &project.process_outputs,
+            &project.process_output_rules,
         )
     });
     let process_output_issue = process_output_issue.transpose()?.flatten();
