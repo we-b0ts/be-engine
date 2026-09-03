@@ -46,9 +46,6 @@ struct InitArgs {
     /// Readiness path shared by source recording and target startup.
     #[arg(long, default_value = "/healthz")]
     readiness_path: String,
-    /// Final HTTP status that indicates readiness.
-    #[arg(long, default_value_t = 404)]
-    readiness_status: u16,
     /// DNS server for queries not owned by the recorder.
     #[arg(long, default_value = "10.10.10.11:53")]
     upstream_dns: SocketAddr,
@@ -66,7 +63,6 @@ pub(super) fn run(args: ConfigArgs) -> Result<()> {
                 breeze_container: init.breeze,
                 http_gateway_port: init.http_gateway_port,
                 readiness_path: init.readiness_path,
-                readiness_status: init.readiness_status,
                 upstream_dns: init.upstream_dns,
                 env_file: init.env_file,
             },
@@ -111,12 +107,11 @@ mod tests {
         assert_eq!(init.breeze.as_deref(), Some("breeze"));
         assert_eq!(init.http_gateway_port, DEFAULT_HTTP_GATEWAY_PORT);
         assert_eq!(init.readiness_path, "/healthz");
-        assert_eq!(init.readiness_status, 404);
         assert_eq!(init.upstream_dns, "10.10.10.11:53".parse().unwrap());
     }
 
     #[test]
-    fn init_does_not_accept_native_service_ports() {
+    fn init_does_not_accept_derived_runtime_inputs() {
         assert!(
             TestCli::try_parse_from([
                 "test",
@@ -136,6 +131,17 @@ mod tests {
                 "friendship",
                 "--target-port",
                 "8081",
+            ])
+            .is_err()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "init",
+                "--source-container",
+                "friendship",
+                "--readiness-status",
+                "204",
             ])
             .is_err()
         );

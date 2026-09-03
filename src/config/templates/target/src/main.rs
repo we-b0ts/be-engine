@@ -12,7 +12,7 @@ mod startup_probe;
 
 const DEFAULT_PORT: u16 = 8080;
 const READINESS_PATH: &str = "/healthz";
-const READINESS_STATUS: u16 = 404;
+const READINESS_STATUS: u16 = 200;
 
 #[tokio::main]
 async fn main() -> Result<()> {

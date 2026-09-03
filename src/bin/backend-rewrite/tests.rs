@@ -320,6 +320,7 @@ fn parses_the_bounded_rewrite_surface() {
         "--startup-env",
         "--target-port-env",
         "--replay-ca-env",
+        "--readiness-status",
     ] {
         assert!(
             Cli::try_parse_from([

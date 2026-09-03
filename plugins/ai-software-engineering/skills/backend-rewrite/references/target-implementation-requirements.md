@@ -23,6 +23,10 @@ These requirements apply to an existing initialized target repository. Use
 - Do not silently convert an existing repository to another Cargo workspace or
   package shape. Initialization and explicitly scoped architecture migrations
   own those changes.
+- `.traffic-e2e/Dockerfile.recording` and `.traffic-e2e/Dockerfile.e2e` remain
+  target-owned build contracts. Change either when the current work scope
+  requires source-adaptor or target-runtime integration; the coordinator
+  validates the result but does not own their contents.
 - Product behavior must not depend on tests, fixtures, debug branches, or
   developer-only defaults.
 

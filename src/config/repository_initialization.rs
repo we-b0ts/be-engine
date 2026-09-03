@@ -69,7 +69,6 @@ pub struct RepositoryConfigInitOptions {
     pub breeze_container: Option<String>,
     pub http_gateway_port: u16,
     pub readiness_path: String,
-    pub readiness_status: u16,
     pub upstream_dns: SocketAddr,
     pub env_file: Option<PathBuf>,
 }
@@ -151,7 +150,6 @@ fn initialize_repository_config_with(
         candidate_http_port: DEFAULT_NATIVE_HTTP_PORT,
         http_gateway_port: options.http_gateway_port,
         readiness_path: options.readiness_path.clone(),
-        readiness_status: options.readiness_status,
         upstream_dns: options.upstream_dns,
         breeze_enabled: breeze.is_some(),
     };
@@ -307,7 +305,7 @@ fn render_missing_target_delivery(
         ));
         files.push((
             main,
-            render_target_main(&options.readiness_path, options.readiness_status).into_bytes(),
+            render_target_main(&options.readiness_path).into_bytes(),
         ));
         files.push((
             target_root.join(TARGET_STARTUP_PROBE_PATH),
@@ -413,16 +411,11 @@ fn target_cache_project(target_root: &Path) -> Result<String> {
         .context("failed to derive target cache identity")
 }
 
-fn render_target_main(readiness_path: &str, readiness_status: u16) -> String {
-    TARGET_MAIN_TEMPLATE
-        .replace(
-            "const READINESS_PATH: &str = \"/healthz\";",
-            &format!("const READINESS_PATH: &str = {readiness_path:?};"),
-        )
-        .replace(
-            "const READINESS_STATUS: u16 = 404;",
-            &format!("const READINESS_STATUS: u16 = {readiness_status};"),
-        )
+fn render_target_main(readiness_path: &str) -> String {
+    TARGET_MAIN_TEMPLATE.replace(
+        "const READINESS_PATH: &str = \"/healthz\";",
+        &format!("const READINESS_PATH: &str = {readiness_path:?};"),
+    )
 }
 
 fn render_target_startup_probe() -> String {
@@ -679,7 +672,6 @@ mod tests {
                 breeze_container: Some("breeze".to_string()),
                 http_gateway_port: 4_080,
                 readiness_path: "/healthz".to_string(),
-                readiness_status: 404,
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
                 env_file: Some(environment),
             },
@@ -750,7 +742,7 @@ mod tests {
         let main = fs::read_to_string(target.path().join(TARGET_MAIN_PATH)).unwrap();
         assert!(!main.contains("TARGET_PORT_ENV"));
         assert!(main.contains("const READINESS_PATH: &str = \"/healthz\";"));
-        assert!(main.contains("const READINESS_STATUS: u16 = 404;"));
+        assert!(main.contains("const READINESS_STATUS: u16 = 200;"));
         assert!(main.contains("Delete this module declaration"));
         assert!(main.contains("startup_probe::run().await?;"));
         let probe = fs::read_to_string(target.path().join(TARGET_STARTUP_PROBE_PATH)).unwrap();
@@ -763,6 +755,9 @@ mod tests {
         assert!(recording_dockerfile.contains("USER 998:998"));
         assert!(!recording_dockerfile.contains("java"));
         let dockerfile = fs::read_to_string(target.path().join(TARGET_DOCKERFILE_PATH)).unwrap();
+        assert!(dockerfile.contains("COPY Cargo.toml Cargo.lock ./"));
+        assert!(dockerfile.contains("COPY src ./src"));
+        assert!(!dockerfile.contains("COPY . ."));
         assert!(dockerfile.contains("--mount=type=ssh,required=true"));
         assert!(dockerfile.contains("git ls-remote --exit-code"));
         assert!(!dockerfile.contains("__TARGET_"));
@@ -787,6 +782,7 @@ mod tests {
         let project = fs::read_to_string(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
         assert!(project.contains("version: 16"));
         assert!(project.contains("dockerfile: .traffic-e2e/Dockerfile.e2e"));
+        assert!(project.contains("success_status: 200"));
         assert!(!project.contains("http_host:"));
         assert!(!project.contains("motan_port:"));
         assert!(project.contains("runtime_root: local/runtime"));
@@ -835,7 +831,6 @@ mod tests {
                 breeze_container: Some("breeze".to_string()),
                 http_gateway_port: 4_080,
                 readiness_path: "/healthz".to_string(),
-                readiness_status: 404,
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
                 env_file: None,
             },
@@ -862,7 +857,6 @@ mod tests {
                 breeze_container: None,
                 http_gateway_port: 4_080,
                 readiness_path: "/ready".to_string(),
-                readiness_status: 204,
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
                 env_file: None,
             },
@@ -884,7 +878,7 @@ mod tests {
             .unwrap();
         assert!(!main.contains("TARGET_PORT_ENV"));
         assert!(main.contains("const READINESS_PATH: &str = \"/ready\";"));
-        assert!(main.contains("const READINESS_STATUS: u16 = 204;"));
+        assert!(main.contains("const READINESS_STATUS: u16 = 200;"));
     }
 
     #[test]
@@ -903,7 +897,6 @@ mod tests {
                 breeze_container: None,
                 http_gateway_port: 4_080,
                 readiness_path: "/healthz".to_string(),
-                readiness_status: 404,
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
                 env_file: None,
             },

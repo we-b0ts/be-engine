@@ -27,9 +27,6 @@ pub(super) struct ProjectInitArgs {
     /// Readiness path shared by source recording and target startup.
     #[arg(long, default_value = "/healthz")]
     readiness_path: String,
-    /// Final HTTP status that indicates readiness.
-    #[arg(long, default_value_t = 404)]
-    readiness_status: u16,
     /// DNS server for queries not owned by the recorder.
     #[arg(long, default_value = "10.10.10.11:53")]
     upstream_dns: SocketAddr,
@@ -122,7 +119,6 @@ pub(super) async fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: boo
         breeze_container: args.breeze,
         http_gateway_port: args.http_gateway_port,
         readiness_path: args.readiness_path,
-        readiness_status: args.readiness_status,
         upstream_dns: args.upstream_dns,
         env_file: args.env_file,
     })?;

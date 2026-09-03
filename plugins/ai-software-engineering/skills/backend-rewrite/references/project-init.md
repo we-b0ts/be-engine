@@ -15,7 +15,6 @@ backend-rewrite init \
   --source-container <existing-source-container> \
   [--env-file /path/to/initial.env] \
   [--readiness-path /healthz] \
-  [--readiness-status 404] \
   [--http-gateway-port 4080]
 ```
 
@@ -24,6 +23,10 @@ imports it into the ignored, mode-0600 project file
 `.traffic-e2e/local/target.env`; without the option, that file starts empty.
 The same file is loaded for every target start and is recreated empty if it is
 missing.
+
+`--readiness-path` defaults to `/healthz`. Initialization requires status `200`
+and writes it explicitly as `success_status: 200` in `project.yaml`; there is no
+readiness status argument.
 
 Initialization creates schema-version-16 repository configuration, an empty
 startup mount snapshot, a minimal `.traffic-e2e/Dockerfile.recording` scaffold,
@@ -36,6 +39,11 @@ environment variables, dotenv files, mounts, or writable directories. Do not
 add framework-specific port or trust variable mappings during initialization.
 
 ## 2. Complete The Two Build Contracts
+
+`.traffic-e2e/Dockerfile.recording` and `.traffic-e2e/Dockerfile.e2e` are
+target-owned build contracts. The Target AI may edit either file to satisfy the
+source adaptor or target runtime contract. Initialization supplies only missing
+scaffolds; managed preflight validates the resulting images.
 
 Review and finish the generated `.traffic-e2e/Dockerfile.recording` scaffold
 against the inspected source image and its real launch contract. Preserve the
