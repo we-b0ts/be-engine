@@ -20,6 +20,7 @@ const TARGET_DOCKERFILE_PATH: &str = ".traffic-e2e/Dockerfile.e2e";
 const TARGET_GITIGNORE_PATH: &str = ".gitignore";
 const TARGET_DOCKERIGNORE_PATH: &str = ".dockerignore";
 const LOCAL_DIR: &str = crate::repository::LOCAL_ROOT;
+const PR_BASE: &str = "dev-migration";
 const DEFAULT_NATIVE_HTTP_PORT: u16 = 8080;
 const TARGET_CARGO_TEMPLATE: &str = include_str!("templates/target/Cargo.toml");
 const TARGET_CARGO_LOCK_TEMPLATE: &str = include_str!("templates/target/Cargo.lock");
@@ -137,6 +138,7 @@ fn initialize_repository_config_with(
     ]
     .map(|relative| target_root.join(relative));
     require_configuration_targets_absent(&configuration_targets)?;
+    ensure_pr_base_branch(&target_root)?;
     let source = inspect(&options.source_container)?;
     let breeze = options
         .breeze_container
@@ -165,7 +167,7 @@ fn initialize_repository_config_with(
             target_dockerfile: PathBuf::from(TARGET_DOCKERFILE_PATH),
             target_startup: crate::startup::StartupConfig::default(),
             replay_policy: PathBuf::from(VERIFICATION_POLICY_PATH),
-            pr_base: "dev-migration".to_string(),
+            pr_base: PR_BASE.to_string(),
             recorder_config: PathBuf::from(PROJECT_CONFIG_PATH),
             force: false,
         },
@@ -446,6 +448,35 @@ fn require_configuration_targets_absent(paths: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
+fn ensure_pr_base_branch(target_root: &Path) -> Result<()> {
+    let reference = format!("refs/heads/{PR_BASE}");
+    let exists = Command::new("git")
+        .arg("-C")
+        .arg(target_root)
+        .args(["show-ref", "--verify", "--quiet", &reference])
+        .status()
+        .context("failed to inspect the initialization pull-request base branch")?;
+    if exists.success() {
+        return Ok(());
+    }
+    ensure!(
+        exists.code() == Some(1),
+        "failed to inspect the initialization pull-request base branch"
+    );
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(target_root)
+        .args(["branch", PR_BASE, "HEAD"])
+        .output()
+        .context("failed to create the initialization pull-request base branch")?;
+    ensure!(
+        output.status.success(),
+        "failed to create pr_base {PR_BASE:?} from HEAD: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(())
+}
+
 fn ensure_target_dockerignore(target_root: &Path) -> Result<(PathBuf, bool, bool)> {
     ensure_ignore_rules(
         target_root,
@@ -599,7 +630,7 @@ mod tests {
     }
 
     #[test]
-    fn unified_init_allows_dev_migration_to_be_created_afterward() {
+    fn unified_init_creates_dev_migration_from_head_without_switching() {
         let target = tempdir().unwrap();
         fs::write(target.path().join("README.md"), "# target\n").unwrap();
         let environment = target.path().join("input.env");
@@ -791,19 +822,33 @@ mod tests {
         assert!(project.contains("pr_base: dev-migration"));
         assert!(!project.contains("max_response_bytes"));
         assert!(!project.contains("protocol_detection:"));
-        assert!(
-            !Command::new("git")
-                .arg("-C")
-                .arg(target.path())
-                .args([
-                    "show-ref",
-                    "--verify",
-                    "--quiet",
-                    "refs/heads/dev-migration"
-                ])
-                .status()
-                .unwrap()
-                .success()
+        let dev_migration = Command::new("git")
+            .arg("-C")
+            .arg(target.path())
+            .args(["rev-parse", "dev-migration^{commit}"])
+            .output()
+            .unwrap();
+        let initialization_head = Command::new("git")
+            .arg("-C")
+            .arg(target.path())
+            .args(["rev-parse", "initialization-work^{commit}"])
+            .output()
+            .unwrap();
+        assert!(dev_migration.status.success());
+        assert_eq!(dev_migration.stdout, initialization_head.stdout);
+        assert_eq!(
+            String::from_utf8(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(target.path())
+                    .args(["branch", "--show-current"])
+                    .output()
+                    .unwrap()
+                    .stdout
+            )
+            .unwrap()
+            .trim(),
+            "initialization-work"
         );
         let recorder =
             crate::config::AppConfig::load(target.path().join(PROJECT_CONFIG_PATH)).unwrap();

@@ -28,11 +28,14 @@ missing.
 and writes it explicitly as `success_status: 200` in `project.yaml`; there is no
 readiness status argument.
 
-Initialization creates schema-version-16 repository configuration, an empty
-startup mount snapshot, a minimal `.traffic-e2e/Dockerfile.recording` scaffold,
-the target bootstrap when target files are absent, and the required ignore
-rules. It preserves existing Dockerfiles and an existing complete target, and
-refuses partial or conflicting initialization state.
+Initialization creates the local `dev-migration` pull-request base branch from
+the current `HEAD` when it is missing, without switching the current branch. It
+also creates schema-version-16 repository configuration, an empty startup mount
+snapshot, a minimal `.traffic-e2e/Dockerfile.recording` scaffold, the target
+bootstrap when target files are absent, and the required ignore rules. It
+preserves an existing `dev-migration` branch, existing Dockerfiles, and an
+existing complete target, and refuses partial or conflicting initialization
+state.
 
 Do not scan source or target code before this command merely to enumerate
 environment variables, dotenv files, mounts, or writable directories. Do not
