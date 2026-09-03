@@ -6,8 +6,9 @@ rewrite work and resumed sessions must not rerun it.
 
 ## 1. Initialize The Repository Contract
 
-Keep the configured source container present, inspectable, and stopped. Run
-from the target repository, or bind it with global `--target-root`:
+At command time, `--source-container` must name a present, inspectable, stopped
+local source container. Run from the target repository, or bind it with global
+`--target-root`:
 
 ```bash
 backend-rewrite init \
@@ -70,8 +71,8 @@ backend-rewrite init preflight --duration-seconds 60
 Provide any required named caller environment without printing its value.
 Treat only the returned overall `status = "passed"` as success. On failure,
 change the repository build/startup contract or managed startup inputs named by
-the result, then rerun the same command. Do not replace it with direct Docker
-commands or self-reported checks.
+the result, then rerun the same command. Additional local checks may help
+diagnosis, but only the managed preflight result completes initialization.
 
 Initialization preflight validates only the initialized build, recording,
 network, target startup, and cleanup contracts. It is not business API
