@@ -345,6 +345,8 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(MANAGER.contains("--entrypoint java \"$adapter_image_id\" -version"));
     assert!(!MANAGER.contains("TRAFFIC_E2E_SOURCE_LANGUAGE"));
     assert!(MANAGER.contains("traffic-e2e-network-probe:0.0.1"));
+    assert!(MANAGER.contains("X-Traffic-E2E-Probe-Origin: source"));
+    assert!(String::from_utf8_lossy(HTTPS_PROBE).contains("X-Traffic-E2E-Probe-Origin"));
     assert!(MANAGER.contains(
         "$TRAFFIC_E2E_PLATFORM_ASSETS/HttpsProbe.class:/traffic-e2e/HttpsProbe.class:ro"
     ));

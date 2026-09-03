@@ -15,7 +15,7 @@ use super::{E2eRunInitOptions, E2eRunInitResult, branch};
 use crate::replay::validate_replay_policy;
 use anyhow::{Context, Result, bail, ensure};
 
-pub(super) const CONFIG_VERSION: u32 = 15;
+pub(super) const CONFIG_VERSION: u32 = 16;
 pub(super) const DEFAULT_RUNTIME_ROOT: &str = crate::internal_runtime::PROJECT_RELATIVE_ROOT;
 pub(crate) const PROJECT_CONFIG_FILE: &str = "project.yaml";
 
@@ -347,7 +347,7 @@ pub(super) fn load_project_config(target_root: &Path, config_path: &Path) -> Res
     if !config_path.exists() {
         bail!(
             "{} is missing; from the target repository run `backend-rewrite init \
-             --source-container <container> [--breeze]`",
+             --source-container <container>`",
             config_path.display()
         );
     }

@@ -38,6 +38,9 @@ pub(super) fn repository_fingerprint(target_root: &Path) -> Result<String> {
     hash.update(b"startup-snapshot");
     hash.update(crate::startup::startup_snapshot_revision(target_root)?.as_bytes());
     hash.update(&[0]);
+    hash.update(b"target-environment");
+    hash.update(crate::startup::startup_environment_revision(target_root)?.as_bytes());
+    hash.update(&[0]);
     Ok(hash.finish())
 }
 

@@ -208,8 +208,7 @@ async fn run_target_runtime(
     crate::target_container::verify_target_identity(container).await?;
     crate::target_container::verify_startup_environment(
         container,
-        &target.startup,
-        true,
+        target_root,
         target.breeze_enabled,
     )
     .await?;

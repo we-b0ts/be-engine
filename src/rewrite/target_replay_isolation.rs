@@ -79,7 +79,7 @@ const PRODUCTION_FORBIDDEN_MARKERS: &[ForbiddenMarker] = &[
         rule: "traffic_e2e_environment",
         marker: "traffic_e2e_",
         reason: "code depends on a traffic-e2e-owned environment variable",
-        required_change: "declare an application-owned startup environment name in .traffic-e2e/project.yaml",
+        required_change: "manage the application-owned value through backend-rewrite startup env",
     },
     ForbiddenMarker {
         rule: "fake_ip_range",

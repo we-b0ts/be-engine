@@ -52,18 +52,9 @@ struct InitArgs {
     /// DNS server for queries not owned by the recorder.
     #[arg(long, default_value = "10.10.10.11:53")]
     upstream_dns: SocketAddr,
-    /// Source-compatible absolute file or directory to copy and mount read-only.
-    #[arg(long = "startup-mount", value_name = "ABSOLUTE_PATH")]
-    startup_mounts: Vec<PathBuf>,
-    /// Application-owned environment variable captured from the source container.
-    #[arg(long = "startup-env", value_name = "NAME")]
-    startup_environment: Vec<String>,
-    /// Application-owned environment variable that receives the recorder-owned native HTTP port.
-    #[arg(long, value_name = "NAME")]
-    target_port_env: Option<String>,
-    /// Application-owned environment variable that receives the Replay CA path.
-    #[arg(long, value_name = "NAME")]
-    replay_ca_env: Option<String>,
+    /// Optional dotenv file used to initialize .traffic-e2e/local/target.env.
+    #[arg(long, value_name = "PATH")]
+    env_file: Option<PathBuf>,
 }
 
 pub(super) fn run(args: ConfigArgs) -> Result<()> {
@@ -77,12 +68,7 @@ pub(super) fn run(args: ConfigArgs) -> Result<()> {
                 readiness_path: init.readiness_path,
                 readiness_status: init.readiness_status,
                 upstream_dns: init.upstream_dns,
-                startup: traffic_e2e::StartupConfig {
-                    mounts: init.startup_mounts,
-                    environment_from_source: init.startup_environment,
-                    port_environment: init.target_port_env,
-                    replay_ca_environment: init.replay_ca_env,
-                },
+                env_file: init.env_file,
             },
         )?),
         ConfigCommand::Recorder(command) => recorder::run(args.target_root, command),

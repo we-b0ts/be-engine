@@ -15,6 +15,7 @@ fn exposes_only_the_rewrite_coordinator_surface() {
         visible,
         [
             "init",
+            "startup",
             "config",
             "next",
             "status",
@@ -309,20 +310,34 @@ fn parses_the_bounded_rewrite_surface() {
             "init",
             "--source-container",
             "friendship",
-            "--startup-mount",
-            "/data1/weibo/confs",
-            "--startup-env",
-            "WEIBO_CONF_PATH",
-            "--target-port-env",
-            "PORT",
-            "--replay-ca-env",
-            "SSL_CERT_FILE",
+            "--env-file",
+            "/tmp/target.env",
         ])
         .is_ok()
     );
-    for command in ["update", "refresh", "status"] {
-        assert!(Cli::try_parse_from(["test", "startup", command]).is_err());
+    for removed in [
+        "--startup-mount",
+        "--startup-env",
+        "--target-port-env",
+        "--replay-ca-env",
+    ] {
+        assert!(
+            Cli::try_parse_from([
+                "test",
+                "init",
+                "--source-container",
+                "friendship",
+                removed,
+                "VALUE",
+            ])
+            .is_err()
+        );
     }
+    assert!(Cli::try_parse_from(["test", "startup", "env", "list"]).is_ok());
+    assert!(Cli::try_parse_from(["test", "startup", "env", "equals", "DATABASE_URL"]).is_ok());
+    assert!(
+        Cli::try_parse_from(["test", "startup", "mount", "ensure", "/data1/authconfs",]).is_ok()
+    );
     assert!(
         Cli::try_parse_from([
             "test",

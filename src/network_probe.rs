@@ -10,6 +10,9 @@ pub(crate) const NEGATIVE_URL: &str = "https://example.com/";
 pub(crate) const NEGATIVE_AUTHORITY: &str = "example.com";
 pub(crate) const SYSTEM_USER_AGENT: &str = "traffic-e2e-system-network-preflight";
 pub(crate) const JAVA_USER_AGENT: &str = "traffic-e2e-java-truststore-preflight";
+pub(crate) const ORIGIN_HEADER: &str = "x-traffic-e2e-probe-origin";
+pub(crate) const SOURCE_ORIGIN: &str = "source";
+pub(crate) const TARGET_ORIGIN: &str = "target";
 pub(crate) const CASE_LIMIT_SHUTDOWN_GRACE: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ValueEnum)]
@@ -48,6 +51,10 @@ impl PreflightProbeKind {
             name.eq_ignore_ascii_case("user-agent")
                 && values.iter().any(|value| value == self.user_agent())
         });
+        let source_origin_matches = exchange.request_headers.iter().any(|(name, values)| {
+            name.eq_ignore_ascii_case(ORIGIN_HEADER)
+                && values.iter().any(|value| value == SOURCE_ORIGIN)
+        });
         let uri_matches = exchange.uri == "/"
             || exchange.uri == POSITIVE_URL
             || exchange.uri == "https://demo.test";
@@ -55,7 +62,8 @@ impl PreflightProbeKind {
             && matches!(exchange.scheme.as_str(), "https" | "fake_ip_https")
             && authority_matches
             && uri_matches
-            && user_agent_matches;
+            && user_agent_matches
+            && source_origin_matches;
         is_probe.then(|| {
             exchange
                 .response_status

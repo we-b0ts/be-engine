@@ -7,7 +7,7 @@ use clap::{Args, Subcommand};
 use serde::Serialize;
 use traffic_e2e::{
     DEFAULT_HTTP_GATEWAY_PORT, InspectedContainer, ManagedRecordingPreflightOptions,
-    RepositoryConfigInitOptions, RepositoryConfigInitResult, StartupConfig, StartupSnapshotReport,
+    RepositoryConfigInitOptions, RepositoryConfigInitResult, StartupSnapshotReport,
     initialize_repository_config, run_managed_recording_preflight,
 };
 
@@ -33,18 +33,9 @@ pub(super) struct ProjectInitArgs {
     /// DNS server for queries not owned by the recorder.
     #[arg(long, default_value = "10.10.10.11:53")]
     upstream_dns: SocketAddr,
-    /// Source-compatible absolute file or directory to snapshot; exact source mounts retain rw/ro.
-    #[arg(long = "startup-mount", value_name = "ABSOLUTE_PATH")]
-    startup_mounts: Vec<PathBuf>,
-    /// Application-owned environment variable whose value is captured from the source container.
-    #[arg(long = "startup-env", value_name = "NAME")]
-    startup_environment: Vec<String>,
-    /// Application-owned environment variable that receives the recorder-owned native HTTP port.
-    #[arg(long, value_name = "NAME")]
-    target_port_env: Option<String>,
-    /// Application-owned environment variable that receives the Replay CA certificate path.
-    #[arg(long, value_name = "NAME")]
-    replay_ca_env: Option<String>,
+    /// Optional dotenv file used to initialize .traffic-e2e/local/target.env.
+    #[arg(long, value_name = "PATH")]
+    env_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -68,11 +59,13 @@ struct ProjectInitReport {
     breeze_container: Option<InspectedContainer>,
     http_gateway_port: u16,
     local_dir: PathBuf,
+    target_environment: PathBuf,
     gitignore: PathBuf,
     gitignore_updated: bool,
     dockerignore: PathBuf,
     dockerignore_updated: bool,
     startup: StartupSnapshotReport,
+    recording_dockerfile: PathBuf,
     target_dockerfile: PathBuf,
     target_image_tag: String,
     target_runtime_contract: &'static str,
@@ -131,12 +124,7 @@ pub(super) async fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: boo
         readiness_path: args.readiness_path,
         readiness_status: args.readiness_status,
         upstream_dns: args.upstream_dns,
-        startup: StartupConfig {
-            mounts: args.startup_mounts,
-            environment_from_source: args.startup_environment,
-            port_environment: args.target_port_env,
-            replay_ca_environment: args.replay_ca_env,
-        },
+        env_file: args.env_file,
     })?;
     super::print_json(&ProjectInitReport::from(result), pretty)
 }
@@ -176,11 +164,13 @@ impl From<RepositoryConfigInitResult> for ProjectInitReport {
             breeze_container: result.breeze_container,
             http_gateway_port: result.http_gateway_port,
             local_dir: result.local_dir,
+            target_environment: result.target_environment,
             gitignore: result.gitignore,
             gitignore_updated: result.gitignore_updated,
             dockerignore: result.dockerignore,
             dockerignore_updated: result.dockerignore_updated,
             startup: result.startup,
+            recording_dockerfile: result.recording_dockerfile,
             target_dockerfile: result.target_dockerfile,
             target_image_tag: result.target_image_tag,
             target_runtime_contract: result.target_runtime_contract,

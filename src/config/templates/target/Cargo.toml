@@ -8,6 +8,7 @@ publish = false
 anyhow = "1"
 axum = "0.8"
 brz-logs = { package = "logs", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/logs.git", tag = "v0.0.1", features = ["metrics"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
 tracing = "0.1"
 

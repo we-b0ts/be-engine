@@ -19,6 +19,7 @@ public final class HttpsProbe {
         connection.setInstanceFollowRedirects(false);
         connection.setRequestMethod("GET");
         connection.setRequestProperty("User-Agent", "traffic-e2e-java-truststore-preflight");
+        connection.setRequestProperty("X-Traffic-E2E-Probe-Origin", "source");
         int status = connection.getResponseCode();
         connection.disconnect();
         if (status < 100) {

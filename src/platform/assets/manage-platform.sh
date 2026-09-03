@@ -728,6 +728,7 @@ run_preflight_https_probe() {
             --silent --show-error --connect-timeout 10 --max-time 15 \
             --cacert /traffic-e2e/trust/recorder-ca.pem \
             --user-agent traffic-e2e-system-network-preflight \
+            --header 'X-Traffic-E2E-Probe-Origin: source' \
             --output /dev/null --write-out 'system network HTTPS probe returned %{http_code}\n' \
             https://demo.test/ || {
                 printf 'error: system network HTTPS probe failed\n' >&2
