@@ -113,6 +113,10 @@ Initialization is complete only when:
 - no credential, recording, generated trust, or `.traffic-e2e/local/` content
   is included in source-controlled changes.
 
+Leave the configured source container present and stopped after initialization;
+it is a retained system input, not a container owned by the initialization AI
+for cleanup.
+
 Stop there. Do not begin the rewrite workflow as part of initialization.
 
 If the caller asks for Git delivery, confirm the intended baseline and target
