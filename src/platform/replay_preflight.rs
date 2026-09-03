@@ -147,16 +147,34 @@ pub(super) async fn run(
         &mut child,
     )
     .await;
-    match (result, cleanup) {
+    let ownership = match crate::ArtifactOwner::invoking() {
+        Ok(owner) => owner.assign_to(&runtime_dir).await,
+        Err(error) => Err(error),
+    }
+    .context("failed to restore Replay preflight artifacts to the invoking user");
+    let finalization = combine_finalization(cleanup, ownership);
+    match (result, finalization) {
         (Ok((mut network, mut target_runtime)), Ok(())) => {
             network.cleanup = true;
             target_runtime.checks.cleanup = true;
             Ok((network, target_runtime))
         }
-        (Ok(_), Err(error)) => Err(error).context("target_runtime preflight cleanup failed"),
+        (Ok(_), Err(error)) => Err(error),
         (Err(error), Ok(())) => Err(error),
-        (Err(error), Err(cleanup_error)) => Err(error.context(format!(
-            "initialization preflight cleanup also failed: {cleanup_error:#}"
+        (Err(error), Err(finalization_error)) => Err(error.context(format!(
+            "initialization preflight finalization also failed: {finalization_error:#}"
+        ))),
+    }
+}
+
+fn combine_finalization(cleanup: Result<()>, ownership: Result<()>) -> Result<()> {
+    match (cleanup, ownership) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error).context("target_runtime preflight cleanup failed"),
+        (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(ownership_error)) => Err(error.context(format!(
+            "target_runtime preflight cleanup failed; artifact ownership also failed: \
+             {ownership_error:#}"
         ))),
     }
 }
@@ -689,6 +707,18 @@ mod tests {
         );
         assert!(parse_positive_output(b"000").is_err());
         assert!(parse_positive_output(b"200 10.0.0.1 trailing").is_err());
+    }
+
+    #[test]
+    fn preserves_cleanup_and_ownership_finalization_errors() {
+        let error = combine_finalization(
+            Err(anyhow::anyhow!("cleanup error")),
+            Err(anyhow::anyhow!("ownership error")),
+        )
+        .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("cleanup error"));
+        assert!(message.contains("ownership error"));
     }
 
     #[test]

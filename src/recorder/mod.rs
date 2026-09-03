@@ -10,12 +10,12 @@ use serde::Serialize;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::ArtifactOwner;
 use crate::config::{RecordingAccessPolicy, RecordingConfig, TrafficJsonlMode};
 use crate::recording_completion::ExplicitApiCaseLimits;
 use crate::recording_network::RecordedEndpoint;
 use crate::request_headers::RequestHeaderCapture;
 
-mod artifact_owner;
 pub(crate) mod background;
 pub(crate) mod cache_snapshot;
 mod capture;
@@ -37,7 +37,6 @@ mod storage;
 mod summary;
 mod writer;
 
-pub use artifact_owner::ArtifactOwner;
 pub use capture::*;
 pub(crate) use case::{
     CaseInvalidation, CaseInvalidationContext, PrimaryCaseDescriptor, PrimarySourceBinding,

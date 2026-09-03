@@ -1,6 +1,7 @@
 mod access_policy;
 mod active_case;
 mod artifact_file;
+mod artifact_owner;
 mod breeze;
 mod build_info;
 mod case_group;
@@ -77,6 +78,7 @@ pub const TRAFFIC_PROCESS_GID: u32 = 998;
 /// OCI user specification for containerized processes whose dependency traffic is intercepted.
 pub const TRAFFIC_PROCESS_USER: &str = "998:998";
 
+pub use artifact_owner::ArtifactOwner;
 pub use build_info::BINARY_VERSION;
 
 pub use case_group::{
@@ -165,15 +167,15 @@ pub use process_output::{
     ProfileTargetMissingEmitterEvidence,
 };
 pub use recorder::{
-    AccessPolicyAllowEvent, ArtifactOwner, BodyCapture, CaseBodyCapture, CaseContext,
-    HeaderMapSnapshot, HttpExchangeEvent, KafkaConnectionEvent, KafkaDeliveryEvent,
-    KafkaFetchEvent, KafkaHeaderCapture, KafkaProduceEvent, MemcachedConnectionEvent,
-    MemcachedExchangeEvent, MotanConnectionEvent, MotanExchangeEvent, MysqlColumn,
-    MysqlConnectionEvent, MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent,
-    MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue,
-    ProxyErrorEvent, ReadonlyRejectionEvent, Recorder, RecorderEvent, RedisConnectionEvent,
-    RedisExchangeEvent, TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body,
-    capture_body_with_original_len, capture_case_body, redact_headers,
+    AccessPolicyAllowEvent, BodyCapture, CaseBodyCapture, CaseContext, HeaderMapSnapshot,
+    HttpExchangeEvent, KafkaConnectionEvent, KafkaDeliveryEvent, KafkaFetchEvent,
+    KafkaHeaderCapture, KafkaProduceEvent, MemcachedConnectionEvent, MemcachedExchangeEvent,
+    MotanConnectionEvent, MotanExchangeEvent, MysqlColumn, MysqlConnectionEvent,
+    MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent, MysqlQueryEvent,
+    MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue, ProxyErrorEvent,
+    ReadonlyRejectionEvent, Recorder, RecorderEvent, RedisConnectionEvent, RedisExchangeEvent,
+    TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body, capture_body_with_original_len,
+    capture_case_body, redact_headers,
 };
 pub use recording_api::RecordingApi;
 pub use recording_control::{

@@ -1,7 +1,5 @@
-use std::ffi::CString;
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::Write as _;
-use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::Path;
 
@@ -28,7 +26,7 @@ fn load_or_create_with(target_root: &Path, supplied: Option<&str>) -> Result<Str
     let secrets_root = target_root.join(crate::repository::LOCAL_SECRETS_ROOT);
     ensure_private_directory(&secrets_root)?;
     let key_path = target_root.join(crate::repository::LOCAL_ENCRYPTION_KEY_PATH);
-    let owner = invoking_owner()?;
+    let owner = crate::ArtifactOwner::invoking()?;
 
     let key = match fs::symlink_metadata(&key_path) {
         Ok(metadata) => {
@@ -91,8 +89,8 @@ fn load_or_create_with(target_root: &Path, supplied: Option<&str>) -> Result<Str
             });
         }
     };
-    assign_to_invoking_owner(&secrets_root, owner)?;
-    assign_to_invoking_owner(&key_path, owner)?;
+    owner.assign_path_to(&secrets_root)?;
+    owner.assign_path_to(&key_path)?;
     Ok(key)
 }
 
@@ -119,40 +117,6 @@ fn ensure_private_directory(path: &Path) -> Result<()> {
     }
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
         .with_context(|| format!("failed to protect managed secrets root {}", path.display()))
-}
-
-fn invoking_owner() -> Result<(libc::uid_t, libc::gid_t)> {
-    let effective = unsafe { (libc::geteuid(), libc::getegid()) };
-    if effective.0 != 0 {
-        return Ok(effective);
-    }
-    match (std::env::var("SUDO_UID"), std::env::var("SUDO_GID")) {
-        (Ok(uid), Ok(gid)) => Ok((
-            uid.parse().context("SUDO_UID must be numeric")?,
-            gid.parse().context("SUDO_GID must be numeric")?,
-        )),
-        _ => Ok(effective),
-    }
-}
-
-fn assign_to_invoking_owner(path: &Path, owner: (libc::uid_t, libc::gid_t)) -> Result<()> {
-    let effective = unsafe { (libc::geteuid(), libc::getegid()) };
-    if owner == effective {
-        return Ok(());
-    }
-    let path_bytes = CString::new(path.as_os_str().as_bytes())
-        .with_context(|| format!("managed secret path contains NUL: {}", path.display()))?;
-    if unsafe { libc::lchown(path_bytes.as_ptr(), owner.0, owner.1) } == 0 {
-        return Ok(());
-    }
-    let error = std::io::Error::last_os_error();
-    bail!(
-        "failed to assign managed secret {} to {}:{}: {}",
-        path.display(),
-        owner.0,
-        owner.1,
-        error
-    )
 }
 
 #[cfg(test)]

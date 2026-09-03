@@ -26,11 +26,31 @@ impl ArtifactOwner {
         self.gid
     }
 
+    pub(crate) fn invoking() -> Result<Self> {
+        let effective = Self::effective();
+        resolve_invoking_owner(
+            effective,
+            std::env::var("SUDO_UID").ok().as_deref(),
+            std::env::var("SUDO_GID").ok().as_deref(),
+        )
+    }
+
     pub(crate) async fn assign_to(self, run_dir: &Path) -> Result<()> {
         let run_dir = run_dir.to_path_buf();
         tokio::task::spawn_blocking(move || assign_tree(&run_dir, self))
             .await
-            .context("recording artifact ownership task failed")?
+            .context("artifact ownership task failed")?
+    }
+
+    pub(crate) fn assign_path_to(self, path: &Path) -> Result<()> {
+        assign_path(path, self)
+    }
+
+    fn effective() -> Self {
+        Self {
+            uid: unsafe { libc::geteuid() },
+            gid: unsafe { libc::getegid() },
+        }
     }
 }
 
@@ -64,18 +84,32 @@ fn owner_format_error() -> String {
     "artifact owner must use numeric UID:GID".to_string()
 }
 
+fn resolve_invoking_owner(
+    effective: ArtifactOwner,
+    sudo_uid: Option<&str>,
+    sudo_gid: Option<&str>,
+) -> Result<ArtifactOwner> {
+    if effective.uid != 0 {
+        return Ok(effective);
+    }
+    let (Some(uid), Some(gid)) = (sudo_uid, sudo_gid) else {
+        return Ok(effective);
+    };
+    Ok(ArtifactOwner {
+        uid: uid.parse().context("SUDO_UID must be numeric")?,
+        gid: gid.parse().context("SUDO_GID must be numeric")?,
+    })
+}
+
 fn assign_tree(path: &Path, owner: ArtifactOwner) -> Result<()> {
     let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("failed to inspect recording artifact {}", path.display()))?;
+        .with_context(|| format!("failed to inspect artifact {}", path.display()))?;
     if metadata.file_type().is_dir() {
         for child in fs::read_dir(path)
-            .with_context(|| format!("failed to list recording artifact dir {}", path.display()))?
+            .with_context(|| format!("failed to list artifact dir {}", path.display()))?
         {
             let child = child.with_context(|| {
-                format!(
-                    "failed to read recording artifact entry under {}",
-                    path.display()
-                )
+                format!("failed to read artifact entry under {}", path.display())
             })?;
             assign_tree(&child.path(), owner)?;
         }
@@ -85,14 +119,14 @@ fn assign_tree(path: &Path, owner: ArtifactOwner) -> Result<()> {
 
 fn assign_path(path: &Path, owner: ArtifactOwner) -> Result<()> {
     let path_bytes = CString::new(path.as_os_str().as_bytes())
-        .with_context(|| format!("recording artifact path contains NUL: {}", path.display()))?;
+        .with_context(|| format!("artifact path contains NUL: {}", path.display()))?;
     let result = unsafe { libc::lchown(path_bytes.as_ptr(), owner.uid, owner.gid) };
     if result == 0 {
         return Ok(());
     }
     let error = std::io::Error::last_os_error();
     bail!(
-        "failed to assign recording artifact {} to {}: {}",
+        "failed to assign artifact {} to {}: {}",
         path.display(),
         owner,
         error
@@ -116,6 +150,27 @@ mod tests {
         for invalid in ["", "1114", ":1115", "1114:", "-1:1115", "1114:1:2"] {
             assert!(invalid.parse::<ArtifactOwner>().is_err(), "{invalid}");
         }
+    }
+
+    #[test]
+    fn resolves_the_invoking_owner_only_for_sudo_root() {
+        let root = ArtifactOwner::new(0, 0);
+        let user = ArtifactOwner::new(1114, 1115);
+
+        assert_eq!(resolve_invoking_owner(root, None, None).unwrap(), root);
+        assert_eq!(
+            resolve_invoking_owner(root, Some("1114"), Some("1115")).unwrap(),
+            user
+        );
+        assert_eq!(
+            resolve_invoking_owner(user, Some("2222"), Some("2223")).unwrap(),
+            user
+        );
+        assert_eq!(
+            resolve_invoking_owner(root, Some("1114"), None).unwrap(),
+            root
+        );
+        assert!(resolve_invoking_owner(root, Some("user"), Some("1115")).is_err());
     }
 
     #[tokio::test]
