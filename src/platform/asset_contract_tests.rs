@@ -318,6 +318,12 @@ fn embedded_platform_manager_is_valid_bash() {
     ));
     assert!(RECORDER_RUNTIME.contains("com.weibo.traffic-e2e.role=cache-snapshot"));
     assert!(MANAGER.contains("normalize_cache_snapshot_ownership"));
+    assert!(MANAGER.contains("if ((effective_uid == 0))"));
+    assert!(MANAGER.contains("runtime_uid=$SUDO_UID"));
+    assert!(MANAGER.contains("runtime_gid=$SUDO_GID"));
+    assert!(MANAGER.contains("artifact_owner=\"$runtime_uid:$runtime_gid\""));
+    assert!(MANAGER.contains("normalize_retained_ownership"));
+    assert!(MANAGER.contains("chown -hR \"$runtime_uid:$runtime_gid\" -- \"$path\""));
     assert!(
         RECORDER_RUNTIME.contains("'chown -hR \"$1:$2\" -- /workspace/control/cache-snapshot'")
     );
@@ -327,6 +333,7 @@ fn embedded_platform_manager_is_valid_bash() {
         &[
             "stop_container \"$recorder_name\"",
             "normalize_cache_snapshot_ownership",
+            "normalize_retained_ownership",
             "remove_private_runtime_dir \"$comparison_socket_dir\" /tmp",
             "remove_private_runtime_dir \"$control_dir\"",
             "remove_platform_mounts",

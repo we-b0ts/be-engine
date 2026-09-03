@@ -126,7 +126,7 @@ if [[ "$operation" == record-comparison && \
     }
 fi
 
-for command_name in docker jq curl nc timeout base64 id date find awk wc tr rm tar mktemp; do
+for command_name in docker jq curl nc timeout base64 id date find awk wc tr rm tar mktemp chown; do
     command -v "$command_name" >/dev/null 2>&1 || {
         printf 'error: required command not found: %s\n' "$command_name" >&2
         exit 1
@@ -237,6 +237,19 @@ adapter_contract_revision=""
 source_uses_java=false
 adapter_dockerfile="$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/Dockerfile.recording"
 
+effective_uid=$(id -u)
+effective_gid=$(id -g)
+runtime_uid=$effective_uid
+runtime_gid=$effective_gid
+if ((effective_uid == 0)) && [[ -n "${SUDO_UID-}" && -n "${SUDO_GID-}" ]]; then
+    runtime_uid=$SUDO_UID
+    runtime_gid=$SUDO_GID
+fi
+[[ "$runtime_uid" =~ ^[0-9]+$ && "$runtime_gid" =~ ^[0-9]+$ ]] || {
+    printf 'error: invoking UID and GID must be numeric\n' >&2
+    exit 1
+}
+
 runtime_root="$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/local"
 if [[ "$operation" == preflight ]]; then
     preflight_root="$runtime_root/preflight/$run_id"
@@ -256,6 +269,9 @@ startup_snapshot_mounts_root="$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/local/startu
 mkdir -p "$data_dir" "$artifacts_dir" "$diagnostics_dir" "$control_dir"
 mkdir -p "$platform_mounts_parent"
 chmod 0700 "$diagnostics_dir" "$control_dir"
+if [[ "$operation" == preflight ]]; then
+    chmod 0700 "$preflight_root" "$data_dir" "$artifacts_dir"
+fi
 
 anchor_started=false
 recorder_started=false
@@ -268,8 +284,6 @@ recorder_finalized=false
 comparison_pid=""
 comparison_socket_dir=""
 input_pid=""
-runtime_uid=$(id -u)
-runtime_gid=$(id -g)
 source "$TRAFFIC_E2E_PLATFORM_ASSETS/platform-mounts.sh"
 
 container_exists() {
@@ -304,6 +318,32 @@ remove_private_runtime_dir() {
         return 1
     }
     rm -rf -- "$path"
+}
+
+normalize_retained_ownership() {
+    local recording_result_dir path mismatched
+    if [[ "$operation" == record-comparison ]]; then
+        recording_result_dir="$artifacts_dir/comparison-recordings/$run_id"
+    else
+        recording_result_dir="$artifacts_dir/recordings/$run_id"
+    fi
+    local -a retained_paths=("$data_dir" "$recording_result_dir" "$diagnostics_dir")
+    [[ "$operation" != preflight ]] || retained_paths+=("$preflight_root")
+    for path in "${retained_paths[@]}"; do
+        [[ -e "$path" ]] || continue
+        mismatched=$(find "$path" \( ! -user "$runtime_uid" -o ! -group "$runtime_gid" \) \
+            -print -quit 2>/dev/null || true)
+        [[ -n "$mismatched" ]] || continue
+        if ((effective_uid == 0)); then
+            chown -hR "$runtime_uid:$runtime_gid" -- "$path"
+        else
+            docker run --rm --platform linux/amd64 --network none --user 0:0 \
+                --entrypoint /bin/sh --volume "$path:/workspace/retained" \
+                "$recorder_image" -ec \
+                'chown -hR "$1:$2" -- /workspace/retained' \
+                sh "$runtime_uid" "$runtime_gid"
+        fi
+    done
 }
 
 cleanup() {
@@ -341,6 +381,7 @@ cleanup() {
     remove_comparison_target_network || status=1
     "$anchor_started" && stop_container "$anchor_name"
     normalize_cache_snapshot_ownership || status=1
+    normalize_retained_ownership || status=1
     if [[ -n "$comparison_socket_dir" ]]; then
         remove_private_runtime_dir "$comparison_socket_dir" /tmp || status=1
         comparison_socket_dir=""
@@ -789,7 +830,7 @@ stop_recording_input() {
 
 run_standard_recording() {
     local artifact_owner control_socket truststore
-    artifact_owner="$(id -u):$(id -g)"
+    artifact_owner="$runtime_uid:$runtime_gid"
     control_socket=/workspace/control/recorder.sock
     truststore="$data_dir/source-truststore.jks"
     [[ ! -e "$artifacts_dir/recordings/$run_id" ]] || {
