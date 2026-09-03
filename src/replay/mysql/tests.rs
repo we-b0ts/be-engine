@@ -3,7 +3,63 @@ use super::*;
 use std::path::{Path, PathBuf};
 
 use tempfile::tempdir;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
+
+#[tokio::test]
+async fn accepts_tls_login_with_replay_ca() {
+    let temp = tempdir().unwrap();
+    let case_dir = temp.path().join("case-id");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    tokio::fs::write(case_dir.join("dependencies.jsonl"), "")
+        .await
+        .unwrap();
+    let (addr, runtime, task) = spawn_replay(&case_dir).await;
+
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    let handshake = read_packet(&mut client).await.unwrap().unwrap();
+    assert!(server_handshake_capabilities(&handshake) & CLIENT_SSL != 0);
+
+    let tls_flags = CLIENT_PROTOCOL_41
+        | CLIENT_SECURE_CONNECTION
+        | CLIENT_CONNECT_WITH_DB
+        | CLIENT_PLUGIN_AUTH
+        | CLIENT_SSL;
+    let mut ssl_request = vec![0_u8; 32];
+    ssl_request[0..4].copy_from_slice(&tls_flags.to_le_bytes());
+    write_packet_bytes(
+        &mut client,
+        MysqlPacket {
+            sequence_id: 1,
+            payload: ssl_request,
+        },
+    )
+    .await;
+
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(runtime.ca.ca_cert_der()).unwrap();
+    let config = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let server_name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+    let mut client = tokio_rustls::TlsConnector::from(Arc::new(config))
+        .connect(server_name, client)
+        .await
+        .unwrap();
+    write_packet_bytes(
+        &mut client,
+        MysqlPacket {
+            sequence_id: 2,
+            payload: login_payload_with_flags("appdb", tls_flags),
+        },
+    )
+    .await;
+
+    let response = read_packet(&mut client).await.unwrap().unwrap();
+    assert_eq!(response.sequence_id, 3);
+    assert_eq!(response.payload[0], 0x00);
+    assert_eq!(runtime.state.lock().await.mysql.events.connections, 1);
+    task.abort();
+}
 
 #[tokio::test]
 async fn delays_response_by_recorded_duration() {
@@ -452,13 +508,17 @@ async fn connect_login(addr: SocketAddr) -> TcpStream {
     client
 }
 
-async fn write_packet_bytes(stream: &mut TcpStream, packet: MysqlPacket) {
+async fn write_packet_bytes(stream: &mut (impl AsyncWrite + Unpin), packet: MysqlPacket) {
     stream.write_all(&packet.to_wire_bytes()).await.unwrap();
 }
 
 fn login_payload(database: &str) -> Vec<u8> {
     let flags =
         CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_PLUGIN_AUTH;
+    login_payload_with_flags(database, flags)
+}
+
+fn login_payload_with_flags(database: &str, flags: u32) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.extend_from_slice(&flags.to_le_bytes());
     payload.extend_from_slice(&0_u32.to_le_bytes());
@@ -470,6 +530,27 @@ fn login_payload(database: &str) -> Vec<u8> {
     payload.push(0);
     payload.extend_from_slice(b"mysql_native_password\0");
     payload
+}
+
+fn server_handshake_capabilities(packet: &MysqlPacket) -> u32 {
+    let version_end = packet.payload[1..]
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap()
+        + 2;
+    let lower_offset = version_end + 4 + 8 + 1;
+    let lower = u16::from_le_bytes(
+        packet.payload[lower_offset..lower_offset + 2]
+            .try_into()
+            .unwrap(),
+    ) as u32;
+    let upper_offset = lower_offset + 2 + 1 + 2;
+    let upper = u16::from_le_bytes(
+        packet.payload[upper_offset..upper_offset + 2]
+            .try_into()
+            .unwrap(),
+    ) as u32;
+    lower | upper << 16
 }
 
 fn stmt_execute_no_params(statement_id: u32) -> Vec<u8> {

@@ -1,45 +1,39 @@
 use super::*;
 
 pub(in crate::replay) async fn handle_connection(
-    mut stream: TcpStream,
+    mut tcp_stream: TcpStream,
     peer_addr: SocketAddr,
     target: Option<TargetKey>,
     state: Arc<Mutex<ReplayState>>,
     report_writer: ReplayReportWriter,
+    ca: Arc<MitmCa>,
 ) -> Result<()> {
-    write_packet(&mut stream, handshake_packet(1)).await?;
-    let login_packet = read_packet(&mut stream)
+    write_packet(&mut tcp_stream, handshake_packet(1)).await?;
+    let first_login_packet = read_packet(&mut tcp_stream)
         .await
         .context("failed to read MySQL replay login packet")?
         .context("MySQL replay client closed before login packet")?;
+    let first_login = parse_handshake_response(&first_login_packet);
+    let (mut stream, login_packet): (BoxedMysqlReplayIo, MysqlPacket) = if first_login.tls_requested
+    {
+        let tls_host = target
+            .as_ref()
+            .map(|target| target.host.as_str())
+            .unwrap_or("localhost");
+        let config = ca.mysql_server_config_for_host(tls_host)?;
+        let mut tls_stream = tokio_rustls::TlsAcceptor::from(config)
+            .accept(tcp_stream)
+            .await
+            .context("failed to accept MySQL replay client TLS")?;
+        let secure_login_packet = read_packet(&mut tls_stream)
+            .await
+            .context("failed to read MySQL replay TLS login packet")?
+            .context("MySQL replay TLS client closed before login packet")?;
+        (Box::new(tls_stream), secure_login_packet)
+    } else {
+        (Box::new(tcp_stream), first_login_packet)
+    };
     let login = parse_handshake_response(&login_packet);
-    if login.tls_requested {
-        write_packet(
-            &mut stream,
-            MysqlPacket {
-                sequence_id: 2,
-                payload: err_payload(3159, "MySQL TLS is not supported by replay mode"),
-            },
-        )
-        .await?;
-        {
-            let mut state = state.lock().await;
-            let identity = ReplaySessionIdentity {
-                target: target.clone(),
-                database: login.database.clone(),
-                username: login.username.clone(),
-            };
-            state.record_unsupported(
-                &identity,
-                "HANDSHAKE",
-                None,
-                None,
-                "MySQL TLS requested; replay mode requires a non-TLS test connection",
-            );
-        }
-        report_writer.request();
-        return Ok(());
-    }
     {
         let mut state = state.lock().await;
         state.record_connection(
@@ -52,7 +46,7 @@ pub(in crate::replay) async fn handle_connection(
     write_packet(
         &mut stream,
         MysqlPacket {
-            sequence_id: 2,
+            sequence_id: login_packet.sequence_id.wrapping_add(1),
             payload: ok_payload(0, 0),
         },
     )

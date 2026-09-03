@@ -40,7 +40,8 @@ Common semantic records:
   frames may contain sensitive business objects
 - `tcp_gateway_connection`: captured TCP/fake-IP dependency connection metadata
 - `udp_datagram`: captured UDP/fake-IP dependency datagram or push side effect
-- `mysql_tls_rejected`: MySQL TLS rejection event; MySQL TLS MITM is out of scope
+- `mysql_tls_rejected`: legacy MySQL TLS rejection evidence from recordings
+  produced before MySQL TLS recording support
 - `proxy_error`: recorder or dependency proxy error
 
 Semantic MySQL, Redis, Memcached, Kafka Produce/Fetch, and Motan exchanges carry
@@ -100,10 +101,11 @@ First-version summary fields:
 - Top level: `version`, `source`, `total_events`, `event_types`, optional
   `parse_errors`, and optional protocol sections such as `mysql`, `http`,
   `tcp_gateway`, and `proxy_errors`.
-- `mysql`: connection counts, TLS rejection counts, route/database/user/upstream
-  counts, semantic exchange counts, executed and failed CRUD counts, resultset
-  and error counts, returned/affected row totals, per-table executed/failed CRUD
-  counts, per-dependency identity summaries, and compact statement records.
+- `mysql`: connection counts, legacy TLS rejection counts,
+  route/database/user/upstream counts, semantic exchange counts, executed and
+  failed CRUD counts, resultset and error counts, returned/affected row totals,
+  per-table executed/failed CRUD counts, per-dependency identity summaries, and
+  compact statement records.
 - `redis`: connection/exchange counts, targets, RESP versions, commands,
   response kinds, errors, unsafe evidence, and byte counts. It never lists
   credentials, keys, or values.

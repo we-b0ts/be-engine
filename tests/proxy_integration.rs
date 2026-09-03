@@ -833,11 +833,17 @@ async fn http_gateway_keeps_truncated_case_out_of_published_recordings() {
 }
 
 #[tokio::test]
-async fn records_and_rejects_mysql_tls_request() {
+async fn records_mysql_exchange_over_tls() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
+    let upstream_ca = traffic_e2e::MitmCa::load_or_generate(
+        temp.path().join("upstream-ca.pem"),
+        temp.path().join("upstream-ca-key.pem"),
+    )
+    .unwrap();
+    let upstream_tls_config = upstream_ca.server_config_for_host("127.0.0.1").unwrap();
     let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_addr = upstream.local_addr().unwrap();
     tokio::spawn(async move {
@@ -847,7 +853,26 @@ async fn records_and_rejects_mysql_tls_request() {
                 .write_all(&mysql_packet(0, mysql_handshake_payload().as_slice()))
                 .await
                 .unwrap();
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            let Some((_, ssl_request)) = read_mysql_packet(&mut stream).await else {
+                continue;
+            };
+            assert!(mysql_capability_flags(&ssl_request) & 0x0000_0800 != 0);
+            let mut stream = tokio_rustls::TlsAcceptor::from(upstream_tls_config.clone())
+                .accept(stream)
+                .await
+                .unwrap();
+            let (_, secure_login) = read_mysql_packet(&mut stream).await.unwrap();
+            assert_eq!(mysql_login_username(&secure_login), Some("recorder"));
+            stream
+                .write_all(&mysql_packet(3, mysql_ok_payload().as_slice()))
+                .await
+                .unwrap();
+            let (_, query) = read_mysql_packet(&mut stream).await.unwrap();
+            assert_eq!(query, b"\x03SELECT tls_value");
+            stream
+                .write_all(&mysql_packet(1, mysql_ok_payload().as_slice()))
+                .await
+                .unwrap();
         }
     });
 
@@ -862,6 +887,7 @@ async fn records_and_rejects_mysql_tls_request() {
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
     let state = traffic_e2e::AppState::new(config).await.unwrap();
+    let recorder_ca_cert = state.ca().ca_cert_der();
     let recorder = state.recorder().clone();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(proxy_addr).await;
@@ -874,12 +900,41 @@ async fn records_and_rejects_mysql_tls_request() {
     let mut payload = vec![0_u8; payload_len];
     client.read_exact(&mut payload).await.unwrap();
 
+    let tls_flags = 0x0008_8a08_u32;
     let mut ssl_request = vec![0_u8; 32];
-    ssl_request[0..4].copy_from_slice(&0x0000_8800_u32.to_le_bytes());
+    ssl_request[0..4].copy_from_slice(&tls_flags.to_le_bytes());
     client
         .write_all(&mysql_packet(1, ssl_request.as_slice()))
         .await
         .unwrap();
+
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(recorder_ca_cert).unwrap();
+    let tls_config = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let server_name = rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap();
+    let mut client = tokio_rustls::TlsConnector::from(std::sync::Arc::new(tls_config))
+        .connect(server_name, client)
+        .await
+        .unwrap();
+    client
+        .write_all(&mysql_packet(
+            2,
+            mysql_login_payload(tls_flags, "recorder", "appdb").as_slice(),
+        ))
+        .await
+        .unwrap();
+    let (sequence_id, login_response) = read_mysql_packet(&mut client).await.unwrap();
+    assert_eq!(sequence_id, 3);
+    assert_eq!(login_response[0], 0x00);
+    client
+        .write_all(&mysql_packet(0, b"\x03SELECT tls_value"))
+        .await
+        .unwrap();
+    let (_, query_response) = read_mysql_packet(&mut client).await.unwrap();
+    assert_eq!(query_response[0], 0x00);
+    client.shutdown().await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     handle.abort();
@@ -889,7 +944,10 @@ async fn records_and_rejects_mysql_tls_request() {
     let jsonl = tokio::fs::read_to_string(run_dir.join("traffic.jsonl"))
         .await
         .unwrap();
-    assert!(jsonl.contains(r#""event_type":"mysql_tls_rejected""#));
+    assert!(!jsonl.contains(r#""event_type":"mysql_tls_rejected""#));
+    assert!(jsonl.contains(r#""event_type":"mysql_connection""#));
+    assert!(jsonl.contains(r#""event_type":"mysql_exchange""#));
+    assert!(jsonl.contains(r#""sql":"SELECT tls_value""#));
 }
 
 #[tokio::test]
@@ -1098,6 +1156,43 @@ fn mysql_packet(sequence_id: u8, payload: &[u8]) -> Vec<u8> {
     out.push(sequence_id);
     out.extend_from_slice(payload);
     out
+}
+
+async fn read_mysql_packet<R>(stream: &mut R) -> Option<(u8, Vec<u8>)>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut header = [0_u8; 4];
+    stream.read_exact(&mut header).await.ok()?;
+    let len = header[0] as usize | (header[1] as usize) << 8 | (header[2] as usize) << 16;
+    let mut payload = vec![0_u8; len];
+    stream.read_exact(&mut payload).await.ok()?;
+    Some((header[3], payload))
+}
+
+fn mysql_capability_flags(payload: &[u8]) -> u32 {
+    u32::from_le_bytes(payload[0..4].try_into().unwrap())
+}
+
+fn mysql_login_username(payload: &[u8]) -> Option<&str> {
+    let username = payload.get(32..)?.split(|byte| *byte == 0).next()?;
+    std::str::from_utf8(username).ok()
+}
+
+fn mysql_login_payload(flags: u32, username: &str, database: &str) -> Vec<u8> {
+    let mut payload = vec![0_u8; 32];
+    payload[0..4].copy_from_slice(&flags.to_le_bytes());
+    payload.extend_from_slice(username.as_bytes());
+    payload.push(0);
+    payload.push(0);
+    payload.extend_from_slice(database.as_bytes());
+    payload.push(0);
+    payload.extend_from_slice(b"mysql_native_password\0");
+    payload
+}
+
+fn mysql_ok_payload() -> Vec<u8> {
+    vec![0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00]
 }
 
 fn mysql_handshake_payload() -> Vec<u8> {

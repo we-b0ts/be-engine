@@ -79,7 +79,7 @@ pub(crate) fn readonly_error_packet(sequence_id: u8) -> MysqlPacket {
 
 pub async fn read_packet<R>(reader: &mut R) -> io::Result<Option<MysqlPacket>>
 where
-    R: AsyncRead + Unpin,
+    R: AsyncRead + Unpin + ?Sized,
 {
     let mut header = [0_u8; 4];
     match reader.read_exact(&mut header).await {
@@ -103,7 +103,10 @@ pub fn parse_handshake_response(packet: &MysqlPacket) -> HandshakeResponse {
 
     let mut username = None;
     let mut database = None;
-    if packet.payload.len() > 32 && !tls_requested {
+    // A 32-byte packet with CLIENT_SSL is the pre-TLS SSLRequest. The full
+    // handshake response sent inside TLS keeps CLIENT_SSL set and carries the
+    // identity fields after the fixed header.
+    if packet.payload.len() > 32 {
         let mut offset = 32;
         if let Some((value, next)) = read_null_string(&packet.payload, offset) {
             username = Some(value);
@@ -316,6 +319,25 @@ mod tests {
             parsed.capability_flags,
             CLIENT_SSL | CLIENT_SECURE_CONNECTION
         );
+    }
+
+    #[test]
+    fn parses_login_identity_inside_tls() {
+        let flags = CLIENT_SSL | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB;
+        let mut payload = vec![0_u8; 32];
+        payload[0..4].copy_from_slice(&flags.to_le_bytes());
+        payload.extend_from_slice(b"alice\0");
+        payload.push(0);
+        payload.extend_from_slice(b"appdb\0");
+        let packet = MysqlPacket {
+            sequence_id: 2,
+            payload,
+        };
+
+        let parsed = parse_handshake_response(&packet);
+        assert!(parsed.tls_requested);
+        assert_eq!(parsed.username.as_deref(), Some("alice"));
+        assert_eq!(parsed.database.as_deref(), Some("appdb"));
     }
 
     #[test]

@@ -66,8 +66,10 @@ traffic-e2e target exec -- path/to/prebuilt-target
   swap files, `target/`, `data/`, `recordings/`, or `.traffic-e2e/local/`.
 - Use `dependencies.jsonl` for replay-oriented semantic dependency data.
   Use `dependencies-debug.jsonl` only for protocol-level debugging.
-- MySQL TLS MITM is intentionally out of scope for v1. If `CLIENT_SSL` is
-  detected, keep rejecting and recording the reason.
+- Preserve MySQL `CLIENT_SSL` behavior end to end: recording terminates TLS on
+  both sides for semantic capture, and replay accepts TLS with the replay CA.
+  Keep the permissive self-signed certificate policy isolated to the recording
+  connector for MySQL upstreams; HTTPS verification must remain strict.
 - Keep sensitive data handling explicit. Add newly sensitive headers to
   `recording.redact_headers` defaults or document the choice.
 - Before changing product code, follow this repository's

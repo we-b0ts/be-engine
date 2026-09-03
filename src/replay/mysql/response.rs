@@ -1,5 +1,5 @@
 pub(in crate::replay) async fn write_response(
-    stream: &mut TcpStream,
+    stream: &mut (impl MysqlReplayIo + ?Sized),
     response: &RecordedMysqlResponse,
     row_encoding: ResultRowEncoding,
 ) -> Result<()> {
@@ -53,7 +53,7 @@ pub(in crate::replay) async fn write_response(
 }
 
 pub(in crate::replay) async fn write_stmt_prepare_ok(
-    stream: &mut TcpStream,
+    stream: &mut (impl MysqlReplayIo + ?Sized),
     statement_id: u32,
     metadata: &StatementMetadata,
 ) -> Result<()> {
@@ -130,7 +130,7 @@ pub(in crate::replay) async fn write_stmt_prepare_ok(
 }
 
 pub(in crate::replay) async fn write_resultset(
-    stream: &mut TcpStream,
+    stream: &mut (impl MysqlReplayIo + ?Sized),
     columns: &[RecordedMysqlColumn],
     rows: &[Vec<RecordedMysqlValue>],
     row_encoding: ResultRowEncoding,
@@ -204,7 +204,7 @@ pub(in crate::replay) async fn write_resultset(
 }
 
 pub(in crate::replay) async fn write_packet(
-    stream: &mut TcpStream,
+    stream: &mut (impl MysqlReplayIo + ?Sized),
     packet: MysqlPacket,
 ) -> Result<()> {
     stream
@@ -222,6 +222,7 @@ pub(in crate::replay) fn handshake_packet(connection_id: u32) -> MysqlPacket {
         | CLIENT_LONG_FLAG
         | CLIENT_CONNECT_WITH_DB
         | CLIENT_PROTOCOL_41
+        | CLIENT_SSL
         | CLIENT_TRANSACTIONS
         | CLIENT_SECURE_CONNECTION
         | CLIENT_MULTI_RESULTS

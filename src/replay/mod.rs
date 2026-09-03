@@ -744,13 +744,13 @@ async fn handle_gateway_connection(
                 host: target.host,
                 port: target.port,
             });
-            mysql::handle_connection(stream, peer_addr, target, state, report_writer).await
+            mysql::handle_connection(stream, peer_addr, target, state, report_writer, ca).await
         }
         None => {
             let registered_targets = state.lock().await.targets.len();
             #[cfg(test)]
             if registered_targets == 0 {
-                return mysql::handle_connection(stream, peer_addr, None, state, report_writer)
+                return mysql::handle_connection(stream, peer_addr, None, state, report_writer, ca)
                     .await;
             }
             let original = original_dst(&stream)
