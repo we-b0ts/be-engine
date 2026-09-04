@@ -8,7 +8,7 @@ shift
 required_environment=(
     TRAFFIC_E2E_BIN
     TRAFFIC_E2E_TARGET_ROOT
-    TRAFFIC_E2E_SOURCE_CONTAINER
+    TRAFFIC_E2E_SOURCE_RUNTIME
     TRAFFIC_E2E_TARGET_STARTUP_MOUNTS_FILE
     TRAFFIC_E2E_TARGET_STARTUP_ENV_FILE
     TRAFFIC_E2E_TARGET_RUNTIME_OUTPUTS_FILE
@@ -173,27 +173,20 @@ docker info >/dev/null 2>&1 || {
     printf 'error: Docker daemon is unavailable\n' >&2
     exit 1
 }
-source_inspect=$(docker container inspect "$TRAFFIC_E2E_SOURCE_CONTAINER" 2>/dev/null) || {
-    printf 'error: configured source container %s must be retained in a stopped state\n' \
-        "$TRAFFIC_E2E_SOURCE_CONTAINER" >&2
+[[ -f "$TRAFFIC_E2E_SOURCE_RUNTIME" && ! -L "$TRAFFIC_E2E_SOURCE_RUNTIME" ]] || {
+    printf 'error: source runtime snapshot is missing or invalid\n' >&2
     exit 1
 }
-[[ "$(jq 'length' <<<"$source_inspect")" == 1 ]] || {
-    printf 'error: source container inspect returned an invalid result\n' >&2
+source_image_id=$(jq -er '.image_id' "$TRAFFIC_E2E_SOURCE_RUNTIME") || {
+    printf 'error: source runtime snapshot has no image ID\n' >&2
     exit 1
 }
-[[ "$(jq -r '.[0].State.Running' <<<"$source_inspect")" == false ]] || {
-    printf 'error: configured source container %s must be stopped; the managed source adaptor owns its recording ports\n' \
-        "$TRAFFIC_E2E_SOURCE_CONTAINER" >&2
-    exit 1
-}
-source_image_id=$(jq -r '.[0].Image' <<<"$source_inspect")
 [[ "$source_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-    printf 'error: source container has an invalid image ID\n' >&2
+    printf 'error: source runtime snapshot has an invalid image ID\n' >&2
     exit 1
 }
 [[ "$(docker image inspect --format '{{.Id}}' "$source_image_id" 2>/dev/null || true)" == "$source_image_id" ]] || {
-    printf 'error: configured source container image %s is unavailable locally\n' \
+    printf 'error: snapshotted source image %s is unavailable locally\n' \
         "$source_image_id" >&2
     exit 1
 }
@@ -285,6 +278,7 @@ comparison_pid=""
 comparison_socket_dir=""
 input_pid=""
 source "$TRAFFIC_E2E_PLATFORM_ASSETS/platform-mounts.sh"
+source "$TRAFFIC_E2E_PLATFORM_ASSETS/container-runtime.sh"
 
 container_exists() {
     docker container inspect "$1" >/dev/null 2>&1
@@ -479,101 +473,6 @@ wait_http() {
     return 1
 }
 
-load_runtime_spec() {
-    local inspect_json=$1
-    local mount_mode=$2
-    local environment_mode=$3
-    local launch_mode=$4
-    [[ "$launch_mode" == exact || "$launch_mode" == image ]] || {
-        printf 'error: unsupported container launch mode %s\n' "$launch_mode" >&2
-        return 1
-    }
-    runtime_args=(--platform linux/amd64)
-    runtime_command=()
-    if [[ "$launch_mode" == exact ]]; then
-        local workdir configured_user
-        workdir=$(jq -r '.[0].Config.WorkingDir // empty' <<<"$inspect_json")
-        [[ -z "$workdir" ]] || runtime_args+=(--workdir "$workdir")
-        configured_user=$(jq -r '.[0].Config.User // empty' <<<"$inspect_json")
-        [[ -z "$configured_user" ]] || runtime_args+=(--user "$configured_user")
-        [[ "$(jq -r '.[0].HostConfig.Privileged // false' <<<"$inspect_json")" != true ]] || runtime_args+=(--privileged)
-    fi
-    [[ "$(jq -r '.[0].HostConfig.ReadonlyRootfs // false' <<<"$inspect_json")" != true ]] || runtime_args+=(--read-only)
-    [[ "$(jq -r '.[0].HostConfig.Init // false' <<<"$inspect_json")" != true ]] || runtime_args+=(--init)
-
-    local -a entries=()
-    mapfile -d '' -t entries < <(jq -j '.[0].Config.Env[]? | ., "\u0000"' <<<"$inspect_json")
-    local entry name
-    for entry in "${entries[@]}"; do
-        name=${entry%%=*}
-        [[ "$name" == HOSTNAME ]] && continue
-        if [[ "$environment_mode" == recording ]] &&
-            [[ "$name" == RUN_COMMAND || "$name" == MESH_CONNECT_HOST || "$name" == JAVA_TOOL_OPTIONS ]]; then
-            continue
-        fi
-        runtime_args+=(--env "$entry")
-    done
-
-    entries=()
-    mapfile -d '' -t entries < <(jq -j '.[0].HostConfig.Ulimits[]? | (.Name + "=" + (.Soft|tostring) + ":" + (.Hard|tostring)), "\u0000"' <<<"$inspect_json")
-    for entry in "${entries[@]}"; do runtime_args+=(--ulimit "$entry"); done
-    entries=()
-    mapfile -d '' -t entries < <(jq -j '.[0].HostConfig.CapAdd[]? | ., "\u0000"' <<<"$inspect_json")
-    for entry in "${entries[@]}"; do runtime_args+=(--cap-add "$entry"); done
-    entries=()
-    mapfile -d '' -t entries < <(jq -j '.[0].HostConfig.CapDrop[]? | ., "\u0000"' <<<"$inspect_json")
-    for entry in "${entries[@]}"; do runtime_args+=(--cap-drop "$entry"); done
-    entries=()
-    mapfile -d '' -t entries < <(jq -j '.[0].HostConfig.GroupAdd[]? | ., "\u0000"' <<<"$inspect_json")
-    for entry in "${entries[@]}"; do runtime_args+=(--group-add "$entry"); done
-    entries=()
-    mapfile -d '' -t entries < <(jq -j '.[0].HostConfig.SecurityOpt[]? | ., "\u0000"' <<<"$inspect_json")
-    for entry in "${entries[@]}"; do runtime_args+=(--security-opt "$entry"); done
-    entries=()
-    mapfile -d '' -t entries < <(jq -j '.[0].Config.Labels // {} | to_entries[] | (.key + "=" + .value), "\u0000"' <<<"$inspect_json")
-    for entry in "${entries[@]}"; do runtime_args+=(--label "$entry"); done
-    entries=()
-    mapfile -d '' -t entries < <(jq -j '.[0].HostConfig.Sysctls // {} | to_entries[] | (.key + "=" + .value), "\u0000"' <<<"$inspect_json")
-    for entry in "${entries[@]}"; do runtime_args+=(--sysctl "$entry"); done
-
-    local source destination writable volume
-    while IFS=$'\t' read -r source destination writable volume; do
-        [[ -n "$destination" ]] || continue
-        validate_container_mount_path "$destination" || {
-            printf 'error: source container has unsupported mount destination %s\n' \
-                "$destination" >&2
-            return 1
-        }
-        case "$destination" in
-            /etc/resolv.conf|/etc/hosts|/etc/hostname) continue ;;
-        esac
-        if [[ -n "$volume" && "$volume" != null ]]; then source=$volume; fi
-        if [[ "$mount_mode" == recording ]]; then
-            resolve_recording_mount_source "$destination" "$writable" "$source"
-            source=$prepared_mount_source
-            writable=$prepared_mount_writable
-        fi
-        if [[ "$writable" == true ]]; then
-            runtime_args+=(--volume "${source}:${destination}:rw")
-        else
-            runtime_args+=(--volume "${source}:${destination}:ro")
-        fi
-    done < <(jq -r '.[0].Mounts[]? | [.Source, .Destination, .RW, (.Name // "")] | @tsv' <<<"$inspect_json")
-    [[ "$mount_mode" != recording ]] || append_source_runtime_output_args
-
-    if [[ "$launch_mode" == exact ]]; then
-        entries=()
-        mapfile -d '' -t entries < <(jq -j '.[0].Config.Entrypoint[]? | ., "\u0000"' <<<"$inspect_json")
-        if ((${#entries[@]} > 0)); then
-            runtime_args+=(--entrypoint "${entries[0]}")
-            ((${#entries[@]} == 1)) || runtime_command+=("${entries[@]:1}")
-        fi
-        entries=()
-        mapfile -d '' -t entries < <(jq -j '.[0].Config.Cmd[]? | ., "\u0000"' <<<"$inspect_json")
-        runtime_command+=("${entries[@]}")
-    fi
-}
-
 normalize_breeze_directories() {
     docker run --rm --platform linux/amd64 --network none --user 0:0 --entrypoint /bin/sh \
         --volume /data1:/host-data1 "$adapter_image_id" -ec '
@@ -597,7 +496,7 @@ start_breeze() {
 
 start_comparison_source() {
     local network=$1
-    load_runtime_spec "$source_inspect" recording recording image
+    load_source_runtime_spec "$TRAFFIC_E2E_SOURCE_RUNTIME"
     if "$breeze_enabled"; then
         runtime_args+=(
             --env "MESH_CONNECT_HOST=${target_network_ip}"
@@ -607,7 +506,7 @@ start_comparison_source() {
         require_port_available "$TRAFFIC_E2E_SOURCE_HOST" "$TRAFFIC_E2E_SOURCE_PORT" source
     fi
     docker run --detach --name "$source_name" --network "$network" \
-        "${runtime_args[@]}" "$adapter_image_id" >/dev/null
+        "${runtime_args[@]}" "$adapter_image_id" "${runtime_command[@]}" >/dev/null
     source_started=true
     if "$http_recording_enabled"; then
         wait_http "$TRAFFIC_E2E_SOURCE_ORIGIN" "$TRAFFIC_E2E_SOURCE_READY_PATH" \
@@ -700,8 +599,8 @@ resolve_or_build_recording_adapter() {
         status=$?
     fi
     ((status == 1)) || return "$status"
-    printf 'recording source adaptor cache does not match the source image or build contract; building it from %s\n' \
-        "$TRAFFIC_E2E_SOURCE_CONTAINER" >&2
+    printf 'recording source adaptor cache does not match the snapshotted source image or build contract; building it from %s\n' \
+        "$source_image_id" >&2
     build_recording_adapter
 }
 
@@ -719,7 +618,7 @@ detect_source_java_runtime() {
 
 start_recording_source() {
     local truststore=$1
-    load_runtime_spec "$source_inspect" recording recording image
+    load_source_runtime_spec "$TRAFFIC_E2E_SOURCE_RUNTIME"
     if "$source_uses_java"; then
         runtime_args+=(
             --env 'JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=/traffic-e2e/source-truststore.jks -Djavax.net.ssl.trustStorePassword=changeit'
@@ -738,7 +637,7 @@ start_recording_source() {
         )
     fi
     docker run --detach --name "$source_name" --network "container:${anchor_name}" \
-        "${runtime_args[@]}" "$adapter_image_id" >/dev/null
+        "${runtime_args[@]}" "$adapter_image_id" "${runtime_command[@]}" >/dev/null
     source_started=true
     docker exec "$source_name" /bin/sh -ec '
         test "$(awk "/^Uid:/{print \$2}" /proc/1/status)" = 998

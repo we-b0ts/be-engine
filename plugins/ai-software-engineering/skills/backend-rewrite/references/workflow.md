@@ -159,8 +159,9 @@ executes acceptance only from the canonical worktree.
 When the handoff contains `startup_environment` inputs, apply each one to the
 canonical target root through `startup env ensure` as specified by
 [startup.md](startup.md) after integrating the implementation and before
-target quality or acceptance. The resulting startup-environment revision is
-part of the target fingerprint used for validation.
+target quality or acceptance. Use `--from-source` for a captured source value;
+do not require a worker to display it. The resulting startup-environment
+revision is part of the target fingerprint used for validation.
 
 After all API items have been traversed and their implementation workers have
 been confirmed, execute each returned `next --process-output <id>` command.

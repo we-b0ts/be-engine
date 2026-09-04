@@ -738,7 +738,8 @@ a source-controlled `.traffic-e2e/verification.yaml`, not product code or record
 overrides. Initialize it once and load it explicitly:
 
 ```bash
-traffic-e2e config init --target-root ../target --source-container <container>
+traffic-e2e config init --target-root ../target \
+  --source-pod <pod> --namespace <namespace>
 traffic-e2e replay --policy ../target/.traffic-e2e/verification.yaml path/to/case-dir
 ```
 
@@ -1381,7 +1382,9 @@ Initialize a rewrite target once, before its first coordinator session:
 
 ```bash
 backend-rewrite --target-root ../target init \
-  --source-container <existing-source-container> \
+  --source-pod <pod> --namespace <namespace> \
+  [--pod-container <regular-container>] \
+  [--kubeconfig /path/to/kubeconfig] \
   [--env-file /path/to/initial.env] \
   [--readiness-path /healthz] \
   [--http-backend-port 8080] \
@@ -1396,9 +1399,11 @@ upstream, managed Comparison candidate, target readiness endpoint, and Replay
 request destination. It must differ from the gateway listener port.
 Initialization accepts a readiness path but no readiness status argument;
 generated `project.yaml` retains the explicit `success_status: 200` contract.
-The source container needs only to be inspectable, not running.
+The selected regular Pod container must be running and ready while init
+captures its immutable image and effective runtime inputs. Later commands use
+the ignored local source snapshot and do not require the Pod.
 
-The command atomically generates version-16 `.traffic-e2e/project.yaml`,
+The command generates version-17 `.traffic-e2e/project.yaml`,
 `.traffic-e2e/source-traffic-policy.yaml`, and `.traffic-e2e/verification.yaml`.
 When the root `Cargo.toml`, `Cargo.lock`, and `src/main.rs` are all absent, it
 also generates a runnable readiness-only Rust target with a temporary
@@ -1466,8 +1471,9 @@ backend-rewrite-admin --target-root <target> \
 backend-rewrite --target-root <target> init preflight
 ```
 
-Recapture requires the configured source container to be stopped. Preflight is
-read-only validation and does not repair a stale snapshot. The initializer owns
+Recapture reads the initialization-owned local source snapshot; it does not
+contact the original Pod. Preflight is read-only validation and does not repair
+a stale snapshot. The initializer owns
 the baseline `.gitignore` and `.dockerignore` generation described above; all
 non-versioned runtime data lives below `.traffic-e2e/local/`. It creates an
 empty mount snapshot under `.traffic-e2e/local/startup/` and a mode-0600
@@ -1494,11 +1500,9 @@ through preflight and E2E API errors when Docker or Cargo fails. traffic-e2e
 builds the image from the repository root, tags the cache as
 `traffic-e2e/<project>-target:cache`, validates the resulting immutable image
 ID, and runs that ID directly. A target start receives each declared startup
-path at the same absolute path. If the declaration exactly matches a Docker
-mount destination on the source container, the snapshot inherits that mount's
-`rw`/`ro` access; a path supplied by the source image defaults to read-only.
-Partial parent/child overlap with a source Docker mount is rejected, so the
-user must make the declaration exact. For example:
+path at the same absolute path. A captured ConfigMap/Secret path preserves its
+access; a path supplied by the immutable source image defaults to read-only.
+Parent/child overlap is rejected. For example:
 
 ```text
 .traffic-e2e/local/startup/mounts/data1/weibo/confs
@@ -1540,11 +1544,12 @@ they stay Git-ignored and are not consumed as Replay inputs or expected
 responses. Remove retained run directories only under the exact
 `.traffic-e2e/local/runtime-outputs/` root when they are no longer needed.
 
-Every target start loads the project-level `.traffic-e2e/local/target.env`.
-Initialization may seed it from an optional dotenv file, but does not inspect
-source code to infer variables or mounts. Implementation uses the startup APIs
-only after actual target behavior proves an input is needed. The engine does
-not define a generic port variable or adapt framework-specific environment
+Every target start loads application-owned values captured in
+`.traffic-e2e/local/source/`, followed by project-level
+`.traffic-e2e/local/target.env` overrides. Initialization may seed the override
+file from an optional dotenv file and does not inspect source code. The startup
+env API can use `--from-source` without displaying a captured value. The engine
+does not define a generic port variable or adapt framework-specific environment
 names. The target contract contains no generic `TRAFFIC_E2E_CONFIG_DIR`,
 `TRAFFIC_E2E_TARGET_PORT`, or `TRAFFIC_E2E_REPLAY_CA_CERT_PATH` variables.
 
@@ -1569,16 +1574,14 @@ change reruns the relevant Cargo build layer, but cached registry, git, and
 target artifacts prevent downloading the dependency graph again when the
 builder identity and cache IDs are unchanged.
 
-For Breeze-aware standard recording, the managed runtime keeps a target-scoped
-source-adaptor cache image. The configured source container is the authoritative
-inspection source: it must remain present and stopped for preflight, recording,
-and comparison, and traffic-e2e only inspects it. The target repository owns the
-reviewed `.traffic-e2e/Dockerfile.recording` build contract. Adaptor build binds
-the source container's exact local image ID through a deterministic temporary
-local alias, and labels the resulting adaptor with that ID. A missing adaptor or
-one labeled for another source image or build-contract revision triggers a
-build/refresh. The manager never starts, stops, removes, or replaces the
-configured source container.
+For standard recording, the managed runtime keeps a target-scoped
+source-adaptor cache image. `.traffic-e2e/local/source/` is authoritative for
+the immutable local image ID and captured Kubernetes runtime inputs; preflight,
+recording, and comparison do not contact the original Pod. The target repository
+owns the reviewed `.traffic-e2e/Dockerfile.recording` build contract. Adaptor
+build binds the exact image ID through a deterministic temporary local alias
+and labels the resulting adaptor with that ID. A missing adaptor or one labeled
+for another source image or build-contract revision triggers a build/refresh.
 The Breeze-only `.traffic-e2e/MeshConnectUtil.class` and
 `.traffic-e2e/CommonSwitcher.class` inputs are owned and validated by the
 Dockerfile; the generic manager does not inspect them. The SDK patch interprets
@@ -1588,15 +1591,15 @@ the manager-injected non-blank
 source Mesh selection switch, but disables automatic degrade and
 exception-to-TCP fallback after Mesh is selected. Mesh initialization failure
 retains the SDK's original behavior and is left to managed Breeze readiness and
-source startup diagnostics. The adaptor preserves the inspected source
-entrypoint and does not send commands to port `880`. The manager forms a
+source startup diagnostics. The adaptor preserves the snapshotted source
+command and arguments and does not send commands to port `880`. The manager forms a
 non-recursive build context from regular files at the top of `.traffic-e2e`, so
 `.traffic-e2e/local/` is never included.
 The adaptor image's own `USER`, working directory, entrypoint, and command are
 used at runtime; the manager does not regenerate a Dockerfile or infer launch
 from `RUN_COMMAND`. Cleanup removes run-private containers but retains the
 matching adaptor image. Comparison recording uses the same adaptor image,
-source-container runtime inputs, and fixed `998:998` source identity as standard
+snapshotted runtime inputs, and fixed `998:998` source identity as standard
 recording, so cache-only interception observes both source and target traffic.
 Breeze itself always uses the centrally managed pinned image and is not built
 from a target-repository Dockerfile.

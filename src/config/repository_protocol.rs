@@ -283,7 +283,6 @@ mod tests {
         );
         crate::e2e_run::initialize_e2e_run(crate::E2eRunInitOptions {
             target_root: root.to_path_buf(),
-            source_container: "source-app".to_string(),
             breeze_container: None,
             target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
             target_startup: crate::StartupConfig::default(),

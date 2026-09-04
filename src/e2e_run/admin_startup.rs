@@ -14,7 +14,7 @@ pub struct StartupSnapshotRecaptureOptions {
 pub struct StartupSnapshotRecaptureResult {
     pub status: &'static str,
     pub project_config: PathBuf,
-    pub source_container: String,
+    pub source_snapshot: PathBuf,
     pub startup: crate::StartupSnapshotReport,
 }
 
@@ -31,16 +31,13 @@ pub fn recapture_startup_snapshot(
         .join(crate::repository::TRAFFIC_E2E_ROOT)
         .join(super::config::PROJECT_CONFIG_FILE);
     let project = load_project_config(&target_root, &project_config)?;
-    let source_container = project.project.source.container;
-    let startup = crate::startup::capture_startup_snapshot(
-        &target_root,
-        &source_container,
-        &project.project.target.startup,
-    )?;
+    let source_snapshot = project.project.source.snapshot;
+    let startup =
+        crate::startup::capture_startup_snapshot(&target_root, &project.project.target.startup)?;
     Ok(StartupSnapshotRecaptureResult {
         status: "recaptured",
         project_config,
-        source_container,
+        source_snapshot,
         startup,
     })
 }

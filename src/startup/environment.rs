@@ -25,6 +25,7 @@ pub enum StartupEnvironmentChangeStatus {
 pub struct StartupEnvironmentList {
     pub path: PathBuf,
     pub variables: Vec<String>,
+    pub overrides: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -60,6 +61,7 @@ pub struct StartupEnvironmentValidation {
     pub status: &'static str,
     pub path: PathBuf,
     pub variables: Vec<String>,
+    pub overrides: Vec<String>,
 }
 
 pub fn initialize_startup_environment(
@@ -97,19 +99,24 @@ pub fn initialize_startup_environment(
             return Err(error).with_context(|| format!("failed to inspect {}", path.display()));
         }
     }
-    let values = read_environment(&path)?;
+    let overrides = read_environment(&path)?;
+    let mut variables = source_environment(target_root)?;
+    variables.extend(overrides.clone());
     Ok(StartupEnvironmentValidation {
         status: "valid",
         path: relative_environment_path(),
-        variables: values.into_keys().collect(),
+        variables: variables.into_keys().collect(),
+        overrides: overrides.into_keys().collect(),
     })
 }
 
 pub fn list_startup_environment(target_root: &Path) -> Result<StartupEnvironmentList> {
-    let values = load_environment(target_root)?;
+    let overrides = load_environment(target_root)?;
+    let values = effective_environment(target_root)?;
     Ok(StartupEnvironmentList {
         path: relative_environment_path(),
         variables: values.into_keys().collect(),
+        overrides: overrides.into_keys().collect(),
     })
 }
 
@@ -118,7 +125,7 @@ pub fn startup_environment_exists(
     name: &str,
 ) -> Result<StartupEnvironmentPresence> {
     validate_name(name)?;
-    let values = load_environment(target_root)?;
+    let values = effective_environment(target_root)?;
     Ok(StartupEnvironmentPresence {
         name: name.to_string(),
         exists: values.contains_key(name),
@@ -132,7 +139,7 @@ pub fn startup_environment_equals(
 ) -> Result<StartupEnvironmentComparison> {
     validate_name(name)?;
     validate_value(name, expected)?;
-    let values = load_environment(target_root)?;
+    let values = effective_environment(target_root)?;
     let actual = values.get(name);
     Ok(StartupEnvironmentComparison {
         name: name.to_string(),
@@ -160,6 +167,15 @@ pub fn ensure_startup_environment(
             StartupEnvironmentChangeStatus::Updated
         }
         None => {
+            if source_environment(target_root)?
+                .get(name)
+                .is_some_and(|existing| constant_time_equal(existing, value))
+            {
+                return Ok(StartupEnvironmentChange {
+                    name: name.to_string(),
+                    status: StartupEnvironmentChangeStatus::Unchanged,
+                });
+            }
             ensure!(
                 values.len() < MAX_ENVIRONMENT_VARIABLES,
                 "startup environment exceeds the limit of {MAX_ENVIRONMENT_VARIABLES} variables"
@@ -234,25 +250,27 @@ pub fn import_startup_environment(
 }
 
 pub fn validate_startup_environment(target_root: &Path) -> Result<StartupEnvironmentValidation> {
-    let values = load_environment(target_root)?;
+    let overrides = load_environment(target_root)?;
+    let values = effective_environment(target_root)?;
     Ok(StartupEnvironmentValidation {
         status: "valid",
         path: relative_environment_path(),
         variables: values.into_keys().collect(),
+        overrides: overrides.into_keys().collect(),
     })
 }
 
 pub(crate) fn startup_environment_variable_names(target_root: &Path) -> Result<Vec<String>> {
-    Ok(load_environment(target_root)?.into_keys().collect())
+    Ok(effective_environment(target_root)?.into_keys().collect())
 }
 
 pub(crate) fn write_docker_environment_file(path: &Path, target_root: &Path) -> Result<()> {
-    let values = load_environment(target_root)?;
+    let values = effective_environment(target_root)?;
     write_environment_file(path, &values, EnvironmentFileSyntax::Docker)
 }
 
 pub(crate) fn startup_environment_revision(target_root: &Path) -> Result<String> {
-    let values = load_environment(target_root)?;
+    let values = effective_environment(target_root)?;
     let mut hash = 0xcbf29ce484222325_u64;
     for (name, value) in values {
         for byte in name
@@ -271,6 +289,21 @@ pub(crate) fn startup_environment_revision(target_root: &Path) -> Result<String>
 fn load_environment(target_root: &Path) -> Result<BTreeMap<String, String>> {
     let path = ensure_environment_path(target_root)?;
     read_environment(&path)
+}
+
+fn effective_environment(target_root: &Path) -> Result<BTreeMap<String, String>> {
+    let mut values = source_environment(target_root)?;
+    values.extend(load_environment(target_root)?);
+    Ok(values)
+}
+
+fn source_environment(target_root: &Path) -> Result<BTreeMap<String, String>> {
+    let source_manifest = target_root.join(crate::repository::LOCAL_SOURCE_MANIFEST_PATH);
+    if source_manifest.exists() {
+        crate::source_snapshot::target_environment(target_root)
+    } else {
+        Ok(BTreeMap::new())
+    }
 }
 
 fn ensure_environment_path(target_root: &Path) -> Result<PathBuf> {

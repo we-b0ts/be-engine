@@ -20,11 +20,13 @@ fn embedded_platform_manager_is_valid_bash() {
     let mounts = temp.path().join("platform-mounts.sh");
     let target_network = temp.path().join("comparison-target-network.sh");
     let recorder_runtime = temp.path().join("recorder-runtime.sh");
+    let container_runtime = temp.path().join("container-runtime.sh");
     write_asset(&script, MANAGER, 0o700).unwrap();
     write_asset(&process_outputs, COMPARISON_PROCESS_OUTPUTS, 0o600).unwrap();
     write_asset(&mounts, PLATFORM_MOUNTS, 0o600).unwrap();
     write_asset(&target_network, COMPARISON_TARGET_NETWORK, 0o600).unwrap();
     write_asset(&recorder_runtime, RECORDER_RUNTIME, 0o600).unwrap();
+    write_asset(&container_runtime, CONTAINER_RUNTIME, 0o600).unwrap();
 
     for asset in [
         &script,
@@ -32,6 +34,7 @@ fn embedded_platform_manager_is_valid_bash() {
         &mounts,
         &target_network,
         &recorder_runtime,
+        &container_runtime,
     ] {
         let status = StdCommand::new("bash")
             .arg("-n")
@@ -43,6 +46,7 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(MANAGER.contains("comparison-target-network.sh"));
     assert!(MANAGER.contains("comparison-process-outputs.sh"));
     assert!(MANAGER.contains("recorder-runtime.sh"));
+    assert!(MANAGER.contains("container-runtime.sh"));
     assert!(MANAGER.contains("TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY"));
     assert!(COMPARISON_PROCESS_OUTPUTS.contains("--observation comparison"));
     assert!(COMPARISON_PROCESS_OUTPUTS.contains("completion_reason"));
@@ -77,7 +81,7 @@ fn embedded_platform_manager_is_valid_bash() {
     );
     assert!(COMPARISON_TARGET_NETWORK.contains("TRAFFIC_E2E_TARGET_STARTUP_MOUNTS_FILE"));
     assert!(MANAGER.contains("TRAFFIC_E2E_TARGET_RUNTIME_OUTPUTS_FILE"));
-    assert!(MANAGER.contains("append_source_runtime_output_args"));
+    assert!(CONTAINER_RUNTIME.contains("append_source_runtime_output_args"));
     assert!(PLATFORM_MOUNTS.contains("prepare_runtime_outputs"));
     assert!(PLATFORM_MOUNTS.contains("append_source_runtime_output_args"));
     assert!(PLATFORM_MOUNTS.contains("chmod 2770"));
@@ -116,26 +120,24 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(MANAGER.contains("resolve_or_build_recording_adapter"));
     assert!(MANAGER.contains("load_initialized_recording_adapter"));
     assert!(MANAGER.contains("reusing initialized recording source adaptor"));
-    assert!(MANAGER.contains("cache does not match the source image or build contract"));
-    assert_eq!(
-        MANAGER
-            .matches("docker container inspect \"$TRAFFIC_E2E_SOURCE_CONTAINER\"")
-            .count(),
-        1
-    );
-    let before_adapter_build = MANAGER.split_once("build_recording_adapter()").unwrap().0;
     assert!(
-        before_adapter_build.contains("docker container inspect \"$TRAFFIC_E2E_SOURCE_CONTAINER\"")
+        MANAGER.contains("cache does not match the snapshotted source image or build contract")
     );
-    assert!(before_adapter_build.contains(
-            "configured source container %s must be stopped; the managed source adaptor owns its recording ports"
-        ));
+    assert!(!MANAGER.contains("TRAFFIC_E2E_SOURCE_CONTAINER"));
+    assert!(MANAGER.contains("TRAFFIC_E2E_SOURCE_RUNTIME"));
+    let before_adapter_build = MANAGER.split_once("build_recording_adapter()").unwrap().0;
+    assert!(before_adapter_build.contains("source runtime snapshot has no image ID"));
     assert!(!MANAGER.contains("recording-adapter.fingerprint"));
     assert!(MANAGER.contains("--iidfile \"$adapter_iid_file\""));
-    assert!(MANAGER.contains("load_runtime_spec \"$source_inspect\" recording recording image"));
+    assert!(MANAGER.contains("load_source_runtime_spec \"$TRAFFIC_E2E_SOURCE_RUNTIME\""));
+    assert!(CONTAINER_RUNTIME.contains(".pod_command[]?"));
+    assert!(CONTAINER_RUNTIME.contains(".pod_args != null"));
+    assert!(CONTAINER_RUNTIME.contains("resolve_snapshotted_source_mount"));
     assert!(!MANAGER.contains("source-adapter-runtime"));
     assert!(!MANAGER.contains("recording-runtime-cache"));
-    assert!(MANAGER.contains("\"${runtime_args[@]}\" \"$adapter_image_id\" >/dev/null"));
+    assert!(MANAGER.contains(
+        "\"${runtime_args[@]}\" \"$adapter_image_id\" \"${runtime_command[@]}\" >/dev/null"
+    ));
     assert!(MANAGER.contains("docker run --rm --platform linux/amd64 --network none --user 0:0"));
     let adapted_source = MANAGER
         .split_once("start_recording_source()")
@@ -155,10 +157,7 @@ fn embedded_platform_manager_is_valid_bash() {
         .split_once("build_recording_adapter()")
         .unwrap()
         .0;
-    assert!(
-        comparison_source
-            .contains("load_runtime_spec \"$source_inspect\" recording recording image")
-    );
+    assert!(comparison_source.contains("load_source_runtime_spec \"$TRAFFIC_E2E_SOURCE_RUNTIME\""));
     assert!(comparison_source.contains("\"${runtime_args[@]}\" \"$adapter_image_id\""));
     assert!(!comparison_source.contains(".[0].Config.Image"));
     assert!(comparison_source.contains("MESH_CONNECT_HOST=${target_network_ip}"));

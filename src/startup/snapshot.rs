@@ -2,7 +2,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read as _, Write as _};
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -10,7 +9,7 @@ use uuid::Uuid;
 
 use super::{StartupConfig, StartupSnapshotReport, validate_config, validate_mount_path};
 
-const SNAPSHOT_SCHEMA_VERSION: u32 = 3;
+const SNAPSHOT_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -18,7 +17,7 @@ pub(crate) struct StartupManifest {
     schema_version: u32,
     pub(crate) snapshot_id: String,
     content_revision: String,
-    pub(crate) source_container_id: String,
+    pub(crate) source_snapshot_id: String,
     pub(crate) source_image_id: String,
     mounts: Vec<StartupSnapshotMount>,
 }
@@ -35,42 +34,12 @@ pub(crate) struct LoadedStartupSnapshot {
     pub(crate) manifest: StartupManifest,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub(super) struct SourceInspection {
-    pub(super) id: String,
-    pub(super) image: String,
-    pub(super) state: SourceState,
-    #[serde(default)]
-    pub(super) mounts: Vec<SourceMountInspection>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub(super) struct SourceMountInspection {
-    destination: PathBuf,
-    #[serde(rename = "RW")]
-    writable: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub(super) struct SourceState {
-    pub(super) running: bool,
-}
-
 pub(crate) fn capture_startup_snapshot(
     target_root: &Path,
-    source_container: &str,
     config: &StartupConfig,
 ) -> Result<StartupSnapshotReport> {
     validate_config(config)?;
-    let source = inspect_source(source_container)?;
-    ensure!(
-        !source.state.running,
-        "configured source container {source_container:?} must be stopped before capturing startup inputs"
-    );
-    let mounts = resolve_startup_mounts(&config.mounts, &source.mounts)?;
+    let source = crate::source_snapshot::load(target_root)?;
     let snapshot_id = Uuid::new_v4().simple().to_string();
     let local_root = target_root.join(crate::repository::LOCAL_ROOT);
     fs::create_dir_all(&local_root).with_context(|| {
@@ -84,16 +53,14 @@ pub(crate) fn capture_startup_snapshot(
     let mounts_root = staging.join("mounts");
     fs::create_dir_all(&mounts_root).context("failed to create startup mounts staging root")?;
     let result = (|| -> Result<StartupSnapshotReport> {
-        for mount in &config.mounts {
-            copy_mount(source_container, mount, &mounts_root)?;
-        }
+        let mounts = capture_mounts(target_root, &config.mounts, &mounts_root)?;
         let content_revision = snapshot_content_revision(&mounts_root)?;
         let manifest = StartupManifest {
             schema_version: SNAPSHOT_SCHEMA_VERSION,
             snapshot_id: snapshot_id.clone(),
             content_revision,
-            source_container_id: source.id.clone(),
-            source_image_id: source.image.clone(),
+            source_snapshot_id: source.manifest.snapshot_id.clone(),
+            source_image_id: source.manifest.image.local_id.clone(),
             mounts: mounts.clone(),
         };
         write_json(&staging.join("manifest.json"), &manifest, 0o600)?;
@@ -108,8 +75,8 @@ pub(crate) fn capture_startup_snapshot(
                 .filter(|mount| mount.writable)
                 .map(|mount| mount.path.clone())
                 .collect(),
-            source_container_id: source.id,
-            source_image_id: source.image,
+            source_snapshot_id: source.manifest.snapshot_id,
+            source_image_id: source.manifest.image.local_id,
         })
     })();
     if result.is_err() {
@@ -120,7 +87,6 @@ pub(crate) fn capture_startup_snapshot(
 
 pub(crate) fn extend_startup_snapshot(
     target_root: &Path,
-    source_container: &str,
     current: &StartupConfig,
     mount: &Path,
 ) -> Result<StartupSnapshotReport> {
@@ -135,20 +101,12 @@ pub(crate) fn extend_startup_snapshot(
     updated.mounts.push(mount.to_path_buf());
     let updated = super::normalized_config(updated)?;
     let existing = load_startup_snapshot(target_root, current)?;
-    let source = inspect_source(source_container)?;
+    let source = crate::source_snapshot::load(target_root)?;
     ensure!(
-        !source.state.running,
-        "configured source container {source_container:?} must be stopped before capturing startup inputs"
+        source.manifest.snapshot_id == existing.manifest.source_snapshot_id
+            && source.manifest.image.local_id == existing.manifest.source_image_id,
+        "source snapshot changed since startup inputs were captured; use administrator startup recapture before adding a mount"
     );
-    ensure!(
-        source.id == existing.manifest.source_container_id
-            && source.image == existing.manifest.source_image_id,
-        "configured source container changed since initialization; use administrator startup recapture before adding a mount"
-    );
-    let new_mount = resolve_startup_mounts(&[mount.to_path_buf()], &source.mounts)?
-        .into_iter()
-        .next()
-        .expect("one requested startup mount");
 
     let snapshot_id = Uuid::new_v4().simple().to_string();
     let local_root = target_root.join(crate::repository::LOCAL_ROOT);
@@ -162,7 +120,7 @@ pub(crate) fn extend_startup_snapshot(
         return Err(error);
     }
     let result = (|| -> Result<StartupSnapshotReport> {
-        copy_mount(source_container, mount, &mounts_root)?;
+        let new_mount = capture_mount(target_root, mount, &mounts_root)?;
         let mut mounts = existing.manifest.mounts.clone();
         mounts.push(new_mount);
         mounts.sort_by(|left, right| left.path.cmp(&right.path));
@@ -170,8 +128,8 @@ pub(crate) fn extend_startup_snapshot(
             schema_version: SNAPSHOT_SCHEMA_VERSION,
             snapshot_id: snapshot_id.clone(),
             content_revision: snapshot_content_revision(&mounts_root)?,
-            source_container_id: source.id.clone(),
-            source_image_id: source.image.clone(),
+            source_snapshot_id: source.manifest.snapshot_id.clone(),
+            source_image_id: source.manifest.image.local_id.clone(),
             mounts: mounts.clone(),
         };
         write_json(&staging.join("manifest.json"), &manifest, 0o600)?;
@@ -186,8 +144,8 @@ pub(crate) fn extend_startup_snapshot(
                 .filter(|mount| mount.writable)
                 .map(|mount| mount.path.clone())
                 .collect(),
-            source_container_id: source.id,
-            source_image_id: source.image,
+            source_snapshot_id: source.manifest.snapshot_id,
+            source_image_id: source.manifest.image.local_id,
         })
     })();
     if result.is_err() {
@@ -246,53 +204,29 @@ fn clone_snapshot_tree(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn inspect_source(container: &str) -> Result<SourceInspection> {
-    ensure!(
-        container == container.trim()
-            && !container.is_empty()
-            && !container.contains(['\r', '\n', ':']),
-        "source container name must be non-empty and single-line"
-    );
-    let output = Command::new("docker")
-        .args(["container", "inspect", container])
-        .stdin(Stdio::null())
-        .output()
-        .with_context(|| format!("failed to inspect source container {container:?}"))?;
-    ensure!(
-        output.status.success(),
-        "source container {container:?} is not inspectable: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
-    let mut values: Vec<SourceInspection> = serde_json::from_slice(&output.stdout)
-        .context("Docker returned invalid source container inspection JSON")?;
-    ensure!(
-        values.len() == 1,
-        "Docker returned {} source container inspections",
-        values.len()
-    );
-    Ok(values.remove(0))
+fn capture_mounts(
+    target_root: &Path,
+    configured: &[PathBuf],
+    mounts_root: &Path,
+) -> Result<Vec<StartupSnapshotMount>> {
+    configured
+        .iter()
+        .map(|mount| capture_mount(target_root, mount, mounts_root))
+        .collect()
 }
 
-fn copy_mount(container: &str, mount: &Path, mounts_root: &Path) -> Result<()> {
+fn capture_mount(
+    target_root: &Path,
+    mount: &Path,
+    mounts_root: &Path,
+) -> Result<StartupSnapshotMount> {
     let relative = mount.strip_prefix("/").expect("validated absolute mount");
     let destination = mounts_root.join(relative);
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create startup path {}", parent.display()))?;
     }
-    let source = format!("{container}:{}", mount.display());
-    let output = Command::new("docker")
-        .args(["cp", "--archive", &source])
-        .arg(&destination)
-        .stdin(Stdio::null())
-        .output()
-        .with_context(|| format!("failed to copy startup input {}", mount.display()))?;
-    ensure!(
-        output.status.success(),
-        "failed to copy startup input {} from source container: {}",
-        mount.display(),
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
+    let writable = crate::source_snapshot::copy_path(target_root, mount, &destination)?;
     let metadata = fs::symlink_metadata(&destination)
         .with_context(|| format!("copied startup input is missing: {}", destination.display()))?;
     ensure!(
@@ -300,7 +234,10 @@ fn copy_mount(container: &str, mount: &Path, mounts_root: &Path) -> Result<()> {
         "startup mount root must not be a symlink: {}",
         mount.display()
     );
-    Ok(())
+    Ok(StartupSnapshotMount {
+        path: mount.to_path_buf(),
+        writable,
+    })
 }
 
 fn write_json<T: Serialize>(path: &Path, value: &T, mode: u32) -> Result<()> {
@@ -472,60 +409,6 @@ impl SnapshotHash {
     }
 }
 
-pub(super) fn resolve_startup_mounts(
-    configured: &[PathBuf],
-    source_mounts: &[SourceMountInspection],
-) -> Result<Vec<StartupSnapshotMount>> {
-    configured
-        .iter()
-        .map(|path| {
-            let mut writable = false;
-            let mut exact_match = false;
-            for source_mount in source_mounts {
-                validate_source_mount_destination(&source_mount.destination)?;
-                if source_mount.destination == *path {
-                    ensure!(
-                        !exact_match,
-                        "source container has duplicate mount destination {}",
-                        path.display()
-                    );
-                    exact_match = true;
-                    writable = source_mount.writable;
-                } else if source_mount.destination.starts_with(path)
-                    || path.starts_with(&source_mount.destination)
-                {
-                    anyhow::bail!(
-                        "startup path {} partially overlaps source mount destination {}; use an exact startup path or narrow the declaration",
-                        path.display(),
-                        source_mount.destination.display()
-                    );
-                }
-            }
-            Ok(StartupSnapshotMount {
-                path: path.clone(),
-                writable,
-            })
-        })
-        .collect()
-}
-
-fn validate_source_mount_destination(path: &Path) -> Result<()> {
-    ensure!(
-        path.is_absolute() && path != Path::new("/"),
-        "source mount destination must be an absolute non-root path: {}",
-        path.display()
-    );
-    ensure!(
-        path.components().all(|component| matches!(
-            component,
-            std::path::Component::RootDir | std::path::Component::Normal(_)
-        )),
-        "source mount destination must be normalized: {}",
-        path.display()
-    );
-    Ok(())
-}
-
 pub(crate) fn startup_mount_source(target_root: &Path, mount: &Path) -> Result<PathBuf> {
     validate_mount_path(mount)?;
     Ok(target_root
@@ -555,42 +438,5 @@ mod tests {
         fs::write(root.path().join("config"), "two").unwrap();
         let second = snapshot_content_revision(root.path()).unwrap();
         assert_ne!(first, second);
-    }
-
-    #[test]
-    fn exact_source_mount_inherits_writable_mode() {
-        let configured = vec![PathBuf::from("/data1/openapi-config")];
-        let resolved = resolve_startup_mounts(
-            &configured,
-            &[SourceMountInspection {
-                destination: PathBuf::from("/data1/openapi-config"),
-                writable: true,
-            }],
-        )
-        .unwrap();
-        assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved[0].path, configured[0]);
-        assert!(resolved[0].writable);
-    }
-
-    #[test]
-    fn image_startup_path_defaults_to_read_only() {
-        let configured = vec![PathBuf::from("/data1/confs")];
-        let resolved = resolve_startup_mounts(&configured, &[]).unwrap();
-        assert!(!resolved[0].writable);
-    }
-
-    #[test]
-    fn partial_source_mount_overlap_is_rejected() {
-        let configured = vec![PathBuf::from("/data1/app")];
-        let error = resolve_startup_mounts(
-            &configured,
-            &[SourceMountInspection {
-                destination: PathBuf::from("/data1/app/logs"),
-                writable: true,
-            }],
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("partially overlaps"));
     }
 }

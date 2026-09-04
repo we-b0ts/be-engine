@@ -38,7 +38,7 @@ validate_container_mount_path() {
     local path=$1
     [[ "$path" == /* && "$path" != / && "$path" != *//* && \
         "$path" != */./* && "$path" != */../* && \
-        "$path" != */. && "$path" != */.. && \
+        "$path" != */. && "$path" != */.. && "$path" != *:* && \
         "$path" != *$'\n'* && "$path" != *$'\r'* && "$path" != *$'\t'* ]]
 }
 
@@ -251,6 +251,68 @@ resolve_recording_mount_source() {
     else
         prepare_empty_runtime_mount source "$destination"
     fi
+}
+
+resolve_snapshotted_source_mount() {
+    local source=$1
+    local destination=$2
+    local writable=$3
+    local projection=$4
+    local startup_target runtime_output_target
+    validate_container_mount_path "$destination" || {
+        printf 'error: source snapshot has invalid mount destination %s\n' "$destination" >&2
+        return 1
+    }
+    [[ "$writable" == true || "$writable" == false ]] || {
+        printf 'error: source snapshot mount %s has invalid writable mode\n' "$destination" >&2
+        return 1
+    }
+    prepared_mount_writable=$writable
+    if [[ -v 'runtime_output_ids_by_target[$destination]' ]]; then
+        prepare_runtime_outputs source
+        prepared_mount_source="$runtime_outputs_root/source/${runtime_output_ids_by_target[$destination]}"
+        prepared_mount_writable=true
+        seen_source_runtime_outputs["$destination"]=true
+        return 0
+    fi
+    for runtime_output_target in "${runtime_output_targets[@]}"; do
+        if mount_paths_overlap "$destination" "$runtime_output_target"; then
+            printf 'error: source snapshot mount %s partially overlaps runtime output %s\n' \
+                "$destination" "$runtime_output_target" >&2
+            return 1
+        fi
+    done
+    if [[ -v 'startup_mount_sources[$destination]' ]]; then
+        resolve_startup_mount_source source "$destination" \
+            "${startup_mount_writable[$destination]}"
+        prepared_mount_writable=${startup_mount_writable[$destination]}
+        return 0
+    fi
+    for startup_target in "${!startup_mount_sources[@]}"; do
+        if mount_paths_overlap "$destination" "$startup_target"; then
+            printf 'error: source snapshot mount %s partially overlaps startup mount %s\n' \
+                "$destination" "$startup_target" >&2
+            return 1
+        fi
+    done
+    case "$projection" in
+        snapshot)
+            [[ -n "$source" && -e "$source" ]] || {
+                printf 'error: captured source mount %s is missing\n' "$destination" >&2
+                return 1
+            }
+            prepared_mount_source=$source
+            ;;
+        empty)
+            prepare_empty_runtime_mount source "$destination"
+            prepared_mount_writable=$writable
+            ;;
+        *)
+            printf 'error: source snapshot mount %s has invalid projection %s\n' \
+                "$destination" "$projection" >&2
+            return 1
+            ;;
+    esac
 }
 
 remove_platform_mounts() {

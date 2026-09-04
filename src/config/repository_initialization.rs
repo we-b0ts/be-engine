@@ -69,7 +69,7 @@ const TARGET_DOCKERIGNORE_RULES: &[&str] = &[
 #[derive(Debug, Clone)]
 pub struct RepositoryConfigInitOptions {
     pub target_root: PathBuf,
-    pub source_container: String,
+    pub source: crate::KubernetesSourceOptions,
     pub http_backend_port: u16,
     pub http_gateway_port: u16,
     pub readiness_path: String,
@@ -81,7 +81,7 @@ pub struct RepositoryConfigInitOptions {
 pub struct RepositoryConfigInitResult {
     pub target_root: PathBuf,
     pub generated: Vec<PathBuf>,
-    pub source_container: InspectedContainer,
+    pub source_snapshot: crate::SourceSnapshotReport,
     pub upstream_dns: SocketAddr,
     pub http_backend_port: u16,
     pub http_gateway_port: u16,
@@ -102,27 +102,24 @@ pub struct RepositoryConfigInitResult {
     pub comparison_command: &'static str,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct InspectedContainer {
-    pub name: String,
-    pub image: String,
-    pub running: bool,
-}
-
 pub fn initialize_repository_config(
     options: RepositoryConfigInitOptions,
 ) -> Result<RepositoryConfigInitResult> {
-    initialize_repository_config_with(options, inspect_container, |target_root, source, config| {
-        crate::startup::capture_startup_snapshot(target_root, source, config)
-    })
+    initialize_repository_config_with(
+        options,
+        crate::capture_kubernetes_source_snapshot,
+        crate::startup::capture_startup_snapshot,
+    )
 }
 
 fn initialize_repository_config_with(
     options: RepositoryConfigInitOptions,
-    inspect: impl Fn(&str) -> Result<InspectedContainer>,
-    capture: impl Fn(
+    capture_source: impl Fn(
         &Path,
-        &str,
+        &crate::KubernetesSourceOptions,
+    ) -> Result<crate::SourceSnapshotReport>,
+    capture_startup: impl Fn(
+        &Path,
         &crate::startup::StartupConfig,
     ) -> Result<crate::startup::StartupSnapshotReport>,
 ) -> Result<RepositoryConfigInitResult> {
@@ -141,7 +138,6 @@ fn initialize_repository_config_with(
     .map(|relative| target_root.join(relative));
     require_configuration_targets_absent(&configuration_targets)?;
     ensure_pr_base_branch(&target_root)?;
-    let source = inspect(&options.source_container)?;
 
     let recorder_options = RecorderConfigInitOptions {
         target_root: target_root.clone(),
@@ -159,7 +155,6 @@ fn initialize_repository_config_with(
     let project = render_project_config(
         &E2eRunInitOptions {
             target_root: target_root.clone(),
-            source_container: source.name.clone(),
             breeze_container: None,
             target_dockerfile: PathBuf::from(TARGET_DOCKERFILE_PATH),
             target_startup: crate::startup::StartupConfig::default(),
@@ -176,10 +171,11 @@ fn initialize_repository_config_with(
     let (dockerignore, dockerignore_updated, dockerignore_created) =
         ensure_target_dockerignore(&target_root)?;
     let mut target_files = render_missing_target_delivery(&target_root, &options)?;
+    let source_snapshot = capture_source(&target_root, &options.source)?;
     let target_environment =
         crate::startup::initialize_startup_environment(&target_root, options.env_file.as_deref())?;
     let startup = crate::startup::StartupConfig::default();
-    let startup = capture(&target_root, &options.source_container, &startup)?;
+    let startup = capture_startup(&target_root, &startup)?;
     let mut files = vec![
         (configuration_targets[0].clone(), project),
         (
@@ -205,7 +201,7 @@ fn initialize_repository_config_with(
     Ok(RepositoryConfigInitResult {
         target_root,
         generated,
-        source_container: source,
+        source_snapshot,
         upstream_dns: options.upstream_dns,
         http_backend_port: options.http_backend_port,
         http_gateway_port: options.http_gateway_port,
@@ -220,8 +216,8 @@ fn initialize_repository_config_with(
         target_dockerfile: PathBuf::from(TARGET_DOCKERFILE_PATH),
         target_image_tag,
         target_runtime_contract: "traffic-e2e builds Dockerfile.e2e, runs its OCI entrypoint as \
-                                  998:998 with target.env loaded and source-compatible startup \
-                                  mounts using source-compatible access, \
+                                  998:998 with the captured source application environment plus \
+                                  target.env overrides and source-compatible startup mounts, \
                                   and owns readiness, signals, network namespace, and cleanup",
         rewrite_command: "backend-rewrite next --api '<METHOD path-or-pattern>'",
         preflight_command: "backend-rewrite init preflight",
@@ -534,44 +530,6 @@ fn require_ignored(target_root: &Path, relative_dir: &str) -> Result<()> {
     Ok(())
 }
 
-fn inspect_container(name: &str) -> Result<InspectedContainer> {
-    ensure!(
-        name == name.trim() && !name.is_empty() && !name.contains(['\r', '\n']),
-        "container name must be non-empty and single-line"
-    );
-    let output = Command::new("docker")
-        .args(["container", "inspect", name])
-        .output()
-        .with_context(|| format!("failed to inspect container {name:?}"))?;
-    ensure!(
-        output.status.success(),
-        "container {name:?} is not inspectable: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
-    let values: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout)
-        .with_context(|| format!("docker returned invalid inspection JSON for {name:?}"))?;
-    ensure!(
-        values.len() == 1,
-        "docker inspection for {name:?} returned {} objects",
-        values.len()
-    );
-    let value = &values[0];
-    let image = value
-        .pointer("/Config/Image")
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.is_empty())
-        .with_context(|| format!("container {name:?} has no configured image"))?;
-    let running = value
-        .pointer("/State/Running")
-        .and_then(serde_json::Value::as_bool)
-        .context("container inspection has no State.Running field")?;
-    Ok(InspectedContainer {
-        name: name.to_string(),
-        image: image.to_string(),
-        running,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -581,6 +539,17 @@ mod tests {
 
     use super::*;
     use crate::config::DEFAULT_BODY_LIMIT_BYTES;
+
+    fn source_options() -> crate::KubernetesSourceOptions {
+        crate::KubernetesSourceOptions {
+            pod: "friendship".to_string(),
+            namespace: "wb-plat-ide".to_string(),
+            container: None,
+            kubeconfig: None,
+            context: None,
+            kubectl_binary: PathBuf::from("kubectl"),
+        }
+    }
 
     #[test]
     fn conventional_paths_are_bounded_and_startup_is_captured() {
@@ -655,36 +624,55 @@ mod tests {
                 .unwrap()
                 .success()
         );
-        let inspect = |name: &str| {
-            Ok(InspectedContainer {
-                name: name.to_string(),
-                image: format!("example/{name}:1"),
-                running: false,
+        let capture_source = |_root: &Path, options: &crate::KubernetesSourceOptions| {
+            Ok(crate::SourceSnapshotReport {
+                status: "captured",
+                snapshot_id: "source-snapshot-test".to_string(),
+                root: PathBuf::from(crate::repository::LOCAL_SOURCE_ROOT),
+                provider: crate::SourceProviderEvidence {
+                    kind: "kubernetes_pod".to_string(),
+                    context: None,
+                    namespace: options.namespace.clone(),
+                    pod: options.pod.clone(),
+                    pod_uid: "pod-uid".to_string(),
+                    container: "app".to_string(),
+                    restart_count: 0,
+                },
+                image: crate::SourceImage {
+                    reference: "example/app:1".to_string(),
+                    registry_digest: format!("example/app@sha256:{}", "a".repeat(64)),
+                    local_id: format!("sha256:{}", "b".repeat(64)),
+                    architecture: "amd64".to_string(),
+                    os: "linux".to_string(),
+                },
+                environment_variables: 2,
+                target_environment_variables: 1,
+                mounts: Vec::new(),
+                ignored_mounts: Vec::new(),
             })
         };
-        let capture =
-            |_target_root: &Path, _source: &str, config: &crate::startup::StartupConfig| {
-                Ok(crate::startup::StartupSnapshotReport {
-                    status: "captured",
-                    snapshot_id: "snapshot-test".to_string(),
-                    root: PathBuf::from(crate::repository::LOCAL_STARTUP_ROOT),
-                    mounts: config.mounts.clone(),
-                    writable_mounts: Vec::new(),
-                    source_container_id: "container-id".to_string(),
-                    source_image_id: "image-id".to_string(),
-                })
-            };
+        let capture = |_target_root: &Path, config: &crate::startup::StartupConfig| {
+            Ok(crate::startup::StartupSnapshotReport {
+                status: "captured",
+                snapshot_id: "snapshot-test".to_string(),
+                root: PathBuf::from(crate::repository::LOCAL_STARTUP_ROOT),
+                mounts: config.mounts.clone(),
+                writable_mounts: Vec::new(),
+                source_snapshot_id: "source-snapshot-test".to_string(),
+                source_image_id: "image-id".to_string(),
+            })
+        };
         let result = initialize_repository_config_with(
             RepositoryConfigInitOptions {
                 target_root: target.path().to_path_buf(),
-                source_container: "friendship".to_string(),
+                source: source_options(),
                 http_backend_port: 8_181,
                 http_gateway_port: 4_080,
                 readiness_path: "/healthz".to_string(),
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
                 env_file: Some(environment),
             },
-            inspect,
+            capture_source,
             capture,
         )
         .unwrap();
@@ -790,7 +778,7 @@ mod tests {
                 .exists()
         );
         let project = fs::read_to_string(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
-        assert!(project.contains("version: 16"));
+        assert!(project.contains("version: 17"));
         assert!(project.contains("dockerfile: .traffic-e2e/Dockerfile.e2e"));
         assert!(project.contains("success_status: 200"));
         assert!(!project.contains("http_host:"));
@@ -851,14 +839,14 @@ mod tests {
         let error = initialize_repository_config_with(
             RepositoryConfigInitOptions {
                 target_root: target.path().to_path_buf(),
-                source_container: "friendship".to_string(),
+                source: source_options(),
                 http_backend_port: 8_181,
                 http_gateway_port: 4_080,
                 readiness_path: "/healthz".to_string(),
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
                 env_file: None,
             },
-            inspect,
+            capture_source,
             capture,
         )
         .unwrap_err();
@@ -877,7 +865,7 @@ mod tests {
             target.path(),
             &RepositoryConfigInitOptions {
                 target_root: target.path().to_path_buf(),
-                source_container: "source".to_string(),
+                source: source_options(),
                 http_backend_port: 8_181,
                 http_gateway_port: 4_080,
                 readiness_path: "/ready".to_string(),
@@ -918,7 +906,7 @@ mod tests {
             target.path(),
             &RepositoryConfigInitOptions {
                 target_root: target.path().to_path_buf(),
-                source_container: "source".to_string(),
+                source: source_options(),
                 http_backend_port: 8_080,
                 http_gateway_port: 4_080,
                 readiness_path: "/healthz".to_string(),

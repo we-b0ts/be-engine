@@ -75,7 +75,7 @@ impl ProcessOutputSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SourceProjectConfig {
-    pub container: String,
+    pub snapshot: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,7 +155,6 @@ pub(crate) struct ResolvedProjectConfig {
     pub(crate) target_request_timeout: Duration,
     pub(crate) target_quality_gates: Vec<TargetQualityGateConfig>,
     pub(crate) target_max_response_bytes: usize,
-    pub(crate) source_container: String,
     pub(crate) process_outputs: Vec<crate::process_output::ProcessOutputConfig>,
     pub(crate) process_output_rules: BTreeMap<String, crate::ProfileByTypeVerificationRules>,
     pub(crate) breeze_container: Option<String>,

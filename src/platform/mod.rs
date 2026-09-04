@@ -15,6 +15,8 @@ use crate::recording_api::RecordingApi;
 #[cfg(test)]
 mod asset_contract_tests;
 mod assets;
+#[cfg(test)]
+mod container_runtime_tests;
 mod encryption_key;
 mod listen_preflight;
 #[cfg(test)]
@@ -48,6 +50,7 @@ pub use replay_preflight::{
 const MANAGER: &str = include_str!("assets/manage-platform.sh");
 const COMPARISON_PROCESS_OUTPUTS: &str = include_str!("assets/comparison-process-outputs.sh");
 const COMPARISON_TARGET_NETWORK: &str = include_str!("assets/comparison-target-network.sh");
+const CONTAINER_RUNTIME: &str = include_str!("assets/container-runtime.sh");
 const RECORDER_RUNTIME: &str = include_str!("assets/recorder-runtime.sh");
 const PLATFORM_MOUNTS: &str = include_str!("assets/platform-mounts.sh");
 const PREFLIGHT_READINESS: &str = include_str!("assets/preflight-readiness.sh");
@@ -127,7 +130,7 @@ pub struct ManagedRecordingResult {
     pub operation: ManagedRecordingOperation,
     pub run_id: String,
     pub target_root: PathBuf,
-    pub source_container: String,
+    pub source_snapshot_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub breeze_container: Option<String>,
     pub manifest: PathBuf,
@@ -141,7 +144,7 @@ pub struct ManagedRecordingResult {
 struct ManagedRuntimeResult {
     run_id: String,
     target_root: PathBuf,
-    source_container: String,
+    source_snapshot_id: String,
     breeze_container: Option<String>,
     manifest: PathBuf,
     runtime_outputs: Vec<crate::RuntimeOutputLocation>,
@@ -171,7 +174,7 @@ pub async fn run_managed_recording(
         operation,
         run_id: result.run_id,
         target_root: result.target_root,
-        source_container: result.source_container,
+        source_snapshot_id: result.source_snapshot_id,
         breeze_container: result.breeze_container,
         manifest: result.manifest,
         runtime_outputs: result.runtime_outputs,
@@ -244,7 +247,7 @@ pub async fn run_managed_recording_preflight(
             status: "passed",
             run_id: runtime.run_id,
             target_root: runtime.target_root,
-            source_container: runtime.source_container,
+            source_snapshot_id: runtime.source_snapshot_id,
             probe_kind: evidence.probe_kind,
             breeze_container: runtime.breeze_container,
             manifest: runtime.manifest,
@@ -395,6 +398,10 @@ async fn run_managed_runtime(
     ensure_executable(&executable, "traffic-e2e binary")?;
     let encryption_key = encryption_key::load_or_create(&target_root)?;
     let assets = stage_assets(&target_root)?;
+    crate::source_snapshot::write_runtime_projection(
+        &assets.join("source-runtime.json"),
+        &target_root,
+    )?;
     startup::stage_assets(&assets, &target_root, &config)?;
     runtime_outputs::stage_assets(&assets, &config.target_runtime_outputs)?;
     let runtime_output_root = target_root
@@ -433,7 +440,10 @@ async fn run_managed_runtime(
         .env(crate::request_headers::ENCRYPTION_KEY_ENV, encryption_key)
         .env("TRAFFIC_E2E_BIN", executable)
         .env("TRAFFIC_E2E_TARGET_ROOT", &target_root)
-        .env("TRAFFIC_E2E_SOURCE_CONTAINER", &config.source_container)
+        .env(
+            "TRAFFIC_E2E_SOURCE_RUNTIME",
+            assets.join("source-runtime.json"),
+        )
         .env(
             "TRAFFIC_E2E_TARGET_STARTUP_MOUNTS_FILE",
             assets.join("target-startup-mounts.tsv"),
@@ -552,10 +562,13 @@ async fn run_managed_runtime(
         "managed recording runtime exited with {status}"
     );
     asset_cleanup?;
+    let source_snapshot_id = crate::source_snapshot::load(&target_root)?
+        .manifest
+        .snapshot_id;
     Ok(ManagedRuntimeResult {
         run_id,
         target_root,
-        source_container: config.source_container,
+        source_snapshot_id,
         breeze_container: config.breeze_container,
         manifest,
         runtime_outputs: runtime_output_locations,

@@ -38,7 +38,7 @@ pub struct StartupSnapshotReport {
     pub root: PathBuf,
     pub mounts: Vec<PathBuf>,
     pub writable_mounts: Vec<PathBuf>,
-    pub source_container_id: String,
+    pub source_snapshot_id: String,
     pub source_image_id: String,
 }
 

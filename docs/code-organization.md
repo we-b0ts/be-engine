@@ -65,12 +65,16 @@ is unclear.
 - Recorder event, run, writer, and summary modules own capture, persistence,
   and reporting.
 - Replay modules own recorded dependency matching and replay lifecycle.
+- `source_snapshot` owns one-time Kubernetes Pod discovery, immutable source
+  image resolution, effective environment capture, supported volume capture,
+  local integrity validation, and the normalized managed-source runtime
+  projection.
 - `startup` owns the source-compatible target startup declaration,
-  initialization-owned snapshot lifecycle, and Docker environment-file
-  projection. Its `snapshot` child owns stopped-source inspection,
-  declared-path capture, atomic local persistence, and content-integrity
-  validation. Target container and Platform runtimes consume this contract;
-  they do not rediscover startup inputs.
+  initialization-owned target-mount snapshot lifecycle, and merged source plus
+  override Docker environment projection. Its `snapshot` child copies declared
+  paths from the source snapshot or immutable source image, persists them
+  atomically, and validates content integrity. Target container and Platform
+  runtimes consume these contracts; they do not rediscover startup inputs.
   `platform/startup.rs` owns the shell-runtime projection of that snapshot.
 - `e2e_run/config.rs` remains the cohesive strict project-schema lifecycle:
   initialization rendering, load/validation, and runtime path resolution must

@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use traffic_e2e::{
-    DEFAULT_HTTP_BACKEND_PORT, DEFAULT_HTTP_GATEWAY_PORT, RepositoryConfigInitOptions,
-    initialize_repository_config,
+    DEFAULT_HTTP_BACKEND_PORT, DEFAULT_HTTP_GATEWAY_PORT, KubernetesSourceOptions,
+    RepositoryConfigInitOptions, initialize_repository_config,
 };
 
 mod comparison;
@@ -35,9 +35,24 @@ enum ConfigCommand {
 
 #[derive(Debug, Args)]
 struct InitArgs {
-    /// Existing genuine source application container to inspect and reproduce.
+    /// Running Kubernetes Pod whose application container is snapshotted during initialization.
     #[arg(long)]
-    source_container: String,
+    source_pod: String,
+    /// Kubernetes namespace containing the source Pod.
+    #[arg(long)]
+    namespace: String,
+    /// Regular Pod container to snapshot; omit when there is exactly one.
+    #[arg(long)]
+    pod_container: Option<String>,
+    /// Kubeconfig used only while creating the source snapshot.
+    #[arg(long, value_name = "PATH")]
+    kubeconfig: Option<PathBuf>,
+    /// Kubeconfig context used only while creating the source snapshot.
+    #[arg(long)]
+    context: Option<String>,
+    /// kubectl executable used during initialization.
+    #[arg(long, default_value = "kubectl", value_name = "PATH")]
+    kubectl_binary: PathBuf,
     /// Native HTTP port listened to by the source and target backend processes.
     #[arg(long, default_value_t = DEFAULT_HTTP_BACKEND_PORT)]
     http_backend_port: u16,
@@ -60,7 +75,14 @@ pub(super) fn run(args: ConfigArgs) -> Result<()> {
         ConfigCommand::Init(init) => print_json(&initialize_repository_config(
             RepositoryConfigInitOptions {
                 target_root: args.target_root,
-                source_container: init.source_container,
+                source: KubernetesSourceOptions {
+                    pod: init.source_pod,
+                    namespace: init.namespace,
+                    container: init.pod_container,
+                    kubeconfig: init.kubeconfig,
+                    context: init.context,
+                    kubectl_binary: init.kubectl_binary,
+                },
                 http_backend_port: init.http_backend_port,
                 http_gateway_port: init.http_gateway_port,
                 readiness_path: init.readiness_path,
@@ -94,8 +116,15 @@ mod tests {
 
     #[test]
     fn init_uses_repository_conventions_by_default() {
-        let parsed =
-            TestCli::try_parse_from(["test", "init", "--source-container", "friendship"]).unwrap();
+        let parsed = TestCli::try_parse_from([
+            "test",
+            "init",
+            "--source-pod",
+            "friendship",
+            "--namespace",
+            "wb-plat-ide",
+        ])
+        .unwrap();
         let ConfigCommand::Init(init) = parsed.config.command else {
             panic!("expected init command");
         };
@@ -111,8 +140,10 @@ mod tests {
             TestCli::try_parse_from([
                 "test",
                 "init",
-                "--source-container",
+                "--source-pod",
                 "friendship",
+                "--namespace",
+                "wb-plat-ide",
                 "--source-http-port",
                 "8081",
             ])
@@ -122,8 +153,10 @@ mod tests {
             TestCli::try_parse_from([
                 "test",
                 "init",
-                "--source-container",
+                "--source-pod",
                 "friendship",
+                "--namespace",
+                "wb-plat-ide",
                 "--target-port",
                 "8081",
             ])
@@ -133,8 +166,10 @@ mod tests {
             TestCli::try_parse_from([
                 "test",
                 "init",
-                "--source-container",
+                "--source-pod",
                 "friendship",
+                "--namespace",
+                "wb-plat-ide",
                 "--readiness-status",
                 "204",
             ])
@@ -144,8 +179,10 @@ mod tests {
             TestCli::try_parse_from([
                 "test",
                 "init",
-                "--source-container",
+                "--source-pod",
                 "friendship",
+                "--namespace",
+                "wb-plat-ide",
                 "--breeze",
             ])
             .is_err()
@@ -157,8 +194,10 @@ mod tests {
         let parsed = TestCli::try_parse_from([
             "test",
             "init",
-            "--source-container",
+            "--source-pod",
             "source",
+            "--namespace",
+            "wb-plat-ide",
             "--http-backend-port",
             "8081",
             "--http-gateway-port",
