@@ -26,10 +26,10 @@ async fn build_redis(
 }
 ```
 
-Pin the dependency to the fixed `v0.0.1` tag and enable `metrics` by default:
+Pin the dependency to the fixed `v0.0.2` tag and enable `metrics` by default:
 
 ```toml
-brz-redis = { package = "redis", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/redis.git", tag = "v0.0.1", features = ["metrics"] }
+brz-redis = { package = "redis", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/redis.git", tag = "v0.0.2", features = ["metrics"] }
 ```
 
 Pass source hostnames through unchanged instead of resolving them in
@@ -78,9 +78,19 @@ where
 }
 ```
 
-Use `get_routed` or `set_routed` only when source behavior deliberately hashes
-on a routing key different from the encoded Redis key. Preserve that routing
-key; do not invent a new sharding rule.
+Do not calculate or pass a separate routing key in business code. The service
+applies the `ShardRouting` configured at construction to each Redis key.
+
+For `mget`, RedisService keeps a same-shard fast path and otherwise groups keys
+by shard, sends the shard requests concurrently, and restores the input order.
+`del_many` uses the same grouping and sums deleted counts, but a cross-shard
+delete is not atomic: a failure cannot roll back shards that already succeeded.
+
+`pfcount`, `eval`, and `evalsha` derive their shard from their key list but
+require every key in one call to resolve to the same shard. A multi-key
+`PFCOUNT` computes one HLL union and a Lua script executes atomically, so those
+commands cannot be split without changing Redis semantics. Preserve source key
+co-location instead of adding an application-selected route override.
 
 For `hmget`, consume `RedisValues` in requested-field order. Missing fields
 remain `None` and do not shift later values:
@@ -120,8 +130,9 @@ and duplicate execution is acceptable.
    routing match the source.
 2. Test hit, nil, dependency error, and every response type and command used by
    the target.
-3. Test that composite keys encode byte-for-byte like the source and routed
-   calls use the source routing key.
+3. Test that composite keys encode byte-for-byte like the source, multi-key
+   results preserve input order, and commands requiring co-location reject a
+   cross-shard key set before sending it.
 4. If source code uses a pipeline, test response order and the target's error
    handling.
 5. Run the target repository checks and the owning API's Replay/Comparison
