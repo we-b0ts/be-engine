@@ -97,5 +97,17 @@ behavior proves another startup input is needed. Use `startup env` and
 
 Initialization is complete when init succeeded, both Dockerfiles are ready,
 `.traffic-e2e/local/target.env` exists with mode `0600`, preflight passed, and
-no local snapshot or credential entered source control. Stop there unless the
-caller separately asks to begin the rewrite workflow or deliver Git changes.
+no local snapshot or credential entered source control. Report that result,
+then explicitly ask the caller whether to create an initialization merge
+request. Do not commit, push, or create the merge request without the caller's
+confirmation.
+
+When the caller confirms, keep `dev-migration` as the unchanged merge-request
+target branch and put the initialization changes on a separate source branch.
+Never commit the initialization changes directly to `dev-migration`, even when
+that is the currently checked-out branch. Commit only the tracked
+initialization deliverables, verify that `.traffic-e2e/local/`, source
+snapshots, `target.env`, credentials, and generated trust remain excluded,
+push the source branch, and create the merge request with `dev-migration` as
+its target/base. If the caller declines, stop without creating Git delivery.
+Beginning the rewrite workflow remains a separate request.
