@@ -94,6 +94,10 @@ When an assigned API worker uses `brz-redis`, read
 [redis.md](references/redis.md) before choosing a `RedisService` topology or
 calling its typed Redis contract.
 
+When an assigned API worker uses `brz-mysql`, read
+[mysql.md](references/mysql.md) before constructing `MysqlService`, defining
+row mappings, issuing queries, or adding transaction and table-selection code.
+
 When target startup installs process logging through `brz-logs`, or a worker
 changes application log routing, buffering, flushing, or shutdown, read
 [logs.md](references/logs.md) before changing the subscriber or emitting
