@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::ops::{Deref, DerefMut};
@@ -18,7 +18,7 @@ use crate::{
 };
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 20;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 21;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -466,6 +466,12 @@ pub(super) struct RewriteState {
     pub worker_bindings: BTreeMap<String, RewriteWorkerBinding>,
     #[serde(default)]
     pub process_outputs: RewriteProcessOutputState,
+    #[serde(default)]
+    pub api_catalog_initialized: bool,
+    #[serde(default)]
+    pub api_catalog: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_pattern_identification: Option<RewriteCasePatternIdentification>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_quality_fingerprint: Option<String>,
     pub recording_run_id: String,
@@ -483,6 +489,14 @@ pub(super) struct RewriteState {
     pub recording_refresh: Option<RewriteRecordingRefreshState>,
     #[serde(flatten)]
     pub active_slice: RewriteSliceState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct RewriteCasePatternIdentification {
+    pub id: String,
+    pub recording_run_id: String,
+    pub candidates: Vec<String>,
+    pub observed_apis: Vec<String>,
 }
 
 impl Deref for RewriteState {
@@ -668,6 +682,13 @@ pub enum RewriteAction {
         run_id: String,
         status_poll_after_seconds: u64,
         status: RewriteCommandSpec,
+    },
+    CasePatternIdentificationRequired {
+        summary: String,
+        batch_id: String,
+        recording_run_id: String,
+        candidates: Vec<String>,
+        command: RewriteCommandSpec,
     },
     ImplementationRequired {
         summary: String,

@@ -88,6 +88,10 @@ pub fn request_rewrite_recording(
         state.recording_refresh.is_none(),
         "a recorder-capture refresh is coordinator-owned; execute the action returned by `backend-rewrite status`"
     );
+    ensure!(
+        state.case_pattern_identification.is_none(),
+        "case path pattern identification is pending; execute action.commands.apply before requesting another recording"
+    );
     let settings = RewriteRecordingSettings {
         duration_seconds: options.duration_seconds,
         per_api_case_limit: options.per_api_case_limit,

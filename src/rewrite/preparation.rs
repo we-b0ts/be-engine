@@ -8,16 +8,13 @@ use crate::e2e_run::{
     focused_background_reclassification_recovery_required, latest_focused_api,
     reclassify_focused_background_dependencies,
 };
-use crate::{
-    E2eRunContext, E2eRunPrepareOptions, RecordingApi, prepare_e2e_run,
-    resolve_recording_api_member,
-};
+use crate::{E2eRunContext, E2eRunPrepareOptions, RecordingApi, prepare_e2e_run};
 
 pub(super) fn prepare_recording(target_root: &Path, state: &mut RewriteState) -> Result<()> {
     crate::e2e_run::resolve_project(target_root)?;
     let case_source = artifacts::recording_run(target_root, &state.recording_run_id);
     let api = state.api.parse::<RecordingApi>()?;
-    let member = resolve_recording_api_member(&case_source, &api)?;
+    let member = crate::case_group::resolve_recording_api_seed_member(&case_source, &api)?;
     let source_revision = fingerprint::source_image_revision(target_root)?;
     let prepared = prepare_e2e_run(E2eRunPrepareOptions {
         context: E2eRunContext {

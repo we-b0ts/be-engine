@@ -19,6 +19,9 @@ fn older_state_uses_bounded_recording_defaults() {
         "parked_slices",
         "worker_bindings",
         "process_outputs",
+        "api_catalog_initialized",
+        "api_catalog",
+        "case_pattern_identification",
     ] {
         object.remove(field);
     }
@@ -37,6 +40,9 @@ fn older_state_uses_bounded_recording_defaults() {
     assert!(state.parked_slices.is_empty());
     assert!(state.worker_bindings.is_empty());
     assert!(state.process_outputs.inventory.is_empty());
+    assert!(!state.api_catalog_initialized);
+    assert!(state.api_catalog.is_empty());
+    assert!(state.case_pattern_identification.is_none());
     assert!(state.target_quality_fingerprint.is_none());
 }
 
@@ -155,7 +161,7 @@ fn implementation_action_has_one_stable_public_shape() {
         action,
     })
     .unwrap();
-    assert_eq!(status.get("schema_version"), Some(&serde_json::json!(20)));
+    assert_eq!(status.get("schema_version"), Some(&serde_json::json!(21)));
     assert!(status.get("active_issue").is_none());
     assert!(status.get("next").is_none());
 }

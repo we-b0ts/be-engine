@@ -108,6 +108,30 @@ pub fn resolve_recording_api_member(
     case_source: &Path,
     api: &crate::RecordingApi,
 ) -> Result<PathBuf> {
+    let members = resolve_recording_api_members(case_source, api)?;
+    ensure!(
+        members.len() == 1,
+        "recording API {api} must resolve to exactly one canonical member directory, found {}",
+        members.len()
+    );
+    Ok(members.into_iter().next().expect("one member was required"))
+}
+
+pub(crate) fn resolve_recording_api_seed_member(
+    case_source: &Path,
+    api: &crate::RecordingApi,
+) -> Result<PathBuf> {
+    let members = resolve_recording_api_members(case_source, api)?;
+    members
+        .into_iter()
+        .next()
+        .context("recording API has no canonical member directory")
+}
+
+fn resolve_recording_api_members(
+    case_source: &Path,
+    api: &crate::RecordingApi,
+) -> Result<BTreeSet<PathBuf>> {
     let case_source = fs::canonicalize(case_source)
         .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
     let cases = discover_published_cases(&case_source)?;
@@ -127,11 +151,10 @@ pub fn resolve_recording_api_member(
         .map(|case| case.member_dir.clone())
         .collect::<BTreeSet<_>>();
     ensure!(
-        members.len() == 1,
-        "recording API {api} must resolve to exactly one canonical member directory, found {}",
-        members.len()
+        !members.is_empty(),
+        "recording API {api} has no recorded cases"
     );
-    Ok(members.into_iter().next().expect("one member was required"))
+    Ok(members)
 }
 
 pub(crate) fn resolve_published_case_dir(case_source: &Path, case_id: &str) -> Result<PathBuf> {

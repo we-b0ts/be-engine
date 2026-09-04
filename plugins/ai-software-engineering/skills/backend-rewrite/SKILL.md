@@ -48,6 +48,9 @@ file only when their trigger occurs:
   traffic, or when applied capture rules require a consolidated recording
   refresh.
 - Read
+  [case-pattern-identification.md](references/case-pattern-identification.md)
+  only for `case_pattern_identification_required`.
+- Read
   [coordinator-evidence-actions.md](references/coordinator-evidence-actions.md)
   only after worker confirmation and only when that worker returns inputs for
   response-rule, recorder-capture, dependency-rule, or process-output-rule
@@ -128,7 +131,7 @@ assume it is complete and never rerun it.
 
 A fresh standard recording requires explicit user authorization.
 
-Response schema v20 contains an `action` object with exactly `kind`, `summary`,
+Response schema v21 contains an `action` object with exactly `kind`, `summary`,
 `details`, and `commands`. This action schema version is independent of target
 repository configuration versions. Read kind-specific facts only from
 `action.details`. An API worker uses only the issue-scoped evidence commands

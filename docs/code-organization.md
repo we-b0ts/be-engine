@@ -124,7 +124,10 @@ is unclear.
   compatibility and action-schema changes remain reviewable together.
   `inventory.rs` owns the API inventory state machine: stable installation,
   bounded activation and parking, deferred revalidation, and summary/detail
-  views. `process_output_model.rs` and `process_outputs.rs` own the separate
+  views. `case_patterns.rs` owns the low-frequency post-recording pattern
+  identification gate, persistent canonical API catalog, and add-only policy
+  application; it does not mutate recorded cases or delegate this gate to API
+  workers. `process_output_model.rs` and `process_outputs.rs` own the separate
   process-output inventory, comparison scheduling, issue projection, and final
   target-fingerprint revalidation. Root `process_output.rs` owns validated
   capture configuration and immutable source/target file evidence.

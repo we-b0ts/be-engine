@@ -28,6 +28,9 @@ Run `action.commands.advance` only after `advance_required`. The allocated
 identity is `action.details.run_id`; the coordinator owns its input mode,
 lifecycle, and exact finalized manifest. Never select a recording by recency or
 add manual curl, Replay, shell pipelines, backgrounding, or driver flags.
+Advancing a finalized unscoped standard recording may return the one-time
+`case_pattern_identification_required` batch described in
+[workflow.md](workflow.md) before it publishes the API inventory.
 
 Duration and case limit belong to the preceding recording request and are bound
 into the action ID. For explicit API selectors, duration is an upper bound and

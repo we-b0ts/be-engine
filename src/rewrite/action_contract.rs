@@ -87,6 +87,33 @@ impl Serialize for RewriteAction {
                 commands: RewriteStatusCommands { status },
             }
             .serialize(serializer),
+            Self::CasePatternIdentificationRequired {
+                summary,
+                batch_id,
+                recording_run_id,
+                candidates,
+                command,
+            } => RewriteActionView {
+                kind: "case_pattern_identification_required",
+                summary,
+                details: RewriteCasePatternIdentificationDetails {
+                    batch_id,
+                    recording_run_id,
+                    candidates,
+                    pattern_input: RewriteCasePatternInput {
+                        environment_variable: "BACKEND_REWRITE_CASE_PATH_PATTERNS_JSON",
+                        format: "JSON array of path patterns",
+                        empty_array_meaning: "every candidate is a static path",
+                        rules: [
+                            "replace only variable whole path segments with *",
+                            "use ** only as the final segment for a source-defined catch-all tail",
+                            "omit static paths from the array",
+                        ],
+                    },
+                },
+                commands: RewriteApplyCommands { apply: command },
+            }
+            .serialize(serializer),
             Self::ImplementationRequired {
                 summary,
                 issue,
@@ -237,6 +264,22 @@ struct RewriteRecordingRunDetails<'a> {
 struct RewriteRecordingInProgressDetails<'a> {
     run_id: &'a str,
     status_poll_after_seconds: u64,
+}
+
+#[derive(Serialize)]
+struct RewriteCasePatternIdentificationDetails<'a> {
+    batch_id: &'a str,
+    recording_run_id: &'a str,
+    candidates: &'a [String],
+    pattern_input: RewriteCasePatternInput<'a>,
+}
+
+#[derive(Serialize)]
+struct RewriteCasePatternInput<'a> {
+    environment_variable: &'a str,
+    format: &'a str,
+    empty_array_meaning: &'a str,
+    rules: [&'a str; 3],
 }
 
 #[derive(Serialize)]
