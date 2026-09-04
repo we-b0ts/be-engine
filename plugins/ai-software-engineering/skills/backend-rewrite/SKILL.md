@@ -86,6 +86,10 @@ When an assigned API worker calls an outbound HTTP dependency through
 `brz-http`, read [http.md](references/http.md) before constructing the client,
 defining endpoints, or implementing request and response handling.
 
+When an assigned API worker exposes an inbound HTTP API or starts an
+`http-server` listener, read [http-server.md](references/http-server.md) before
+defining routes, authentication, request binding, or server lifecycle.
+
 When an assigned API worker uses memcache `CacheService`, read
 [memcache.md](references/memcache.md) before constructing the cache or calling
 `get`/`set`.
