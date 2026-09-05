@@ -26,6 +26,27 @@ Successful verification chooses the next transition. Replay and external-input
 repairs reuse the same cases; Recorder or source-baseline repairs allocate
 fresh standard traffic. The AI never chooses between those transitions.
 
+For an accepted `source_change` caused by an upgraded source image, an
+administrator replaces the source baseline without rerunning initialization:
+
+```bash
+backend-rewrite-admin --target-root <target> source upgrade \
+  --source-pod <ready-pod> --namespace <namespace> \
+  [--pod-container <regular-container>] \
+  [--kubeconfig /path/to/kubeconfig] [--context <context>] \
+  --confirm-replace
+```
+
+The command captures the new image and Kubernetes runtime inputs and
+recaptures the existing startup declaration as one rollback-safe operation. It
+does not change tracked project configuration, target code, or `target.env`.
+After it succeeds, execute the exact coordinator-issued `repair verify
+<repair-id>` acceptance command; do not substitute initialization preflight or
+a manually constructed recording. If only runtime inputs changed while the
+image stayed the same, the upgrade does not satisfy `source_change` acceptance;
+use the coordinator's runtime-input repair (`external_data_blocker`) and its
+issued verification command.
+
 If an administrator confirms that a `source_change`,
 `recorder_capability_gap`, or `replay_capability_gap` route was accepted by
 mistake and the issue is target-owned, use `backend-rewrite-admin repair

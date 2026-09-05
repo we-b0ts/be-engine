@@ -21,6 +21,12 @@ pub(super) fn covers(
 ) -> bool {
     match (existing, requested) {
         (
+            BackgroundDependencyRuleConfig::Mysql { selector: left, .. },
+            BackgroundDependencyRuleConfig::Mysql {
+                selector: right, ..
+            },
+        ) => left == right,
+        (
             BackgroundDependencyRuleConfig::Http {
                 authorities: existing_authorities,
                 methods: existing_methods,
@@ -188,6 +194,12 @@ fn compatible(
     require_exact_sets: bool,
 ) -> bool {
     match (existing, requested) {
+        (
+            BackgroundDependencyRuleConfig::Mysql { selector: left, .. },
+            BackgroundDependencyRuleConfig::Mysql {
+                selector: right, ..
+            },
+        ) => left == right,
         (
             BackgroundDependencyRuleConfig::Http {
                 authorities: existing_authorities,

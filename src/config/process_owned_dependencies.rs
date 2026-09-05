@@ -1,3 +1,6 @@
+mod mysql;
+pub use mysql::{MysqlBackgroundSelector, MysqlBackgroundTableSeries};
+
 use std::collections::HashSet;
 
 use anyhow::{Result, bail};
@@ -24,6 +27,12 @@ pub struct RedisKeyPatternConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "protocol", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BackgroundDependencyRuleConfig {
+    Mysql {
+        name: String,
+        selector: MysqlBackgroundSelector,
+        source_revision: String,
+        source_evidence: String,
+    },
     Http {
         name: String,
         authorities: Vec<String>,
@@ -80,7 +89,8 @@ pub enum BackgroundDependencyRuleConfig {
 impl BackgroundDependencyRuleConfig {
     pub fn name(&self) -> &str {
         match self {
-            Self::Http { name, .. }
+            Self::Mysql { name, .. }
+            | Self::Http { name, .. }
             | Self::Memcached { name, .. }
             | Self::Redis { name, .. }
             | Self::Motan { name, .. } => name,
@@ -89,6 +99,9 @@ impl BackgroundDependencyRuleConfig {
 
     pub(crate) fn matches(&self, event: &RecorderEvent) -> bool {
         match (self, event) {
+            (Self::Mysql { selector, .. }, RecorderEvent::MysqlExchange(exchange)) => {
+                selector.matches(exchange)
+            }
             (
                 Self::Http {
                     authorities,
@@ -178,6 +191,16 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
             bail!("duplicate process-owned dependency rule name {name:?}");
         }
         match rule {
+            BackgroundDependencyRuleConfig::Mysql {
+                selector,
+                source_revision,
+                source_evidence,
+                ..
+            } => {
+                selector.validate()?;
+                validate_source_revision(source_revision)?;
+                validate_source_evidence(source_evidence)?;
+            }
             BackgroundDependencyRuleConfig::Http {
                 authorities,
                 methods,
@@ -370,6 +393,12 @@ fn rules_overlap(
     right: &BackgroundDependencyRuleConfig,
 ) -> bool {
     match (left, right) {
+        (
+            BackgroundDependencyRuleConfig::Mysql { selector: left, .. },
+            BackgroundDependencyRuleConfig::Mysql {
+                selector: right, ..
+            },
+        ) => left.overlaps(right),
         (
             BackgroundDependencyRuleConfig::Http {
                 authorities: left_authorities,

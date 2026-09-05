@@ -105,7 +105,8 @@ impl BackgroundDependencyMatcher {
         let mut initial_loads = InitialLoads::default();
         for rule in rules {
             match rule {
-                BackgroundDependencyRuleConfig::Http { .. }
+                BackgroundDependencyRuleConfig::Mysql { .. }
+                | BackgroundDependencyRuleConfig::Http { .. }
                 | BackgroundDependencyRuleConfig::Motan { .. } => {
                     rules_without_specialized_matching.push(rule.clone());
                 }

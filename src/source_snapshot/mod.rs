@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 mod kubernetes;
+mod upgrade;
+
+pub(crate) use upgrade::begin_kubernetes_source_snapshot_upgrade;
 
 const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 const PRIVATE_FILE_MODE: u32 = 0o600;
@@ -269,7 +272,11 @@ fn snapshot_report(status: &'static str, snapshot: LoadedSourceSnapshot) -> Sour
 
 pub(crate) fn load(target_root: &Path) -> Result<LoadedSourceSnapshot> {
     let root = target_root.join(crate::repository::LOCAL_SOURCE_ROOT);
-    let metadata = fs::symlink_metadata(&root)
+    load_root(&root)
+}
+
+fn load_root(root: &Path) -> Result<LoadedSourceSnapshot> {
+    let metadata = fs::symlink_metadata(root)
         .with_context(|| format!("failed to inspect source snapshot {}", root.display()))?;
     ensure!(
         metadata.is_dir() && !metadata.file_type().is_symlink(),
@@ -289,7 +296,7 @@ pub(crate) fn load(target_root: &Path) -> Result<LoadedSourceSnapshot> {
     for mount in &manifest.mounts {
         validate_snapshot_mount_path(&mount.path)?;
         if matches!(mount.projection, SourceMountProjection::Snapshot) {
-            let path = snapshot_mount_path(&root, &mount.path)?;
+            let path = snapshot_mount_path(root, &mount.path)?;
             ensure!(
                 path.exists(),
                 "source snapshot mount is missing: {}",
@@ -303,7 +310,7 @@ pub(crate) fn load(target_root: &Path) -> Result<LoadedSourceSnapshot> {
     ensure!(
         manifest.content_revision
             == snapshot_content_revision(
-                &root,
+                root,
                 &manifest.provider,
                 &manifest.image,
                 &manifest.mounts,
@@ -314,7 +321,7 @@ pub(crate) fn load(target_root: &Path) -> Result<LoadedSourceSnapshot> {
     Ok(LoadedSourceSnapshot {
         manifest,
         runtime,
-        root,
+        root: root.to_path_buf(),
     })
 }
 

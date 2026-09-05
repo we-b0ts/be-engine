@@ -65,10 +65,10 @@ is unclear.
 - Recorder event, run, writer, and summary modules own capture, persistence,
   and reporting.
 - Replay modules own recorded dependency matching and replay lifecycle.
-- `source_snapshot` owns one-time Kubernetes Pod discovery, immutable source
-  image resolution, effective environment capture, supported volume capture,
-  local integrity validation, and the normalized managed-source runtime
-  projection.
+- `source_snapshot` owns initial and explicit administrator-requested Kubernetes
+  Pod capture, immutable source image resolution, effective environment capture,
+  supported volume capture, rollback-safe local replacement, integrity
+  validation, and the normalized managed-source runtime projection.
 - `startup` owns the source-compatible target startup declaration,
   initialization-owned target-mount snapshot lifecycle, and merged source plus
   override Docker environment projection. Its `snapshot` child copies declared
@@ -81,6 +81,9 @@ is unclear.
   agree on one contract. `e2e_run/admin_startup.rs` projects the validated
   project startup declaration into the administrator-owned snapshot recapture
   operation without adding mutation to the ordinary coordinator CLI.
+  `e2e_run/admin_source.rs` coordinates an administrator-confirmed source image
+  upgrade with the existing project declaration and derived startup snapshot;
+  it does not rerun initialization or rewrite tracked configuration.
 - `internal_runtime` owns the canonical `.traffic-e2e/local/runtime` path used
   by engine-managed mutable state. The directory is inspectable but not a
   stable API; coordinator commands remain the primary interface and all state
@@ -175,3 +178,10 @@ plugins/ai-software-engineering/skills/backend-rewrite/scripts/check-code-organi
 
 Before an MR, set `CODE_ORG_BASE` to the target branch. Use `--all` only for an
 explicit repository-wide audit.
+
+- `mysql/sql.rs` owns conservative SQL token/value identity shared by replay and
+  narrow MySQL ownership selectors. `replay/mysql/session_setup.rs` owns builtin
+  initialization recognition; `sql_match.rs` owns text/prepared correlation.
+  `config/process_owned_dependencies/mysql.rs` owns MySQL rule validation and
+  matching, while `config/background_mysql_feedback.rs` owns immutable-evidence
+  planning and atomic configuration application.

@@ -124,6 +124,29 @@ pub struct RewriteContext {
     pub target_root: PathBuf,
 }
 
+pub(crate) struct AdminSourceUpgradeGuard {
+    _coordinator: store::RewriteLock,
+}
+
+pub(crate) fn lock_admin_source_upgrade(target_root: &Path) -> Result<AdminSourceUpgradeGuard> {
+    let store = RewriteStore::new(target_root)?;
+    let coordinator = store.lock()?;
+    match traffic_operation::state(target_root)? {
+        traffic_operation::TrafficOperationState::Absent => Ok(AdminSourceUpgradeGuard {
+            _coordinator: coordinator,
+        }),
+        traffic_operation::TrafficOperationState::Live(active) => anyhow::bail!(
+            "cannot upgrade the source snapshot while {:?} traffic operation {} is running",
+            active.kind,
+            active.operation_id
+        ),
+        traffic_operation::TrafficOperationState::Stale(active) => anyhow::bail!(
+            "cannot upgrade the source snapshot while stale traffic operation {} requires `backend-rewrite recover`",
+            active.operation_id
+        ),
+    }
+}
+
 pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
     let (target_root, project) = crate::e2e_run::resolve_project(&options.target_root)?;
     ensure!(

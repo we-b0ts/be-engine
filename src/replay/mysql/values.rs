@@ -1,3 +1,4 @@
+use super::session_setup::is_mysql_session_setup_sql;
 use crate::mysql::maintenance::{MysqlMaintenanceQuery, classify_mysql_maintenance_query};
 
 pub(in crate::replay) fn builtin_response(
@@ -35,13 +36,16 @@ pub(in crate::replay) fn builtin_response(
     if normalized == "select database()" {
         return Some(single_string_result("DATABASE()", database.unwrap_or("")));
     }
-    if normalized.contains("version()") || normalized.contains("@@version") {
+    if matches!(
+        normalized.as_str(),
+        "select version()" | "select @@ version"
+    ) {
         return Some(single_string_result(
             "VERSION()",
             "8.0.0-traffic-recorder-replay",
         ));
     }
-    if normalized.starts_with("show warnings") {
+    if normalized == "show warnings" {
         return Some(RecordedMysqlResponse {
             status: "resultset".to_string(),
             error_code: None,
@@ -56,7 +60,7 @@ pub(in crate::replay) fn builtin_response(
             rows: Vec::new(),
         });
     }
-    if normalized.starts_with("show variables") {
+    if normalized == "show variables" {
         return Some(RecordedMysqlResponse {
             status: "resultset".to_string(),
             error_code: None,
@@ -76,17 +80,6 @@ pub(in crate::replay) fn is_builtin_ok(normalized_sql: &str) -> bool {
             normalized_sql,
             "begin" | "start transaction" | "commit" | "rollback"
         )
-}
-
-pub(in crate::replay) fn is_mysql_session_setup_sql(normalized_sql: &str) -> bool {
-    normalized_sql.starts_with("set names ")
-        || normalized_sql.starts_with("set character set ")
-        || normalized_sql.starts_with("set character_set_client ")
-        || normalized_sql.starts_with("set character_set_connection ")
-        || normalized_sql.starts_with("set character_set_results ")
-        || normalized_sql.starts_with("set collation_connection ")
-        || normalized_sql.starts_with("set time_zone ")
-        || normalized_sql.starts_with("set sql_mode ")
 }
 
 pub(in crate::replay) fn single_string_result(name: &str, value: &str) -> RecordedMysqlResponse {
@@ -156,29 +149,15 @@ pub(in crate::replay) fn params_match(
 }
 
 pub(in crate::replay) fn normalize_sql(sql: &str) -> String {
-    let mut out = String::with_capacity(sql.len());
-    let mut last_was_space = false;
-    for ch in sql.chars() {
-        let ch = if ch == '`' { continue } else { ch };
-        if ch.is_whitespace() {
-            if !last_was_space {
-                out.push(' ');
-                last_was_space = true;
-            }
-        } else {
-            out.push(ch.to_ascii_lowercase());
-            last_was_space = false;
-        }
-    }
-    let mut compact = out.trim().to_string();
-    for pattern in [" = ", " =", "= ", " ,", " (", "( ", " )", ") "] {
-        compact = compact.replace(pattern, pattern.trim());
-    }
-    compact
+    crate::mysql::sql::normalize(sql)
 }
-
 pub(in crate::replay) fn count_sql_placeholders(sql: &str) -> usize {
-    sql.chars().filter(|ch| *ch == '?').count()
+    crate::mysql::sql::tokens(sql).map_or(0, |tokens| {
+        tokens
+            .iter()
+            .filter(|t| **t == crate::mysql::sql::Token::Placeholder)
+            .count()
+    })
 }
 
 pub(in crate::replay) fn looks_like_select(sql: &str) -> bool {
@@ -303,6 +282,13 @@ pub(in crate::replay) fn value_as_str(value: &RecordedMysqlValue) -> Result<&str
     Err(anyhow!("recorded value is not a string"))
 }
 
+fn fractional_micros(fraction: &str) -> Result<u32> {
+    if fraction.is_empty() || fraction.len() > 6 || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(anyhow!("invalid recorded MySQL fractional seconds"));
+    }
+    Ok(fraction.parse::<u32>()? * 10_u32.pow(6 - fraction.len() as u32))
+}
+
 pub(in crate::replay) fn binary_datetime_bytes(value: &str) -> Result<Vec<u8>> {
     let (date, time) = value.split_once(' ').unwrap_or((value, "00:00:00"));
     let mut date_parts = date.split('-');
@@ -326,7 +312,7 @@ pub(in crate::replay) fn binary_datetime_bytes(value: &str) -> Result<Vec<u8>> {
     let hour = time_parts.next().unwrap_or("0").parse::<u8>()?;
     let minute = time_parts.next().unwrap_or("0").parse::<u8>()?;
     let second = time_parts.next().unwrap_or("0").parse::<u8>()?;
-    let micros = micros.parse::<u32>().unwrap_or_default();
+    let micros = fractional_micros(micros)?;
     let mut out = Vec::new();
     if micros > 0 {
         out.push(11);
@@ -359,7 +345,7 @@ pub(in crate::replay) fn binary_time_bytes(value: &str) -> Result<Vec<u8>> {
     let second = parts.next().unwrap_or("0").parse::<u8>()?;
     let days = total_hours / 24;
     let hour = (total_hours % 24) as u8;
-    let micros = micros.parse::<u32>().unwrap_or_default();
+    let micros = fractional_micros(micros)?;
     let mut out = Vec::new();
     if micros > 0 {
         out.push(12);

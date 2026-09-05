@@ -222,7 +222,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn builtin_query_consumes_matching_recorded_exchange() {
+    async fn recorded_session_query_takes_precedence_over_builtin_response() {
         let temp = tempfile::tempdir().unwrap();
         let case_dir = temp.path().join("case");
         tokio::fs::create_dir_all(&case_dir).await.unwrap();
@@ -247,13 +247,13 @@ mod tests {
         let ok = read_packet(&mut client).await.unwrap().unwrap();
         assert_eq!(ok.payload[0], 0x00);
 
-        wait_for_report_contains(&report_path, r#""recorded_source": "case""#).await;
+        wait_for_report_contains(&report_path, r#""matched_query_count": 1"#).await;
         let report: Value =
             serde_json::from_str(&tokio::fs::read_to_string(&report_path).await.unwrap()).unwrap();
-        assert_eq!(report["builtin_queries"][0]["command"], "COM_QUERY");
-        assert_eq!(report["builtin_queries"][0]["sql"], "SET NAMES utf8");
-        assert_eq!(report["builtin_queries"][0]["recorded_source"], "case");
-        assert_eq!(report["builtin_queries"][0]["recorded_index"], 0);
+        assert_eq!(report["matched_queries"][0]["command"], "COM_QUERY");
+        assert_eq!(report["matched_queries"][0]["sql"], "SET NAMES utf8");
+        assert_eq!(report["matched_queries"][0]["source"], "case");
+        assert_eq!(report["matched_queries"][0]["index"], 0);
         assert!(
             report["unused_case_exchanges"]
                 .as_array()

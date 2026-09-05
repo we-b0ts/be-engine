@@ -4,9 +4,10 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use traffic_e2e::{
     BackgroundDependencyFeedback, BreezeMemcachedBackgroundDependencyFeedback, E2eRunContext,
-    MotanBackgroundDependencyFeedback, RedisBackgroundDependencyFeedback,
-    plan_background_dependency, plan_breeze_memcached_background_dependency,
-    plan_motan_background_dependency, plan_redis_background_dependency,
+    MotanBackgroundDependencyFeedback, MysqlBackgroundDependencyFeedback, MysqlBackgroundSelector,
+    MysqlBackgroundTableSeries, RedisBackgroundDependencyFeedback, plan_background_dependency,
+    plan_breeze_memcached_background_dependency, plan_motan_background_dependency,
+    plan_mysql_background_dependency, plan_redis_background_dependency,
     resolve_single_e2e_response_rule_evidence,
 };
 
@@ -30,6 +31,8 @@ pub(super) struct BackgroundDependencyArgs {
 
 #[derive(Debug, Subcommand)]
 enum BackgroundProtocolArgs {
+    /// Source-proven process-owned MySQL reads, bounded by SQL and physical tables.
+    Mysql(MysqlBackgroundArgs),
     /// Process-owned HTTP traffic unrelated to one case.
     Http(HttpBackgroundArgs),
     /// Process-owned Breeze-backed Memcached get traffic.
@@ -38,6 +41,33 @@ enum BackgroundProtocolArgs {
     Motan(MotanBackgroundArgs),
     /// Process-owned Redis traffic.
     Redis(RedisBackgroundArgs),
+}
+
+#[derive(Debug, Args)]
+struct MysqlBackgroundArgs {
+    #[arg(long)]
+    target_host: String,
+    #[arg(long, default_value_t = 3306)]
+    target_port: u16,
+    #[arg(long)]
+    database: String,
+    #[arg(long)]
+    username: String,
+    #[arg(
+        long,
+        help = "Single SELECT with {{table}} and ? for variable literal positions"
+    )]
+    sql: String,
+    #[arg(long = "table")]
+    tables: Vec<String>,
+    #[arg(long, requires_all = ["table_start", "table_end"])]
+    table_prefix: Option<String>,
+    #[arg(long, requires = "table_prefix")]
+    table_start: Option<u32>,
+    #[arg(long, requires = "table_prefix")]
+    table_end: Option<u32>,
+    #[arg(long, default_value_t = 4)]
+    table_width: usize,
 }
 
 #[derive(Debug, Args)]
@@ -135,6 +165,37 @@ pub(super) fn run(
     })?
     .replay;
     match protocol {
+        BackgroundProtocolArgs::Mysql(selector) => {
+            let table_series = selector
+                .table_prefix
+                .map(|prefix| MysqlBackgroundTableSeries {
+                    prefix,
+                    start: selector.table_start.expect("clap requires table_start"),
+                    end: selector.table_end.expect("clap requires table_end"),
+                    width: selector.table_width,
+                });
+            let plan = plan_mysql_background_dependency(MysqlBackgroundDependencyFeedback {
+                rules_path,
+                replay_report_path: replay_report,
+                name,
+                source_revision,
+                source_evidence: evidence,
+                selector: MysqlBackgroundSelector {
+                    target_host: selector.target_host,
+                    target_port: selector.target_port,
+                    database: selector.database,
+                    username: selector.username,
+                    sql: selector.sql,
+                    tables: selector.tables,
+                    table_series,
+                },
+            })?;
+            if apply {
+                super::super::print_json(&plan.apply()?)
+            } else {
+                super::super::print_json(plan.report())
+            }
+        }
         BackgroundProtocolArgs::Http(selector) => {
             let feedback = BackgroundDependencyFeedback {
                 rules_path,

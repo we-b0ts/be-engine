@@ -58,6 +58,7 @@ pub(in crate::replay) async fn handle_connection(
         database: login.database,
         username: login.username,
         next_statement_id: 1,
+        status_flags: SERVER_STATUS_AUTOCOMMIT,
         statements: HashMap::new(),
     };
     loop {
@@ -77,7 +78,7 @@ pub(in crate::replay) async fn handle_connection(
                     &mut stream,
                     MysqlPacket {
                         sequence_id: 1,
-                        payload: ok_payload(0, 0),
+                        payload: ok_payload_with_status(0, 0, session.status_flags),
                     },
                 )
                 .await?;
@@ -94,7 +95,7 @@ pub(in crate::replay) async fn handle_connection(
             }
             "COM_QUERY" => {
                 let sql = command.query.as_deref().unwrap_or_default();
-                if handle_query(&mut stream, state.clone(), &session, sql).await?
+                if handle_query(&mut stream, state.clone(), &mut session, sql).await?
                     == SessionDirective::ClientTerminated
                 {
                     break;

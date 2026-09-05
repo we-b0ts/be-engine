@@ -307,6 +307,40 @@ mod tests {
     const KEY: [u8; AES_256_KEY_BYTES] = [7; AES_256_KEY_BYTES];
 
     #[test]
+    fn default_recording_preserves_authentication_headers_for_replay() {
+        let config: crate::config::RecordingConfig = serde_yaml::from_str("{}").unwrap();
+        let capture = RequestHeaderCapture::from_environment(
+            &config.encrypt_request_headers,
+            &config.redact_headers,
+        )
+        .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer test-token"),
+        );
+        headers.insert("cookie", HeaderValue::from_static("session=test-session"));
+        headers.insert(
+            "proxy-authorization",
+            HeaderValue::from_static("Basic test"),
+        );
+
+        let request = serde_json::json!({
+            "method": "GET",
+            "uri": "/resource",
+            "headers": capture.capture(&headers).unwrap(),
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("request.json");
+        std::fs::write(&path, serde_json::to_vec(&request).unwrap()).unwrap();
+        let replay: Value = serde_json::from_slice(&load_request_file(&path).unwrap()).unwrap();
+
+        for (name, value) in &headers {
+            assert_eq!(replay["headers"][name.as_str()][0], value.to_str().unwrap());
+        }
+    }
+
+    #[test]
     fn encrypts_configured_headers_case_insensitively_and_prefers_encryption() {
         let capture = RequestHeaderCapture::with_key(
             &["Authorization".to_string()],

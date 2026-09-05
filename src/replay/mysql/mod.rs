@@ -3,6 +3,10 @@ mod matcher;
 mod model;
 mod response;
 mod session;
+mod session_setup;
+mod sql_match;
+#[cfg(test)]
+mod sqlx_tests;
 #[cfg(test)]
 mod tests;
 mod values;
