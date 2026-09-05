@@ -133,6 +133,37 @@ fn status_recovers_the_exact_recording_action_until_a_result_exists() {
 }
 
 #[test]
+fn status_recovers_pending_case_pattern_identification_after_recording_finalizes() {
+    let target = tempfile::tempdir().unwrap();
+    let mut state = crate::rewrite::test_state();
+    state.case_pattern_identification =
+        Some(super::super::model::RewriteCasePatternIdentification {
+            id: "case-patterns-current".to_string(),
+            recording_run_id: state.recording_run_id.clone(),
+            candidates: vec!["GET /api/tasks/123/tree".to_string()],
+            observed_apis: vec!["GET /api/tasks/123/tree".to_string()],
+        });
+    let manifest = artifacts::recording_manifest(target.path(), &state.recording_run_id);
+    fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+    fs::write(
+        manifest,
+        br#"{"status":"completed","recording_apis":["GET /api"],"published_cases":1}"#,
+    )
+    .unwrap();
+
+    let status = serde_json::to_value(for_status(target.path(), &state).unwrap()).unwrap();
+
+    assert_eq!(
+        status["action"]["kind"],
+        serde_json::json!("case_pattern_identification_required")
+    );
+    assert_eq!(
+        status["action"]["details"]["batch_id"],
+        serde_json::json!("case-patterns-current")
+    );
+}
+
+#[test]
 fn status_requires_recovery_for_an_unowned_running_manifest() {
     let target = tempfile::tempdir().unwrap();
     let state = crate::rewrite::test_state();

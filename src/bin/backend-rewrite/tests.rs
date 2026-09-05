@@ -21,6 +21,7 @@ fn exposes_only_the_rewrite_coordinator_surface() {
             "status",
             "inventory",
             "case",
+            "case-pattern",
             "evidence",
             "rule",
             "dependency-rule",
@@ -69,6 +70,17 @@ fn parses_the_bounded_rewrite_surface() {
         "wb-plat-ide",
     ];
     assert!(Cli::try_parse_from(init).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "case-pattern",
+            "apply",
+            "case-patterns-current",
+            "--patterns-json",
+            r#"["/api/tasks/*/tree"]"#,
+        ])
+        .is_ok()
+    );
     assert!(
         Cli::try_parse_from([
             "test",

@@ -61,6 +61,7 @@ pub use breeze_capture_feedback::{
 pub use case_limits::HttpGatewayCaseLimitsConfig;
 pub use comparison_recording::ComparisonRecordingConfig;
 pub use dns::{DnsBypassStrategyConfig, DnsMockConfig};
+pub(crate) use feedback::validate_case_path_pattern;
 pub use feedback::{
     CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport,
     plan_case_path_pattern_feedback,

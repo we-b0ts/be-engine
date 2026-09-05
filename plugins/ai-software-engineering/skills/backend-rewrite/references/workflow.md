@@ -45,7 +45,8 @@ AI-owned reference and handoff context, never as coordinator state;
 The coordinator owns the executable phase order:
 
 ```text
-record configured traffic -> stable API inventory + source process outputs
+record configured traffic -> identify patterns only for new uncovered APIs
+           -> stable API inventory + source process outputs
            -> serialize prepare/focused E2E for API A
            -> API A implementation issue (AI work may run in parallel)
            -> serialize focused E2E for API B
@@ -106,6 +107,12 @@ Do not reconstruct a recording command or discover its run by recency.
 Read [recording-lifecycle.md](recording-lifecycle.md) and execute only
 `commands.status`. Do not start another executor or advance before the exact
 finalized run becomes `advance_required`.
+
+### `case_pattern_identification_required`
+
+This rare post-recording batch belongs only to the main orchestrator. Read
+[case-pattern-identification.md](case-pattern-identification.md); do not
+dispatch it to an API worker or handle it as ordinary issue diagnosis.
 
 ### `plan_apply_required`
 

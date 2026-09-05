@@ -10,7 +10,7 @@ use super::model::{
     RewritePhase, RewriteRecordingInputMode, RewriteState, RewriteWorkflowView,
 };
 use super::{
-    inventory, process_outputs, progress_publication, recorder_capture, recording,
+    case_patterns, inventory, process_outputs, progress_publication, recorder_capture, recording,
     recording_action, repair, target_quality, worker,
 };
 
@@ -22,6 +22,13 @@ pub(super) fn for_status(
     target_root: &Path,
     state: &RewriteState,
 ) -> Result<RewriteActionEnvelope> {
+    if state.case_pattern_identification.is_some() {
+        return Ok(envelope(
+            target_root,
+            state,
+            state_action(target_root, state),
+        ));
+    }
     let recording_status = recording_action::status_action(target_root, state)?;
     let target_change = target_quality::status_action(target_root, state)?;
     let action = match state.phase {
@@ -142,6 +149,9 @@ pub(super) fn envelope(
 }
 
 fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
+    if let Some(action) = case_patterns::state_action(target_root, state) {
+        return action;
+    }
     match progress_publication::state(target_root, state) {
         Some(progress_publication::PublicationState::SynchronizationRequired) => {
             return advance_required(

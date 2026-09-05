@@ -1019,6 +1019,8 @@ backend-rewrite status --api 'GET /api/widgets/*'
 backend-rewrite status --process-output metrics-profile
 backend-rewrite inventory
 backend-rewrite evidence <query-id>
+BACKEND_REWRITE_CASE_PATH_PATTERNS_JSON='["/api/tasks/*/tree"]' \
+  backend-rewrite case-pattern apply <batch-id>
 backend-rewrite recording request \
   --kind standard \
   --reason user-requested \
@@ -1035,7 +1037,7 @@ backend-rewrite verification request \
   --reason 'shared response mapper changed'
 ```
 
-Rewrite action schema v20 always returns `action.kind`, `action.summary`,
+Rewrite action schema v21 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under role-named `commands` such as
 `execute`, `status`, `advance`, `recover`, `evidence`, `apply`, and `acceptance`.
@@ -1213,8 +1215,19 @@ evidence for the same target content fingerprint. A process-output repair can
 invalidate completed APIs, so the final epoch reruns stale APIs before the
 process output is compared again.
 
+After a finalized unscoped standard recording, the coordinator compares its
+concrete APIs with a persistent historical API catalog canonicalized by current
+`case_path_patterns`. Only new uncovered APIs produce one
+`case_pattern_identification_required` batch. Its fixed apply command receives
+the complete JSON pattern list through
+`BACKEND_REWRITE_CASE_PATH_PATTERNS_JSON`; `[]` confirms that every candidate is
+static. This action has no source-revision or evidence input. Apply updates the
+managed source traffic policy and the catalog, while existing recording files
+remain immutable. The current recording inventory is then derived again under
+the updated policy.
+
 Recording, focused Replay, and comparison share one serialized traffic-runtime
-lease. When another API owns it, action schema v20 returns `wait_required` with
+lease. When another API owns it, action schema v21 returns `wait_required` with
 the requested and blocking APIs, the live operation when available, a retry
 delay, and the exact `commands.status` argv. This lease serializes each traffic
 operation, not a complete API lifecycle: while worker A implements, the

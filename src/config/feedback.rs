@@ -121,7 +121,7 @@ pub fn plan_case_path_pattern_feedback(
     let requested = feedback
         .patterns
         .iter()
-        .map(|pattern| validate_feedback_pattern(pattern, &static_config.http_gateway.rules))
+        .map(|pattern| validate_case_path_pattern(pattern, &static_config.http_gateway.rules))
         .collect::<Result<BTreeSet<_>>>()?;
     let before = rules
         .http
@@ -240,7 +240,10 @@ fn validate_single_line(label: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_feedback_pattern(pattern: &str, rules: &[HttpGatewayRuleConfig]) -> Result<String> {
+pub(crate) fn validate_case_path_pattern(
+    pattern: &str,
+    rules: &[HttpGatewayRuleConfig],
+) -> Result<String> {
     ensure!(
         pattern.starts_with('/'),
         "pattern must start with '/': {pattern}"

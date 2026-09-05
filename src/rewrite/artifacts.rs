@@ -7,7 +7,9 @@ use serde::Deserialize;
 
 use super::inventory;
 use super::model::RewriteState;
-use crate::{ManagedRecordingOperation, RecordingApi, resolve_recording_api_member};
+use crate::{ManagedRecordingOperation, RecordingApi};
+
+const MAX_HISTORICAL_RECORDING_RUNS: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RecordingPublication {
@@ -113,9 +115,9 @@ pub(super) fn standard_recording_apis(
     );
     for api in &apis {
         let api = api.parse::<RecordingApi>()?;
-        resolve_recording_api_member(&case_source, &api).with_context(|| {
-            format!("standard recording has no canonical case member for {api}")
-        })?;
+        crate::case_group::resolve_recording_api_seed_member(&case_source, &api).with_context(
+            || format!("standard recording has no canonical case member for {api}"),
+        )?;
     }
     if let Some(refresh) = &state.recording_refresh {
         ensure_required_apis_preserved(&refresh.required_apis, &apis)?;
@@ -261,14 +263,88 @@ fn discover_recorded_api_counts_from_config(
             .uri
             .parse::<hyper::Uri>()
             .with_context(|| format!("recorded request has invalid URI in {}", path.display()))?;
-        let pattern = request.api_pattern.unwrap_or_else(|| {
-            configured_pattern(config, uri.path()).unwrap_or_else(|| uri.path().to_string())
-        });
+        let pattern = configured_pattern(config, uri.path())
+            .or(request.api_pattern)
+            .unwrap_or_else(|| uri.path().to_string());
         let api = format!("{} {pattern}", request.method).parse::<RecordingApi>()?;
         let count = apis.entry(api.to_string()).or_default();
         *count = count.saturating_add(1);
     }
     Ok(apis)
+}
+
+pub(super) fn standard_recording_observed_apis(
+    target_root: &Path,
+    run_id: &str,
+) -> Result<Vec<String>> {
+    observed_apis(&recording_run(target_root, run_id))
+}
+
+pub(super) fn historical_standard_recording_observed_apis(
+    target_root: &Path,
+    excluded_run_id: &str,
+) -> Result<Vec<String>> {
+    let root = target_root
+        .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
+        .join("recordings");
+    let mut entries = match std::fs::read_dir(&root) {
+        Ok(entries) => entries.collect::<std::io::Result<Vec<_>>>()?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to inspect recordings {}", root.display()));
+        }
+    };
+    entries.retain(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()));
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    entries.reverse();
+    entries.truncate(MAX_HISTORICAL_RECORDING_RUNS);
+
+    let mut apis = std::collections::BTreeSet::new();
+    for entry in entries {
+        if entry.file_name().to_string_lossy() == excluded_run_id {
+            continue;
+        }
+        let Ok(manifest) =
+            read_json::<StandardRecordingManifest>(&entry.path().join("recording-run.json"))
+        else {
+            continue;
+        };
+        if manifest.status != "completed" || manifest.published_cases == 0 {
+            continue;
+        }
+        let Ok(observed) = observed_apis(&entry.path()) else {
+            continue;
+        };
+        apis.extend(observed);
+    }
+    Ok(apis.into_iter().collect())
+}
+
+fn observed_apis(case_source: &Path) -> Result<Vec<String>> {
+    let mut request_files = Vec::new();
+    collect_request_files(case_source, case_source, &mut request_files)?;
+    ensure!(
+        request_files.len() <= 100_000,
+        "standard recording API inventory exceeds the supported case bound"
+    );
+    request_files
+        .into_iter()
+        .map(|path| {
+            let request: StandardCaseRequest = read_json(&path)?;
+            let uri = request.uri.parse::<hyper::Uri>().with_context(|| {
+                format!("recorded request has invalid URI in {}", path.display())
+            })?;
+            let api = format!(
+                "{} {}",
+                request.method.trim().to_ascii_uppercase(),
+                uri.path()
+            )
+            .parse::<RecordingApi>()?;
+            Ok(api.to_string())
+        })
+        .collect::<Result<std::collections::BTreeSet<_>>>()
+        .map(|apis| apis.into_iter().collect())
 }
 
 fn configured_pattern(config: &crate::config::AppConfig, path: &str) -> Option<String> {
@@ -533,6 +609,25 @@ mod tests {
         assert_eq!(
             discover_recorded_apis_from_config(&config, source.path()).unwrap(),
             vec!["GET /users/*", "POST /widgets/*"]
+        );
+    }
+
+    #[test]
+    fn current_config_pattern_recanonicalizes_a_recorded_exact_pattern() {
+        let source = tempfile::tempdir().unwrap();
+        let case = source.path().join("apis/api-users/case-1");
+        std::fs::create_dir_all(&case).unwrap();
+        std::fs::write(
+            case.join("request.json"),
+            r#"{"method":"GET","uri":"/users/1","api_pattern":"/users/1"}"#,
+        )
+        .unwrap();
+        let mut config = crate::config::AppConfig::default();
+        config.http_gateway.case_path_patterns = vec!["/users/*".to_string()];
+
+        assert_eq!(
+            discover_recorded_apis_from_config(&config, source.path()).unwrap(),
+            vec!["GET /users/*"]
         );
     }
 

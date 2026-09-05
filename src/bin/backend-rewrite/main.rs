@@ -8,16 +8,17 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_e2e::{
     RecordingApi, ResponseBodyCodec, ResponseBodyJoinedStringPath, ResponseBodyUnorderedPath,
-    ResponseRuleKind, RewriteCaseDependenciesOptions, RewriteContext, RewriteNextOptions,
-    RewriteRecordingKind, RewriteRecordingReason, RewriteRecordingRequestOptions,
-    RewriteRevalidationRequestOptions, RewriteRouteCause, RewriteRouteOptions,
-    RewriteRulePlanOptions, RewriteTargetQualityOptions, RewriteWorkerConfirmOptions,
-    RewriteWorkerTransferOptions, apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite,
-    next_rewrite, plan_rewrite_rule, query_rewrite_case_dependencies, query_rewrite_evidence,
-    recover_rewrite, request_rewrite_recording, request_rewrite_revalidation,
-    resume_rewrite_replay_planning, route_rewrite, run_rewrite_target_quality,
-    start_rewrite_recording, status_rewrite, status_rewrite_for_api,
-    status_rewrite_for_process_output, transfer_rewrite_worker, verify_rewrite_repair,
+    ResponseRuleKind, RewriteCaseDependenciesOptions, RewriteCasePatternApplyOptions,
+    RewriteContext, RewriteNextOptions, RewriteRecordingKind, RewriteRecordingReason,
+    RewriteRecordingRequestOptions, RewriteRevalidationRequestOptions, RewriteRouteCause,
+    RewriteRouteOptions, RewriteRulePlanOptions, RewriteTargetQualityOptions,
+    RewriteWorkerConfirmOptions, RewriteWorkerTransferOptions, apply_rewrite_case_patterns,
+    apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite, next_rewrite, plan_rewrite_rule,
+    query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
+    request_rewrite_recording, request_rewrite_revalidation, resume_rewrite_replay_planning,
+    route_rewrite, run_rewrite_target_quality, start_rewrite_recording, status_rewrite,
+    status_rewrite_for_api, status_rewrite_for_process_output, transfer_rewrite_worker,
+    verify_rewrite_repair,
 };
 
 mod config_protocol;
@@ -107,6 +108,8 @@ enum RewriteCommand {
     Inventory,
     /// Inspect bounded dependency evidence from one published case.
     Case(CaseArgs),
+    /// Apply one coordinator-requested batch of API case path patterns.
+    CasePattern(CasePatternArgs),
     /// Execute one current, bounded evidence query.
     Evidence(EvidenceArgs),
     /// Plan or apply one evidence-backed response rule.
@@ -164,6 +167,31 @@ struct EvidenceArgs {
 struct CaseArgs {
     #[command(subcommand)]
     command: CaseCommand,
+}
+
+#[derive(Debug, Args)]
+struct CasePatternArgs {
+    #[command(subcommand)]
+    command: CasePatternCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum CasePatternCommand {
+    /// Apply every identified pattern; an empty JSON array confirms all candidates are static.
+    Apply(CasePatternApplyArgs),
+}
+
+#[derive(Debug, Args)]
+struct CasePatternApplyArgs {
+    /// Opaque batch id returned by case_pattern_identification_required.
+    batch_id: String,
+    /// Complete JSON array of identified path patterns.
+    #[arg(
+        long,
+        env = "BACKEND_REWRITE_CASE_PATH_PATTERNS_JSON",
+        hide_env_values = true
+    )]
+    patterns_json: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -548,6 +576,20 @@ async fn run(cli: Cli) -> Result<()> {
                 })?,
                 pretty,
             ),
+        },
+        RewriteCommand::CasePattern(args) => match args.command {
+            CasePatternCommand::Apply(args) => {
+                let patterns = serde_json::from_str::<Vec<String>>(&args.patterns_json)
+                    .map_err(|error| anyhow::anyhow!("invalid case path patterns JSON: {error}"))?;
+                print_json(
+                    &apply_rewrite_case_patterns(RewriteCasePatternApplyOptions {
+                        target_root,
+                        batch_id: args.batch_id,
+                        patterns,
+                    })?,
+                    pretty,
+                )
+            }
         },
         RewriteCommand::Evidence(args) => print_json(
             &query_rewrite_evidence(RewriteContext { target_root }, &args.query_id)?,

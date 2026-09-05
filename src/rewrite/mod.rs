@@ -3,6 +3,7 @@ mod action_contract;
 mod artifacts;
 mod background_reclassification;
 mod case_dependencies;
+mod case_patterns;
 mod comparison_issue;
 mod dependency_rule;
 mod evidence;
@@ -47,6 +48,7 @@ pub use case_dependencies::{
     RewriteMemcachedOperationDetail, RewriteRedisExchangeDetail, RewriteRedisOperationDetail,
     query as query_rewrite_case_dependencies,
 };
+pub use case_patterns::{RewriteCasePatternApplyOptions, apply as apply_rewrite_case_patterns};
 pub use dependency_rule::{
     RewriteDependencyOwnership, RewriteDependencyPayloadRulePlanOptions,
     RewriteDependencyPayloadRulePlanReport, RewriteDependencyRulePlanOptions,
@@ -350,6 +352,9 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 parked_slices: std::collections::BTreeMap::new(),
                 worker_bindings: std::collections::BTreeMap::new(),
                 process_outputs: Default::default(),
+                api_catalog_initialized: false,
+                api_catalog: std::collections::BTreeSet::new(),
+                case_pattern_identification: None,
                 target_quality_fingerprint: None,
                 recording_run_id,
                 recording_rejection: None,
@@ -422,9 +427,24 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 }
                 artifacts::RecordingPublication::Finalized => {}
             }
-            let apis = match artifacts::validate_standard_recording(&target_root, &state)
-                .and_then(|()| artifacts::standard_recording_apis(&target_root, &state))
-            {
+            if let Err(error) = artifacts::validate_standard_recording(&target_root, &state) {
+                state.recording_rejection = Some(artifacts::recording_rejection(&error));
+                state.recording_run_id =
+                    artifacts::allocate_run_id(&target_root, ManagedRecordingOperation::Record)?;
+                if let Some(refresh) = state.recording_refresh.as_mut() {
+                    refresh.recording_run_id = Some(state.recording_run_id.clone());
+                }
+                state.bump();
+                store.save(&state)?;
+                return Ok(action::for_state(&target_root, &state));
+            }
+            if case_patterns::identify_after_finalized_recording(&target_root, &mut state)? {
+                state.recording_rejection = None;
+                state.bump();
+                store.save(&state)?;
+                return Ok(action::for_state(&target_root, &state));
+            }
+            let apis = match artifacts::standard_recording_apis(&target_root, &state) {
                 Ok(apis) => apis,
                 Err(error) => {
                     state.recording_rejection = Some(artifacts::recording_rejection(&error));
