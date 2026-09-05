@@ -433,6 +433,12 @@ fn move_matching_events<'a>(
         .unwrap_or_default();
     let mut retained = Vec::with_capacity(case.len());
     for mut event in case.drain(..) {
+        // A bare ROLLBACK at request teardown is SQLAlchemy session-close
+        // driver control traffic, not an application dependency the target
+        // must reproduce; drop it from the dirty view.
+        if is_session_control_exchange(&event) {
+            continue;
+        }
         let Some(rule) = matching_rule(&event).map(ToOwned::to_owned) else {
             retained.push(event);
             continue;
@@ -477,6 +483,24 @@ fn dirty_case_ids(report: &Value) -> BTreeSet<String> {
         }
     }
     case_ids
+}
+
+/// Identifies recorded MySQL session-control traffic that the target is never
+/// expected to reproduce: a bare ROLLBACK from driver/session teardown.
+fn is_session_control_exchange(event: &Value) -> bool {
+    event.get("command").and_then(Value::as_str) == Some("COM_QUERY")
+        && event
+            .get("sql_summary")
+            .and_then(|summary| summary.get("preview"))
+            .and_then(Value::as_str)
+            .is_some_and(|sql| {
+                !event
+                    .get("sql_summary")
+                    .and_then(|summary| summary.get("truncated"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                    && sql.trim().eq_ignore_ascii_case("rollback")
+            })
 }
 
 fn collect_case_ids(report: &Value, field: &str, output: &mut BTreeSet<String>) {
