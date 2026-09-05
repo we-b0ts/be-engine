@@ -158,6 +158,22 @@ pub(super) async fn load_dependency_file(
         if exchange.command == "COM_STMT_PREPARE" && exchange.response.status == "stmt_prepare" {
             continue;
         }
+        // A bare ROLLBACK recorded at request teardown is the SQLAlchemy
+        // session-close artifact (`get_db`'s `finally: db.close()` on an
+        // autobegin session), not an application dependency call; the target
+        // is not expected to reproduce it.
+        if exchange.command == "COM_QUERY"
+            && exchange.sql.as_deref().is_some_and(|sql| {
+                let normalized: String = sql
+                    .trim()
+                    .chars()
+                    .map(|ch| if ch.is_whitespace() { ' ' } else { ch.to_ascii_lowercase() })
+                    .collect();
+                normalized == "rollback"
+            })
+        {
+            continue;
+        }
         if crate::mysql::wire::is_no_response_command(&exchange.command) {
             continue;
         }
