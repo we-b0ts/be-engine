@@ -1,4 +1,7 @@
-//! Evidence-gated planning for future MySQL process-owned recordings.
+//! Evidence-gated MySQL ownership plans for recording and report reclassification.
+use super::process_owned_dependencies::mysql::evidence::{
+    consume_unused, identity_matches, query_matches,
+};
 use super::{
     background_feedback::plan_rule_config,
     edit::write_atomic,
@@ -27,6 +30,7 @@ pub struct MysqlBackgroundDependencyFeedback {
 pub struct MysqlBackgroundDependencyReport {
     pub name: String,
     pub effective_name: String,
+    pub reused_existing: bool,
     pub selector: MysqlBackgroundSelector,
     pub matched_unused_exchanges: usize,
     pub matched_case_ids: Vec<String>,
@@ -129,49 +133,9 @@ pub fn plan_mysql_background_dependency(
         let events = dependencies
             .get_mut(id)
             .context("unused MySQL exchange has no case evidence")?;
-        let expected_fingerprint = unused["sql_summary"]["fingerprint"]
-            .as_str()
-            .context("unused MySQL exchange has no SQL fingerprint")?;
-        let pos = events
-            .iter()
-            .position(|event| {
-                event["event_type"] == "mysql_exchange"
-                    && event["command"] == unused["command"]
-                    && event["target_host"].as_str().is_some_and(|host| {
-                        host.eq_ignore_ascii_case(&feedback.selector.target_host)
-                    })
-                    && event["target_port"].as_u64()
-                        == Some(u64::from(feedback.selector.target_port))
-                    && event["database"].as_str() == Some(feedback.selector.database.as_str())
-                    && event["username"].as_str() == Some(feedback.selector.username.as_str())
-                    && event["sql"]
-                        .as_str()
-                        .is_some_and(|sql| fingerprint(sql) == expected_fingerprint)
-            })
-            .context("unused MySQL SQL fingerprint has no corresponding immutable dependency")?;
-        let event = events.remove(pos);
-        if !query_matches(&feedback.selector, unused, event["sql"].as_str()) {
+        if !consume_unused(&feedback.selector, unused, events)? {
             continue;
         }
-        ensure!(
-            event["response"]["status"] == "resultset"
-                && event["response"]["rows_truncated"] == false
-                && event["parse_warnings"]
-                    .as_array()
-                    .is_some_and(Vec::is_empty)
-                && event["response"]["columns"]
-                    .as_array()
-                    .is_some_and(|c| !c.is_empty())
-                && event["response"]["rows"].as_array().is_some_and(|rows| {
-                    event["response"]["row_count"].as_u64() == Some(rows.len() as u64)
-                        && rows.iter().all(|row| {
-                            row.as_array().is_some_and(|row| {
-                                row.len() == event["response"]["columns"].as_array().unwrap().len()
-                            })
-                        })
-                }),
-            "MySQL ownership evidence is truncated, failed or lacks complete row metadata"
-        );
         count += 1;
         cases.insert(id.to_owned());
     }
@@ -184,14 +148,13 @@ pub fn plan_mysql_background_dependency(
     let report = MysqlBackgroundDependencyReport {
         name: feedback.name.clone(),
         effective_name: plan.effective_name,
+        reused_existing: plan.reused_existing,
         selector: feedback.selector.clone(),
         matched_unused_exchanges: count,
         matched_case_ids: cases.into_iter().collect(),
         changed: plan.changed,
         applied: false,
-        // A matching unused Case proves this evidence predates classification,
-        // even if the same rule has already been applied to configuration.
-        requires_new_recording: true,
+        requires_new_recording: false,
         diff: plan.diff,
     };
     Ok(MysqlBackgroundDependencyPlan {
@@ -202,26 +165,6 @@ pub fn plan_mysql_background_dependency(
     })
 }
 
-fn identity_matches(selector: &MysqlBackgroundSelector, event: &Value) -> bool {
-    event["target"]["host"]
-        .as_str()
-        .is_some_and(|host| host.eq_ignore_ascii_case(&selector.target_host))
-        && event["target"]["port"].as_u64() == Some(u64::from(selector.target_port))
-        && event["database"].as_str() == Some(selector.database.as_str())
-        && event["username"].as_str() == Some(selector.username.as_str())
-}
-fn query_matches(selector: &MysqlBackgroundSelector, event: &Value, sql: Option<&str>) -> bool {
-    selector.matches_query(
-        event["target"]["host"].as_str(),
-        event["target"]["port"]
-            .as_u64()
-            .and_then(|p| u16::try_from(p).ok()),
-        event["database"].as_str(),
-        event["username"].as_str(),
-        event["command"].as_str().unwrap_or_default(),
-        sql,
-    )
-}
 fn array<'a>(value: &'a Value, key: &str) -> Result<&'a Vec<Value>> {
     value[key]
         .as_array()
@@ -230,16 +173,10 @@ fn array<'a>(value: &'a Value, key: &str) -> Result<&'a Vec<Value>> {
 fn read(path: &Path) -> Result<String> {
     fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))
 }
-fn fingerprint(sql: &str) -> String {
-    let hash = sql.bytes().fold(0xcbf29ce484222325_u64, |hash, b| {
-        (hash ^ u64::from(b)).wrapping_mul(0x100000001b3)
-    });
-    format!("fnv1a64:{hash:016x}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::process_owned_dependencies::mysql::evidence::fingerprint;
     use serde_json::json;
     fn fixture() -> (tempfile::TempDir, MysqlBackgroundDependencyFeedback) {
         let temp = tempfile::tempdir().unwrap();
@@ -259,6 +196,7 @@ mod tests {
             username: "user".into(),
             sql: "SELECT id FROM {{table}} WHERE status='RUNNING' AND created_at >= ?".into(),
             tables: vec!["tasks_0001".into()],
+            table_patterns: Vec::new(),
             table_series: None,
         };
         (
@@ -274,13 +212,13 @@ mod tests {
         )
     }
     #[test]
-    fn apply_preserves_evidence_and_requires_new_recording() {
+    fn apply_preserves_evidence_and_reuses_recording() {
         let (temp, feedback) = fixture();
         let deps = temp.path().join("dependencies.jsonl");
         let before = read(&deps).unwrap();
         let plan = plan_mysql_background_dependency(feedback.clone()).unwrap();
         assert_eq!(plan.report().matched_unused_exchanges, 1);
-        assert!(plan.report().requires_new_recording);
+        assert!(!plan.report().requires_new_recording);
         assert!(plan.apply().unwrap().applied);
         assert_eq!(read(&deps).unwrap(), before);
         assert!(

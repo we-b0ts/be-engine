@@ -617,7 +617,11 @@ fn is_successful_mysql_session_setup(
 
 fn is_mysql_session_setup_sql(sql: &str) -> bool {
     let normalized = normalize_mysql_control_sql(sql);
-    normalized.starts_with("set names ")
+    // A bare ROLLBACK is the SQLAlchemy/pymysql session-teardown artifact of
+    // `get_db`'s `finally: db.close()` on an autobegin session; it is driver
+    // control traffic, not an application dependency call.
+    normalized == "rollback"
+        || normalized.starts_with("set names ")
         || normalized.starts_with("set character set ")
         || normalized.starts_with("set character_set_client ")
         || normalized.starts_with("set character_set_connection ")

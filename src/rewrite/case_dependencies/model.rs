@@ -56,6 +56,9 @@ pub struct RewriteCaseDependencyTarget {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "detail_kind", rename_all = "snake_case")]
 pub enum RewriteCaseDependencyProtocolDetail {
+    Mysql {
+        operations: Vec<RewriteMysqlOperationDetail>,
+    },
     Redis {
         operations: Vec<RewriteRedisOperationDetail>,
     },
@@ -63,6 +66,57 @@ pub enum RewriteCaseDependencyProtocolDetail {
         operations: Vec<RewriteMemcachedOperationDetail>,
     },
     Generic,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteMysqlOperationDetail {
+    pub command: String,
+    pub count: usize,
+    pub outcomes: BTreeMap<String, usize>,
+    pub response_statuses: BTreeMap<String, usize>,
+    pub representative_exchanges: Vec<RewriteMysqlExchangeDetail>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub omitted_representative_exchanges: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteMysqlExchangeDetail {
+    pub database: Option<String>,
+    pub username: Option<String>,
+    pub sql: Option<RewriteCapturePreview>,
+    pub sql_fingerprint: Option<String>,
+    pub params: Option<Vec<RewriteMysqlParameterDetail>>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub omitted_params: usize,
+    pub outcome: Option<String>,
+    pub response_status: Option<String>,
+    pub error_code: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<RewriteCapturePreview>,
+    pub affected_rows: Option<u64>,
+    pub row_count: Option<u64>,
+    pub rows_truncated: Option<bool>,
+    pub column_names: Vec<RewriteCapturePreview>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub omitted_columns: usize,
+    pub parse_warnings: Vec<RewriteCapturePreview>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub omitted_parse_warnings: usize,
+    pub case_dependency_matched_by: Option<String>,
+    pub connection_id: Option<String>,
+    pub query_sequence: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteMysqlParameterDetail {
+    pub kind: String,
+    /// Complete small JSON value; absent when the value exceeds the preview bound.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_preview: Option<RewriteCapturePreview>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw: Option<RewriteCapturePreview>,
 }
 
 #[derive(Debug, Clone, Serialize)]

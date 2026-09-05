@@ -206,3 +206,37 @@ fn rejected_redis_snapshot_derivation_can_schedule_a_fresh_recording_fallback() 
     assert_eq!(refresh.required_apis, vec!["GET /api"]);
     assert!(refresh.recording_run_id.is_none());
 }
+
+#[test]
+fn mysql_plan_survives_persistence_without_requesting_redis_snapshot_recording() {
+    let mut state = dependency_state();
+    let selector = crate::MysqlBackgroundSelector {
+        target_host: "db.internal".into(),
+        target_port: 3306,
+        database: "app".into(),
+        username: "user".into(),
+        sql: "SELECT {{table}}.id AS {{table}}_id FROM {{table}} WHERE status='RUNNING'".into(),
+        tables: vec!["subtasks".into()],
+        table_patterns: vec!["subtasks_*".into()],
+        table_series: None,
+    };
+    state.dependency_rule_plan.as_mut().unwrap().spec =
+        spec_from_selector(RewriteDependencyRuleSelector::Mysql {
+            selector: selector.clone(),
+        });
+    let serialized = serde_json::to_string(&state).unwrap();
+    let state: RewriteState = serde_json::from_str(&serialized).unwrap();
+    let record = pending_plan_for_apply(&state, "dependency-plan-original").unwrap();
+    let RewriteDependencyRuleSpec::Mysql {
+        selector: persisted,
+    } = record.spec
+    else {
+        panic!("expected mysql plan");
+    };
+    assert_eq!(persisted, selector);
+    assert!(
+        pending_cache_snapshot_refresh(&state, "dependency-plan-original")
+            .unwrap()
+            .is_none()
+    );
+}

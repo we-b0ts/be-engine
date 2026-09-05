@@ -180,8 +180,27 @@ Before an MR, set `CODE_ORG_BASE` to the target branch. Use `--all` only for an
 explicit repository-wide audit.
 
 - `mysql/sql.rs` owns conservative SQL token/value identity shared by replay and
-  narrow MySQL ownership selectors. `replay/mysql/session_setup.rs` owns builtin
+  narrow MySQL ownership selectors. Its `projection` child resolves bounded
+  single-table SELECT fields, aliases and row-selection clauses without owning
+  recorded evidence. `replay/mysql/projection.rs` validates evidence and maps
+  result columns and cells onto the target projection; the matcher retains
+  identity, policy and exchange-consumption decisions.
+  `replay/mysql/session_setup.rs` owns builtin
   initialization recognition; `sql_match.rs` owns text/prepared correlation.
   `config/process_owned_dependencies/mysql.rs` owns MySQL rule validation and
   matching, while `config/background_mysql_feedback.rs` owns immutable-evidence
   planning and atomic configuration application.
+
+- `rewrite/dependency_rule/planner.rs` owns protocol selector conversion and
+  construction of engine evidence plans; its parent owns coordinator rule
+  lifecycle and state transitions. `config/process_owned_dependencies/mysql/evidence.rs`
+  owns correlation of bounded MySQL report summaries with complete immutable
+  exchanges, shared by planning and `replay/report/background_overlay/mysql.rs`.
+  That Replay adapter owns reversible MySQL report reclassification only; its
+  parent reads immutable case dependencies once for all protocol projections.
+  `config/process_owned_dependencies/mysql/tables.rs` owns physical table selector
+  validation, matching, and intersection independently of SQL template expansion.
+- `rewrite/case_dependencies` owns bounded, read-only per-target dependency
+  projections. Its `mysql` child owns query, parameter, connection, and response
+  facts for diagnosis; it does not infer process ownership or implement rule
+  planning. The shared summary/detail command flow also serves Redis and Memcached.

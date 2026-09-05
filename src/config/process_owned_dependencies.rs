@@ -1,4 +1,4 @@
-mod mysql;
+pub(crate) mod mysql;
 pub use mysql::{MysqlBackgroundSelector, MysqlBackgroundTableSeries};
 
 use std::collections::HashSet;
@@ -352,6 +352,11 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
 }
 
 fn validate_source_revision(source_revision: &str) -> Result<()> {
+    // Image fingerprints arrive as `sha256:<hex>`; the recorded hex digest is
+    // the revision, so accept the digest after stripping the algorithm tag.
+    let source_revision = source_revision
+        .strip_prefix("sha256:")
+        .unwrap_or(source_revision);
     validate_single_line(
         "process-owned dependency source revision",
         source_revision,

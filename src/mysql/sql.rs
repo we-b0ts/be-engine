@@ -2,6 +2,8 @@
 //! Values are decoded separately from SQL words: formatting never changes data.
 //! Uses MySQL's default quoting/escape modes; executable comments fail closed.
 
+pub(crate) mod projection;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Token {
     Word(String),
@@ -24,11 +26,23 @@ impl Token {
 }
 
 pub(crate) fn tokens(sql: &str) -> Option<Vec<Token>> {
+    scan(sql, |_| {})
+}
+
+pub(crate) fn tokens_with_spans(sql: &str) -> Option<(Vec<Token>, Vec<std::ops::Range<usize>>)> {
+    let mut spans = Vec::new();
+    let tokens = scan(sql, |span| spans.push(span))?;
+    spans.truncate(tokens.len());
+    Some((tokens, spans))
+}
+
+fn scan(sql: &str, mut span: impl FnMut(std::ops::Range<usize>)) -> Option<Vec<Token>> {
     let bytes = sql.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
         let start = i;
+        let token_count = out.len();
         match bytes[i] {
             b if b.is_ascii_whitespace() => i += 1,
             b'#' => i = line_end(bytes, i),
@@ -159,6 +173,9 @@ pub(crate) fn tokens(sql: &str) -> Option<Vec<Token>> {
                 i += length;
                 out.push(Token::Symbol(sql[start..i].to_owned()));
             }
+        }
+        if out.len() > token_count {
+            span(start..i);
         }
     }
     if out.last().is_some_and(|t| t.is(";")) {

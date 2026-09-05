@@ -146,10 +146,16 @@ query ID.
   prove request or process ownership. For a dependency issue it also returns
   `applicable_rule_planners` only for supported protocols present in those
   clusters. Whenever a supported dependency-value rule exists for a protocol
-  present in the clusters, it separately returns `protocol_rules` with a short
+  present in the clusters, it separately returns `rule_hints` with a short
   applicability hint and an exact read-only help command. Rule availability
   does not prove applicability. It also returns the selected case's exact
   `representative_dependencies_command` when available;
+  MySQL supports source-proven process-owned SELECT templates with exact
+  connection identity and exact, numeric-series, or patterned physical tables,
+  including `AS {{table}}_id` aliases tied to the selected table. Return the
+  source-proven selector inputs to the main orchestrator, which plans and applies
+  the rule to reclassify existing unused evidence without a new recording;
+  target unmatched queries and incomplete evidence remain dirty.
 - `policy_applicability`: structural rule eligibility; eligibility does not
   authorize a rule;
 - `attempt_delta`: convergence against the previous attempt; improvement does
@@ -183,9 +189,14 @@ For dependency topology, execute the representative result's
 `representative_dependencies_command`. The compact summary groups by target and
 returns one exact `detail_command` per target. Execute only the relevant target
 detail before reading raw `dependencies.jsonl`; do not recreate this projection
-with Python or shell parsing. The detail contains bounded representative Redis
-exchanges that preserve each key/argument/response association and Memcached
-key/outcome associations. A dependency response preview is at most 256 bytes
+with Python or shell parsing. The tool reads the recording internally; raw-file
+inspection is only needed when omitted or truncated facts block the diagnosis.
+The detail contains bounded representative MySQL
+exchanges with SQL (up to 8192 bytes), typed parameters, database, username,
+attribution, result status, row counts, column names, warnings, and an original
+record locator. It omits row payloads and explicitly marks truncated previews
+and omitted examples. Redis details preserve each key/argument/response
+association, and Memcached details preserve key/outcome associations. A dependency response preview is at most 256 bytes
 and carries its encoding, original length, and truncation state. Memcached flags
 are intentionally neither interpreted nor returned. Complete small Redis scalar
 responses also carry a decoded `response_value`; larger or structured responses
@@ -398,7 +409,7 @@ focused replay report. Never manually rewrite replay reports, trim traffic, or
 edit immutable request/response/dependency capture files.
 
 For dependency value mismatches, inspect each entry returned in
-`protocol_rules`. Run its exact `help` command, then verify the described value
+`rule_hints`. Run its exact `help` command, then verify the described value
 mechanism in source and in the representative dependency details before
 planning it. In the currently supported Memcached case,
 `protobuf-timestamp` applies only to a `SET` value whose selected top-level

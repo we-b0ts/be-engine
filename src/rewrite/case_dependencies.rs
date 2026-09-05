@@ -11,12 +11,14 @@ use serde_json::Value;
 use super::model::RewriteCommandSpec;
 
 mod model;
+mod mysql;
 
 pub use model::{
     RewriteCapturePreview, RewriteCaseDependenciesOptions, RewriteCaseDependenciesReport,
     RewriteCaseDependencyProtocolDetail, RewriteCaseDependencyTarget,
     RewriteCaseDependencyTargetSummary, RewriteMemcachedExchangeDetail,
-    RewriteMemcachedOperationDetail, RewriteRedisExchangeDetail, RewriteRedisOperationDetail,
+    RewriteMemcachedOperationDetail, RewriteMysqlExchangeDetail, RewriteMysqlOperationDetail,
+    RewriteMysqlParameterDetail, RewriteRedisExchangeDetail, RewriteRedisOperationDetail,
 };
 
 const MAX_DEPENDENCIES_BYTES: u64 = 64 * 1024 * 1024;
@@ -64,6 +66,7 @@ struct DetailBuilder {
     commands: BTreeMap<String, usize>,
     redis: BTreeMap<String, RedisOperationBuilder>,
     memcached: BTreeMap<String, MemcachedOperationBuilder>,
+    mysql: BTreeMap<String, mysql::OperationBuilder>,
 }
 
 #[derive(Default)]
@@ -231,7 +234,7 @@ fn summary(
         ungrouped_events,
         targets_total: targets.len(),
         targets,
-        next_step: "Execute the selected target's detail_command exactly to inspect bounded representative exchanges that preserve key, argument, and response association."
+        next_step: "Execute the selected target's detail_command exactly to inspect bounded representative exchanges that preserve SQL/connection identity or key/argument/response association."
             .to_string(),
     })
 }
@@ -268,6 +271,9 @@ fn detail(
         format!("case has no dependency target with id {requested_target_id:?}")
     })?;
     let protocol_detail = match identity.protocol.as_str() {
+        "mysql" => RewriteCaseDependencyProtocolDetail::Mysql {
+            operations: mysql::finish(builder.mysql),
+        },
         "redis" => RewriteCaseDependencyProtocolDetail::Redis {
             operations: finish_redis(builder.redis),
         },
@@ -307,6 +313,12 @@ impl DetailBuilder {
         );
         increment(&mut self.commands, command);
         match protocol {
+            "mysql" if json_str(event, "event_type") == Some("mysql_exchange") => {
+                self.mysql
+                    .entry(command.to_string())
+                    .or_default()
+                    .record(event)?;
+            }
             "redis" if json_str(event, "event_type") == Some("redis_exchange") => {
                 self.redis
                     .entry(command.to_string())

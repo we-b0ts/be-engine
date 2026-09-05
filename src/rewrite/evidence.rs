@@ -236,7 +236,12 @@ fn applicable_rule_planners(
         .into_iter()
         .flatten()
         .filter_map(|cluster| cluster.get("protocol").and_then(Value::as_str))
-        .filter(|protocol| matches!(*protocol, "http" | "memcached" | "motan" | "redis"))
+        .filter(|protocol| {
+            matches!(
+                *protocol,
+                "http" | "memcached" | "motan" | "redis" | "mysql"
+            )
+        })
         .collect::<std::collections::BTreeSet<_>>();
     planners.extend(
         protocols

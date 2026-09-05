@@ -90,6 +90,7 @@ pub(in crate::replay) async fn write_stmt_prepare_ok(
                 payload: column_definition_payload(&RecordedMysqlColumn {
                     name: format!("param_{}", index + 1),
                     table: None,
+                    table_alias: None,
                     column: None,
                     family: "string".to_string(),
                     sql_type: "VARCHAR".to_string(),
@@ -333,7 +334,12 @@ pub(in crate::replay) fn column_definition_payload(column: &RecordedMysqlColumn)
     payload.extend_from_slice(&lenenc_bytes(b"def"));
     payload.extend_from_slice(&lenenc_bytes(b""));
     payload.extend_from_slice(&lenenc_bytes(
-        column.table.as_deref().unwrap_or_default().as_bytes(),
+        column
+            .table_alias
+            .as_deref()
+            .or(column.table.as_deref())
+            .unwrap_or_default()
+            .as_bytes(),
     ));
     payload.extend_from_slice(&lenenc_bytes(
         column.table.as_deref().unwrap_or_default().as_bytes(),

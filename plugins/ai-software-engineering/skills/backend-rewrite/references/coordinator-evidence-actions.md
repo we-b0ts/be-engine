@@ -135,9 +135,13 @@ passing post-apply workflow is sufficient.
 
 ## Process-Owned Dependency Rules
 
-For a dependency issue, `dirty_clusters.applicable_rule_planners` contains only
-supported protocols present in the current clusters. Use the selected dirty
-case's `representative_dependencies_command` when available. Planner exposure
+For a dependency issue, the `dirty_clusters` evidence response's top-level
+`applicable_rule_planners` contains only supported protocols present in the
+current clusters. Use the selected dirty case's
+`representative_dependencies_command`, then the selected target's returned
+`detail_command` when available. These commands read the recording internally
+and return structured protocol facts; manual JSONL parsing is unnecessary for
+ordinary diagnosis. Planner exposure
 does not establish ownership. Asynchronous execution, fire-and-forget calls,
 post-response timing, scheduler names, and the 100 ms attribution window do not
 make a dependency process-owned.
@@ -165,6 +169,20 @@ shows an incomplete selector, rerun the same planner with the same evidence ID
 and corrected inputs; the newer preview replaces the pending one atomically.
 Recorder configuration remains unchanged until apply.
 
+For MySQL, use the returned `dependency-rule plan mysql` planner. The worker
+supplies exact host/port, database, username, a source-proven read-only SELECT
+template, and table selectors. `--table` selects exact names; `--table-prefix`
+with `--table-start`, `--table-end`, and `--table-width` selects bounded numeric
+shards; repeatable `--table-pattern 'subtasks_*'` selects an identifier pattern
+with one `*`. Prefix, suffix, and middle patterns are supported; a bare `*` is
+rejected. Source proof must justify the complete selected table family.
+`{{table}}` in the SQL binds every table reference and `AS {{table}}_id` alias
+to the same physical table. `?` permits a variable literal position; other
+projection and predicate facts remain exact. Successful, complete unused
+exchanges can be reclassified on the current recording; unmatched target queries
+and incomplete evidence remain blocking. Follow the same returned plan/apply/next
+sequence as for the other dependency protocols.
+
 For Redis, select the command-specific planner. `get`, `scard`, and `hgetall`
 accept only exact keys proven by immutable evidence; never generalize them to a
 prefix or wildcard. If planning returns `reused_existing=true`, execute the
@@ -178,12 +196,19 @@ Only a `process-owned` result returns a `plan_id`. After
 `evidence_reclassification` with rule coverage, remaining dirty cases, and the
 revised focused result.
 
-Applying or confirming a process-owned dependency rule is not a fresh-recording
-condition. The coordinator keeps capture artifacts immutable, recomputes the
-effective case/global ownership view, rebuilds dependency evidence, and revises
-the same progress-ledger attempt. Clean evidence advances to comparison;
-residual case-scoped dirty evidence remains in repair. Apply therefore returns
-`next`, never a recorder-contract recording request.
+An ownership change alone is not a fresh-recording condition. The coordinator
+keeps capture artifacts immutable, recomputes the effective case/global ownership
+view, rebuilds dependency evidence, and revises the same progress-ledger attempt.
+Clean evidence advances to comparison;
+residual case-scoped dirty evidence remains in repair. Apply returns `next`.
+Redis rules that additionally require reusable snapshot seeds first try to
+derive them from complete, consistent immutable bootstrap evidence. If that
+derivation fails, `cache_snapshot_overlay` explicitly reports
+`recording_required=true` with the reason, and the coordinator schedules its
+recording refresh to obtain snapshot evidence that the existing recording cannot
+safely provide. MySQL ownership reclassification does not require Redis snapshot
+seeds. Follow the returned action in either case, without manually requesting a
+recording.
 
 On resume, `next` may repair a finalized attempt whose derived dependency view
 is already clean but whose persisted failure retains an obsolete strict

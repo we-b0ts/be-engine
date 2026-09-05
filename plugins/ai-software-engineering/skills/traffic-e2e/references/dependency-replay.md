@@ -59,6 +59,15 @@ database or schema, and username or role before normalized SQL and parsed
 parameters. Preserve transaction, lock, repeated-call, and session order when
 required. Use semantic column metadata for schema evidence; missing SQL,
 prepared parameters, column schema, or untruncated rows is a recording risk.
+Single-table direct-column SELECTs can use different selected columns, order,
+column aliases and table aliases when every target field maps unambiguously to
+recorded data. Replay projects response metadata and cells together; it does not
+require an ownership rule or new recording. COUNT(*) and integer constants keep
+their expression identity. Physical tables, predicates, values, sorting and
+pagination remain constrained; DISTINCT, grouping, joins, subqueries, locks,
+wildcards and other expressions retain strict matching. See
+[MySQL interoperability](../../../../../docs/mysql-replay.md) for the exact
+boundary and actual-client acceptance tests.
 
 For Redis and Memcached, preserve connection-lane ordering and protocol
 semantics. Unmatched, unsupported, unsafe, and unused evidence remains dirty.

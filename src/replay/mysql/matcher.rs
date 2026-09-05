@@ -109,87 +109,118 @@ impl ReplayState {
         let normalized_sql = sql.map(normalize_sql);
         let active_case_id = self.active_case_id.clone();
         for source in [ReplaySource::Case, ReplaySource::Global] {
-            for index in 0..self.mysql.exchanges.len() {
-                let exchange = &self.mysql.exchanges[index];
-                if exchange.source != source || !exchange.status.is_available() {
-                    continue;
-                }
-                let cross_protocol = exchange.record.command != command;
-                if cross_protocol
-                    && !sql.is_some_and(|sql| {
-                        sql_match::cross_protocol_matches(&exchange.record, command, sql, params)
-                    })
-                {
-                    continue;
-                }
-                if !active_case_matches(active_case_id.as_deref(), exchange) {
-                    continue;
-                }
-                if !identity_matches_exchange(identity, &exchange.identity) {
-                    continue;
-                }
-                let Some(recorded_sql) = exchange.record.sql.as_deref().map(normalize_sql) else {
-                    continue;
-                };
-                let policy_decision = if cross_protocol {
-                    // Exact SQL tokens and parameter values already match. A driver
-                    // protocol change does not require a dynamic-value exemption.
-                    DependencyRuleDecision::default()
-                } else if let Some(policy) = &self.replay_policy {
-                    let context = MysqlPolicyContext {
-                        case_id: active_case_id.as_deref(),
-                        identity,
-                        command,
-                        recorded_sql: exchange.record.sql.as_deref(),
-                        sql,
-                        recorded: exchange.record.params.as_deref(),
-                        actual: params,
-                    };
-                    if Some(recorded_sql) != normalized_sql
-                        && !policy.allows_mysql_sql_difference(&context)
+            // Preserve existing candidate precedence before trying compatible
+            // projections, without allowing Global to outrank the active Case.
+            for project_columns in [false, true] {
+                for index in 0..self.mysql.exchanges.len() {
+                    let exchange = &self.mysql.exchanges[index];
+                    if exchange.source != source
+                        || !exchange.status.is_available()
+                        || !active_case_matches(active_case_id.as_deref(), exchange)
+                        || !identity_matches_exchange(identity, &exchange.identity)
                     {
                         continue;
                     }
-                    match policy.preview_mysql(&context, Utc::now()) {
-                        Ok(decision) => decision,
-                        Err(_) => continue,
+                    let cross_protocol = exchange.record.command != command;
+                    if cross_protocol
+                        && !project_columns
+                        && !sql.is_some_and(|sql| {
+                            sql_match::cross_protocol_matches(
+                                &exchange.record,
+                                command,
+                                sql,
+                                params,
+                            )
+                        })
+                    {
+                        continue;
                     }
-                } else if Some(recorded_sql) != normalized_sql {
-                    continue;
-                } else if params_match(exchange.record.params.as_deref(), params) {
-                    DependencyRuleDecision::default()
-                } else {
-                    continue;
-                };
-                let exchange = self.mysql.exchanges[index].clone();
-                self.mysql.exchanges[index].status =
-                    if exchange.record.outcome.is_client_terminated() {
-                        ReplayExchangeStatus::AwaitingClientTermination
-                    } else {
-                        ReplayExchangeStatus::Responding
+                    let Some(recorded_sql) = exchange.record.sql.as_deref().map(normalize_sql)
+                    else {
+                        continue;
                     };
-                if let Some(policy) = &mut self.replay_policy {
-                    policy.commit(active_case_id.as_deref(), policy_decision);
+                    let policy_decision = if cross_protocol {
+                        // The SQL matcher or projection adapter verifies values.
+                        // A protocol change needs no dynamic-value exemption.
+                        DependencyRuleDecision::default()
+                    } else if let Some(policy) = &self.replay_policy {
+                        let context = MysqlPolicyContext {
+                            case_id: active_case_id.as_deref(),
+                            identity,
+                            command,
+                            recorded_sql: exchange.record.sql.as_deref(),
+                            sql,
+                            recorded: exchange.record.params.as_deref(),
+                            actual: params,
+                        };
+                        if !project_columns
+                            && Some(recorded_sql) != normalized_sql
+                            && !policy.allows_mysql_sql_difference(&context)
+                        {
+                            continue;
+                        }
+                        match policy.preview_mysql(&context, Utc::now()) {
+                            Ok(decision) => decision,
+                            Err(_) => continue,
+                        }
+                    } else if !project_columns && Some(recorded_sql) != normalized_sql {
+                        continue;
+                    } else if params_match(exchange.record.params.as_deref(), params) {
+                        DependencyRuleDecision::default()
+                    } else {
+                        continue;
+                    };
+                    // Reject parameter/policy mismatches before copying any rows.
+                    let projected = if project_columns {
+                        let Some(response) = sql.and_then(|sql| {
+                            projection::query_response(&exchange.record, command, sql, params)
+                        }) else {
+                            continue;
+                        };
+                        Some(response)
+                    } else {
+                        None
+                    };
+                    let mut exchange = self.mysql.exchanges[index].clone();
+                    // Only the delivered copy is projected. Capture identity and
+                    // consumption still refer to the original recorded exchange.
+                    if let Some(response) = projected.or_else(|| {
+                        sql.filter(|sql| Some(*sql) != exchange.record.sql.as_deref())
+                            .and_then(|sql| {
+                                projection::query_response(&exchange.record, command, sql, params)
+                            })
+                    }) {
+                        exchange.record.response = response;
+                    }
+                    self.mysql.exchanges[index].status =
+                        if exchange.record.outcome.is_client_terminated() {
+                            ReplayExchangeStatus::AwaitingClientTermination
+                        } else {
+                            ReplayExchangeStatus::Responding
+                        };
+                    if let Some(policy) = &mut self.replay_policy {
+                        policy.commit(active_case_id.as_deref(), policy_decision);
+                    }
+                    let matched = MatchedQueryReport {
+                        case_id: exchange.case_id.clone(),
+                        target: Some(exchange.identity.target.clone()),
+                        database: exchange.identity.database.clone(),
+                        username: exchange.identity.username.clone(),
+                        source: exchange.source,
+                        index,
+                        command: command.to_string(),
+                        sql: sql.map(ToOwned::to_owned),
+                        params: params.map(ToOwned::to_owned),
+                        status: exchange.record.response.status.clone(),
+                    };
+                    return Some(MatchedExchange {
+                        source: exchange.source,
+                        index,
+                        record: exchange.record,
+                        timing: exchange.timing,
+                        report: matched,
+                    });
                 }
-                let matched = MatchedQueryReport {
-                    case_id: exchange.case_id.clone(),
-                    target: Some(exchange.identity.target.clone()),
-                    database: exchange.identity.database.clone(),
-                    username: exchange.identity.username.clone(),
-                    source: exchange.source,
-                    index,
-                    command: command.to_string(),
-                    sql: sql.map(ToOwned::to_owned),
-                    params: params.map(ToOwned::to_owned),
-                    status: exchange.record.response.status.clone(),
-                };
-                return Some(MatchedExchange {
-                    source: exchange.source,
-                    index,
-                    record: exchange.record.clone(),
-                    timing: exchange.timing,
-                    report: matched,
-                });
             }
         }
         None
@@ -236,26 +267,39 @@ impl ReplayState {
         let normalized_sql = normalize_sql(sql);
         let param_count = count_sql_placeholders(sql);
         for source in [ReplaySource::Case, ReplaySource::Global] {
-            for exchange in &self.mysql.exchanges {
-                if exchange.source != source
-                    || !self.active_case_matches(exchange)
-                    || !identity_matches_exchange(identity, &exchange.identity)
-                {
-                    continue;
-                }
-                let Some(recorded_sql) = exchange.record.sql.as_deref() else {
-                    continue;
-                };
-                let matches = match exchange.record.command.as_str() {
-                    "COM_STMT_EXECUTE" => normalize_sql(recorded_sql) == normalized_sql,
-                    "COM_QUERY" => sql_match::metadata_matches(sql, recorded_sql),
-                    _ => false,
-                };
-                if matches {
-                    return StatementMetadata {
-                        param_count,
-                        columns: exchange.record.response.columns.clone(),
+            for project_columns in [false, true] {
+                for exchange in &self.mysql.exchanges {
+                    if exchange.source != source
+                        || !self.active_case_matches(exchange)
+                        || !identity_matches_exchange(identity, &exchange.identity)
+                    {
+                        continue;
+                    }
+                    if project_columns {
+                        if let Some(columns) = projection::statement_columns(&exchange.record, sql)
+                        {
+                            return StatementMetadata {
+                                param_count,
+                                columns,
+                            };
+                        }
+                        continue;
+                    }
+                    let Some(recorded_sql) = exchange.record.sql.as_deref() else {
+                        continue;
                     };
+                    let matches = match exchange.record.command.as_str() {
+                        "COM_STMT_EXECUTE" => normalize_sql(recorded_sql) == normalized_sql,
+                        "COM_QUERY" => sql_match::metadata_matches(sql, recorded_sql),
+                        _ => false,
+                    };
+                    if matches {
+                        return StatementMetadata {
+                            param_count,
+                            columns: projection::statement_columns(&exchange.record, sql)
+                                .unwrap_or_else(|| exchange.record.response.columns.clone()),
+                        };
+                    }
                 }
             }
         }

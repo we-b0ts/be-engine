@@ -14,6 +14,8 @@ use crate::config::process_owned_dependencies::redis_rule_matches;
 use crate::config::{BackgroundDependencyRuleConfig, SourceTrafficPolicyConfig};
 use crate::recorder::background::BackgroundDependencyMatcher;
 
+mod mysql;
+
 const ORIGINAL_CASE_ID: &str = "background_original_case_id";
 const MATCHED_RULE: &str = "background_rule";
 
@@ -42,7 +44,7 @@ pub(crate) fn reclassify_background_dependencies(
     let rules = &config.process_owned_dependencies;
     let matcher = BackgroundDependencyMatcher::from_rules(rules)?;
     let memcached_ports = matcher.resolved_memcached_rule_ports();
-    let matched = matched_recorded_exchanges(case_dirs, rules, &memcached_ports)?;
+    let mut matched = matched_recorded_exchanges(case_dirs, rules, &memcached_ports)?;
     let payload = fs::read(report_path)
         .with_context(|| format!("failed to read replay report {}", report_path.display()))?;
     let mut report: Value = serde_json::from_slice(&payload)
@@ -50,9 +52,10 @@ pub(crate) fn reclassify_background_dependencies(
     restore_previous_reclassification(&mut report);
 
     let mut by_protocol = BTreeMap::new();
+    mysql::reclassify(&mut report, rules, &mut matched.mysql, &mut by_protocol);
     reclassify_http(&mut report, rules, &mut by_protocol);
     for protocol in ["redis", "memcached", "motan"] {
-        reclassify_command_protocol(&mut report, protocol, &matched, &mut by_protocol);
+        reclassify_command_protocol(&mut report, protocol, &matched.commands, &mut by_protocol);
     }
     by_protocol.retain(|_, count| *count > 0);
     let matched_unused_case = by_protocol.values().sum();
@@ -75,12 +78,21 @@ pub(crate) fn reclassify_background_dependencies(
     })
 }
 
+#[derive(Default)]
+struct RecordedMatches {
+    commands: BTreeMap<ExchangeIdentity, String>,
+    mysql: BTreeMap<String, Vec<Value>>,
+}
+
 fn matched_recorded_exchanges(
     case_dirs: &BTreeMap<String, PathBuf>,
     rules: &[BackgroundDependencyRuleConfig],
     memcached_ports: &BTreeMap<String, BTreeSet<u16>>,
-) -> Result<BTreeMap<ExchangeIdentity, String>> {
-    let mut matched = BTreeMap::new();
+) -> Result<RecordedMatches> {
+    let mut matched = RecordedMatches::default();
+    let has_mysql = rules
+        .iter()
+        .any(|rule| matches!(rule, BackgroundDependencyRuleConfig::Mysql { .. }));
     for (case_id, case_dir) in case_dirs {
         let path = case_dir.join("dependencies.jsonl");
         let raw = fs::read_to_string(&path)
@@ -96,6 +108,16 @@ fn matched_recorded_exchanges(
                     line_index + 1
                 )
             })?;
+            // Share the JSONL read with the command protocols. MySQL needs the
+            // original SQL and complete response for fingerprint correlation.
+            if has_mysql && value["event_type"] == "mysql_exchange" {
+                matched
+                    .mysql
+                    .entry(case_id.clone())
+                    .or_default()
+                    .push(value);
+                continue;
+            }
             let Some(protocol) = dependency_protocol(&value) else {
                 continue;
             };
@@ -108,7 +130,7 @@ fn matched_recorded_exchanges(
             let Some(sequence) = value.get("sequence").and_then(Value::as_u64) else {
                 continue;
             };
-            matched.insert(
+            matched.commands.insert(
                 ExchangeIdentity {
                     protocol: protocol.to_string(),
                     case_id: case_id.clone(),
@@ -238,6 +260,7 @@ fn decode_capture(value: &Value) -> Option<Vec<u8>> {
 }
 
 fn restore_previous_reclassification(report: &mut Value) {
+    restore_array(report, "unused_global_exchanges", "unused_case_exchanges");
     restore_array(
         report,
         "unused_global_http_exchanges",
@@ -410,6 +433,12 @@ fn move_matching_events<'a>(
         .unwrap_or_default();
     let mut retained = Vec::with_capacity(case.len());
     for mut event in case.drain(..) {
+        // A bare ROLLBACK at request teardown is SQLAlchemy session-close
+        // driver control traffic, not an application dependency the target
+        // must reproduce; drop it from the dirty view.
+        if is_session_control_exchange(&event) {
+            continue;
+        }
         let Some(rule) = matching_rule(&event).map(ToOwned::to_owned) else {
             retained.push(event);
             continue;
@@ -454,6 +483,24 @@ fn dirty_case_ids(report: &Value) -> BTreeSet<String> {
         }
     }
     case_ids
+}
+
+/// Identifies recorded MySQL session-control traffic that the target is never
+/// expected to reproduce: a bare ROLLBACK from driver/session teardown.
+fn is_session_control_exchange(event: &Value) -> bool {
+    event.get("command").and_then(Value::as_str) == Some("COM_QUERY")
+        && event
+            .get("sql_summary")
+            .and_then(|summary| summary.get("preview"))
+            .and_then(Value::as_str)
+            .is_some_and(|sql| {
+                !event
+                    .get("sql_summary")
+                    .and_then(|summary| summary.get("truncated"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                    && sql.trim().eq_ignore_ascii_case("rollback")
+            })
 }
 
 fn collect_case_ids(report: &Value, field: &str, output: &mut BTreeSet<String>) {

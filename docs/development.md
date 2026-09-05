@@ -1362,7 +1362,13 @@ backend-rewrite case dependencies <representative-case-dir>
 
 The summary is grouped by stable target ID and includes an exact
 `detail_command` for every target. Executing that command returns only the
-selected target's bounded operation details and representative exchanges. Redis
+selected target's bounded operation details and representative exchanges. MySQL
+exchanges expose SQL up to 8192 bytes, typed parameters, database and username,
+attribution, result status, row counts, column names, warnings, and the original
+exchange locator. They omit result row payloads and report truncated previews
+and omitted examples explicitly. The ordinary MySQL and Redis diagnostic flow
+uses these returned commands; inspect the smallest original record only when
+bounded output lacks a necessary fact. Redis
 exchanges keep keys, arguments, and responses associated; response previews are
 capped at 256 bytes and retain encoding, original length, and truncation
 metadata. Complete small Redis scalar frames also expose a decoded

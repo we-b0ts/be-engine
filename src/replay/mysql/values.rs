@@ -8,6 +8,7 @@ pub(in crate::replay) fn builtin_response(
     if let Some(maintenance) = classify_mysql_maintenance_query(sql) {
         return Some(match maintenance {
             MysqlMaintenanceQuery::C3p0TableProbe => RecordedMysqlResponse {
+                rows_truncated: false,
                 status: "error".to_string(),
                 error_code: Some(1102),
                 error_message: Some("Incorrect database name ''".to_string()),
@@ -24,6 +25,7 @@ pub(in crate::replay) fn builtin_response(
     let normalized = normalize_sql(sql);
     if is_builtin_ok(&normalized) {
         return Some(RecordedMysqlResponse {
+            rows_truncated: false,
             status: "ok".to_string(),
             error_code: None,
             error_message: None,
@@ -47,6 +49,7 @@ pub(in crate::replay) fn builtin_response(
     }
     if normalized == "show warnings" {
         return Some(RecordedMysqlResponse {
+            rows_truncated: false,
             status: "resultset".to_string(),
             error_code: None,
             error_message: None,
@@ -62,6 +65,7 @@ pub(in crate::replay) fn builtin_response(
     }
     if normalized == "show variables" {
         return Some(RecordedMysqlResponse {
+            rows_truncated: false,
             status: "resultset".to_string(),
             error_code: None,
             error_message: None,
@@ -84,6 +88,7 @@ pub(in crate::replay) fn is_builtin_ok(normalized_sql: &str) -> bool {
 
 pub(in crate::replay) fn single_string_result(name: &str, value: &str) -> RecordedMysqlResponse {
     RecordedMysqlResponse {
+        rows_truncated: false,
         status: "resultset".to_string(),
         error_code: None,
         error_message: None,
@@ -96,6 +101,7 @@ pub(in crate::replay) fn single_string_result(name: &str, value: &str) -> Record
 
 fn single_integer_result(name: &str, value: i64) -> RecordedMysqlResponse {
     RecordedMysqlResponse {
+        rows_truncated: false,
         status: "resultset".to_string(),
         error_code: None,
         error_message: None,
@@ -110,6 +116,7 @@ pub(in crate::replay) fn string_column(name: &str) -> RecordedMysqlColumn {
     RecordedMysqlColumn {
         name: name.to_string(),
         table: None,
+        table_alias: None,
         column: None,
         family: "string".to_string(),
         sql_type: "VARCHAR".to_string(),
@@ -124,6 +131,7 @@ pub(in crate::replay) fn integer_column(name: &str) -> RecordedMysqlColumn {
     RecordedMysqlColumn {
         name: name.to_string(),
         table: None,
+        table_alias: None,
         column: None,
         family: "integer".to_string(),
         sql_type: "INT".to_string(),
