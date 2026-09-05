@@ -118,13 +118,8 @@ recorder:
     case_dependency_post_response_window_ms: 100
     case_dependency_drain_timeout_ms: 5000
     shutdown_case_drain_timeout_ms: 5000
-    encrypt_request_headers: []
-    redact_headers:
-    - authorization
-    - cookie
-    - set-cookie
-    - proxy-authorization
-    - proxy-authenticate
+    encrypt_request_headers: [authorization]
+    redact_headers: []
     access_policy: block_known_writes
     access_rules: []
   tls:

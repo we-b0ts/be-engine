@@ -253,13 +253,7 @@ impl Default for RecordingConfig {
             case_dependency_drain_timeout_ms: 5_000,
             shutdown_case_drain_timeout_ms: 5_000,
             encrypt_request_headers: Vec::new(),
-            redact_headers: vec![
-                "authorization".to_string(),
-                "cookie".to_string(),
-                "set-cookie".to_string(),
-                "proxy-authorization".to_string(),
-                "proxy-authenticate".to_string(),
-            ],
+            redact_headers: Vec::new(),
             access_policy: RecordingAccessPolicy::Unrestricted,
             access_rules: Vec::new(),
         }

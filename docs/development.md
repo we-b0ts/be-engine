@@ -201,7 +201,18 @@ The default comparison recording duration is 60 seconds. AI and automated
 invocations must pass `--duration-seconds 60` or another positive integer
 explicitly.
 
-Sensitive request headers can remain replayable without storing plaintext:
+Recording defaults to `redact_headers: []` so authentication and session headers
+remain available for Replay. Redaction irreversibly replaces values with
+`<redacted>` and can break authenticated requests. Existing projects with an
+explicit list must set `recorder.recording.redact_headers: []` themselves;
+previously redacted recordings require new capture to recover those values.
+Unencrypted headers are stored as plaintext in the sensitive recording artifacts.
+Newly initialized projects and the example configurations also default to
+`encrypt_request_headers: [authorization]`, with or without Breeze. Existing
+projects can enable the same request-header encryption. The low-level
+`RecordingConfig::default()` and configurations omitting both lists preserve
+headers without encryption; low-level callers must explicitly configure
+`encrypt_request_headers` and provide the encryption key when needed:
 
 ```toml
 [recording]
@@ -215,9 +226,9 @@ directory is mode `0700` and the strict Base64-encoded 32-byte key is mode
 `0600`. An explicitly supplied `TRAFFIC_E2E_ENCRYPTION_KEY_B64` is imported
 only when the managed key is absent; a later mismatch is rejected.
 
-The plaintext header value is written only as versioned ciphertext in
-`request.json`. Keep `authorization` in `redact_headers` too: request
-encryption takes precedence, while response headers remain redacted. Missing,
+The configured request header value is written only as versioned ciphertext in
+`request.json`. Request encryption takes precedence over any explicitly configured
+redaction; response headers follow `redact_headers`. Missing,
 invalid, or wrong managed key material blocks Replay. The system passes the key
 only to Recorder and Comparison processes; it is never injected into source,
 target, Breeze, commands, or policy.

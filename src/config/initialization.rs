@@ -116,11 +116,6 @@ fn render_recorder_template(scope: &str, options: &RecorderConfigInitOptions) ->
     } else {
         "http_response_rewrite:\n  enabled: false\n  rules: []"
     };
-    let encrypted_headers = if options.breeze_enabled {
-        "  encrypt_request_headers:\n  - authorization\n"
-    } else {
-        "  encrypt_request_headers: []\n"
-    };
     Ok(RECORDER_YAML_TEMPLATE
         .replace(
             "__DEFAULT_BODY_LIMIT_BYTES__",
@@ -155,8 +150,7 @@ fn render_recorder_template(scope: &str, options: &RecorderConfigInitOptions) ->
         )
         .replace("__FALLBACK_BODY__", &fallback_body)
         .replace("__DNS_CAPTURE_POLICY__", CAPTURE_ALL_DNS_YAML)
-        .replace("__RESPONSE_REWRITE__", response_rewrite)
-        .replace("__ENCRYPTED_HEADERS__", encrypted_headers))
+        .replace("__RESPONSE_REWRITE__", response_rewrite))
 }
 
 fn render_yaml_scalar(value: &str) -> Result<String> {
@@ -281,12 +275,8 @@ recording:
   case_dependency_drain_timeout_ms: 5000
   shutdown_case_drain_timeout_ms: 5000
   access_policy: unrestricted
-__ENCRYPTED_HEADERS__  redact_headers:
-  - authorization
-  - cookie
-  - set-cookie
-  - proxy-authorization
-  - proxy-authenticate
+  encrypt_request_headers: [authorization]
+  redact_headers: []
 tls:
   ca_cert_path: ./.traffic-e2e/local/data/traffic-recorder-ca.pem
   ca_key_path: ./.traffic-e2e/local/data/traffic-recorder-ca-key.pem
@@ -314,6 +304,7 @@ mod tests {
 
         let config: AppConfig = serde_yaml::from_str(&raw).unwrap();
         config.validate().unwrap();
+        assert!(config.recording.redact_headers.is_empty());
         assert_eq!(
             config.http_gateway.matched_upstream,
             "http://127.0.0.1:8080"
@@ -441,6 +432,8 @@ mod tests {
             raw.contains("candidate_upstream: http://comparison-target.traffic-e2e.invalid:8080")
         );
         let mut runtime: AppConfig = serde_yaml::from_str(&raw).unwrap();
+        assert_eq!(runtime.recording.encrypt_request_headers, ["authorization"]);
+        assert!(runtime.recording.redact_headers.is_empty());
         runtime
             .comparison_recording
             .as_mut()
