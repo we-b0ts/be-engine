@@ -10,8 +10,7 @@ workflow. Load action-specific references only through the direct routing in
 - Coordinator phase order
 - Core action handling
 - API inventory and serialized traffic
-- Integrated target quality
-- Completion
+- Completion invariants
 
 ## Session Start And Resume
 
@@ -82,10 +81,11 @@ The stable action envelope has `kind`, `summary`, `details`, and `commands`.
 Read kind-specific facts only from `details` and execute only command roles
 present in `commands`; an empty command object never implies a fallback. Status
 does not guarantee an unconditional top-level `next` command. Source-process
-traffic is issue-scoped evidence, not coordinator state. When an
-`implementation_required` action returns its evidence command, execute that
-exact command only when startup, configured process-owned traffic, background
-refresh, or local-cache behavior is relevant.
+traffic is issue-scoped evidence, not coordinator state. The main Agent passes
+returned evidence commands unchanged to the assigned API worker. That worker
+executes the returned `source_process_traffic` command only when startup,
+configured process-owned traffic, background refresh, or local-cache behavior
+is relevant.
 
 ### `wait_required`
 
@@ -155,13 +155,10 @@ require progress commits.
 Stop before evidence, artifact, source, or target analysis. Follow
 [implementation-worker-coordination.md](implementation-worker-coordination.md)
 to create or resume the work item's dedicated worker and confirm the dispatch.
-An API worker receives its bounded evidence commands. A process-output worker
-receives the comparison observation and acceptance command and fixes target
-startup/code without inventing traffic operations. The assigned worker follows
-[problem-diagnosis.md](problem-diagnosis.md), executes any returned opaque
-evidence queries, proves one cause, runs local tests, and returns the unchanged
-acceptance command. The main orchestrator integrates the tested handoff and
-executes acceptance only from the canonical worktree.
+The assigned worker follows [problem-diagnosis.md](problem-diagnosis.md) for
+diagnosis and returns the tested handoff described in the coordination guide.
+The main Agent integrates the handoff and executes its unchanged acceptance
+command only from the canonical worktree.
 
 When the handoff contains `startup_environment` inputs, apply each one to the
 canonical target root through `startup env ensure` as specified by
@@ -273,10 +270,9 @@ waits. The coordinator may park implementation issues while it serializes the
 selected API's Replay or comparison. Expensive worker diagnosis, coding, and
 tests may overlap; only one traffic operation may be live.
 
-After worker confirmation, execute a returned `advance_required` immediately.
-When the original confirmation response is lost, use scoped `status` to
-reconstruct it. Wait for a worker only when no pending API can advance or the
-coordinator returns `wait_required`.
+Follow the post-dispatch scheduler in
+[implementation-worker-coordination.md](implementation-worker-coordination.md)
+for advancing pending work, resuming from status, and waiting for handoffs.
 
 Keep finalized standard cases immutable through ordinary repair attempts. A
 failed focused attempt changes the target and reuses the same cases; it does

@@ -146,7 +146,7 @@ query ID.
   prove request or process ownership. For a dependency issue it also returns
   `applicable_rule_planners` only for supported protocols present in those
   clusters. Whenever a supported dependency-value rule exists for a protocol
-  present in the clusters, it separately returns `protocol_rules` with a short
+  present in the clusters, it separately returns `rule_hints` with a short
   applicability hint and an exact read-only help command. Rule availability
   does not prove applicability. It also returns the selected case's exact
   `representative_dependencies_command` when available;
@@ -409,7 +409,7 @@ focused replay report. Never manually rewrite replay reports, trim traffic, or
 edit immutable request/response/dependency capture files.
 
 For dependency value mismatches, inspect each entry returned in
-`protocol_rules`. Run its exact `help` command, then verify the described value
+`rule_hints`. Run its exact `help` command, then verify the described value
 mechanism in source and in the representative dependency details before
 planning it. In the currently supported Memcached case,
 `protobuf-timestamp` applies only to a `SET` value whose selected top-level

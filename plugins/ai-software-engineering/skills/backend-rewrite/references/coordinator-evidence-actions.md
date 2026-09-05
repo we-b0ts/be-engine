@@ -196,12 +196,19 @@ Only a `process-owned` result returns a `plan_id`. After
 `evidence_reclassification` with rule coverage, remaining dirty cases, and the
 revised focused result.
 
-Applying or confirming a process-owned dependency rule is not a fresh-recording
-condition. The coordinator keeps capture artifacts immutable, recomputes the
-effective case/global ownership view, rebuilds dependency evidence, and revises
-the same progress-ledger attempt. Clean evidence advances to comparison;
-residual case-scoped dirty evidence remains in repair. Apply therefore returns
-`next`, never a recorder-contract recording request.
+An ownership change alone is not a fresh-recording condition. The coordinator
+keeps capture artifacts immutable, recomputes the effective case/global ownership
+view, rebuilds dependency evidence, and revises the same progress-ledger attempt.
+Clean evidence advances to comparison;
+residual case-scoped dirty evidence remains in repair. Apply returns `next`.
+Redis rules that additionally require reusable snapshot seeds first try to
+derive them from complete, consistent immutable bootstrap evidence. If that
+derivation fails, `cache_snapshot_overlay` explicitly reports
+`recording_required=true` with the reason, and the coordinator schedules its
+recording refresh to obtain snapshot evidence that the existing recording cannot
+safely provide. MySQL ownership reclassification does not require Redis snapshot
+seeds. Follow the returned action in either case, without manually requesting a
+recording.
 
 On resume, `next` may repair a finalized attempt whose derived dependency view
 is already clean but whose persisted failure retains an obsolete strict

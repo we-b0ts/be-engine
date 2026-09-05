@@ -18,7 +18,8 @@ size changes only what the orchestrator does after dispatch.
 The main Agent is a thin orchestrator. It owns the canonical coordinator
 worktree, worker/worktree assignment, state-mutating coordinator commands,
 integration, serialized traffic verification, shared refactoring, repository
-checks, and the final `terminal_allowed` decision.
+checks, and final delivery. The coordinator computes `terminal_allowed`; the
+main Agent finishes delivery only when the coordinator returns `true`.
 
 Maintain this invariant for the complete workflow:
 
@@ -76,10 +77,10 @@ available, report the blocker; do not silently fall back to main-Agent
 diagnosis or implementation.
 
 The coordinator enforces this barrier at the work-item diagnostic boundary.
-Until the owning worker confirms the current dispatch, its evidence queries
-and repair routing are rejected. API response/dependency/recorder-capture
-planning follows the opaque evidence identity to its owning API rather than
-using whichever API is currently active.
+Evidence queries and repair routing for a work item are rejected until the
+main Agent confirms its worker's current dispatch.
+API response/dependency/recorder-capture planning follows the opaque evidence
+identity to its owning API rather than using whichever API is currently active.
 
 For a later `implementation_required` on a bound work item, do not dispatch
 another subagent. Refresh the same worktree from the integrated revision and
@@ -105,13 +106,15 @@ worker that absolute path. Repository initialization keeps
 create, switch, reset, remove, or repurpose worktrees and must not initialize a
 private coordinator. Worker edits stay isolated until orchestrator integration.
 
-Every returned coordinator argv includes the absolute canonical
-`--target-root`. An API worker may therefore execute its assigned evidence,
+Every returned coordinator command includes a canonical `cwd` and an absolute
+`--target-root`. An API worker may execute its assigned evidence,
 case-dependency, returned read-only help, and explicitly handed API-scoped
-status argv from its own worktree. A process-output worker executes only
-read-only commands present in its handoff; normally it receives no evidence
-commands. Every worker executes argv exactly and never removes or replaces
-`--target-root`. Inventory and unscoped status remain orchestrator concerns.
+status commands. A process-output worker executes only read-only commands
+present in its handoff; normally it receives no evidence commands.
+Run each command in its supplied `cwd`, since artifact arguments may be
+relative to that directory. Execute argv exactly and never remove or replace
+`--target-root`. Source inspection, edits, and local tests stay in the worker's
+own worktree. Inventory and unscoped status remain orchestrator concerns.
 
 Only the orchestrator runs state-mutating transitions: `next` and acceptance,
 recording, rule plan/apply, route or repair verification, recover, Replay, and
