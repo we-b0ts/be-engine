@@ -53,7 +53,7 @@ pub(super) fn redis_builtin(
         "CLIENT" => match command.args.first().map(Vec::as_slice) {
             Some(subcommand)
                 if subcommand.eq_ignore_ascii_case(b"SETNAME")
-                    || subcommand.eq_ignore_ascii_case(b"SETINFO") =>
+                    || crate::redis::is_client_library_info(&command.name, &command.args) =>
             {
                 Some(b"+OK\r\n".to_vec())
             }

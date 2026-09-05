@@ -97,7 +97,8 @@ pub(super) async fn load_dependency_file(
         }
     }
 
-    for record in records {
+    let optional_rollbacks = mysql::rollback::optional_rollbacks(&records);
+    for (record_index, record) in records.into_iter().enumerate() {
         match record {
             DependencyRecord::HttpExchange(exchange) => {
                 http::register_http_exchange(*exchange, source, case_id, http_exchanges, targets)?;
@@ -158,28 +159,6 @@ pub(super) async fn load_dependency_file(
         if exchange.command == "COM_STMT_PREPARE" && exchange.response.status == "stmt_prepare" {
             continue;
         }
-        // A bare ROLLBACK recorded at request teardown is the SQLAlchemy
-        // session-close artifact (`get_db`'s `finally: db.close()` on an
-        // autobegin session), not an application dependency call; the target
-        // is not expected to reproduce it.
-        if exchange.command == "COM_QUERY"
-            && exchange.sql.as_deref().is_some_and(|sql| {
-                let normalized: String = sql
-                    .trim()
-                    .chars()
-                    .map(|ch| {
-                        if ch.is_whitespace() {
-                            ' '
-                        } else {
-                            ch.to_ascii_lowercase()
-                        }
-                    })
-                    .collect();
-                normalized == "rollback"
-            })
-        {
-            continue;
-        }
         if crate::mysql::wire::is_no_response_command(&exchange.command) {
             continue;
         }
@@ -203,6 +182,7 @@ pub(super) async fn load_dependency_file(
             case_id: case_id.map(ToOwned::to_owned),
             identity,
             record: *exchange,
+            optional_rollback: optional_rollbacks.contains(&record_index),
             status: ReplayExchangeStatus::Available,
             timing,
         });

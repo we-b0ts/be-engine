@@ -19,17 +19,26 @@ use brz_redis::{RedisResult, RedisService, RedisServiceOptions};
 async fn build_redis(
     master: String,
     replicas: Vec<String>,
+    password: Option<String>,
     timeout: Duration,
 ) -> RedisResult<RedisService> {
-    let options = RedisServiceOptions::default().with_timeout(timeout);
+    let options = RedisServiceOptions::default()
+        .with_password(password)
+        .with_timeout(timeout);
     RedisService::noshard_with_options(master, replicas, options).await
 }
 ```
 
-Pin the dependency to the fixed `v0.0.2` tag and enable `metrics` by default:
+Pass `Some(password)` from application configuration to authenticate every
+master and replica connection; use `None` for a deployment without authentication.
+The service sends `AUTH password` when connecting and reconnecting, before
+selecting the database and making the connection available to business calls.
+Keep endpoints in `host:port[:db]` form and supply the password through options.
+
+Pin the dependency to the fixed `v0.0.3` tag and enable `metrics` by default:
 
 ```toml
-brz-redis = { package = "redis", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/redis.git", tag = "v0.0.2", features = ["metrics"] }
+brz-redis = { package = "redis", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/redis.git", tag = "v0.0.3", features = ["metrics"] }
 ```
 
 Pass source hostnames through unchanged instead of resolving them in

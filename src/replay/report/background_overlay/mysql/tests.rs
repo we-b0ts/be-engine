@@ -138,6 +138,35 @@ fn mysql_plan_apply_reclassifies_existing_evidence_and_rule_removal_restores_dir
 }
 
 #[test]
+fn mysql_rules_do_not_erase_rollback_from_existing_dirty_reports() {
+    let f = Fixture::new();
+    f.apply();
+    let mut report = f.read_report();
+    report["unused_case_exchanges"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "case_id": CASE, "command":"COM_QUERY", "status":"ok",
+            "sql_summary":{"preview":"ROLLBACK", "truncated":false}
+        }));
+    f.write_report(&report);
+    let result = f.reclassify();
+    assert_eq!(result.remaining_dirty_case_ids, [CASE.to_owned()].into());
+    assert_eq!(
+        f.read_report()["unused_case_exchanges"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    // Applying the same rule again must retain the transaction evidence too.
+    assert_eq!(
+        f.reclassify().remaining_dirty_case_ids,
+        [CASE.to_owned()].into()
+    );
+}
+
+#[test]
 fn table_pattern_rules_share_plan_apply_and_reversible_evidence_reclassification() {
     let f = Fixture::new();
     let original = fs::read(f.case_dir.join("dependencies.jsonl")).unwrap();

@@ -10,6 +10,7 @@ use std::time::Duration;
 use tempfile::tempdir;
 
 mod projection_tests;
+mod rollback_tests;
 
 fn exchange(sql: &str, response: Value) -> Value {
     json!({"event_type":"mysql_exchange", "target_host":"127.0.0.1", "target_port":3306,

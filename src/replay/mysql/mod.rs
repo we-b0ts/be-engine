@@ -3,6 +3,7 @@ mod matcher;
 mod model;
 mod projection;
 mod response;
+pub(in crate::replay) mod rollback;
 mod session;
 mod session_setup;
 mod sql_match;

@@ -5,6 +5,35 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 
 #[test]
+fn rollback_ok_preserves_server_transaction_status_without_guessing_truncated_flags() {
+    for (payload, expected) in [
+        (vec![0, 0, 0, 0, 0, 0, 0], Some(0)),
+        (vec![0, 0, 0, 2, 0, 0, 0], Some(2)),
+        (vec![0, 0, 0, 1, 0, 0, 0], Some(1)),
+        (vec![0, 0, 0, 1], None),
+    ] {
+        let mut tracker = MysqlSemanticTracker::new(1024, test_context());
+        let query = MysqlPacket {
+            sequence_id: 0,
+            payload: [vec![0x03], b"ROLLBACK".to_vec()].concat(),
+        };
+        let command = parse_client_command(&query).unwrap();
+        tracker.start_query(Uuid::nil(), 1, &command, &query, None);
+        tracker.observe_packet(&MysqlPacket {
+            sequence_id: 1,
+            payload,
+        });
+        let exchange = tracker.finish_active("ok", None, None, Some(1)).unwrap();
+        assert_eq!(exchange.response.server_status, expected);
+        let value = serde_json::to_value(exchange).unwrap();
+        assert_eq!(
+            value["response"]["server_status"],
+            serde_json::to_value(expected).unwrap()
+        );
+    }
+}
+
+#[test]
 fn parses_text_resultset_exchange() {
     let mut tracker = MysqlSemanticTracker::new(1024, test_context());
     let query = MysqlPacket {

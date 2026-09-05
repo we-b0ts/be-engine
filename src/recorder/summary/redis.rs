@@ -1,7 +1,40 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use serde::Serialize;
 use serde_json::Value;
+
+#[cfg(test)]
+mod tests;
+
+pub(super) fn is_client_library_info_exchange(
+    exchange: &crate::recorder::RedisExchangeEvent,
+) -> bool {
+    if !exchange.command.eq_ignore_ascii_case("CLIENT")
+        || !exchange.replay_safe
+        || exchange.outcome != crate::DependencyExchangeOutcome::Response
+        || exchange.response.truncated
+        || !exchange.parse_warnings.is_empty()
+    {
+        return false;
+    }
+    let args = exchange
+        .args
+        .iter()
+        .map(|capture| {
+            if capture.truncated {
+                return None;
+            }
+            match capture.encoding {
+                "base64" => STANDARD.decode(&capture.data).ok(),
+                "utf8" => Some(capture.data.as_bytes().to_vec()),
+                _ => None,
+            }
+        })
+        .collect::<Option<Vec<_>>>();
+    args.is_some_and(|args| crate::redis::is_client_library_info(&exchange.command, &args))
+}
 
 #[derive(Debug, Default, Serialize)]
 pub(super) struct RedisDependencySummary {

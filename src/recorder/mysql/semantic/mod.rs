@@ -292,6 +292,7 @@ impl MysqlSemanticTracker {
         error_message: Option<String>,
     ) -> MysqlExchangeResponse {
         let mut response = MysqlExchangeResponse {
+            server_status: None,
             status: status.to_string(),
             error_code,
             error_message,
@@ -315,6 +316,7 @@ impl MysqlSemanticTracker {
         match status {
             "ok" => {
                 if let Some(ok) = parse_ok_packet(&active.packets[0].payload) {
+                    response.server_status = ok.server_status;
                     response.affected_rows = Some(ok.affected_rows);
                     response.last_insert_id = Some(ok.last_insert_id);
                 }

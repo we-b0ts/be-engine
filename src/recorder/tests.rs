@@ -754,6 +754,7 @@ fn mysql_exchange(
         statement_id: Some(1),
         params: None,
         response: MysqlExchangeResponse {
+            server_status: None,
             status: status.to_string(),
             error_code,
             error_message: error_message.map(ToOwned::to_owned),

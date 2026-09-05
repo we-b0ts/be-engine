@@ -601,6 +601,7 @@ impl ReplayState {
             metadata_warnings: self.mysql.events.metadata_warnings.clone(),
             unused_global_exchanges: self.unused_exchanges(ReplaySource::Global),
             unused_case_exchanges: self.unused_exchanges(ReplaySource::Case),
+            allowed_unused_mysql_rollback_exchanges: self.allowed_unused_rollbacks(),
             matched_http_exchange_count: self.http_events.matched_count,
             matched_http_exchanges: self.http_events.matched.clone(),
             unmatched_http_requests: self.http_events.unmatched.clone(),
