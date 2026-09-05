@@ -8,7 +8,7 @@ fields and routing rules in each example.
 ## Pin the dependency
 
 ```toml
-brz-mysql = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/mysql.git", rev = "c33d21e21571f0957aed1fa5f7ce54d79f70beac" }
+brz-mysql = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/mysql.git", tag = "v0.0.3" }
 ```
 
 ## Create and share the service
@@ -128,6 +128,16 @@ async fn owner_id<M: Mysql>(mysql: &M, task_id: u64) -> MysqlResult<Option<i64>>
         "SELECT user_id FROM tasks WHERE id = ? LIMIT 1",
         (task_id,),
     ).await
+}
+
+async fn user_name<M: Mysql>(mysql: &M, user_id: u64)
+    -> MysqlResult<Option<(u64, String)>>
+{
+    let row: Option<(u64, String)> = mysql.fetch_optional(
+        "SELECT id, name FROM users WHERE id = ?",
+        (user_id,),
+    ).await?;
+    Ok(row)
 }
 
 async fn user_summary<M: Mysql>(mysql: &M, user_id: u64)

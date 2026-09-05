@@ -167,7 +167,13 @@ pub(super) async fn load_dependency_file(
                 let normalized: String = sql
                     .trim()
                     .chars()
-                    .map(|ch| if ch.is_whitespace() { ' ' } else { ch.to_ascii_lowercase() })
+                    .map(|ch| {
+                        if ch.is_whitespace() {
+                            ' '
+                        } else {
+                            ch.to_ascii_lowercase()
+                        }
+                    })
                     .collect();
                 normalized == "rollback"
             })
