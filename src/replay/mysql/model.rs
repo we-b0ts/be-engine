@@ -72,6 +72,8 @@ pub(in crate::replay) struct RecordedMysqlExchange {
     pub(in crate::replay) params: Option<Vec<RecordedMysqlValue>>,
     pub(in crate::replay) response: RecordedMysqlResponse,
     #[serde(default)]
+    pub(in crate::replay) parse_warnings: Vec<String>,
+    #[serde(default)]
     pub(in crate::replay) outcome: DependencyExchangeOutcome,
     #[serde(default)]
     pub(in crate::replay) duration_ms: u64,
@@ -88,12 +90,17 @@ pub(in crate::replay) struct RecordedMysqlResponse {
     pub(in crate::replay) columns: Vec<RecordedMysqlColumn>,
     #[serde(default)]
     pub(in crate::replay) rows: Vec<Vec<RecordedMysqlValue>>,
+    #[serde(default)]
+    pub(in crate::replay) rows_truncated: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub(in crate::replay) struct RecordedMysqlColumn {
     pub(in crate::replay) name: String,
     pub(in crate::replay) table: Option<String>,
+    /// Delivered table label; the recording's table remains the physical origin.
+    #[serde(skip)]
+    pub(in crate::replay) table_alias: Option<String>,
     pub(in crate::replay) column: Option<String>,
     pub(in crate::replay) family: String,
     pub(in crate::replay) sql_type: String,

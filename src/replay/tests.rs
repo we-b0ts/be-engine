@@ -95,6 +95,7 @@ mod tests {
         let payload = column_definition_payload(&RecordedMysqlColumn {
             name: "department_id".to_string(),
             table: Some("user".to_string()),
+            table_alias: None,
             column: Some("department_id".to_string()),
             family: "binary".to_string(),
             sql_type: "VARBINARY".to_string(),

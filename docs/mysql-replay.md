@@ -10,11 +10,12 @@ direction. Matching checks target host/port, database, username and case scope
 before SQL and parameter values. SQL tokens distinguish identifiers, literals,
 comments and placeholders. Literal case, whitespace, binary bytes, NULL and exact
 numeric values are preserved. PREPARE can obtain column metadata from a text
-recording; only the actual placeholder positions vary. Different projections,
-tables, predicates or fixed LIMIT values do not acquire a match.
+recording. Physical tables, predicates, parameter values and fixed LIMIT values
+remain matching constraints; the projection compatibility below handles ordinary
+ORM and driver differences without requiring target code to mimic source SQL.
 
-Cross-protocol matching requires exact SQL/value equivalence. Existing dynamic
-parameter policies continue to apply to matching prepared-protocol records;
+Cross-protocol matching requires SQL/value equivalence within those boundaries.
+Existing dynamic parameter policies continue to apply to matching prepared-protocol records;
 this change does not infer dynamic values from text literals. The tokenizer
 uses default MySQL quoting and escapes. Executable comments, optimizer hints,
 ANSI_QUOTES and NO_BACKSLASH_ESCAPES are not normalized across protocols.
@@ -40,6 +41,54 @@ default initialization, strict-policy text recordings, strings, NULL, binary
 values, unsigned BIGINT, fractional timestamps, decimals, statement reuse,
 writes, commit, rollback and errors. These tests have an explicit time bound.
 SQLx is a development dependency only.
+
+## SELECT column compatibility
+
+For a single-table SELECT of direct columns, replay permits a different column
+selection, order, column aliases and table alias. It resolves each target field
+to the same physical field in the recorded projection, selects the recorded
+cells, and emits column metadata in the target's requested order and names.
+The target may read a subset of the recorded columns. A field absent from the
+recording, or an ambiguous source mapping, cannot acquire a match. Replay never
+substitutes unrelated cells merely because their positions or types agree.
+
+For example, these queries can share recorded evidence:
+
+```sql
+-- Source ORM
+SELECT s.id AS subtasks_0640_id, s.uid AS subtasks_0640_uid,
+       s.title AS subtasks_0640_title
+FROM subtasks_0640 AS s WHERE s.uid = 640 ORDER BY s.id LIMIT 10;
+
+-- Target (also accepts a bound ? with value 640)
+SELECT t.title AS title, t.id AS task_id
+FROM subtasks_0640 AS t WHERE t.uid = 640 ORDER BY t.id LIMIT 10;
+```
+
+Endpoint, database, username, physical table, predicates, values, sorting and
+pagination remain constrained by the existing matcher. `ORDER BY` output aliases
+and column positions are resolved to physical fields before comparison: merely
+keeping `ORDER BY 1` after reordering columns does not prove equivalent sorting.
+Exact candidates take precedence within the existing Case-before-Global order;
+every successful delivery still consumes its original exchange once.
+
+`COUNT(*)` matches `COUNT(*)`, and integer constants such as `1` match the same
+constant, with optional alias changes. These expressions cannot be dropped,
+added or replaced with ordinary columns. This compatibility does not equate
+`COUNT(*)` with `COUNT(column)`, nor `1` with a different expression or result
+type. DISTINCT, GROUP BY, joins, subqueries, locks, wildcard projections and
+other computed expressions stay on the existing strict matching path.
+
+The same mapping supplies PREPARE metadata, text rows and binary prepared rows,
+including NULLs, empty results and original column types. It requires complete,
+successful resultset evidence without parse warnings. Only the delivered copy
+changes: dependency JSONL files remain immutable, and no rule application or
+new recording is required for this compatibility. Process-owned classification
+below is a separate ownership decision and retains its explicit SQL selectors.
+
+The SQLx tests exercise subset/reorder/alias mapping over TLS in both text and
+prepared protocols, cached parameter rebinding, COUNT and constant projections,
+rejection of changed conditions, scope isolation and immutable recordings.
 
 ## Process-owned MySQL reads
 

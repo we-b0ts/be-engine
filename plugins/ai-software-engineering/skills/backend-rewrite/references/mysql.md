@@ -1,5 +1,14 @@
 # Use MySQL through `brz-mysql`
 
+Ordinary single-table SELECTs need not reproduce a source ORM's full column
+list or generated aliases for Replay. Select the fields the business code
+needs and use the names its decoder expects. The engine maps available recorded
+fields into that order, resolves table aliases and preserves the remaining
+query constraints. COUNT(*) and integer constants retain their expression
+identity. Missing recorded fields or unsupported SQL shapes remain evidence or
+engine capability issues; do not compensate by consuming recording files in
+target code. See [MySQL replay compatibility](../../../../../docs/mysql-replay.md).
+
 Use these examples to integrate MySQL into the target. Keep SQL, result types,
 and routing policies in the owning repository. The example tables and routing
 rules below are illustrative; substitute the application's actual schema and rules.

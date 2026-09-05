@@ -1,6 +1,7 @@
 mod broker;
 mod matcher;
 mod model;
+mod projection;
 mod response;
 mod session;
 mod session_setup;
