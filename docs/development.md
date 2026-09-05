@@ -3,6 +3,9 @@
 Use this file for local commands, runtime behavior, recording, replay, and
 testing details. Keep `AGENTS.md` as the short navigation map.
 
+MySQL replay driver compatibility and process-owned read rules are documented in
+[mysql-replay.md](mysql-replay.md).
+
 ## Rust Tooling
 
 Use the standard Cargo workflow:

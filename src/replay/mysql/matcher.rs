@@ -111,9 +111,14 @@ impl ReplayState {
         for source in [ReplaySource::Case, ReplaySource::Global] {
             for index in 0..self.mysql.exchanges.len() {
                 let exchange = &self.mysql.exchanges[index];
-                if exchange.source != source
-                    || !exchange.status.is_available()
-                    || exchange.record.command != command
+                if exchange.source != source || !exchange.status.is_available() {
+                    continue;
+                }
+                let cross_protocol = exchange.record.command != command;
+                if cross_protocol
+                    && !sql.is_some_and(|sql| {
+                        sql_match::cross_protocol_matches(&exchange.record, command, sql, params)
+                    })
                 {
                     continue;
                 }
@@ -126,7 +131,11 @@ impl ReplayState {
                 let Some(recorded_sql) = exchange.record.sql.as_deref().map(normalize_sql) else {
                     continue;
                 };
-                let policy_decision = if let Some(policy) = &self.replay_policy {
+                let policy_decision = if cross_protocol {
+                    // Exact SQL tokens and parameter values already match. A driver
+                    // protocol change does not require a dynamic-value exemption.
+                    DependencyRuleDecision::default()
+                } else if let Some(policy) = &self.replay_policy {
                     let context = MysqlPolicyContext {
                         case_id: active_case_id.as_deref(),
                         identity,
@@ -225,37 +234,35 @@ impl ReplayState {
         sql: &str,
     ) -> StatementMetadata {
         let normalized_sql = normalize_sql(sql);
+        let param_count = count_sql_placeholders(sql);
         for source in [ReplaySource::Case, ReplaySource::Global] {
             for exchange in &self.mysql.exchanges {
-                if exchange.source != source || exchange.record.command != "COM_STMT_EXECUTE" {
-                    continue;
-                }
-                if !self.active_case_matches(exchange) {
-                    continue;
-                }
-                if !identity_matches_exchange(identity, &exchange.identity) {
-                    continue;
-                }
-                if exchange
-                    .record
-                    .sql
-                    .as_deref()
-                    .is_some_and(|recorded_sql| normalize_sql(recorded_sql) == normalized_sql)
+                if exchange.source != source
+                    || !self.active_case_matches(exchange)
+                    || !identity_matches_exchange(identity, &exchange.identity)
                 {
+                    continue;
+                }
+                let Some(recorded_sql) = exchange.record.sql.as_deref() else {
+                    continue;
+                };
+                let matches = match exchange.record.command.as_str() {
+                    "COM_STMT_EXECUTE" => normalize_sql(recorded_sql) == normalized_sql,
+                    "COM_QUERY" => sql_match::metadata_matches(sql, recorded_sql),
+                    _ => false,
+                };
+                if matches {
                     return StatementMetadata {
-                        param_count: exchange
-                            .record
-                            .params
-                            .as_ref()
-                            .map_or_else(|| count_sql_placeholders(sql), Vec::len),
+                        param_count,
                         columns: exchange.record.response.columns.clone(),
                     };
                 }
             }
         }
         StatementMetadata {
-            param_count: count_sql_placeholders(sql),
-            columns: Vec::new(),
+            param_count,
+            columns: builtin_response(sql, identity.database.as_deref())
+                .map_or_else(Vec::new, |r| r.columns),
         }
     }
 

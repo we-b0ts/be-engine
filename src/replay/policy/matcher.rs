@@ -701,14 +701,20 @@ fn rule_matches_mysql(
     let Some(sql) = sql else {
         return false;
     };
-    text_pattern_matches(&normalize_sql(&mysql.sql), &normalize_sql(sql))
+    text_pattern_matches(
+        &crate::mysql::sql::normalize_pattern(&mysql.sql),
+        &normalize_sql(sql),
+    )
 }
 
 fn rule_matches_mysql_sql_pattern(rule: &ReplayDependencyRule, sql: Option<&str>) -> bool {
     let (Some(mysql), Some(sql)) = (&rule.mysql, sql) else {
         return false;
     };
-    text_pattern_matches(&normalize_sql(&mysql.sql), &normalize_sql(sql))
+    text_pattern_matches(
+        &crate::mysql::sql::normalize_pattern(&mysql.sql),
+        &normalize_sql(sql),
+    )
 }
 
 fn rule_matches_http(

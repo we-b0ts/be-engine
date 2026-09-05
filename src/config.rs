@@ -14,6 +14,7 @@ mod artifacts;
 mod background_feedback;
 mod background_memcached_feedback;
 mod background_motan_feedback;
+mod background_mysql_feedback;
 mod background_redis_feedback;
 mod breeze_capture_feedback;
 mod case_limits;
@@ -50,6 +51,10 @@ pub use background_motan_feedback::{
     MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
     MotanBackgroundDependencyReport, plan_motan_background_dependency,
 };
+pub use background_mysql_feedback::{
+    MysqlBackgroundDependencyFeedback, MysqlBackgroundDependencyPlan,
+    MysqlBackgroundDependencyReport, plan_mysql_background_dependency,
+};
 pub use background_redis_feedback::{
     RedisBackgroundDependencyFeedback, RedisBackgroundDependencyPlan,
     RedisBackgroundDependencyReport, plan_redis_background_dependency,
@@ -72,7 +77,10 @@ pub use http_response_rewrite::{
 };
 pub use initialization::{DEFAULT_HTTP_BACKEND_PORT, DEFAULT_HTTP_GATEWAY_PORT};
 pub use motan_gateway::{MotanGatewayConfig, MotanGatewayRuleConfig};
-pub use process_owned_dependencies::{BackgroundDependencyRuleConfig, RedisKeyPatternConfig};
+pub use process_owned_dependencies::{
+    BackgroundDependencyRuleConfig, MysqlBackgroundSelector, MysqlBackgroundTableSeries,
+    RedisKeyPatternConfig,
+};
 pub use recording::{
     RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
     TrafficJsonlMode,

@@ -2,19 +2,28 @@ pub(in crate::replay) async fn write_response(
     stream: &mut (impl MysqlReplayIo + ?Sized),
     response: &RecordedMysqlResponse,
     row_encoding: ResultRowEncoding,
+    status_flags: u16,
 ) -> Result<()> {
     match response.status.as_str() {
         "resultset" => {
-            write_resultset(stream, &response.columns, &response.rows, row_encoding).await
+            write_resultset(
+                stream,
+                &response.columns,
+                &response.rows,
+                row_encoding,
+                status_flags,
+            )
+            .await
         }
         "ok" => {
             write_packet(
                 stream,
                 MysqlPacket {
                     sequence_id: 1,
-                    payload: ok_payload(
+                    payload: ok_payload_with_status(
                         response.affected_rows.unwrap_or_default(),
                         response.last_insert_id.unwrap_or_default(),
+                        status_flags,
                     ),
                 },
             )
@@ -56,6 +65,7 @@ pub(in crate::replay) async fn write_stmt_prepare_ok(
     stream: &mut (impl MysqlReplayIo + ?Sized),
     statement_id: u32,
     metadata: &StatementMetadata,
+    status_flags: u16,
 ) -> Result<()> {
     let mut sequence_id = 1_u8;
     write_packet(
@@ -98,7 +108,7 @@ pub(in crate::replay) async fn write_stmt_prepare_ok(
             stream,
             MysqlPacket {
                 sequence_id,
-                payload: eof_payload(),
+                payload: eof_payload_with_status(status_flags),
             },
         )
         .await?;
@@ -121,7 +131,7 @@ pub(in crate::replay) async fn write_stmt_prepare_ok(
             stream,
             MysqlPacket {
                 sequence_id,
-                payload: eof_payload(),
+                payload: eof_payload_with_status(status_flags),
             },
         )
         .await?;
@@ -134,6 +144,7 @@ pub(in crate::replay) async fn write_resultset(
     columns: &[RecordedMysqlColumn],
     rows: &[Vec<RecordedMysqlValue>],
     row_encoding: ResultRowEncoding,
+    status_flags: u16,
 ) -> Result<()> {
     if columns.is_empty() {
         return write_packet(
@@ -172,7 +183,7 @@ pub(in crate::replay) async fn write_resultset(
         stream,
         MysqlPacket {
             sequence_id,
-            payload: eof_payload(),
+            payload: eof_payload_with_status(status_flags),
         },
     )
     .await?;
@@ -197,7 +208,7 @@ pub(in crate::replay) async fn write_resultset(
         stream,
         MysqlPacket {
             sequence_id,
-            payload: eof_payload(),
+            payload: eof_payload_with_status(status_flags),
         },
     )
     .await
@@ -255,10 +266,18 @@ pub(in crate::replay) fn mysql_replay_auth_plugin_data_len() -> u8 {
 }
 
 pub(in crate::replay) fn ok_payload(affected_rows: u64, last_insert_id: u64) -> Vec<u8> {
+    ok_payload_with_status(affected_rows, last_insert_id, SERVER_STATUS_AUTOCOMMIT)
+}
+
+pub(in crate::replay) fn ok_payload_with_status(
+    affected_rows: u64,
+    last_insert_id: u64,
+    status_flags: u16,
+) -> Vec<u8> {
     let mut payload = vec![0x00];
     payload.extend_from_slice(&lenenc_int(affected_rows));
     payload.extend_from_slice(&lenenc_int(last_insert_id));
-    payload.extend_from_slice(&SERVER_STATUS_AUTOCOMMIT.to_le_bytes());
+    payload.extend_from_slice(&status_flags.to_le_bytes());
     payload.extend_from_slice(&0_u16.to_le_bytes());
     payload
 }
@@ -271,10 +290,10 @@ pub(in crate::replay) fn err_payload(code: u16, message: &str) -> Vec<u8> {
     payload
 }
 
-pub(in crate::replay) fn eof_payload() -> Vec<u8> {
+fn eof_payload_with_status(status_flags: u16) -> Vec<u8> {
     let mut payload = vec![0xfe];
     payload.extend_from_slice(&0_u16.to_le_bytes());
-    payload.extend_from_slice(&SERVER_STATUS_AUTOCOMMIT.to_le_bytes());
+    payload.extend_from_slice(&status_flags.to_le_bytes());
     payload
 }
 
@@ -294,7 +313,7 @@ pub(in crate::replay) fn stmt_prepare_ok_payload(
 
 pub(in crate::replay) fn column_definition_payload(column: &RecordedMysqlColumn) -> Vec<u8> {
     let type_code = column_type_code(column);
-    let charset = if type_code == MYSQL_TYPE_VAR_STRING && column.family == "binary" {
+    let charset = if column.family == "binary" {
         MYSQL_CHARSET_BINARY
     } else {
         MYSQL_CHARSET_UTF8_GENERAL_CI
@@ -385,7 +404,20 @@ pub(in crate::replay) fn encode_binary_value(
             payload.extend_from_slice(&(value_as_i64(value)? as i32).to_le_bytes());
         }
         MYSQL_TYPE_LONGLONG => {
-            payload.extend_from_slice(&value_as_i64(value)?.to_le_bytes());
+            if column.unsigned == Some(true) {
+                let value = match value.value.as_ref() {
+                    Some(Value::Number(value)) => value
+                        .as_u64()
+                        .context("recorded integer does not fit u64")?,
+                    Some(Value::String(value)) => value
+                        .parse::<u64>()
+                        .context("invalid recorded unsigned integer")?,
+                    _ => return Err(anyhow!("recorded unsigned integer has no numeric value")),
+                };
+                payload.extend_from_slice(&value.to_le_bytes());
+            } else {
+                payload.extend_from_slice(&value_as_i64(value)?.to_le_bytes());
+            }
         }
         MYSQL_TYPE_FLOAT => {
             payload.extend_from_slice(&(value_as_f64(value)? as f32).to_le_bytes());
@@ -463,6 +495,11 @@ pub(in crate::replay) fn parse_binary_value(
             Some((mysql_json("float", Value::Number(number)), offset + 8))
         }
         MYSQL_TYPE_NULL => Some((mysql_null(), offset)),
+        MYSQL_TYPE_NEWDECIMAL => {
+            let (bytes, next) = read_lenenc_bytes(payload, offset)?;
+            let value = std::str::from_utf8(bytes).ok()?;
+            Some((mysql_json("decimal", Value::String(value.to_owned())), next))
+        }
         MYSQL_TYPE_DATE | MYSQL_TYPE_DATETIME | MYSQL_TYPE_TIMESTAMP => {
             parse_binary_datetime(payload, offset)
                 .map(|(value, next)| (mysql_json("datetime", Value::String(value)), next))

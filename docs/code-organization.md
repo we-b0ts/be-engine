@@ -175,3 +175,10 @@ plugins/ai-software-engineering/skills/backend-rewrite/scripts/check-code-organi
 
 Before an MR, set `CODE_ORG_BASE` to the target branch. Use `--all` only for an
 explicit repository-wide audit.
+
+- `mysql/sql.rs` owns conservative SQL token/value identity shared by replay and
+  narrow MySQL ownership selectors. `replay/mysql/session_setup.rs` owns builtin
+  initialization recognition; `sql_match.rs` owns text/prepared correlation.
+  `config/process_owned_dependencies/mysql.rs` owns MySQL rule validation and
+  matching, while `config/background_mysql_feedback.rs` owns immutable-evidence
+  planning and atomic configuration application.

@@ -468,3 +468,105 @@ async fn redis_get_background_rule_records_without_response_role_metadata() {
     assert!(global.contains("\"global_dependency_matched_by\":\"startup-cache-warm\""));
     assert!(!global.contains("global_dependency_response_role"));
 }
+
+#[tokio::test]
+async fn background_mysql_scan_enters_global_while_user_query_remains_case_owned() {
+    use crate::recorder::{MysqlColumn, MysqlExchangeEvent, MysqlExchangeResponse};
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = case_limit_test_config(&temp);
+    config.http_gateway.ready.enabled = false;
+    config.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Mysql {
+        name: "task-recovery".into(),
+        selector: MysqlBackgroundSelector {
+            target_host: "mysql.internal".into(),
+            target_port: 3306,
+            database: "appdb".into(),
+            username: "root".into(),
+            sql: "SELECT id FROM {{table}} WHERE status='RUNNING' AND created_at>=?".into(),
+            tables: vec![],
+            table_series: Some(MysqlBackgroundTableSeries {
+                prefix: "video_tasks_".into(),
+                start: 0,
+                end: 1023,
+                width: 4,
+            }),
+        },
+        source_revision: "0123456789abcdef".into(),
+        source_evidence: "src/recovery.py:run startup scan".into(),
+    }];
+    let state = AppState::new(config).await.unwrap();
+    let case = CaseContext {
+        id: Uuid::new_v4(),
+        rule_name: "devices".into(),
+        uri_group: None,
+    };
+    let guard = state.try_reserve_active_case(case.clone()).unwrap();
+    state.activate_case_dependencies(&guard).unwrap();
+    let event = |sql: &str| {
+        RecorderEvent::MysqlExchange(MysqlExchangeEvent {
+            id: Uuid::new_v4(),
+            connection_id: Uuid::new_v4(),
+            query_sequence: 1,
+            timestamp: Utc::now(),
+            client_addr: None,
+            route_name: None,
+            target_host: Some("mysql.internal".into()),
+            target_port: Some(3306),
+            target_addr: Some("mysql.internal:3306".into()),
+            upstream_addr: None,
+            database: Some("appdb".into()),
+            username: Some("root".into()),
+            command: "COM_QUERY".into(),
+            sql: Some(sql.into()),
+            statement_id: None,
+            params: None,
+            response: MysqlExchangeResponse {
+                status: "resultset".into(),
+                error_code: None,
+                error_message: None,
+                affected_rows: None,
+                last_insert_id: None,
+                columns: vec![MysqlColumn {
+                    name: "id".into(),
+                    table: None,
+                    column: None,
+                    family: "integer".into(),
+                    sql_type: "INT".into(),
+                    column_type_code: 3,
+                    flags: Some(1),
+                    unsigned: Some(false),
+                    bits: Some(32),
+                    nullable: Some(false),
+                    scale: None,
+                }],
+                rows: vec![],
+                row_count: 0,
+                rows_truncated: false,
+            },
+            outcome: DependencyExchangeOutcome::Response,
+            duration_ms: 0,
+            parse_warnings: vec![],
+        })
+    };
+    state.record_event(event(
+        "SELECT id FROM video_tasks_0509 WHERE status='RUNNING' AND created_at>='2026-09-05'",
+    ));
+    state.record_event(event("SELECT id FROM users WHERE user_name='AbC'"));
+    drop(guard);
+    state.recorder().publish_case(&case).await.unwrap();
+    state.recorder().finish_run().await.unwrap();
+    let global =
+        tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
+            .await
+            .unwrap();
+    let dependencies =
+        tokio::fs::read_to_string(state.recorder().case_dir(&case).join("dependencies.jsonl"))
+            .await
+            .unwrap();
+    assert_eq!(global.lines().count(), 1);
+    assert!(global.contains("video_tasks_0509"));
+    assert!(global.contains("\"global_dependency_reason\":\"background_rule\""));
+    assert!(global.contains("\"global_dependency_matched_by\":\"task-recovery\""));
+    assert_eq!(dependencies.lines().count(), 1);
+    assert!(dependencies.contains("FROM users"));
+}

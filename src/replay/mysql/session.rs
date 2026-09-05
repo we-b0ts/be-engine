@@ -3,10 +3,22 @@ pub(in crate::replay) struct ReplaySession {
     pub(in crate::replay) database: Option<String>,
     pub(in crate::replay) username: Option<String>,
     pub(in crate::replay) next_statement_id: u32,
+    pub(in crate::replay) status_flags: u16,
     pub(in crate::replay) statements: HashMap<u32, PreparedStatement>,
 }
 
 impl ReplaySession {
+    fn observe_response(&mut self, sql: &str, response: &RecordedMysqlResponse) {
+        if response.status != "ok" {
+            return;
+        }
+        match normalize_sql(sql).as_str() {
+            "begin" | "start transaction" => self.status_flags |= 0x0001,
+            "commit" | "rollback" => self.status_flags &= !0x0001,
+            _ => {}
+        }
+    }
+
     pub(in crate::replay) fn identity(&self) -> ReplaySessionIdentity {
         ReplaySessionIdentity {
             target: self.target.clone(),
@@ -25,7 +37,7 @@ pub(in crate::replay) enum SessionDirective {
 async fn deliver_matched(
     stream: &mut (impl MysqlReplayIo + ?Sized),
     state: Arc<Mutex<ReplayState>>,
-    session: &ReplaySession,
+    session: &mut ReplaySession,
     matched: MatchedExchange,
     row_encoding: ResultRowEncoding,
 ) -> Result<SessionDirective> {
@@ -46,7 +58,18 @@ async fn deliver_matched(
     }
 
     matched.timing.delay_response().await;
-    if let Err(error) = write_response(stream, &matched.record.response, row_encoding).await {
+    session.observe_response(
+        matched.record.sql.as_deref().unwrap_or_default(),
+        &matched.record.response,
+    );
+    if let Err(error) = write_response(
+        stream,
+        &matched.record.response,
+        row_encoding,
+        session.status_flags,
+    )
+    .await
+    {
         state.lock().await.fail_exchange(
             &matched,
             &session.identity(),
@@ -61,11 +84,25 @@ async fn deliver_matched(
 pub(in crate::replay) async fn handle_query(
     stream: &mut (impl MysqlReplayIo + ?Sized),
     state: Arc<Mutex<ReplayState>>,
-    session: &ReplaySession,
+    session: &mut ReplaySession,
     sql: &str,
 ) -> Result<SessionDirective> {
-    if let Some(response) = builtin_response(sql, session.database.as_deref()) {
-        write_response(stream, &response, ResultRowEncoding::Text).await?;
+    let matched = {
+        let mut state = state.lock().await;
+        let identity = session.identity();
+        state.match_exchange(&identity, "COM_QUERY", Some(sql), None)
+    };
+    if matched.is_none()
+        && let Some(response) = builtin_response(sql, session.database.as_deref())
+    {
+        session.observe_response(sql, &response);
+        write_response(
+            stream,
+            &response,
+            ResultRowEncoding::Text,
+            session.status_flags,
+        )
+        .await?;
         let mut state = state.lock().await;
         let identity = session.identity();
         state.record_builtin(
@@ -77,11 +114,6 @@ pub(in crate::replay) async fn handle_query(
         return Ok(SessionDirective::Continue);
     }
 
-    let matched = {
-        let mut state = state.lock().await;
-        let identity = session.identity();
-        state.match_exchange(&identity, "COM_QUERY", Some(sql), None)
-    };
     match matched {
         Some(matched) => {
             deliver_matched(stream, state, session, matched, ResultRowEncoding::Text).await
@@ -148,7 +180,7 @@ pub(in crate::replay) async fn handle_stmt_prepare(
             last_param_types: Vec::new(),
         },
     );
-    write_stmt_prepare_ok(stream, statement_id, &metadata).await?;
+    write_stmt_prepare_ok(stream, statement_id, &metadata, session.status_flags).await?;
     Ok(SessionDirective::Continue)
 }
 
@@ -187,19 +219,6 @@ pub(in crate::replay) async fn handle_stmt_execute(
         statement.last_param_types = param_types;
     }
 
-    if let Some(response) = builtin_response(&statement.sql, session.database.as_deref()) {
-        write_response(stream, &response, ResultRowEncoding::Binary).await?;
-        let mut state = state.lock().await;
-        let identity = session.identity();
-        state.record_builtin(
-            &identity,
-            "COM_STMT_EXECUTE",
-            Some(&statement.sql),
-            "prepared driver/session query handled by replay server",
-        );
-        return Ok(SessionDirective::Continue);
-    }
-
     if !parsed.warnings.is_empty() {
         let mut state = state.lock().await;
         for warning in &parsed.warnings {
@@ -217,6 +236,28 @@ pub(in crate::replay) async fn handle_stmt_execute(
             parsed.params.as_deref(),
         )
     };
+    if matched.is_none()
+        && let Some(response) = builtin_response(&statement.sql, session.database.as_deref())
+    {
+        session.observe_response(&statement.sql, &response);
+        write_response(
+            stream,
+            &response,
+            ResultRowEncoding::Binary,
+            session.status_flags,
+        )
+        .await?;
+        let mut state = state.lock().await;
+        let identity = session.identity();
+        state.record_builtin(
+            &identity,
+            "COM_STMT_EXECUTE",
+            Some(&statement.sql),
+            "prepared driver/session query handled by replay server",
+        );
+        return Ok(SessionDirective::Continue);
+    }
+
     match matched {
         Some(matched) => {
             deliver_matched(stream, state, session, matched, ResultRowEncoding::Binary).await

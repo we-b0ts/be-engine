@@ -179,7 +179,8 @@ fn matching_rule<'a>(
                     && event.get("interface_name").and_then(Value::as_str) == Some(interface_name)
                     && event.get("method_name").and_then(Value::as_str) == Some(method_name)
             }
-            BackgroundDependencyRuleConfig::Http { .. } => false,
+            BackgroundDependencyRuleConfig::Http { .. }
+            | BackgroundDependencyRuleConfig::Mysql { .. } => false,
         };
         matches.then(|| rule.name())
     })

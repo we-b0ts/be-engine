@@ -113,8 +113,10 @@ pub use config::{
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
     MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
     MotanBackgroundDependencyReport, MotanGatewayConfig, MotanGatewayRuleConfig,
-    MotanProtocolConfigOptions, MotanProtocolConfigResult, MysqlConfig, MysqlRouteConfig,
-    RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
+    MotanProtocolConfigOptions, MotanProtocolConfigResult, MysqlBackgroundDependencyFeedback,
+    MysqlBackgroundDependencyPlan, MysqlBackgroundDependencyReport, MysqlBackgroundSelector,
+    MysqlBackgroundTableSeries, MysqlConfig, MysqlRouteConfig, RecordingAccessPolicy,
+    RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
     RedisBackgroundDependencyFeedback, RedisBackgroundDependencyPlan,
     RedisBackgroundDependencyReport, RedisKeyPatternConfig, RepositoryConfigInitOptions,
     RepositoryConfigInitResult, TcpApplicationProtocol, TcpGatewayConfig,
@@ -123,7 +125,7 @@ pub use config::{
     plan_allowed_unused_http_hosts, plan_background_dependency, plan_breeze_endpoint_capture,
     plan_breeze_memcached_background_dependency, plan_breeze_resource_capture,
     plan_case_path_pattern_feedback, plan_motan_background_dependency,
-    plan_redis_background_dependency,
+    plan_mysql_background_dependency, plan_redis_background_dependency,
 };
 pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};

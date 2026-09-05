@@ -335,8 +335,8 @@ async fn active_case_exchanges_precede_identical_global_exchanges() {
         ReplaySource::Case
     );
     assert_eq!(
-        state.mysql.events.builtin_queries[0].recorded_source,
-        Some(ReplaySource::Case)
+        state.mysql.events.matched_queries[1].source,
+        ReplaySource::Case
     );
     assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
     assert_eq!(state.unused_exchanges(ReplaySource::Global).len(), 2);
@@ -453,8 +453,14 @@ fn builtin_dependency() -> String {
     .to_string()
 }
 
-async fn spawn_replay(
+pub(super) async fn spawn_replay(
     case_dir: &Path,
+) -> (SocketAddr, Arc<ReplayRuntime>, tokio::task::JoinHandle<()>) {
+    spawn_replay_with_policy(case_dir, None).await
+}
+pub(super) async fn spawn_replay_with_policy(
+    case_dir: &Path,
+    policy_path: Option<PathBuf>,
 ) -> (SocketAddr, Arc<ReplayRuntime>, tokio::task::JoinHandle<()>) {
     super::super::write_test_recording_network_manifest(case_dir);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -472,7 +478,7 @@ async fn spawn_replay(
                 control_socket_path: None,
                 ca_cert_path: Some(PathBuf::from(case_dir).join(".replay/ca.pem")),
                 ca_key_path: Some(PathBuf::from(case_dir).join(".replay/ca-key.pem")),
-                policy_path: None,
+                policy_path,
                 http_ignore_query_params: Vec::new(),
                 process_owned_dependencies: Vec::new(),
                 allowed_unused_http: None,
@@ -558,5 +564,117 @@ fn stmt_execute_no_params(statement_id: u32) -> Vec<u8> {
     payload.extend_from_slice(&statement_id.to_le_bytes());
     payload.push(0);
     payload.extend_from_slice(&1_u32.to_le_bytes());
+    payload
+}
+
+#[tokio::test]
+async fn prepared_execute_matches_com_query_recording_with_inlined_literal() {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let temp = tempdir().unwrap();
+        let case_dir = temp.path().join("case-id");
+        tokio::fs::create_dir_all(&case_dir).await.unwrap();
+        tokio::fs::write(
+            case_dir.join("dependencies.jsonl"),
+            serde_json::json!({
+                "event_type": "mysql_exchange",
+                "target_host": "mysql.internal",
+                "target_port": 3306,
+                "target_addr": "mysql.internal:3306",
+                "database": "appdb",
+                "username": "root",
+                "command": "COM_QUERY",
+                "sql": "SELECT id FROM users WHERE user_name = 'xiaoning5' LIMIT 1",
+                "response": {
+                    "status": "resultset",
+                    "columns": [{
+                        "name": "id",
+                        "family": "integer",
+                        "sql_type": "INT",
+                        "nullable": false
+                    }],
+                    "rows": [[{"kind": "integer", "value": 52}]]
+                }
+            })
+            .to_string(),
+        )
+        .await
+        .unwrap();
+
+        let (addr, runtime, task) = spawn_replay(&case_dir).await;
+        let mut client = connect_login(addr).await;
+
+        write_packet_bytes(
+            &mut client,
+            MysqlPacket {
+                sequence_id: 0,
+                payload: [
+                    vec![0x16],
+                    b"SELECT id FROM users WHERE user_name = ? LIMIT 1".to_vec(),
+                ]
+                .concat(),
+            },
+        )
+        .await;
+        let prepare_ok = read_packet(&mut client).await.unwrap().unwrap();
+        let statement_id = read_u32_le(&prepare_ok.payload, 1).unwrap();
+        // The statement has one placeholder, so the prepare response carries one
+        // parameter definition followed by EOF before the column definitions.
+        let _param_def = read_packet(&mut client).await.unwrap().unwrap();
+        let _param_eof = read_packet(&mut client).await.unwrap().unwrap();
+        let _column = read_packet(&mut client).await.unwrap().unwrap();
+        let _column_eof = read_packet(&mut client).await.unwrap().unwrap();
+
+        write_packet_bytes(
+            &mut client,
+            MysqlPacket {
+                sequence_id: 0,
+                payload: stmt_execute_string_param(statement_id, "xiaoning5"),
+            },
+        )
+        .await;
+        let header = read_packet(&mut client).await.unwrap().unwrap();
+        assert_eq!(header.payload, vec![1], "one-column resultset header");
+        let _column = read_packet(&mut client).await.unwrap().unwrap();
+        let _columns_eof = read_packet(&mut client).await.unwrap().unwrap();
+        // One data row must arrive (binary resultset row), then EOF.
+        let row = read_packet(&mut client).await.unwrap().unwrap();
+        assert_eq!(row.payload, vec![0, 0, 52, 0, 0, 0], "INT binary row");
+        let _rows_eof = read_packet(&mut client).await.unwrap().unwrap();
+
+        let state = runtime.state.lock().await;
+        for query in &state.mysql.events.unmatched_queries {
+            eprintln!(
+                "unmatched: command={} sql={:?} params={:?} reason={}",
+                query.command, query.sql, query.params, query.reason
+            );
+        }
+        assert_eq!(
+            state.mysql.events.matched_queries.len(),
+            1,
+            "prepared COM_STMT_EXECUTE must match the COM_QUERY recording"
+        );
+        drop(state);
+        task.abort();
+    })
+    .await
+    .expect("prepared protocol regression timed out");
+}
+
+fn stmt_execute_string_param(statement_id: u32, value: &str) -> Vec<u8> {
+    let mut payload = vec![0x17];
+    payload.extend_from_slice(&statement_id.to_le_bytes());
+    payload.push(0);
+    payload.extend_from_slice(&1_u32.to_le_bytes());
+    // null bitmap for one non-null parameter
+    payload.push(0x00);
+    // new-params-bound flag
+    payload.push(1);
+    // one parameter, type MYSQL_TYPE_VAR_STRING (0xfd), unsigned flag 0
+    payload.push(0xfd);
+    payload.push(0);
+    // length-encoded value (single-byte length for short strings)
+    assert!(value.len() < 251);
+    payload.push(value.len() as u8);
+    payload.extend_from_slice(value.as_bytes());
     payload
 }
