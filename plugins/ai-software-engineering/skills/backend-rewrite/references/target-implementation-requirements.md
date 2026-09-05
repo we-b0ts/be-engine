@@ -7,8 +7,7 @@ Read this reference only in these situations:
 - the main orchestrator is about to integrate a worker change, resolve an
   integration conflict, or make a shared target refactor.
 
-These requirements apply to an existing initialized target repository. Use
-[project-init.md](project-init.md) only for explicit one-time initialization.
+These requirements apply only to an existing initialized target repository.
 
 ## Scope And Compatibility
 
@@ -78,6 +77,24 @@ These requirements apply to an existing initialized target repository. Use
   expose secrets, full sensitive payloads, or unbounded-cardinality values.
 - Keep `unsafe` behind a narrow safe interface with documented invariants and
   boundary tests. Do not introduce it for an unmeasured performance claim.
+
+### Rust Data Representation And Allocation
+
+- Target product code MUST NOT use `serde_json::Value`,
+  `serde_json::Map<String, serde_json::Value>`, or an equivalent dynamically
+  typed tree as the serialization or deserialization model for a known schema.
+  Define dedicated `Serialize` and `Deserialize` structs for request, response,
+  configuration, and dependency payloads. Isolate a genuinely dynamic field
+  only when the source contract proves that field is open-ended.
+- Avoid unnecessary allocations and copies. Do not introduce intermediate
+  `String`, `Vec`, owned collections, `clone`, `to_owned`, `format!`, or
+  serialize-then-deserialize steps when direct construction, streaming, buffer
+  reuse, or borrowing is sufficient.
+- Prefer borrowed values and explicit lifetimes, such as `&str` and `&[u8]`,
+  when data does not need independent ownership. Use owned values at genuine
+  ownership boundaries such as spawned tasks, queues, caches, or persistence,
+  or when borrowing would make the interface less safe or substantially more
+  complex.
 
 ### Source Executor And Thread-Pool Submissions
 
