@@ -217,6 +217,13 @@ impl RedisReplayState {
             record.target_port,
             ReplayProtocol::Redis,
         )?;
+        // Older recordings retained rejected SDK identity announcements. Neither
+        // success nor failure makes these a business dependency or lane barrier.
+        if record.outcome == DependencyExchangeOutcome::Response
+            && crate::redis::is_client_library_info(&record.command, &args)
+        {
+            return Ok(());
+        }
         self.exchanges.push(ReplayExchange {
             source,
             case_id: case_id.map(ToOwned::to_owned),
@@ -541,31 +548,38 @@ pub(super) async fn handle_connection(
                     if !matched.connection_independent {
                         connection_binding.bind(active_case_id.as_deref(), matched.connection_id);
                     }
-                    Some(matched)
+                    Ok(matched)
                 }
                 Err(diagnostic) => {
+                    let authentication_hint = redis_authentication_hint(&diagnostic);
                     state.redis.events.unmatched.push(CommandRequestReport {
                         case_id: active_case_id,
                         target: target_key.clone(),
                         command: command.name.clone(),
-                        reason: "no recorded Redis exchange matched target/session/arguments"
+                        reason: authentication_hint
+                            .unwrap_or(
+                                "no recorded Redis exchange matched target/session/arguments",
+                            )
                             .to_string(),
                         diagnostic: Some(diagnostic),
                     });
-                    None
+                    Err(authentication_hint.unwrap_or("no recorded Redis dependency matched"))
                 }
             }
         };
-        if let Some(matched) = response {
-            if deliver_redis_exchange(&mut reader, &state, &matched).await? {
-                report_writer.request();
-                break;
+        match response {
+            Ok(matched) => {
+                if deliver_redis_exchange(&mut reader, &state, &matched).await? {
+                    report_writer.request();
+                    break;
+                }
             }
-        } else {
-            reader
-                .inner
-                .write_all(b"-ERR no recorded Redis dependency matched\r\n")
-                .await?;
+            Err(reason) => {
+                reader
+                    .inner
+                    .write_all(format!("-ERR {reason}\r\n").as_bytes())
+                    .await?;
+            }
         }
         report_writer.request();
     }
@@ -781,11 +795,19 @@ fn redis_mismatch_fields(
     ) {
         fields.push("target");
     }
-    if exchange.record.resp_version != resp_version
-        || exchange.record.database != database
-        || normalize_optional(username) != normalize_optional(exchange.record.username.as_deref())
-    {
+    if exchange.record.resp_version != resp_version || exchange.record.database != database {
         fields.push("session");
+    }
+    let recorded_username = normalize_optional(exchange.record.username.as_deref());
+    let target_username = normalize_optional(username);
+    if recorded_username != target_username {
+        fields.push(
+            if recorded_username.is_some() && target_username.is_none() {
+                "authentication_not_observed"
+            } else {
+                "username"
+            },
+        );
     }
     if !exchange.record.command.eq_ignore_ascii_case(command) {
         fields.push("command");
@@ -794,6 +816,21 @@ fn redis_mismatch_fields(
         fields.push("arguments");
     }
     fields
+}
+
+fn redis_authentication_hint(diagnostic: &CommandMatchDiagnostic) -> Option<&'static str> {
+    // Only attribute an otherwise matching exchange to missing authentication.
+    // A username difference cannot prove that the application omitted a password.
+    match diagnostic {
+        CommandMatchDiagnostic::Mismatch { fields }
+            if fields.as_slice() == ["authentication_not_observed"] =>
+        {
+            Some(
+                "Redis authentication state mismatch: the recorded connection has an authenticated username, but target authentication was not observed. Check password configuration and whether it is passed to the Redis client.",
+            )
+        }
+        _ => None,
+    }
 }
 
 fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnusedReport> {

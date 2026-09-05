@@ -29,6 +29,7 @@ use udp::{UdpDependencySummary, record_udp_summary};
 
 pub(crate) fn should_append_case_dependency(event: &RecorderEvent) -> bool {
     !matches!(event, RecorderEvent::MysqlExchange(exchange) if is_debug_only_mysql_exchange(exchange))
+        && !matches!(event, RecorderEvent::RedisExchange(exchange) if redis::is_client_library_info_exchange(exchange))
         && !matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.session_setup && exchange.response_kind != "error" && exchange.replay_safe)
         && !matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.command == "PING" && exchange.response_kind != "error" && exchange.replay_safe)
         && !matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.cache_snapshot_hit)
@@ -617,11 +618,7 @@ fn is_successful_mysql_session_setup(
 
 fn is_mysql_session_setup_sql(sql: &str) -> bool {
     let normalized = normalize_mysql_control_sql(sql);
-    // A bare ROLLBACK is the SQLAlchemy/pymysql session-teardown artifact of
-    // `get_db`'s `finally: db.close()` on an autobegin session; it is driver
-    // control traffic, not an application dependency call.
-    normalized == "rollback"
-        || normalized.starts_with("set names ")
+    normalized.starts_with("set names ")
         || normalized.starts_with("set character set ")
         || normalized.starts_with("set character_set_client ")
         || normalized.starts_with("set character_set_connection ")
@@ -897,6 +894,20 @@ mod tests {
         assert_eq!(summary["mysql"]["semantic_exchanges"], 2);
         assert_eq!(summary["mysql"]["executed"]["crud"]["select"], 1);
         assert_eq!(summary["mysql"]["executed"]["crud"]["other"], 1);
+    }
+
+    #[test]
+    fn rollback_is_preserved_in_semantic_dependencies() {
+        let raw = r#"{"event_type":"mysql_exchange","command":"COM_QUERY","sql":"ROLLBACK","response":{"status":"ok","affected_rows":0,"last_insert_id":0}}
+{"event_type":"mysql_exchange","command":"COM_QUERY","sql":"ROLLBACK","response":{"status":"error","error_code":1205}}"#;
+        let summary = serde_json::to_value(build_dependency_summary(raw)).unwrap();
+        assert_eq!(summary["mysql"]["semantic_exchanges"], 2);
+        assert!(!is_successful_mysql_session_setup(
+            "COM_QUERY",
+            Some("ROLLBACK"),
+            "ok",
+            1
+        ));
     }
 
     #[test]

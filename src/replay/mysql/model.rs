@@ -20,6 +20,7 @@ pub(in crate::replay) struct ReplayExchange {
     pub(in crate::replay) case_id: Option<String>,
     pub(in crate::replay) identity: MysqlDependencyIdentity,
     pub(in crate::replay) record: RecordedMysqlExchange,
+    pub(in crate::replay) optional_rollback: bool,
     pub(in crate::replay) status: ReplayExchangeStatus,
     pub(in crate::replay) timing: ReplayExchangeTiming,
 }
@@ -61,6 +62,7 @@ pub(in crate::replay) struct RecordedMysqlConnection {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(in crate::replay) struct RecordedMysqlExchange {
+    pub(in crate::replay) query_sequence: Option<u64>,
     pub(in crate::replay) connection_id: Option<Uuid>,
     pub(in crate::replay) target_host: Option<String>,
     pub(in crate::replay) target_port: Option<u16>,
@@ -81,6 +83,7 @@ pub(in crate::replay) struct RecordedMysqlExchange {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(in crate::replay) struct RecordedMysqlResponse {
+    pub(in crate::replay) server_status: Option<u16>,
     pub(in crate::replay) status: String,
     pub(in crate::replay) error_code: Option<u16>,
     pub(in crate::replay) error_message: Option<String>,

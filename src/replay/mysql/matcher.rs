@@ -314,11 +314,29 @@ impl ReplayState {
         &self,
         source: ReplaySource,
     ) -> Vec<RecordedExchangeSummary> {
+        self.mysql_unused_exchanges(source, false)
+    }
+
+    pub(in crate::replay) fn allowed_unused_rollbacks(&self) -> Vec<RecordedExchangeSummary> {
+        [ReplaySource::Case, ReplaySource::Global]
+            .into_iter()
+            .flat_map(|source| self.mysql_unused_exchanges(source, true))
+            .collect()
+    }
+
+    fn mysql_unused_exchanges(
+        &self,
+        source: ReplaySource,
+        allowed: bool,
+    ) -> Vec<RecordedExchangeSummary> {
         self.mysql
             .exchanges
             .iter()
             .enumerate()
-            .filter(|(_, exchange)| exchange.source == source && !exchange.status.is_consumed())
+            .filter(|(_, exchange)| {
+                let optional = exchange.optional_rollback && exchange.status.is_available();
+                exchange.source == source && !exchange.status.is_consumed() && optional == allowed
+            })
             .map(|(index, exchange)| RecordedExchangeSummary {
                 index,
                 case_id: exchange.case_id.clone(),

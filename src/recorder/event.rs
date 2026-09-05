@@ -496,6 +496,9 @@ pub struct MysqlExchangeEvent {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct MysqlExchangeResponse {
+    /// Protocol-41 OK status flags, when captured completely.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_status: Option<u16>,
     pub status: String,
     pub error_code: Option<u16>,
     pub error_message: Option<String>,

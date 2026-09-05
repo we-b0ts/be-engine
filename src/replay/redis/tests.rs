@@ -1,6 +1,8 @@
 use super::*;
 use crate::BackgroundDependencyRuleConfig;
 
+mod client_info;
+
 #[test]
 fn cache_snapshot_seed_can_satisfy_repeated_logical_reads() {
     let mut state = RedisReplayState::default();

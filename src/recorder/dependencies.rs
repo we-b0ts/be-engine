@@ -539,6 +539,7 @@ mod tests {
             statement_id: None,
             params: None,
             response: MysqlExchangeResponse {
+                server_status: None,
                 status: "ok".to_string(),
                 error_code: None,
                 error_message: None,

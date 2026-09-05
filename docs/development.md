@@ -2234,10 +2234,27 @@ Redis and Memcached dependencies are semantic `redis_connection`,
 `redis_exchange`, `memcached_connection`, and `memcached_exchange` records.
 Successful Redis authentication/session initialization is handled by replay
 and omitted from case dependencies; failed initialization remains as redacted
-evidence. Any truncated frame, parse/correlation failure, unsupported cache
+evidence. When an otherwise matching business command has a recorded authenticated
+username but no observed target authentication, Replay reports an authentication
+state mismatch and suggests checking password configuration and client wiring.
+This does not establish that a password was omitted, and Replay does not validate
+password values. Other username, database, and protocol differences remain strict.
+Any truncated frame, parse/correlation failure, unsupported cache
 mode, or unsafe cache connection prevents a case from being published and
 prevents unsafe Global replay from starting. The recording directory is
 sensitive because ordinary cache keys and values are needed for exact replay.
+
+Well-formed `CLIENT SETINFO LIB-NAME` and `CLIENT SETINFO LIB-VER` announcements
+are SDK metadata, not business dependencies, whether Redis returns success or
+an error (including servers or proxies without SETINFO support). With full traffic
+logging enabled, Recorder retains these exchanges in `traffic.jsonl`, while
+excluding them from semantic case
+and Global dependencies. Replay also excludes them when loading older recordings,
+without changing the files or requiring re-recording. Target SDKs may omit the
+announcements or send their own library name and version; Replay accepts valid
+announcements with `+OK`. Authentication and database selection failures remain
+strict. This exemption requires a well-formed announcement and a complete response;
+it does not bypass unsafe or truncated capture validation.
 
 Redis Pub/Sub support is intentionally bounded to a single RESP2 subscription
 argument for `SUBSCRIBE`, `PSUBSCRIBE`, or `SSUBSCRIBE`. Recorder accepts only

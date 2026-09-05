@@ -30,6 +30,27 @@ in OK and EOF packets; a successful BEGIN therefore works with SQLx's transactio
 state checks. This status tracking does not simulate database contents or
 replace recorded effects with an in-memory database.
 
+ROLLBACK remains semantic evidence, including failed rollbacks. Replay permits
+omitting only a redundant successful bare ROLLBACK immediately following a
+successful bare COMMIT or ROLLBACK on the same recorded connection and identity.
+Both exchanges must have consecutive query sequence numbers and complete,
+successful zero-effect responses whose captured OK status flags confirm no
+active transaction or pending results. This also excludes implicit transaction
+chaining through MySQL's `completion_type` setting. Missing status flags or
+missing or duplicate sequence evidence,
+intervening statements, explicit transaction chaining, and parse warnings prevent
+this compatibility. A first rollback after reads, writes, or locks remains
+required; a read-only request alone does not prove transaction equivalence.
+
+Optional cleanup stays matchable and appears separately in
+`allowed_unused_mysql_rollback_exchanges` when omitted. It is never marked as a
+successful target call. Recorded files remain unchanged. Existing reports are
+not cleaned by SQL-summary filtering: rerun Replay to derive the classification
+from full exchanges. Older recordings without status flags remain strict;
+a new recording is needed to establish cleanup eligibility. Recordings produced
+by versions that omitted ROLLBACK already lack that semantic evidence and need a
+new recording to validate it.
+
 Run the actual-client and focused protocol tests with:
 
 ```sh

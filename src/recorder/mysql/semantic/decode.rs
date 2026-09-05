@@ -2,6 +2,7 @@ use super::*;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct OkPacket {
+    pub(super) server_status: Option<u16>,
     pub(super) affected_rows: u64,
     pub(super) last_insert_id: u64,
 }
@@ -434,8 +435,13 @@ pub(super) fn parse_ok_packet(payload: &[u8]) -> Option<OkPacket> {
         return None;
     }
     let (affected_rows, offset) = read_lenenc_int(payload, 1)?;
-    let (last_insert_id, _) = read_lenenc_int(payload, offset)?;
+    let (last_insert_id, offset) = read_lenenc_int(payload, offset)?;
+    // Status and warning count follow both length-encoded integers in Protocol 41.
+    let server_status = payload
+        .get(offset..offset + 4)
+        .map(|tail| u16::from_le_bytes([tail[0], tail[1]]));
     Some(OkPacket {
+        server_status,
         affected_rows,
         last_insert_id,
     })
