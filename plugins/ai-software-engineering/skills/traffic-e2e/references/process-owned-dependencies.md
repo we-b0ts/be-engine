@@ -53,9 +53,11 @@ diagnostic hint, not proof of ownership or response causality.
 The current narrow rule types are:
 
 - MySQL read-only SELECT templates scoped to exact host, port, database, username
-  and bounded physical tables; see [MySQL replay](../../../../../docs/mysql-replay.md)
-  for the evidence-gated plan/apply command. These rules require new recordings
-  and do not reclassify existing Case evidence;
+  and exact tables, bounded numeric shards, or single-wildcard table identifier
+  patterns; see [MySQL replay](../../../../../docs/mysql-replay.md)
+  for evidence-gated plan/apply and table-bound column alias templates. The
+  coordinator can reclassify complete unused Case evidence with the current
+  rule and reuse the recording without changing its JSONL;
 
 - exact HTTP authority, method, and path prefix;
 - exact Vintage service group plus Motan interface and method, with no endpoint,

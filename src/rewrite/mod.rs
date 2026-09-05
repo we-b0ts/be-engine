@@ -45,7 +45,8 @@ pub use case_dependencies::{
     RewriteCapturePreview, RewriteCaseDependenciesOptions, RewriteCaseDependenciesReport,
     RewriteCaseDependencyProtocolDetail, RewriteCaseDependencyTarget,
     RewriteCaseDependencyTargetSummary, RewriteMemcachedExchangeDetail,
-    RewriteMemcachedOperationDetail, RewriteRedisExchangeDetail, RewriteRedisOperationDetail,
+    RewriteMemcachedOperationDetail, RewriteMysqlExchangeDetail, RewriteMysqlOperationDetail,
+    RewriteMysqlParameterDetail, RewriteRedisExchangeDetail, RewriteRedisOperationDetail,
     query as query_rewrite_case_dependencies,
 };
 pub use case_patterns::{RewriteCasePatternApplyOptions, apply as apply_rewrite_case_patterns};

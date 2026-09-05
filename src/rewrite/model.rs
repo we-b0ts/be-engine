@@ -258,6 +258,9 @@ pub struct RewriteResponseBodyRuleSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum RewriteDependencyRuleSpec {
+    Mysql {
+        selector: crate::MysqlBackgroundSelector,
+    },
     Http {
         authority: String,
         method: String,

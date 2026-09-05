@@ -45,10 +45,27 @@ SQLx is a development dependency only.
 
 MySQL joins the existing HTTP/Redis/Memcached/Motan process-owned classification.
 A rule requires source ownership evidence, exact endpoint/database/username,
-a bounded physical table set and one read-only SELECT template. `{{table}}`
-selects a configured physical table; `?` selects a variable literal position.
+a physical table selector and one read-only SELECT template. `{{table}}`
+selects a matching physical table; `AS {{table}}_id` expands a column alias
+using that same table, and `?` selects a variable literal position.
 Every other projection, predicate and constant remains exact. Do not classify a
 query as process-owned merely because replay reports it unused.
+
+Table selectors can be combined (their union is used):
+
+- Repeat `--table` for exact table names.
+- Use `--table-prefix`, `--table-start`, `--table-end`, and `--table-width`
+  for a numeric shard series, bounded to 4096 physical names.
+- Repeat `--table-pattern` for a pattern containing one `*`, such as
+  `'subtasks_*'`, `'*_archive'`, or `'recovery_*_pending'`. Quote patterns in
+  the shell. The wildcard matches zero or more ASCII identifier characters;
+  matching remains case-sensitive and limited to 64-byte table names. Bare
+  `*`, multiple wildcards, regular expressions, and SQL fragments are rejected.
+
+The policy stores these as `tables`, `table_series`, and `table_patterns`.
+Patterns must be justified by the source's table naming and ownership contract;
+an observed prefix alone does not prove that all matching tables are process-owned.
+Every table mode also requires the same endpoint, database, user, and SQL shape.
 
 For example, after proving that a recovery scan runs independently of an API:
 
@@ -71,9 +88,50 @@ report and corresponding complete, successful immutable dependency evidence;
 unmatched or unsupported target queries selected by the rule reject the plan.
 Apply checks that evidence and rules have not changed since planning.
 
-Create a new recording after applying a rule. Matching reads enter Global even
-while an API case is active; unrelated business queries remain Case-owned.
-Global MySQL records are finite and consumed once. Existing recordings and
-unused-case reports are unchanged, and no Redis-style reusable snapshot is
-inferred. Source-required initialization, background state changes and readiness
-remain target responsibilities.
+In a backend rewrite, the API worker starts with the dirty-cluster result's
+`representative_dependencies_command`, then the relevant target's returned
+`detail_command`. Like Redis, MySQL has a structured detail view: SQL (up to
+8192 bytes), typed parameters, connection identity, attribution, result status,
+row count, column names, warnings, and original exchange locator. Previews and
+omitted counts are explicit; result rows are not dumped. The tool reads
+`dependencies.jsonl` internally. Read only the necessary original record if a
+truncated or omitted detail prevents the diagnosis.
+
+The worker verifies process ownership in source and returns selector inputs and
+source proof. The main orchestrator uses the coordinator-issued dirty-cluster
+evidence ID and the exposed `applicable_rule_planners` entry to plan and apply:
+
+```sh
+backend-rewrite --target-root /path/to/target dependency-rule plan mysql \
+  --evidence-id <current-dirty-cluster-evidence-id> \
+  --ownership process-owned --name task-recovery \
+  --source-evidence 'src/recovery.py:run process startup recovery scan' \
+  --target-host mysql.internal --target-port 3306 \
+  --database appdb --username app_user \
+  --table video_tasks --table-prefix video_tasks_ \
+  --table-start 0 --table-end 1023 --table-width 4 \
+  --sql "SELECT {{table}}.id AS {{table}}_id FROM {{table}} WHERE {{table}}.status='RUNNING' AND {{table}}.created_at>=?"
+backend-rewrite --target-root /path/to/target dependency-rule apply <returned-plan-id>
+```
+
+Apply reclassifies the finalized focused report and recomputes its verification
+result using the existing recording. The original dependency JSONL stays
+immutable. Only unused Case summaries backed by complete successful immutable
+exchanges and matching the current rule move to Global in the derived report.
+SQL previews are not matching evidence. Unmatched and unsupported target traffic,
+failed or incomplete recorded responses, and unrelated business queries remain
+dirty. Reclassification is idempotent and restores Case ownership when a rule is
+removed or no longer matches. No new recording is required for this classification.
+
+The table expansion is bounded by the configured physical table selectors. A column
+alias `{{table}}_id` must occur after `AS` in the SELECT projection and use the
+same table as FROM and all other `{{table}}` references. `--table-pattern` matches
+only that table identifier; SQL-wide glob matching, identifier fragments
+elsewhere, and literal interpolation are not supported. For example,
+`--table-pattern 'subtasks_*'` with `AS {{table}}_id` matches
+`subtasks_0640_id` only when the actual table is `subtasks_0640`.
+
+Future recordings also use the rule: matching reads enter Global even while an
+API case is active. Global MySQL records remain finite and consumed once; no
+Redis-style reusable snapshot is inferred. Source-required initialization,
+background state changes and readiness remain target responsibilities.

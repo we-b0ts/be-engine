@@ -185,3 +185,17 @@ explicit repository-wide audit.
   `config/process_owned_dependencies/mysql.rs` owns MySQL rule validation and
   matching, while `config/background_mysql_feedback.rs` owns immutable-evidence
   planning and atomic configuration application.
+
+- `rewrite/dependency_rule/planner.rs` owns protocol selector conversion and
+  construction of engine evidence plans; its parent owns coordinator rule
+  lifecycle and state transitions. `config/process_owned_dependencies/mysql/evidence.rs`
+  owns correlation of bounded MySQL report summaries with complete immutable
+  exchanges, shared by planning and `replay/report/background_overlay/mysql.rs`.
+  That Replay adapter owns reversible MySQL report reclassification only; its
+  parent reads immutable case dependencies once for all protocol projections.
+  `config/process_owned_dependencies/mysql/tables.rs` owns physical table selector
+  validation, matching, and intersection independently of SQL template expansion.
+- `rewrite/case_dependencies` owns bounded, read-only per-target dependency
+  projections. Its `mysql` child owns query, parameter, connection, and response
+  facts for diagnosis; it does not infer process ownership or implement rule
+  planning. The shared summary/detail command flow also serves Redis and Memcached.

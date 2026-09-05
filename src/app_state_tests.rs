@@ -484,6 +484,7 @@ async fn background_mysql_scan_enters_global_while_user_query_remains_case_owned
             username: "root".into(),
             sql: "SELECT id FROM {{table}} WHERE status='RUNNING' AND created_at>=?".into(),
             tables: vec![],
+            table_patterns: Vec::new(),
             table_series: Some(MysqlBackgroundTableSeries {
                 prefix: "video_tasks_".into(),
                 start: 0,

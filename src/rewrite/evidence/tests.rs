@@ -594,10 +594,11 @@ fn dirty_cluster_evidence_returns_only_protocol_specific_rule_planners() {
         "evidence-current",
     );
 
-    assert_eq!(planners.len(), 3);
+    assert_eq!(planners.len(), 4);
     assert_eq!(planners[0].capability, "http");
     assert_eq!(planners[1].capability, "memcached");
-    assert_eq!(planners[2].capability, "redis");
+    assert_eq!(planners[2].capability, "mysql");
+    assert_eq!(planners[3].capability, "redis");
     assert_eq!(planners[1].evidence_id, "evidence-current");
     assert_eq!(planners[1].command.cwd, target.path());
     assert_eq!(
@@ -620,7 +621,7 @@ fn dirty_cluster_evidence_returns_only_protocol_specific_rule_planners() {
             target.path().to_str().unwrap(),
             "dependency-rule",
             "plan",
-            "redis",
+            "mysql",
             "--help",
         ]
     );

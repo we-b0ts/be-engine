@@ -55,11 +55,14 @@ struct MysqlBackgroundArgs {
     username: String,
     #[arg(
         long,
-        help = "Single SELECT with {{table}} and ? for variable literal positions"
+        help = "Single SELECT with {{table}}, AS {{table}}_suffix aliases and ? for variable literals"
     )]
     sql: String,
     #[arg(long = "table")]
     tables: Vec<String>,
+    /// Table identifier pattern with one *, e.g. subtasks_* or *_archive. Repeatable.
+    #[arg(long = "table-pattern")]
+    table_patterns: Vec<String>,
     #[arg(long, requires_all = ["table_start", "table_end"])]
     table_prefix: Option<String>,
     #[arg(long, requires = "table_prefix")]
@@ -187,6 +190,7 @@ pub(super) fn run(
                     username: selector.username,
                     sql: selector.sql,
                     tables: selector.tables,
+                    table_patterns: selector.table_patterns,
                     table_series,
                 },
             })?;

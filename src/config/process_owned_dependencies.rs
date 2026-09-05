@@ -1,4 +1,4 @@
-mod mysql;
+pub(crate) mod mysql;
 pub use mysql::{MysqlBackgroundSelector, MysqlBackgroundTableSeries};
 
 use std::collections::HashSet;

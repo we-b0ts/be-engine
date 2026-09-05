@@ -31,6 +31,8 @@ struct DependencyRulePlanArgs {
 
 #[derive(Debug, Subcommand)]
 enum DependencyRuleProtocolArgs {
+    /// Classify source-proven MySQL reads using bounded tables and a SELECT template.
+    Mysql(Box<MysqlDependencyRuleArgs>),
     /// Classify an HTTP dependency using an exact selector.
     Http(HttpDependencyRuleArgs),
     /// Plan a Memcached dependency rule.
@@ -78,6 +80,38 @@ impl From<DependencyOwnershipArg> for RewriteDependencyOwnership {
             DependencyOwnershipArg::Unresolved => Self::Unresolved,
         }
     }
+}
+
+#[derive(Debug, Args)]
+struct MysqlDependencyRuleArgs {
+    #[command(flatten)]
+    common: DependencyRuleCommonArgs,
+    #[arg(long)]
+    target_host: String,
+    #[arg(long, default_value_t = 3306)]
+    target_port: u16,
+    #[arg(long)]
+    database: String,
+    #[arg(long)]
+    username: String,
+    #[arg(
+        long,
+        help = "Single SELECT with {{table}}, AS {{table}}_suffix aliases and ? for variable literals"
+    )]
+    sql: String,
+    #[arg(long = "table")]
+    tables: Vec<String>,
+    /// Table identifier pattern with one *, e.g. subtasks_* or *_archive. Repeatable.
+    #[arg(long = "table-pattern")]
+    table_patterns: Vec<String>,
+    #[arg(long, requires_all = ["table_start", "table_end"])]
+    table_prefix: Option<String>,
+    #[arg(long, requires = "table_prefix")]
+    table_start: Option<u32>,
+    #[arg(long, requires = "table_prefix")]
+    table_end: Option<u32>,
+    #[arg(long, default_value_t = 4)]
+    table_width: usize,
 }
 
 #[derive(Debug, Args)]
@@ -254,6 +288,31 @@ impl TryFrom<DependencyRuleProtocolArgs> for DependencyPlan {
 
     fn try_from(value: DependencyRuleProtocolArgs) -> Result<Self> {
         Ok(Self::Ownership(match value {
+            DependencyRuleProtocolArgs::Mysql(args) => {
+                let table_series =
+                    args.table_prefix
+                        .map(|prefix| traffic_e2e::MysqlBackgroundTableSeries {
+                            prefix,
+                            start: args.table_start.expect("clap requires table-start"),
+                            end: args.table_end.expect("clap requires table-end"),
+                            width: args.table_width,
+                        });
+                dependency_rule_options(
+                    args.common,
+                    RewriteDependencyRuleSelector::Mysql {
+                        selector: traffic_e2e::MysqlBackgroundSelector {
+                            target_host: args.target_host,
+                            target_port: args.target_port,
+                            database: args.database,
+                            username: args.username,
+                            sql: args.sql,
+                            tables: args.tables,
+                            table_patterns: args.table_patterns,
+                            table_series,
+                        },
+                    },
+                )
+            }
             DependencyRuleProtocolArgs::Http(args) => dependency_rule_options(
                 args.common,
                 RewriteDependencyRuleSelector::Http {
@@ -497,5 +556,71 @@ mod tests {
             "sender",
         ])
         .unwrap();
+    }
+
+    #[test]
+    fn mysql_cli_requires_bounded_table_series_and_preserves_alias_template() {
+        let base = [
+            "test",
+            "plan",
+            "mysql",
+            "--evidence-id",
+            "evidence-dirty-clusters",
+            "--ownership",
+            "process-owned",
+            "--name",
+            "video-recovery",
+            "--source-evidence",
+            "src/recovery.py:run startup scan",
+            "--target-host",
+            "db.internal",
+            "--database",
+            "app",
+            "--username",
+            "user",
+            "--sql",
+            "SELECT {{table}}.id AS {{table}}_id FROM {{table}} WHERE status='RUNNING'",
+            "--table-prefix",
+            "subtasks_",
+            "--table-start",
+            "0",
+        ];
+        let error = TestCli::try_parse_from(base).unwrap_err();
+        assert!(error.to_string().contains("--table-end"));
+        let parsed =
+            TestCli::try_parse_from(base.into_iter().chain(["--table-end", "1023"])).unwrap();
+        let DependencyRuleCommand::Plan(plan) = parsed.dependency_rule.command else {
+            panic!("expected plan");
+        };
+        let DependencyPlan::Ownership(options) = plan.protocol.try_into().unwrap() else {
+            panic!("expected ownership");
+        };
+        let RewriteDependencyRuleSelector::Mysql { selector } = options.selector else {
+            panic!("expected mysql selector");
+        };
+        assert_eq!(options.ownership, RewriteDependencyOwnership::ProcessOwned);
+        assert_eq!(selector.target_port, 3306);
+        assert_eq!(selector.sql, base[18]);
+        let series = selector.table_series.unwrap();
+        assert_eq!((series.start, series.end, series.width), (0, 1023, 4));
+
+        let parsed = TestCli::try_parse_from(base[..19].iter().copied().chain([
+            "--table-pattern",
+            "subtasks_*",
+            "--table-pattern",
+            "*_archive",
+        ]))
+        .unwrap();
+        let DependencyRuleCommand::Plan(plan) = parsed.dependency_rule.command else {
+            panic!("expected plan");
+        };
+        let DependencyPlan::Ownership(options) = plan.protocol.try_into().unwrap() else {
+            panic!("expected ownership");
+        };
+        let RewriteDependencyRuleSelector::Mysql { selector } = options.selector else {
+            panic!("expected mysql");
+        };
+        assert_eq!(selector.table_patterns, ["subtasks_*", "*_archive"]);
+        assert!(selector.tables.is_empty() && selector.table_series.is_none());
     }
 }
