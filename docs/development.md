@@ -1507,6 +1507,41 @@ empty mount snapshot under `.traffic-e2e/local/startup/` and a mode-0600
 `.traffic-e2e/local/target.env`, importing the optional `--env-file` when
 provided. Do not hand-write generated snapshot state.
 
+After initialization, replace an upgraded source image and its effective
+Kubernetes runtime inputs through the administrator API:
+
+```bash
+backend-rewrite-admin --target-root <target> source upgrade \
+  --source-pod <ready-pod> --namespace <namespace> \
+  [--pod-container <regular-container>] \
+  [--kubeconfig /path/to/kubeconfig] [--context <context>] \
+  --confirm-replace
+```
+
+This is not project initialization and never rewrites `project.yaml`,
+`source-traffic-policy.yaml`, `verification.yaml`, either Dockerfile, target
+code, Git state, or `.traffic-e2e/local/target.env`. It captures the selected
+Pod's new immutable image, effective environment, command and arguments,
+security settings, and supported ConfigMap/Secret mounts into a validated
+staging snapshot. The complete source snapshot content revision must differ
+from the current baseline, so the same command also supports runtime-input-only
+changes when the image ID is unchanged.
+While holding the rewrite coordinator lock and requiring no live traffic
+operation, it publishes the source snapshot, recaptures the exact existing
+target startup declaration from that new source, and rolls the source snapshot
+back if startup recapture fails. The next managed source run automatically
+rebuilds an adaptor cached for another source image ID.
+
+When the coordinator issued this change through a `source_change` system
+repair, execute its exact `backend-rewrite repair verify <repair-id>` command
+after the administrator upgrade. Verification detects the new source image
+revision and allocates fresh standard recording evidence; the administrator
+command does not bypass that coordinator transition. A runtime-input-only
+upgrade does not change the image revision and therefore does not satisfy a
+`source_change` repair. Runtime-input repairs use `external_data_blocker`
+acceptance, which compares source runtime and startup snapshot revisions;
+execute the acceptance command issued for that repair.
+
 `backend-rewrite startup env` lists names, checks presence or exact equality,
 ensures or removes a value, imports a dotenv file, and validates the canonical
 file without returning stored values. `backend-rewrite startup mount` lists,

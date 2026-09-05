@@ -5,9 +5,10 @@ use std::process::ExitCode;
 use anyhow::{Result, ensure};
 use clap::{Args, Parser, Subcommand};
 use traffic_e2e::{
-    RewriteRepairCancelOptions, RewriteReplayRetryOptions, StartupSnapshotRecaptureOptions,
-    cancel_misrouted_rewrite_repair, recapture_startup_snapshot,
-    retry_rewrite_replay_after_out_of_band_run,
+    KubernetesSourceOptions, RewriteRepairCancelOptions, RewriteReplayRetryOptions,
+    SourceUpgradeOptions, StartupSnapshotRecaptureOptions, cancel_misrouted_rewrite_repair,
+    recapture_startup_snapshot, retry_rewrite_replay_after_out_of_band_run,
+    upgrade_source_snapshot,
 };
 
 #[derive(Debug, Parser)]
@@ -32,10 +33,49 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum AdminCommand {
+    /// Replace the captured source image and runtime inputs from a ready Kubernetes Pod.
+    Source(SourceArgs),
     /// Repair immutable startup inputs after an explicit project declaration change.
     Startup(StartupArgs),
     /// Repair administrator-confirmed coordinator routing mistakes.
     Repair(RepairArgs),
+}
+
+#[derive(Debug, Args)]
+struct SourceArgs {
+    #[command(subcommand)]
+    command: SourceCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum SourceCommand {
+    /// Upgrade the source baseline without rerunning project initialization.
+    Upgrade(SourceUpgradeArgs),
+}
+
+#[derive(Debug, Args)]
+struct SourceUpgradeArgs {
+    /// Running Kubernetes Pod whose application container becomes the new source baseline.
+    #[arg(long)]
+    source_pod: String,
+    /// Kubernetes namespace containing the source Pod.
+    #[arg(long)]
+    namespace: String,
+    /// Regular Pod container to capture; omit when the Pod has exactly one regular container.
+    #[arg(long)]
+    pod_container: Option<String>,
+    /// Kubeconfig used only while capturing the upgraded source snapshot.
+    #[arg(long, value_name = "PATH")]
+    kubeconfig: Option<PathBuf>,
+    /// Kubeconfig context used only while capturing the upgraded source snapshot.
+    #[arg(long)]
+    context: Option<String>,
+    /// kubectl executable used while capturing the upgraded source snapshot.
+    #[arg(long, default_value = "kubectl", value_name = "PATH")]
+    kubectl_binary: PathBuf,
+    /// Confirm replacement of the existing source and derived startup snapshots.
+    #[arg(long)]
+    confirm_replace: bool,
 }
 
 #[derive(Debug, Args)]
@@ -114,6 +154,32 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
+        AdminCommand::Source(args) => match args.command {
+            SourceCommand::Upgrade(args) => {
+                ensure!(
+                    args.confirm_replace,
+                    "source upgrade requires --confirm-replace"
+                );
+                let result = upgrade_source_snapshot(SourceUpgradeOptions {
+                    target_root: cli.target_root,
+                    source: KubernetesSourceOptions {
+                        pod: args.source_pod,
+                        namespace: args.namespace,
+                        container: args.pod_container,
+                        kubeconfig: args.kubeconfig,
+                        context: args.context,
+                        kubectl_binary: args.kubectl_binary,
+                    },
+                })?;
+                if cli.pretty {
+                    serde_json::to_writer_pretty(std::io::stdout(), &result)?;
+                } else {
+                    serde_json::to_writer(std::io::stdout(), &result)?;
+                }
+                println!();
+                Ok(())
+            }
+        },
         AdminCommand::Startup(args) => match args.command {
             StartupCommand::Recapture(args) => {
                 ensure!(
@@ -177,6 +243,24 @@ mod tests {
     #[test]
     fn recapture_requires_explicit_confirmation() {
         let cli = Cli::try_parse_from(["backend-rewrite-admin", "startup", "recapture"]).unwrap();
+
+        let error = run(cli).unwrap_err();
+
+        assert!(error.to_string().contains("--confirm-replace"));
+    }
+
+    #[test]
+    fn source_upgrade_requires_explicit_confirmation() {
+        let cli = Cli::try_parse_from([
+            "backend-rewrite-admin",
+            "source",
+            "upgrade",
+            "--source-pod",
+            "source-v2",
+            "--namespace",
+            "default",
+        ])
+        .unwrap();
 
         let error = run(cli).unwrap_err();
 

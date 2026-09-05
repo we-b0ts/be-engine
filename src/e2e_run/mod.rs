@@ -1,3 +1,4 @@
+mod admin_source;
 mod admin_startup;
 mod branch;
 mod case_progress;
@@ -29,6 +30,7 @@ use crate::case_group::{
     load_complete_case_group_inventory,
 };
 
+pub use admin_source::{SourceUpgradeOptions, SourceUpgradeResult, upgrade_source_snapshot};
 pub use admin_startup::{
     StartupSnapshotRecaptureOptions, StartupSnapshotRecaptureResult, recapture_startup_snapshot,
 };

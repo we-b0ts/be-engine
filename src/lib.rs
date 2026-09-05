@@ -139,14 +139,14 @@ pub use e2e_run::{
     E2eRunInitResult, E2eRunPrepareOptions, E2eRunPrepareResult, E2eRunResult, E2eRunStatus,
     E2eSourcePreReadiness, E2eSourcePreReadinessEndpoint, E2eSourceValueCount, E2eSourceVariation,
     E2eTargetLog, E2eTargetRuntimeDiagnostics, E2eValueObservation, E2eValuePresence,
-    E2eVerificationGates, StartupMountChange, StartupMountChangeStatus, StartupMountEntry,
-    StartupMountList, StartupMountPresence, StartupSnapshotRecaptureOptions,
-    StartupSnapshotRecaptureResult, abort_e2e_run, ensure_startup_mount, initialize_e2e_run,
-    list_startup_mounts, prepare_e2e_run, query_e2e_case_response_differences,
-    query_e2e_dependency_correlation, query_e2e_dirty_counts, query_e2e_source_variation,
-    query_e2e_target_runtime_diagnostics, recapture_startup_snapshot, recover_e2e_run,
-    resolve_e2e_response_rule_evidence, resolve_single_e2e_response_rule_evidence, run_e2e_api,
-    run_e2e_round, startup_mount_exists, status_e2e_run,
+    E2eVerificationGates, SourceUpgradeOptions, SourceUpgradeResult, StartupMountChange,
+    StartupMountChangeStatus, StartupMountEntry, StartupMountList, StartupMountPresence,
+    StartupSnapshotRecaptureOptions, StartupSnapshotRecaptureResult, abort_e2e_run,
+    ensure_startup_mount, initialize_e2e_run, list_startup_mounts, prepare_e2e_run,
+    query_e2e_case_response_differences, query_e2e_dependency_correlation, query_e2e_dirty_counts,
+    query_e2e_source_variation, query_e2e_target_runtime_diagnostics, recapture_startup_snapshot,
+    recover_e2e_run, resolve_e2e_response_rule_evidence, resolve_single_e2e_response_rule_evidence,
+    run_e2e_api, run_e2e_round, startup_mount_exists, status_e2e_run, upgrade_source_snapshot,
 };
 pub use mysql::operation::MysqlWriteOperation;
 pub use network_probe::PreflightProbeKind;
