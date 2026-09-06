@@ -3,6 +3,7 @@ use super::*;
 use std::path::{Path, PathBuf};
 
 use tempfile::tempdir;
+mod autocommit_tests;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 #[tokio::test]

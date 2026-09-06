@@ -618,6 +618,16 @@ fn is_successful_mysql_session_setup(
 
 fn is_mysql_session_setup_sql(sql: &str) -> bool {
     let normalized = normalize_mysql_control_sql(sql);
+    // Preserve transaction controls, including compound/unsupported SET forms.
+    // Replay needs the full exchange and surrounding session evidence.
+    if normalized.contains("autocommit")
+        && crate::mysql::sql::tokens(sql).is_none_or(|tokens| {
+            tokens.iter().any(|token| token.is("autocommit")
+                || matches!(token, crate::mysql::sql::Token::Identifier(name) if name.eq_ignore_ascii_case("autocommit")))
+        })
+    {
+        return false;
+    }
     normalized.starts_with("set names ")
         || normalized.starts_with("set character set ")
         || normalized.starts_with("set character_set_client ")
@@ -626,8 +636,6 @@ fn is_mysql_session_setup_sql(sql: &str) -> bool {
         || normalized.starts_with("set collation_connection ")
         || normalized.starts_with("set time_zone ")
         || is_mysql_set_assignment(&normalized, "sql_mode")
-        || normalized == "set autocommit=1"
-        || normalized == "set autocommit = 1"
 }
 
 fn is_mysql_set_assignment(sql: &str, variable: &str) -> bool {
@@ -838,7 +846,7 @@ mod tests {
                 "{sql}"
             );
         }
-        assert!(is_successful_mysql_session_setup(
+        assert!(!is_successful_mysql_session_setup(
             "COM_QUERY",
             Some("SET autocommit=1"),
             "ok",

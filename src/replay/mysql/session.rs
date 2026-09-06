@@ -9,13 +9,36 @@ pub(in crate::replay) struct ReplaySession {
 
 impl ReplaySession {
     fn observe_response(&mut self, sql: &str, response: &RecordedMysqlResponse) {
-        if response.status != "ok" {
+        if !matches!(response.status.as_str(), "ok" | "resultset") {
+            return;
+        }
+        if let Some(enabled) = crate::mysql::autocommit::assignment(sql) {
+            if enabled {
+                // Only OFF -> ON implicitly commits. Repeating ON inside an
+                // explicit transaction must preserve that transaction.
+                if self.status_flags & SERVER_STATUS_AUTOCOMMIT == 0 {
+                    self.status_flags &= !0x2001;
+                }
+                self.status_flags |= SERVER_STATUS_AUTOCOMMIT;
+            } else {
+                self.status_flags &= !SERVER_STATUS_AUTOCOMMIT;
+            }
             return;
         }
         match normalize_sql(sql).as_str() {
             "begin" | "start transaction" => self.status_flags |= 0x0001,
-            "commit" | "rollback" => self.status_flags &= !0x0001,
-            _ => {}
+            "commit" | "rollback" => self.status_flags &= !0x2001,
+            _ => {
+                // Only copy transaction evidence when the source and target
+                // use the same autocommit mode. Source implicit read sessions
+                // must not turn an autocommitting target connection into one.
+                if self.status_flags & SERVER_STATUS_AUTOCOMMIT == 0
+                    && let Some(flags) = response.server_status
+                    && flags & SERVER_STATUS_AUTOCOMMIT == 0
+                {
+                    self.status_flags = (self.status_flags & !0x2001) | (flags & 0x2001);
+                }
+            }
         }
     }
 

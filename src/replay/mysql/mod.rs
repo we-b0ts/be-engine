@@ -1,9 +1,9 @@
 mod broker;
 mod matcher;
 mod model;
+pub(in crate::replay) mod optional_session;
 mod projection;
 mod response;
-pub(in crate::replay) mod rollback;
 mod session;
 mod session_setup;
 mod sql_match;

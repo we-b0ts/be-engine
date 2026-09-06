@@ -97,7 +97,7 @@ pub(super) async fn load_dependency_file(
         }
     }
 
-    let optional_rollbacks = mysql::rollback::optional_rollbacks(&records);
+    let optional_sessions = mysql::optional_session::classify(&records);
     for (record_index, record) in records.into_iter().enumerate() {
         match record {
             DependencyRecord::HttpExchange(exchange) => {
@@ -182,7 +182,7 @@ pub(super) async fn load_dependency_file(
             case_id: case_id.map(ToOwned::to_owned),
             identity,
             record: *exchange,
-            optional_rollback: optional_rollbacks.contains(&record_index),
+            optional_session: optional_sessions.get(&record_index).copied(),
             status: ReplayExchangeStatus::Available,
             timing,
         });

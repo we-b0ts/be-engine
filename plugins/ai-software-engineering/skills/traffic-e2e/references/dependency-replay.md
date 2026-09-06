@@ -98,6 +98,17 @@ re-recording; do not infer eligibility from SELECT summaries or read debug JSONL
 as the replay source. Optional cleanup stays matchable, and all business reads
 remain required. A matching HTTP response alone cannot justify omitting rollback.
 
+MySQL AUTOCOMMIT assignments are handled as connection state by Replay. A target
+can use its normal driver mode; do not add SET AUTOCOMMIT merely to consume cold
+source-connection initialization. With complete read-only session evidence,
+omitted setup appears as `allowed_unused_mysql_autocommit_exchanges` and stays
+matchable. Both 0 and 1 are retained during recording; writes, failed controls,
+unknown transaction starts and incomplete spans remain strict. Initial gaps
+caused by omitted setup may be crossed only before the first read and with
+consistent inactive status; gaps inside a transaction never establish proof.
+No rule or new recording is needed when the immutable capture already has the
+required status evidence. This does not verify transaction isolation equivalence.
+
 For Redis and Memcached, preserve connection-lane ordering and protocol
 semantics. Unmatched, unsupported, unsafe, and unused evidence remains dirty.
 Ordinary Redis data commands support different source/target pool widths and

@@ -81,6 +81,37 @@ semantic evidence. Recordings produced
 by versions that omitted ROLLBACK already lack that semantic evidence and need a
 new recording to validate it.
 
+AUTOCOMMIT is also handled by Replay. A single literal session assignment
+(`SET [SESSION|LOCAL] autocommit=0/1`, or `SET @@[session.]autocommit=0/1`)
+can be sent by ordinary clients without a matching recorded initialization.
+Replay maintains the connection's AUTOCOMMIT flag, preserves an existing
+transaction when disabling it, and clears transaction flags on OFF-to-ON.
+Repeated ON does not end an explicit transaction. Recorded errors take
+precedence over built-in success. Recorded transaction flags for an implicit
+session are applied only when both source and target have autocommit disabled;
+they never force the source's implicit transaction onto an autocommitting target.
+This is protocol state tracking, not a simulation of storage-engine transaction
+effects when source and target use different modes.
+
+Recorder retains both successful and failed AUTOCOMMIT exchanges, including
+ON assignments that older versions discarded. Replay permits omitting them
+only when the loaded connection/identity evidence proves a read-only span:
+known inactive start, complete ordinary reads, no writes, locks, explicit BEGIN,
+unsupported statements or failures, and a confirmed inactive finish. Successful
+PREPARE does not execute SQL. An initial sequence gap before the first read is
+allowed only with consistent inactive status on both sides, because Recorder
+can omit driver setup such as SET NAMES. Gaps after reads start remain strict.
+The check is scoped to one immutable dependency file and does not infer the
+contents of a gap or join evidence across cases/Global. SQL effect checks share
+the load-local cache used for rollback classification.
+
+Optional setup remains matchable and, if omitted, appears separately as
+`allowed_unused_mysql_autocommit_exchanges`; business reads remain required.
+No target shim, rule or re-recording is needed when existing captures contain
+the required status evidence. A write-containing or incomplete session keeps
+the setup required. Old captures that discarded AUTOCOMMIT=1 cannot validate
+that missing transaction control without a new recording.
+
 Run the actual-client and focused protocol tests with:
 
 ```sh
