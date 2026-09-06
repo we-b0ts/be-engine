@@ -71,6 +71,16 @@ boundary and actual-client acceptance tests.
 
 For Redis and Memcached, preserve connection-lane ordering and protocol
 semantics. Unmatched, unsupported, unsafe, and unused evidence remains dirty.
+Ordinary Redis data commands support different source/target pool widths and
+connection lifetimes by default, while retaining exact endpoint, database,
+username, RESP version, command and arguments. A target connection may consume
+several recorded source lanes; several target connections may consume one lane
+in order. Each ordinary exchange is still consumed once. Source lanes with
+retained session commands, transactions, subscriptions, blocking operations,
+scripts or unknown commands remain bound in their entirety to one target
+connection per active case. Another target connection cannot consume their
+remaining exchanges. Diagnose these session constraints before changing target
+pooling; do not reproduce short source connections for ordinary GET/MGET calls.
 Redis RESP2 `SUBSCRIBE`, `PSUBSCRIBE`, and `SSUBSCRIBE` evidence is replayable
 only when one command argument produced one exact three-element subscription
 confirmation (or an ordinary Redis error). Replay returns that recorded

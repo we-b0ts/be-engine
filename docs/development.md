@@ -2341,7 +2341,30 @@ may consume matching exchanges from multiple recorded source lanes, which
 allows source and target connection pools to have different widths. Replay
 still preserves the order within every recorded source lane and still requires
 the exact target, wire protocol, command, key, arguments, value, CAS, quiet,
-and noreply semantics. Redis retains its session connection binding.
+and noreply semantics.
+
+Redis also permits ordinary data commands (including GET/MGET, hash reads,
+SET and DEL) to span recorded physical connections. One pooled target connection
+can consume multiple short source lanes, and multiple target connections can
+consume one source lane in recorded order. Endpoint, database, authenticated
+username, RESP version, command and exact arguments remain strict. Repeated
+requests consume separate recorded exchanges; pool compatibility does not
+make responses reusable or relax case/Global ownership. Successful SDK setup
+and CLIENT SETINFO metadata retain their existing handling.
+
+Replay classifies source lanes before serving requests. A lane containing a
+retained session operation, WATCH/MULTI/EXEC, subscription, blocking operation,
+WAIT, script or unknown command conservatively retains connection binding for
+the entire lane, including its ordinary-command prefix and suffix. A stateful
+source lane belongs to one target connection within the active case; another
+target connection cannot steal its next exchange. This does not split a
+recorded transaction into independently replayable fragments. Explicit
+process-owned background/snapshot rules retain their existing behavior.
+
+No rule, new recording, or per-call target connection workaround is needed for
+ordinary Redis pool differences. If such a difference alone fails replay,
+investigate the engine version and matching evidence instead of duplicating
+the source pool size or connection lifetime in target code.
 
 Motan also preserves every recorded source lane's order. When concurrent target
 connections or multiplexed frames arrive in a different order, Replay keeps a

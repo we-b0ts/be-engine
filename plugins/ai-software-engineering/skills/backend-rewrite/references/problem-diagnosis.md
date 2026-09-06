@@ -295,6 +295,25 @@ source/recording proof and returned error and continue diagnosis. Use
 `recorder-capability-gap` only when the required capture mechanism itself is
 unsupported.
 
+## Redis Connection Pool Differences
+
+Ordinary Redis GET/MGET and other supported data commands do not require the
+target to reproduce source connection counts, pool sizes, or per-call client
+creation. Replay matches across physical connections while preserving exact
+endpoint, database, authentication identity, RESP version, arguments, source
+lane order and finite exchange counts. Keep normal target connection reuse;
+this capability needs no rule or fresh recording.
+
+If ordinary reads fail only because one pooled target connection spans several
+short recorded connections, investigate an old engine or a replay capability
+gap. Do not change target code to create one Redis client per read or separate
+pools solely to satisfy physical lane matching. Inspect the returned Redis
+dependency details for true session constraints: a source lane containing
+transactions, subscriptions, blocking operations, scripts or unknown commands
+retains whole-lane binding, and its remaining exchanges cannot move to another
+target connection. Authentication/database differences and missing, extra or
+out-of-order calls remain target behavior issues when proven by source evidence.
+
 ## Rejected Egress And IP Capture Preflight
 
 When response/dependency verification fails, `action.details.egress_rejections`

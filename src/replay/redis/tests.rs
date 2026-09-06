@@ -2,6 +2,7 @@ use super::*;
 use crate::BackgroundDependencyRuleConfig;
 
 mod client_info;
+mod pooling_scope;
 
 #[test]
 fn cache_snapshot_seed_can_satisfy_repeated_logical_reads() {
@@ -55,7 +56,16 @@ fn cache_snapshot_seed_can_satisfy_repeated_logical_reads() {
     };
     for _ in 0..2 {
         let matched = state
-            .match_redis(None, &target, None, 2, 0, None, "GET", &[b"key".to_vec()])
+            .match_redis(
+                None,
+                &target,
+                TargetConnection::default(),
+                2,
+                0,
+                None,
+                "GET",
+                &[b"key".to_vec()],
+            )
             .unwrap();
         assert_eq!(matched.response, b"$2\r\nv1\r\n");
         state.complete_exchange(&matched);
@@ -109,7 +119,7 @@ fn subscription_confirmation_registers_and_matches() {
         .match_redis(
             None,
             &target,
-            None,
+            TargetConnection::default(),
             2,
             0,
             None,

@@ -65,6 +65,10 @@ is unclear.
 - Recorder event, run, writer, and summary modules own capture, persistence,
   and reporting.
 - Replay modules own recorded dependency matching and replay lifecycle.
+- `replay/redis/matching` owns exact command selection and source-lane order
+  diagnostics. `replay/redis/connection_scope` distinguishes ordinary pool
+  reuse from recorded stateful lanes and owns their exclusive target connection
+  claims; runtime Redis I/O and session setup remain in `replay/redis/mod.rs`.
 - `http/rewrite/json_urls` owns JSON Pointer URL substitution and discovered
   HTTP routes. Recorder configuration owns concise rule validation and the
   source-traffic-policy overlay; no application-specific sandbox plugin is
