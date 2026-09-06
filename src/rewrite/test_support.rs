@@ -21,6 +21,8 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
         case_pattern_identification: None,
         target_quality_fingerprint: None,
         recording_run_id: "20260802000000".to_string(),
+        require_comparison: true,
+        recording_require_comparison: true,
         recording_rejection: None,
         recording_settings: RewriteRecordingSettings::default(),
         recording_request_reason: None,

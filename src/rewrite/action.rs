@@ -22,7 +22,9 @@ pub(super) fn for_status(
     target_root: &Path,
     state: &RewriteState,
 ) -> Result<RewriteActionEnvelope> {
-    if state.case_pattern_identification.is_some() {
+    if state.case_pattern_identification.is_some()
+        || super::transition::replay_completion_pending(state)
+    {
         return Ok(envelope(
             target_root,
             state,
@@ -142,8 +144,9 @@ pub(super) fn envelope(
         api_inventory: Some(inventory::view(state)),
         process_output_inventory: Some(process_outputs::view(state)),
         latest_focused_e2e: latest_focused_e2e(state),
-        terminal_allowed: progress_publication::state(target_root, state)
-            == Some(progress_publication::PublicationState::Published),
+        terminal_allowed: state.require_comparison
+            && progress_publication::state(target_root, state)
+                == Some(progress_publication::PublicationState::Published),
         action,
     }
 }
@@ -151,6 +154,16 @@ pub(super) fn envelope(
 fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
     if let Some(action) = case_patterns::state_action(target_root, state) {
         return action;
+    }
+    if super::transition::replay_completion_pending(state) {
+        return advance_required(
+            target_root,
+            Some(&state.api),
+            format!(
+                "finish Replay validation for {} in this recording batch",
+                state.api
+            ),
+        );
     }
     match progress_publication::state(target_root, state) {
         Some(progress_publication::PublicationState::SynchronizationRequired) => {
@@ -167,6 +180,14 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
                 summary: "commit every listed coordinator-managed final delivery file".to_string(),
                 required,
             };
+        }
+        Some(progress_publication::PublicationState::Published) if !state.require_comparison => {
+            return advance_required(
+                target_root,
+                None,
+                "finalize this recording batch and enable comparison for future recordings"
+                    .to_string(),
+            );
         }
         Some(progress_publication::PublicationState::Published) | None => {}
     }
@@ -295,7 +316,7 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
                 )
             } else {
                 format!(
-                    "{} has current E2E and comparison evidence; other recorded APIs still require work",
+                    "{} satisfies this recording batch's validation requirements; other recorded APIs still require work",
                     state.api
                 )
             },
@@ -444,6 +465,9 @@ pub(super) fn workflow_view(state: &RewriteState) -> RewriteWorkflowView {
         revision: state.revision,
         phase: state.phase,
         scope: workflow_scope(state),
+        recording_run_id: state.recording_run_id.clone(),
+        require_comparison: state.recording_require_comparison,
+        next_recording_require_comparison: state.require_comparison,
         work_scope: process_outputs::selected_scope(state).or_else(|| {
             (!state.api.is_empty()).then(|| super::process_output_model::RewriteWorkScope::Api {
                 api: state.api.clone(),

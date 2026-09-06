@@ -117,6 +117,7 @@ pub fn request_rewrite_recording(
             ExistingRecordingDisposition::Replace => {}
         }
     }
+    super::progress_publication::finalize_if_published(&target_root, &store, &mut state)?;
     let run_id = artifacts::allocate_run_id_excluding(
         &target_root,
         ManagedRecordingOperation::Record,
@@ -519,6 +520,10 @@ fn recording_action_context(
             artifacts::recording_manifest(target_root, &state.recording_run_id),
         )),
         RewritePhase::ComparisonRecordingRequired => {
+            ensure!(
+                state.recording_require_comparison,
+                "this recording batch does not require comparison; execute `backend-rewrite next`"
+            );
             let run_id = state
                 .comparison_run_id
                 .clone()
@@ -633,6 +638,7 @@ pub(super) fn reset_for_fresh_recording(
     state.phase = RewritePhase::RecordingRequired;
     inventory::reset_for_recording(state);
     state.recording_run_id = run_id;
+    state.recording_require_comparison = state.require_comparison;
     state.recording_rejection = None;
     state.recording_settings = settings;
     state.recording_request_reason = Some(reason);

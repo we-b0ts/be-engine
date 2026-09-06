@@ -132,7 +132,7 @@ assume it is complete and never rerun it.
 
 A fresh standard recording requires explicit user authorization.
 
-Response schema v21 contains an `action` object with exactly `kind`, `summary`,
+Response schema v22 contains an `action` object with exactly `kind`, `summary`,
 `details`, and `commands`. This action schema version is independent of target
 repository configuration versions. Read kind-specific facts only from
 `action.details`. An API worker uses only the issue-scoped evidence commands
@@ -169,7 +169,13 @@ Keep these states distinct:
   for the current target content fingerprint. A later integration may make it
   stale and require revalidation through the same binding.
 - **Workflow complete:** `terminal_allowed=true` proves every API and process
-  output is current for one target content fingerprint. Only then run the
+  output satisfies this recording batch's validation requirements for one target
+  content fingerprint. `workflow.require_comparison=false` permits API completion
+  after Replay; skipped Comparison remains `comparison_current=false`. The first
+  completed batch enables Comparison for future recordings without changing the
+  current batch. Follow a final `advance_required` to persist that transition;
+  never override the batch requirement or infer it from historical pass counts.
+  Only then run the
   caller-required repository checks and finish delivery.
 
 An evidence-proven unavailable external response-driving value may stop work as

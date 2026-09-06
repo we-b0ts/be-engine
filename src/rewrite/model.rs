@@ -18,7 +18,7 @@ use crate::{
 };
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 21;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 22;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -482,6 +482,12 @@ pub(super) struct RewriteState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_quality_fingerprint: Option<String>,
     pub recording_run_id: String,
+    /// Project latch: once terminal completion is published, future batches require comparison.
+    #[serde(default)]
+    pub require_comparison: bool,
+    /// Frozen when this standard recording batch is allocated, including across recovery.
+    #[serde(default)]
+    pub recording_require_comparison: bool,
     #[serde(default)]
     pub recording_rejection: Option<String>,
     #[serde(default)]
@@ -532,6 +538,9 @@ pub struct RewriteWorkflowView {
     pub revision: u64,
     pub phase: RewritePhase,
     pub scope: String,
+    pub recording_run_id: String,
+    pub require_comparison: bool,
+    pub next_recording_require_comparison: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub work_scope: Option<RewriteWorkScope>,
 }

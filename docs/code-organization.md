@@ -161,6 +161,10 @@ is unclear.
   status projection and the traffic lease are separate modules, and further
   splitting should follow a real responsibility boundary rather than divide
   one transaction, action contract, or inventory transition.
+  `transition.rs` applies each batch's frozen Comparison requirement and leaves
+  parked-slice completion scheduling to the root coordinator. `progress_publication.rs`
+  owns the durable first-completion latch for future recording batches alongside
+  its existing final delivery publication gate.
 - Within `rewrite`, `target_quality.rs` owns the coordinator quality-gate
   transaction. Its `target_replay_isolation` child owns the mandatory,
   deterministic scan that prevents production Rust source from consuming

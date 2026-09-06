@@ -1149,7 +1149,7 @@ backend-rewrite verification request \
   --reason 'shared response mapper changed'
 ```
 
-Rewrite action schema v21 always returns `action.kind`, `action.summary`,
+Rewrite action schema v22 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under role-named `commands` such as
 `execute`, `status`, `advance`, `recover`, `evidence`, `apply`, and `acceptance`.
@@ -1311,9 +1311,28 @@ stable and bounded by the maximum number of configured profile types.
 After status returns
 `advance_required`, the returned `next` validates the
 preallocated run, prepares the current API, runs focused E2E, and returns
-either one bounded implementation issue or the next comparison action. Once
-comparison passes, the following `next` prepares the next inventory item from
-the same standard recording. A repository or policy content change makes prior
+either one bounded implementation issue or the next validation action. A newly
+initialized coordinator starts with comparison disabled. Each standard recording
+batch freezes that project setting when allocated; `workflow.recording_run_id`
+identifies the batch and `workflow.require_comparison` exposes its frozen value.
+When false, a passing Replay completes the API work item without generating
+Comparison evidence, and the coordinator advances through the recording inventory.
+`comparison_current` stays false for skipped Comparison.
+
+After the entire batch and its ordinary process-output checks pass and the
+managed delivery files are committed, `next` atomically enables Comparison for
+future batches before returning `terminal_allowed=true`. Until that finalization,
+read-only `status` returns `advance_required`. The current batch keeps its frozen
+value across restart, recovery, reclassification, and target revalidation.
+`workflow.next_recording_require_comparison` exposes the project setting for the
+next batch. Replacement recordings before first completion remain Replay-only.
+Missing project or batch fields default to false, including in old coordinator
+states; explicit persisted values are preserved. Neither the latch nor the batch
+value is a user-editable policy.
+
+For batches requiring Comparison, passing Replay requests Comparison; once it
+passes, the following `next` prepares the next inventory item from the same
+standard recording. A repository or policy content change makes prior
 E2E/comparison evidence stale. Completed APIs become `revalidation_pending`
 and remain deferred while ordinary pending or implementation work exists. The
 coordinator drains them in one final verification epoch. A commit that
@@ -1321,8 +1340,8 @@ preserves the effective worktree content does not change the fingerprint.
 `verification request` lets the main orchestrator promote selected stale APIs
 early after a high-impact shared change; the returned advance command starts
 their normal Replay/comparison flow, and final whole-inventory coverage remains
-mandatory. `terminal_allowed` is false until every API inventory item has both
-passing E2E and comparison evidence and every process output has passing
+mandatory. `terminal_allowed` is false until every API inventory item has
+passing E2E and, when required by its batch, comparison evidence, and every process output has passing
 evidence for the same target content fingerprint. A process-output repair can
 invalidate completed APIs, so the final epoch reruns stale APIs before the
 process output is compared again.
@@ -1339,7 +1358,7 @@ remain immutable. The current recording inventory is then derived again under
 the updated policy.
 
 Recording, focused Replay, and comparison share one serialized traffic-runtime
-lease. When another API owns it, action schema v21 returns `wait_required` with
+lease. When another API owns it, action schema v22 returns `wait_required` with
 the requested and blocking APIs, the live operation when available, a retry
 delay, and the exact `commands.status` argv. This lease serializes each traffic
 operation, not a complete API lifecycle: while worker A implements, the
@@ -1973,7 +1992,8 @@ atomically publishes runner-owned evidence, and updates
 `.traffic-e2e/progress.yaml`.
 
 The current logical run passes only with complete response, replay, and
-dependency gates. Replay success does not replace current comparison evidence.
+dependency gates. When a rewrite batch requires Comparison, Replay success
+does not replace its Comparison evidence.
 Use `status`, `abort`, and `recover` for interrupted global rounds; never repair
 runner state through filesystem edits.
 
