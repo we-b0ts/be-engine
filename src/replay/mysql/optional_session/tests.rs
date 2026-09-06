@@ -9,13 +9,16 @@ fn exchange(sequence: u64, sql: &str) -> Value {
 }
 
 fn optional(records: &[Value]) -> BTreeSet<usize> {
-    optional_rollbacks(
+    classify(
         &records
             .iter()
             .cloned()
             .map(|v| serde_json::from_value(v).unwrap())
             .collect::<Vec<_>>(),
     )
+    .into_iter()
+    .filter_map(|(index, kind)| (kind == OptionalSessionExchange::Rollback).then_some(index))
+    .collect()
 }
 
 #[test]

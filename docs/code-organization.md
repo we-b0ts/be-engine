@@ -222,10 +222,14 @@ explicit repository-wide audit.
   The matcher checks live scope, dynamic policy and finite exchange availability
   on every call, while `replay/mysql/projection` validates and projects the
   delivered resultset and PREPARE metadata.
-  `replay/mysql/rollback` classifies optional transaction cleanup from immutable
-  connection sequence/status evidence; its `read` child owns the bounded SELECT
-  effect allowlist. Recorder's MySQL semantic tracker owns before-command status
-  continuity and final resultset status capture. Neither infers transaction
+  `mysql/autocommit` recognizes single literal session assignments shared by
+  Replay protocol handling and evidence classification.
+  `replay/mysql/optional_session` classifies optional transaction setup and
+  cleanup from immutable connection sequence/status evidence; its `read` child
+  owns the bounded SELECT effect allowlist, and its `autocommit` child proves
+  setup omission over the loaded read-only span. Recorder's MySQL semantic
+  tracker owns before-command status continuity and final resultset status
+  capture. Neither infers transaction
   boundaries from HTTP responses or ORM names.
   `config/process_owned_dependencies/mysql.rs` owns MySQL rule validation and
   matching, while `config/background_mysql_feedback.rs` owns immutable-evidence

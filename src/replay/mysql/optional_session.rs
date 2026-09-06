@@ -1,12 +1,15 @@
-//! Classify duplicate rollback and proven implicit read-only session cleanup.
+//! Classify optional setup and cleanup from immutable session evidence.
 //! Keep every exchange; only the final unused-dependency requirement changes.
 use super::*;
 use crate::replay::dependencies::DependencyRecord;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod autocommit;
 mod read;
 
-pub(in crate::replay) fn optional_rollbacks(records: &[DependencyRecord]) -> BTreeSet<usize> {
+pub(in crate::replay) fn classify(
+    records: &[DependencyRecord],
+) -> BTreeMap<usize, OptionalSessionExchange> {
     let mut connections = BTreeMap::<Uuid, BTreeMap<u64, (usize, &RecordedMysqlExchange)>>::new();
     let mut ambiguous = BTreeSet::new();
     for (index, record) in records.iter().enumerate() {
@@ -29,7 +32,7 @@ pub(in crate::replay) fn optional_rollbacks(records: &[DependencyRecord]) -> BTr
             ambiguous.insert(connection);
         }
     }
-    let mut optional = BTreeSet::new();
+    let mut optional = BTreeMap::new();
     // Classification happens once per loaded file. Borrow SQL already owned
     // by the records and drop this parse-result cache with the classification.
     let mut read_sql = HashMap::<&str, bool>::new();
@@ -59,7 +62,7 @@ pub(in crate::replay) fn optional_rollbacks(records: &[DependencyRecord]) -> BTr
                             successful_end(previous, &["commit", "rollback"])
                         }))
             {
-                optional.insert(index);
+                optional.insert(index, OptionalSessionExchange::Rollback);
             }
             read_only = continued_read && successful_prepare(current)
                 || (continued_read
@@ -73,6 +76,7 @@ pub(in crate::replay) fn optional_rollbacks(records: &[DependencyRecord]) -> BTr
                             .or_insert_with(|| read::plain_select(sql))
                     });
         }
+        autocommit::classify(&exchanges, &mut read_sql, &mut optional);
     }
     optional
 }
@@ -120,6 +124,16 @@ fn complete_read(exchange: &RecordedMysqlExchange) -> bool {
 }
 
 fn successful_end(exchange: &RecordedMysqlExchange, commands: &[&str]) -> bool {
+    successful_control(exchange)
+        && exchange.sql.as_deref().is_some_and(|sql| {
+            let sql = sql.trim().strip_suffix(';').unwrap_or(sql.trim()).trim();
+            commands
+                .iter()
+                .any(|command| sql.eq_ignore_ascii_case(command))
+        })
+}
+
+fn successful_control(exchange: &RecordedMysqlExchange) -> bool {
     exchange.command == "COM_QUERY"
         && exchange.parse_warnings.is_empty()
         && exchange.outcome == crate::DependencyExchangeOutcome::Response
@@ -135,12 +149,6 @@ fn successful_end(exchange: &RecordedMysqlExchange, commands: &[&str]) -> bool {
         && exchange.response.rows.is_empty()
         && exchange.response.columns.is_empty()
         && exchange.params.as_ref().is_none_or(Vec::is_empty)
-        && exchange.sql.as_deref().is_some_and(|sql| {
-            let sql = sql.trim().strip_suffix(';').unwrap_or(sql.trim()).trim();
-            commands
-                .iter()
-                .any(|command| sql.eq_ignore_ascii_case(command))
-        })
 }
 
 #[cfg(test)]

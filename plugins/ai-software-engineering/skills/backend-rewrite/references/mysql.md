@@ -320,6 +320,17 @@ ordinary reads, and a successful transaction end; repeated cleanup after a
 confirmed COMMIT/ROLLBACK is also optional. Omitted cleanup is reported as
 `allowed_unused_mysql_rollback_exchanges`. No rule is needed.
 
+Cold source connections may also send `SET AUTOCOMMIT=0/1` before business
+queries. Replay handles literal session assignments and tracks the target
+connection's mode. Proven read-only source-session setup can be omitted and is
+reported as `allowed_unused_mysql_autocommit_exchanges`. Do not add AUTOCOMMIT
+assignments to a shared target pool just to consume source-driver setup. No
+rule or new recording is needed when existing evidence contains the required
+transaction status. Write-containing sessions, failed assignments and incomplete
+evidence remain strict; inspect the evidence and route an engine capability
+gap if ordinary driver behavior is still blocked. Preserve real business
+transaction boundaries.
+
 Do not add `mysql.execute("ROLLBACK", ())` to the end of every handler merely
 to consume recording evidence. A pool can route that command to another
 connection. Missing status evidence in an older recording requires fresh

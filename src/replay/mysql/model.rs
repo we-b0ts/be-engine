@@ -20,9 +20,15 @@ pub(in crate::replay) struct ReplayExchange {
     pub(in crate::replay) case_id: Option<String>,
     pub(in crate::replay) identity: MysqlDependencyIdentity,
     pub(in crate::replay) record: RecordedMysqlExchange,
-    pub(in crate::replay) optional_rollback: bool,
+    pub(in crate::replay) optional_session: Option<OptionalSessionExchange>,
     pub(in crate::replay) status: ReplayExchangeStatus,
     pub(in crate::replay) timing: ReplayExchangeTiming,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::replay) enum OptionalSessionExchange {
+    Rollback,
+    Autocommit,
 }
 
 #[derive(Debug, Clone)]

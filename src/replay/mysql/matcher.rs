@@ -108,6 +108,12 @@ impl ReplayState {
         params: Option<&[RecordedMysqlValue]>,
     ) -> Option<MatchedExchange> {
         let normalized_sql = sql.map(normalize_sql);
+        let actual_autocommit = sql
+            .and_then(crate::mysql::autocommit::assignment)
+            .filter(|_| {
+                matches!(command, "COM_QUERY" | "COM_STMT_EXECUTE")
+                    && params.is_none_or(<[_]>::is_empty)
+            });
         let active_case_id = self.active_case_id.clone();
         let mut semantic_target = None;
         for source in [ReplaySource::Case, ReplaySource::Global] {
@@ -124,6 +130,18 @@ impl ReplayState {
                         continue;
                     }
                     let cross_protocol = exchange.record.command != command;
+                    let same_autocommit = actual_autocommit.is_some_and(|actual| {
+                        matches!(
+                            exchange.record.command.as_str(),
+                            "COM_QUERY" | "COM_STMT_EXECUTE"
+                        ) && exchange.record.params.as_ref().is_none_or(Vec::is_empty)
+                            && exchange
+                                .record
+                                .sql
+                                .as_deref()
+                                .and_then(crate::mysql::autocommit::assignment)
+                                == Some(actual)
+                    });
                     let (policy_decision, projected) = if semantic {
                         let Some(actual) = semantic_target
                             .get_or_insert_with(|| {
@@ -173,6 +191,7 @@ impl ReplayState {
                     } else {
                         if cross_protocol
                             && !project_columns
+                            && !same_autocommit
                             && !sql.is_some_and(|sql| {
                                 sql_match::cross_protocol_matches(
                                     &exchange.record,
@@ -204,6 +223,7 @@ impl ReplayState {
                             };
                             if !project_columns
                                 && Some(recorded_sql) != normalized_sql
+                                && !same_autocommit
                                 && !policy.allows_mysql_sql_difference(&context)
                             {
                                 continue;
@@ -212,7 +232,10 @@ impl ReplayState {
                                 Ok(decision) => decision,
                                 Err(_) => continue,
                             }
-                        } else if !project_columns && Some(recorded_sql) != normalized_sql {
+                        } else if !project_columns
+                            && Some(recorded_sql) != normalized_sql
+                            && !same_autocommit
+                        {
                             continue;
                         } else if params_match(exchange.record.params.as_deref(), params) {
                             DependencyRuleDecision::default()
@@ -394,27 +417,40 @@ impl ReplayState {
         &self,
         source: ReplaySource,
     ) -> Vec<RecordedExchangeSummary> {
-        self.mysql_unused_exchanges(source, false)
+        self.mysql_unused_exchanges(source, None)
     }
 
     pub(in crate::replay) fn allowed_unused_rollbacks(&self) -> Vec<RecordedExchangeSummary> {
+        self.allowed_unused_session_exchanges(OptionalSessionExchange::Rollback)
+    }
+
+    pub(in crate::replay) fn allowed_unused_autocommit(&self) -> Vec<RecordedExchangeSummary> {
+        self.allowed_unused_session_exchanges(OptionalSessionExchange::Autocommit)
+    }
+
+    fn allowed_unused_session_exchanges(
+        &self,
+        kind: OptionalSessionExchange,
+    ) -> Vec<RecordedExchangeSummary> {
         [ReplaySource::Case, ReplaySource::Global]
             .into_iter()
-            .flat_map(|source| self.mysql_unused_exchanges(source, true))
+            .flat_map(|source| self.mysql_unused_exchanges(source, Some(kind)))
             .collect()
     }
 
     fn mysql_unused_exchanges(
         &self,
         source: ReplaySource,
-        allowed: bool,
+        allowed: Option<OptionalSessionExchange>,
     ) -> Vec<RecordedExchangeSummary> {
         self.mysql
             .exchanges
             .iter()
             .enumerate()
             .filter(|(_, exchange)| {
-                let optional = exchange.optional_rollback && exchange.status.is_available();
+                let optional = exchange
+                    .optional_session
+                    .filter(|_| exchange.status.is_available());
                 exchange.source == source && !exchange.status.is_consumed() && optional == allowed
             })
             .map(|(index, exchange)| RecordedExchangeSummary {

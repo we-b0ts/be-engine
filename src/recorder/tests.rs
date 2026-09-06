@@ -449,7 +449,6 @@ async fn case_dependency_skips_successful_mysql_session_setup() {
             "SET sql_mode='NO_AUTO_CREATE_USER,STRICT_TRANS_TABLES'",
             "ok",
         ),
-        ("SET autocommit=1", "ok"),
         ("SELECT 2", "resultset"),
         ("SHOW COLLATION", "resultset"),
         ("SHOW WARNINGS", "resultset"),
@@ -518,6 +517,56 @@ async fn case_dependency_skips_successful_mysql_session_setup() {
     assert!(!raw.contains("SELECT 2"));
     assert!(!raw.contains("SHOW COLLATION"));
     assert!(!raw.contains("auto_increment_increment"));
+}
+
+#[tokio::test]
+async fn autocommit_controls_remain_semantic_evidence_for_replay_classification() {
+    let temp = tempfile::tempdir().unwrap();
+    let recorder = Recorder::new(temp.path()).await.unwrap();
+    let case = CaseContext {
+        id: Uuid::new_v4(),
+        rule_name: "api".to_string(),
+        uri_group: None,
+    };
+    for (sql, status) in [
+        ("SET AUTOCOMMIT=0", "ok"),
+        ("SET AUTOCOMMIT=1", "ok"),
+        ("SET SESSION AUTOCOMMIT=1", "ok"),
+        ("SET AUTOCOMMIT=1", "error"),
+        ("SET sql_mode='',autocommit=1", "ok"),
+        ("SET sql_mode='',`autocommit`=1", "ok"),
+        ("SET sql_mode='' /*! ,autocommit=1 */", "ok"),
+    ] {
+        recorder
+            .append_case_dependency(
+                &case,
+                &RecorderEvent::MysqlExchange(mysql_exchange(
+                    "COM_QUERY",
+                    Some(sql),
+                    status,
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                    None,
+                )),
+                "active_window",
+            )
+            .await
+            .unwrap();
+    }
+    flush_case_dependencies(&recorder, &case).await;
+    let raw =
+        tokio::fs::read_to_string(recorder.case_staging_dir(&case).join("dependencies.jsonl"))
+            .await
+            .unwrap();
+    let records: Vec<serde_json::Value> = raw
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records.len(), 7);
+    assert_eq!(records[0]["sql"], "SET AUTOCOMMIT=0");
+    assert_eq!(records[1]["sql"], "SET AUTOCOMMIT=1");
+    assert_eq!(records[3]["response"]["status"], "error");
 }
 
 #[tokio::test]

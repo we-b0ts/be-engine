@@ -84,6 +84,7 @@ pub(in crate::replay) fn builtin_response(
 
 pub(in crate::replay) fn is_builtin_ok(normalized_sql: &str) -> bool {
     is_mysql_session_setup_sql(normalized_sql)
+        || crate::mysql::autocommit::assignment(normalized_sql).is_some()
         || matches!(
             normalized_sql,
             "begin" | "start transaction" | "commit" | "rollback"
