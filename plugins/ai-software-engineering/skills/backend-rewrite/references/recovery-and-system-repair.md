@@ -57,6 +57,12 @@ command. Execute that returned command once. It does not apply to
 `external_data_blocker`, delete evidence, or bypass ordinary AI workflow
 transitions.
 
+Before reporting an IP capture defect, use `route --cause unrecorded-ip` and
+follow its source investigation or recorder rule plan/apply instructions. A
+supported JSON response URL rewrite is an acquisition rule; complete its fresh
+recording verification before escalating a remaining engine defect. Rejection
+counts alone establish neither IP origin nor a missing capture mechanism.
+
 Use `recorder-capability-gap` only when the recorder lacks a required mechanism.
 A comparison issue owned by `traffic_e2e_system` uses
 `replay-capability-gap`: response decoding, semantic assertion, and comparison

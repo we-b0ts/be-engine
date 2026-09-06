@@ -1,7 +1,7 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-pub(super) fn whole_file_diff(path: &Path, original: &str, updated: &str) -> String {
+pub(crate) fn whole_file_diff(path: &Path, original: &str, updated: &str) -> String {
     let old_count = original.lines().count();
     let new_count = updated.lines().count();
     let mut diff = format!(

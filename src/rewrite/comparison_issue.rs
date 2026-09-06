@@ -47,6 +47,8 @@ pub(super) fn from_report(
         pointer_pattern: (pointer != "<comparison>")
             .then(|| crate::e2e_run::response_pointer_pattern(pointer)),
         representative: None,
+        egress_rejections: None,
+        recorder_capture_diagnosis: None,
         response_diagnosis: None,
         possible_causes: if response_body_candidate {
             vec![
@@ -104,6 +106,8 @@ fn incomplete_issue(
         ),
         pointer_pattern: None,
         representative: None,
+        egress_rejections: None,
+        recorder_capture_diagnosis: None,
         response_diagnosis: None,
         possible_causes: vec![
             "comparison_verification_capability_gap".to_string(),

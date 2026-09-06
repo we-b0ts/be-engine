@@ -4,29 +4,45 @@ use std::net::SocketAddr;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
 pub struct HttpResponseRewriteConfig {
     pub enabled: bool,
     pub rules: Vec<HttpResponseRewriteRuleConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+impl Default for HttpResponseRewriteConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            rules: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HttpResponseRewriteRuleConfig {
     pub name: String,
     #[serde(default)]
     pub authorities: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub methods: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub path: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_pattern: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pointers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub status_codes: Vec<u16>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub content_types: Vec<String>,
-    pub plugin: HttpResponseRewritePluginConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<HttpResponseRewritePluginConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "name", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum HttpResponseRewritePluginConfig {
     PlutoEciKubeconfig {
@@ -43,6 +59,10 @@ pub enum HttpResponseRewritePluginConfig {
 }
 
 impl HttpResponseRewriteConfig {
+    pub fn is_enabled(&self) -> bool {
+        self.enabled && !self.rules.is_empty()
+    }
+
     pub(super) fn validate(&self) -> Result<()> {
         let mut names = HashSet::new();
         for rule in &self.rules {
@@ -59,8 +79,12 @@ impl HttpResponseRewriteConfig {
             if rule.authorities.is_empty() {
                 bail!("HTTP response rewrite rule {name:?} must include authorities");
             }
-            if rule.path.trim().is_empty() || !rule.path.starts_with('/') {
-                bail!("HTTP response rewrite rule {name:?} path must be an absolute HTTP path");
+            match (&rule.path_pattern, rule.path.is_empty()) {
+                (Some(pattern), true) => crate::path_pattern::validate_path_pattern(pattern)?,
+                (None, false) if rule.path.starts_with('/') => {}
+                _ => bail!(
+                    "HTTP response rewrite rule {name:?} requires exactly one absolute path or path_pattern"
+                ),
             }
             if rule
                 .status_codes
@@ -69,10 +93,36 @@ impl HttpResponseRewriteConfig {
             {
                 bail!("HTTP response rewrite rule {name:?} has an invalid status code");
             }
-            rule.plugin.validate(name)?;
+            match (&rule.plugin, rule.pointers.is_empty()) {
+                (Some(plugin), true) => plugin.validate(name)?,
+                (None, false) => validate_pointers(name, &rule.pointers)?,
+                _ => bail!(
+                    "HTTP response rewrite rule {name:?} requires pointers or a legacy plugin, exclusively"
+                ),
+            }
         }
         Ok(())
     }
+}
+
+fn validate_pointers(name: &str, pointers: &[String]) -> Result<()> {
+    let mut seen = HashSet::new();
+    for pointer in pointers {
+        if !seen.insert(pointer) || (!pointer.is_empty() && !pointer.starts_with('/')) {
+            bail!(
+                "HTTP response rewrite rule {name:?} has a duplicate or invalid JSON pointer {pointer:?}"
+            );
+        }
+        let mut chars = pointer.chars();
+        while let Some(ch) = chars.next() {
+            if ch == '~' && !matches!(chars.next(), Some('0' | '1')) {
+                bail!(
+                    "HTTP response rewrite rule {name:?} has an invalid JSON pointer escape {pointer:?}"
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 impl HttpResponseRewritePluginConfig {
@@ -198,7 +248,10 @@ mod tests {
 
         config.validate().unwrap();
         let HttpResponseRewritePluginConfig::VintageNaming { services, clusters } =
-            &config.http_response_rewrite.rules[0].plugin
+            config.http_response_rewrite.rules[0]
+                .plugin
+                .as_ref()
+                .unwrap()
         else {
             panic!("expected Vintage naming plugin");
         };
@@ -238,7 +291,7 @@ mod tests {
         config.validate().unwrap();
         assert!(matches!(
             config.http_response_rewrite.rules[0].plugin,
-            HttpResponseRewritePluginConfig::VintageCacheConfig
+            Some(HttpResponseRewritePluginConfig::VintageCacheConfig)
         ));
     }
 }

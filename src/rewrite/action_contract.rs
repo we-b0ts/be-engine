@@ -303,6 +303,10 @@ struct RewriteWaitRequiredDetails<'a> {
 
 #[derive(Serialize)]
 struct RewriteIssueDetails<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    egress_rejections: Option<&'a Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recorder_capture_diagnosis: Option<&'a Value>,
     issue_id: &'a str,
     issue_kind: &'a RewriteIssueKind,
     owner: &'a RewriteIssueOwner,
@@ -338,6 +342,8 @@ struct RewriteTargetQualityDetails<'a> {
 impl<'a> From<&'a RewriteIssue> for RewriteIssueDetails<'a> {
     fn from(issue: &'a RewriteIssue) -> Self {
         Self {
+            egress_rejections: issue.egress_rejections.as_ref(),
+            recorder_capture_diagnosis: issue.recorder_capture_diagnosis.as_ref(),
             issue_id: &issue.id,
             issue_kind: &issue.kind,
             owner: &issue.owner,

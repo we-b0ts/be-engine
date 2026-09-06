@@ -91,6 +91,10 @@ state or invent traffic.
 
 ## Consolidated Capture Refresh
 
+HTTP JSON response URL rules use the same capture refresh lifecycle as Breeze
+resource rules. Applying either kind cannot repair old immutable dependency
+files.
+
 A recorder-capture apply is coordinator-owned and is the exception to the
 explicit request rules: never follow it with `recording request`. Apply returns
 either another runnable API command or, after runnable inventory drains, the

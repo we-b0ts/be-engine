@@ -65,6 +65,18 @@ is unclear.
 - Recorder event, run, writer, and summary modules own capture, persistence,
   and reporting.
 - Replay modules own recorded dependency matching and replay lifecycle.
+- `http/rewrite/json_urls` owns JSON Pointer URL substitution and discovered
+  HTTP routes. Recorder configuration owns concise rule validation and the
+  source-traffic-policy overlay; no application-specific sandbox plugin is
+  required.
+- `cli/interception/egress_counters` owns read-only firewall command parsing.
+  `replay/egress_counter` owns bounded sampling and per-case counter differences;
+  `e2e_run/result/egress` projects this evidence only for failed verification.
+  Counter observations never become dependency mismatches or gate inputs.
+- `rewrite/ip_capture` owns IP defect preflight, `response_url_evidence` owns
+  bounded recorded-response correlation, and `recorder_capture/http_response`
+  owns planning/applying acquisition rules through the existing refresh
+  lifecycle. `evidence/rule_guidance` owns rule discovery commands.
 - `source_snapshot` owns initial and explicit administrator-requested Kubernetes
   Pod capture, immutable source image resolution, effective environment capture,
   supported volume capture, rollback-safe local replacement, integrity

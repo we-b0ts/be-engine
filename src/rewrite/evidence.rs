@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-use super::evidence_model::{RewriteApplicableRulePlanner, RewriteEvidenceReport, RewriteRuleHint};
+use super::evidence_model::RewriteEvidenceReport;
 use super::model::{RewriteEvidenceCommand, RewriteIssue, RewriteIssueKind, RewriteState};
 use super::{artifacts, fingerprint, source_process_traffic};
 use crate::case_group::resolve_published_case_dir;
@@ -18,6 +18,9 @@ use crate::{
 };
 
 mod response_body;
+mod rule_guidance;
+pub(super) use rule_guidance::supports_response_body_codec;
+use rule_guidance::{applicable_rule_planners, rule_hints};
 
 const QUERY_CASE_RESPONSE_DIFFERENCES: &str = "case_response_differences";
 const QUERY_REPRESENTATIVES: &str = "representatives";
@@ -25,6 +28,7 @@ const QUERY_SOURCE_VARIATION: &str = "source_variation";
 const QUERY_COLLECTION_EQUIVALENCE: &str = "collection_equivalence";
 const QUERY_DEPENDENCY_CORRELATION: &str = "dependency_correlation";
 const QUERY_SOURCE_PROCESS_TRAFFIC: &str = "source_process_traffic";
+const QUERY_IP_CAPTURE: &str = "ip_capture";
 const QUERY_DIRTY_CLUSTERS: &str = "dirty_clusters";
 const QUERY_POLICY_APPLICABILITY: &str = "policy_applicability";
 const QUERY_ATTEMPT_DELTA: &str = "attempt_delta";
@@ -101,179 +105,6 @@ pub(super) fn query(
     })
 }
 
-fn rule_hints(target_root: &Path, query_kind: &str, facts: &Value) -> Vec<RewriteRuleHint> {
-    if query_kind == QUERY_REPRESENTATIVES {
-        let codecs = response_body::codec_candidates(facts);
-        if codecs.is_empty() {
-            return Vec::new();
-        }
-        let configured = response_body::configured(facts);
-        return codecs
-            .into_iter()
-            .map(|codec| {
-                let hint = match (configured, codec) {
-                    (true, "protobuf") => "The response body codec is protobuf. Review unordered_path_candidates as mechanical candidates; they do not authorize order-insensitive comparison. Apply only fields whose order is irrelevant in the source contract, with field_path, semantic display_path, explicit element_type, and source_evidence.",
-                    (true, "hessian2") => "The response body codec is Hessian2. Candidates identify lists or joined strings but do not authorize order-insensitive comparison. Apply only source-proven sets; joined strings also require the reviewed separator.",
-                    (false, "protobuf") => "The exact response body is a protobuf candidate. The response rule planner can configure the codec and verify the existing focused-E2E or comparison artifacts offline without recording new traffic.",
-                    (false, "hessian2") => "The exact response body is a Hessian2 candidate. The response rule planner can configure the codec and verify the existing focused-E2E or comparison artifacts offline without recording new traffic.",
-                    _ => "The exact response body has a supported codec candidate. Review the body evidence before applying a response rule.",
-                };
-                RewriteRuleHint {
-                    capability: codec.to_string(),
-                    rule: "response_body".to_string(),
-                    hint: hint.to_string(),
-                    help: super::action::command(
-                        target_root,
-                        vec![
-                            "rule".to_string(),
-                            "plan".to_string(),
-                            "--body-codec".to_string(),
-                            codec.to_string(),
-                            "--help".to_string(),
-                        ],
-                        Vec::new(),
-                    ),
-                }
-            })
-            .collect();
-    }
-    if query_kind != QUERY_DIRTY_CLUSTERS {
-        return Vec::new();
-    }
-    let has_memcached = facts
-        .get("clusters")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .any(|cluster| cluster.get("protocol").and_then(Value::as_str) == Some("memcached"));
-    if !has_memcached {
-        return Vec::new();
-    }
-    vec![RewriteRuleHint {
-        capability: "memcached".to_string(),
-        rule: "protobuf-timestamp".to_string(),
-        hint: "Investigate this rule when a Memcached SET value contains a protobuf varint field generated from the current Unix time."
-            .to_string(),
-        help: super::action::command(
-            target_root,
-            vec![
-                "dependency-rule".to_string(),
-                "plan".to_string(),
-                "memcached".to_string(),
-                "protobuf-timestamp".to_string(),
-                "--help".to_string(),
-            ],
-            Vec::new(),
-        ),
-    }]
-}
-
-fn applicable_rule_planners(
-    target_root: &Path,
-    issue_kind: RewriteIssueKind,
-    query_kind: &str,
-    facts: &Value,
-    evidence_id: &str,
-) -> Vec<RewriteApplicableRulePlanner> {
-    let mut planners = Vec::new();
-    if query_kind == QUERY_REPRESENTATIVES
-        && matches!(
-            issue_kind,
-            RewriteIssueKind::Response | RewriteIssueKind::Comparison
-        )
-    {
-        let configured = response_body::configured(facts);
-        planners.extend(
-            response_body::codec_candidates(facts)
-                .into_iter()
-                .map(|codec| {
-                    let mut arguments = vec![
-                        "rule".to_string(),
-                        "plan".to_string(),
-                        "--evidence-id".to_string(),
-                        evidence_id.to_string(),
-                        "--body-codec".to_string(),
-                        codec.to_string(),
-                    ];
-                    if configured {
-                        arguments.push("--help".to_string());
-                    }
-                    RewriteApplicableRulePlanner {
-                        kind: "response_body".to_string(),
-                        capability: codec.to_string(),
-                        evidence_id: evidence_id.to_string(),
-                        command: super::action::command(target_root, arguments, Vec::new()),
-                    }
-                }),
-        );
-    }
-    if issue_kind == RewriteIssueKind::Response
-        && query_kind == QUERY_SOURCE_PROCESS_TRAFFIC
-        && has_redis_bootstrap_traffic(facts)
-    {
-        planners.push(RewriteApplicableRulePlanner {
-            kind: "dependency_ownership".to_string(),
-            capability: "redis_bootstrap".to_string(),
-            evidence_id: evidence_id.to_string(),
-            command: super::action::command(
-                target_root,
-                vec![
-                    "dependency-rule".to_string(),
-                    "plan".to_string(),
-                    "redis".to_string(),
-                    "--help".to_string(),
-                ],
-                Vec::new(),
-            ),
-        });
-    }
-    if issue_kind != RewriteIssueKind::Dependency || query_kind != QUERY_DIRTY_CLUSTERS {
-        return planners;
-    }
-    let protocols = facts
-        .get("clusters")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|cluster| cluster.get("protocol").and_then(Value::as_str))
-        .filter(|protocol| {
-            matches!(
-                *protocol,
-                "http" | "memcached" | "motan" | "redis" | "mysql"
-            )
-        })
-        .collect::<std::collections::BTreeSet<_>>();
-    planners.extend(
-        protocols
-            .into_iter()
-            .map(|protocol| RewriteApplicableRulePlanner {
-                kind: "dependency_ownership".to_string(),
-                capability: protocol.to_string(),
-                evidence_id: evidence_id.to_string(),
-                command: super::action::command(
-                    target_root,
-                    vec![
-                        "dependency-rule".to_string(),
-                        "plan".to_string(),
-                        protocol.to_string(),
-                        "--help".to_string(),
-                    ],
-                    Vec::new(),
-                ),
-            }),
-    );
-    planners
-}
-
-pub(super) fn supports_response_body_codec(facts: &Value, codec: ResponseBodyCodec) -> bool {
-    let expected = match codec {
-        ResponseBodyCodec::Protobuf => "protobuf",
-        ResponseBodyCodec::Hessian2 => "hessian2",
-        _ => return false,
-    };
-    response_body::codec_candidates(facts).contains(&expected)
-}
-
 fn has_redis_bootstrap_traffic(facts: &Value) -> bool {
     facts
         .pointer("/bootstrap/protocols")
@@ -308,6 +139,9 @@ fn facts(
     offset: usize,
 ) -> Result<(Value, Vec<String>, String)> {
     match kind {
+        QUERY_IP_CAPTURE => Ok((super::response_url_evidence::facts(target_root, state)?,
+            vec!["The IP omission is reported by target analysis; source consumption and absence of equivalent recorded calls require source/dependency evidence.".to_string()],
+            "Prove the IP origin. For a supported JSON URL, execute the returned recorder-capture plan and apply, then verify a fresh recording before submitting a remaining system defect.".to_string())),
         QUERY_CASE_RESPONSE_DIFFERENCES => {
             case_response_difference_facts(target_root, state, issue, offset)
         }
@@ -397,7 +231,8 @@ fn facts(
         }
         QUERY_DIRTY_CLUSTERS => {
             let counts = query_e2e_dirty_counts(e2e_context(target_root, state)?, group_id(state)?)?;
-            let facts = dirty_cluster_facts(target_root, counts);
+            let mut facts = dirty_cluster_facts(target_root, counts);
+            if let Some(rejections) = &issue.egress_rejections { facts["egress_rejections"] = rejections.clone(); }
             let limitations = dirty_cluster_limitations(&facts);
             Ok((
                 facts,
@@ -773,6 +608,9 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
             "Cluster case-scoped dirty dependencies by protocol, endpoint, and reason",
         ));
     }
+    if issue.recorder_capture_diagnosis.is_some() {
+        queries.push((QUERY_IP_CAPTURE, "Inspect reported IP origin and recorder response rewrite eligibility before system repair"));
+    }
     if state.attempt_delta.is_some() {
         queries.push((
             QUERY_ATTEMPT_DELTA,
@@ -884,7 +722,7 @@ fn case_response_difference_offset(
     (case_response_difference_query_id(state, issue, offset) == requested_id).then_some(offset)
 }
 
-fn e2e_context(target_root: &Path, state: &RewriteState) -> Result<E2eRunContext> {
+pub(super) fn e2e_context(target_root: &Path, state: &RewriteState) -> Result<E2eRunContext> {
     Ok(E2eRunContext {
         target_root: target_root.to_path_buf(),
         case_source: state
@@ -895,7 +733,7 @@ fn e2e_context(target_root: &Path, state: &RewriteState) -> Result<E2eRunContext
     })
 }
 
-fn case_source(target_root: &Path, state: &RewriteState) -> Result<std::path::PathBuf> {
+pub(super) fn case_source(target_root: &Path, state: &RewriteState) -> Result<std::path::PathBuf> {
     let case_source = state
         .case_source
         .clone()
@@ -907,7 +745,7 @@ fn case_source(target_root: &Path, state: &RewriteState) -> Result<std::path::Pa
     })
 }
 
-fn group_id(state: &RewriteState) -> Result<&str> {
+pub(super) fn group_id(state: &RewriteState) -> Result<&str> {
     state
         .group_id
         .as_deref()

@@ -15,6 +15,7 @@ use super::output::{stderr_line, stdout_line};
 mod cache_ports;
 mod dns;
 mod egress;
+mod egress_counters;
 mod fake_ip;
 mod target_egress;
 
@@ -102,6 +103,8 @@ enum InterceptionCommand {
     FakeIp(FakeIpArgs),
     /// Manage fixed-user Replay external-egress rejection rules.
     Egress(EgressArgs),
+    /// Read Replay rejection packet counters without changing rules.
+    EgressCounters,
     /// Print the fixed interception identity.
     Identity,
 }
@@ -355,6 +358,10 @@ pub(super) fn run(args: InterceptionArgs) -> Result<()> {
             require_root()?;
             run_egress(args.action)
         }
+        InterceptionCommand::EgressCounters => {
+            require_root()?;
+            egress_counters::read()
+        }
         InterceptionCommand::Identity => {
             stdout_line(format_args!("{FIXED_USER} {TRAFFIC_PROCESS_UID}"))
         }
@@ -515,6 +522,24 @@ pub(super) fn system_program(name: &str) -> Result<PathBuf> {
         .map(|directory| Path::new(directory).join(name))
         .find(|path| path.is_file())
         .with_context(|| format!("required system command not found: {name}"))
+}
+
+pub(super) fn counter_reader() -> Result<traffic_e2e::ReplayEgressCounterReader> {
+    let executable = std::env::current_exe()?;
+    let (program, mut arguments) = if effective_uid() == 0 {
+        (executable, Vec::new())
+    } else {
+        (
+            system_program("sudo")?,
+            vec![
+                OsString::from("-n"),
+                OsString::from("--"),
+                executable.into_os_string(),
+            ],
+        )
+    };
+    arguments.extend(["diagnose", "interception", "egress-counters"].map(OsString::from));
+    Ok(traffic_e2e::ReplayEgressCounterReader { program, arguments })
 }
 
 #[cfg(test)]

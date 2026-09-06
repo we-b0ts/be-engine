@@ -2,6 +2,8 @@ use super::super::*;
 
 #[derive(Debug, Serialize)]
 pub(in crate::replay) struct ReplayReport {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) egress_rejections: Vec<ReplayEgressRejections>,
     pub(in crate::replay) version: u8,
     pub(in crate::replay) session_id: String,
     pub(in crate::replay) started_at: DateTime<Utc>,

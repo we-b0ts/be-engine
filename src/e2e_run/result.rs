@@ -14,6 +14,7 @@ use crate::replay::{
 const MAX_FAILURE_CLUSTERS: usize = 20;
 pub(crate) const RESPONSE_AVAILABILITY_POINTER: &str = "$response";
 
+mod egress;
 mod observation;
 
 #[cfg(test)]
@@ -183,6 +184,8 @@ pub struct E2eValueObservation {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct E2eDiagnosis {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress_rejections: Option<Value>,
     pub counts: E2eDiagnosisCounts,
     pub response_differences: E2eResponseDifferenceDiagnosis,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -305,6 +308,7 @@ fn diagnosis(layout: &RunLayout, state: &ActiveRunState) -> E2eDiagnosis {
         .filter(|case| case.assertion_passed == Some(false))
         .count();
     E2eDiagnosis {
+        egress_rejections: egress::diagnosis(layout, state),
         counts: E2eDiagnosisCounts {
             selected: state.cases.len(),
             executed,

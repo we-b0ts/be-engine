@@ -17,10 +17,14 @@ use crate::dependency::DiscoveredTcpTarget;
 use crate::dns_mock::{FakeDnsRegistry, FakeDnsUpstreamProtocol};
 use crate::http::content_encoding;
 
+#[cfg(test)]
+mod json_url_tests;
+mod json_urls;
 mod kubectl_proxy;
 mod pluto;
 mod vintage;
 
+pub(crate) use json_urls::{UrlTarget, inspect_url_target};
 pub(crate) use kubectl_proxy::KubectlProxyManager;
 use kubectl_proxy::KubectlProxySpec;
 
@@ -57,6 +61,7 @@ enum RewrittenBody {
     Complete(Vec<u8>),
     VintageNaming(vintage::NamingResponsePlan),
     VintageCacheConfig(vintage::CacheConfigResponsePlan),
+    JsonUrls(json_urls::ResponsePlan),
 }
 
 struct DiscoveredTarget {
@@ -74,12 +79,26 @@ pub(crate) async fn apply(
     max_decoded_body_bytes: usize,
     input: RewriteInput<'_>,
 ) -> Result<Option<RewrittenResponse>> {
-    if !config.enabled {
+    if !config.is_enabled() {
         return Ok(None);
     }
     let Some(rule) = config.rules.iter().find(|rule| matches(rule, &input)) else {
         return Ok(None);
     };
+    let mut rule = rule.clone();
+    if rule.plugin.is_none() {
+        for matching in config
+            .rules
+            .iter()
+            .filter(|candidate| candidate.plugin.is_none() && matches(candidate, &input))
+        {
+            for pointer in &matching.pointers {
+                if !rule.pointers.contains(pointer) {
+                    rule.pointers.push(pointer.clone());
+                }
+            }
+        }
+    }
     let decoded_body = decode_rewrite_body(input.headers, input.body, max_decoded_body_bytes)
         .with_context(|| {
             format!(
@@ -93,18 +112,19 @@ pub(crate) async fn apply(
     };
 
     let plugin: Box<dyn Plugin> = match &rule.plugin {
-        HttpResponseRewritePluginConfig::PlutoEciKubeconfig {
+        Some(HttpResponseRewritePluginConfig::PlutoEciKubeconfig {
             kubectl_binary,
             proxy_listen,
-        } => Box::new(pluto::EciKubeconfig::new(
+        }) => Box::new(pluto::EciKubeconfig::new(
             kubectl_binary,
             *proxy_listen,
             recorder_ca_pem,
         )?),
-        HttpResponseRewritePluginConfig::VintageNaming { services, clusters } => {
+        Some(HttpResponseRewritePluginConfig::VintageNaming { services, clusters }) => {
             Box::new(vintage::Naming::new(services, clusters))
         }
-        HttpResponseRewritePluginConfig::VintageCacheConfig => Box::new(vintage::CacheConfig),
+        Some(HttpResponseRewritePluginConfig::VintageCacheConfig) => Box::new(vintage::CacheConfig),
+        None => Box::new(json_urls::JsonUrls::new(&rule.pointers)),
     };
 
     let PluginResult::Rewritten {
@@ -131,6 +151,7 @@ pub(crate) async fn apply(
     }
 
     let mut registered = BTreeMap::new();
+    let mut registered_aliases = BTreeMap::new();
     for target in targets {
         let entry = match (&target.upstream_authority, target.upstream_protocol) {
             (Some(authority), Some(protocol)) => {
@@ -157,6 +178,7 @@ pub(crate) async fn apply(
             connect_ip = %target.connect_ip,
             "registered response-discovered target"
         );
+        registered_aliases.insert(target.alias, entry.clone());
         registered.insert(target.connect_ip, entry);
     }
     let (body, discovered_tcp_targets) = match *body {
@@ -167,6 +189,7 @@ pub(crate) async fn apply(
         RewrittenBody::VintageCacheConfig(plan) => plan
             .render(&registered)
             .context("failed to render rewritten Vintage cache config response")?,
+        RewrittenBody::JsonUrls(plan) => plan.render(&registered_aliases)?,
     };
 
     let mut headers = input.headers.clone();
@@ -184,7 +207,7 @@ pub(crate) async fn apply(
     }))
 }
 
-fn matches(rule: &HttpResponseRewriteRuleConfig, input: &RewriteInput<'_>) -> bool {
+pub(crate) fn matches(rule: &HttpResponseRewriteRuleConfig, input: &RewriteInput<'_>) -> bool {
     let authority = input.authority.map(normalize_authority);
     let authority_matches = authority.is_some_and(|authority| {
         rule.authorities
@@ -196,15 +219,29 @@ fn matches(rule: &HttpResponseRewriteRuleConfig, input: &RewriteInput<'_>) -> bo
             .methods
             .iter()
             .any(|method| method.eq_ignore_ascii_case(input.method.as_str()));
-    let path_matches = input.uri.path() == rule.path;
-    let status_matches =
-        rule.status_codes.is_empty() || rule.status_codes.contains(&input.status.as_u16());
-    let content_type_matches = rule.content_types.is_empty()
-        || response_content_type(input.headers).is_some_and(|content_type| {
+    let path_matches = rule.path_pattern.as_ref().map_or_else(
+        || input.uri.path() == rule.path,
+        |pattern| crate::path_pattern::matches_path_pattern(pattern, input.uri.path()),
+    );
+    let generic = rule.plugin.is_none();
+    let status_matches = if rule.status_codes.is_empty() {
+        !generic || input.status.is_success()
+    } else {
+        rule.status_codes.contains(&input.status.as_u16())
+    };
+    let content_type_matches = if rule.content_types.is_empty() {
+        !generic
+            || response_content_type(input.headers).is_some_and(|content_type| {
+                content_type.eq_ignore_ascii_case("application/json")
+                    || content_type.to_ascii_lowercase().ends_with("+json")
+            })
+    } else {
+        response_content_type(input.headers).is_some_and(|content_type| {
             rule.content_types
                 .iter()
                 .any(|candidate| candidate.eq_ignore_ascii_case(content_type))
-        });
+        })
+    };
 
     authority_matches && method_matches && path_matches && status_matches && content_type_matches
 }
@@ -214,6 +251,12 @@ fn decode_rewrite_body<'a>(
     body: &'a [u8],
     max_decoded_body_bytes: usize,
 ) -> Result<Cow<'a, [u8]>> {
+    if body.len() > max_decoded_body_bytes {
+        bail!(
+            "response exceeds configured rewrite limit of {} bytes",
+            max_decoded_body_bytes
+        );
+    }
     let Some(value) = headers.get(CONTENT_ENCODING) else {
         return Ok(Cow::Borrowed(body));
     };

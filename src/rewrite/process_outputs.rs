@@ -395,6 +395,8 @@ fn missing_issue(
         summary,
         pointer_pattern: None,
         representative: None,
+        egress_rejections: None,
+        recorder_capture_diagnosis: None,
         response_diagnosis: None,
         possible_causes: recommended_checks,
         observed_target_fingerprint: target_fingerprint.to_string(),

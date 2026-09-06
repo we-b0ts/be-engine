@@ -55,7 +55,8 @@ file only when their trigger occurs:
   only after worker confirmation and only when that worker returns inputs for
   response-rule, recorder-capture, dependency-rule, or process-output-rule
   planning, or confirmed evidence exposes one of those coordinator-owned
-  planners.
+  planners. This includes rejection-count hints and `unrecorded-ip` preflight;
+  inspect supported recorder rules before submitting an IP capture defect.
 - Read
   [recovery-and-system-repair.md](references/recovery-and-system-repair.md) only
   for `recovery_required`, `system_repair_required`, or a coordinator-issued

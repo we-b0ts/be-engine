@@ -185,6 +185,10 @@ pub struct RewriteAttemptDelta {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RewriteIssue {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress_rejections: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorder_capture_diagnosis: Option<Value>,
     pub id: String,
     pub kind: RewriteIssueKind,
     pub owner: RewriteIssueOwner,
@@ -332,6 +336,8 @@ pub(super) struct RewriteDependencyRulePlanRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct RewriteRecorderCapturePlanRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_response: Option<super::recorder_capture::http_response::HttpResponseCaptureSpec>,
     pub id: String,
     pub issue_id: String,
     pub evidence_id: String,

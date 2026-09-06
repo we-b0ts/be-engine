@@ -813,6 +813,8 @@ mod tests {
             summary: "implementation differs".to_string(),
             pointer_pattern: None,
             representative: None,
+            egress_rejections: None,
+            recorder_capture_diagnosis: None,
             response_diagnosis: None,
             possible_causes: Vec::new(),
             observed_target_fingerprint: target_fingerprint.to_string(),

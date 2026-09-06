@@ -132,3 +132,9 @@ replay when supported. Validate pull metrics through the target exporter or
 scrape surface. Do not write recorded metric payloads from target fixtures. If
 metrics evidence is absent or unsupported, report the recorder gap or obtain
 explicit approval for a behavior-contract change.
+
+HTTP response URL rewrite records contain discovered synthetic host/fake-IP
+routes alongside the rewritten JSON. Replay reserves those fake IPs and uses
+recorded subsequent HTTP(S) exchanges; configuring a new capture rule cannot
+synthesize missing historical exchanges. Rejection packet counts are auxiliary
+context for failures and never count as semantic dependency mismatches.

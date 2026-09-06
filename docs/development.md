@@ -639,6 +639,44 @@ The `vintage-naming` plugin rewrites legacy Motan node addresses published by
 Vintage naming responses. The `vintage-cache-config` plugin rewrites cache
 node addresses published inside Vintage `/1/config/service` responses.
 
+For ordinary JSON URL fields, a rule needs no plugin or format options:
+
+```yaml
+http_response_rewrite:
+  rules:
+    - name: sandbox-base-url
+      authorities: [cs.wegent.intra.demo.test]
+      methods: [GET]
+      path_pattern: /executor-manager/sandboxes/*
+      pointers: [/base_url]
+```
+
+Under `project.yaml` this block belongs to `recorder`. Coordinator-applied rules
+are stored as the `http_response_rewrite` list in
+`.traffic-e2e/source-traffic-policy.yaml`; the recorder overlays this list when
+loading configuration. Omitted `enabled` enables configured rules; an explicit
+`enabled: false` still disables them. Rules are loaded at recording startup;
+new addresses are discovered on each matching response, without hot reload.
+
+`path_pattern` matches the request path excluding its query. Whole-segment `*`
+matches exactly one nonempty level; terminal `**` matches one or more levels.
+Thus `/sandboxes/*` matches `/sandboxes/123`, not `/sandboxes/123/files` or
+`/sandboxes/`. Legacy `path` remains an exact match; configure exactly one of
+`path` and `path_pattern`. Pointers use JSON Pointer syntax (`~0` for `~`, `~1`
+for `/`, numeric array indices); pointer wildcards are not supported.
+
+By default generic rules apply to successful HTTP responses with JSON media
+types (`application/json` or `+json`). Selected missing or null values are
+skipped, and URL hostnames stay unchanged. IPv4 HTTP(S) URL hosts become stable
+synthetic names such as `http-10-36-14-118-8080.trp.test`. The original scheme,
+explicit port, credentials, path, query and fragment remain intact. Non-string,
+invalid, unsupported IPv6, or ambiguous URL values fail the matched exchange.
+The synthetic route forwards to the original IP and port and restores the
+upstream HTTP authority; HTTPS retains strict upstream certificate validation.
+The source client must trust the Recorder CA for intercepted HTTPS as usual.
+The rewritten response and discovered routes are recorded together, and Replay
+restores their reserved fake IPs before replaying subsequent HTTP(S) exchanges.
+
 For Pluto ECI, that synthetic domain is registered in the recorder's fake-DNS
 registry and routed to a local `kubectl proxy`, allowing the later HTTPS traffic
 to pass through the TCP gateway and be recorded. The rewritten kubeconfig uses
@@ -722,11 +760,11 @@ When both files are absent, `traffic-e2e record` reports that Recorder will
 generate them automatically. If only one exists, startup stops with recovery
 guidance instead of replacing the remaining file and silently changing the CA.
 
-Rules are evaluated in configuration order and only the first matching rule is
-run. Version one accepts complete, identity-encoded HTTP response bodies; a
-matched response with compression is rejected instead of being partially
-rewritten. Plugin parse or rewrite failures fail the HTTP exchange and active
-case, so an original IP-bearing response is never silently published. On
+Rules are evaluated in configuration order. A matching legacy plugin retains
+first-match behavior; when the first match is a generic pointer rule, matching
+generic rules contribute their pointers to one rewrite. Parse or rewrite
+failures fail the HTTP exchange and active case, so an original IP-bearing
+response is never silently published. On
 success, body-dependent headers such as `Content-Length`, `ETag`, and `Digest`
 are normalized, and the rewritten response is what the recorder stores.
 
@@ -915,6 +953,40 @@ recording. DNS lookup and TCP connection establishment alone do not add an
 event. Any reported payload attempt is dirty, is counted under aggregate
 `network` events, and is clustered as `network/unrecorded_endpoint` in
 dependency evidence.
+
+Replay also samples the existing fixed-UID REJECT packet counters at each
+controlled case `begin` and `end`. This requires no NFLOG or packet observer.
+`egress_rejections` retains the sampled time window and packet delta; it has no
+IP address, source classification, or per-event timestamp. Counts include
+retries and background traffic from the same UID. Failed reads or changed/reset
+rules yield `rejected_packets: null`, never a fabricated zero. `--no-intercept`
+does not sample firewall counters. Standard recording does not install Replay's
+REJECT policy, so successful direct-IP traffic during recording is not detected
+by this diagnostic.
+
+These counters do not affect dirty, response, or completion gates. Only when
+responses differ or dependencies are dirty does `run-api` expose the auxiliary
+`diagnosis.egress_rejections`; `backend-rewrite next/status` carries it in
+`action.details.egress_rejections`. The `dirty_clusters` evidence response adds
+the same bounded observations. Positive counts add a `rule_hints` entry with
+`recorder-capture plan-http-response --help`; they do not by themselves produce
+an applicable rule or establish causality.
+
+After source investigation establishes a missing IP dependency, the coordinator
+can run `route --cause unrecorded-ip --endpoint IP:PORT --case-id CASE
+--ip-origin http-response --evidence-id CURRENT --source-ref SOURCE_PROOF`.
+`unknown`, `static`, and `other` origins return the relevant investigation
+requirements. The route is a preflight, with `accepted: false`, and leaves the
+API out of system repair. Its `ip_capture` evidence matches reported endpoints
+to exact recorded JSON responses and returns planner commands. Supply the
+source consumption proof via `--source-evidence` or the returned
+`BACKEND_REWRITE_SOURCE_EVIDENCE` environment input. Inspect the plan and execute
+its `next_command` apply; status reconstructs a pending apply. Apply persists
+the capture rule and parks the API for consolidated fresh recording. A pending
+capture plan or unresolved supported capture candidate blocks capability-gap
+submission. If a rule is already configured, inspect whether fresh recording
+loaded it and cite the remaining engine failure rather than repeatedly adding
+rules. Historical recordings are never edited.
 
 For a collection, multi-case selection, or multiple sessions, generate one
 deterministic coverage and dependency summary from the recording source root.

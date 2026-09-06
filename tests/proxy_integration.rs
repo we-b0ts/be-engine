@@ -677,12 +677,14 @@ async fn http_gateway_rewrites_pluto_eci_kubeconfig_and_registers_alias() {
             authorities: vec!["cs.aliyuncs.com".to_string()],
             methods: vec!["GET".to_string()],
             path: format!("/api/v2/k8s/{cluster_id}/user_config"),
+            path_pattern: None,
+            pointers: Vec::new(),
             status_codes: vec![200],
             content_types: vec!["application/json".to_string()],
-            plugin: HttpResponseRewritePluginConfig::PlutoEciKubeconfig {
+            plugin: Some(HttpResponseRewritePluginConfig::PlutoEciKubeconfig {
                 kubectl_binary: fake_kubectl.to_string_lossy().into_owned(),
                 proxy_listen,
-            },
+            }),
         }],
     };
     config.mysql.enabled = false;

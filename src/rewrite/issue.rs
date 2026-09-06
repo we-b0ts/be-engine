@@ -110,6 +110,8 @@ pub(super) fn from_e2e(
         summary,
         pointer_pattern: pointer.map(crate::e2e_run::response_pointer_pattern),
         representative: result.diagnosis.representative.clone(),
+        egress_rejections: result.diagnosis.egress_rejections.clone(),
+        recorder_capture_diagnosis: None,
         response_diagnosis: (kind == RewriteIssueKind::Response)
             .then(|| result.diagnosis.response_differences.clone()),
         possible_causes,

@@ -75,6 +75,13 @@ recorder:
     enabled: false
     listen: 127.0.0.1:8080
   http_response_rewrite:
+    # Optional JSON URL rule (omit enabled, or set true, to activate rules):
+    # rules:
+    # - name: sandbox-base-url
+    #   authorities: [cs.wegent.intra.demo.test]
+    #   methods: [GET]
+    #   path_pattern: /executor-manager/sandboxes/*
+    #   pointers: [/base_url]
     enabled: false
     rules:
     - name: pluto-eci-kubeconfig

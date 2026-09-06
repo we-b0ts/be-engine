@@ -128,6 +128,61 @@ fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
 }
 
 #[test]
+fn response_discovered_http_target_reserves_its_recorded_fake_ip() {
+    let record = RecordedHttpExchange {
+        scheme: "http".to_string(),
+        method: "GET".to_string(),
+        uri: "/naming/service?action=lookup&service=yf-rpc&cluster=user/service".to_string(),
+        authority: Some("config.example.test".to_string()),
+        request_body: RecordedBodyCapture {
+            encoding: "utf8".to_string(),
+            truncated: false,
+            data: String::new(),
+        },
+        response_status: Some(200),
+        response_headers: None,
+        response_body: Some(RecordedBodyCapture {
+            encoding: "utf8".to_string(),
+            truncated: false,
+            data: "{}".to_string(),
+        }),
+        discovered_tcp_targets: vec![DiscoveredTcpTarget {
+            protocol: "http".to_string(),
+            alias: "http-10-145-1-107-8881.trp.test".to_string(),
+            advertised_ip: "198.19.0.20".parse().unwrap(),
+            upstream_ip: "10.145.1.107".parse().unwrap(),
+            port: 8881,
+            service: Some("yf-rpc".to_string()),
+            cluster: Some("user/service".to_string()),
+        }],
+        global_dependency_reason: None,
+        global_dependency_phase: None,
+        global_dependency_matched_by: None,
+        error: None,
+    };
+    let mut exchanges = Vec::new();
+    let mut targets = BTreeMap::new();
+
+    register_http_exchange(
+        record,
+        ReplaySource::Case,
+        Some("case"),
+        &mut exchanges,
+        &mut targets,
+    )
+    .unwrap();
+
+    let motan = targets
+        .get(&TargetKey {
+            host: "http-10-145-1-107-8881.trp.test".to_string(),
+            port: 8881,
+        })
+        .unwrap();
+    assert_eq!(motan.protocol, ReplayProtocol::Http);
+    assert_eq!(motan.fake_ip, "198.19.0.20".parse::<Ipv4Addr>().unwrap());
+}
+
+#[test]
 fn tcp_blackhole_requires_case_local_clean_zero_byte_connection() {
     for (source, client_bytes, server_bytes, error, expected) in [
         (ReplaySource::Case, 0, 0, None, true),

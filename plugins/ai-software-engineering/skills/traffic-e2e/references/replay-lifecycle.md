@@ -131,6 +131,17 @@ published case replayed in exactly one finalized session may record
 manually total counters, merge overlapping attempts without exact session
 selection, or substitute target test output for recorder evidence.
 
+## Auxiliary Rejection Counts
+
+Intercepted Replay reads existing REJECT packet counters at case begin/end.
+Response or dependency failures may include `egress_rejections` with the delta
+and sampled time window. Counts do not change verification gates and do not
+identify IPs, origins, individual calls, or exact event times. Failed reads or
+rule replacement are unavailable evidence, never zero. `--no-intercept` omits
+this observation. Follow returned rule hints only after tracing the source
+call; JSON response URL acquisition can use recorder rule plan/apply followed
+by a consolidated fresh recording.
+
 ## Iteration
 
 After an engine failure, isolate lifecycle, interception, publication, or

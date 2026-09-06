@@ -173,6 +173,7 @@ not prove that the observed difference is safe to ignore.
 
 | Problem stage | Protocol | Rule | Repairs |
 | --- | --- | --- | --- |
+| `dirty_clusters` with positive rejection-count evidence; source-proven `ip_capture` preflight | HTTP JSON | Response URL pointers | Capture later HTTP(S) calls to an IP obtained from an upstream JSON URL; requires source proof and fresh recording. |
 | `dirty_clusters` during a response, Replay, or dependency issue | Memcached | `protobuf-timestamp` | A `SET` value mismatch where source proves that one selected top-level protobuf varint field is current Unix seconds; all other protobuf fields must remain equal, and each timestamp must be within the engine-owned fixed five-second window around its own `SET`. |
 
 Run the exact `help` command returned with the rule before planning it. Add a
@@ -293,6 +294,27 @@ the endpoint is unknown, ambiguous, or already captured, retain the exact
 source/recording proof and returned error and continue diagnosis. Use
 `recorder-capability-gap` only when the required capture mechanism itself is
 unsupported.
+
+## Rejected Egress And IP Capture Preflight
+
+When response/dependency verification fails, `action.details.egress_rejections`
+and `dirty_clusters` may report REJECT packet-count deltas and sampled time
+windows. Treat these as investigation leads: they identify no IP or origin,
+include retries/background traffic, and do not prove response causality. A null
+count means the read or rule generation was unavailable, not zero rejections.
+A clean passing run needs no investigation based only on these counters.
+
+Follow `rule_hints[].help` to discover response URL rewriting. Trace the source
+call and the missing dependency before submitting a system defect. Return the
+current evidence ID, case ID, literal IP:port and source citation to the
+coordinator, which runs `route --cause unrecorded-ip`. The route returns missing
+inputs or `ip_capture` evidence. For a source-proven `http-response` origin,
+matching JSON fields produce `applicable_rule_planners` commands. Complete
+plan/apply and verify the consolidated fresh recording before escalating a
+remaining engine defect. Static/hardcoded addresses require source
+configuration or a source mock. Unknown origins require investigation; do not
+invent a response pointer. A matching IP in recorded JSON alone does not prove
+source consumption or the absence of an equivalent recorded endpoint.
 
 ## Local Cache And Runtime State
 

@@ -62,6 +62,8 @@ fn implementation_action_has_one_stable_public_shape() {
             summary: "response status differs".to_string(),
             pointer_pattern: Some("/status".to_string()),
             representative: None,
+            egress_rejections: None,
+            recorder_capture_diagnosis: None,
             response_diagnosis: Some(E2eResponseDifferenceDiagnosis {
                 total_differences: 7,
                 indexed_differences: 7,

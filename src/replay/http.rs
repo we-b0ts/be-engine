@@ -156,6 +156,8 @@ pub(super) fn register_http_exchange(
     for discovered in &record.discovered_tcp_targets {
         let protocol = match discovered.protocol.as_str() {
             "auto" => ReplayProtocol::Auto,
+            "http" => ReplayProtocol::Http,
+            "https" => ReplayProtocol::Https,
             "motan" => ReplayProtocol::Motan,
             "redis" => ReplayProtocol::Redis,
             "memcached" => ReplayProtocol::Memcached,

@@ -147,6 +147,7 @@ fn clean_reclassification_advances_without_replacing_standard_recording() {
             dependencies: crate::E2eDependencyGate::Clean,
         },
         diagnosis: crate::E2eDiagnosis {
+            egress_rejections: None,
             counts,
             response_differences: crate::E2eResponseDifferenceDiagnosis {
                 total_differences: 0,

@@ -115,6 +115,40 @@ Do not follow capture apply with `recording request`. Continue runnable work and
 read [recording-lifecycle.md](recording-lifecycle.md) when the coordinator
 returns the consolidated refresh.
 
+## HTTP Response URL Capture
+
+For a source-proven IP omission, run the defect preflight using current issue
+evidence and the source call location:
+
+```text
+backend-rewrite route --cause unrecorded-ip \
+  --evidence-id <returned-evidence-id> --case-id <case-id> \
+  --endpoint <IP:port> --ip-origin http-response \
+  --source-ref '<source file:line symbol: address acquisition and missing-call proof>'
+```
+
+The preflight returns `accepted: false` and stays outside system repair. With an
+unknown origin it requests investigation; static/hardcoded endpoints receive
+source configuration/mock guidance. The `ip_capture` evidence correlates the
+reported endpoint with recorded response IDs and JSON pointers. This is source
+response evidence, not firewall packet evidence. It includes no full URL query,
+credentials or unrelated response body.
+
+Execute the returned `applicable_rule_planners[].command` after reviewing the
+pointer and source consumption. Set its required
+`BACKEND_REWRITE_SOURCE_EVIDENCE` input to a one-line source file/line/symbol
+proof; a field name alone is insufficient. The plan previews the acquisition
+rule and returns the exact apply command. Apply persists rules in
+`source-traffic-policy.yaml`, then follows the same consolidated refresh as
+Breeze capture. `status` restores pending apply commands. Workers return the
+source inputs; the coordinator performs the state mutations.
+
+The preflight does not apply an assertion selector or ignore differences.
+Pending capture plans and unresolved supported candidates block capability-gap
+submission. If a matching rule already exists, inspect its activation and fresh
+recording evidence before reporting the exact remaining engine defect; do not
+keep creating duplicate rules or modify historical recordings.
+
 ## Process-Output Target-Missing Rules
 
 Use this route only when a confirmed process-output worker returns the exact
