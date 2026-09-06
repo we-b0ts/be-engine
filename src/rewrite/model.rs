@@ -376,8 +376,6 @@ pub(super) struct RewriteRecordingRefreshState {
     pub applied: Vec<RewriteRecorderCaptureAppliedRecord>,
     #[serde(default)]
     pub dependency_rules: Vec<RewriteDependencyRuleAppliedRecord>,
-    #[serde(default)]
-    pub required_apis: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline_case_source: Option<PathBuf>,
     pub project_config_revision: String,

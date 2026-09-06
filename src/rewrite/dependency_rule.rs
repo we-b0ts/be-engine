@@ -543,21 +543,12 @@ pub(super) fn schedule_cache_snapshot_refresh(
     );
     let config_revision = fingerprint::project_config_revision(target_root)?;
     let rules_revision = fingerprint::source_traffic_policy_revision(target_root)?;
-    let mut required_apis = state
-        .api_inventory
-        .iter()
-        .map(|item| item.api.clone())
-        .collect::<Vec<_>>();
-    if required_apis.is_empty() && !state.api.is_empty() {
-        required_apis.push(state.api.clone());
-    }
     let baseline_case_source = state.case_source.clone();
     let refresh = state
         .recording_refresh
         .get_or_insert_with(|| RewriteRecordingRefreshState {
             applied: Vec::new(),
             dependency_rules: Vec::new(),
-            required_apis: required_apis.clone(),
             baseline_case_source: baseline_case_source.clone(),
             project_config_revision: config_revision.clone(),
             source_traffic_policy_revision: rules_revision.clone(),
@@ -568,12 +559,6 @@ pub(super) fn schedule_cache_snapshot_refresh(
     if refresh.baseline_case_source.is_none() {
         refresh.baseline_case_source = baseline_case_source;
     }
-    for api in required_apis {
-        if !refresh.required_apis.contains(&api) {
-            refresh.required_apis.push(api);
-        }
-    }
-    refresh.required_apis.sort();
     if !refresh
         .dependency_rules
         .iter()

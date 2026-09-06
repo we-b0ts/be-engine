@@ -131,21 +131,23 @@ still compare against the current baseline. When no runnable item remains, the
 coordinator atomically returns one `recording_required` refresh.
 
 The new finalized recording replaces the shared baseline atomically and
-invalidates old Replay/comparison evidence. Until validation succeeds, the
-refresh state retains the old case source and its required API inventory. A
-replacement that omits any previously published API, including a rare case
-that did not recur, is rejected and cannot silently shrink the workflow
-inventory. The refresh never creates per-API recording generations.
+invalidates old Replay/comparison evidence. Its observed APIs define the new
+round's inventory; rare APIs do not have to recur in every recording. Historical
+recordings and the known API catalog remain available, but an API absent from
+this recording does not participate in this round and is not counted as newly
+verified. Do not request another recording solely to reproduce the old API
+inventory. The refresh never creates per-API recording generations or merges
+old cases into the new recording.
 
 When repair verification requests fresh standard traffic while a capture
 refresh is pending, that run takes ownership of the existing refresh. Its
-applied-rule records, old case source and required APIs remain until the new
+applied-rule records and old case source remain until the new
 recording passes validation. `next` also reconciles older repair states that
 reserved a fresh run but left the refresh unbound; it validates that same run
 instead of allocating another one or checking an obsolete scheduling hash.
-This does not waive publication, scope or API coverage checks. Missing required
-APIs are named in the replacement-recording action. Configuration revision
-checks still apply when scheduling a refresh that has no replacement run.
+Completed publication, nonempty cases and the requested recording scope still
+require validation. Configuration revision checks still apply when scheduling
+a refresh that has no replacement run.
 
 After a system repair, do not choose fresh traffic yourself. The
 coordinator-issued repair verification decides whether to allocate fresh

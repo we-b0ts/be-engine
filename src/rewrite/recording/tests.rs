@@ -251,7 +251,6 @@ fn drained_capture_plans_start_one_all_scope_fresh_recording() {
             source_evidence: "CounterService.java:88".to_string(),
         }],
         dependency_rules: Vec::new(),
-        required_apis: vec!["GET /a".to_string(), "POST /b".to_string()],
         baseline_case_source: Some(PathBuf::from("old-recording")),
         project_config_revision: super::super::fingerprint::project_config_revision(target.path())
             .unwrap(),
@@ -298,7 +297,6 @@ fn pending_refresh() -> super::super::model::RewriteRecordingRefreshState {
             rule_name: "background-read".to_string(),
             source_evidence: "src/background.rs:42".to_string(),
         }],
-        required_apis: vec!["GET /widgets/*".to_string()],
         baseline_case_source: Some(PathBuf::from("old-recording")),
         project_config_revision: "fnv1a64:old-project".to_string(),
         source_traffic_policy_revision: "fnv1a64:old-policy".to_string(),
@@ -320,7 +318,7 @@ fn legacy_repair_recording() -> RewriteState {
 }
 
 #[test]
-fn repair_replacement_owns_pending_refresh_without_losing_its_requirements() {
+fn repair_replacement_owns_pending_refresh_without_losing_its_provenance() {
     for reason in [
         RewriteRecordingReason::RecorderContractChanged,
         RewriteRecordingReason::SourceBaselineChanged,
@@ -503,9 +501,26 @@ async fn next(target: &Path) -> RewriteActionEnvelope {
 }
 
 #[tokio::test]
-async fn finalized_legacy_repair_recording_installs_without_another_recording() {
+async fn finalized_refresh_installs_observed_apis_and_preserves_rare_history() {
     let target = recording_target();
-    let state = legacy_repair_recording();
+    let mut historical = legacy_repair_recording();
+    historical.recording_run_id = "20260801000000".to_string();
+    write_recording(
+        target.path(),
+        &historical,
+        "completed",
+        &[("/rare-case", "/rare-case")],
+    );
+    let historical_run = artifacts::recording_run(target.path(), &historical.recording_run_id);
+    let historical_request = historical_run.join("apis/api-0/case-0/request.json");
+    let historical_before = fs::read(&historical_request).unwrap();
+
+    let mut legacy = serde_json::to_value(legacy_repair_recording()).unwrap();
+    legacy["recording_refresh"]["required_apis"] =
+        serde_json::json!(["GET /widgets/*", "GET /rare-case"]);
+    legacy["recording_refresh"]["baseline_case_source"] = serde_json::json!(historical_run);
+    let mut state: RewriteState = serde_json::from_value(legacy).unwrap();
+    state.api_catalog.insert("GET /rare-case".to_string());
     let original_run = state.recording_run_id.clone();
     write_recording(
         target.path(),
@@ -533,54 +548,62 @@ async fn finalized_legacy_repair_recording_installs_without_another_recording() 
     assert!(installed.recording_refresh.is_none());
     assert_eq!(installed.api_inventory.len(), 1);
     assert_eq!(installed.api_inventory[0].api, "GET /widgets/*");
+    assert!(installed.api_catalog.contains("GET /rare-case"));
+    assert!(!installed.api_inventory[0].e2e_current);
+    assert!(!result.terminal_allowed);
     assert_eq!(fs::read(manifest).unwrap(), before);
+    assert_eq!(fs::read(historical_request).unwrap(), historical_before);
+    assert!(artifacts::recording_manifest(target.path(), &historical.recording_run_id).exists());
 }
 
-#[tokio::test]
-async fn legacy_repair_recording_missing_a_required_api_requests_one_replacement() {
+#[test]
+fn refreshed_recording_accepts_the_observed_apis_without_requiring_rare_history() {
     let target = recording_target();
-    let mut state = legacy_repair_recording();
-    state
-        .recording_refresh
-        .as_mut()
-        .unwrap()
-        .required_apis
-        .push("GET /rare-case".to_string());
-    let original_run = state.recording_run_id.clone();
+    let mut legacy = serde_json::to_value(legacy_repair_recording()).unwrap();
+    legacy["recording_refresh"]["required_apis"] =
+        serde_json::json!(["GET /widgets/*", "GET /rare-case"]);
+    let state: RewriteState = serde_json::from_value(legacy).unwrap();
     write_recording(
         target.path(),
         &state,
         "completed",
         &[("/widgets/*", "/widgets/7")],
     );
-    let store = RewriteStore::new(target.path()).unwrap();
-    store.save(&state).unwrap();
 
-    let result = next(target.path()).await;
-    let RewriteAction::RecordingRequired {
-        summary, run_id, ..
-    } = result.action
-    else {
-        panic!("expected replacement recording, got {:?}", result.action);
-    };
-    assert!(summary.contains("GET /rare-case"), "{summary}");
-    assert_ne!(run_id, original_run);
-    let replacement = store.load().unwrap().unwrap();
-    let refresh = replacement.recording_refresh.as_ref().unwrap();
-    assert_eq!(refresh.recording_run_id.as_deref(), Some(run_id.as_str()));
+    artifacts::validate_standard_recording(target.path(), &state).unwrap();
     assert_eq!(
-        refresh.required_apis,
-        state.recording_refresh.unwrap().required_apis
+        artifacts::standard_recording_apis(target.path(), &state).unwrap(),
+        ["GET /widgets/*"]
     );
-    assert!(replacement.api_inventory.is_empty());
-    let repeated = next(target.path()).await;
-    let RewriteAction::RecordingRequired {
-        run_id: repeated_run,
-        ..
-    } = repeated.action
-    else {
-        panic!("expected same recording request");
-    };
-    assert_eq!(repeated_run, run_id);
-    assert!(artifacts::recording_manifest(target.path(), &original_run).exists());
+    assert!(
+        serde_json::to_value(&state).unwrap()["recording_refresh"]
+            .get("required_apis")
+            .is_none()
+    );
+}
+
+#[test]
+fn refreshed_recording_still_requires_completed_nonempty_evidence_and_matching_scope() {
+    let target = recording_target();
+    let state = legacy_repair_recording();
+    for status in ["running", "failed"] {
+        write_recording(
+            target.path(),
+            &state,
+            status,
+            &[("/widgets/*", "/widgets/7")],
+        );
+        assert!(artifacts::validate_standard_recording(target.path(), &state).is_err());
+    }
+    write_recording(target.path(), &state, "completed", &[]);
+    assert!(artifacts::validate_standard_recording(target.path(), &state).is_err());
+    write_recording(
+        target.path(),
+        &state,
+        "completed",
+        &[("/widgets/*", "/widgets/7")],
+    );
+    let mut different_scope = state;
+    different_scope.recording_apis = vec!["GET /widgets/*".to_string()];
+    assert!(artifacts::validate_standard_recording(target.path(), &different_scope).is_err());
 }

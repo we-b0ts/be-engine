@@ -617,7 +617,7 @@ pub(super) fn reset_for_fresh_recording(
     reason: RewriteRecordingReason,
 ) {
     // Every replacement run also owns any outstanding capture refresh. Keep
-    // its applied rules and required API inventory until publication validates.
+    // its applied rules and baseline reference until publication validates.
     if let Some(refresh) = state.recording_refresh.as_mut() {
         refresh.recording_run_id = Some(run_id.clone());
     }
@@ -679,7 +679,7 @@ pub(super) fn begin_pending_capture_refresh(
         // Older repair verification reset the baseline but left this refresh
         // unbound. The repair already reserved a fresh run using the current
         // recorder contract. Adopt it before the pre-scheduling revision guard;
-        // next must still validate its publication, scope and required APIs.
+        // next must still validate its publication, scope and recorded cases.
         state
             .recording_refresh
             .as_mut()
