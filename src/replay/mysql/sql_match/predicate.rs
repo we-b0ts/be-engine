@@ -8,6 +8,8 @@ use sqlparser::{
     tokenizer::Token as ParserToken,
 };
 
+mod in_list;
+
 #[derive(Clone, Debug)]
 pub(super) struct Template {
     start: usize,
@@ -20,6 +22,7 @@ enum Operand {
     Column(Vec<String>),
     Slot(usize),
     Value(Token),
+    Tuple(Vec<Operand>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -240,14 +243,8 @@ fn predicate(expr: &Expr, depth: usize) -> Option<Predicate> {
             list,
             negated,
         } if !list.is_empty() => {
-            let values = list.iter().map(operand).collect::<Option<Vec<_>>>()?;
-            if values
-                .iter()
-                .any(|value| matches!(value, Operand::Column(_)))
-            {
-                return None;
-            }
-            Predicate::In(operand(expr)?, *negated, values)
+            let (left, values) = in_list::parse(expr, list)?;
+            Predicate::In(left, *negated, values)
         }
         _ => return None,
     })
@@ -261,13 +258,31 @@ impl Operand {
                 (value.is_value() || *value == Token::Placeholder)
                     .then(|| Self::Value(value.clone()))
             }
+            Self::Tuple(fields) => Some(Self::Tuple(
+                fields
+                    .iter()
+                    .map(|field| field.bind(tokens))
+                    .collect::<Option<_>>()?,
+            )),
             value => Some(value.clone()),
         }
     }
 
     fn metadata_matches(&self, recorded: &Self) -> bool {
-        self == recorded
-            || matches!(self, Self::Value(Token::Placeholder)) && matches!(recorded, Self::Value(_))
+        match (self, recorded) {
+            (Self::Tuple(actual), Self::Tuple(recorded)) => {
+                actual.len() == recorded.len()
+                    && actual
+                        .iter()
+                        .zip(recorded)
+                        .all(|(a, r)| a.metadata_matches(r))
+            }
+            _ => {
+                self == recorded
+                    || matches!(self, Self::Value(Token::Placeholder))
+                        && matches!(recorded, Self::Value(_))
+            }
+        }
     }
 }
 
@@ -280,22 +295,7 @@ impl Predicate {
                 Self::Between(a.bind(tokens)?, *not, b.bind(tokens)?, c.bind(tokens)?)
             }
             Self::In(a, not, values) => {
-                let mut values = values
-                    .iter()
-                    .map(|v| v.bind(tokens))
-                    .collect::<Option<Vec<_>>>()?;
-                // Mixed string/number lists depend on MySQL coercion rules.
-                let numeric = values
-                    .iter()
-                    .any(|v| matches!(v, Operand::Value(Token::Number(_))));
-                let bytes = values
-                    .iter()
-                    .any(|v| matches!(v, Operand::Value(Token::Bytes(_))));
-                if numeric && bytes {
-                    return None;
-                }
-                values.sort();
-                Self::In(a.bind(tokens)?, *not, values)
+                Self::In(a.bind(tokens)?, *not, in_list::bind(values, tokens)?)
             }
             Self::And(terms) => {
                 let mut terms = terms
@@ -321,29 +321,12 @@ impl Predicate {
                     && c.metadata_matches(z)
             }
             (Self::In(a, not, values), Self::In(x, rnot, recorded)) => {
-                if not != rnot || !a.metadata_matches(x) || values.len() != recorded.len() {
-                    return false;
-                }
-                let mut counts = std::collections::BTreeMap::new();
-                for value in recorded {
-                    *counts.entry(value).or_insert(0_usize) += 1;
-                }
-                // Concrete values claim their occurrences before wildcards.
-                for value in values
-                    .iter()
-                    .filter(|v| **v != Operand::Value(Token::Placeholder))
-                {
-                    let Some(count) = counts.get_mut(value) else {
-                        return false;
-                    };
-                    let Some(left) = count.checked_sub(1) else {
-                        return false;
-                    };
-                    *count = left;
-                }
-                true
+                not == rnot && a.metadata_matches(x) && in_list::metadata_matches(values, recorded)
             }
-            (Self::And(terms), Self::And(recorded)) => unordered_metadata(terms, recorded),
+            (Self::And(terms), Self::And(recorded)) => {
+                terms.len() == recorded.len()
+                    && injective_metadata(terms, recorded, Self::metadata_matches)
+            }
             _ => false,
         }
     }
@@ -366,18 +349,16 @@ impl Key {
 
 // PREPARE has no actual values. Repeated fields and partially bound IN lists
 // require a one-to-one assignment, not a greedy match or SQL-shape wildcard.
-fn unordered_metadata(actual: &[Predicate], recorded: &[Predicate]) -> bool {
-    if actual.len() != recorded.len() || actual.len() > 64 {
+fn injective_metadata<T>(actual: &[T], recorded: &[T], matches: impl Fn(&T, &T) -> bool) -> bool {
+    if actual.len() > recorded.len()
+        || actual.len() > 64
+        || actual.len().saturating_mul(recorded.len()) > 4096
+    {
         return false;
     }
     let edges = actual
         .iter()
-        .map(|a| {
-            recorded
-                .iter()
-                .map(|r| a.metadata_matches(r))
-                .collect::<Vec<_>>()
-        })
+        .map(|a| recorded.iter().map(|r| matches(a, r)).collect::<Vec<_>>())
         .collect::<Vec<_>>();
     fn assign(
         a: usize,

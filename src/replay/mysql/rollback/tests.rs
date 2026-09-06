@@ -206,6 +206,7 @@ fn implicit_cleanup_needs_known_start_contiguous_reads_and_successful_end() {
 #[test]
 fn read_effect_allowlist_rejects_locks_calls_and_vendor_tail_clauses() {
     for sql in [
+        "SELECT id FROM users WHERE (id,name) IN ((1,'a'),(2,'b'))",
         "SELECT u.id AS user_id FROM users u WHERE u.id IN (1,2) AND (u.active=1 OR u.name='a') ORDER BY u.id LIMIT 1",
         "SELECT * FROM users WHERE id=?",
         "SELECT id FROM users",
@@ -214,6 +215,8 @@ fn read_effect_allowlist_rejects_locks_calls_and_vendor_tail_clauses() {
         assert!(super::read::plain_select(sql), "{sql}");
     }
     for sql in [
+        "SELECT id FROM users WHERE (id,name) IN ((1,'a'),(2,GET_LOCK('x',1)))",
+        "SELECT id FROM users WHERE (id,name) IN ((1,'a'),(2,'b',3))",
         "BEGIN",
         "SELECT id FROM users FOR UPDATE",
         "SELECT id FROM users FOR SHARE",

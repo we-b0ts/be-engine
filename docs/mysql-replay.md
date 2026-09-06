@@ -164,12 +164,39 @@ strings/binary values, optionally with NULL; mixed string/number lists remain
 strict. Reordering preserves duplicates, list length and each exact value.
 `?` is never a value exemption during execution.
 
+Flat tuple `IN` / `NOT IN` lists also support reordering, including ordinary
+SQLAlchemy row constructors and target parameter binding:
+
+```sql
+-- Source
+WHERE (user_id,namespace,name) IN ((7,'default','a'),(7,'shared','b'))
+-- Target, parameters [7,"shared","b",7,"default","a"]
+WHERE (user_id,namespace,name) IN ((?,?,?),(?,?,?))
+```
+
+The left side is an ordered tuple of direct columns and every list item must
+have the same arity, at least two, with scalar literal/parameter components.
+Only whole tuples are sorted: column order, value pairing, NULL position and
+duplicate tuple counts remain exact. Types are checked per component across
+rows, so `(integer,string)` is allowed while mixing numbers and strings in
+the same tuple position remains strict. Nested/ragged tuples, row expressions,
+subqueries and function calls stay on the existing exact matching path.
+
+PREPARE matches complete fixed tuples before unknown rows and uses injective
+matching for partially bound tuples such as `((?,2),(1,?))`. That ambiguous
+search is bounded to 64 partial rows and 4096 possible assignments; fully
+parameterized or concrete lists retain the fast multiset path within the
+existing SQL size/token limits. EXECUTE binds each parameter before sorting
+and validates the actual complete tuples on every call. The same compiled
+template, metadata and constant-query caches apply. Ordinary tuple IN reads
+can also participate in proven read-only session cleanup described above.
+
 The supported conditions are direct fields and scalar values compared with
 `=`, `!=`, `<>`, `<`, `<=`, `>`, `>=`, `<=>`, `IS NULL`, `IS NOT NULL`,
 `BETWEEN`, and literal/parameter IN lists, combined by AND and parentheses.
 AND groups are flattened without dropping duplicate conditions. The grammar
 distinguishes BETWEEN's internal AND. OR, function/arithmetic predicates,
-subqueries, tuple-valued IN, joins, grouping, locks, writes and computed sorting
+subqueries, tuple comparisons outside IN, joins, grouping, locks, writes and computed sorting
 retain their existing strict matching behavior. Wildcard SELECTs can match
 when their projection remains the same; supported direct-column projections
 can also use the column compatibility above.

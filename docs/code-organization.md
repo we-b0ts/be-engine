@@ -211,6 +211,9 @@ explicit repository-wide audit.
   `replay/mysql/sql_match/predicate` uses sqlparser's MySQL grammar and owns
   bounded pure-predicate equivalence; `sql_match/cache` owns Replay-local
   compiled templates, constant normalization and fresh parameter binding.
+  `sql_match/predicate/in_list` owns scalar/flat-tuple list shapes, per-component
+  type checks, atomic multiset normalization and bounded partial-row PREPARE
+  matching. Tuple fields are never normalized as independent sets.
   These do not change shared SQL normalization or ownership/policy selectors.
   The matcher checks live scope, dynamic policy and finite exchange availability
   on every call, while `replay/mysql/projection` validates and projects the
