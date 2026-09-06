@@ -1511,8 +1511,16 @@ the ignored local source snapshot and do not require the Pod.
 The command generates version-17 `.traffic-e2e/project.yaml`,
 `.traffic-e2e/source-traffic-policy.yaml`, and `.traffic-e2e/verification.yaml`.
 When the root `Cargo.toml`, `Cargo.lock`, and `src/main.rs` are all absent, it
-also generates a runnable readiness-only Rust target with a temporary
-`src/startup_probe.rs` initialization module. Keep that module and its
+also generates a runnable readiness-only Rust target using `http-server`
+`v0.0.2` with its `macros` feature. `ReadinessApi` exports the configured GET
+route through `#[api(auth = none)]` and `#[http_server::get(...)]`, returns
+an empty `200` response, and starts with `Server::bind` / `serve_until` for
+graceful shutdown. The generated route must be a literal path without captures,
+query, fragment, whitespace, or a trailing slash (except `/`). Implement
+business APIs with the same macros in their owning modules and combine them
+with `http_server::Router::new(ReadinessApi).merge(business_api)`.
+The bootstrap also includes a temporary `src/startup_probe.rs` initialization
+module. Keep that module and its
 `src/main.rs` call through initialization preflight, then delete the module,
 declaration, and call when real target implementation begins. It generates
 `.traffic-e2e/Dockerfile.e2e` only when absent and creates or safely extends the
