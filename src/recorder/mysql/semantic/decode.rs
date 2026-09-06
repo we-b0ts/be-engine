@@ -153,6 +153,11 @@ pub(super) fn parse_resultset_response(
     let mut rows = Vec::new();
     while let Some(packet) = packets.get(index) {
         if is_eof_packet(packet) {
+            // Only the final row terminator describes the completed query.
+            // The metadata EOF can carry a different transaction status.
+            if packet.payload.len() == 5 && index + 1 == packets.len() {
+                response.server_status = read_u16_le(&packet.payload, 3);
+            }
             break;
         }
         let row = match protocol {

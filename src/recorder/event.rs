@@ -488,6 +488,9 @@ pub struct MysqlExchangeEvent {
     pub sql: Option<String>,
     pub statement_id: Option<u32>,
     pub params: Option<Vec<MysqlValue>>,
+    /// Last confirmed status before this command, on the same wire sequence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_status_before: Option<u16>,
     pub response: MysqlExchangeResponse,
     pub outcome: DependencyExchangeOutcome,
     pub duration_ms: u128,
@@ -496,7 +499,7 @@ pub struct MysqlExchangeEvent {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct MysqlExchangeResponse {
-    /// Protocol-41 OK status flags, when captured completely.
+    /// Protocol-41 OK or final resultset EOF status, when captured completely.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server_status: Option<u16>,
     pub status: String,

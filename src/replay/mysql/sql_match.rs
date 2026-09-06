@@ -2,6 +2,9 @@
 use super::*;
 use crate::mysql::sql::{Token, number, tokens};
 
+pub(super) mod cache;
+mod predicate;
+
 pub(super) fn materialize(sql: &str, params: &[RecordedMysqlValue]) -> Option<Vec<Token>> {
     let mut tokens = tokens(sql)?;
     let mut values = params.iter();

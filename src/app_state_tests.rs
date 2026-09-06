@@ -521,6 +521,7 @@ async fn background_mysql_scan_enters_global_while_user_query_remains_case_owned
             sql: Some(sql.into()),
             statement_id: None,
             params: None,
+            server_status_before: None,
             response: MysqlExchangeResponse {
                 server_status: None,
                 status: "resultset".into(),

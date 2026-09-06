@@ -1,14 +1,14 @@
 //! Resolve direct-column SELECT projections without changing query semantics.
 use super::{Token, tokens_with_spans};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct DirectColumn {
     pub name: Option<String>,
     pub expression: Vec<Token>,
     pub label: String,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct DirectSelect {
     pub columns: Vec<DirectColumn>,
     pub table: String,

@@ -31,7 +31,7 @@ state checks. This status tracking does not simulate database contents or
 replace recorded effects with an in-memory database.
 
 ROLLBACK remains semantic evidence, including failed rollbacks. Replay permits
-omitting only a redundant successful bare ROLLBACK immediately following a
+omitting a redundant successful bare ROLLBACK immediately following a
 successful bare COMMIT or ROLLBACK on the same recorded connection and identity.
 Both exchanges must have consecutive query sequence numbers and complete,
 successful zero-effect responses whose captured OK status flags confirm no
@@ -39,15 +39,45 @@ active transaction or pending results. This also excludes implicit transaction
 chaining through MySQL's `completion_type` setting. Missing status flags or
 missing or duplicate sequence evidence,
 intervening statements, explicit transaction chaining, and parse warnings prevent
-this compatibility. A first rollback after reads, writes, or locks remains
-required; a read-only request alone does not prove transaction equivalence.
+this compatibility.
+
+Replay also permits the first bare ROLLBACK that closes a proven implicit
+read-only session. Recorder preserves `server_status_before` from the immediately
+preceding completed command, including maintenance such as COM_PING, and records
+the final resultset EOF status in `response.server_status`. The first ordinary
+SELECT must start with confirmed absence of an active transaction. Every
+subsequent exchange through ROLLBACK must have consecutive sequence numbers,
+the same complete connection/endpoint/database/username identity, consistent
+before/after transaction flags, and complete successful responses. Successful
+PREPARE preserves the read proof because it does not execute SQL. The rollback
+must confirm transaction completion without chaining or further results.
+
+The read allowlist uses sqlparser and admits single-table direct-column,
+literal or wildcard SELECTs with ordinary predicates (including AND/OR),
+ordering and pagination. This effect check does not broaden SQL matching:
+OR remains outside predicate-reordering compatibility. Writes, explicit BEGIN,
+locks, savepoints, calls/functions, subqueries and unsupported SQL interrupt
+the read proof. Unknown transaction starts, sequence gaps, errors or truncated
+evidence keep the first rollback required. Classification stays within one
+dependency file and caches SQL effect checks only during that load. It neither
+joins transactions across cases/Global nor proves concurrency/isolation
+equivalence. A SELECT-only case without transaction-state evidence is insufficient.
+
+Targets can retain their normal pooled client after read-only requests; do not
+add `pool.execute("ROLLBACK")` merely to consume ORM session-close traffic.
+Such a call can acquire a different connection and cannot replace a business
+transaction's rollback. Preserve business transactions on one connection: a
+missing rollback can change persisted data even when the HTTP response agrees.
 
 Optional cleanup stays matchable and appears separately in
 `allowed_unused_mysql_rollback_exchanges` when omitted. It is never marked as a
 successful target call. Recorded files remain unchanged. Existing reports are
 not cleaned by SQL-summary filtering: rerun Replay to derive the classification
-from full exchanges. Older recordings without status flags remain strict;
-a new recording is needed to establish cleanup eligibility. Recordings produced
+from full exchanges. Older recordings without query before/final-EOF status
+remain strict for the first read-session rollback; re-record to establish that
+proof. The existing duplicate-rollback compatibility still applies when its
+own OK status evidence is present. Debug JSONL is never substituted for missing
+semantic evidence. Recordings produced
 by versions that omitted ROLLBACK already lack that semantic evidence and need a
 new recording to validate it.
 
@@ -110,6 +140,70 @@ below is a separate ownership decision and retains its explicit SQL selectors.
 The SQLx tests exercise subset/reorder/alias mapping over TLS in both text and
 prepared protocols, cached parameter rebinding, COUNT and constant projections,
 rejection of changed conditions, scope isolation and immutable recordings.
+
+## SELECT predicate order compatibility
+
+Replay accepts different list orders in ordinary `IN` / `NOT IN` predicates
+and different orders of pure `AND` conditions in single-table SELECTs. This is
+built in and requires neither a rule nor a new recording. Source can interpolate
+literal values into text SQL while target retains its normal `?` binding:
+
+```sql
+-- Recorded source text
+SELECT id FROM tasks WHERE tenant=7 AND id IN (3,1,2);
+
+-- Target prepared SQL, parameters [2,3,1,7]
+SELECT id FROM tasks WHERE id IN (?,?,?) AND tenant=?;
+```
+
+`sqlparser` with `MySqlDialect` recognizes the query and predicate structure.
+Replay associates each placeholder with its original parameter position before
+normalizing values or conditions. The existing literal decoder retains exact
+decimals, string case/bytes, escapes and NULL. An IN list may contain numbers or
+strings/binary values, optionally with NULL; mixed string/number lists remain
+strict. Reordering preserves duplicates, list length and each exact value.
+`?` is never a value exemption during execution.
+
+The supported conditions are direct fields and scalar values compared with
+`=`, `!=`, `<>`, `<`, `<=`, `>`, `>=`, `<=>`, `IS NULL`, `IS NOT NULL`,
+`BETWEEN`, and literal/parameter IN lists, combined by AND and parentheses.
+AND groups are flattened without dropping duplicate conditions. The grammar
+distinguishes BETWEEN's internal AND. OR, function/arithmetic predicates,
+subqueries, tuple-valued IN, joins, grouping, locks, writes and computed sorting
+retain their existing strict matching behavior. Wildcard SELECTs can match
+when their projection remains the same; supported direct-column projections
+can also use the column compatibility above.
+
+Exact and existing projection candidates precede predicate-equivalent candidates
+within each scope; Case still precedes Global. Only complete successful
+resultsets qualify. Host, port, database, username, table, sorting, pagination,
+case ownership and finite dependency consumption remain constraints. IN
+compatibility does not make response row order irrelevant. Recorded JSONL is
+immutable; only delivered response columns/cells are adapted.
+
+PREPARE checks structure and all fixed literals to select column metadata without
+consuming an exchange. EXECUTE checks freshly bound values. Cached prepared
+statement reuse with different parameters therefore cannot reuse a previous
+successful match. Selected positional dynamic-parameter policies keep their
+existing matching path; predicate compatibility does not move their parameter
+indices or bypass their validation. Cross-protocol matching continues to require
+actual value equivalence, without inferring dynamic bindings.
+
+The Replay-local FIFO cache retains compiled SQL templates, negative parsing
+results, parameter-independent metadata shapes and normalized constant queries.
+It holds at most 256 SQL strings and 1 MiB of original SQL text (the associated
+compiled representations consume additional bounded memory). A single SQL is
+limited to 64 KiB and 4096 tokens for this compatibility path, with bounded
+parenthesis/parser depth and at most 64 AND terms for metadata assignment.
+Unsupported/oversized forms still try the existing matcher. Actual parameters
+are bound once per semantic lookup; cached templates never retain previous
+execution parameters, selected exchanges, responses or policy decisions.
+The cache is discarded with the Replay runtime and never written to recordings.
+
+The actual SQLx/TLS tests cover all four text/prepared protocol combinations,
+reordered integer/string lists and conditions, partial literal/parameter lists,
+column mapping, cached rebinding, wrong values, scope and finite consumption.
+Focused checks: `cargo test --lib mysql`.
 
 ## Process-owned MySQL reads
 

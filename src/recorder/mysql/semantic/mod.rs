@@ -59,6 +59,7 @@ pub(crate) struct MysqlSemanticTracker {
     pending: VecDeque<ActiveExchange>,
     max_value_bytes: usize,
     context: MysqlExchangeContext,
+    last_status: Option<(Uuid, u64, u16)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -115,6 +116,7 @@ impl MysqlSemanticTracker {
             pending: VecDeque::new(),
             max_value_bytes,
             context,
+            last_status: None,
         }
     }
 
@@ -150,6 +152,8 @@ impl MysqlSemanticTracker {
         command: &ClientCommand,
         packet: &MysqlPacket,
     ) {
+        // Do not carry evidence across commands outside the response FIFO.
+        self.last_status = None;
         if command.command_name == "COM_STMT_CLOSE"
             && let Some(statement_id) = read_u32_le(&packet.payload, 1)
         {
@@ -209,6 +213,28 @@ impl MysqlSemanticTracker {
         let mut active = self.pending.pop_front()?;
         let status = fallback_status.to_string();
         let response = self.parse_response(&mut active, &status, error_code, error_message);
+        // Compute this at completion, not enqueue time: pipelined commands are
+        // executed in FIFO order and must see the preceding command's status.
+        let server_status_before = self.last_status.and_then(|(connection, sequence, flags)| {
+            (connection == active.connection_id
+                && sequence.checked_add(1) == Some(active.query_sequence))
+            .then_some(flags)
+        });
+        let confirmed_status = if active.parse_warnings.is_empty()
+            && response.error_code.is_none()
+            && response.error_message.is_none()
+        {
+            match status.as_str() {
+                "ok" | "resultset" => response.server_status.filter(|flags| flags & 8 == 0),
+                // PREPARE reports metadata; it does not execute the statement.
+                "stmt_prepare" if active.command == "COM_STMT_PREPARE" => server_status_before,
+                _ => None,
+            }
+        } else {
+            None
+        };
+        self.last_status =
+            confirmed_status.map(|flags| (active.connection_id, active.query_sequence, flags));
         Some(MysqlExchangeEvent {
             id: Uuid::new_v4(),
             connection_id: active.connection_id,
@@ -226,6 +252,7 @@ impl MysqlSemanticTracker {
             sql: active.sql,
             statement_id: active.statement_id,
             params: active.params,
+            server_status_before,
             response,
             outcome: if fallback_status == "client_terminated" {
                 DependencyExchangeOutcome::ClientTerminated

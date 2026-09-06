@@ -159,7 +159,7 @@ pub(in crate::replay) async fn handle_stmt_prepare(
     }
 
     let metadata = {
-        let state = state.lock().await;
+        let mut state = state.lock().await;
         let identity = session.identity();
         state.statement_metadata(&identity, sql)
     };

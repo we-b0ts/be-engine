@@ -753,6 +753,7 @@ fn mysql_exchange(
         sql: sql.map(ToOwned::to_owned),
         statement_id: Some(1),
         params: None,
+        server_status_before: None,
         response: MysqlExchangeResponse {
             server_status: None,
             status: status.to_string(),

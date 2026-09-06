@@ -2070,6 +2070,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlparser"
+version = "0.62.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13c6d1b651dc4edf07eead2a0c6c78016ce971bc2c10da5266861b13f25e7cec"
+dependencies = [
+ "log",
+]
+
+[[package]]
 name = "sqlx"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2634,6 +2643,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sqlparser",
  "sqlx",
  "tempfile",
  "tokio",
