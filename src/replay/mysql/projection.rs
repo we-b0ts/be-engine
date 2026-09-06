@@ -32,6 +32,10 @@ pub(super) fn query_response(
         _ => return None,
     };
     let mapping = mapping(record, sql, &forms.0, &forms.1, false)?;
+    Some(project_response(record, mapping))
+}
+
+fn project_response(record: &RecordedMysqlExchange, mapping: Mapping) -> RecordedMysqlResponse {
     let mut response = record.response.clone();
     response.columns = mapping.columns;
     response.rows = record
@@ -46,7 +50,7 @@ pub(super) fn query_response(
                 .collect()
         })
         .collect();
-    Some(response)
+    response
 }
 
 pub(super) fn statement_columns(
@@ -83,13 +87,6 @@ fn mapping(
     actual: &[Token],
     metadata: bool,
 ) -> Option<Mapping> {
-    if record.response.status != "resultset"
-        || record.response.rows_truncated
-        || !record.parse_warnings.is_empty()
-        || record.outcome.is_client_terminated()
-    {
-        return None;
-    }
     let recorded = DirectSelect::parse(record.sql.as_deref()?, recorded)?;
     let actual = DirectSelect::parse(sql, actual)?;
     if recorded.body.len() != actual.body.len()
@@ -99,6 +96,30 @@ fn mapping(
             .zip(&recorded.body)
             .all(|(a, r)| a == r || metadata && *a == Token::Placeholder && r.is_value())
     {
+        return None;
+    }
+    column_mapping(record, &recorded, &actual)
+}
+
+fn complete_resultset(record: &RecordedMysqlExchange) -> bool {
+    record.response.status == "resultset"
+        && !record.response.rows_truncated
+        && record.parse_warnings.is_empty()
+        && !record.outcome.is_client_terminated()
+        && !record.response.columns.is_empty()
+        && record
+            .response
+            .rows
+            .iter()
+            .all(|row| row.len() == record.response.columns.len())
+}
+
+fn column_mapping(
+    record: &RecordedMysqlExchange,
+    recorded: &DirectSelect,
+    actual: &DirectSelect,
+) -> Option<Mapping> {
+    if !complete_resultset(record) {
         return None;
     }
     let response = &record.response;
@@ -169,6 +190,42 @@ fn mapping(
         columns.push(wire);
     }
     Some(Mapping { indices, columns })
+}
+
+pub(super) fn semantic_response(
+    record: &RecordedMysqlExchange,
+    recorded: &sql_match::cache::BoundSql,
+    actual: &sql_match::cache::BoundSql,
+) -> Option<RecordedMysqlResponse> {
+    if !complete_resultset(record) {
+        return None;
+    }
+    if actual.projection_matches(recorded, false)
+        && let Some((r, a)) = recorded.projection.as_ref().zip(actual.projection.as_ref())
+    {
+        return Some(project_response(record, column_mapping(record, r, a)?));
+    }
+    actual
+        .matches(recorded, false)
+        .then(|| record.response.clone())
+}
+
+pub(super) fn semantic_columns(
+    record: &RecordedMysqlExchange,
+    recorded: &sql_match::cache::BoundSql,
+    actual: &sql_match::cache::BoundSql,
+) -> Option<Vec<RecordedMysqlColumn>> {
+    if !complete_resultset(record) {
+        return None;
+    }
+    if actual.projection_matches(recorded, true)
+        && let Some((r, a)) = recorded.projection.as_ref().zip(actual.projection.as_ref())
+    {
+        return Some(column_mapping(record, r, a)?.columns);
+    }
+    actual
+        .matches(recorded, true)
+        .then(|| record.response.columns.clone())
 }
 
 #[cfg(test)]

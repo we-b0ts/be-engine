@@ -4,7 +4,7 @@
 
 pub(crate) mod projection;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Token {
     Word(String),
     Identifier(String),

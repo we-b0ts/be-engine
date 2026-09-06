@@ -226,6 +226,17 @@ async fn find_many<M: Mysql>(mysql: &M, ids: &[u64]) -> MysqlResult<Vec<Record>>
 Bind each argument with its original type. A vector supplies one argument per
 element; generate the same number of SQL placeholders.
 
+Replay supports source text SQL with inline literals and target prepared SQL
+with `?` parameters. For ordinary single-table SELECTs it compares IN/NOT IN
+lists without requiring the same value order, and accepts reordered pure AND
+conditions after binding actual values. Do not reproduce source set iteration
+order or sort target inputs solely for Replay. Exact values, types, NULL and
+duplicate counts remain constrained, as do tables, ordering and pagination.
+This built-in compatibility composes with direct-column projection mapping;
+it requires no rule or new recording. Complex expressions and positional
+dynamic-parameter policies keep their existing boundaries. See
+[MySQL predicate compatibility](../../../../../docs/mysql-replay.md#select-predicate-order-compatibility).
+
 ## Query sharded tables
 
 `mysql.with_route(policy)` returns an owned `ShardedMysqlService` that implements

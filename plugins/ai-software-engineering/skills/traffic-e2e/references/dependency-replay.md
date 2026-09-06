@@ -69,6 +69,16 @@ wildcards and other expressions retain strict matching. See
 [MySQL interoperability](../../../../../docs/mysql-replay.md) for the exact
 boundary and actual-client acceptance tests.
 
+Ordinary single-table SELECT predicates also support reordered IN/NOT IN values
+and pure AND conditions, including source text literals versus target bound `?`
+parameters. Values, types, NULL and duplicate counts stay exact. This built-in
+compatibility needs no rule or new recording and does not require target to
+reproduce source collection order. It composes with direct-column mapping;
+an unchanged wildcard projection can use predicate compatibility as well.
+Complex predicates and positional dynamic parameter rules retain their existing
+constraints. Parsed templates and constant queries are cached within Replay;
+actual values and finite dependency availability are checked for each execution.
+
 For Redis and Memcached, preserve connection-lane ordering and protocol
 semantics. Unmatched, unsupported, unsafe, and unused evidence remains dirty.
 Ordinary Redis data commands support different source/target pool widths and

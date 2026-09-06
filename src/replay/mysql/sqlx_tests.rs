@@ -9,6 +9,7 @@ use sqlx::{
 use std::time::Duration;
 use tempfile::tempdir;
 
+mod predicate_tests;
 mod projection_tests;
 mod rollback_tests;
 

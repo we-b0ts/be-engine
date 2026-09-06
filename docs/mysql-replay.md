@@ -111,6 +111,70 @@ The SQLx tests exercise subset/reorder/alias mapping over TLS in both text and
 prepared protocols, cached parameter rebinding, COUNT and constant projections,
 rejection of changed conditions, scope isolation and immutable recordings.
 
+## SELECT predicate order compatibility
+
+Replay accepts different list orders in ordinary `IN` / `NOT IN` predicates
+and different orders of pure `AND` conditions in single-table SELECTs. This is
+built in and requires neither a rule nor a new recording. Source can interpolate
+literal values into text SQL while target retains its normal `?` binding:
+
+```sql
+-- Recorded source text
+SELECT id FROM tasks WHERE tenant=7 AND id IN (3,1,2);
+
+-- Target prepared SQL, parameters [2,3,1,7]
+SELECT id FROM tasks WHERE id IN (?,?,?) AND tenant=?;
+```
+
+`sqlparser` with `MySqlDialect` recognizes the query and predicate structure.
+Replay associates each placeholder with its original parameter position before
+normalizing values or conditions. The existing literal decoder retains exact
+decimals, string case/bytes, escapes and NULL. An IN list may contain numbers or
+strings/binary values, optionally with NULL; mixed string/number lists remain
+strict. Reordering preserves duplicates, list length and each exact value.
+`?` is never a value exemption during execution.
+
+The supported conditions are direct fields and scalar values compared with
+`=`, `!=`, `<>`, `<`, `<=`, `>`, `>=`, `<=>`, `IS NULL`, `IS NOT NULL`,
+`BETWEEN`, and literal/parameter IN lists, combined by AND and parentheses.
+AND groups are flattened without dropping duplicate conditions. The grammar
+distinguishes BETWEEN's internal AND. OR, function/arithmetic predicates,
+subqueries, tuple-valued IN, joins, grouping, locks, writes and computed sorting
+retain their existing strict matching behavior. Wildcard SELECTs can match
+when their projection remains the same; supported direct-column projections
+can also use the column compatibility above.
+
+Exact and existing projection candidates precede predicate-equivalent candidates
+within each scope; Case still precedes Global. Only complete successful
+resultsets qualify. Host, port, database, username, table, sorting, pagination,
+case ownership and finite dependency consumption remain constraints. IN
+compatibility does not make response row order irrelevant. Recorded JSONL is
+immutable; only delivered response columns/cells are adapted.
+
+PREPARE checks structure and all fixed literals to select column metadata without
+consuming an exchange. EXECUTE checks freshly bound values. Cached prepared
+statement reuse with different parameters therefore cannot reuse a previous
+successful match. Selected positional dynamic-parameter policies keep their
+existing matching path; predicate compatibility does not move their parameter
+indices or bypass their validation. Cross-protocol matching continues to require
+actual value equivalence, without inferring dynamic bindings.
+
+The Replay-local FIFO cache retains compiled SQL templates, negative parsing
+results, parameter-independent metadata shapes and normalized constant queries.
+It holds at most 256 SQL strings and 1 MiB of original SQL text (the associated
+compiled representations consume additional bounded memory). A single SQL is
+limited to 64 KiB and 4096 tokens for this compatibility path, with bounded
+parenthesis/parser depth and at most 64 AND terms for metadata assignment.
+Unsupported/oversized forms still try the existing matcher. Actual parameters
+are bound once per semantic lookup; cached templates never retain previous
+execution parameters, selected exchanges, responses or policy decisions.
+The cache is discarded with the Replay runtime and never written to recordings.
+
+The actual SQLx/TLS tests cover all four text/prepared protocol combinations,
+reordered integer/string lists and conditions, partial literal/parameter lists,
+column mapping, cached rebinding, wrong values, scope and finite consumption.
+Focused checks: `cargo test --lib mysql`.
+
 ## Process-owned MySQL reads
 
 MySQL joins the existing HTTP/Redis/Memcached/Motan process-owned classification.

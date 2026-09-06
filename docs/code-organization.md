@@ -208,6 +208,13 @@ explicit repository-wide audit.
   identity, policy and exchange-consumption decisions.
   `replay/mysql/session_setup.rs` owns builtin
   initialization recognition; `sql_match.rs` owns text/prepared correlation.
+  `replay/mysql/sql_match/predicate` uses sqlparser's MySQL grammar and owns
+  bounded pure-predicate equivalence; `sql_match/cache` owns Replay-local
+  compiled templates, constant normalization and fresh parameter binding.
+  These do not change shared SQL normalization or ownership/policy selectors.
+  The matcher checks live scope, dynamic policy and finite exchange availability
+  on every call, while `replay/mysql/projection` validates and projects the
+  delivered resultset and PREPARE metadata.
   `config/process_owned_dependencies/mysql.rs` owns MySQL rule validation and
   matching, while `config/background_mysql_feedback.rs` owns immutable-evidence
   planning and atomic configuration application.
