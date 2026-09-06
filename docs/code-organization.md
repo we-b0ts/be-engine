@@ -80,7 +80,12 @@ is unclear.
 - `rewrite/ip_capture` owns IP defect preflight, `response_url_evidence` owns
   bounded recorded-response correlation, and `recorder_capture/http_response`
   owns planning/applying acquisition rules through the existing refresh
-  lifecycle. `evidence/rule_guidance` owns rule discovery commands.
+  lifecycle. Its `review` child owns mandatory path-review responses, while
+  `rules` owns selector equality and consolidation by mechanical path coverage.
+  Target decides whether source paths contain dynamic IDs; the engine does not
+  infer path similarity. `config/source_traffic_policy/http_response` owns the
+  compact authority / method-path / pointer / review-note document and its
+  recorder projection. `evidence/rule_guidance` owns rule discovery commands.
 - `source_snapshot` owns initial and explicit administrator-requested Kubernetes
   Pod capture, immutable source image resolution, effective environment capture,
   supported volume capture, rollback-safe local replacement, integrity

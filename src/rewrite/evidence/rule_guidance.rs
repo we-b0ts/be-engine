@@ -44,7 +44,7 @@ pub(super) fn rule_hints(
     if query_kind == QUERY_IP_CAPTURE {
         return vec![RewriteRuleHint {
             capability: "http_response_url".to_string(), rule: "recorder_capture".to_string(),
-            hint: "Trace the reported IP to source code. HTTP JSON URL fields can use response rewrite pointers; plan/apply and verify fresh recording before submitting a remaining capture defect. Static or hardcoded addresses require source configuration or a source mock.".to_string(),
+            hint: "Trace the reported IP to source code. HTTP JSON URL fields can use response rewrite pointers. plan-http-response first returns a path review, including existing rules with the same authority, method and pointers. Check source path construction even for the first rule; choose an exact path or pattern, then explicitly submit --pattern-checked and a brief --source-evidence note. Inspect the merge diff, apply and verify fresh recording before submitting a remaining capture defect. Static or hardcoded addresses require source configuration or a source mock.".to_string(),
             help: super::super::action::command(target_root, vec!["recorder-capture".into(), "plan-http-response".into(), "--help".into()], Vec::new()),
         }];
     }
@@ -113,9 +113,7 @@ pub(super) fn applicable_rule_planners(
             for (flag, field) in [
                 ("--case-id", "case_id"),
                 ("--response-id", "response_id"),
-                ("--authority", "authority"),
-                ("--method", "method"),
-                ("--path-pattern", "path"),
+                ("--name", "authority"),
                 ("--pointer", "pointer"),
             ] {
                 arguments.extend([
@@ -124,28 +122,18 @@ pub(super) fn applicable_rule_planners(
                 ]);
             }
             arguments.extend([
-                "--name".to_string(),
+                "--path-pattern".to_string(),
                 format!(
-                    "json-url-{}",
-                    super::super::fingerprint::id(&[&serde_json::json!([
-                        candidate["authority"],
-                        candidate["method"],
-                        candidate["path"],
-                        candidate["pointer"]
-                    ])
-                    .to_string()])
-                    .trim_start_matches("fnv1a64:")
+                    "{} {}",
+                    candidate["method"].as_str().unwrap_or_default(),
+                    candidate["path"].as_str().unwrap_or_default()
                 ),
             ]);
             planners.push(RewriteApplicableRulePlanner {
                 kind: "recorder_capture".to_string(),
                 capability: "http_response_url".to_string(),
                 evidence_id: evidence_id.to_string(),
-                command: super::super::action::command(
-                    target_root,
-                    arguments,
-                    vec!["BACKEND_REWRITE_SOURCE_EVIDENCE".to_string()],
-                ),
+                command: super::super::action::command(target_root, arguments, Vec::new()),
             });
         }
     }

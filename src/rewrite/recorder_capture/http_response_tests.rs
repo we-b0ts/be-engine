@@ -109,6 +109,18 @@ fn options(report: &crate::RewriteIpCaptureReport) -> RewriteHttpResponseCapture
         evidence_id:report.evidence.evidence_id.clone(),case_id:"case-1".into(),response_id:"response-1".into(),
         rule:serde_yaml::from_str("name: sandbox-base-url\nauthorities: [cs.wegent.intra.demo.test]\nmethods: [GET]\npath_pattern: /executor-manager/sandboxes/*\npointers: [/base_url]\n").unwrap(),
         source_evidence:"service.py:42 list_tree reads sandbox.base_url and invokes ListDir on it".into(),
+        pattern_checked: true,
+    }
+}
+
+fn checked_plan(
+    target: &Path,
+    state: &mut RewriteState,
+    options: RewriteHttpResponseCapturePlanOptions,
+) -> crate::RewriteRecorderCaptureReport {
+    match plan(target, state, options).unwrap() {
+        RewriteHttpResponseCaptureReport::Planned { plan } => plan,
+        report => panic!("expected checked plan, got {report:?}"),
     }
 }
 
@@ -140,7 +152,7 @@ fn ip_preflight_returns_guidance_then_plan_apply_parks_for_refresh() {
         .path()
         .join(".traffic-e2e/source-traffic-policy.yaml");
     let before = fs::read_to_string(&config).unwrap();
-    let planned = plan(target.path(), &mut state, options(&report)).unwrap();
+    let planned = checked_plan(target.path(), &mut state, options(&report));
     assert_eq!(fs::read_to_string(&config).unwrap(), before);
     assert!(planned.next_command.argv.contains(&"apply".into()));
     let action = super::super::pending_plan_action(target.path(), &state).unwrap();
@@ -172,7 +184,7 @@ fn wrong_pointer_and_changed_recorded_response_cannot_be_applied() {
     let mut wrong = options(&report);
     wrong.rule.pointers = vec!["/other".into()];
     assert!(plan(target.path(), &mut state, wrong).is_err());
-    let planned = plan(target.path(), &mut state, options(&report)).unwrap();
+    let planned = checked_plan(target.path(), &mut state, options(&report));
     fs::write(
         recording.path().join("apis/api/case-1/dependencies.jsonl"),
         "",
@@ -186,4 +198,302 @@ fn wrong_pointer_and_changed_recorded_response_cannot_be_applied() {
             .rules
             .is_empty()
     );
+}
+
+fn rule(pattern: &str) -> HttpResponseRewriteRuleConfig {
+    crate::config::source_traffic_policy::http_response::Document {
+        name: "cs.wegent.intra.demo.test".into(),
+        path_pattern: format!("GET {pattern}"),
+        pointer: "/base_url".into(),
+        source_evidence: "sandbox_id varies; consume base_url".into(),
+    }
+    .into_rule()
+    .unwrap()
+}
+
+fn install_rules(target: &Path, rules: Vec<HttpResponseRewriteRuleConfig>) {
+    let path = super::super::source_traffic_policy_path(target);
+    let mut policy =
+        crate::config::SourceTrafficPolicyConfig::parse(&fs::read_to_string(&path).unwrap(), &path)
+            .unwrap();
+    policy.http_response_rewrite = rules;
+    fs::write(path, policy.render().unwrap()).unwrap();
+}
+
+fn configured_rules(target: &Path) -> Vec<HttpResponseRewriteRuleConfig> {
+    crate::AppConfig::load(super::super::project_config(target))
+        .unwrap()
+        .http_response_rewrite
+        .rules
+}
+
+#[test]
+fn first_plan_requires_explicit_review_without_a_proof_format_or_apply_command() {
+    let (target, _recording, mut state) = fixture();
+    let report = report_ip(target.path(), &mut state, "http-response");
+    let initial =
+        serde_json::to_value(&report.evidence.applicable_rule_planners[0].command).unwrap();
+    assert!(!initial.to_string().contains("pattern-checked"));
+    assert!(
+        !initial
+            .to_string()
+            .contains("BACKEND_REWRITE_SOURCE_EVIDENCE")
+    );
+    assert!(!initial.to_string().contains("json-url-"));
+    assert!(
+        initial["argv"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("GET /executor-manager/sandboxes/123"))
+    );
+    let mut input = options(&report);
+    input.pattern_checked = false;
+    input.source_evidence.clear();
+    let before = fs::read(super::super::source_traffic_policy_path(target.path())).unwrap();
+    let result =
+        serde_json::to_value(plan(target.path(), &mut state, input.clone()).unwrap()).unwrap();
+    assert_eq!(result["status"], "path_pattern_review_required");
+    assert_eq!(result["pattern_review"]["existing_rules"], json!([]));
+    assert_eq!(
+        result["pattern_review"]["current_path"],
+        "/executor-manager/sandboxes/123"
+    );
+    assert!(result.get("plan_id").is_none());
+    assert!(!result["next_command"].to_string().contains("apply"));
+    assert!(
+        !result["next_command"]
+            .to_string()
+            .contains("pattern-checked")
+    );
+    assert!(state.recorder_capture_plan.is_none());
+    assert_eq!(
+        fs::read(super::super::source_traffic_policy_path(target.path())).unwrap(),
+        before
+    );
+    input.pattern_checked = true;
+    assert!(
+        plan(target.path(), &mut state, input.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("source evidence")
+    );
+    input.source_evidence = "sandbox_id is dynamic; use *; read base_url".into();
+    let checked = plan(target.path(), &mut state, input).unwrap();
+    let json = serde_json::to_value(checked).unwrap();
+    assert_eq!(json["status"], "planned");
+    assert!(json["plan_id"].is_string());
+    assert_eq!(
+        json["traffic_e2e_report"]["rule"]["name"],
+        "cs.wegent.intra.demo.test"
+    );
+    assert_eq!(
+        json["traffic_e2e_report"]["rule"]["path_pattern"],
+        "GET /executor-manager/sandboxes/*"
+    );
+    assert!(
+        json["next_command"]["argv"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("apply"))
+    );
+}
+
+#[test]
+fn a_new_review_invalidates_the_previous_http_apply_plan() {
+    let (target, _recording, mut state) = fixture();
+    let report = report_ip(target.path(), &mut state, "http-response");
+    let checked = checked_plan(target.path(), &mut state, options(&report));
+    let mut input = options(&report);
+    input.pattern_checked = false;
+    plan(target.path(), &mut state, input).unwrap();
+    assert!(super::super::pending_plan_action(target.path(), &state).is_none());
+    assert!(super::super::apply(target.path(), &mut state, &checked.plan_id).is_err());
+    assert!(configured_rules(target.path()).is_empty());
+}
+
+#[test]
+fn review_lists_matching_selectors_without_path_similarity_filtering() {
+    let (target, _recording, mut state) = fixture();
+    let mut other_method = rule("/executor-manager/sandboxes/456");
+    other_method.methods = vec!["POST".into()];
+    let mut other_host = rule("/executor-manager/sandboxes/456");
+    other_host.name = "other.test".into();
+    other_host.authorities = vec!["other.test".into()];
+    let mut other_pointer = rule("/executor-manager/sandboxes/456");
+    other_pointer.pointers = vec!["/other".into()];
+    install_rules(
+        target.path(),
+        vec![
+            rule("/executor-manager/sandboxes/456"),
+            rule("/entirely/different/path"),
+            other_method,
+            other_host,
+            other_pointer,
+        ],
+    );
+    let report = report_ip(target.path(), &mut state, "http-response");
+    let mut input = options(&report);
+    input.pattern_checked = false;
+    let review = serde_json::to_value(plan(target.path(), &mut state, input).unwrap()).unwrap();
+    let paths: Vec<_> = review["pattern_review"]["existing_rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|rule| rule["path_pattern"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "GET /executor-manager/sandboxes/456",
+            "GET /entirely/different/path"
+        ]
+    );
+}
+
+#[test]
+fn checked_pattern_merges_old_ids_and_preserves_uncovered_or_different_rules() {
+    let (target, _recording, mut state) = fixture();
+    let mut another_pointer = rule("/executor-manager/sandboxes/987");
+    another_pointer.pointers = vec!["/other".into()];
+    install_rules(
+        target.path(),
+        vec![
+            rule("/executor-manager/sandboxes/789"),
+            rule("/executor-manager/sandboxes/456"),
+            rule("/executor-manager/sandboxes/*/detail"),
+            rule("/other/*"),
+            another_pointer.clone(),
+        ],
+    );
+    let report = report_ip(target.path(), &mut state, "http-response");
+    let before = configured_rules(target.path());
+    let planned = checked_plan(target.path(), &mut state, options(&report));
+    assert_eq!(configured_rules(target.path()), before);
+    let replaced: Vec<_> = planned.traffic_e2e_report["replaced_rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|rule| rule["path_pattern"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        replaced,
+        [
+            "GET /executor-manager/sandboxes/789",
+            "GET /executor-manager/sandboxes/456"
+        ]
+    );
+    super::super::apply(target.path(), &mut state, &planned.plan_id).unwrap();
+    let after = configured_rules(target.path());
+    assert_eq!(after.len(), 4);
+    assert_eq!(
+        after[0].path_pattern.as_deref(),
+        Some("/executor-manager/sandboxes/*")
+    );
+    assert_eq!(after[3], another_pointer);
+    let raw: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(super::super::source_traffic_policy_path(target.path())).unwrap(),
+    )
+    .unwrap();
+    let domain = &raw["http_response_rewrite"][0];
+    let entry = &domain["rules"][0];
+    assert_eq!(domain["name"].as_str(), Some("cs.wegent.intra.demo.test"));
+    assert_eq!(
+        entry["path_pattern"].as_str(),
+        Some("GET /executor-manager/sandboxes/*")
+    );
+    assert_eq!(entry["pointer"].as_str(), Some("/base_url"));
+    assert_eq!(
+        entry["source_evidence"].as_str(),
+        Some(options(&report).source_evidence.as_str())
+    );
+    assert_eq!(entry.as_mapping().unwrap().len(), 3);
+    assert_eq!(raw["http_response_rewrite"].as_sequence().unwrap().len(), 1);
+    assert_eq!(domain["rules"].as_sequence().unwrap().len(), 4);
+    assert_eq!(state.phase, RewritePhase::AwaitingRecordingRefresh);
+}
+
+#[test]
+fn checked_exact_path_can_stay_separate_with_a_brief_note_and_same_domain_name() {
+    let (target, _recording, mut state) = fixture();
+    install_rules(target.path(), vec![rule("/executor-manager/sandboxes/456")]);
+    let report = report_ip(target.path(), &mut state, "http-response");
+    let mut input = options(&report);
+    input.rule.path_pattern = Some("/executor-manager/sandboxes/123".into());
+    input.source_evidence = "fixed configured path; keep exact; consume base_url".into();
+    let planned = checked_plan(target.path(), &mut state, input);
+    assert_eq!(planned.traffic_e2e_report["replaced_rules"], json!([]));
+    super::super::apply(target.path(), &mut state, &planned.plan_id).unwrap();
+    let rules = configured_rules(target.path());
+    assert_eq!(rules.len(), 2);
+    assert_eq!(rules[0].name, rules[1].name);
+}
+
+#[test]
+fn existing_pattern_is_reused_without_adding_the_new_id() {
+    let (target, _recording, mut state) = fixture();
+    install_rules(target.path(), vec![rule("/executor-manager/sandboxes/*")]);
+    let report = report_ip(target.path(), &mut state, "http-response");
+    let mut input = options(&report);
+    input.rule.path_pattern = Some("/executor-manager/sandboxes/123".into());
+    let before = fs::read(super::super::source_traffic_policy_path(target.path())).unwrap();
+    let planned = checked_plan(target.path(), &mut state, input);
+    assert_eq!(planned.traffic_e2e_report["reused_existing"], true);
+    assert_eq!(planned.traffic_e2e_report["changed"], false);
+    super::super::apply(target.path(), &mut state, &planned.plan_id).unwrap();
+    assert_eq!(
+        fs::read(super::super::source_traffic_policy_path(target.path())).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn changed_policy_and_unreviewed_legacy_plans_cannot_apply() {
+    let (target, _recording, mut state) = fixture();
+    let report = report_ip(target.path(), &mut state, "http-response");
+    let planned = checked_plan(target.path(), &mut state, options(&report));
+    let spec = state
+        .recorder_capture_plan
+        .as_mut()
+        .unwrap()
+        .http_response
+        .as_mut()
+        .unwrap();
+    let mut legacy = serde_json::to_value(&*spec).unwrap();
+    legacy.as_object_mut().unwrap().remove("pattern_checked");
+    *spec = serde_json::from_value(legacy).unwrap();
+    let error = super::super::apply(target.path(), &mut state, &planned.plan_id).unwrap_err();
+    assert!(error.to_string().contains("path review"));
+    assert!(configured_rules(target.path()).is_empty());
+    let planned = checked_plan(target.path(), &mut state, options(&report));
+    install_rules(target.path(), vec![rule("/other/path")]);
+    assert!(super::super::apply(target.path(), &mut state, &planned.plan_id).is_err());
+    assert_eq!(configured_rules(target.path()), vec![rule("/other/path")]);
+}
+
+#[test]
+fn related_rules_compare_pointer_sets_and_do_not_use_path_shape() {
+    let mut first = rule("/one/*");
+    first.pointers = vec!["/base_url".into(), "/endpoints/0".into()];
+    let mut second = rule("/entirely/different/resource/path");
+    second.pointers = vec!["/endpoints/0".into(), "/base_url".into()];
+    assert!(rules::related(&first, &second));
+    second.pointers = vec!["/base_url".into()];
+    assert!(!rules::related(&first, &second));
+}
+
+#[test]
+fn consolidation_preserves_static_rows_even_when_names_match() {
+    let (target, _recording, _state) = fixture();
+    let mut app = crate::AppConfig::load(super::super::project_config(target.path())).unwrap();
+    let static_rule = rule("/executor-manager/sandboxes/456");
+    app.http_response_rewrite.rules.push(static_rule.clone());
+    let mut policy = crate::config::SourceTrafficPolicyConfig::empty();
+    let requested = rule("/executor-manager/sandboxes/*");
+    let result = rules::converge(&mut app, &mut policy, &requested).unwrap();
+    assert!(result.replaced_rules.is_empty());
+    assert_eq!(
+        app.http_response_rewrite.rules,
+        vec![static_rule, requested.clone()]
+    );
+    assert_eq!(policy.http_response_rewrite, vec![requested]);
 }

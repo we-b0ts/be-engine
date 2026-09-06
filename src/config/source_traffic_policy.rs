@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use super::process_owned_dependencies::{self, BackgroundDependencyRuleConfig};
 use super::{AppConfig, DnsBypassStrategyConfig};
 
+pub(crate) mod http_response;
+
 pub const SOURCE_TRAFFIC_POLICY_VERSION: u32 = 2;
 pub const SOURCE_TRAFFIC_POLICY_FILE: &str = "source-traffic-policy.yaml";
 
@@ -20,7 +22,7 @@ pub struct SourceTrafficPolicyConfig {
     pub version: u32,
     #[serde(default)]
     pub http: SourceTrafficHttpPolicyConfig,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty", with = "http_response")]
     pub http_response_rewrite: Vec<super::HttpResponseRewriteRuleConfig>,
     #[serde(default)]
     pub breeze_capture: Vec<SourceTrafficBreezeCaptureConfig>,

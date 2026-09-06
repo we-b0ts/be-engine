@@ -879,6 +879,22 @@ pub struct RewriteRecorderCaptureReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum RewriteHttpResponseCaptureReport {
+    PathPatternReviewRequired {
+        issue_id: String,
+        api: String,
+        evidence_id: String,
+        pattern_review: Value,
+        next_command: RewriteCommandSpec,
+    },
+    Planned {
+        #[serde(flatten)]
+        plan: RewriteRecorderCaptureReport,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct RewriteRouteReport {
     pub accepted: bool,
     pub issue_id: String,

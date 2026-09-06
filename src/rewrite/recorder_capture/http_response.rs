@@ -5,9 +5,12 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::super::model::{RewriteRecorderCaptureReport, RewriteState};
+use super::super::model::{RewriteHttpResponseCaptureReport, RewriteState};
 use super::super::{RewriteContext, evidence, fingerprint, inventory, store::RewriteStore};
 use crate::config::HttpResponseRewriteRuleConfig;
+
+mod review;
+mod rules;
 
 #[derive(Debug, Clone)]
 pub struct RewriteHttpResponseCapturePlanOptions {
@@ -16,6 +19,7 @@ pub struct RewriteHttpResponseCapturePlanOptions {
     pub response_id: String,
     pub rule: HttpResponseRewriteRuleConfig,
     pub source_evidence: String,
+    pub pattern_checked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,12 +28,14 @@ pub(in crate::rewrite) struct HttpResponseCaptureSpec {
     pub response_id: String,
     pub response_digest: String,
     pub rule: HttpResponseRewriteRuleConfig,
+    #[serde(default)]
+    pub pattern_checked: bool,
 }
 
 pub fn plan_rewrite_http_response_capture(
     context: RewriteContext,
     options: RewriteHttpResponseCapturePlanOptions,
-) -> Result<RewriteRecorderCaptureReport> {
+) -> Result<RewriteHttpResponseCaptureReport> {
     let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
     let store = RewriteStore::new(&target_root)?;
     let _lock = store.lock()?;
@@ -49,8 +55,8 @@ pub fn plan_rewrite_http_response_capture(
 pub(super) fn plan(
     target_root: &Path,
     state: &mut RewriteState,
-    options: RewriteHttpResponseCapturePlanOptions,
-) -> Result<RewriteRecorderCaptureReport> {
+    mut options: RewriteHttpResponseCapturePlanOptions,
+) -> Result<RewriteHttpResponseCaptureReport> {
     let candidates = current_candidates(target_root, state, &options.evidence_id)?;
     ensure!(
         state
@@ -66,13 +72,29 @@ pub(super) fn plan(
         &options.response_id,
         &options.rule,
     )?;
+    options.rule.name = options.rule.authorities[0].clone();
+    options.rule.source_evidence = options.source_evidence.clone();
+    if !options.pattern_checked {
+        let report = review::report(target_root, state, &options, &candidates)?;
+        // A fresh review must not leave an earlier HTTP plan available to apply.
+        if state
+            .recorder_capture_plan
+            .as_ref()
+            .is_some_and(|plan| plan.http_response.is_some())
+        {
+            state.recorder_capture_plan = None;
+            state.bump();
+        }
+        return Ok(report);
+    }
     let spec = HttpResponseCaptureSpec {
         case_id: options.case_id,
         response_id: options.response_id,
         response_digest: digest,
         rule: options.rule,
+        pattern_checked: options.pattern_checked,
     };
-    super::plan_with_capture_requirement(
+    let plan = super::plan_with_capture_requirement(
         target_root,
         state,
         super::RewriteRecorderCapturePlanOptions {
@@ -82,7 +104,8 @@ pub(super) fn plan(
         },
         false,
         Some(spec),
-    )
+    )?;
+    Ok(RewriteHttpResponseCaptureReport::Planned { plan })
 }
 
 fn current_candidates(
@@ -170,6 +193,10 @@ impl Plan {
         source_revision: &str,
         source_evidence: &str,
     ) -> Result<Self> {
+        ensure!(
+            spec.pattern_checked,
+            "HTTP response capture requires path review; rerun plan-http-response, inspect source path construction and existing rules, then submit --pattern-checked with a brief --source-evidence note"
+        );
         let project_path = super::project_config(target_root);
         let mut app = crate::AppConfig::load(&project_path)?;
         ensure!(
@@ -179,33 +206,40 @@ impl Plan {
         let path = super::source_traffic_policy_path(target_root);
         let before = std::fs::read_to_string(&path)?;
         let mut policy = crate::config::SourceTrafficPolicyConfig::parse(&before, &path)?;
-        if let Some(existing) = app
-            .http_response_rewrite
-            .rules
-            .iter()
-            .find(|rule| rule.name == spec.rule.name)
-        {
-            ensure!(
-                existing == &spec.rule,
-                "an HTTP response rewrite rule with this name already has a different definition"
-            );
+        let convergence = rules::converge(&mut app, &mut policy, &spec.rule)?;
+        let after = if convergence.changed {
+            policy.render()?
         } else {
-            app.http_response_rewrite.rules.push(spec.rule.clone());
-            policy.http_response_rewrite.push(spec.rule.clone());
-        }
-        app.validate()?;
-        let after = policy.render()?;
-        let identity = format!("http-response-url:{}", spec.rule.name);
+            before.clone()
+        };
+        let identity = format!(
+            "http-response-url:{}",
+            fingerprint::id(&[&serde_json::to_string(&convergence.rule)?])
+        );
+        let rule_document =
+            crate::config::source_traffic_policy::http_response::Document::from_rule(
+                &convergence.rule,
+            )?;
+        let requested_document =
+            crate::config::source_traffic_policy::http_response::Document::from_rule(&spec.rule)?;
+        let replaced_documents = convergence
+            .replaced_rules
+            .iter()
+            .map(crate::config::source_traffic_policy::http_response::Document::from_rule)
+            .collect::<Result<Vec<_>>>()?;
         let report = json!({
             "kind": "http_response_url", "resource_identity": identity,
-            "rules": path, "rule": spec.rule, "case_id": spec.case_id,
+            "rules": path, "rule": rule_document, "case_id": spec.case_id,
+            "requested_rule": requested_document, "pattern_checked": true,
+            "reused_existing": convergence.reused_existing,
+            "replaced_rules": replaced_documents,
             "response_id": spec.response_id, "response_digest": spec.response_digest,
             "source_revision": source_revision, "source_evidence": source_evidence,
             "changed": before != after, "applied": false,
             "diff": crate::config::rule_document::whole_file_diff(&path, &before, &after),
             "effect": "On the next standard recording, replace selected IPv4 URL hosts with registered synthetic hostnames. Preserve URL scheme, port, path and query; capture subsequent HTTP(S) calls for replay.",
             "recording_refresh_required": true,
-            "does_not_prove": "Endpoint equality is mechanical evidence; source_evidence must establish that the source API consumes this response field."
+            "does_not_prove": "The engine checks selectors and path coverage. Target reviews source URL consumption and dynamic path segments; source_evidence is a brief note of that choice."
         });
         Ok(Self {
             path,

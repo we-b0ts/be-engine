@@ -79,7 +79,7 @@ fn disposition(facts: &serde_json::Value) -> (&'static str, &'static str, Vec<St
         Some("http-response") if has_unconfigured_candidates(facts) => (
             "recorder_capture_required",
             "A recorded JSON URL matches the reported IP. Plan/apply its response rewrite and verify a fresh recording before submitting a system defect.",
-            vec!["source file:line and symbol proving consumption of the selected response pointer".into()],
+            vec!["check source URL consumption and path construction; give one brief source_evidence note with --pattern-checked when planning".into()],
         ),
         Some("http-response") if !facts["http_response_url_candidates"].as_array().is_none_or(Vec::is_empty) => (
             "capture_rule_verification_required",

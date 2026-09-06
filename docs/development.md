@@ -639,30 +639,37 @@ The `vintage-naming` plugin rewrites legacy Motan node addresses published by
 Vintage naming responses. The `vintage-cache-config` plugin rewrites cache
 node addresses published inside Vintage `/1/config/service` responses.
 
-For ordinary JSON URL fields, a rule needs no plugin or format options:
+For ordinary JSON URL fields, the coordinator writes compact rules in
+`.traffic-e2e/source-traffic-policy.yaml`:
 
 ```yaml
 http_response_rewrite:
-  rules:
-    - name: sandbox-base-url
-      authorities: [cs.wegent.intra.demo.test]
-      methods: [GET]
-      path_pattern: /executor-manager/sandboxes/*
-      pointers: [/base_url]
+  - name: cs.wegent.intra.demo.test
+    rules:
+      - path_pattern: GET /executor-manager/sandboxes/*
+        pointer: /base_url
+        source_evidence: sandbox_id varies; consume base_url
+      - path_pattern: GET /another-api/*
+        pointer: /base_url
+        source_evidence: another API with dynamic IDs
 ```
 
-Under `project.yaml` this block belongs to `recorder`. Coordinator-applied rules
-are stored as the `http_response_rewrite` list in
-`.traffic-e2e/source-traffic-policy.yaml`; the recorder overlays this list when
-loading configuration. Omitted `enabled` enables configured rules; an explicit
+`name` is the upstream authority and appears once per domain. Its `rules` list
+contains multiple path entries. Each `path_pattern` contains the HTTP method
+and path; `pointer` selects one JSON URL field. Use separate path entries for
+other methods or fields. `source_evidence` records
+the short note supplied during path review. The recorder overlays these rules
+on the static configuration in `project.yaml`. The previously generated
+`authorities` / `methods` / `pointers` list format is not accepted in this
+managed policy section. Omitted `enabled` enables configured rules; an explicit
 `enabled: false` still disables them. Rules are loaded at recording startup;
 new addresses are discovered on each matching response, without hot reload.
 
-`path_pattern` matches the request path excluding its query. Whole-segment `*`
-matches exactly one nonempty level; terminal `**` matches one or more levels.
+The path part of `path_pattern` matches the request path excluding its query.
+Whole-segment `*` matches exactly one nonempty level; terminal `**` matches one or more levels.
 Thus `/sandboxes/*` matches `/sandboxes/123`, not `/sandboxes/123/files` or
-`/sandboxes/`. Legacy `path` remains an exact match; configure exactly one of
-`path` and `path_pattern`. Pointers use JSON Pointer syntax (`~0` for `~`, `~1`
+`/sandboxes/`. The static recorder configuration retains exact `path` selectors
+for legacy plugins. Pointers use JSON Pointer syntax (`~0` for `~`, `~1`
 for `/`, numeric array indices); pointer wildcards are not supported.
 
 By default generic rules apply to successful HTTP responses with JSON media
@@ -978,9 +985,28 @@ can run `route --cause unrecorded-ip --endpoint IP:PORT --case-id CASE
 `unknown`, `static`, and `other` origins return the relevant investigation
 requirements. The route is a preflight, with `accepted: false`, and leaves the
 API out of system repair. Its `ip_capture` evidence matches reported endpoints
-to exact recorded JSON responses and returns planner commands. Supply the
-source consumption proof via `--source-evidence` or the returned
-`BACKEND_REWRITE_SOURCE_EVIDENCE` environment input. Inspect the plan and execute
+to exact recorded JSON responses and returns planner commands.
+`recorder-capture plan-http-response` without `--pattern-checked` returns
+`status: path_pattern_review_required`, the current path, and all existing
+rules with the same authority, method and pointer. The engine does not
+filter by path similarity or infer dynamic IDs. Review source path construction
+even for the first rule; choose an exact path or wildcard pattern and check
+whether existing paths should be consolidated. This response has no `plan_id`
+or apply command, and generated commands do not prefill the confirmation flag.
+Rerun with the selected `--path-pattern`, `--pattern-checked`, and a brief
+`--source-evidence` note (or `BACKEND_REWRITE_SOURCE_EVIDENCE`). A short statement
+such as `sandbox_id varies; use * and consume base_url` is enough;
+no structured proof format is required.
+
+The checked response has `status: planned` and the usual plan/apply fields.
+The plan reuses an existing covering rule or consolidates fully covered managed
+rules with identical selectors and response filters. Its diff and
+`traffic_e2e_report.replaced_rules` identify every replaced rule. Uncovered
+paths, other selectors and project-owned static rules are retained. Multiple path entries
+share one domain group; consolidation uses selectors and full path coverage
+instead of names. Policy changes after planning and
+old HTTP plans lacking the review confirmation cannot be applied.
+Inspect the plan and execute
 its `next_command` apply; status reconstructs a pending apply. Apply persists
 the capture rule and parks the API for consolidated fresh recording. A pending
 capture plan or unresolved supported capture candidate blocks capability-gap

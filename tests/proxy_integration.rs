@@ -673,6 +673,7 @@ async fn http_gateway_rewrites_pluto_eci_kubeconfig_and_registers_alias() {
     config.http_response_rewrite = HttpResponseRewriteConfig {
         enabled: true,
         rules: vec![HttpResponseRewriteRuleConfig {
+            source_evidence: String::new(),
             name: "pluto-kubeconfig".to_string(),
             authorities: vec!["cs.aliyuncs.com".to_string()],
             methods: vec!["GET".to_string()],

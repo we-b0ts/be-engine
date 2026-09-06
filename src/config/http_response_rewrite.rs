@@ -40,6 +40,8 @@ pub struct HttpResponseRewriteRuleConfig {
     pub content_types: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<HttpResponseRewritePluginConfig>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_evidence: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -70,7 +72,7 @@ impl HttpResponseRewriteConfig {
             if name.is_empty() {
                 bail!("HTTP response rewrite rule name must not be empty");
             }
-            if !names.insert(name) {
+            if rule.plugin.is_some() && !names.insert(name) {
                 bail!("duplicate HTTP response rewrite rule name {name:?}");
             }
             validate_values(name, "authorities", &rule.authorities)?;
