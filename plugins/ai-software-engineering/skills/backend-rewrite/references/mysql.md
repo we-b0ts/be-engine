@@ -307,6 +307,20 @@ MySQL's default quoting and escape rules.
 
 ## Run a transaction
 
+Keep ordinary read requests on the shared pool. Source ORMs may close an
+implicit read-only session with ROLLBACK. The engine allows this cleanup to be
+omitted when semantic recording proves a transaction-free start, consecutive
+ordinary reads, and a successful transaction end; repeated cleanup after a
+confirmed COMMIT/ROLLBACK is also optional. Omitted cleanup is reported as
+`allowed_unused_mysql_rollback_exchanges`. No rule is needed.
+
+Do not add `mysql.execute("ROLLBACK", ())` to the end of every handler merely
+to consume recording evidence. A pool can route that command to another
+connection. Missing status evidence in an older recording requires fresh
+recording through the coordinator workflow; unexplained failures remain an
+engine investigation. Writes, locks and explicit business transactions retain
+their required rollback/commit behavior, even when HTTP responses agree.
+
 `with_transaction` commits when the closure returns `Ok` and rolls back on `Err`.
 Import `MysqlTransaction` to call transaction query methods. The base service
 uses the same closure API for ordinary SQL.

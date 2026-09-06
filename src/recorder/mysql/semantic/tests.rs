@@ -4,6 +4,8 @@ use crate::recorder::BodyCapture;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 
+mod transaction_status;
+
 #[test]
 fn rollback_ok_preserves_server_transaction_status_without_guessing_truncated_flags() {
     for (payload, expected) in [

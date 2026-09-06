@@ -538,6 +538,7 @@ mod tests {
             sql: sql.map(ToOwned::to_owned),
             statement_id: None,
             params: None,
+            server_status_before: None,
             response: MysqlExchangeResponse {
                 server_status: None,
                 status: "ok".to_string(),

@@ -62,6 +62,7 @@ pub(in crate::replay) struct RecordedMysqlConnection {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(in crate::replay) struct RecordedMysqlExchange {
+    pub(in crate::replay) server_status_before: Option<u16>,
     pub(in crate::replay) query_sequence: Option<u64>,
     pub(in crate::replay) connection_id: Option<Uuid>,
     pub(in crate::replay) target_host: Option<String>,

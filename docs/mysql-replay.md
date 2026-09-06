@@ -31,7 +31,7 @@ state checks. This status tracking does not simulate database contents or
 replace recorded effects with an in-memory database.
 
 ROLLBACK remains semantic evidence, including failed rollbacks. Replay permits
-omitting only a redundant successful bare ROLLBACK immediately following a
+omitting a redundant successful bare ROLLBACK immediately following a
 successful bare COMMIT or ROLLBACK on the same recorded connection and identity.
 Both exchanges must have consecutive query sequence numbers and complete,
 successful zero-effect responses whose captured OK status flags confirm no
@@ -39,15 +39,45 @@ active transaction or pending results. This also excludes implicit transaction
 chaining through MySQL's `completion_type` setting. Missing status flags or
 missing or duplicate sequence evidence,
 intervening statements, explicit transaction chaining, and parse warnings prevent
-this compatibility. A first rollback after reads, writes, or locks remains
-required; a read-only request alone does not prove transaction equivalence.
+this compatibility.
+
+Replay also permits the first bare ROLLBACK that closes a proven implicit
+read-only session. Recorder preserves `server_status_before` from the immediately
+preceding completed command, including maintenance such as COM_PING, and records
+the final resultset EOF status in `response.server_status`. The first ordinary
+SELECT must start with confirmed absence of an active transaction. Every
+subsequent exchange through ROLLBACK must have consecutive sequence numbers,
+the same complete connection/endpoint/database/username identity, consistent
+before/after transaction flags, and complete successful responses. Successful
+PREPARE preserves the read proof because it does not execute SQL. The rollback
+must confirm transaction completion without chaining or further results.
+
+The read allowlist uses sqlparser and admits single-table direct-column,
+literal or wildcard SELECTs with ordinary predicates (including AND/OR),
+ordering and pagination. This effect check does not broaden SQL matching:
+OR remains outside predicate-reordering compatibility. Writes, explicit BEGIN,
+locks, savepoints, calls/functions, subqueries and unsupported SQL interrupt
+the read proof. Unknown transaction starts, sequence gaps, errors or truncated
+evidence keep the first rollback required. Classification stays within one
+dependency file and caches SQL effect checks only during that load. It neither
+joins transactions across cases/Global nor proves concurrency/isolation
+equivalence. A SELECT-only case without transaction-state evidence is insufficient.
+
+Targets can retain their normal pooled client after read-only requests; do not
+add `pool.execute("ROLLBACK")` merely to consume ORM session-close traffic.
+Such a call can acquire a different connection and cannot replace a business
+transaction's rollback. Preserve business transactions on one connection: a
+missing rollback can change persisted data even when the HTTP response agrees.
 
 Optional cleanup stays matchable and appears separately in
 `allowed_unused_mysql_rollback_exchanges` when omitted. It is never marked as a
 successful target call. Recorded files remain unchanged. Existing reports are
 not cleaned by SQL-summary filtering: rerun Replay to derive the classification
-from full exchanges. Older recordings without status flags remain strict;
-a new recording is needed to establish cleanup eligibility. Recordings produced
+from full exchanges. Older recordings without query before/final-EOF status
+remain strict for the first read-session rollback; re-record to establish that
+proof. The existing duplicate-rollback compatibility still applies when its
+own OK status evidence is present. Debug JSONL is never substituted for missing
+semantic evidence. Recordings produced
 by versions that omitted ROLLBACK already lack that semantic evidence and need a
 new recording to validate it.
 
