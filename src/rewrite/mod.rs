@@ -19,6 +19,8 @@ mod process_outputs;
 mod progress_publication;
 mod recorder_capture;
 pub use ip_capture::RewriteIpCaptureReport;
+#[cfg(test)]
+mod comparison_requirement_tests;
 mod recording;
 mod recording_action;
 mod recording_execution;
@@ -320,10 +322,15 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 state.process_outputs.current_id = None;
             }
             if state.phase == RewritePhase::SliceComplete {
+                if transition::complete_replay_if_ready(&target_root, &mut state)? {
+                    store.save(&state)?;
+                    return Ok(action::for_state(&target_root, &state));
+                }
                 if migrated || invalidated || process_invalidated || active_comparison_stale {
                     store.save(&state)?;
                 }
                 progress_publication::synchronize_if_complete(&target_root, &state)?;
+                progress_publication::finalize_if_published(&target_root, &store, &mut state)?;
                 let scoped = inventory::scoped(&state, options.api.as_ref())?;
                 return action::for_status(&target_root, &scoped);
             }
@@ -386,6 +393,8 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 case_pattern_identification: None,
                 target_quality_fingerprint: None,
                 recording_run_id,
+                require_comparison: false,
+                recording_require_comparison: false,
                 recording_rejection: None,
                 recording_settings: RewriteRecordingSettings::default(),
                 recording_request_reason: None,
@@ -444,6 +453,10 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
         }
     }
 
+    if transition::complete_replay_if_ready(&target_root, &mut state)? {
+        store.save(&state)?;
+        return Ok(action::for_state(&target_root, &state));
+    }
     match state.phase {
         RewritePhase::RecordingRequired => {
             match artifacts::standard_recording_publication(&target_root, &state.recording_run_id)?
@@ -888,7 +901,9 @@ async fn run_and_transition(target_root: &Path, state: &mut RewriteState) -> Res
         state,
         &result,
         transition::AttemptTransition::Append,
-    )
+    )?;
+    transition::complete_replay_if_ready(target_root, state)?;
+    Ok(())
 }
 
 fn compare_and_transition(target_root: &Path, state: &mut RewriteState) -> Result<()> {

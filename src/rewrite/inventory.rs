@@ -502,7 +502,10 @@ pub(super) fn defer_completed_for_target_change(
             changed = true;
         }
     }
-    if changed && state.phase == RewritePhase::SliceComplete {
+    if changed
+        && state.phase == RewritePhase::SliceComplete
+        && !super::transition::replay_completion_pending(state)
+    {
         let next = state
             .api_inventory
             .iter()
