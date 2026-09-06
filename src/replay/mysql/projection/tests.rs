@@ -16,6 +16,71 @@ fn project(record: &RecordedMysqlExchange, sql: &str) -> Option<RecordedMysqlRes
 }
 
 #[test]
+fn distinct_requires_the_same_complete_projection_in_all_matching_paths() {
+    for filter in ["", " WHERE tenant=7 AND status='approved'"] {
+        let source_sql =
+            format!("SELECT DISTINCT t.id AS old_id,t.uid AS old_uid FROM tasks t{filter}");
+        let source = record(&source_sql, &["old_id", "old_uid"]);
+        let mut cache = sql_match::cache::SqlCache::default();
+        let compiled = cache.get(&source_sql);
+        let bound_source = compiled.bind("COM_QUERY", None);
+        let valid = format!("SELECT DISTINCT uid AS owner,id AS task FROM tasks{filter}");
+        let mapped = project(&source, &valid).unwrap();
+        assert_eq!(mapped.rows[0][0].value, Some(json!(11)));
+        assert_eq!(mapped.rows[0][1].value, Some(json!(10)));
+        assert_eq!(mapped.columns[0].name, "owner");
+        assert_eq!(statement_columns(&source, &valid).unwrap()[1].name, "task");
+        for projection in [
+            "id",
+            "DISTINCT id",
+            "id,uid",
+            "DISTINCT id,id",
+            "DISTINCT id,uid,status",
+            "DISTINCT id,1",
+            "DISTINCT COUNT(*)",
+        ] {
+            let target = format!("SELECT {projection} FROM tasks{filter}");
+            assert!(project(&source, &target).is_none(), "{target}");
+            assert!(statement_columns(&source, &target).is_none(), "{target}");
+            if let Some((a, r)) = cache
+                .get(&target)
+                .bind("COM_QUERY", None)
+                .zip(bound_source.as_ref())
+            {
+                assert!(semantic_response(&source, r, &a).is_none(), "{target}");
+                assert!(semantic_columns(&source, r, &a).is_none(), "{target}");
+            }
+        }
+        let ordinary = record(&format!("SELECT id,uid FROM tasks{filter}"), &["id", "uid"]);
+        assert!(project(&ordinary, &valid).is_none());
+        assert!(statement_columns(&ordinary, &valid).is_none());
+    }
+}
+
+#[test]
+fn distinct_preserves_order_by_column_identity_and_limit() {
+    let source = record(
+        "SELECT DISTINCT id AS old_id,uid AS old_uid FROM tasks ORDER BY 1 LIMIT 2",
+        &["old_id", "old_uid"],
+    );
+    assert!(
+        project(
+            &source,
+            "SELECT DISTINCT uid,id FROM tasks ORDER BY 2 LIMIT 2"
+        )
+        .is_some()
+    );
+    for sql in [
+        "SELECT DISTINCT uid,id FROM tasks ORDER BY 1 LIMIT 2",
+        "SELECT DISTINCT uid,id FROM tasks ORDER BY 2 DESC LIMIT 2",
+        "SELECT DISTINCT uid,id FROM tasks ORDER BY 2 LIMIT 1",
+        "SELECT DISTINCT uid,id FROM tasks",
+    ] {
+        assert!(project(&source, sql).is_none(), "{sql}");
+    }
+}
+
+#[test]
 fn selects_reorders_and_relabels_by_physical_column_without_mutating_record() {
     let record = record(
         "SELECT s.id AS shard_id, s.uid AS shard_uid, s.status AS shard_status FROM subtasks_0640 AS s WHERE s.id=1 ORDER BY s.uid DESC LIMIT 2",

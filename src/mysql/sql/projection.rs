@@ -10,6 +10,8 @@ pub(crate) struct DirectColumn {
 
 #[derive(Clone, Debug)]
 pub(crate) struct DirectSelect {
+    /// DISTINCT projections must preserve every physical output column.
+    pub distinct: bool,
     pub columns: Vec<DirectColumn>,
     pub table: String,
     pub table_alias: Option<String>,
@@ -29,14 +31,15 @@ impl DirectSelect {
         // These forms can make column removal or reordering change row semantics.
         if sql.iter().any(|t| {
             [
-                "distinct", "group", "having", "union", "join", "into", "for", "lock", "@", "@@",
-                ":=",
+                "group", "having", "union", "join", "into", "for", "lock", "@", "@@", ":=",
             ]
             .iter()
             .any(|word| t.is(word))
         }) {
             return None;
         }
+        let distinct = sql.get(1)?.is("distinct");
+        let projection_start = if distinct { 2 } else { 1 };
         if let Token::Word(word) = sql.get(1)?
             && [
                 "all",
@@ -79,6 +82,7 @@ impl DirectSelect {
             tail_start += 1;
         }
         let mut select = Self {
+            distinct,
             columns: Vec::new(),
             table: relation.last().cloned().unwrap_or_default(),
             table_alias: alias,
@@ -86,8 +90,8 @@ impl DirectSelect {
         };
         // The relation is compared exactly; table aliases are resolved locally.
         select.body = sql[from..(from + 1 + used).min(sql.len())].to_vec();
-        let mut item_start = 1;
-        for item in sql[1..from].split(|t| t.is(",")) {
+        let mut item_start = projection_start;
+        for item in sql.get(projection_start..from)?.split(|t| t.is(",")) {
             let (field, used) = if matches!(item.first(), Some(Token::Number(_))) {
                 // A projection literal carries a result type as well as a value.
                 // Keep integer constants bounded here; decimal/exponent forms and
@@ -127,6 +131,11 @@ impl DirectSelect {
             item_start += item.len() + 1;
         }
         if select.columns.is_empty() {
+            return None;
+        }
+        // Keep DISTINCT adaptation bounded to direct columns. Constants and
+        // aggregates have additional result-type and duplicate semantics.
+        if distinct && select.columns.iter().any(|column| column.name.is_none()) {
             return None;
         }
         // Bare fields mixed with an aggregate require GROUP BY semantics, which

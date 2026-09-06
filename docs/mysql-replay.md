@@ -158,8 +158,24 @@ every successful delivery still consumes its original exchange once.
 constant, with optional alias changes. These expressions cannot be dropped,
 added or replaced with ordinary columns. This compatibility does not equate
 `COUNT(*)` with `COUNT(column)`, nor `1` with a different expression or result
-type. DISTINCT, GROUP BY, joins, subqueries, locks, wildcard projections and
+type. GROUP BY, joins, subqueries, locks, wildcard projections and
 other computed expressions stay on the existing strict matching path.
+
+Single-table `SELECT DISTINCT` supports the same alias and qualifier adaptation
+when both queries select exactly the same complete set of direct columns.
+Columns may be reordered, but cannot be dropped, added, or duplicated: doing so
+would change the tuple used for deduplication. DISTINCT never maps to ordinary
+SELECT. Predicates, bound values, sorting, and pagination retain their existing
+checks. DISTINCT aggregates, constants, and wildcard projection adaptation remain
+unsupported. The recorded row order and duplicate handling are preserved; Replay
+does not deduplicate or sort result rows itself.
+
+For example, source `SELECT DISTINCT resource_members.entity_id AS
+resource_members_entity_id FROM resource_members WHERE
+resource_members.resource_type='Namespace'` can match target
+`SELECT DISTINCT entity_id FROM resource_members WHERE resource_type=?` with
+the string parameter `Namespace`. Target can keep normal prepared statements
+and decode `entity_id`; copying ORM labels or forcing COM_QUERY is unnecessary.
 
 The same mapping supplies PREPARE metadata, text rows and binary prepared rows,
 including NULLs, empty results and original column types. It requires complete,
@@ -171,6 +187,9 @@ below is a separate ownership decision and retains its explicit SQL selectors.
 The SQLx tests exercise subset/reorder/alias mapping over TLS in both text and
 prepared protocols, cached parameter rebinding, COUNT and constant projections,
 rejection of changed conditions, scope isolation and immutable recordings.
+DISTINCT tests also cover the models/unified query shape, empty results,
+both protocol directions, reordered AND predicates, finite evidence consumption,
+and cached parameter rebinding.
 
 ## SELECT predicate order compatibility
 

@@ -64,7 +64,9 @@ column aliases and table aliases when every target field maps unambiguously to
 recorded data. Replay projects response metadata and cells together; it does not
 require an ownership rule or new recording. COUNT(*) and integer constants keep
 their expression identity. Physical tables, predicates, values, sorting and
-pagination remain constrained; DISTINCT, grouping, joins, subqueries, locks,
+pagination remain constrained. DISTINCT permits aliases and column reordering
+only when both queries retain the same complete direct-column projection; it
+never permits dropping/adding columns or switching to ordinary SELECT. Grouping, joins, subqueries, locks,
 wildcards and other expressions retain strict matching. See
 [MySQL interoperability](../../../../../docs/mysql-replay.md) for the exact
 boundary and actual-client acceptance tests.

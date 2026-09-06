@@ -237,6 +237,13 @@ it requires no rule or new recording. Complex expressions and positional
 dynamic-parameter policies keep their existing boundaries. See
 [MySQL predicate compatibility](../../../../../docs/mysql-replay.md#select-predicate-order-compatibility).
 
+Single-table `SELECT DISTINCT` also supports normal prepared statements, bound
+parameters, column/table aliases, table qualifiers, and reordered pure AND
+conditions. Both sides must retain DISTINCT and the same complete set of direct
+output columns. Do not force COM_QUERY, inline dynamic values, or reproduce
+SQLAlchemy column labels to work around Replay. Column removal, aggregates,
+grouping, and other complex query forms retain their existing constraints.
+
 Flat tuple IN/NOT IN supports whole-tuple reordering for forms such as
 `(user_id,namespace,name) IN ((?,?,?),(?,?,?))`, including source SQL built from
 set iteration. Preserve each tuple's field order, paired values, types and

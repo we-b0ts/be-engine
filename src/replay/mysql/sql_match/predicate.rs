@@ -2,7 +2,7 @@
 //! admits only pure predicates and retains the rest of each query verbatim.
 use crate::mysql::sql::{Token, render};
 use sqlparser::{
-    ast::{BinaryOperator, Expr, SelectItem, SetExpr, Statement, TableFactor, Value},
+    ast::{BinaryOperator, Distinct, Expr, SelectItem, SetExpr, Statement, TableFactor, Value},
     dialect::MySqlDialect,
     parser::Parser,
     tokenizer::Token as ParserToken,
@@ -89,8 +89,8 @@ impl Template {
         let expr = if whole_query {
             if tokens.iter().any(|t| {
                 [
-                    "distinct", "group", "having", "union", "join", "into", "for", "lock", "@",
-                    "@@", ":=", "||", "&&",
+                    "group", "having", "union", "join", "into", "for", "lock", "@", "@@", ":=",
+                    "||", "&&",
                 ]
                 .iter()
                 .any(|s| t.is(s))
@@ -116,6 +116,18 @@ impl Template {
             let SetExpr::Select(select) = *query.body else {
                 return None;
             };
+            if let Some(distinct) = &select.distinct
+                && !matches!(distinct, Distinct::All)
+                && (!matches!(distinct, Distinct::Distinct)
+                    || select.projection.iter().any(|item| match item {
+                        SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => {
+                            !matches!(expr, Expr::Identifier(_) | Expr::CompoundIdentifier(_))
+                        }
+                        _ => true,
+                    }))
+            {
+                return None;
+            }
             if select.from.len() != 1
                 || !select.from[0].joins.is_empty()
                 || !matches!(
