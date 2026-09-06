@@ -119,27 +119,7 @@ pub(super) fn standard_recording_apis(
             || format!("standard recording has no canonical case member for {api}"),
         )?;
     }
-    if let Some(refresh) = &state.recording_refresh {
-        ensure_required_apis_preserved(&refresh.required_apis, &apis)?;
-    }
     Ok(apis)
-}
-
-fn ensure_required_apis_preserved(
-    required_apis: &[String],
-    recorded_apis: &[String],
-) -> Result<()> {
-    let missing = required_apis
-        .iter()
-        .filter(|required| !recorded_apis.contains(required))
-        .cloned()
-        .collect::<Vec<_>>();
-    ensure!(
-        missing.is_empty(),
-        "replacement recording lost previously published APIs: {}",
-        missing.join(", ")
-    );
-    Ok(())
 }
 
 pub(super) fn standard_recording_api_case_counts(
@@ -501,17 +481,6 @@ mod tests {
         .unwrap();
 
         assert_ne!(replacement, reserved);
-    }
-
-    #[test]
-    fn replacement_recording_must_preserve_the_previous_api_inventory() {
-        let required = vec!["GET /common".to_string(), "GET /rare-case".to_string()];
-
-        let error =
-            ensure_required_apis_preserved(&required, &["GET /common".to_string()]).unwrap_err();
-
-        assert!(error.to_string().contains("GET /rare-case"));
-        ensure_required_apis_preserved(&required, &required).unwrap();
     }
 
     #[test]

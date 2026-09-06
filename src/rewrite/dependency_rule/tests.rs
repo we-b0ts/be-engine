@@ -205,7 +205,6 @@ fn rejected_redis_snapshot_derivation_can_schedule_a_fresh_recording_fallback() 
     assert!(refresh.applied.is_empty());
     assert_eq!(refresh.dependency_rules.len(), 1);
     assert_eq!(refresh.dependency_rules[0].rule_name, "cache-warm");
-    assert_eq!(refresh.required_apis, vec!["GET /api"]);
     assert!(refresh.recording_run_id.is_none());
 }
 

@@ -79,6 +79,14 @@ Complex predicates and positional dynamic parameter rules retain their existing
 constraints. Parsed templates and constant queries are cached within Replay;
 actual values and finite dependency availability are checked for each execution.
 
+Flat tuple IN/NOT IN also permits whole-row reordering, including
+`(user_id,namespace,name) IN ((?,?,?),(?,?,?))` versus source text literals.
+Column order, tuple width, component values/types, NULL positions, value pairing
+and duplicate counts stay strict. PREPARE supports bounded partial-row matching;
+each execution binds fresh values before comparison. Source set iteration order
+does not need to be reproduced by target. This Replay compatibility reuses
+existing immutable recordings and needs no rule.
+
 MySQL session cleanup can appear as `allowed_unused_mysql_rollback_exchanges`.
 Replay allows a successful duplicate ROLLBACK after a confirmed transaction end,
 and a first ROLLBACK after a proven implicit read-only span. The latter requires

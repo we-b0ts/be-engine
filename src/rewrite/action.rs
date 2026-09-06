@@ -289,7 +289,7 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
                 .all(|item| item.status == super::model::RewriteApiStatus::Complete)
             {
                 format!(
-                    "all {} recorded API slice(s) and {} process output(s) have current evidence",
+                    "all {} API slice(s) in the current recording and {} process output(s) have current evidence",
                     state.api_inventory.len(),
                     state.process_outputs.inventory.len()
                 )

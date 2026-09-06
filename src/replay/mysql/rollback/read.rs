@@ -172,7 +172,19 @@ fn predicate(expr: &Expr, depth: usize) -> bool {
         Expr::Between {
             expr, low, high, ..
         } => atom(expr) && atom(low) && atom(high),
-        Expr::InList { expr, list, .. } => atom(expr) && !list.is_empty() && list.iter().all(atom),
+        Expr::InList { expr, list, .. } => {
+            if let Expr::Tuple(fields) = &**expr {
+                fields.len() >= 2
+                    && fields.iter().all(atom)
+                    && !list.is_empty()
+                    && list.iter().all(|row| {
+                        matches!(row, Expr::Tuple(values)
+                        if values.len() == fields.len() && values.iter().all(atom))
+                    })
+            } else {
+                atom(expr) && !list.is_empty() && list.iter().all(atom)
+            }
+        }
         Expr::Like { expr, pattern, .. } => atom(expr) && atom(pattern),
         _ => atom(expr),
     }

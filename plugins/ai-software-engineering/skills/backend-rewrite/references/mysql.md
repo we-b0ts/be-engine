@@ -237,6 +237,12 @@ it requires no rule or new recording. Complex expressions and positional
 dynamic-parameter policies keep their existing boundaries. See
 [MySQL predicate compatibility](../../../../../docs/mysql-replay.md#select-predicate-order-compatibility).
 
+Flat tuple IN/NOT IN supports whole-tuple reordering for forms such as
+`(user_id,namespace,name) IN ((?,?,?),(?,?,?))`, including source SQL built from
+set iteration. Preserve each tuple's field order, paired values, types and
+duplicate count; use normal bound parameters. A repair still needs the affected
+immutable cases rerun; an engine revision change alone is not functional acceptance.
+
 ## Query sharded tables
 
 `mysql.with_route(policy)` returns an owned `ShardedMysqlService` that implements
