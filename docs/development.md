@@ -1493,6 +1493,15 @@ recording evidence. A successful `missing-recorded-resource` route instead
 returns the existing recorder-capture apply command and never enters system
 repair.
 
+A fresh standard recording allocated by repair verification also takes over
+any pending capture refresh. The coordinator retains applied rules, the old
+baseline reference and required API coverage until validation succeeds. `next`
+reconciles older repair states with an unbound refresh to their already reserved
+recording, including a finalized one. It does not allocate duplicate traffic
+merely because the old scheduling revision differs. Publication and scope
+checks still apply, and a replacement missing previously published APIs is
+rejected with a bounded list of missing API selectors.
+
 If an administrator confirms that an issue was incorrectly routed as a
 `source_change`, `recorder_capability_gap`, or `replay_capability_gap` system
 repair, return that exact repair to target implementation explicitly:

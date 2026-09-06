@@ -137,6 +137,16 @@ replacement that omits any previously published API, including a rare case
 that did not recur, is rejected and cannot silently shrink the workflow
 inventory. The refresh never creates per-API recording generations.
 
+When repair verification requests fresh standard traffic while a capture
+refresh is pending, that run takes ownership of the existing refresh. Its
+applied-rule records, old case source and required APIs remain until the new
+recording passes validation. `next` also reconciles older repair states that
+reserved a fresh run but left the refresh unbound; it validates that same run
+instead of allocating another one or checking an obsolete scheduling hash.
+This does not waive publication, scope or API coverage checks. Missing required
+APIs are named in the replacement-recording action. Configuration revision
+checks still apply when scheduling a refresh that has no replacement run.
+
 After a system repair, do not choose fresh traffic yourself. The
 coordinator-issued repair verification decides whether to allocate fresh
 standard cases or replay the existing cases. Follow

@@ -616,6 +616,11 @@ pub(super) fn reset_for_fresh_recording(
     settings: RewriteRecordingSettings,
     reason: RewriteRecordingReason,
 ) {
+    // Every replacement run also owns any outstanding capture refresh. Keep
+    // its applied rules and required API inventory until publication validates.
+    if let Some(refresh) = state.recording_refresh.as_mut() {
+        refresh.recording_run_id = Some(run_id.clone());
+    }
     state.recording_input_case_source = if reason.requires_external_live_traffic() {
         None
     } else {
@@ -660,6 +665,29 @@ pub(super) fn begin_pending_capture_refresh(
     if refresh.recording_run_id.is_some() {
         return Ok(false);
     }
+    if state.phase == RewritePhase::RecordingRequired
+        && matches!(
+            state.recording_request_reason,
+            Some(
+                RewriteRecordingReason::RecorderContractChanged
+                    | RewriteRecordingReason::SourceBaselineChanged
+            )
+        )
+        && state.case_source.is_none()
+        && state.recording_input_case_source.is_none()
+    {
+        // Older repair verification reset the baseline but left this refresh
+        // unbound. The repair already reserved a fresh run using the current
+        // recorder contract. Adopt it before the pre-scheduling revision guard;
+        // next must still validate its publication, scope and required APIs.
+        state
+            .recording_refresh
+            .as_mut()
+            .expect("refresh was checked")
+            .recording_run_id = Some(state.recording_run_id.clone());
+        state.bump();
+        return Ok(true);
+    }
     if inventory::has_runnable_work(state) {
         return Ok(false);
     }
@@ -671,18 +699,13 @@ pub(super) fn begin_pending_capture_refresh(
     ensure!(
         super::fingerprint::source_traffic_policy_revision(target_root)?
             == refresh.source_traffic_policy_revision,
-        "process-owned rules changed after scheduling the recording refresh; re-plan the affected rule"
+        "source traffic policy changed after scheduling the recording refresh; re-plan the affected rule"
     );
     let run_id = artifacts::allocate_run_id_excluding(
         target_root,
         ManagedRecordingOperation::Record,
         &[&state.recording_run_id],
     )?;
-    state
-        .recording_refresh
-        .as_mut()
-        .expect("refresh was checked")
-        .recording_run_id = Some(run_id.clone());
     reset_for_fresh_recording(
         state,
         run_id,
@@ -705,292 +728,4 @@ pub(super) fn standard_recording_input_source(state: &RewriteState) -> Option<&P
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::RewriteAction;
-
-    #[test]
-    fn recording_execute_conflict_returns_pollable_wait_report() {
-        let target = Path::new("/target");
-        let report = waiting_start_report(
-            target,
-            "recording-a",
-            ManagedRecordingOperation::RecordComparison,
-            "run-a".to_string(),
-            "GET /api",
-            None,
-        );
-
-        assert_eq!(
-            report.execution_state,
-            RewriteRecordingStartState::WaitingForTrafficRuntime
-        );
-        assert_eq!(
-            report.status_poll_after_seconds,
-            Some(STATUS_POLL_AFTER_SECONDS)
-        );
-        assert_eq!(
-            serde_json::to_value(&report).unwrap()["status_poll_after_seconds"],
-            STATUS_POLL_AFTER_SECONDS
-        );
-        assert!(report.waiting_on.is_none());
-        assert_eq!(
-            report.status.argv,
-            [
-                "backend-rewrite",
-                "--target-root",
-                "/target",
-                "status",
-                "--api",
-                "GET /api"
-            ]
-        );
-    }
-
-    #[test]
-    fn recording_execute_only_delays_status_polling_for_waiting_states() {
-        let target = Path::new("/target");
-        for execution_state in [
-            RewriteRecordingStartState::Started,
-            RewriteRecordingStartState::AlreadyRunning,
-        ] {
-            let report = start_report(
-                target,
-                "recording-a",
-                ManagedRecordingOperation::RecordComparison,
-                "run-a".to_string(),
-                execution_state,
-            );
-            assert_eq!(
-                serde_json::to_value(report).unwrap()["status_poll_after_seconds"],
-                STATUS_POLL_AFTER_SECONDS
-            );
-        }
-        let completed = start_report(
-            target,
-            "recording-a",
-            ManagedRecordingOperation::RecordComparison,
-            "run-a".to_string(),
-            RewriteRecordingStartState::AlreadyCompleted,
-        );
-
-        assert!(serde_json::to_value(completed).unwrap()["status_poll_after_seconds"].is_null());
-    }
-
-    #[test]
-    fn fresh_request_invalidates_evidence_and_returns_opaque_managed_action() {
-        let mut state = crate::rewrite::test_state();
-        state.phase = RewritePhase::SliceComplete;
-        state.case_source = Some(PathBuf::from("old-cases"));
-        state.case_inventory_id = Some("old-inventory".to_string());
-        state.group_id = Some("GET /api".to_string());
-        state.comparison_run_id = Some("20260802000001".to_string());
-        state.e2e_current = true;
-        state.comparison_current = true;
-
-        reset_for_fresh_recording(
-            &mut state,
-            "20260802000002".to_string(),
-            RewriteRecordingSettings {
-                duration_seconds: NonZeroU64::new(90).unwrap(),
-                per_api_case_limit: NonZeroUsize::new(250).unwrap(),
-            },
-            RewriteRecordingReason::UserRequested,
-        );
-
-        assert_eq!(state.phase, RewritePhase::RecordingRequired);
-        assert!(state.case_source.is_none());
-        assert!(state.case_inventory_id.is_none());
-        assert!(state.group_id.is_none());
-        assert!(state.comparison_run_id.is_none());
-        assert!(!state.e2e_current);
-        assert!(!state.comparison_current);
-        let target = tempfile::tempdir().unwrap();
-        let action = action::for_state(target.path(), &state).action;
-        let RewriteAction::RecordingRequired {
-            summary, command, ..
-        } = action
-        else {
-            panic!("expected a standard recording action");
-        };
-        assert_eq!(
-            command.argv,
-            [
-                "backend-rewrite",
-                "--target-root",
-                target.path().to_str().unwrap(),
-                "recording",
-                "execute",
-                recording_action::recording_action_id(&state, false).as_str(),
-            ]
-        );
-        assert_eq!(command.cwd, target.path());
-        assert!(state.recording_input_case_source.is_none());
-        assert_eq!(
-            summary,
-            "fresh standard recording requested (user_requested) for GET /api; the request reason requires fresh external live traffic"
-        );
-    }
-
-    #[test]
-    fn recorder_contract_change_keeps_the_atomic_all_api_scope_but_not_old_input() {
-        let mut state = crate::rewrite::test_state();
-        state.api.clear();
-        state.source_route.clear();
-        state.recording_apis.clear();
-        state.case_source = Some(PathBuf::from("old-all-api-cases"));
-
-        let settings = state.recording_settings;
-        reset_for_fresh_recording(
-            &mut state,
-            "20260802000003".to_string(),
-            settings,
-            RewriteRecordingReason::RecorderContractChanged,
-        );
-
-        assert!(state.recording_apis.is_empty());
-        assert!(state.recording_input_case_source.is_none());
-        assert!(requires_external_live_traffic(&state));
-    }
-
-    #[test]
-    fn pending_request_is_idempotent_and_requires_explicit_replacement() {
-        let mut state = crate::rewrite::test_state();
-        state.recording_request_reason = Some(RewriteRecordingReason::UserRequested);
-        let settings = state.recording_settings;
-
-        assert!(
-            reuse_pending_recording(
-                &state,
-                RewriteRecordingReason::UserRequested,
-                settings,
-                &state.recording_apis,
-                false,
-            )
-            .unwrap()
-        );
-
-        let different = RewriteRecordingSettings {
-            duration_seconds: NonZeroU64::new(90).unwrap(),
-            per_api_case_limit: settings.per_api_case_limit,
-        };
-        assert!(
-            reuse_pending_recording(
-                &state,
-                RewriteRecordingReason::UserRequested,
-                different,
-                &state.recording_apis,
-                false,
-            )
-            .is_err()
-        );
-        assert!(
-            !reuse_pending_recording(
-                &state,
-                RewriteRecordingReason::UserRequested,
-                different,
-                &state.recording_apis,
-                true,
-            )
-            .unwrap()
-        );
-    }
-
-    #[test]
-    fn omitted_api_requests_all_configured_traffic() {
-        assert!(requested_recording_apis(None).is_empty());
-        let api = "GET /api/widgets/*".parse::<RecordingApi>().unwrap();
-        assert_eq!(requested_recording_apis(Some(&api)), ["GET /api/widgets/*"]);
-    }
-
-    #[test]
-    fn finalized_single_api_can_be_replaced_by_an_all_configured_request() {
-        let mut state = crate::rewrite::test_state();
-        state.recording_request_reason = Some(RewriteRecordingReason::UserRequested);
-
-        assert_eq!(
-            existing_recording_disposition(
-                artifacts::RecordingPublication::Finalized,
-                &state,
-                RewriteRecordingReason::UserRequested,
-                RewriteRecordingSettings {
-                    duration_seconds: NonZeroU64::new(60).unwrap(),
-                    per_api_case_limit: NonZeroUsize::new(100).unwrap(),
-                },
-                &[],
-                true,
-            )
-            .unwrap(),
-            ExistingRecordingDisposition::Replace
-        );
-    }
-
-    #[test]
-    fn drained_capture_plans_start_one_all_scope_fresh_recording() {
-        let target = tempfile::tempdir().unwrap();
-        fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
-        crate::rewrite::test_support::install_project_config(
-            target.path(),
-            "master",
-            crate::config::AppConfig::default(),
-            None,
-        );
-        let mut state = crate::rewrite::test_state();
-        inventory::install(
-            &mut state,
-            vec!["GET /a".to_string(), "POST /b".to_string()],
-        )
-        .unwrap();
-        state.recording_apis.clear();
-        for item in &mut state.api_inventory {
-            item.status = super::super::model::RewriteApiStatus::AwaitingRecordingRefresh;
-        }
-        state.case_source = Some(PathBuf::from("old-recording"));
-        state.current_api_index = None;
-        state.recording_refresh = Some(super::super::model::RewriteRecordingRefreshState {
-            applied: vec![super::super::model::RewriteRecorderCaptureAppliedRecord {
-                plan_id: "capture-1".to_string(),
-                issue_id: "issue-1".to_string(),
-                evidence_id: "evidence-1".to_string(),
-                api: "GET /a".to_string(),
-                endpoint: "counter.example.com:9332".to_string(),
-                resource_identity: "resource-1".to_string(),
-                source_revision: "source-1".to_string(),
-                source_evidence: "CounterService.java:88".to_string(),
-            }],
-            dependency_rules: Vec::new(),
-            required_apis: vec!["GET /a".to_string(), "POST /b".to_string()],
-            baseline_case_source: Some(PathBuf::from("old-recording")),
-            project_config_revision: super::super::fingerprint::project_config_revision(
-                target.path(),
-            )
-            .unwrap(),
-            source_traffic_policy_revision:
-                super::super::fingerprint::source_traffic_policy_revision(target.path()).unwrap(),
-            recording_run_id: None,
-        });
-
-        assert!(begin_pending_capture_refresh(target.path(), &mut state).unwrap());
-        assert_eq!(state.phase, RewritePhase::RecordingRequired);
-        assert_eq!(
-            state.recording_request_reason,
-            Some(RewriteRecordingReason::RecorderContractChanged)
-        );
-        assert!(state.recording_apis.is_empty());
-        assert!(state.api_inventory.is_empty());
-        assert_eq!(
-            state
-                .recording_refresh
-                .as_ref()
-                .and_then(|refresh| refresh.baseline_case_source.as_deref()),
-            Some(Path::new("old-recording"))
-        );
-        assert_eq!(
-            state
-                .recording_refresh
-                .as_ref()
-                .and_then(|refresh| refresh.recording_run_id.as_deref()),
-            Some(state.recording_run_id.as_str())
-        );
-    }
-}
+mod tests;

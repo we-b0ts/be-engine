@@ -134,13 +134,38 @@ fn ensure_required_apis_preserved(
         .filter(|required| !recorded_apis.contains(required))
         .cloned()
         .collect::<Vec<_>>();
-    ensure!(
-        missing.is_empty(),
-        "replacement recording lost previously published APIs: {}",
-        missing.join(", ")
-    );
+    if !missing.is_empty() {
+        return Err(MissingRecordingApis(missing).into());
+    }
     Ok(())
 }
+
+#[derive(Debug)]
+struct MissingRecordingApis(Vec<String>);
+
+impl std::fmt::Display for MissingRecordingApis {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Project only coordinator-owned API selectors, never a raw I/O error
+        // or case path. Keep even a large inventory bounded in the action.
+        let shown = self
+            .0
+            .iter()
+            .take(16)
+            .map(|api| api.chars().take(160).collect::<String>())
+            .collect::<Vec<_>>();
+        write!(
+            formatter,
+            "replacement recording lost previously published APIs: {}",
+            shown.join(", ")
+        )?;
+        if self.0.len() > shown.len() {
+            write!(formatter, " (and {} more)", self.0.len() - shown.len())?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for MissingRecordingApis {}
 
 pub(super) fn standard_recording_api_case_counts(
     target_root: &Path,
@@ -217,6 +242,9 @@ pub(super) fn comparison_recording_publication(
 }
 
 pub(super) fn recording_rejection(error: &anyhow::Error) -> String {
+    if let Some(missing) = error.downcast_ref::<MissingRecordingApis>() {
+        return missing.to_string();
+    }
     public_rejection(
         error,
         &[
@@ -511,7 +539,30 @@ mod tests {
             ensure_required_apis_preserved(&required, &["GET /common".to_string()]).unwrap_err();
 
         assert!(error.to_string().contains("GET /rare-case"));
+        assert_eq!(
+            recording_rejection(&error),
+            "replacement recording lost previously published APIs: GET /rare-case"
+        );
         ensure_required_apis_preserved(&required, &required).unwrap();
+    }
+
+    #[test]
+    fn missing_api_rejection_is_bounded_and_does_not_publish_untyped_errors() {
+        let required = (0..20)
+            .map(|index| format!("GET /api-{index}"))
+            .collect::<Vec<_>>();
+        let error = ensure_required_apis_preserved(&required, &[]).unwrap_err();
+        let message = recording_rejection(&error.context("private recording path"));
+        assert!(message.contains("GET /api-15"));
+        assert!(message.ends_with("(and 4 more)"));
+        assert!(!message.contains("GET /api-16"));
+        assert!(!message.contains("private recording path"));
+        let untyped =
+            anyhow::anyhow!("replacement recording lost previously published APIs: private path");
+        assert_eq!(
+            recording_rejection(&untyped),
+            "standard recording evidence is unreadable or invalid"
+        );
     }
 
     #[test]
