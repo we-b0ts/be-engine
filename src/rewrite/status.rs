@@ -48,6 +48,9 @@ pub fn status_rewrite_for_api(
     context: RewriteContext,
     api: Option<&RecordingApi>,
 ) -> Result<RewriteStatusReport> {
+    if let Some(report) = super::configuration_commit::status(&context.target_root)? {
+        return Ok(report);
+    }
     let (target_root, project) = crate::e2e_run::resolve_project(&context.target_root)?;
     let state = RewriteStore::new(&target_root)?.load()?;
     Ok(match state {
@@ -156,6 +159,9 @@ pub fn status_rewrite_for_process_output(
     context: RewriteContext,
     id: &str,
 ) -> Result<RewriteStatusReport> {
+    if let Some(report) = super::configuration_commit::status(&context.target_root)? {
+        return Ok(report);
+    }
     let (target_root, project) = crate::e2e_run::resolve_project(&context.target_root)?;
     let state = RewriteStore::new(&target_root)?.load()?;
     Ok(match state {

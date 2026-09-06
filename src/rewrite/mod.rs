@@ -5,6 +5,8 @@ mod background_reclassification;
 mod case_dependencies;
 mod case_patterns;
 mod comparison_issue;
+mod configuration_commit;
+pub use configuration_commit::next_rewrite;
 mod dependency_rule;
 mod evidence;
 mod evidence_model;
@@ -155,7 +157,7 @@ pub(crate) fn lock_admin_source_upgrade(target_root: &Path) -> Result<AdminSourc
     }
 }
 
-pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
+async fn advance_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
     let (target_root, project) = crate::e2e_run::resolve_project(&options.target_root)?;
     ensure!(
         options.api.is_none() || options.process_output.is_none(),
@@ -234,6 +236,9 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
             return Ok(action::recovery_required(&target_root));
         }
         traffic_operation::TrafficOperationState::Absent => {}
+    }
+    if let Some(envelope) = configuration_commit::pending_locked(&target_root)? {
+        return Ok(envelope);
     }
     let mut state = match store.load()? {
         Some(mut state) => {
@@ -457,6 +462,9 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
         store.save(&state)?;
         return Ok(action::for_state(&target_root, &state));
     }
+    if let Some(envelope) = configuration_commit::pending_locked(&target_root)? {
+        return Ok(envelope);
+    }
     match state.phase {
         RewritePhase::RecordingRequired => {
             match artifacts::standard_recording_publication(&target_root, &state.recording_run_id)?
@@ -523,6 +531,9 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
             }
             preparation::prepare_recording(&target_root, &mut state)?;
             store.save(&state)?;
+            if let Some(envelope) = configuration_commit::pending_locked(&target_root)? {
+                return Ok(envelope);
+            }
             let _traffic = claim_traffic_operation(
                 &target_root,
                 &state,
@@ -562,6 +573,9 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
             }
             preparation::prepare_recording(&target_root, &mut state)?;
             store.save(&state)?;
+            if let Some(envelope) = configuration_commit::pending_locked(&target_root)? {
+                return Ok(envelope);
+            }
             let _traffic = claim_traffic_operation(
                 &target_root,
                 &state,

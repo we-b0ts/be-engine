@@ -165,6 +165,10 @@ is unclear.
   parked-slice completion scheduling to the root coordinator. `progress_publication.rs`
   owns the durable first-completion latch for future recording batches alongside
   its existing final delivery publication gate.
+  `configuration_commit` owns the separate persistent-configuration Git commit
+  boundary for `status` and `next`; it detects pending configuration before
+  dispatch or verification without committing files or treating routine progress
+  updates as configuration changes.
 - Within `rewrite`, `target_quality.rs` owns the coordinator quality-gate
   transaction. Its `target_replay_isolation` child owns the mandatory,
   deterministic scan that prevents production Rust source from consuming

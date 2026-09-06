@@ -436,6 +436,13 @@ fn recording_target() -> tempfile::TempDir {
     for args in [
         vec!["init", "--quiet", "--initial-branch=master"],
         vec![
+            "add",
+            "--",
+            ".traffic-e2e/project.yaml",
+            ".traffic-e2e/source-traffic-policy.yaml",
+            ".traffic-e2e/verification.yaml",
+        ],
+        vec![
             "-c",
             "user.name=Test",
             "-c",
