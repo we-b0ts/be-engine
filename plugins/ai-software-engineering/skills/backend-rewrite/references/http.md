@@ -38,11 +38,11 @@ fn build_http_dependencies(user_service_url: &str) -> Result<HttpDependencies> {
 }
 ```
 
-Pin the dependency to the fixed `v0.0.1` tag. Enable `metrics` by default and
+Pin the dependency to the fixed `v0.0.2` tag. Enable `metrics` by default and
 enable `json` when using the typed JSON body methods:
 
 ```toml
-brz-http = { package = "http", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/http.git", tag = "v0.0.1", features = ["json", "metrics"] }
+brz-http = { package = "http", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/http.git", tag = "v0.0.2", features = ["json", "metrics"] }
 ```
 
 Use `ClientBuilder::configure` for an uncommon reqwest transport option while

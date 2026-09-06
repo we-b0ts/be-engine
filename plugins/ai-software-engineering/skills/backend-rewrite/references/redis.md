@@ -35,10 +35,10 @@ The service sends `AUTH password` when connecting and reconnecting, before
 selecting the database and making the connection available to business calls.
 Keep endpoints in `host:port[:db]` form and supply the password through options.
 
-Pin the dependency to the fixed `v0.0.3` tag and enable `metrics` by default:
+Pin the dependency to the fixed `v0.0.4` tag and enable `metrics` by default:
 
 ```toml
-brz-redis = { package = "redis", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/redis.git", tag = "v0.0.3", features = ["metrics"] }
+brz-redis = { package = "redis", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/redis.git", tag = "v0.0.4", features = ["metrics"] }
 ```
 
 Pass source hostnames through unchanged instead of resolving them in

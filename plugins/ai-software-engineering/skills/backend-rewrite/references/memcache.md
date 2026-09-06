@@ -29,11 +29,11 @@ async fn build_cache(
 }
 ```
 
-Pin both dependencies to the fixed `v0.0.1` tag. Enable `metrics` by default
+Pin `brz-memcache` to `v0.0.2` and `brz-vintage` to `v0.0.1`. Enable `metrics` by default
 and enable memcache's `service` feature for this construction path:
 
 ```toml
-brz-memcache = { package = "memcache", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/memcache.git", tag = "v0.0.1", features = ["metrics", "service"] }
+brz-memcache = { package = "memcache", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/memcache.git", tag = "v0.0.2", features = ["metrics", "service"] }
 brz-vintage = { package = "vintage", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/vintage.git", tag = "v0.0.1" }
 ```
 
