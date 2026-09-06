@@ -31,7 +31,7 @@ pub(crate) mod process_owned_dependencies;
 mod recording;
 mod repository_initialization;
 mod repository_protocol;
-mod rule_document;
+pub(crate) mod rule_document;
 pub(crate) mod source_traffic_policy;
 
 pub use allowed_unused_http::{
@@ -371,7 +371,7 @@ impl AppConfig {
         if self.tcp_gateway.backlog == 0 || self.tcp_gateway.backlog > i32::MAX as u32 {
             bail!("tcp_gateway.backlog must be between 1 and {}", i32::MAX);
         }
-        if self.http_response_rewrite.enabled
+        if self.http_response_rewrite.is_enabled()
             && (!self.dns_mock.enabled
                 || !self.tcp_gateway.enabled
                 || !self.tcp_gateway.record_http)

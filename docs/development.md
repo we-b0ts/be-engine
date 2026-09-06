@@ -639,6 +639,51 @@ The `vintage-naming` plugin rewrites legacy Motan node addresses published by
 Vintage naming responses. The `vintage-cache-config` plugin rewrites cache
 node addresses published inside Vintage `/1/config/service` responses.
 
+For ordinary JSON URL fields, the coordinator writes compact rules in
+`.traffic-e2e/source-traffic-policy.yaml`:
+
+```yaml
+http_response_rewrite:
+  - name: cs.wegent.intra.demo.test
+    rules:
+      - path_pattern: GET /executor-manager/sandboxes/*
+        pointer: /base_url
+        source_evidence: sandbox_id varies; consume base_url
+      - path_pattern: GET /another-api/*
+        pointer: /base_url
+        source_evidence: another API with dynamic IDs
+```
+
+`name` is the upstream authority and appears once per domain. Its `rules` list
+contains multiple path entries. Each `path_pattern` contains the HTTP method
+and path; `pointer` selects one JSON URL field. Use separate path entries for
+other methods or fields. `source_evidence` records
+the short note supplied during path review. The recorder overlays these rules
+on the static configuration in `project.yaml`. The previously generated
+`authorities` / `methods` / `pointers` list format is not accepted in this
+managed policy section. Omitted `enabled` enables configured rules; an explicit
+`enabled: false` still disables them. Rules are loaded at recording startup;
+new addresses are discovered on each matching response, without hot reload.
+
+The path part of `path_pattern` matches the request path excluding its query.
+Whole-segment `*` matches exactly one nonempty level; terminal `**` matches one or more levels.
+Thus `/sandboxes/*` matches `/sandboxes/123`, not `/sandboxes/123/files` or
+`/sandboxes/`. The static recorder configuration retains exact `path` selectors
+for legacy plugins. Pointers use JSON Pointer syntax (`~0` for `~`, `~1`
+for `/`, numeric array indices); pointer wildcards are not supported.
+
+By default generic rules apply to successful HTTP responses with JSON media
+types (`application/json` or `+json`). Selected missing or null values are
+skipped, and URL hostnames stay unchanged. IPv4 HTTP(S) URL hosts become stable
+synthetic names such as `http-10-36-14-118-8080.trp.test`. The original scheme,
+explicit port, credentials, path, query and fragment remain intact. Non-string,
+invalid, unsupported IPv6, or ambiguous URL values fail the matched exchange.
+The synthetic route forwards to the original IP and port and restores the
+upstream HTTP authority; HTTPS retains strict upstream certificate validation.
+The source client must trust the Recorder CA for intercepted HTTPS as usual.
+The rewritten response and discovered routes are recorded together, and Replay
+restores their reserved fake IPs before replaying subsequent HTTP(S) exchanges.
+
 For Pluto ECI, that synthetic domain is registered in the recorder's fake-DNS
 registry and routed to a local `kubectl proxy`, allowing the later HTTPS traffic
 to pass through the TCP gateway and be recorded. The rewritten kubeconfig uses
@@ -722,11 +767,11 @@ When both files are absent, `traffic-e2e record` reports that Recorder will
 generate them automatically. If only one exists, startup stops with recovery
 guidance instead of replacing the remaining file and silently changing the CA.
 
-Rules are evaluated in configuration order and only the first matching rule is
-run. Version one accepts complete, identity-encoded HTTP response bodies; a
-matched response with compression is rejected instead of being partially
-rewritten. Plugin parse or rewrite failures fail the HTTP exchange and active
-case, so an original IP-bearing response is never silently published. On
+Rules are evaluated in configuration order. A matching legacy plugin retains
+first-match behavior; when the first match is a generic pointer rule, matching
+generic rules contribute their pointers to one rewrite. Parse or rewrite
+failures fail the HTTP exchange and active case, so an original IP-bearing
+response is never silently published. On
 success, body-dependent headers such as `Content-Length`, `ETag`, and `Digest`
 are normalized, and the rewritten response is what the recorder stores.
 
@@ -915,6 +960,59 @@ recording. DNS lookup and TCP connection establishment alone do not add an
 event. Any reported payload attempt is dirty, is counted under aggregate
 `network` events, and is clustered as `network/unrecorded_endpoint` in
 dependency evidence.
+
+Replay also samples the existing fixed-UID REJECT packet counters at each
+controlled case `begin` and `end`. This requires no NFLOG or packet observer.
+`egress_rejections` retains the sampled time window and packet delta; it has no
+IP address, source classification, or per-event timestamp. Counts include
+retries and background traffic from the same UID. Failed reads or changed/reset
+rules yield `rejected_packets: null`, never a fabricated zero. `--no-intercept`
+does not sample firewall counters. Standard recording does not install Replay's
+REJECT policy, so successful direct-IP traffic during recording is not detected
+by this diagnostic.
+
+These counters do not affect dirty, response, or completion gates. Only when
+responses differ or dependencies are dirty does `run-api` expose the auxiliary
+`diagnosis.egress_rejections`; `backend-rewrite next/status` carries it in
+`action.details.egress_rejections`. The `dirty_clusters` evidence response adds
+the same bounded observations. Positive counts add a `rule_hints` entry with
+`recorder-capture plan-http-response --help`; they do not by themselves produce
+an applicable rule or establish causality.
+
+After source investigation establishes a missing IP dependency, the coordinator
+can run `route --cause unrecorded-ip --endpoint IP:PORT --case-id CASE
+--ip-origin http-response --evidence-id CURRENT --source-ref SOURCE_PROOF`.
+`unknown`, `static`, and `other` origins return the relevant investigation
+requirements. The route is a preflight, with `accepted: false`, and leaves the
+API out of system repair. Its `ip_capture` evidence matches reported endpoints
+to exact recorded JSON responses and returns planner commands.
+`recorder-capture plan-http-response` without `--pattern-checked` returns
+`status: path_pattern_review_required`, the current path, and all existing
+rules with the same authority, method and pointer. The engine does not
+filter by path similarity or infer dynamic IDs. Review source path construction
+even for the first rule; choose an exact path or wildcard pattern and check
+whether existing paths should be consolidated. This response has no `plan_id`
+or apply command, and generated commands do not prefill the confirmation flag.
+Rerun with the selected `--path-pattern`, `--pattern-checked`, and a brief
+`--source-evidence` note (or `BACKEND_REWRITE_SOURCE_EVIDENCE`). A short statement
+such as `sandbox_id varies; use * and consume base_url` is enough;
+no structured proof format is required.
+
+The checked response has `status: planned` and the usual plan/apply fields.
+The plan reuses an existing covering rule or consolidates fully covered managed
+rules with identical selectors and response filters. Its diff and
+`traffic_e2e_report.replaced_rules` identify every replaced rule. Uncovered
+paths, other selectors and project-owned static rules are retained. Multiple path entries
+share one domain group; consolidation uses selectors and full path coverage
+instead of names. Policy changes after planning and
+old HTTP plans lacking the review confirmation cannot be applied.
+Inspect the plan and execute
+its `next_command` apply; status reconstructs a pending apply. Apply persists
+the capture rule and parks the API for consolidated fresh recording. A pending
+capture plan or unresolved supported capture candidate blocks capability-gap
+submission. If a rule is already configured, inspect whether fresh recording
+loaded it and cite the remaining engine failure rather than repeatedly adding
+rules. Historical recordings are never edited.
 
 For a collection, multi-case selection, or multiple sessions, generate one
 deterministic coverage and dependency summary from the recording source root.
@@ -1439,8 +1537,16 @@ the ignored local source snapshot and do not require the Pod.
 The command generates version-17 `.traffic-e2e/project.yaml`,
 `.traffic-e2e/source-traffic-policy.yaml`, and `.traffic-e2e/verification.yaml`.
 When the root `Cargo.toml`, `Cargo.lock`, and `src/main.rs` are all absent, it
-also generates a runnable readiness-only Rust target with a temporary
-`src/startup_probe.rs` initialization module. Keep that module and its
+also generates a runnable readiness-only Rust target using `http-server`
+`v0.0.2` with its `macros` feature. `ReadinessApi` exports the configured GET
+route through `#[api(auth = none)]` and `#[http_server::get(...)]`, returns
+an empty `200` response, and starts with `Server::bind` / `serve_until` for
+graceful shutdown. The generated route must be a literal path without captures,
+query, fragment, whitespace, or a trailing slash (except `/`). Implement
+business APIs with the same macros in their owning modules and combine them
+with `http_server::Router::new(ReadinessApi).merge(business_api)`.
+The bootstrap also includes a temporary `src/startup_probe.rs` initialization
+module. Keep that module and its
 `src/main.rs` call through initialization preflight, then delete the module,
 declaration, and call when real target implementation begins. It generates
 `.traffic-e2e/Dockerfile.e2e` only when absent and creates or safely extends the
@@ -2269,7 +2375,30 @@ may consume matching exchanges from multiple recorded source lanes, which
 allows source and target connection pools to have different widths. Replay
 still preserves the order within every recorded source lane and still requires
 the exact target, wire protocol, command, key, arguments, value, CAS, quiet,
-and noreply semantics. Redis retains its session connection binding.
+and noreply semantics.
+
+Redis also permits ordinary data commands (including GET/MGET, hash reads,
+SET and DEL) to span recorded physical connections. One pooled target connection
+can consume multiple short source lanes, and multiple target connections can
+consume one source lane in recorded order. Endpoint, database, authenticated
+username, RESP version, command and exact arguments remain strict. Repeated
+requests consume separate recorded exchanges; pool compatibility does not
+make responses reusable or relax case/Global ownership. Successful SDK setup
+and CLIENT SETINFO metadata retain their existing handling.
+
+Replay classifies source lanes before serving requests. A lane containing a
+retained session operation, WATCH/MULTI/EXEC, subscription, blocking operation,
+WAIT, script or unknown command conservatively retains connection binding for
+the entire lane, including its ordinary-command prefix and suffix. A stateful
+source lane belongs to one target connection within the active case; another
+target connection cannot steal its next exchange. This does not split a
+recorded transaction into independently replayable fragments. Explicit
+process-owned background/snapshot rules retain their existing behavior.
+
+No rule, new recording, or per-call target connection workaround is needed for
+ordinary Redis pool differences. If such a difference alone fails replay,
+investigate the engine version and matching evidence instead of duplicating
+the source pool size or connection lifetime in target code.
 
 Motan also preserves every recorded source lane's order. When concurrent target
 connections or multiplexed frames arrive in a different order, Replay keeps a

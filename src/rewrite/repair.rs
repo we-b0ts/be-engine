@@ -65,6 +65,7 @@ pub(super) fn route(
         valid_evidence,
         "route evidence is stale or belongs to another issue"
     );
+    super::ip_capture::ensure_before_system_repair(target_root, state, &options.kind)?;
     let (acceptance_kind, observed_revision) = acceptance_snapshot(target_root, &options.kind)?;
     let repair_id = repair_id(
         state,
@@ -828,6 +829,8 @@ mod tests {
             summary: "replay capability gap".to_string(),
             pointer_pattern: None,
             representative: None,
+            egress_rejections: None,
+            recorder_capture_diagnosis: None,
             response_diagnosis: None,
             possible_causes: Vec::new(),
             observed_target_fingerprint: "target".to_string(),
@@ -877,6 +880,8 @@ mod tests {
             summary: "response assertion could not be evaluated".to_string(),
             pointer_pattern: Some("$response".to_string()),
             representative: None,
+            egress_rejections: None,
+            recorder_capture_diagnosis: None,
             response_diagnosis: None,
             possible_causes: vec!["response_assertion_evaluation_or_evidence_failure".to_string()],
             observed_target_fingerprint: target_fingerprint.to_string(),

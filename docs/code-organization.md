@@ -65,6 +65,27 @@ is unclear.
 - Recorder event, run, writer, and summary modules own capture, persistence,
   and reporting.
 - Replay modules own recorded dependency matching and replay lifecycle.
+- `replay/redis/matching` owns exact command selection and source-lane order
+  diagnostics. `replay/redis/connection_scope` distinguishes ordinary pool
+  reuse from recorded stateful lanes and owns their exclusive target connection
+  claims; runtime Redis I/O and session setup remain in `replay/redis/mod.rs`.
+- `http/rewrite/json_urls` owns JSON Pointer URL substitution and discovered
+  HTTP routes. Recorder configuration owns concise rule validation and the
+  source-traffic-policy overlay; no application-specific sandbox plugin is
+  required.
+- `cli/interception/egress_counters` owns read-only firewall command parsing.
+  `replay/egress_counter` owns bounded sampling and per-case counter differences;
+  `e2e_run/result/egress` projects this evidence only for failed verification.
+  Counter observations never become dependency mismatches or gate inputs.
+- `rewrite/ip_capture` owns IP defect preflight, `response_url_evidence` owns
+  bounded recorded-response correlation, and `recorder_capture/http_response`
+  owns planning/applying acquisition rules through the existing refresh
+  lifecycle. Its `review` child owns mandatory path-review responses, while
+  `rules` owns selector equality and consolidation by mechanical path coverage.
+  Target decides whether source paths contain dynamic IDs; the engine does not
+  infer path similarity. `config/source_traffic_policy/http_response` owns the
+  compact authority / method-path / pointer / review-note document and its
+  recorder projection. `evidence/rule_guidance` owns rule discovery commands.
 - `source_snapshot` owns initial and explicit administrator-requested Kubernetes
   Pod capture, immutable source image resolution, effective environment capture,
   supported volume capture, rollback-safe local replacement, integrity

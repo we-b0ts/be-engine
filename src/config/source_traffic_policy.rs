@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use super::process_owned_dependencies::{self, BackgroundDependencyRuleConfig};
 use super::{AppConfig, DnsBypassStrategyConfig};
 
+pub(crate) mod http_response;
+
 pub const SOURCE_TRAFFIC_POLICY_VERSION: u32 = 2;
 pub const SOURCE_TRAFFIC_POLICY_FILE: &str = "source-traffic-policy.yaml";
 
@@ -20,6 +22,8 @@ pub struct SourceTrafficPolicyConfig {
     pub version: u32,
     #[serde(default)]
     pub http: SourceTrafficHttpPolicyConfig,
+    #[serde(default, skip_serializing_if = "Vec::is_empty", with = "http_response")]
+    pub http_response_rewrite: Vec<super::HttpResponseRewriteRuleConfig>,
     #[serde(default)]
     pub breeze_capture: Vec<SourceTrafficBreezeCaptureConfig>,
     #[serde(default)]
@@ -81,6 +85,7 @@ impl SourceTrafficPolicyConfig {
         Self {
             version: SOURCE_TRAFFIC_POLICY_VERSION,
             http: SourceTrafficHttpPolicyConfig::default(),
+            http_response_rewrite: Vec::new(),
             breeze_capture: Vec::new(),
             process_owned_dependencies: Vec::new(),
         }
@@ -90,6 +95,7 @@ impl SourceTrafficPolicyConfig {
         Self {
             version: SOURCE_TRAFFIC_POLICY_VERSION,
             http: SourceTrafficHttpPolicyConfig::default(),
+            http_response_rewrite: Vec::new(),
             breeze_capture: Vec::new(),
             process_owned_dependencies: vec![BackgroundDependencyRuleConfig::Http {
                 name: "breeze_vintage".to_string(),
@@ -156,6 +162,11 @@ impl SourceTrafficPolicyConfig {
                 "coordinator Breeze capture snapshot_dir values must be non-empty and unique"
             );
         }
+        super::HttpResponseRewriteConfig {
+            enabled: true,
+            rules: self.http_response_rewrite.clone(),
+        }
+        .validate()?;
         process_owned_dependencies::validate(&self.process_owned_dependencies)
     }
 
@@ -198,6 +209,11 @@ impl SourceTrafficPolicyConfig {
             } = strategy;
             *capture_resources = overlay.capture_resources.clone();
         }
+        config
+            .http_response_rewrite
+            .rules
+            .extend(self.http_response_rewrite.iter().cloned());
+        config.http_response_rewrite.validate()?;
         config.process_owned_dependencies = self.process_owned_dependencies.clone();
         Ok(())
     }
@@ -240,6 +256,7 @@ impl SourceTrafficPolicyConfig {
                 case_path_patterns,
                 allowed_unused_http_hosts,
             },
+            http_response_rewrite: Vec::new(),
             breeze_capture: legacy.breeze_capture,
             process_owned_dependencies: legacy.process_owned_dependencies,
         }

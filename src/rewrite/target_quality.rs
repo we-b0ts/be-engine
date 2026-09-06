@@ -227,6 +227,8 @@ mod tests {
             summary: "target response differs".to_string(),
             pointer_pattern: Some("/result".to_string()),
             representative: None,
+            egress_rejections: None,
+            recorder_capture_diagnosis: None,
             response_diagnosis: None,
             possible_causes: vec!["target behavior differs".to_string()],
             observed_target_fingerprint: "fnv1a64:observed".to_string(),

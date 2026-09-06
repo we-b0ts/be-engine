@@ -10,6 +10,7 @@ mod evidence;
 mod evidence_model;
 mod fingerprint;
 mod inventory;
+mod ip_capture;
 mod issue;
 mod model;
 mod preparation;
@@ -17,12 +18,14 @@ mod process_output_model;
 mod process_outputs;
 mod progress_publication;
 mod recorder_capture;
+pub use ip_capture::RewriteIpCaptureReport;
 mod recording;
 mod recording_action;
 mod recording_execution;
 mod recording_input;
 mod recovery;
 mod repair;
+mod response_url_evidence;
 mod revalidation;
 mod route;
 mod rule;
@@ -60,22 +63,24 @@ pub use model::{
     RewriteAction, RewriteActionEnvelope, RewriteApiInventoryDetails, RewriteApiInventoryView,
     RewriteApiProgress, RewriteApiStatus, RewriteCommandSpec, RewriteDependencyRuleReport,
     RewriteEvidenceCommand, RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode,
-    RewriteInputRequiredReason, RewriteInventoryReport, RewriteIssue, RewriteIssueKind,
-    RewriteIssueOwner, RewritePhase, RewriteRecorderCaptureReport, RewriteRecordingExecutionReport,
-    RewriteRecordingInputCandidate, RewriteRecordingInputCandidateDisposition,
-    RewriteRecordingInputDiagnosis, RewriteRecordingInputMode, RewriteRecordingInputRejections,
-    RewriteRecordingKind, RewriteRecordingReason, RewriteRecordingStartReport,
-    RewriteRecordingStartState, RewriteRecoveryReport, RewriteRepairAcceptanceKind,
-    RewriteRouteReport, RewriteRuleReport, RewriteStatusReport, RewriteTrafficOperationKind,
-    RewriteTrafficOperationView, RewriteWorkerBlockingReason, RewriteWorkerDispatchState,
-    RewriteWorkerDispatchView, RewriteWorkflowView,
+    RewriteHttpResponseCaptureReport, RewriteInputRequiredReason, RewriteInventoryReport,
+    RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewritePhase, RewriteRecorderCaptureReport,
+    RewriteRecordingExecutionReport, RewriteRecordingInputCandidate,
+    RewriteRecordingInputCandidateDisposition, RewriteRecordingInputDiagnosis,
+    RewriteRecordingInputMode, RewriteRecordingInputRejections, RewriteRecordingKind,
+    RewriteRecordingReason, RewriteRecordingStartReport, RewriteRecordingStartState,
+    RewriteRecoveryReport, RewriteRepairAcceptanceKind, RewriteRouteReport, RewriteRuleReport,
+    RewriteStatusReport, RewriteTrafficOperationKind, RewriteTrafficOperationView,
+    RewriteWorkerBlockingReason, RewriteWorkerDispatchState, RewriteWorkerDispatchView,
+    RewriteWorkflowView,
 };
 pub use process_output_model::{
     RewriteProcessOutputInventoryDetails, RewriteProcessOutputInventoryView,
     RewriteProcessOutputProgress, RewriteProcessOutputStatus, RewriteWorkScope,
 };
 pub use recorder_capture::{
-    RewriteRecorderCapturePlanOptions, apply_rewrite_recorder_capture,
+    RewriteHttpResponseCapturePlanOptions, RewriteRecorderCapturePlanOptions,
+    apply_rewrite_recorder_capture, plan_rewrite_http_response_capture,
     plan_rewrite_recorder_capture,
 };
 pub use recording::{

@@ -185,6 +185,10 @@ pub struct RewriteAttemptDelta {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RewriteIssue {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress_rejections: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorder_capture_diagnosis: Option<Value>,
     pub id: String,
     pub kind: RewriteIssueKind,
     pub owner: RewriteIssueOwner,
@@ -332,6 +336,8 @@ pub(super) struct RewriteDependencyRulePlanRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct RewriteRecorderCapturePlanRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_response: Option<super::recorder_capture::http_response::HttpResponseCaptureSpec>,
     pub id: String,
     pub issue_id: String,
     pub evidence_id: String,
@@ -870,6 +876,22 @@ pub struct RewriteRecorderCaptureReport {
     pub recording_refresh_pending: bool,
     pub awaiting_apis: Vec<String>,
     pub next_command: RewriteCommandSpec,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum RewriteHttpResponseCaptureReport {
+    PathPatternReviewRequired {
+        issue_id: String,
+        api: String,
+        evidence_id: String,
+        pattern_review: Value,
+        next_command: RewriteCommandSpec,
+    },
+    Planned {
+        #[serde(flatten)]
+        plan: RewriteRecorderCaptureReport,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]

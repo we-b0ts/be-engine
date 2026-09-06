@@ -25,15 +25,14 @@ use super::{
 };
 
 mod builtins;
+mod connection_scope;
+mod matching;
+use connection_scope::{ConnectionScopes, TargetConnection};
+use matching::redis_authentication_hint;
 pub(super) mod snapshot_overlay;
-use super::command_matching::{
-    CaseConnectionBinding, CommandExchangeScope, PreferredMatch,
-    is_connection_independent_background, lane_blocked_diagnostic, preferred_match,
-    unmatched_diagnostic,
-};
+use super::command_matching::{CaseConnectionBinding, is_connection_independent_background};
 use super::report::command::{
-    CommandMatchDiagnostic, CommandMatchedReport, CommandProtocolReport, CommandRequestReport,
-    CommandUnusedReport,
+    CommandMatchedReport, CommandProtocolReport, CommandRequestReport, CommandUnusedReport,
 };
 use builtins::{redis_builtin, redis_is_builtin, redis_is_unsupported};
 
@@ -100,12 +99,13 @@ struct MatchedRedisExchange {
     connection_id: Uuid,
     response: Vec<u8>,
     timing: ReplayExchangeTiming,
-    connection_independent: bool,
+    requires_binding: bool,
     report: CommandMatchedReport,
 }
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayState {
+    connection_scopes: ConnectionScopes,
     exchanges: Vec<ReplayExchange>,
     pub(super) events: RedisReplayEvents,
     snapshot_overlays: Vec<super::report::command::CommandSnapshotOverlayReport>,
@@ -224,6 +224,7 @@ impl RedisReplayState {
         {
             return Ok(());
         }
+        self.connection_scopes.register(&record, &args);
         self.exchanges.push(ReplayExchange {
             source,
             case_id: case_id.map(ToOwned::to_owned),
@@ -237,145 +238,6 @@ impl RedisReplayState {
             matched_once: false,
         });
         Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn match_redis(
-        &mut self,
-        active_case_id: Option<&str>,
-        target: &TargetKey,
-        bound_connection: Option<Uuid>,
-        resp_version: u8,
-        database: i64,
-        username: Option<&str>,
-        command: &str,
-        args: &[Vec<u8>],
-    ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
-        let matched = preferred_match(&self.exchanges, active_case_id, |exchange| {
-            (exchange.status.is_available()
-                || (exchange.reusable_snapshot && exchange.status != ReplayExchangeStatus::Failed))
-                && (exchange.connection_independent
-                    || bound_connection.is_none_or(|id| exchange.record.connection_id == id))
-                && target_matches(
-                    target,
-                    &exchange.record.target_host,
-                    exchange.record.target_port,
-                )
-                && exchange.record.resp_version == resp_version
-                && exchange.record.database == database
-                && normalize_optional(username)
-                    == normalize_optional(exchange.record.username.as_deref())
-                && exchange.record.command.eq_ignore_ascii_case(command)
-                && exchange.args == args
-        });
-        let index = match matched {
-            PreferredMatch::Matched(index) => index,
-            PreferredMatch::LaneBlocked { candidate, blocker } => {
-                return Err(lane_blocked_diagnostic(&self.exchanges, candidate, blocker));
-            }
-            PreferredMatch::NotFound => {
-                return Err(unmatched_diagnostic(
-                    &self.exchanges,
-                    active_case_id,
-                    |exchange| {
-                        redis_mismatch_fields(
-                            exchange,
-                            target,
-                            bound_connection,
-                            resp_version,
-                            database,
-                            username,
-                            command,
-                            args,
-                        )
-                    },
-                ));
-            }
-        };
-        let exchange = &mut self.exchanges[index];
-        let timing = if exchange.reusable_snapshot && exchange.matched_once {
-            ReplayExchangeTiming::from_recorded(0, DependencyExchangeOutcome::Response)
-        } else {
-            exchange.timing
-        };
-        exchange.status = if exchange.reusable_snapshot {
-            exchange.status
-        } else if exchange.timing.outcome().is_client_terminated() {
-            ReplayExchangeStatus::AwaitingClientTermination
-        } else {
-            ReplayExchangeStatus::Responding
-        };
-        Ok(MatchedRedisExchange {
-            index,
-            connection_id: exchange.record.connection_id,
-            response: exchange.response.clone(),
-            timing,
-            connection_independent: exchange.connection_independent,
-            report: CommandMatchedReport {
-                case_id: exchange.case_id.clone(),
-                source: exchange.source,
-                index,
-                target: target.clone(),
-                connection_id: exchange.record.connection_id,
-                sequence: exchange.record.sequence,
-                command: exchange.record.command.clone(),
-            },
-        })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn match_redis_builtin_failure(
-        &mut self,
-        active_case_id: Option<&str>,
-        target: &TargetKey,
-        bound_connection: Option<Uuid>,
-        resp_version: u8,
-        database: i64,
-        username: Option<&str>,
-        command: &RedisCommand,
-    ) -> Option<MatchedRedisExchange> {
-        let index = match preferred_match(&self.exchanges, active_case_id, |exchange| {
-            exchange.status.is_available()
-                && exchange.record.response_kind == "error"
-                && bound_connection.is_none_or(|id| exchange.record.connection_id == id)
-                && target_matches(
-                    target,
-                    &exchange.record.target_host,
-                    exchange.record.target_port,
-                )
-                && exchange.record.resp_version == resp_version
-                && exchange.record.database == database
-                && normalize_optional(username)
-                    == normalize_optional(exchange.record.username.as_deref())
-                && exchange.record.command.eq_ignore_ascii_case(&command.name)
-                && (matches!(command.name.as_str(), "AUTH" | "HELLO")
-                    || exchange.args == command.args)
-        }) {
-            PreferredMatch::Matched(index) => index,
-            PreferredMatch::LaneBlocked { .. } | PreferredMatch::NotFound => return None,
-        };
-        let exchange = &mut self.exchanges[index];
-        exchange.status = if exchange.timing.outcome().is_client_terminated() {
-            ReplayExchangeStatus::AwaitingClientTermination
-        } else {
-            ReplayExchangeStatus::Responding
-        };
-        Some(MatchedRedisExchange {
-            index,
-            connection_id: exchange.record.connection_id,
-            response: exchange.response.clone(),
-            timing: exchange.timing,
-            connection_independent: false,
-            report: CommandMatchedReport {
-                case_id: exchange.case_id.clone(),
-                source: exchange.source,
-                index,
-                target: target.clone(),
-                connection_id: exchange.record.connection_id,
-                sequence: exchange.record.sequence,
-                command: exchange.record.command.clone(),
-            },
-        })
     }
 
     fn complete_exchange(&mut self, matched: &MatchedRedisExchange) {
@@ -438,6 +300,7 @@ pub(super) async fn handle_connection(
     let mut database = 0_i64;
     let mut username: Option<String> = None;
     let mut connection_binding = CaseConnectionBinding::default();
+    let client_id = Uuid::new_v4();
     loop {
         let frame = match read_redis_frame(&mut reader).await {
             Ok(Some(frame)) => frame,
@@ -499,7 +362,10 @@ pub(super) async fn handle_connection(
             let matched = state.redis.match_redis_builtin_failure(
                 active_case_id.as_deref(),
                 &target_key,
-                bound_connection,
+                TargetConnection {
+                    id: client_id,
+                    bound: bound_connection,
+                },
                 resp_version,
                 database,
                 username.as_deref(),
@@ -510,7 +376,7 @@ pub(super) async fn handle_connection(
             (None, None)
         };
         if let Some(matched) = recorded_failure {
-            if !matched.connection_independent {
+            if matched.requires_binding {
                 connection_binding.bind(recorded_failure_case_id.as_deref(), matched.connection_id);
             }
             if deliver_redis_exchange(&mut reader, &state, &matched).await? {
@@ -537,7 +403,10 @@ pub(super) async fn handle_connection(
             match state.redis.match_redis(
                 active_case_id.as_deref(),
                 &target_key,
-                bound_connection,
+                TargetConnection {
+                    id: client_id,
+                    bound: bound_connection,
+                },
                 resp_version,
                 database,
                 username.as_deref(),
@@ -545,7 +414,7 @@ pub(super) async fn handle_connection(
                 &command.args,
             ) {
                 Ok(matched) => {
-                    if !matched.connection_independent {
+                    if matched.requires_binding {
                         connection_binding.bind(active_case_id.as_deref(), matched.connection_id);
                     }
                     Ok(matched)
@@ -734,103 +603,6 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_ascii_lowercase())
-}
-
-impl CommandExchangeScope for ReplayExchange {
-    fn source(&self) -> ReplaySource {
-        self.source
-    }
-
-    fn case_id(&self) -> Option<&str> {
-        self.case_id.as_deref()
-    }
-
-    fn connection_id(&self) -> Uuid {
-        self.record.connection_id
-    }
-
-    fn sequence(&self) -> u64 {
-        self.record.sequence
-    }
-
-    fn command(&self) -> &str {
-        &self.record.command
-    }
-
-    fn is_available(&self) -> bool {
-        self.status.is_available()
-            || (self.reusable_snapshot && self.status != ReplayExchangeStatus::Failed)
-    }
-
-    fn is_consumed(&self) -> bool {
-        self.status.is_consumed() || (self.reusable_snapshot && self.matched_once)
-    }
-
-    fn preserves_connection_order(&self) -> bool {
-        !self.connection_independent
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn redis_mismatch_fields(
-    exchange: &ReplayExchange,
-    target: &TargetKey,
-    bound_connection: Option<Uuid>,
-    resp_version: u8,
-    database: i64,
-    username: Option<&str>,
-    command: &str,
-    args: &[Vec<u8>],
-) -> Vec<&'static str> {
-    let mut fields = Vec::new();
-    if !exchange.connection_independent
-        && bound_connection.is_some_and(|id| exchange.record.connection_id != id)
-    {
-        fields.push("connection");
-    }
-    if !target_matches(
-        target,
-        &exchange.record.target_host,
-        exchange.record.target_port,
-    ) {
-        fields.push("target");
-    }
-    if exchange.record.resp_version != resp_version || exchange.record.database != database {
-        fields.push("session");
-    }
-    let recorded_username = normalize_optional(exchange.record.username.as_deref());
-    let target_username = normalize_optional(username);
-    if recorded_username != target_username {
-        fields.push(
-            if recorded_username.is_some() && target_username.is_none() {
-                "authentication_not_observed"
-            } else {
-                "username"
-            },
-        );
-    }
-    if !exchange.record.command.eq_ignore_ascii_case(command) {
-        fields.push("command");
-    }
-    if exchange.args != args {
-        fields.push("arguments");
-    }
-    fields
-}
-
-fn redis_authentication_hint(diagnostic: &CommandMatchDiagnostic) -> Option<&'static str> {
-    // Only attribute an otherwise matching exchange to missing authentication.
-    // A username difference cannot prove that the application omitted a password.
-    match diagnostic {
-        CommandMatchDiagnostic::Mismatch { fields }
-            if fields.as_slice() == ["authentication_not_observed"] =>
-        {
-            Some(
-                "Redis authentication state mismatch: the recorded connection has an authenticated username, but target authentication was not observed. Check password configuration and whether it is passed to the Redis client.",
-            )
-        }
-        _ => None,
-    }
 }
 
 fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnusedReport> {

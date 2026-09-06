@@ -91,6 +91,33 @@ state or invent traffic.
 
 ## Consolidated Capture Refresh
 
+HTTP JSON response URL rules use the same capture refresh lifecycle as Breeze
+resource rules. Applying either kind cannot repair old immutable dependency
+files.
+
+For HTTP response URL capture, first call `recorder-capture plan-http-response`
+without `--pattern-checked`. It returns `path_pattern_review_required` with the
+observed path and existing rules sharing authority, method and pointer. Check
+the source's path construction even when no previous rule exists. Target owns
+the decision about dynamic IDs and consolidation; the engine does not judge
+path similarity. After checking, choose `--path-pattern 'GET /sandboxes/*'`, explicitly add
+`--pattern-checked`, and provide one brief `--source-evidence` note about URL
+consumption and the path choice. No special proof format is needed. Keep an
+exact path when the source contract calls for it, explaining that choice.
+
+The review response has no plan ID or apply command. A checked plan returns
+`status: planned`, reuses an existing covering rule or previews consolidation
+of fully covered managed rules with matching selectors and response filters.
+Inspect `traffic_e2e_report.replaced_rules` and the diff before apply. The normal
+consolidated refresh follows both new rules and merged rules.
+
+The policy groups entries under one `name` (the upstream authority) and a
+`rules` list. Each path entry has `path_pattern` (HTTP method plus path),
+`pointer` (one field), and `source_evidence` (the brief review note). A domain
+can have multiple paths or pointers; use separate path entries for them. Planner commands use
+`--name HOST --path-pattern 'GET /path/*' --pointer /field`; they carry no
+separate authority or method arguments and no generated hash name.
+
 A recorder-capture apply is coordinator-owned and is the exception to the
 explicit request rules: never follow it with `recording request`. Apply returns
 either another runnable API command or, after runnable inventory drains, the

@@ -3,7 +3,7 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_e2e::{
@@ -332,14 +332,20 @@ struct RouteArgs {
     /// One-line source file/symbol proof for the reported cause.
     #[arg(long)]
     source_ref: String,
-    /// Missing dependency hostname with an optional port; required only for a missing recorded resource.
+    /// Missing-resource hostname[:port], or literal IP:port for unrecorded-ip.
     #[arg(
         long,
-        value_name = "HOSTNAME[:PORT]",
-        required_if_eq("cause", "missing-recorded-resource"),
+        value_name = "ENDPOINT",
+        required_if_eq_any([("cause", "missing-recorded-resource"), ("cause", "unrecorded-ip")]),
         conflicts_with = "required_change"
     )]
     endpoint: Option<String>,
+    /// Case containing the caller-reported IP dependency gap.
+    #[arg(long, required_if_eq("cause", "unrecorded-ip"))]
+    case_id: Option<String>,
+    /// Address origin established by source inspection; unknown requests investigation guidance.
+    #[arg(long, default_value = "unknown", value_parser = ["unknown", "http-response", "static", "other"])]
+    ip_origin: String,
     /// Exact required non-target change; required for causes that enter system repair.
     #[arg(
         long,
@@ -517,6 +523,7 @@ enum RecordingReasonArg {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum RouteCauseArg {
+    UnrecordedIp,
     MissingRecordedResource,
     RecorderCapabilityGap,
     ReplayCapabilityGap,
@@ -622,9 +629,20 @@ async fn run(cli: Cli) -> Result<()> {
         RewriteCommand::DependencyRule(args) => dependency_rule::run(target_root, args, pretty),
         RewriteCommand::RecorderCapture(args) => recorder_capture::run(target_root, args, pretty),
         RewriteCommand::Route(args) => {
-            let cause = args
-                .cause
-                .into_rewrite_cause(args.endpoint, args.required_change)?;
+            let cause = if matches!(args.cause, RouteCauseArg::UnrecordedIp) {
+                RewriteRouteCause::UnrecordedIp {
+                    endpoint: args.endpoint.context("unrecorded IP endpoint missing")?,
+                    case_id: args.case_id.context("unrecorded IP case missing")?,
+                    origin: args.ip_origin,
+                }
+            } else {
+                ensure!(
+                    args.case_id.is_none() && args.ip_origin == "unknown",
+                    "case-id and ip-origin are only valid with --cause unrecorded-ip"
+                );
+                args.cause
+                    .into_rewrite_cause(args.endpoint, args.required_change)?
+            };
             print_json(
                 &route_rewrite(RewriteRouteOptions {
                     target_root,

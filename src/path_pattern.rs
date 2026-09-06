@@ -92,6 +92,29 @@ pub(crate) fn path_patterns_overlap(left: &str, right: &str) -> bool {
             .all(|(left, right)| left == right || *left == "*" || *right == "*")
 }
 
+/// Whether every path accepted by `covered` is also accepted by `cover`.
+pub(crate) fn path_pattern_covers(cover: &str, covered: &str) -> bool {
+    if validate_path_pattern(cover).is_err() || validate_path_pattern(covered).is_err() {
+        return false;
+    }
+    let cover_segments = segments(cover);
+    let covered_segments = segments(covered);
+    let cover_tail = cover_segments.last() == Some(&"**");
+    let covered_tail = covered_segments.last() == Some(&"**");
+    let outer = fixed_segments(&cover_segments, cover_tail);
+    let inner = fixed_segments(&covered_segments, covered_tail);
+    let lengths_covered = if cover_tail {
+        inner.len() + usize::from(covered_tail) > outer.len()
+    } else {
+        !covered_tail && outer.len() == inner.len()
+    };
+    lengths_covered
+        && outer
+            .iter()
+            .zip(inner)
+            .all(|(outer, inner)| *outer == "*" || outer == inner)
+}
+
 pub(crate) fn segments(path: &str) -> Vec<&str> {
     path.split('/')
         .filter(|segment| !segment.is_empty())
@@ -129,6 +152,34 @@ fn fixed_segments<'a>(segments: &'a [&str], catch_all: bool) -> &'a [&'a str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coverage_requires_every_inner_path_including_catch_all_lengths() {
+        for (outer, inner, expected) in [
+            ("/a/*", "/a/123", true),
+            ("/a/*", "/a/*", true),
+            ("/a/123", "/a/*", false),
+            ("/a/*", "/a/*/detail", false),
+            ("/a/*", "/a/**", false),
+            ("/a/**", "/a/*", true),
+            ("/a/**", "/a/*/detail", true),
+            ("/a/**", "/a", false),
+            ("/a/**", "/a/*/**", true),
+            ("/a/*/**", "/a/**", false),
+            ("/a/*/**", "/a/*/detail/**", true),
+            ("/a/fixed/**", "/a/*/detail/**", false),
+            ("/**", "/a/**", true),
+            ("/a/**", "/b/**", false),
+            ("/a/**/detail", "/a/123/detail", false),
+            ("/a/*", "/a/123/", false),
+        ] {
+            assert_eq!(
+                path_pattern_covers(outer, inner),
+                expected,
+                "{outer} covers {inner}"
+            );
+        }
+    }
 
     #[test]
     fn segment_wildcard_consumes_exactly_one_segment() {

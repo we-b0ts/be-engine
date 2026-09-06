@@ -69,6 +69,15 @@ source adaptor or target runtime contract. Both final processes must run in the
 foreground as UID/GID `998:998`; neither image may contain credentials,
 recordings, generated trust, build cache, or `.traffic-e2e/local/` content.
 
+The generated target uses `http-server` with its `macros` feature and exports
+the readiness GET route with `#[api(auth = none)]` and
+`#[http_server::get(...)]`. The readiness path must be literal: no captures,
+query, fragment, whitespace, or trailing slash except `/`. Keep the readiness
+endpoint when adding business APIs. Follow [http-server.md](http-server.md)
+to export methods in their owning modules and combine them through
+`http_server::Router::new(ReadinessApi).merge(business_api)`; retain
+`Server::serve_until` and the SIGTERM/SIGINT shutdown handling.
+
 The generated bootstrap target temporarily contains `src/startup_probe.rs`,
 and `src/main.rs` calls it during startup. Keep it through initialization
 preflight. Delete the module, declaration, and call when real target

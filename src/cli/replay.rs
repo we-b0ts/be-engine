@@ -8,7 +8,7 @@ use serde::Deserialize;
 use traffic_e2e::{
     AppConfig, DEFAULT_DNS_MOCK_LISTEN, DEFAULT_FAKE_CIDR, DEFAULT_TCP_GATEWAY_LISTEN,
     DEFAULT_UDP_GATEWAY_PORT, ReplayAllowedUnusedHttpConfig, ReplayConfig, ReplayLifecycleConfig,
-    run_replay_with_lifecycle,
+    run_replay_with_counters,
 };
 use uuid::Uuid;
 
@@ -130,7 +130,7 @@ pub(super) async fn run(args: ReplayArgs) -> Result<()> {
             resolved.case_dependency_post_response_window_ms,
         ),
     };
-    let replay = run_replay_with_lifecycle(
+    let replay = run_replay_with_counters(
         ReplayConfig {
             case_dir: resolved.case,
             selected_case_ids: resolved.case_ids,
@@ -148,6 +148,10 @@ pub(super) async fn run(args: ReplayArgs) -> Result<()> {
             allowed_unused_http,
         },
         lifecycle,
+        resolved
+            .intercept
+            .then(super::interception::counter_reader)
+            .transpose()?,
     );
     tokio::pin!(replay);
     let result = tokio::select! {

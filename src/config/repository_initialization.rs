@@ -300,7 +300,7 @@ fn render_missing_target_delivery(
         ));
         files.push((
             main,
-            render_target_main(&options.readiness_path, options.http_backend_port).into_bytes(),
+            render_target_main(&options.readiness_path, options.http_backend_port)?.into_bytes(),
         ));
         files.push((
             target_root.join(TARGET_STARTUP_PROBE_PATH),
@@ -733,14 +733,18 @@ mod tests {
         let cargo = fs::read_to_string(target.path().join(TARGET_CARGO_PATH)).unwrap();
         assert!(cargo.contains("tag = \"v0.0.1\""));
         assert!(cargo.contains("features = [\"metrics\"]"));
+        assert!(cargo.contains("tag = \"v0.0.2\", features = [\"macros\"]"));
         let lock = fs::read_to_string(target.path().join(TARGET_CARGO_LOCK_PATH)).unwrap();
         assert!(lock.contains(
             "git+ssh://git@git.intra.demo.test:2222/platform/breeze/logs.git?tag=v0.0.1"
         ));
+        assert!(lock.contains(
+            "git+ssh://git@git.intra.demo.test:2222/platform/breeze/http-server.git?tag=v0.0.2"
+        ));
         let main = fs::read_to_string(target.path().join(TARGET_MAIN_PATH)).unwrap();
         assert!(!main.contains("TARGET_PORT_ENV"));
-        assert!(main.contains("const READINESS_PATH: &str = \"/healthz\";"));
-        assert!(main.contains("const READINESS_STATUS: u16 = 200;"));
+        assert!(main.contains("#[http_server::get(\"/healthz\")]"));
+        assert!(main.contains("StatusCode::OK"));
         assert!(main.contains("Delete this module declaration"));
         assert!(main.contains("startup_probe::run().await?;"));
         let probe = fs::read_to_string(target.path().join(TARGET_STARTUP_PROBE_PATH)).unwrap();
@@ -890,8 +894,8 @@ mod tests {
             .unwrap();
         assert!(!main.contains("TARGET_PORT_ENV"));
         assert!(main.contains("const DEFAULT_PORT: u16 = 8181;"));
-        assert!(main.contains("const READINESS_PATH: &str = \"/ready\";"));
-        assert!(main.contains("const READINESS_STATUS: u16 = 200;"));
+        assert!(main.contains("#[http_server::get(\"/ready\")]"));
+        assert!(main.contains("StatusCode::OK"));
     }
 
     #[test]

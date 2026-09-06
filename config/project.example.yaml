@@ -75,6 +75,13 @@ recorder:
     enabled: false
     listen: 127.0.0.1:8080
   http_response_rewrite:
+    # JSON URL rules belong to http_response_rewrite in source-traffic-policy.yaml:
+    # - name: cs.wegent.intra.demo.test
+    #   rules:
+    #   - path_pattern: GET /executor-manager/sandboxes/*
+    #     pointer: /base_url
+    #     source_evidence: sandbox_id varies; consume base_url
+    # Omit enabled, or set true, to activate the configured rules.
     enabled: false
     rules:
     - name: pluto-eci-kubeconfig

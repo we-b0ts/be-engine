@@ -5,6 +5,11 @@ coordinator handoffs and target implementations. Let the component dispatch
 routes, bind parameters, and serialize responses. Reuse business types and
 keep operations in their owning modules; use the generated `Handler`.
 
+Initialization generates a `ReadinessApi` using these same macros and starts it
+with `Server::bind` / `serve_until`. Keep that endpoint and extend the server
+with business API modules using `Router::new(ReadinessApi).merge(business_api)`.
+Keep the generated SIGTERM/SIGINT handling and logging shutdown lifecycle.
+
 Pin `http-server` to the fixed `v0.0.2` tag and enable `macros` in `Cargo.toml`:
 
 ```toml

@@ -130,13 +130,15 @@ fn preflight(config: &AppConfig) -> Result<()> {
 }
 
 fn check_plugin_commands(config: &AppConfig, search_path: Option<&OsStr>) -> Result<()> {
-    if !config.http_response_rewrite.enabled {
+    if !config.http_response_rewrite.is_enabled() {
         return Ok(());
     }
 
     for rule in &config.http_response_rewrite.rules {
         match &rule.plugin {
-            HttpResponseRewritePluginConfig::PlutoEciKubeconfig { kubectl_binary, .. } => {
+            Some(HttpResponseRewritePluginConfig::PlutoEciKubeconfig {
+                kubectl_binary, ..
+            }) => {
                 require_executable(kubectl_binary, search_path).with_context(|| {
                     format!(
                         "HTTP response rewrite rule {:?} plugin \"pluto-eci-kubeconfig\" requires \
@@ -146,8 +148,11 @@ fn check_plugin_commands(config: &AppConfig, search_path: Option<&OsStr>) -> Res
                     )
                 })?;
             }
-            HttpResponseRewritePluginConfig::VintageNaming { .. }
-            | HttpResponseRewritePluginConfig::VintageCacheConfig => {}
+            Some(
+                HttpResponseRewritePluginConfig::VintageNaming { .. }
+                | HttpResponseRewritePluginConfig::VintageCacheConfig,
+            )
+            | None => {}
         }
     }
     Ok(())

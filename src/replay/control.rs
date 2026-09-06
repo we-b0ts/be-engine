@@ -436,6 +436,14 @@ pub(super) async fn begin_case(
             "error": format!("replay case {active_case_id} is already active")
         });
     }
+    if !state.egress_counter_starts.contains_key(case_id)
+        && let Some(reader) = &state.egress_counter_reader
+    {
+        let sample = reader.sample().await;
+        state
+            .egress_counter_starts
+            .insert(case_id.to_string(), sample);
+    }
     state.active_case_id = Some(case_id.to_string());
     if let Some(policy) = &mut state.replay_policy {
         policy.begin_case(case_id);
@@ -488,6 +496,15 @@ pub(super) async fn end_case(
             "ok": false,
             "error": format!("replay case {case_id} is no longer active")
         });
+    }
+    if let Some(before) = state.egress_counter_starts.remove(case_id)
+        && let Some(reader) = &state.egress_counter_reader
+    {
+        let after = reader.sample().await;
+        state.egress_rejections.insert(
+            case_id.to_string(),
+            egress_counter::difference(case_id, before, after),
+        );
     }
     state.active_case_id = None;
     if let Some(case) = state.cases.get_mut(case_id) {

@@ -28,7 +28,11 @@ mod command_protocol_tests;
 mod control;
 mod dependencies;
 mod dns;
+mod egress_counter;
 mod exchange;
+pub use egress_counter::{
+    ReplayEgressCounterReader, ReplayEgressCounterSnapshot, ReplayEgressRejections,
+};
 #[cfg(test)]
 mod global_dependency_tests;
 mod http;
@@ -178,6 +182,14 @@ pub async fn run_replay_with_lifecycle(
     config: ReplayConfig,
     lifecycle: ReplayLifecycleConfig,
 ) -> Result<()> {
+    run_replay_with_counters(config, lifecycle, None).await
+}
+
+pub async fn run_replay_with_counters(
+    config: ReplayConfig,
+    lifecycle: ReplayLifecycleConfig,
+    counter_reader: Option<ReplayEgressCounterReader>,
+) -> Result<()> {
     validate_replay_request_headers(&config).await?;
     let tcp_listener = TcpListener::bind(config.tcp_listen)
         .await
@@ -198,6 +210,7 @@ pub async fn run_replay_with_lifecycle(
         .context("failed to read dependency replay DNS listen address")?;
     let runtime =
         ReplayRuntime::load_with_lifecycle(config, dns_listen, tcp_listen, lifecycle).await?;
+    runtime.state.lock().await.egress_counter_reader = counter_reader;
     runtime.write_report().await?;
     info!(
         dns_listen = %dns_listen,
@@ -393,6 +406,9 @@ impl ReplayRuntime {
         }
 
         let state = ReplayState {
+            egress_counter_reader: None,
+            egress_counter_starts: BTreeMap::new(),
+            egress_rejections: BTreeMap::new(),
             session_id: Uuid::new_v4(),
             started_at: Utc::now(),
             finalized_at: None,
@@ -521,6 +537,9 @@ async fn validate_replay_request_headers(config: &ReplayConfig) -> Result<()> {
 
 #[derive(Debug)]
 struct ReplayState {
+    egress_counter_reader: Option<ReplayEgressCounterReader>,
+    egress_counter_starts: BTreeMap<String, egress_counter::Sample>,
+    egress_rejections: BTreeMap<String, ReplayEgressRejections>,
     session_id: Uuid,
     started_at: DateTime<Utc>,
     finalized_at: Option<DateTime<Utc>>,
@@ -561,6 +580,7 @@ impl ReplayState {
         let allowed_unused_case_http_exchanges =
             self.unused_http_exchanges(ReplaySource::Case, true);
         ReplayReport {
+            egress_rejections: self.egress_rejections.values().cloned().collect(),
             version: 6,
             session_id: self.session_id.to_string(),
             started_at: self.started_at,

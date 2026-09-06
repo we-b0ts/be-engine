@@ -15,6 +15,10 @@ const MAX_TEXT_CHARS: usize = 256;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ReplayDependencyEvidence {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) egress_rejections: Vec<crate::ReplayEgressRejections>,
+    #[serde(default)]
+    pub(crate) omitted_egress_cases: usize,
     pub(crate) version: u8,
     pub(crate) case_event_counts: BTreeMap<String, BTreeMap<String, usize>>,
     pub(crate) clusters: Vec<ReplayDependencyCluster>,
@@ -240,7 +244,27 @@ pub(super) fn build_dependency_evidence(report: &Value) -> ReplayDependencyEvide
     });
     let omitted_clusters = clusters.len().saturating_sub(MAX_CLUSTERS);
     clusters.truncate(MAX_CLUSTERS);
+    let mut samples = report
+        .get("egress_rejections")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|sample| {
+            serde_json::from_value::<crate::ReplayEgressRejections>(sample.clone()).ok()
+        })
+        .filter(|sample| sample.rejected_packets != Some(0))
+        .collect::<Vec<_>>();
+    samples.sort_by(|left, right| {
+        right
+            .rejected_packets
+            .cmp(&left.rejected_packets)
+            .then_with(|| left.case_id.cmp(&right.case_id))
+    });
+    let omitted_egress_cases = samples.len().saturating_sub(20);
+    samples.truncate(20);
     ReplayDependencyEvidence {
+        egress_rejections: samples,
+        omitted_egress_cases,
         version: EVIDENCE_VERSION,
         case_event_counts,
         clusters,
@@ -552,5 +576,20 @@ mod tests {
 
         assert_eq!(loaded.clusters.len(), 1);
         assert!(!report_path.exists());
+    }
+}
+
+#[cfg(test)]
+mod egress_tests {
+    use super::*;
+    #[test]
+    fn rejection_counts_are_evidence_without_creating_dirty_events() {
+        let now = chrono::Utc::now();
+        let report = serde_json::json!({"egress_rejections":[{"case_id":"case-a","observed_from":now,"observed_until":now,"rejected_packets":4}]});
+        assert!(!report_has_case_dirty_events(&report));
+        let evidence = build_dependency_evidence(&report);
+        assert_eq!(evidence.egress_rejections[0].rejected_packets, Some(4));
+        assert!(evidence.clusters.is_empty());
+        assert!(evidence.case_event_counts.is_empty());
     }
 }

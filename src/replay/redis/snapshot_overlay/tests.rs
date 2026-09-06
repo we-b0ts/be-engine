@@ -92,7 +92,7 @@ fn derives_one_reusable_seed_from_consistent_old_global_and_case_evidence() {
             .match_redis(
                 Some("case-a"),
                 &target,
-                None,
+                super::super::TargetConnection::default(),
                 2,
                 0,
                 None,

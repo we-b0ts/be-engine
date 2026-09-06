@@ -572,6 +572,16 @@ and the TCP gateway forwards to `10.185.28.119:3306`.
 Avoid `.local` for these names because many Linux systems route it through
 mDNS instead of normal DNS.
 
+When the IP comes from an upstream JSON response, configure an HTTP response
+rewrite rule with `authorities`, `methods`, `path_pattern`, and `pointers`
+(e.g. `/base_url`). Recorder substitutes a registered synthetic hostname and
+captures subsequent HTTP(S) calls. See [response rewriting](docs/development.md#rewriting-http-responses)
+for the short configuration and matching semantics. In backend rewrites,
+`route --cause unrecorded-ip` returns source investigation and rule plan/apply
+instructions before a system defect is submitted; applied capture rules require
+fresh recording. Replay rejection packet counts are auxiliary evidence shown
+with response/dependency failures and do not identify an IP or change gates.
+
 Fake DNS mappings are persisted at `registry_path` so recorder restarts can
 continue handling fake IPs that clients already cached. If a cached fake IP now
 belongs to a `bypass_domains` entry, the TCP gateway only forwards it

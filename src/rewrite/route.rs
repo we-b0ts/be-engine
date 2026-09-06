@@ -18,16 +18,32 @@ pub struct RewriteRouteOptions {
 
 #[derive(Debug, Clone)]
 pub enum RewriteRouteCause {
-    MissingRecordedResource { endpoint: String },
-    RecorderCapabilityGap { required_change: String },
-    ReplayCapabilityGap { required_change: String },
-    ExternalDataBlocker { required_change: String },
-    SourceChange { required_change: String },
+    UnrecordedIp {
+        endpoint: String,
+        case_id: String,
+        origin: String,
+    },
+    MissingRecordedResource {
+        endpoint: String,
+    },
+    RecorderCapabilityGap {
+        required_change: String,
+    },
+    ReplayCapabilityGap {
+        required_change: String,
+    },
+    ExternalDataBlocker {
+        required_change: String,
+    },
+    SourceChange {
+        required_change: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum RewriteRouteOutcome {
+    CaptureInvestigation(super::ip_capture::RewriteIpCaptureReport),
     RecorderCapture(RewriteRecorderCaptureReport),
     SystemRepair(RewriteRouteReport),
 }
@@ -63,6 +79,21 @@ fn route_in_state(
         ..
     } = options;
     match cause {
+        RewriteRouteCause::UnrecordedIp {
+            endpoint,
+            case_id,
+            origin,
+        } => Ok(RewriteRouteOutcome::CaptureInvestigation(
+            super::ip_capture::investigate(
+                target_root,
+                state,
+                &evidence_id,
+                &source_ref,
+                case_id,
+                endpoint,
+                origin,
+            )?,
+        )),
         RewriteRouteCause::MissingRecordedResource { endpoint } => {
             let report = recorder_capture::plan_missing_recorded_resource(
                 target_root,
@@ -104,7 +135,8 @@ fn system_repair(cause: RewriteRouteCause) -> (&'static str, String) {
             ("external_data_blocker", required_change)
         }
         RewriteRouteCause::SourceChange { required_change } => ("source_change", required_change),
-        RewriteRouteCause::MissingRecordedResource { .. } => {
+        RewriteRouteCause::MissingRecordedResource { .. }
+        | RewriteRouteCause::UnrecordedIp { .. } => {
             unreachable!("missing recorded resources are handled before system repair")
         }
     }
@@ -343,6 +375,8 @@ mod tests {
             summary: "counter response differs".to_string(),
             pointer_pattern: None,
             representative: None,
+            egress_rejections: None,
+            recorder_capture_diagnosis: None,
             response_diagnosis: None,
             possible_causes: Vec::new(),
             observed_target_fingerprint: state.target_fingerprint.clone().unwrap(),

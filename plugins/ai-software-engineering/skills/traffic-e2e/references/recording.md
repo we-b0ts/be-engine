@@ -67,6 +67,15 @@ after tracing a response-driving source hostname to a unique snapshot
 descriptor. Use background attribution only after proving process ownership
 and response causality. Every applied Recorder rule requires a new recording.
 
+HTTP JSON responses that publish later IP URLs can use `http_response_rewrite`
+rules with request authority/method/path and JSON `pointers`. No per-service
+plugin is needed. In backend rewrite workflows, use the coordinator's
+`unrecorded-ip` preflight and returned `recorder-capture plan-http-response`
+command with source consumption proof. Apply requires fresh recording; never
+patch old JSONL. Standard recording does not install Replay's outbound REJECT
+policy, so rejection counters do not detect successful direct-IP recording
+bypasses.
+
 ## Acceptance
 
 Trust the finalized recording manifest and command exit status. A valid run is

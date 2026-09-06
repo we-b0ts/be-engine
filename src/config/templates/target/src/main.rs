@@ -1,44 +1,43 @@
 use std::net::SocketAddr;
 
 use anyhow::{Context as _, Result};
-use axum::Router;
-use axum::extract::Request;
-use axum::http::StatusCode;
-use tokio::net::TcpListener;
+use http_server::{Server, StatusCode, api};
 
 // Initialization-only verification. Delete this module declaration and the
 // startup_probe::run() call as soon as real target implementation begins.
 mod startup_probe;
 
 const DEFAULT_PORT: u16 = 8080;
-const READINESS_PATH: &str = "/healthz";
-const READINESS_STATUS: u16 = 200;
+
+struct ReadinessApi;
+
+// Export business APIs the same way, in their owning modules. Combine them
+// with ReadinessApi using http_server::Router::new(ReadinessApi).merge(api).
+#[api(auth = none)]
+impl ReadinessApi {
+    #[http_server::get("/healthz")]
+    async fn readiness(&self) -> StatusCode {
+        StatusCode::OK
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let logs = brz_logs::init_default().context("failed to initialize application logging")?;
     startup_probe::run().await?;
     let address = SocketAddr::from(([0, 0, 0, 0], DEFAULT_PORT));
-    let listener = TcpListener::bind(address)
+    let server = Server::bind(address, ReadinessApi)
         .await
         .with_context(|| format!("failed to bind target listener on {address}"))?;
     tracing::info!(%address, "target template started");
 
-    let serve_result = axum::serve(listener, Router::new().fallback(handle_request))
-        .with_graceful_shutdown(shutdown_signal())
+    let serve_result = server
+        .serve_until(shutdown_signal())
         .await
         .context("target server failed");
     tracing::info!("target template stopped");
     logs.flush().context("failed to flush application logs")?;
     serve_result
-}
-
-async fn handle_request(request: Request) -> StatusCode {
-    if request.uri().path() == READINESS_PATH {
-        StatusCode::from_u16(READINESS_STATUS).expect("validated readiness status")
-    } else {
-        StatusCode::NOT_FOUND
-    }
 }
 
 #[cfg(unix)]

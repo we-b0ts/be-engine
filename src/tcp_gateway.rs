@@ -538,7 +538,12 @@ async fn handle_https_request(
             .await
             .map_err(anyhow::Error::from)
     } else {
-        send_https_upstream(&state, upstream_addr, &entry.domain, outbound).await
+        let server_name = entry
+            .upstream_authority
+            .as_deref()
+            .and_then(|authority| authority.split(':').next())
+            .unwrap_or(&entry.domain);
+        send_https_upstream(&state, upstream_addr, server_name, outbound).await
     };
     match upstream_response {
         Ok(upstream_response) => {

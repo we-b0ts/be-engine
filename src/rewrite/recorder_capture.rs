@@ -13,8 +13,14 @@ use super::{
     RewriteContext, action, evidence, fingerprint, inventory, recording, recording_action,
     traffic_operation,
 };
-use crate::{
-    BreezeEndpointCaptureFeedback, BreezeResourceCapturePlan, plan_breeze_endpoint_capture,
+use crate::{BreezeEndpointCaptureFeedback, plan_breeze_endpoint_capture};
+
+mod capture_plan;
+pub(in crate::rewrite) mod http_response;
+use capture_plan::CapturePlan;
+use http_response::HttpResponseCaptureSpec;
+pub use http_response::{
+    RewriteHttpResponseCapturePlanOptions, plan_rewrite_http_response_capture,
 };
 
 #[derive(Debug, Clone)]
@@ -99,7 +105,7 @@ pub(super) fn plan(
     state: &mut RewriteState,
     options: RewriteRecorderCapturePlanOptions,
 ) -> Result<RewriteRecorderCaptureReport> {
-    plan_with_capture_requirement(target_root, state, options, false)
+    plan_with_capture_requirement(target_root, state, options, false, None)
 }
 
 pub(super) fn plan_missing_recorded_resource(
@@ -107,7 +113,7 @@ pub(super) fn plan_missing_recorded_resource(
     state: &mut RewriteState,
     options: RewriteRecorderCapturePlanOptions,
 ) -> Result<RewriteRecorderCaptureReport> {
-    plan_with_capture_requirement(target_root, state, options, true)
+    plan_with_capture_requirement(target_root, state, options, true, None)
 }
 
 fn plan_with_capture_requirement(
@@ -115,6 +121,7 @@ fn plan_with_capture_requirement(
     state: &mut RewriteState,
     options: RewriteRecorderCapturePlanOptions,
     require_current_bypass: bool,
+    http_response: Option<HttpResponseCaptureSpec>,
 ) -> Result<RewriteRecorderCaptureReport> {
     let issue = capture_issue(state)?;
     validate_plan_evidence(target_root, state, &issue.id, &options.evidence_id)?;
@@ -124,26 +131,37 @@ fn plan_with_capture_requirement(
         .clone()
         .context("recorder capture planning requires a finalized source revision")?;
     let project_config_revision = fingerprint::project_config_revision(target_root)?;
-    let traffic_plan = plan_breeze_endpoint_capture(BreezeEndpointCaptureFeedback {
-        project_config_path: project_config(target_root),
-        rules_path: source_traffic_policy_path(target_root),
-        endpoint: options.endpoint.clone(),
-        source_revision: source_revision.clone(),
-        source_evidence: options.source_evidence.clone(),
-    })?;
+    let traffic_plan = if let Some(spec) = &http_response {
+        CapturePlan::HttpResponse(http_response::Plan::build(
+            target_root,
+            spec,
+            &source_revision,
+            &options.source_evidence,
+        )?)
+    } else {
+        CapturePlan::Breeze(Box::new(plan_breeze_endpoint_capture(
+            BreezeEndpointCaptureFeedback {
+                project_config_path: project_config(target_root),
+                rules_path: source_traffic_policy_path(target_root),
+                endpoint: options.endpoint.clone(),
+                source_revision: source_revision.clone(),
+                source_evidence: options.source_evidence.clone(),
+            },
+        )?))
+    };
     if require_current_bypass {
         ensure!(
-            !traffic_plan.report().bypassed_domains_before.is_empty(),
+            traffic_plan.has_current_bypass(),
             "backend endpoint {:?} resolves to Breeze resource {:?}, but all of its backend domains are already captured and are not currently bypassed",
             options.endpoint,
-            traffic_plan.report().resource_identity
+            traffic_plan.resource_identity()
         );
     }
     ensure!(
         fingerprint::project_config_revision(target_root)? == project_config_revision,
         "recorder config changed during capture planning; rerun plan"
     );
-    let resource_identity = traffic_plan.report().resource_identity.clone();
+    let resource_identity = traffic_plan.resource_identity().to_string();
     let target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
     let record = RewriteRecorderCapturePlanRecord {
         id: format!(
@@ -158,6 +176,10 @@ fn plan_with_capture_requirement(
                 &project_config_revision,
                 &resource_identity,
                 &target_fingerprint,
+                &http_response
+                    .as_ref()
+                    .map(http_response::identity)
+                    .unwrap_or_default(),
             ])
             .trim_start_matches("fnv1a64:")
         ),
@@ -169,8 +191,9 @@ fn plan_with_capture_requirement(
         project_config_revision,
         resource_identity,
         target_fingerprint,
+        http_response,
     };
-    let traffic_e2e_report = serde_json::to_value(traffic_plan.report())?;
+    let traffic_e2e_report = traffic_plan.report()?;
     state.rule_plan = None;
     state.dependency_rule_plan = None;
     state.recorder_capture_plan = Some(record.clone());
@@ -208,10 +231,13 @@ pub(super) fn apply(
         fingerprint::repository_fingerprint(target_root)? == record.target_fingerprint,
         "target repository changed after capture planning; rerun plan before applying"
     );
+    if let Some(spec) = &record.http_response {
+        http_response::revalidate(target_root, state, spec)?;
+    }
     let plan = build_plan(target_root, &record)?;
     ensure!(
-        plan.report().resource_identity == record.resource_identity,
-        "Breeze resource resolution changed after capture planning; rerun plan"
+        plan.resource_identity() == record.resource_identity,
+        "capture rule resolution changed after planning; rerun plan"
     );
     let report = plan.apply()?;
     let current_target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
@@ -260,7 +286,7 @@ pub(super) fn apply(
             evidence_id: record.evidence_id.clone(),
             api,
             endpoint: record.endpoint.clone(),
-            resource_identity: report.resource_identity.clone(),
+            resource_identity: record.resource_identity.clone(),
             source_revision: record.source_revision.clone(),
             source_evidence: record.source_evidence.clone(),
         });
@@ -277,7 +303,7 @@ pub(super) fn apply(
         plan_id: record.id,
         issue_id: record.issue_id,
         api: state.api.clone(),
-        traffic_e2e_report: serde_json::to_value(report)?,
+        traffic_e2e_report: report,
         previous_target_fingerprint: record.target_fingerprint,
         current_target_fingerprint,
     })
@@ -306,7 +332,7 @@ pub(super) fn awaiting_apis(state: &RewriteState) -> Vec<String> {
     apis
 }
 
-fn capture_issue(state: &RewriteState) -> Result<RewriteIssue> {
+pub(super) fn capture_issue(state: &RewriteState) -> Result<RewriteIssue> {
     ensure!(
         state.phase == RewritePhase::ImplementationRequired,
         "recorder capture planning requires an active implementation issue"
@@ -319,6 +345,7 @@ fn capture_issue(state: &RewriteState) -> Result<RewriteIssue> {
         matches!(
             issue.kind,
             RewriteIssueKind::Response
+                | RewriteIssueKind::Replay
                 | RewriteIssueKind::Dependency
                 | RewriteIssueKind::Comparison
         ),
@@ -348,7 +375,7 @@ fn pending_plan_for_apply(
     Ok(record)
 }
 
-fn validate_plan_evidence(
+pub(super) fn validate_plan_evidence(
     target_root: &Path,
     state: &RewriteState,
     issue_id: &str,
@@ -377,14 +404,24 @@ fn validate_plan_evidence(
 fn build_plan(
     target_root: &Path,
     record: &RewriteRecorderCapturePlanRecord,
-) -> Result<BreezeResourceCapturePlan> {
-    plan_breeze_endpoint_capture(BreezeEndpointCaptureFeedback {
-        project_config_path: project_config(target_root),
-        rules_path: source_traffic_policy_path(target_root),
-        endpoint: record.endpoint.clone(),
-        source_revision: record.source_revision.clone(),
-        source_evidence: record.source_evidence.clone(),
-    })
+) -> Result<CapturePlan> {
+    if let Some(spec) = &record.http_response {
+        return Ok(CapturePlan::HttpResponse(http_response::Plan::build(
+            target_root,
+            spec,
+            &record.source_revision,
+            &record.source_evidence,
+        )?));
+    }
+    Ok(CapturePlan::Breeze(Box::new(plan_breeze_endpoint_capture(
+        BreezeEndpointCaptureFeedback {
+            project_config_path: project_config(target_root),
+            rules_path: source_traffic_policy_path(target_root),
+            endpoint: record.endpoint.clone(),
+            source_revision: record.source_revision.clone(),
+            source_evidence: record.source_evidence.clone(),
+        },
+    )?)))
 }
 
 fn project_config(target_root: &Path) -> PathBuf {
@@ -471,7 +508,7 @@ fn next_command(target_root: &Path, state: &RewriteState) -> super::model::Rewri
     }
 }
 
-fn validate_single_line(label: &str, value: &str) -> Result<()> {
+pub(super) fn validate_single_line(label: &str, value: &str) -> Result<()> {
     ensure!(
         value == value.trim() && !value.is_empty() && !value.contains(['\r', '\n']),
         "{label} must be a non-empty single line"
@@ -642,6 +679,8 @@ mod tests {
             summary: "counter response differs".to_string(),
             pointer_pattern: None,
             representative: None,
+            egress_rejections: None,
+            recorder_capture_diagnosis: None,
             response_diagnosis: None,
             possible_causes: Vec::new(),
             observed_target_fingerprint: state.target_fingerprint.clone().unwrap(),

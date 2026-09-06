@@ -480,7 +480,7 @@ fn resolve_dependencies(case_dir: &Path) -> Result<PathBuf> {
     Ok(dependencies)
 }
 
-fn read_events(path: &Path, mut visit: impl FnMut(&Value) -> Result<()>) -> Result<()> {
+pub(super) fn read_events(path: &Path, mut visit: impl FnMut(&Value) -> Result<()>) -> Result<()> {
     let file = File::open(path)
         .with_context(|| format!("failed to open case dependencies {}", path.display()))?;
     let mut reader = BufReader::new(file);
