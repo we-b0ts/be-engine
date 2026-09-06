@@ -8,7 +8,7 @@ fields and routing rules in each example.
 ## Pin the dependency
 
 ```toml
-brz-mysql = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/mysql.git", tag = "v0.0.3" }
+brz-mysql = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/mysql.git", tag = "v0.0.4" }
 ```
 
 ## Create and share the service

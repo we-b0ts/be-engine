@@ -10,11 +10,11 @@ with `Server::bind` / `serve_until`. Keep that endpoint and extend the server
 with business API modules using `Router::new(ReadinessApi).merge(business_api)`.
 Keep the generated SIGTERM/SIGINT handling and logging shutdown lifecycle.
 
-Pin `http-server` to the fixed `v0.0.2` tag and enable `macros` in `Cargo.toml`:
+Pin `http-server` to the fixed `v0.0.3` tag and enable `macros` in `Cargo.toml`:
 
 ```toml
 [dependencies]
-http-server = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/http-server.git", tag = "v0.0.2", features = ["macros"] }
+http-server = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/http-server.git", tag = "v0.0.3", features = ["macros"] }
 http = "1"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
