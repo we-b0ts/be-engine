@@ -145,6 +145,7 @@ fn diagnostic_entrypoints_require_worker_confirmation_without_mutating_state() {
         super::super::plan_rewrite_rule(
             context(),
             RewriteRulePlanOptions {
+                time: None,
                 jwt: None,
                 evidence_id: evidence_id.clone(),
                 body_codec: crate::ResponseBodyCodec::Json,
@@ -527,6 +528,13 @@ fn status_recovers_confirmation_and_advance_across_repeated_worker_dispatches() 
             dispatch_id: dispatch_id.into(),
             agent_handle: "persistent-worker".into(),
             agent_name: None,
+        })?;
+        runtime::report(runtime::RewriteWorkerReportOptions {
+            target_root: target.path().to_path_buf(),
+            dispatch_id: dispatch_id.into(),
+            agent_handle: "persistent-worker".into(),
+            activity: model::RewriteWorkerActivity::Running,
+            handoff_id: None,
         })
     };
 

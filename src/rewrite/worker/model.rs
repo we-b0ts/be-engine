@@ -90,6 +90,8 @@ pub(in crate::rewrite) struct RewriteWorkerObservation {
     pub recording_run_id: String,
     pub activity: RewriteWorkerActivity,
     pub observed_at: String,
+    #[serde(default)]
+    pub coordinator_reported: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

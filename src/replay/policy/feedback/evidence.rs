@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 use super::super::response::{
     ResponseBodyCodec, ResponseRuleKind, ResponseRules, response_locations_overlap,
+    response_pointer_matches,
 };
 use crate::replay::JsonJoinedStringCandidate;
 use crate::replay::ResponseGatewayProtocol;
@@ -100,16 +101,16 @@ impl ResponseCaseEvidence {
             kind if kind.is_generated() => self
                 .generated_scalar_candidates
                 .iter()
-                .any(|candidate| candidate == pointer),
+                .any(|candidate| response_pointer_matches(pointer, candidate)),
             ResponseRuleKind::Unordered => self
                 .unordered_candidates
                 .iter()
-                .any(|candidate| candidate == pointer),
+                .any(|candidate| response_pointer_matches(pointer, candidate)),
             ResponseRuleKind::UnorderedJoinedString => self
                 .unordered_joined_string_candidates
                 .iter()
                 .any(|candidate| {
-                    candidate.pointer == pointer
+                    response_pointer_matches(pointer, &candidate.pointer)
                         && separator.is_some_and(|separator| candidate.separator == separator)
                 }),
             ResponseRuleKind::Counter => false,
@@ -151,7 +152,10 @@ pub(super) fn difference_supports_rule(
     difference: &DifferenceEvidence,
     requested: &BTreeSet<String>,
 ) -> bool {
-    if !requested.contains(&difference.pointer) {
+    if !requested
+        .iter()
+        .any(|pointer| response_pointer_matches(pointer, &difference.pointer))
+    {
         return false;
     }
     match kind {

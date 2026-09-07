@@ -268,6 +268,10 @@ struct RulePlanArgs {
         conflicts_with_all = ["unordered_paths", "unordered_joined_string_paths"]
     )]
     kind: Option<RuleKindArg>,
+    #[arg(long, value_enum)]
+    unit: Option<traffic_e2e::ResponseDurationUnit>,
+    #[arg(long, value_enum)]
+    timestamp_format: Option<traffic_e2e::ResponseTimestampFormat>,
     #[arg(long)]
     json_pointer: Option<String>,
     #[arg(long)]
@@ -641,6 +645,11 @@ async fn run(cli: Cli) -> Result<()> {
                             .map(Into::into)
                             .unwrap_or(ResponseBodyCodec::Json),
                         jwt: args.jwt.options()?,
+                        time: traffic_e2e::ResponseTimeRule::from_options(
+                            args.kind.map(Into::into),
+                            args.unit,
+                            args.timestamp_format,
+                        )?,
                         kind: args.kind.map(Into::into),
                         json_pointer: args.json_pointer,
                         source_evidence: args.source_evidence,

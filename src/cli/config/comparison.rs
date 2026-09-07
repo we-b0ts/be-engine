@@ -67,6 +67,7 @@ struct ResponseRuleArgs {
     kind: ResponseRuleKindArg,
     #[arg(long)]
     api: String,
+    /// JSON Pointer; a whole * segment selects every array element (quote in the shell).
     #[arg(long = "json-pointer", required = true)]
     json_pointers: Vec<String>,
     #[arg(long)]
@@ -151,6 +152,7 @@ fn response_rule_plan(
         ResponseRuleKindArg::Counter => ResponseRuleKind::Counter,
     };
     plan_comparison_response_rule(ComparisonResponseRuleFeedback {
+        time: None,
         policy_path: target_root.join(".traffic-e2e/verification.yaml"),
         kind,
         api: args.api,

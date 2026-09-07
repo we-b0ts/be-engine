@@ -48,6 +48,7 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
             dependency_rule_plan: None,
             recorder_capture_plan: None,
             route: None,
+            system_repair_accepted: false,
             e2e_current: false,
             comparison_current: false,
         },

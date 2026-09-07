@@ -227,14 +227,21 @@ impl Serialize for RewriteAction {
             }
             .serialize(serializer),
             Self::SystemRepairRequired {
+                work_scope,
                 issue,
                 route,
                 evidence,
                 acceptance,
             } => RewriteActionView {
                 kind: "system_repair_required",
-                summary: &issue.summary,
+                summary: if acceptance.is_some() {
+                    "verify the available system repair through commands.acceptance, then follow the returned action"
+                } else {
+                    "wait for the required system revision to change; global status continues other ready work"
+                },
                 details: RewriteSystemRepairDetails {
+                    work_scope,
+                    acceptance_ready: acceptance.is_some(),
                     issue: RewriteIssueDetails::from(issue),
                     route: route.as_ref(),
                 },
@@ -389,6 +396,8 @@ impl<'a> From<&'a RewriteIssue> for RewriteIssueDetails<'a> {
 
 #[derive(Serialize)]
 struct RewriteSystemRepairDetails<'a> {
+    work_scope: &'a super::RewriteWorkScope,
+    acceptance_ready: bool,
     #[serde(flatten)]
     issue: RewriteIssueDetails<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -453,4 +462,26 @@ struct RewriteAcceptanceCommands<'a> {
     evidence: &'a RewriteCommandSpec,
     #[serde(skip_serializing_if = "Option::is_none")]
     acceptance: Option<&'a RewriteCommandSpec>,
+}
+
+/// Scheduling responses retain identity; inventory owns the expanded workflow view.
+pub(super) fn compact_workflow<S>(
+    workflow: &Option<super::model::RewriteWorkflowView>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    #[derive(Serialize)]
+    struct Identity<'a> {
+        id: &'a str,
+        revision: u64,
+    }
+    workflow
+        .as_ref()
+        .map(|value| Identity {
+            id: &value.id,
+            revision: value.revision,
+        })
+        .serialize(serializer)
 }

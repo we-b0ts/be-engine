@@ -270,12 +270,6 @@ fn confirm_binding(
         }),
         "subagent handle is already dedicated to another work item in this workflow"
     );
-    let started = !matches!(
-        runtime::coverage(state, scope),
-        model::RewriteWorkerCoverageState::Running
-            | model::RewriteWorkerCoverageState::IntegrationRequired
-            | model::RewriteWorkerCoverageState::VerificationRequired
-    );
     let mut changed = false;
     match state.worker_bindings.get_mut(&binding_key) {
         Some(binding) => {
@@ -290,6 +284,7 @@ fn confirm_binding(
             }
             if binding.confirmed_dispatch_id != expected_dispatch_id {
                 binding.confirmed_dispatch_id = expected_dispatch_id.to_string();
+                binding.observation = None;
                 changed = true;
             }
         }
@@ -308,10 +303,6 @@ fn confirm_binding(
             );
             changed = true;
         }
-    }
-    if started {
-        runtime::record_start(state, scope);
-        changed = true;
     }
     Ok(changed)
 }
@@ -350,7 +341,7 @@ fn transfer_binding(
         reason,
         transferred_at: chrono::Utc::now().to_rfc3339(),
     });
-    runtime::record_start(state, scope);
+    binding.observation = None;
     Ok(())
 }
 
@@ -464,6 +455,7 @@ pub(super) fn confirm_current_for_test(state: &mut RewriteState) {
     let dispatch_id = dispatch_id(state, &scope);
     let handle = format!("test-subagent-handle:{}", scope.binding_key());
     confirm_binding(state, &scope, &dispatch_id, &handle, None).unwrap();
+    runtime::record_running_for_test(state, &scope);
 }
 
 #[cfg(test)]

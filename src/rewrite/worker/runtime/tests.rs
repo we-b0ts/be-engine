@@ -50,6 +50,22 @@ fn confirm(target: &Path, state: &RewriteState, scope: &RewriteWorkScope) {
 fn handoff_wakes_idle_coordinator_and_only_its_api_becomes_ready_for_acceptance() {
     let (target, state, scope) = setup();
     confirm(target.path(), &state, &scope);
+    let confirmation = rewrite::status_rewrite(RewriteContext {
+        target_root: target.path().into(),
+    })
+    .unwrap();
+    assert_eq!(confirmation.pending, 1);
+    assert!(matches!(
+        confirmation.action,
+        RewriteAction::WorkerStatusRequired { .. }
+    ));
+    report(options(
+        target.path(),
+        &state,
+        &scope,
+        RewriteWorkerActivity::Running,
+    ))
+    .unwrap();
     let running = rewrite::status_rewrite(RewriteContext {
         target_root: target.path().into(),
     })
@@ -130,6 +146,13 @@ fn idle_worker_becomes_resume_required_and_running_report_cannot_fake_a_resume()
         .unwrap()
         .unwrap();
     confirm(target.path(), &latest, &scope);
+    report(options(
+        target.path(),
+        &latest,
+        &scope,
+        RewriteWorkerActivity::Queued,
+    ))
+    .unwrap();
     assert_eq!(
         rewrite::status_rewrite(RewriteContext {
             target_root: target.path().into()
@@ -137,6 +160,63 @@ fn idle_worker_becomes_resume_required_and_running_report_cannot_fake_a_resume()
         .unwrap()
         .pending,
         0
+    );
+}
+
+#[test]
+fn confirmation_does_not_refresh_or_invent_an_activity_report() {
+    let (target, state, scope) = setup();
+    confirm(target.path(), &state, &scope);
+    let store = RewriteStore::new(target.path()).unwrap();
+    assert!(observation(&store.load().unwrap().unwrap(), &scope).is_none());
+    report(options(
+        target.path(),
+        &state,
+        &scope,
+        RewriteWorkerActivity::Running,
+    ))
+    .unwrap();
+    let mut reported = store.load().unwrap().unwrap();
+    let value = reported
+        .worker_bindings
+        .get_mut(&scope.binding_key())
+        .unwrap()
+        .observation
+        .as_mut()
+        .unwrap();
+    value.observed_at = "2000-01-01T00:00:00Z".into();
+    store.save(&reported).unwrap();
+    confirm(target.path(), &reported, &scope);
+    let after = store.load().unwrap().unwrap();
+    assert_eq!(
+        observation(&after, &scope).unwrap().observed_at,
+        "2000-01-01T00:00:00Z"
+    );
+    assert_eq!(
+        coverage(&after, &scope),
+        RewriteWorkerCoverageState::StatusRequired
+    );
+}
+
+#[test]
+fn legacy_automatic_running_requires_an_explicit_coordinator_report() {
+    let (target, mut state, scope) = setup();
+    worker::confirm_current_for_test(&mut state);
+    state
+        .worker_bindings
+        .get_mut(&scope.binding_key())
+        .unwrap()
+        .observation
+        .as_mut()
+        .unwrap()
+        .coordinator_reported = false;
+    RewriteStore::new(target.path())
+        .unwrap()
+        .save(&state)
+        .unwrap();
+    assert_eq!(
+        coverage(&state, &scope),
+        RewriteWorkerCoverageState::StatusRequired
     );
 }
 
@@ -167,7 +247,7 @@ fn historical_or_expired_confirmation_requires_runtime_observation_not_automatic
         status.action,
         RewriteAction::WorkerStatusRequired { .. }
     ));
-    record_start(&mut state, &scope);
+    record_running_for_test(&mut state, &scope);
     state
         .worker_bindings
         .get_mut(&scope.binding_key())
@@ -276,6 +356,13 @@ fn integration_conflict_resumes_same_worker_and_rejects_old_handoff() {
         .unwrap()
         .unwrap();
     confirm(target.path(), &latest, &scope);
+    report(options(
+        target.path(),
+        &latest,
+        &scope,
+        RewriteWorkerActivity::Running,
+    ))
+    .unwrap();
     let latest = RewriteStore::new(target.path())
         .unwrap()
         .load()

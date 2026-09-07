@@ -37,6 +37,7 @@ fn response_replay_repair_requires_dirty_evidence_and_reuses_the_recording() {
         rule_hints: vec![],
         does_not_prove: vec![],
         next_step: String::new(),
+        queries: Default::default(),
     };
     validate_response_replay_evidence(issue, "replay_capability_gap", &report).unwrap();
     report.query = "representatives".into();
@@ -74,6 +75,14 @@ fn coordinator_verified_revision_change_returns_to_the_same_cases() {
     assert_eq!(state.phase, RewritePhase::ImplementationRequired);
     assert!(state.route.is_none());
     assert!(state.target_fingerprint.is_none());
+    let scope = super::super::RewriteWorkScope::Api {
+        api: state.api.clone(),
+    };
+    assert!(state.system_repair_accepted);
+    assert!(
+        super::super::worker::scheduler::acceptance_gate(target.path(), &state, &scope).is_none()
+    );
+    assert!(!super::super::worker::runtime::scopes(&state).contains(&scope));
     assert!(matches!(
         action.action,
         super::super::model::RewriteAction::AdvanceRequired { .. }

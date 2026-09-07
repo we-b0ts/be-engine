@@ -2,10 +2,39 @@ use super::*;
 
 fn uuid(pointer: &str) -> GeneratedResponseRule {
     GeneratedResponseRule {
+        unit: None,
+        format: None,
         pointer: pointer.to_string(),
         source_evidence: "src/token.rs:issue_token".to_string(),
         source_example: "<redacted source UUID>".to_string(),
         target_example: "<redacted target UUID>".to_string(),
+    }
+}
+
+#[test]
+fn rejects_overlapping_array_patterns_and_explicit_indexes() {
+    for (left, right) in [
+        ("/data/*/id", "/data/0/id"),
+        ("/data/*/items/0", "/data/1/items/*"),
+        ("/data/*/id", "/data"),
+    ] {
+        let rules = ResponseRules {
+            json: BTreeMap::from([(
+                "GET /api/resource".into(),
+                JsonResponseRules {
+                    uuid: vec![uuid(left)],
+                    unordered: vec![unordered(right)],
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        assert!(
+            validate_response_rules(&rules)
+                .unwrap_err()
+                .to_string()
+                .contains("overlapping response rules")
+        );
     }
 }
 
@@ -206,6 +235,8 @@ fn rejects_generated_rules_without_auditable_evidence() {
             "GET /api/resource".to_string(),
             JsonResponseRules {
                 uuid: vec![GeneratedResponseRule {
+                    unit: None,
+                    format: None,
                     pointer: "/content".to_string(),
                     source_evidence: "src/token.rs:issue_token".to_string(),
                     source_example: "<same>".to_string(),
@@ -228,11 +259,13 @@ json:
   "GET /api/resource":
     timestamp:
       - pointer: /created_at
+        format: unix_seconds
         source_evidence: src/resource.rs:created_at uses current time
         source_example: "100"
         target_example: "101"
     duration:
       - pointer: /elapsed
+        unit: seconds
         source_evidence: src/resource.rs:elapsed measures runtime duration
         source_example: "10"
         target_example: "11"

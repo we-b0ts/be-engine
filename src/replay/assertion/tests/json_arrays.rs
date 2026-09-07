@@ -1,0 +1,246 @@
+use super::*;
+
+fn generated_rule(kind: &str, pointer: &str) -> String {
+    let time = match kind {
+        "timestamp" => "          format: unix_seconds\n",
+        "duration" => "          unit: seconds\n",
+        _ => "",
+    };
+    format!(
+        "response_rules:\n  json:\n    'GET /api/resource/token':\n      {kind}:\n        - pointer: {pointer}\n{time}          source_evidence: src/generator.rs:generate\n          source_example: '<source generated value>'\n          target_example: '<target generated value>'\n"
+    )
+}
+
+#[test]
+fn all_generated_rules_support_variable_and_nested_arrays() {
+    for kind in ["timestamp", "duration", "uuid", "random"] {
+        let (source, target) = match kind {
+            "timestamp" => (json!(1700000000), json!(1700000060)),
+            "duration" => (json!(120), json!(180)),
+            _ => (json!("source"), json!("target")),
+        };
+        for count in [0, 1, 3] {
+            let expected = json!({"data": (0..count).map(|index| json!({
+                "stable": index, "items": [{"value": source}, {"value": source}]
+            })).collect::<Vec<_>>()});
+            let actual = json!({"data": (0..count).map(|index| json!({
+                "stable": index, "items": [{"value": target}, {"value": target}]
+            })).collect::<Vec<_>>()});
+            let (_temp, options) = write_raw_case(
+                &generated_rule(kind, "/data/*/items/*/value"),
+                &expected.to_string(),
+                &actual.to_string(),
+            );
+            let report = assert_recorded_response(options).unwrap();
+            assert!(report.passed, "{kind}: {report:?}");
+            assert_eq!(
+                report.applied_generated_rule_ids.len(),
+                usize::from(count > 0)
+            );
+            assert!(report.unused_applicable_generated_rule_ids.is_empty());
+        }
+    }
+}
+
+#[test]
+fn array_rules_keep_missing_types_lengths_order_and_other_fields_exact() {
+    let expected = json!({"data": [{"value": 1, "id": "a"}, {"value": 2, "id": "b"}]});
+    for (actual, pointer, kind) in [
+        (
+            json!({"data": [{"id": "a"}, {"value": 4, "id": "b"}]}),
+            "/data/0/value",
+            ResponseDifferenceKind::MissingActual,
+        ),
+        (
+            json!({"data": [{"value": "3", "id": "a"}, {"value": 4, "id": "b"}]}),
+            "/data/0/value",
+            ResponseDifferenceKind::GeneratedFieldNotScalar,
+        ),
+        (
+            json!({"data": [{"value": 3, "id": "a"}, {"value": null, "id": "b"}]}),
+            "/data/1/value",
+            ResponseDifferenceKind::GeneratedFieldNotScalar,
+        ),
+        (
+            json!({"data": [{"value": 3, "id": "a"}]}),
+            "/data",
+            ResponseDifferenceKind::ArrayLengthMismatch,
+        ),
+        (
+            json!({"data": [{"value": 3, "id": "changed"}, {"value": 4, "id": "b"}]}),
+            "/data/0/id",
+            ResponseDifferenceKind::ValueMismatch,
+        ),
+        (
+            json!({"data": [{"value": 2, "id": "b"}, {"value": 1, "id": "a"}]}),
+            "/data",
+            ResponseDifferenceKind::ArrayOrderMismatch,
+        ),
+    ] {
+        let (_temp, options) = write_raw_case(
+            &generated_rule("random", "/data/*/value"),
+            &expected.to_string(),
+            &actual.to_string(),
+        );
+        let report = assert_recorded_response(options).unwrap();
+        assert!(!report.passed);
+        assert!(
+            report
+                .differences
+                .iter()
+                .any(|difference| difference.pointer == pointer && difference.kind == kind),
+            "{report:?}"
+        );
+    }
+}
+
+#[test]
+fn array_rules_do_not_relax_numeric_object_keys() {
+    let (_temp, options) = write_raw_case(
+        &generated_rule("uuid", "/data/*/value"),
+        r#"{"data":{"0":{"value":"source"}}}"#,
+        r#"{"data":{"0":{"value":"target"}}}"#,
+    );
+    let report = assert_recorded_response(options).unwrap();
+    assert!(!report.passed);
+    assert_eq!(report.differences[0].pointer, "/data/0/value");
+    assert!(report.applied_generated_rule_ids.is_empty());
+}
+
+#[test]
+fn array_rules_support_root_scalars_and_keep_explicit_indexes() {
+    for pointer in ["/*", "/0"] {
+        let (_temp, options) = write_raw_case(&generated_rule("random", pointer), "[1,2]", "[3,2]");
+        assert!(assert_recorded_response(options).unwrap().passed);
+    }
+}
+
+#[test]
+fn comparison_supports_array_rules_and_counters_remain_comparison_only() {
+    for kind in ["timestamp", "duration", "uuid", "random", "counter"] {
+        let (source, target) = if kind == "timestamp" {
+            (1700000000_i64, 1700000060_i64)
+        } else {
+            (120, 180)
+        };
+        let (_temp, options) = write_raw_case(
+            &generated_rule(kind, "/data/*/value"),
+            &json!({"data": [{"value": source}, {"value": source}]}).to_string(),
+            &json!({"data": [{"value": target}, {"value": target}]}).to_string(),
+        );
+        let mut expected: serde_json::Value =
+            serde_json::from_slice(&fs::read(&options.expected_response).unwrap()).unwrap();
+        expected["version"] = json!(1);
+        expected["timestamp"] = json!("2023-11-14T22:13:20Z");
+        fs::write(
+            &options.expected_response,
+            serde_json::to_vec(&expected).unwrap(),
+        )
+        .unwrap();
+        let mut captured: serde_json::Value =
+            serde_json::from_slice(&fs::read(&options.actual_response).unwrap()).unwrap();
+        captured["timestamp"] = json!("2023-11-14T22:14:20Z");
+        let comparison = options.actual_response.with_file_name("comparison.json");
+        fs::write(&comparison, serde_json::to_vec(&captured).unwrap()).unwrap();
+        let report = assert_comparison_response(ComparisonResponseAssertionOptions {
+            case_id: options.case_id.clone(),
+            request: options.request.clone(),
+            expected_response: options.expected_response.clone(),
+            response: comparison,
+            policy: options.policy.clone(),
+        })
+        .unwrap();
+        assert!(report.passed, "{kind}: {report:?}");
+        assert_eq!(
+            assert_recorded_response(options).unwrap().passed,
+            kind != "counter"
+        );
+    }
+}
+
+#[test]
+fn time_array_rules_fail_on_one_invalid_element_or_missing_request_time() {
+    for (kind, source, target, failure) in [
+        (
+            "timestamp",
+            1700000000_i64,
+            1700000066_i64,
+            ResponseDifferenceKind::TimestampOutsideRequestWindow,
+        ),
+        (
+            "duration",
+            120,
+            186,
+            ResponseDifferenceKind::DurationDeltaMismatch,
+        ),
+    ] {
+        let valid_target = if kind == "timestamp" {
+            1700000060_i64
+        } else {
+            180
+        };
+        let (_temp, options) = write_raw_case(
+            &generated_rule(kind, "/data/*/value"),
+            &json!({"data": [{"value": source}, {"value": source}]}).to_string(),
+            &json!({"data": [{"value": valid_target}, {"value": target}]}).to_string(),
+        );
+        let report = assert_recorded_response(ResponseAssertionOptions {
+            case_id: options.case_id.clone(),
+            request: options.request.clone(),
+            expected_response: options.expected_response.clone(),
+            actual_response: options.actual_response.clone(),
+            policy: options.policy.clone(),
+        })
+        .unwrap();
+        assert!(!report.passed);
+        assert_eq!(report.applied_generated_rule_ids.len(), 1);
+        assert!(
+            report
+                .differences
+                .iter()
+                .any(|difference| difference.pointer == "/data/1/value"
+                    && difference.kind == failure)
+        );
+        let mut actual: serde_json::Value =
+            serde_json::from_slice(&fs::read(&options.actual_response).unwrap()).unwrap();
+        actual.as_object_mut().unwrap().remove("request_sent_at");
+        fs::write(
+            &options.actual_response,
+            serde_json::to_vec(&actual).unwrap(),
+        )
+        .unwrap();
+        let report = assert_recorded_response(options).unwrap();
+        assert!(!report.passed);
+        assert!(
+            report
+                .differences
+                .iter()
+                .all(|difference| difference.kind == ResponseDifferenceKind::TimeReferenceMissing)
+        );
+    }
+}
+
+#[test]
+fn array_selection_is_shared_by_unordered_and_joined_string_rules() {
+    for (kind, extra, expected, actual) in [
+        (
+            "unordered",
+            "",
+            json!([{"names": ["alice", "bob"]}, {"names": ["eve", "dan"]}]),
+            json!([{"names": ["bob", "alice"]}, {"names": ["dan", "eve"]}]),
+        ),
+        (
+            "unordered_joined_string",
+            "          separator: ','\n",
+            json!([{"names": "alice,bob"}, {"names": "eve,dan"}]),
+            json!([{"names": "bob,alice"}, {"names": "dan,eve"}]),
+        ),
+    ] {
+        let rules = format!(
+            "response_rules:\n  json:\n    'GET /api/resource/token':\n      {kind}:\n        - pointer: /content/*/names\n{extra}          source_evidence: src/names.rs:set\n"
+        );
+        let (_temp, options) = write_case(&rules, expected, actual);
+        let report = assert_recorded_response(options).unwrap();
+        assert!(report.passed, "{report:?}");
+    }
+}

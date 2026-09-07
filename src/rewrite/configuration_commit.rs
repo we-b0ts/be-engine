@@ -136,6 +136,7 @@ pub(super) fn pending_locked(target_root: &Path) -> Result<Option<RewriteActionE
             envelope
         }
     };
+    envelope.pending = 1;
     envelope.terminal_allowed = false;
     Ok(Some(envelope))
 }

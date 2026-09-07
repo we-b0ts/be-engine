@@ -7,7 +7,7 @@ or process-output diagnosis, implementation, and local tests.
 
 ## Post-Dispatch Scheduler
 
-Schema v24 exposes one top-level `pending`: the number of operations the
+Schema v25 exposes one top-level `pending`: the number of operations the
 coordinator can perform now. `pending > 0` requires consuming the returned
 `action`; `pending = 0` means wait for an event or the returned polling delay.
 Check `terminal_allowed` separately before ending the workflow.
@@ -96,7 +96,10 @@ For `implementation_required`:
    with `BACKEND_REWRITE_SUBAGENT_HANDLE` and optional
    `BACKEND_REWRITE_SUBAGENT_NAME`. Confirm accepted queued work as well; report
    `queued` when the runtime exposes that state.
-4. Consume the returned action and continue scheduling immediately.
+4. Confirmation records the accepted binding only. Report `running` or `queued`
+   explicitly using the owning action's `commands.report_worker` when that state
+   is known, then continue with the returned global action. A confirmation with
+   no activity report remains `worker_status_required` in `pending`.
 
 Confirmation gates that work item's evidence and acceptance. It does not block
 another work item's dispatch or feedback. Never perform API diagnosis in the
@@ -121,7 +124,7 @@ The coordinator consumes the returned result and executes the work item's
 | Activity | Meaning |
 | --- | --- |
 | `queued` | Runtime accepted the task and is waiting to run it. |
-| `running` | Runtime observation confirms this dispatch is running. |
+| `running` | The coordinator reports that this dispatch is running. |
 | `idle` | The worker stopped without a usable handoff; resume is required. |
 | `handoff_ready` | The coordinator received a reviewable handoff. |
 | `integrated` | The identified handoff and required inputs have been integrated. |
@@ -144,9 +147,15 @@ The worker returns the handoff and ends its turn; it does not wait for Replay.
 
 After interruption, on `worker_status_required`, or when an observation expires,
 inspect the actual runtime task and report its state through `report_worker`.
-Running observations are fresh for five minutes. Expiry requests a check; it
+The engine trusts the coordinator's explicit report; it does not query Claude
+Code or another runtime, or independently prove liveness. Never report running
+merely because a dispatch was previously confirmed. A repeated confirmation does
+not create or refresh an activity report. Running/queued reports are fresh for
+five minutes. Expiry requests a check; it
 does not prove that a worker stopped and never authorizes a duplicate worker.
-Missing observations on legacy confirmed bindings also request a runtime check.
+Missing or legacy unclassified observations on confirmed bindings also request
+a coordinator status check. Recover the retained assignment before reporting;
+unknown activity is not evidence of either running or idle.
 Completion events should be reported immediately, not held until that interval.
 
 ## Integration And Focused Acceptance

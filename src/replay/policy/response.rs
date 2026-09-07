@@ -7,6 +7,14 @@ use super::pattern::path_pattern_matches;
 
 mod body_validation;
 mod joined_string;
+mod json_pointer;
+mod time_rule;
+pub use time_rule::{ResponseDurationUnit, ResponseTimeRule, ResponseTimestampFormat};
+
+pub(crate) use json_pointer::response_locations_overlap;
+pub(in crate::replay) use json_pointer::{
+    response_pointer_matches, select_json_pointers, validate_json_pointer,
+};
 
 use body_validation::{validate_hessian2_rule_map, validate_protobuf_rule_map};
 pub(in crate::replay) use joined_string::JsonJoinedStringResponseRule;
@@ -176,7 +184,13 @@ impl ResponseRules {
             .flat_map(|(api, rules)| {
                 rules
                     .generated()
-                    .map(move |(kind, field)| response_field(kind, api, &field.pointer, None))
+                    .map(move |(kind, field)| {
+                        let mut selected = response_field(kind, api, &field.pointer, None);
+                        selected.time =
+                            ResponseTimeRule::from_options(Some(kind), field.unit, field.format)
+                                .expect("response time settings were validated on load");
+                        selected
+                    })
                     .chain(rules.unordered.iter().map(move |field| {
                         response_field(ResponseRuleKind::Unordered, api, &field.pointer, None)
                     }))
@@ -472,6 +486,10 @@ pub(in crate::replay) struct GeneratedResponseRule {
     pub(in crate::replay) source_evidence: String,
     pub(in crate::replay) source_example: String,
     pub(in crate::replay) target_example: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) unit: Option<ResponseDurationUnit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) format: Option<ResponseTimestampFormat>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -496,6 +514,8 @@ pub struct ResponseField {
     pub api: String,
     pub pointer: String,
     pub kind: ResponseRuleKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<ResponseTimeRule>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub separator: Option<String>,
 }
@@ -591,28 +611,6 @@ pub(in crate::replay) fn parse_api(api: &str) -> Result<(&str, &str)> {
         "response rule API path must be absolute: {api:?}"
     );
     Ok((method, path))
-}
-
-pub(in crate::replay) fn validate_json_pointer(pointer: &str) -> Result<()> {
-    ensure!(
-        pointer.starts_with('/') && pointer.len() > 1,
-        "response field must use a non-root JSON Pointer: {pointer:?}"
-    );
-    let bytes = pointer.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'~' {
-            ensure!(
-                bytes
-                    .get(index + 1)
-                    .is_some_and(|byte| matches!(byte, b'0' | b'1')),
-                "JSON Pointer contains an invalid '~' escape: {pointer:?}"
-            );
-            index += 1;
-        }
-        index += 1;
-    }
-    Ok(())
 }
 
 type RuleLocation<'a> = (&'a str, &'a str, &'a str, ResponseRuleKind);
@@ -718,6 +716,7 @@ fn validate_rule_api(api: &str) -> Result<(&str, &str)> {
 }
 
 fn validate_generated_rule(kind: ResponseRuleKind, rule: &GeneratedResponseRule) -> Result<()> {
+    ResponseTimeRule::from_options(Some(kind), rule.unit, rule.format)?;
     ensure!(
         kind.is_generated(),
         "generated response rule has an invalid kind"
@@ -798,18 +797,9 @@ fn response_field(
         api: api.to_string(),
         pointer: pointer.to_string(),
         kind,
+        time: None,
         separator: separator.map(str::to_string),
     }
-}
-
-pub(crate) fn response_locations_overlap(left: &str, right: &str) -> bool {
-    left == right
-        || left
-            .strip_prefix(right)
-            .is_some_and(|suffix| suffix.starts_with('/'))
-        || right
-            .strip_prefix(left)
-            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 fn path_patterns_overlap(left: &str, right: &str) -> bool {

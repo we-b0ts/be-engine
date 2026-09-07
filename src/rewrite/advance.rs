@@ -261,6 +261,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                     dependency_rule_plan: None,
                     recorder_capture_plan: None,
                     route: None,
+                    system_repair_accepted: false,
                     e2e_current: false,
                     comparison_current: false,
                 },

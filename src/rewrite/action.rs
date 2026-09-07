@@ -16,7 +16,7 @@ use super::{
 
 pub(super) fn for_state(target_root: &Path, state: &RewriteState) -> RewriteActionEnvelope {
     let base = state_action(target_root, state);
-    let selected = global_worker_action(target_root, state, &base).unwrap_or(base);
+    let selected = select_action(target_root, state, base);
     envelope(target_root, state, selected)
 }
 
@@ -24,18 +24,28 @@ pub(super) fn for_status(
     target_root: &Path,
     state: &RewriteState,
 ) -> Result<RewriteActionEnvelope> {
+    let base = status_base(target_root, state)?;
+    let pending = super::coordination::pending(state, &base, false);
+    let selected = select_action(target_root, state, base);
+    let mut result = envelope(target_root, state, selected);
+    result.pending = pending;
+    Ok(result)
+}
+
+/// Native workflow gate, before choosing among worker actions. Counts consume this
+/// same gate regardless of which API's action the caller wants to inspect.
+pub(super) fn status_base(target_root: &Path, state: &RewriteState) -> Result<RewriteAction> {
     if state.case_pattern_identification.is_some()
         || super::transition::replay_completion_pending(state)
     {
-        return Ok(envelope(
-            target_root,
-            state,
-            state_action(target_root, state),
-        ));
+        return Ok(state_action(target_root, state));
+    }
+    if state.phase == RewritePhase::SystemRepairRequired {
+        repair::acceptance_ready(target_root, state)?;
     }
     let recording_status = recording_action::status_action(target_root, state)?;
     let target_change = target_quality::status_action(target_root, state)?;
-    let base = match state.phase {
+    Ok(match state.phase {
         RewritePhase::RecordingRequired | RewritePhase::ComparisonRecordingRequired
             if recording_status.is_some() =>
         {
@@ -43,9 +53,26 @@ pub(super) fn for_status(
         }
         _ if target_change.is_some() => target_change.expect("target change was checked"),
         _ => state_action(target_root, state),
-    };
-    let selected = global_worker_action(target_root, state, &base).unwrap_or(base);
-    Ok(envelope(target_root, state, selected))
+    })
+}
+
+fn select_action(target_root: &Path, state: &RewriteState, base: RewriteAction) -> RewriteAction {
+    if matches!(
+        base,
+        RewriteAction::SystemRepairRequired {
+            acceptance: Some(_),
+            ..
+        }
+    ) {
+        return base;
+    }
+    if let Some(selected) = global_worker_action(target_root, state, &base) {
+        return selected;
+    }
+    if matches!(base, RewriteAction::ImplementationRequired { .. }) {
+        return worker::state_action(target_root, state);
+    }
+    base
 }
 
 fn global_worker_action(
@@ -196,9 +223,13 @@ pub(super) fn envelope(
     action: RewriteAction,
 ) -> RewriteActionEnvelope {
     let workflow = Some(workflow_view(state));
+    let busy = matches!(
+        action,
+        RewriteAction::WaitRequired { .. } | RewriteAction::ExecutionFailed { .. }
+    );
     RewriteActionEnvelope {
         schema_version: ACTION_SCHEMA_VERSION,
-        pending: super::coordination::pending(state, &action, false),
+        pending: super::coordination::pending(state, &state_action(target_root, state), busy),
         workflow,
         api_inventory: Some(inventory::view(state)),
         process_output_inventory: Some(process_outputs::view(state)),
@@ -210,7 +241,7 @@ pub(super) fn envelope(
     }
 }
 
-fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
+pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
     if let Some(action) = case_patterns::state_action(target_root, state) {
         return action;
     }
@@ -251,7 +282,14 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
         Some(progress_publication::PublicationState::Published) | None => {}
     }
     if process_outputs::active_scope(state).is_some() {
-        return worker::state_action(target_root, state);
+        return worker::implementation_action(target_root, state, None);
+    }
+    if state.system_repair_accepted {
+        return advance_required(
+            target_root,
+            Some(&state.api),
+            "system repair accepted; replay the same API and immutable cases".into(),
+        );
     }
     if state.phase == RewritePhase::SystemRepairRequired
         && state
@@ -325,7 +363,7 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
             Some(&state.api),
             format!("continue with the next recorded API {}", state.api),
         ),
-        RewritePhase::ImplementationRequired => worker::state_action(target_root, state),
+        RewritePhase::ImplementationRequired => worker::implementation_action(target_root, state, None),
         RewritePhase::AwaitingRecordingRefresh => {
             recorder_capture::pending_refresh_action(target_root, state)
         }
@@ -346,6 +384,7 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
             command: recording_action::command(target_root, state, true),
         },
         RewritePhase::SystemRepairRequired => RewriteAction::SystemRepairRequired {
+            work_scope: super::RewriteWorkScope::Api { api: state.api.clone() },
             issue: state
                 .active_issue
                 .clone()
@@ -441,19 +480,19 @@ fn recording_summary(state: &RewriteState) -> String {
     }
 }
 
-pub(super) fn input_required(_target_root: &Path) -> RewriteActionEnvelope {
+pub(super) fn input_required(target_root: &Path) -> RewriteActionEnvelope {
     RewriteActionEnvelope {
         schema_version: ACTION_SCHEMA_VERSION,
-        pending: 0,
+        pending: 1,
         workflow: None,
         api_inventory: None,
         process_output_inventory: None,
         latest_focused_e2e: None,
-        action: RewriteAction::InputRequired {
-            reason: RewriteInputRequiredReason::WorkflowNotInitialized,
-            summary: "start the rewrite workflow for every API observed through recorder configuration, or optionally select one API".to_string(),
-            required: vec!["run `backend-rewrite next`; optional: --api 'METHOD /path-or-pattern'".to_string()],
-        },
+        action: advance_required(
+            target_root,
+            None,
+            "initialize the rewrite workflow from the existing target project".into(),
+        ),
         terminal_allowed: false,
     }
 }

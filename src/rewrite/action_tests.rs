@@ -18,6 +18,7 @@ use super::super::model::{
 fn cross_api_non_preemptible_transition_returns_scoped_wait_status() {
     let mut state = crate::rewrite::test_state();
     state.phase = RewritePhase::ComparisonRecordingRequired;
+    state.comparison_run_id = Some("20260907000000".into());
     let target = Path::new("/target");
 
     let response = serde_json::to_value(api_selection_wait_envelope(
@@ -312,6 +313,7 @@ fn pending_rule_plans_are_recoverable_by_plan_id() {
     let mut state = crate::rewrite::test_state();
     state.phase = RewritePhase::ImplementationRequired;
     state.rule_plan = Some(RewriteRulePlanRecord {
+        time: None,
         id: "plan-response".to_string(),
         issue_id: "issue-response".to_string(),
         kind: "uuid".to_string(),

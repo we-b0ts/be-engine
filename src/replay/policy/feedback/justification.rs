@@ -1,21 +1,24 @@
 use anyhow::{Result, ensure};
 
-use super::super::response::ResponseRuleKind;
+use super::super::response::{ResponseRuleKind, ResponseTimeRule};
 
 pub(super) struct ResponseRuleJustification {
     pub(super) source_evidence: Option<String>,
     pub(super) source_example: Option<String>,
     pub(super) target_example: Option<String>,
     pub(super) separator: Option<String>,
+    pub(super) time: Option<ResponseTimeRule>,
 }
 
 pub(super) fn validate(
     kind: ResponseRuleKind,
+    time: Option<ResponseTimeRule>,
     source_evidence: Option<String>,
     source_example: Option<String>,
     target_example: Option<String>,
     separator: Option<String>,
 ) -> Result<ResponseRuleJustification> {
+    ResponseTimeRule::validate(kind, time)?;
     match kind {
         kind if kind.is_generated() => {
             validate_text(source_evidence.as_deref(), "--source-evidence", 512)?;
@@ -65,6 +68,7 @@ pub(super) fn validate(
         _ => unreachable!("all response rule kinds are covered"),
     }
     Ok(ResponseRuleJustification {
+        time,
         source_evidence,
         source_example,
         target_example,

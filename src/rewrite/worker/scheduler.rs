@@ -142,6 +142,19 @@ pub(in crate::rewrite) fn after_dispatch(
     if let Some(action) = global_action(target_root, state, false) {
         return action;
     }
+    if let Some(slice) = state
+        .parked_slices
+        .values()
+        .find(|slice| slice.api != state.api && slice.system_repair_accepted)
+    {
+        return RewriteAction::AdvanceRequired {
+            summary: format!(
+                "system repair accepted for {}; replay its immutable cases",
+                slice.api
+            ),
+            command: action::next_command_for_api(target_root, &slice.api),
+        };
+    }
     if let Some(api) = inventory::next_pending_api_for_concurrent_work(state) {
         return RewriteAction::AdvanceRequired {
             summary: format!("execute commands.advance to continue with pending API {api}"),

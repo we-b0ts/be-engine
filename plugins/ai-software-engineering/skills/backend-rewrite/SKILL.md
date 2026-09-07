@@ -132,7 +132,7 @@ assume it is complete and never rerun it.
 
 A fresh standard recording requires explicit user authorization.
 
-Response schema v24 contains an `action` object with exactly `kind`, `summary`,
+Response schema v25 contains an `action` object with exactly `kind`, `summary`,
 `details`, and `commands`. This action schema version is independent of target
 repository configuration versions. `status` (including scoped status) and
 `next` return scheduling state, a short issue summary, and legal commands;
@@ -155,13 +155,22 @@ default; use global `--pretty` only for interactive human inspection. The sole
 documented argv extension is the target-quality exception in
 [workflow.md](references/workflow.md).
 
+Start and resume in the initialized canonical target repository with unscoped
+`backend-rewrite status`. An initialized project without a workflow returns the
+command that starts it. Default `workflow` contains only `id` and `revision`;
+`inventory` retains phase, recording, comparison, and selected-scope metadata.
+Choose the next operation from `pending`, `action`, and `terminal_allowed`.
+Do not infer scheduling from `workflow.phase`.
+
 The state-machine coordinator consumes one executable-work loop. Top-level
 `pending` counts only actions it can perform now; running or resource-waiting
 work is excluded. While `pending > 0`, execute the returned action and report
 its result. When it reaches zero, wait for a runtime completion event or the
 returned polling delay (normally 30 seconds), then query status again. End only
 when `terminal_allowed` permits delivery. `inventory` expands English ready and
-waiting counts; API `unverified` counts are not a dispatch queue.
+waiting counts; API `unverified` counts are not a dispatch queue. Scoped status
+retains this same global `pending` count while showing the selected item's action;
+use unscoped status for the coordinator loop.
 
 The engine owns selection across all APIs and process-output items, including
 parked implementation issues. The coordinator imposes no worker concurrency

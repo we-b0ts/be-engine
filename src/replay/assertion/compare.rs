@@ -7,30 +7,66 @@ use super::model::{
     JsonJoinedStringCandidate, ResponseAssertionCaseReport, ResponseDifference,
     ResponseDifferenceKind,
 };
-use crate::replay::policy::{ResponseField, ResponseRuleKind};
+use super::time::{self, RequestTimes};
+use crate::replay::policy::{ResponseField, ResponseRuleKind, select_json_pointers};
 
 pub(super) fn compare_json(
     expected: &Value,
     actual: &Value,
     fields: &[ResponseField],
     report: &mut ResponseAssertionCaseReport,
-) {
-    let fields = fields
-        .iter()
-        .map(|field| (field.pointer.as_str(), field))
-        .collect::<BTreeMap<_, _>>();
-    compare_value("", expected, actual, &fields, report);
+    times: RequestTimes,
+) -> Vec<ResponseField> {
+    let mut selected = BTreeMap::new();
+    let mut applicable = Vec::new();
+    for field in fields {
+        let pointers = select_json_pointers(&field.pointer, expected, actual);
+        if !pointers.is_empty() {
+            applicable.push(field.clone());
+        }
+        for pointer in pointers {
+            selected.insert(pointer, field);
+        }
+    }
+    compare_value("", expected, actual, &selected, report, times);
+    for ids in [
+        &mut report.applied_generated_rule_ids,
+        &mut report.applied_unordered_rule_ids,
+        &mut report.applied_unordered_joined_string_rule_ids,
+        &mut report.applied_counter_rule_ids,
+    ] {
+        let mut seen = BTreeSet::new();
+        ids.retain(|id| seen.insert(id.clone()));
+    }
+    applicable
 }
 
 fn compare_value(
     pointer: &str,
     expected: &Value,
     actual: &Value,
-    fields: &BTreeMap<&str, &ResponseField>,
+    fields: &BTreeMap<String, &ResponseField>,
     report: &mut ResponseAssertionCaseReport,
+    times: RequestTimes,
 ) {
     if let Some(field) = fields.get(pointer) {
         match field.kind {
+            ResponseRuleKind::Timestamp | ResponseRuleKind::Duration => {
+                match time::compare(
+                    field.time.expect("validated time rule"),
+                    expected,
+                    actual,
+                    times,
+                ) {
+                    Ok(()) => report.applied_generated_rule_ids.push(field.id.clone()),
+                    Err(kind) => report.differences.push(difference(
+                        pointer,
+                        kind,
+                        Some(expected),
+                        Some(actual),
+                    )),
+                }
+            }
             kind if kind.is_generated() => {
                 if scalar_kind(expected).is_some() && scalar_kind(expected) == scalar_kind(actual) {
                     report.applied_generated_rule_ids.push(field.id.clone());
@@ -146,7 +182,7 @@ fn compare_value(
                 let child = child_pointer(pointer, key);
                 match (expected.get(key), actual.get(key)) {
                     (Some(expected), Some(actual)) => {
-                        compare_value(&child, expected, actual, fields, report)
+                        compare_value(&child, expected, actual, fields, report, times)
                     }
                     (Some(expected), None) => report.differences.push(difference(
                         &child,
@@ -189,6 +225,7 @@ fn compare_value(
                     actual,
                     fields,
                     report,
+                    times,
                 );
             }
         }

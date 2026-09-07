@@ -22,7 +22,7 @@ use crate::{
 };
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 24;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 25;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -239,6 +239,8 @@ pub enum RewriteRepairAcceptanceKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RewriteRulePlanRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<crate::ResponseTimeRule>,
     pub id: String,
     pub issue_id: String,
     pub kind: String,
@@ -418,6 +420,8 @@ pub(super) struct RewriteSliceState {
     #[serde(default)]
     pub recorder_capture_plan: Option<RewriteRecorderCapturePlanRecord>,
     pub route: Option<RewriteRouteRecord>,
+    #[serde(default)]
+    pub system_repair_accepted: bool,
     pub e2e_current: bool,
     pub comparison_current: bool,
 }
@@ -442,6 +446,7 @@ impl RewriteSliceState {
             dependency_rule_plan: None,
             recorder_capture_plan: None,
             route: None,
+            system_repair_accepted: false,
             e2e_current: false,
             comparison_current: false,
         }
@@ -722,6 +727,7 @@ pub enum RewriteAction {
         command: RewriteCommandSpec,
     },
     SystemRepairRequired {
+        work_scope: RewriteWorkScope,
         issue: RewriteIssue,
         route: Option<RewriteRouteRecord>,
         evidence: RewriteCommandSpec,
@@ -750,7 +756,10 @@ pub struct RewriteEvidenceCommand {
 #[derive(Debug, Clone, Serialize)]
 pub struct RewriteActionEnvelope {
     pub schema_version: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "super::action_contract::compact_workflow"
+    )]
     pub workflow: Option<RewriteWorkflowView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_inventory: Option<RewriteApiInventoryView>,
@@ -767,7 +776,10 @@ pub struct RewriteActionEnvelope {
 pub struct RewriteStatusReport {
     pub schema_version: u32,
     pub initialized: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "super::action_contract::compact_workflow"
+    )]
     pub workflow: Option<RewriteWorkflowView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_inventory: Option<RewriteApiInventoryView>,

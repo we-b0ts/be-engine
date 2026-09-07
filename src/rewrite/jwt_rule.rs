@@ -100,6 +100,7 @@ pub(super) fn plan(
     };
     let (_, _, traffic_report) = build(root, state, &spec)?;
     let record = RewriteRulePlanRecord {
+        time: None,
         id: format!(
             "plan-{}",
             fingerprint::id(&[&issue.id, &evidence_id, &serde_json::to_string(&spec)?])

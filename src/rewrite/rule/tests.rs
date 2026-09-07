@@ -20,6 +20,7 @@ fn response_state() -> RewriteState {
         comparison_observation: None,
     });
     state.rule_plan = Some(RewriteRulePlanRecord {
+        time: None,
         id: "plan-response".to_string(),
         issue_id: "issue-response".to_string(),
         kind: "uuid".to_string(),
