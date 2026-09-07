@@ -3,9 +3,10 @@
 use crate::mysql::sql;
 use sqlparser::{
     ast::{
-        BinaryOperator, Distinct, Expr, Function, FunctionArguments, GroupByExpr, JoinConstraint,
-        JoinOperator, LimitClause, OrderByKind, Select, SelectItem, SetExpr, SetOperator,
-        SetQuantifier, Statement, TableFactor, UnaryOperator, WindowSpec, WindowType,
+        BinaryOperator, Distinct, Expr, Function, FunctionArg, FunctionArgExpr, FunctionArguments,
+        GroupByExpr, JoinConstraint, JoinOperator, LimitClause, OrderByKind, Select, SelectItem,
+        SetExpr, SetOperator, SetQuantifier, Statement, TableFactor, UnaryOperator, WindowSpec,
+        WindowType,
     },
     dialect::MySqlDialect,
     parser::Parser,
@@ -300,6 +301,12 @@ fn expression(expr: &Expr, depth: usize) -> bool {
                 }
             }
             Expr::Function(function) => {
+                if let Some(argument) = count_argument(function) {
+                    if let Some(argument) = argument {
+                        pending.push(argument);
+                    }
+                    continue;
+                }
                 let Some(window) = row_number_window(function) else {
                     return false;
                 };
@@ -316,6 +323,32 @@ fn expression(expr: &Expr, depth: usize) -> bool {
         }
     }
     true
+}
+
+fn count_argument(function: &Function) -> Option<Option<&Expr>> {
+    if !function.name.to_string().eq_ignore_ascii_case("count")
+        || function.uses_odbc_syntax
+        || !matches!(function.parameters, FunctionArguments::None)
+        || function.filter.is_some()
+        || function.null_treatment.is_some()
+        || !function.within_group.is_empty()
+        || function.over.is_some()
+    {
+        return None;
+    }
+    let FunctionArguments::List(args) = &function.args else {
+        return None;
+    };
+    if !args.clauses.is_empty() {
+        return None;
+    }
+    match args.args.as_slice() {
+        [FunctionArg::Unnamed(FunctionArgExpr::Expr(expr))] => Some(Some(expr)),
+        [FunctionArg::Unnamed(FunctionArgExpr::Wildcard)] if args.duplicate_treatment.is_none() => {
+            Some(None)
+        }
+        _ => None,
+    }
 }
 
 fn row_number_window(function: &Function) -> Option<&WindowSpec> {

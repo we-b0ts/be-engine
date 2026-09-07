@@ -1,3 +1,5 @@
+mod mysql;
+mod mysql_time;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -90,13 +92,27 @@ impl TargetSelector {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct MysqlSelector {
+    #[serde(
+        default = "mysql::default_command",
+        skip_serializing_if = "mysql::is_default_command"
+    )]
     pub(super) command: String,
     pub(super) sql: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) database: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) username: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) params: BTreeMap<usize, DynamicValueRule>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) sql_values: BTreeMap<usize, MysqlTimeValueRule>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(try_from = "mysql_time::Config", into = "mysql_time::Config")]
+pub(super) struct MysqlTimeValueRule {
+    pub(super) source_evidence: String,
+    pub(super) time: TimeRule,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -367,10 +383,13 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
                 rule.id
             );
             ensure!(
-                !mysql.params.is_empty(),
-                "MySQL rule {:?} must configure at least one params field",
+                !mysql.params.is_empty() || !mysql.sql_values.is_empty(),
+                "MySQL rule {:?} must configure at least one params or sql_values field",
                 rule.id
             );
+            if !mysql.sql_values.is_empty() {
+                mysql::validate_selector(mysql)?;
+            }
             for (index, field) in &mysql.params {
                 validate_dynamic_value(field)
                     .with_context(|| format!("invalid MySQL rule {:?} params[{index}]", rule.id))?;

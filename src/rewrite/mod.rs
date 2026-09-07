@@ -784,6 +784,7 @@ pub fn apply_rewrite_dependency_rule(
                 matches!(
                     plan.spec,
                     model::RewriteDependencyRuleSpec::MemcachedProtobufTimestamp { .. }
+                        | model::RewriteDependencyRuleSpec::MysqlSqlTime { .. }
                 )
             });
             let cache_snapshot_refresh =

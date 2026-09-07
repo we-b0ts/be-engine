@@ -264,6 +264,9 @@ pub struct RewriteResponseBodyRuleSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum RewriteDependencyRuleSpec {
+    MysqlSqlTime {
+        selector: crate::MysqlTimeSelector,
+    },
     Mysql {
         selector: crate::MysqlBackgroundSelector,
     },

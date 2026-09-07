@@ -7,6 +7,7 @@ mod pattern;
 mod protobuf;
 mod report;
 mod response;
+mod sql_template;
 mod value;
 
 #[cfg(test)]
@@ -16,12 +17,13 @@ pub use config::{ReplayPolicyValidationReport, validate_replay_policy};
 pub(in crate::replay) use config::{fingerprint, load_replay_policy};
 pub use feedback::{
     ComparisonResponseRuleFeedback, MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan,
-    MemcachedTimestampRuleReport, ProfileTargetMissingFeedback, ProfileTargetMissingPlan,
+    MemcachedTimestampRuleReport, MysqlTimeRuleFeedback, MysqlTimeRulePlan, MysqlTimeRuleReport,
+    MysqlTimeSelector, ProfileTargetMissingFeedback, ProfileTargetMissingPlan,
     ProfileTargetMissingReport, ResponseBodyRuleEvidence, ResponseBodyRuleEvidenceKind,
     ResponseBodyRuleFeedback, ResponseBodyRulePlan, ResponseBodyRuleReport,
     ResponseBodyRuleVerificationOutcome, ResponseRuleFeedback, ResponseRulePlan,
     ResponseRuleReport, plan_comparison_response_rule, plan_memcached_timestamp_rule,
-    plan_profile_target_missing, plan_response_body_rule, plan_response_rule,
+    plan_mysql_time_rule, plan_profile_target_missing, plan_response_body_rule, plan_response_rule,
 };
 pub(crate) use initialization::render_validated_replay_policy;
 pub use initialization::{

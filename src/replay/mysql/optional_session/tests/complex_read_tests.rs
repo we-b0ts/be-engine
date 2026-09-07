@@ -17,6 +17,47 @@ const RANKED_READ: &str = "SELECT ranked.id FROM (
     ) combined
 ) ranked WHERE ranked.row_num=1 ORDER BY ranked.id DESC LIMIT 0,100";
 
+const COUNT_READ: &str = "SELECT count(distinct(combined_team_counts.team_id)) AS count_1
+    FROM (SELECT kinds.id AS team_id FROM kinds WHERE kinds.user_id=7
+    UNION SELECT kinds.id AS team_id FROM kinds WHERE kinds.namespace='shared') combined_team_counts";
+
+#[test]
+fn count_distinct_over_union_preserves_read_session_cleanup() {
+    for sql in [
+        COUNT_READ,
+        "SELECT COUNT(*) FROM users",
+        "SELECT COUNT(id) FROM users",
+        "SELECT COUNT(1) FROM users",
+        "SELECT COUNT(DISTINCT id) FROM users",
+    ] {
+        assert_eq!(classify(sql), Effect::ReadOnly, "{sql}");
+    }
+    let mut count = read(101, 1);
+    count["sql"] = json!(COUNT_READ);
+    count["response"]["server_status"] = json!(33);
+    let mut rollback = cleanup(102);
+    rollback["server_status_before"] = json!(33);
+    let mut records = vec![read(100, 0), count, rollback, exchange(103, "ROLLBACK")];
+    assert_eq!(optional(&records), [2, 3].into());
+    for sql in [
+        "SELECT COUNT(GET_LOCK('x',1)) FROM users",
+        "SELECT COUNT(custom_function()) FROM users",
+        "SELECT app.count(id) FROM users",
+        "SELECT COUNT((SELECT custom_function())) FROM users",
+        "SELECT COUNT(*) FROM (SELECT id FROM users FOR UPDATE) u",
+    ] {
+        assert_ne!(classify(sql), Effect::ReadOnly, "{sql}");
+        records[1]["sql"] = json!(sql);
+        assert_eq!(optional(&records), [3].into(), "{sql}");
+    }
+    records[1]["sql"] = json!(COUNT_READ);
+    records[0]
+        .as_object_mut()
+        .unwrap()
+        .remove("server_status_before");
+    assert_eq!(optional(&records), [3].into());
+}
+
 #[test]
 fn ranked_union_join_and_exists_are_read_only_when_every_child_is_pure() {
     assert_eq!(classify(RANKED_READ), Effect::ReadOnly);

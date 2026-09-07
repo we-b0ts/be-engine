@@ -13,6 +13,7 @@ use crate::{
 use std::path::PathBuf;
 
 pub(super) enum DependencyRulePlan {
+    MysqlTime(crate::MysqlTimeRulePlan),
     Mysql(MysqlBackgroundDependencyPlan),
     Http(BackgroundDependencyPlan),
     Memcached(BreezeMemcachedBackgroundDependencyPlan),
@@ -35,6 +36,7 @@ struct ExactKeyRedisPlanInput<'a> {
 impl DependencyRulePlan {
     pub(super) fn report(&self) -> Result<Value> {
         match self {
+            Self::MysqlTime(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::Http(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::Mysql(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::Memcached(plan) => Ok(serde_json::to_value(plan.report())?),
@@ -46,6 +48,7 @@ impl DependencyRulePlan {
 
     pub(super) fn apply(self) -> Result<Value> {
         match self {
+            Self::MysqlTime(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::Http(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::Mysql(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::Memcached(plan) => Ok(serde_json::to_value(plan.apply()?)?),
@@ -57,6 +60,9 @@ impl DependencyRulePlan {
 
     pub(super) fn reused_existing(&self) -> Option<&str> {
         match self {
+            Self::MysqlTime(plan) if plan.report().reused_existing => {
+                Some(&plan.report().effective_rule_id)
+            }
             Self::Http(plan) if plan.report().reused_existing => {
                 Some(&plan.report().effective_name)
             }
@@ -81,6 +87,7 @@ impl DependencyRulePlan {
 
     pub(super) fn effective_name(&self) -> &str {
         match self {
+            Self::MysqlTime(plan) => &plan.report().effective_rule_id,
             Self::Http(plan) => &plan.report().effective_name,
             Self::Mysql(plan) => &plan.report().effective_name,
             Self::Memcached(plan) => &plan.report().effective_name,
@@ -95,6 +102,9 @@ pub(super) fn spec_from_selector(
     selector: RewriteDependencyRuleSelector,
 ) -> RewriteDependencyRuleSpec {
     match selector {
+        RewriteDependencyRuleSelector::MysqlSqlTime { selector } => {
+            RewriteDependencyRuleSpec::MysqlSqlTime { selector }
+        }
         RewriteDependencyRuleSelector::Mysql { selector } => {
             RewriteDependencyRuleSpec::Mysql { selector }
         }
@@ -231,6 +241,18 @@ pub(super) fn build_plan(
         api,
     )?
     .replay;
+    if let RewriteDependencyRuleSpec::MysqlSqlTime { selector } = &record.spec {
+        return Ok(DependencyRulePlan::MysqlTime(crate::plan_mysql_time_rule(
+            crate::MysqlTimeRuleFeedback {
+                policy_path: target_root.join(".traffic-e2e/verification.yaml"),
+                replay_report_path,
+                api: state.api.clone(),
+                rule_id: record.name.clone(),
+                selector: selector.clone(),
+                source_evidence: record.source_evidence.clone(),
+            },
+        )?));
+    }
     let rules_path = target_root
         .join(crate::repository::TRAFFIC_E2E_ROOT)
         .join(crate::config::SOURCE_TRAFFIC_POLICY_FILE);
@@ -287,7 +309,8 @@ pub(super) fn build_plan(
                 },
             )?,
         )),
-        RewriteDependencyRuleSpec::MemcachedProtobufTimestamp { .. } => {
+        RewriteDependencyRuleSpec::MemcachedProtobufTimestamp { .. }
+        | RewriteDependencyRuleSpec::MysqlSqlTime { .. } => {
             unreachable!("Memcached payload plans return before background evidence resolution")
         }
         RewriteDependencyRuleSpec::Motan {

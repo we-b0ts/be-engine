@@ -78,6 +78,15 @@ wildcards and other expressions retain strict matching. See
 [MySQL interoperability](../../../../../docs/mysql-replay.md) for the exact
 boundary and actual-client acceptance tests.
 
+Generated MySQL write timestamps can use explicit `mysql.sql_values` time rules
+across text and prepared protocols. Rules select database and SQL, independently
+of inbound API paths; `sql_values: {0: {time: replay_now, tolerance: 5s}}` uses
+UTC MySQL datetime defaults. The coordinator exposes
+`dependency-rule plan mysql-time`; it requires source proof and matching immutable
+write evidence, then reruns Replay without new recording or write omission.
+See [SQL time rules](../../../../../docs/mysql-time-rules.md). Preserve database
+error propagation in target code; swallowing an unmatched UPDATE is not a fix.
+
 Ordinary single-table SELECT predicates also support reordered IN/NOT IN values
 and pure AND conditions / OR branches, including source text literals versus target bound `?`
 parameters. Values, types, NULL and duplicate counts stay exact. This built-in

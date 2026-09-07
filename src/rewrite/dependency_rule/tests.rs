@@ -241,3 +241,35 @@ fn mysql_plan_survives_persistence_without_requesting_redis_snapshot_recording()
             .is_none()
     );
 }
+
+#[test]
+fn mysql_time_plan_survives_response_issue_persistence_without_background_reclassification() {
+    let mut state = dependency_state();
+    state.active_issue.as_mut().unwrap().kind = RewriteIssueKind::Response;
+    state.dependency_rule_plan.as_mut().unwrap().spec = RewriteDependencyRuleSpec::MysqlSqlTime {
+        selector: crate::MysqlTimeSelector {
+            target_host: "db.internal".into(),
+            target_port: 3306,
+            database: "app".into(),
+            username: "user".into(),
+            sql: "UPDATE keys SET stamp=? WHERE id=?".into(),
+            value_index: 0,
+            tolerance: "5s".into(),
+            offset: "0s".into(),
+            format: "%Y-%m-%d %H:%M:%S%.f".into(),
+            timezone: "+00:00".into(),
+        },
+    };
+    let state: RewriteState =
+        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+    let plan = pending_plan_for_apply(&state, "dependency-plan-original").unwrap();
+    assert!(matches!(
+        plan.spec,
+        RewriteDependencyRuleSpec::MysqlSqlTime { .. }
+    ));
+    assert!(
+        pending_cache_snapshot_refresh(&state, "dependency-plan-original")
+            .unwrap()
+            .is_none()
+    );
+}

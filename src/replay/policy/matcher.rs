@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+pub(super) mod mysql_values;
 use std::fs;
 use std::path::Path;
 
@@ -685,7 +686,8 @@ fn rule_matches_mysql(
     let Some(mysql) = &rule.mysql else {
         return false;
     };
-    if !mysql.command.eq_ignore_ascii_case(command)
+    if !(mysql.command.eq_ignore_ascii_case(command)
+        || (!mysql.sql_values.is_empty() && matches!(command, "COM_QUERY" | "COM_STMT_EXECUTE")))
         || !rule_matches_target(rule, identity.target.as_ref())
         || mysql
             .database
@@ -701,6 +703,9 @@ fn rule_matches_mysql(
     let Some(sql) = sql else {
         return false;
     };
+    if !mysql.sql_values.is_empty() {
+        return super::sql_template::template_matches(&mysql.sql, sql);
+    }
     text_pattern_matches(
         &crate::mysql::sql::normalize_pattern(&mysql.sql),
         &normalize_sql(sql),
@@ -711,6 +716,9 @@ fn rule_matches_mysql_sql_pattern(rule: &ReplayDependencyRule, sql: Option<&str>
     let (Some(mysql), Some(sql)) = (&rule.mysql, sql) else {
         return false;
     };
+    if !mysql.sql_values.is_empty() {
+        return super::sql_template::template_matches(&mysql.sql, sql);
+    }
     text_pattern_matches(
         &crate::mysql::sql::normalize_pattern(&mysql.sql),
         &normalize_sql(sql),

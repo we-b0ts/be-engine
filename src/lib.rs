@@ -193,6 +193,7 @@ pub use replay::{
     Hessian2UnorderedPath, Hessian2ValuePath, Hessian2ValuePathCandidate,
     JsonJoinedStringCandidate, MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan,
     MemcachedTimestampRuleReport, MysqlReplayConfig, MysqlReplayControlConfig,
+    MysqlTimeRuleFeedback, MysqlTimeRulePlan, MysqlTimeRuleReport, MysqlTimeSelector,
     ProfileTargetMissingFeedback, ProfileTargetMissingPlan, ProfileTargetMissingReport,
     ProtobufBodyDifference, ProtobufBodyDifferenceKind, ProtobufFieldPath,
     ProtobufFieldPathCandidate, ProtobufJoinedStringCandidate, ProtobufJoinedStringFieldType,
@@ -209,9 +210,10 @@ pub use replay::{
     ResponseGatewayProtocol, ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan,
     ResponseRuleReport, aggregate_replay_reports, aggregate_replay_reports_with_options,
     assert_recorded_response, initialize_replay_policy, plan_comparison_response_rule,
-    plan_memcached_timestamp_rule, plan_profile_target_missing, plan_response_body_rule,
-    plan_response_rule, run_mysql_replay, run_mysql_replay_control, run_replay, run_replay_control,
-    run_replay_with_counters, run_replay_with_lifecycle, validate_replay_policy,
+    plan_memcached_timestamp_rule, plan_mysql_time_rule, plan_profile_target_missing,
+    plan_response_body_rule, plan_response_rule, run_mysql_replay, run_mysql_replay_control,
+    run_replay, run_replay_control, run_replay_with_counters, run_replay_with_lifecycle,
+    validate_replay_policy,
 };
 pub use rewrite::{
     JwtRulePlanOptions, RewriteAction, RewriteActionEnvelope, RewriteApiInventoryDetails,

@@ -75,6 +75,9 @@ pub struct RewriteDependencyRulePlanReport {
 
 #[derive(Debug, Clone)]
 pub enum RewriteDependencyRuleSelector {
+    MysqlSqlTime {
+        selector: crate::MysqlTimeSelector,
+    },
     Mysql {
         selector: crate::MysqlBackgroundSelector,
     },
@@ -132,18 +135,23 @@ pub(super) fn plan(
     options: RewriteDependencyRulePlanOptions,
 ) -> Result<RewriteDependencyRulePlanReport> {
     let spec = spec_from_selector(options.selector.clone());
+    let sql_time = matches!(&spec, RewriteDependencyRuleSpec::MysqlSqlTime { .. });
+    ensure!(
+        !sql_time || options.ownership == RewriteDependencyOwnership::RequestOwned,
+        "SQL time validation does not change dependency ownership; use request-owned"
+    );
     let issue = dependency_issue(state, &spec)?;
     validate_plan_evidence(target_root, state, &issue.id, &options.evidence_id, &spec)?;
     let selector = serde_json::to_value(&spec)?;
-    if options.ownership != RewriteDependencyOwnership::ProcessOwned {
+    if !sql_time && options.ownership != RewriteDependencyOwnership::ProcessOwned {
         return classify_non_process_owned(target_root, state, issue, options, selector);
     }
     let name = options
         .name
-        .context("--name is required when --ownership process-owned")?;
+        .context("a rule name is required when planning a dependency rule")?;
     let source_evidence = options
         .source_evidence
-        .context("--source-evidence is required when --ownership process-owned")?;
+        .context("--source-evidence is required when planning a dependency rule")?;
     let spec_json = serde_json::to_string(&spec)?;
     let mut record = RewriteDependencyRulePlanRecord {
         id: format!(
@@ -179,10 +187,10 @@ pub(super) fn plan(
     state.dependency_rule_plan = Some(record.clone());
     state.bump();
     Ok(RewriteDependencyRulePlanReport {
-        ownership: RewriteDependencyOwnership::ProcessOwned,
+        ownership: options.ownership,
         issue_id: issue.id,
         evidence_id: options.evidence_id,
-        process_owned_rule_applicable: true,
+        process_owned_rule_applicable: !sql_time,
         target_implementation_required: false,
         selector,
         plan_id: Some(record.id.clone()),
@@ -335,6 +343,7 @@ pub(super) fn apply(
     if !matches!(
         &record.spec,
         RewriteDependencyRuleSpec::MemcachedProtobufTimestamp { .. }
+            | RewriteDependencyRuleSpec::MysqlSqlTime { .. }
     ) && state.case_source.is_some()
         && state.group_id.is_some()
     {
@@ -380,6 +389,7 @@ fn dependency_issue(
         (matches!(
             spec,
             RewriteDependencyRuleSpec::MemcachedProtobufTimestamp { .. }
+                | RewriteDependencyRuleSpec::MysqlSqlTime { .. }
         ) && matches!(
             issue.kind,
             RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay

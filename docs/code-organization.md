@@ -253,6 +253,17 @@ explicit repository-wide audit.
   facts for diagnosis; it does not infer process ownership or implement rule
   planning. The shared summary/detail command flow also serves Redis and Memcached.
 
+- `replay/policy/matcher/mysql_values` owns explicit SQL time-slot validation
+  across text and prepared calls. It reuses `replay/mysql/sql_match` value
+  materialization; the MySQL matcher retains identity and finite consumption.
+  `replay/policy/sql_template` owns pure bounded template extraction, and
+  `replay/policy/config/mysql` owns rule-schema validation. Its sibling
+  `config/mysql_time` owns compact time defaults and legacy syntax conversion;
+  the policy document renderer keeps SQL value maps on one line.
+  `replay/policy/feedback/mysql_time` owns atomic policy plan/apply; its evidence
+  child correlates immutable writes. Coordinator dependency rules persist the plan
+  and invalidate validation without changing dependency ownership.
+
 - `request_rules` owns explicit inbound-request transformation policy and the
   per-send runtime. Its `jwt` child owns compact HMAC JWT verification and
   relative NumericDate translation; `keys` resolves private references to
