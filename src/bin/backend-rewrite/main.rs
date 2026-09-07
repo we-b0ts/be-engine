@@ -1,3 +1,4 @@
+mod jwt_rule;
 use std::io::Write;
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
@@ -216,8 +217,8 @@ struct RuleArgs {
 
 #[derive(Debug, Subcommand)]
 enum RuleCommand {
-    /// Validate current evidence and preview one response-rule change.
-    Plan(RulePlanArgs),
+    /// Validate current evidence and preview one request or response rule.
+    Plan(Box<RulePlanArgs>),
     /// Atomically apply the persisted, evidence-validated pending plan.
     Apply(RuleApplyArgs),
 }
@@ -251,11 +252,13 @@ impl From<ResponseBodyCodecArg> for ResponseBodyCodec {
 
 #[derive(Debug, Args)]
 struct RulePlanArgs {
+    #[command(flatten)]
+    jwt: jwt_rule::JwtArgs,
     #[arg(long)]
     evidence_id: String,
     /// Response body codec. JSON uses --kind and JSON arguments; typed codecs use typed path JSON.
-    #[arg(long, value_enum)]
-    body_codec: ResponseBodyCodecArg,
+    #[arg(long, value_enum, required_unless_present = "request_kind")]
+    body_codec: Option<ResponseBodyCodecArg>,
     /// JSON response-rule kind. Omit for protobuf and Hessian2 typed-body rules.
     #[arg(
         long,
@@ -608,7 +611,11 @@ async fn run(cli: Cli) -> Result<()> {
                     RewriteContext { target_root },
                     RewriteRulePlanOptions {
                         evidence_id: args.evidence_id,
-                        body_codec: args.body_codec.into(),
+                        body_codec: args
+                            .body_codec
+                            .map(Into::into)
+                            .unwrap_or(ResponseBodyCodec::Json),
+                        jwt: args.jwt.options()?,
                         kind: args.kind.map(Into::into),
                         json_pointer: args.json_pointer,
                         source_evidence: args.source_evidence,

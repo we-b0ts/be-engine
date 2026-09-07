@@ -38,9 +38,12 @@ pub(crate) struct RecordedHttpClient {
     request_timeout: Duration,
     max_response_bytes: usize,
     preserve_host: bool,
+    request_rules: Option<crate::request_rules::RequestRuleRuntime>,
 }
 
 pub(crate) struct RecordedHttpResponse {
+    pub(crate) request_sent_at: chrono::DateTime<chrono::Utc>,
+    pub(crate) request_rules: Vec<crate::request_rules::RequestRuleObservation>,
     pub(crate) status: StatusCode,
     pub(crate) body: Bytes,
 }
@@ -59,6 +62,7 @@ impl RecordedHttpClient {
             request_timeout,
             max_response_bytes,
             preserve_host: false,
+            request_rules: None,
         }
     }
 
@@ -73,6 +77,13 @@ impl RecordedHttpClient {
         }
     }
 
+    pub(crate) fn with_request_rules(mut self, root: &Path, policy: &Path) -> Result<Self> {
+        self.request_rules = Some(crate::request_rules::RequestRuleRuntime::load(
+            root, policy,
+        )?);
+        Ok(self)
+    }
+
     pub(crate) async fn send(&self, request_path: &Path) -> Result<RecordedHttpResponse> {
         let request_label = request_path.display().to_string();
         let request_path = request_path.to_path_buf();
@@ -81,8 +92,17 @@ impl RecordedHttpClient {
         })
         .await
         .context("recorded request loader task failed")??;
-        let recorded: RecordedRequest = serde_json::from_slice(&bytes)
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes)
             .with_context(|| format!("invalid recorded request {request_label}"))?;
+        let request_sent_at = chrono::Utc::now();
+        let request_rules = self
+            .request_rules
+            .as_ref()
+            .map(|rules| rules.apply(&mut value, request_sent_at))
+            .transpose()?
+            .unwrap_or_default();
+        let recorded: RecordedRequest =
+            serde_json::from_value(value).context("invalid recorded request shape")?;
         let request = build_request(&self.origin, &recorded, self.preserve_host)?;
         tokio::time::timeout(self.request_timeout, async {
             let response = self
@@ -92,7 +112,12 @@ impl RecordedHttpClient {
                 .context("recorded HTTP request failed")?;
             let status = response.status();
             let body = collect_limited(response.into_body(), self.max_response_bytes).await?;
-            Ok::<_, anyhow::Error>(RecordedHttpResponse { status, body })
+            Ok::<_, anyhow::Error>(RecordedHttpResponse {
+                request_sent_at,
+                request_rules,
+                status,
+                body,
+            })
         })
         .await
         .context("recorded HTTP request timed out")?

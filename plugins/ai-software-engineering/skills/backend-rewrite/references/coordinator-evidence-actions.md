@@ -284,3 +284,33 @@ For a Response issue with Redis bootstrap observations, the returned
 planner. It accepts compact HGET/HMGET
 numeric-key patterns plus exact fields, applies a replay-only overlay to
 immutable Global bootstrap evidence, and returns to the same focused cases.
+
+## JWT expiration during Replay
+
+For a status mismatch with target HTTP 401, use the coordinator-issued
+`jwt-time-validity` query. It reports recorded/replay time and unverified JWT
+expiration candidates without credentials. Trace the source and target JWT
+verification path, key source, and actual expiration leeway; 401 or zero
+observed dependencies alone does not establish the cause.
+
+Read `signing_key_discovery` in that evidence for effective target variable
+names, startup mount paths and `writable` modes, and existing key references.
+Use the returned `startup env list` and `startup mount list` commands when
+needed; do not guess mounts or dump dotenv contents. Select a file within a
+mount with `writable: false` only after source/target code proves the dotenv
+path, key field and loading precedence. Discovery needs no running target.
+
+Use the returned `rule plan --request-kind jwt` planner with
+`--signing-key-ref`, either `--target-env` or
+`--target-key-file` plus `--target-key-field`, `--jwt-leeway-seconds`, and
+`--source-evidence`. Plan/apply must verify the original JWT signature and
+reject stale evidence or changed keys. Existing bindings require no repeated
+key-source declaration. Never pass raw keys on the command line or expose
+raw tokens in evidence notes.
+
+The resulting global `verification.yaml` `request_rules.jwt` rule changes
+only engine-sent request copies. Apply returns `next` and invalidates API
+acceptance across the service. Reexecute the existing recorded cases; this
+request rule does not require new standard recording and cannot be verified
+by reclassifying old actual responses. Preserve normal JWT expiry checks in
+target code and keep dependency verification strict.

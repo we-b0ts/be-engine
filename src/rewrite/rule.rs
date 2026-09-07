@@ -19,6 +19,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct RewriteRulePlanOptions {
     pub evidence_id: String,
+    pub jwt: Option<super::jwt_rule::JwtRulePlanOptions>,
     pub body_codec: ResponseBodyCodec,
     pub kind: Option<ResponseRuleKind>,
     pub json_pointer: Option<String>,
@@ -56,6 +57,26 @@ pub(super) fn plan(
     state: &mut RewriteState,
     options: RewriteRulePlanOptions,
 ) -> Result<RewriteRuleReport> {
+    if let Some(jwt) = options.jwt {
+        ensure!(
+            options.body_codec == ResponseBodyCodec::Json
+                && options.kind.is_none()
+                && options.json_pointer.is_none()
+                && options.source_example.is_none()
+                && options.target_example.is_none()
+                && options.separator.is_none()
+                && options.unordered_paths.is_empty()
+                && options.unordered_joined_string_paths.is_empty(),
+            "JWT request rules cannot carry response rule options"
+        );
+        return super::jwt_rule::plan(
+            target_root,
+            state,
+            options.evidence_id,
+            options.source_evidence,
+            jwt,
+        );
+    }
     match options.body_codec {
         ResponseBodyCodec::Json => plan_json(target_root, state, options),
         ResponseBodyCodec::Protobuf | ResponseBodyCodec::Hessian2 => {
@@ -119,6 +140,7 @@ fn plan_json(
         target_example: options.target_example,
         separator: options.separator,
         response_body: None,
+        jwt: None,
         evidence_id: options.evidence_id,
     };
     let traffic_plan = build_plan(target_root, state, &record)?;
@@ -186,6 +208,7 @@ fn plan_response_body(
         target_example: None,
         separator: None,
         response_body: Some(spec),
+        jwt: None,
         evidence_id: options.evidence_id,
     };
     let traffic_report = build_plan(target_root, state, &record)?.report()?;
@@ -207,6 +230,9 @@ pub(super) fn apply(
     plan_id: &str,
 ) -> Result<RewriteRuleReport> {
     let record = pending_plan_for_apply(state, plan_id)?;
+    if record.jwt.is_some() {
+        return super::jwt_rule::apply(target_root, state, record);
+    }
     let projected = build_plan(target_root, state, &record)?.apply()?;
     state.rule_plan = None;
     state.e2e_current = false;

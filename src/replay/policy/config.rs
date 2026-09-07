@@ -20,6 +20,11 @@ pub(in crate::replay) struct ReplayPolicyDocument {
     pub(in crate::replay) expected_response: ExpectedResponseUsage,
     #[serde(default)]
     pub(super) dependency_rules: Vec<ReplayDependencyRule>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::request_rules::RequestRules::is_empty"
+    )]
+    pub(crate) request_rules: crate::request_rules::RequestRules,
     #[serde(default, skip_serializing_if = "ResponseSettings::is_empty")]
     pub(in crate::replay) response_settings: ResponseSettings,
     #[serde(default, skip_serializing_if = "ResponseRules::is_empty")]
@@ -265,6 +270,11 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
                 && document.process_output_rules.is_empty()),
         "response_settings and response_rules, plus process_output_rules, require replay policy version 3"
     );
+    ensure!(
+        document.version >= 3 || document.request_rules.is_empty(),
+        "request_rules require replay policy version 3"
+    );
+    document.request_rules.validate()?;
     validate_response_rules(&document.response_rules)?;
     for (output_id, rules) in &document.process_output_rules {
         crate::process_output::validate_verification_rules(output_id, rules)?;

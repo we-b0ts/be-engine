@@ -59,11 +59,21 @@ pub async fn drive_managed_recording_input(
         !requests.is_empty(),
         "managed recording input contains no request.json files"
     );
-    let client = RecordedHttpClient::new_recording_input(
+    let mut client = RecordedHttpClient::new_recording_input(
         options.origin,
         options.request_timeout,
         DEFAULT_BODY_LIMIT_BYTES,
     );
+    // A finite comparison sends one transformed request to the gateway, which
+    // forwards those identical bytes to both source and candidate.
+    if let Some(root) = case_source
+        .ancestors()
+        .find(|p| p.file_name().is_some_and(|n| n == ".traffic-e2e"))
+        .and_then(Path::parent)
+    {
+        let (_, config) = crate::e2e_run::resolve_project(root)?;
+        client = client.with_request_rules(root, &config.replay_policy)?;
+    }
     let mut attempted = 0_usize;
     let mut succeeded = 0_usize;
     let mut failed = 0_usize;

@@ -8,6 +8,7 @@ mod evidence;
 mod execute;
 mod final_evidence;
 mod http_driver;
+pub(crate) mod jwt_evidence;
 mod model;
 mod progress;
 mod project_validation;

@@ -1,5 +1,6 @@
 mod config;
 mod feedback;
+pub(crate) use feedback::replace_request_rule_section;
 mod initialization;
 mod matcher;
 mod pattern;

@@ -520,6 +520,7 @@ async fn execute_case(
     let assertion_command = match &case_view {
         Ok(case_view) => {
             super::http_driver::capture_case(
+                &layout.target_root,
                 config,
                 &case_view.case_dir().join("request.json"),
                 &actual_response,

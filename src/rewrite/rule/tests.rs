@@ -29,6 +29,7 @@ fn response_state() -> RewriteState {
         target_example: None,
         separator: None,
         response_body: None,
+        jwt: None,
         evidence_id: "evidence-response".to_string(),
     });
     state
