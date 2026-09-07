@@ -56,14 +56,21 @@ must confirm transaction completion without chaining or further results.
 
 The independent SQL effect classifier uses sqlparser and caches ReadOnly,
 StateChange or Unknown for each SQL string during loading. It admits
-single-table SELECTs with direct columns, literals, wildcards, DISTINCT, pure
+SELECTs with direct columns, literals, wildcards, DISTINCT, pure
 boolean/arithmetic expressions, grouping, HAVING, ordering and pagination.
+Derived tables, UNION/UNION ALL, ordinary joins and EXISTS are checked recursively:
+every branch, joined relation, join condition and nested query must be read-only.
+The unqualified builtin `ROW_NUMBER()` is admitted only with an inline OVER
+specification whose partition/order expressions are pure and which has no frame
+or function extensions. Flat expression and UNION chains are traversed iteratively,
+so large OR groups do not exhaust a recursive expression-depth limit. SQL size,
+token count, parser depth and nested-query depth remain bounded.
 Boolean tests (`IS [NOT] TRUE`, `IS [NOT] FALSE`, `IS [NOT] UNKNOWN`) preserve
-the read proof only when their operand is also proven pure; wrapping a call or
-subquery in such a test never makes it read-only.
+the read proof only when their operand is also proven pure; wrapping an unknown
+call or unsupported subquery in such a test never makes it read-only.
 This proves absence of effects; it does not require those expressions to be
 supported by the query equivalence matcher. Writes, explicit BEGIN,
-locks, savepoints, calls/functions, subqueries and unsupported SQL interrupt
+locks, savepoints, unknown calls/functions, scalar/IN subqueries and unsupported SQL interrupt
 the read proof. Unknown transaction starts, sequence gaps, errors or truncated
 evidence keep the first rollback required. Classification stays within one
 dependency file and caches SQL effect checks only during that load. It neither

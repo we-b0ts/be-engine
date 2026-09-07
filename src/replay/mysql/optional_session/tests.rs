@@ -1,6 +1,8 @@
 use super::*;
 use serde_json::json;
 
+mod complex_read_tests;
+
 fn exchange(sequence: u64, sql: &str) -> Value {
     json!({"event_type":"mysql_exchange", "connection_id":Uuid::nil(),
         "query_sequence":sequence, "target_host":"db.internal", "target_port":3306,
@@ -318,7 +320,7 @@ fn read_effect_allowlist_rejects_locks_calls_and_vendor_tail_clauses() {
         "SELECT /*!50000 SQL_CALC_FOUND_ROWS */ id FROM users",
         "SELECT id FROM users SETTINGS x=custom_function()",
         "SELECT id FROM users FORMAT JSON",
-        "SELECT id FROM users UNION SELECT id FROM users",
+        "SELECT id FROM users UNION SELECT custom_function() FROM users",
         "CALL read_users()",
         "SELECT id FROM users WHERE id =",
         "SELECT id FROM users WHERE id=1 FOR UPDATE NOWAIT",

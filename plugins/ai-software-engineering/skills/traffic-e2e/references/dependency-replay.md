@@ -98,7 +98,10 @@ Replay allows a successful duplicate ROLLBACK after a confirmed transaction end,
 and a first ROLLBACK after a proven implicit read-only span. The latter requires
 captured before/after transaction status, a known inactive start, consecutive
 ordinary SELECTs and successful transaction completion on the same connection
-and identity. Writes, locks, explicit transactions, unknown starts and incomplete
+and identity. Read-effect checks cover derived tables, UNION, joins, EXISTS and
+pure ROW_NUMBER windows by checking every child, independently of SQL matching;
+long OR chains do not lose their read proof solely because of expression width.
+Writes, locks, explicit transactions, unknown starts and incomplete
 evidence remain strict. Older recordings lacking query status evidence require
 re-recording; do not infer eligibility from SELECT summaries or read debug JSONL
 as the replay source. Optional cleanup stays matchable, and all business reads

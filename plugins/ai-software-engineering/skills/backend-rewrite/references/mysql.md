@@ -238,6 +238,9 @@ Large OR groups with a repeated parameter template use bounded linear metadata
 matching. Empty strings remain values, distinct from NULL. `IS [NOT] TRUE`,
 `IS [NOT] FALSE` and `IS [NOT] UNKNOWN` can accompany reordered conditions and
 tuple IN lists; retain these operators instead of rewriting them as `= 1/0`.
+The independent read-effect check also handles derived tables, UNION, ordinary
+joins, EXISTS and pure ROW_NUMBER windows, including long OR chains. Successful
+matching alone never makes unknown effects safe to omit at session cleanup.
 This built-in compatibility composes with direct-column projection mapping;
 it requires no rule or new recording. Complex expressions and positional
 dynamic-parameter policies keep their existing boundaries. See
