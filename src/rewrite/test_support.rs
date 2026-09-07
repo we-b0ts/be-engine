@@ -15,6 +15,7 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
         current_api_index: None,
         parked_slices: std::collections::BTreeMap::new(),
         worker_bindings: std::collections::BTreeMap::new(),
+        worker_event_revision: 0,
         process_outputs: Default::default(),
         api_catalog_initialized: false,
         api_catalog: std::collections::BTreeSet::new(),

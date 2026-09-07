@@ -1,0 +1,169 @@
+//! Read-only projection of executable coordinator work. Waiting work is not pending.
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use anyhow::Result;
+use serde::Serialize;
+
+use super::model::{RewriteAction, RewriteApiStatus, RewritePhase, RewriteState};
+use super::worker::{model::RewriteWorkerCoverageState as Coverage, runtime, scheduler};
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RewriteCoordinationDetails {
+    pub ready: BTreeMap<String, usize>,
+    pub waiting: BTreeMap<String, usize>,
+    pub completed: usize,
+}
+
+impl RewriteCoordinationDetails {
+    pub(super) fn pending(&self) -> usize {
+        self.ready.values().sum()
+    }
+}
+
+pub(super) fn resources_busy(target_root: &Path) -> Result<bool> {
+    Ok(!matches!(
+        super::traffic_operation::state(target_root)?,
+        super::traffic_operation::TrafficOperationState::Absent
+    ) || !matches!(
+        super::store::RewriteStore::new(target_root)?.lock_state()?,
+        super::store::RewriteLockState::Absent
+    ) || super::execution::busy(target_root)?)
+}
+
+fn add(counts: &mut BTreeMap<String, usize>, name: &str, count: usize) {
+    if count > 0 {
+        *counts.entry(name.to_string()).or_default() += count;
+    }
+}
+
+fn replace_one(counts: &mut BTreeMap<String, usize>, previous: &str, next: &str) {
+    if let Some(value) = counts.get_mut(previous) {
+        *value -= 1;
+        if *value == 0 {
+            counts.remove(previous);
+        }
+    }
+    add(counts, next, 1);
+}
+
+pub(super) fn details(
+    state: &RewriteState,
+    action: &RewriteAction,
+    busy: bool,
+) -> RewriteCoordinationDetails {
+    let mut result = RewriteCoordinationDetails::default();
+    for scope in runtime::scopes(state) {
+        match runtime::coverage(state, &scope) {
+            Coverage::DispatchRequired => add(&mut result.ready, "dispatch_worker", 1),
+            Coverage::ResumeRequired => add(&mut result.ready, "resume_worker", 1),
+            Coverage::StatusRequired => add(&mut result.ready, "check_worker_status", 1),
+            Coverage::Running => add(&mut result.waiting, "worker_handoff", 1),
+            Coverage::IntegrationRequired if !busy => {
+                add(&mut result.ready, "integrate_handoff", 1)
+            }
+            Coverage::IntegrationRequired => add(&mut result.waiting, "integration_resource", 1),
+            Coverage::VerificationRequired
+                if !busy
+                    && (matches!(scope, super::RewriteWorkScope::ProcessOutput { .. })
+                        || matches!(
+                            state.phase,
+                            RewritePhase::ApiPending | RewritePhase::ImplementationRequired
+                        )) =>
+            {
+                add(&mut result.ready, "verify_handoff", 1)
+            }
+            Coverage::VerificationRequired => add(&mut result.waiting, "verification_resource", 1),
+        }
+    }
+    let unverified = state
+        .api_inventory
+        .iter()
+        .filter(|item| item.status == RewriteApiStatus::Pending)
+        .count()
+        + usize::from(state.phase == RewritePhase::ApiPending);
+    if !busy
+        && matches!(
+            state.phase,
+            RewritePhase::ApiPending | RewritePhase::ImplementationRequired
+        )
+    {
+        add(&mut result.ready, "verify_api", unverified);
+    } else {
+        add(&mut result.waiting, "replay_resource", unverified);
+    }
+    add(
+        &mut result.waiting,
+        "final_revalidation",
+        state
+            .api_inventory
+            .iter()
+            .filter(|item| item.status == RewriteApiStatus::RevalidationPending)
+            .count(),
+    );
+    result.completed = state
+        .api_inventory
+        .iter()
+        .filter(|item| item.status == RewriteApiStatus::Complete)
+        .count();
+    match action {
+        RewriteAction::WaitRequired { .. }
+        | RewriteAction::RecordingInProgress { .. }
+        | RewriteAction::RecordingRefreshPending { .. }
+        | RewriteAction::Complete { .. }
+        | RewriteAction::ExecutionFailed { .. } => result.ready.clear(),
+        RewriteAction::InputRequired {
+            reason: super::model::RewriteInputRequiredReason::WorkflowNotInitialized,
+            ..
+        } => result.ready.clear(),
+        RewriteAction::ImplementationRequired { .. }
+        | RewriteAction::WorkerStatusRequired { .. }
+        | RewriteAction::IntegrationRequired { .. } => {}
+        RewriteAction::AdvanceRequired { .. }
+            if result.ready.contains_key("verify_api")
+                || result.ready.contains_key("verify_handoff") => {}
+        RewriteAction::TargetQualityRequired { .. } => {
+            replace_one(&mut result.ready, "verify_handoff", "target_quality")
+        }
+        RewriteAction::PlanApplyRequired { .. } => {
+            replace_one(&mut result.ready, "integrate_handoff", "apply_plan")
+        }
+        _ => add(&mut result.ready, "advance_workflow", 1),
+    }
+    result
+}
+
+pub(super) fn pending(state: &RewriteState, action: &RewriteAction, busy: bool) -> usize {
+    details(state, action, busy).pending()
+}
+
+pub(super) fn busy_workers(
+    target_root: &Path,
+    state: &RewriteState,
+    api: Option<&crate::RecordingApi>,
+) -> Result<Option<super::model::RewriteActionEnvelope>> {
+    let selected = if let Some(api) = api {
+        let scope = super::RewriteWorkScope::Api {
+            api: api.to_string(),
+        };
+        runtime::scopes(state)
+            .contains(&scope)
+            .then_some(scope)
+            .and_then(|scope| {
+                matches!(
+                    runtime::coverage(state, &scope),
+                    Coverage::DispatchRequired
+                        | Coverage::ResumeRequired
+                        | Coverage::StatusRequired
+                )
+                .then(|| scheduler::scope_action(target_root, state, &scope))
+            })
+    } else {
+        scheduler::global_action(target_root, state, true)
+    };
+    Ok(selected.map(|action| {
+        let mut envelope = super::action::envelope(target_root, state, action);
+        envelope.pending = pending(state, &envelope.action, true);
+        envelope
+    }))
+}

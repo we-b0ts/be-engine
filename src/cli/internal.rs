@@ -8,7 +8,7 @@ use traffic_e2e::{
     ManagedRecordingInputCompletion, ManagedRecordingInputOptions, ProcessOutputCaptureSide,
     ProcessOutputObservation, RecordingApi, capture_project_process_outputs,
     capture_project_process_outputs_for_observation, drive_managed_recording_input,
-    execute_rewrite_recording_worker,
+    execute_rewrite_operation, execute_rewrite_recording_worker,
 };
 
 use super::{record, record_comparison};
@@ -36,6 +36,8 @@ enum InternalCommand {
     /// Run one detached rewrite recording action owned by the coordinator.
     #[command(hide = true)]
     RewriteRecordingWorker(RewriteRecordingWorkerArgs),
+    #[command(hide = true)]
+    RewriteOperationWorker(RewriteRecordingWorkerArgs),
 }
 
 #[derive(Debug, Args)]
@@ -150,6 +152,10 @@ pub(super) async fn run(args: InternalArgs) -> Result<()> {
                     &args.output_root,
                 )?,
             };
+            super::output::stdout_line(format_args!("{}", serde_json::to_string(&report)?))
+        }
+        InternalCommand::RewriteOperationWorker(args) => {
+            let report = execute_rewrite_operation(args.target_root, &args.action_id).await?;
             super::output::stdout_line(format_args!("{}", serde_json::to_string(&report)?))
         }
         InternalCommand::RewriteRecordingWorker(args) => {

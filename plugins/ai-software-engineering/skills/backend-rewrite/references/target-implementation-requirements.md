@@ -4,7 +4,7 @@ Read this reference only in these situations:
 
 - an assigned API or process-output worker is about to change target product
   code, target startup, or target configuration; or
-- the main orchestrator is about to integrate a worker change, resolve an
+- the state-machine coordinator is about to integrate a worker change, resolve an
   integration conflict, or make a shared target refactor.
 
 These requirements apply only to an existing initialized target repository.
@@ -42,7 +42,7 @@ These requirements apply only to an existing initialized target repository.
 - When source behavior proves that implemented target logic requires an
   application-owned environment variable, follow [startup.md](startup.md)
   immediately. Preserve the runtime lookup in target code and return the
-  source-proven startup input for the main orchestrator; do not wait for a
+  source-proven startup input for the state-machine coordinator; do not wait for a
   connection or startup failure and do not hardcode the effective value.
 - Never print, persist, or hard-code credentials, private keys, tokens, remote
   configuration values, source-process memory, or generated SDK snapshots.
@@ -141,7 +141,7 @@ product uses.
   inputs, and unresolved risks.
 - A worker MUST NOT execute coordinator acceptance, advance workflow state, or
   claim that the work item or workflow is complete.
-- The main orchestrator integrates the change in the canonical target worktree
+- The state-machine coordinator integrates the change in the canonical target worktree
   and executes the coordinator-issued target quality and acceptance actions.
   Worker-local checks do not replace those integrated-revision gates.
 - Performance, throughput, capacity, scalability, and availability claims

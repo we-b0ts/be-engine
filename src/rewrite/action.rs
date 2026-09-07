@@ -15,7 +15,9 @@ use super::{
 };
 
 pub(super) fn for_state(target_root: &Path, state: &RewriteState) -> RewriteActionEnvelope {
-    envelope(target_root, state, state_action(target_root, state))
+    let base = state_action(target_root, state);
+    let selected = global_worker_action(target_root, state, &base).unwrap_or(base);
+    envelope(target_root, state, selected)
 }
 
 pub(super) fn for_status(
@@ -33,7 +35,7 @@ pub(super) fn for_status(
     }
     let recording_status = recording_action::status_action(target_root, state)?;
     let target_change = target_quality::status_action(target_root, state)?;
-    let action = match state.phase {
+    let base = match state.phase {
         RewritePhase::RecordingRequired | RewritePhase::ComparisonRecordingRequired
             if recording_status.is_some() =>
         {
@@ -42,7 +44,62 @@ pub(super) fn for_status(
         _ if target_change.is_some() => target_change.expect("target change was checked"),
         _ => state_action(target_root, state),
     };
-    Ok(envelope(target_root, state, action))
+    let selected = global_worker_action(target_root, state, &base).unwrap_or(base);
+    Ok(envelope(target_root, state, selected))
+}
+
+fn global_worker_action(
+    target_root: &Path,
+    state: &RewriteState,
+    base: &RewriteAction,
+) -> Option<RewriteAction> {
+    if state.case_pattern_identification.is_some()
+        || super::transition::replay_completion_pending(state)
+        || matches!(base, RewriteAction::PlanApplyRequired { .. })
+    {
+        return None;
+    }
+    let selected = worker::scheduler::global_action(target_root, state, false)?;
+    if matches!(selected, RewriteAction::AdvanceRequired { .. })
+        && matches!(base, RewriteAction::TargetQualityRequired { .. })
+    {
+        return None;
+    }
+    Some(selected)
+}
+
+pub(super) fn for_scoped_status(
+    target_root: &Path,
+    state: &RewriteState,
+) -> Result<RewriteActionEnvelope> {
+    if let Some(scope) = worker::runtime::scopes(state)
+        .into_iter()
+        .find(|scope| match scope {
+            super::RewriteWorkScope::Api { api } => {
+                state.process_outputs.current_id.is_none() && api == &state.api
+            }
+            super::RewriteWorkScope::ProcessOutput { id } => {
+                state.process_outputs.current_id.as_ref() == Some(id)
+            }
+        })
+        && state.rule_plan.is_none()
+        && state.dependency_rule_plan.is_none()
+        && state.recorder_capture_plan.is_none()
+    {
+        if let Some(action) = target_quality::status_action(target_root, state)? {
+            return Ok(envelope(target_root, state, action));
+        }
+        return Ok(envelope(
+            target_root,
+            state,
+            worker::scheduler::scope_action(target_root, state, &scope),
+        ));
+    }
+    Ok(envelope(
+        target_root,
+        state,
+        state_action(target_root, state),
+    ))
 }
 
 pub(super) fn wait_envelope(
@@ -115,6 +172,7 @@ pub(super) fn uninitialized_coordinator_wait_envelope(
     let status = status_command_for_api(target_root, requested_api.as_deref());
     RewriteActionEnvelope {
         schema_version: ACTION_SCHEMA_VERSION,
+        pending: 0,
         workflow: None,
         api_inventory: None,
         process_output_inventory: None,
@@ -140,6 +198,7 @@ pub(super) fn envelope(
     let workflow = Some(workflow_view(state));
     RewriteActionEnvelope {
         schema_version: ACTION_SCHEMA_VERSION,
+        pending: super::coordination::pending(state, &action, false),
         workflow,
         api_inventory: Some(inventory::view(state)),
         process_output_inventory: Some(process_outputs::view(state)),
@@ -292,6 +351,12 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
                 .clone()
                 .expect("system repair phase requires an issue"),
             route: state.route.clone(),
+            evidence: super::evidence::overview_command(
+                target_root,
+                state,
+                &super::process_output_model::RewriteWorkScope::Api { api: state.api.clone() },
+                state.active_issue.as_ref().expect("system repair phase requires an issue"),
+            ),
             acceptance: repair::pending_command(target_root, state),
         },
         RewritePhase::SliceComplete => {
@@ -379,6 +444,7 @@ fn recording_summary(state: &RewriteState) -> String {
 pub(super) fn input_required(_target_root: &Path) -> RewriteActionEnvelope {
     RewriteActionEnvelope {
         schema_version: ACTION_SCHEMA_VERSION,
+        pending: 0,
         workflow: None,
         api_inventory: None,
         process_output_inventory: None,
@@ -398,6 +464,7 @@ pub(super) fn source_route_required(
 ) -> RewriteActionEnvelope {
     RewriteActionEnvelope {
         schema_version: ACTION_SCHEMA_VERSION,
+        pending: 1,
         workflow: None,
         api_inventory: None,
         process_output_inventory: None,
@@ -416,6 +483,7 @@ pub(super) fn source_route_required(
 pub(super) fn recovery_required(target_root: &Path) -> RewriteActionEnvelope {
     RewriteActionEnvelope {
         schema_version: ACTION_SCHEMA_VERSION,
+        pending: 1,
         workflow: None,
         api_inventory: None,
         process_output_inventory: None,

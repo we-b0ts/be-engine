@@ -151,5 +151,5 @@ that failure through the failed logger.
    write failure, explicit flush, and graceful shutdown behavior when changing
    logging infrastructure.
 5. Run the target repository's focused checks. Return the coordinator-issued
-   acceptance command unchanged; the main orchestrator runs it after
+   acceptance command unchanged; the state-machine coordinator runs it after
    integration.

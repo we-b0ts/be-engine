@@ -2,7 +2,7 @@
 
 Read this guide only for `recording_required`, `recording_in_progress`,
 `comparison_recording_required`, an explicit fresh-standard-recording request,
-or a consolidated capture refresh. The main orchestrator owns every command in
+or a consolidated capture refresh. The state-machine coordinator owns every command in
 this guide.
 
 ## Contents

@@ -45,8 +45,13 @@ pub fn run(options: RewriteTargetQualityOptions) -> Result<RewriteActionEnvelope
         scoped.phase
     );
     ensure!(
-        worker::current_is_confirmed(&scoped),
-        "target quality gates require the current dedicated subagent confirmation"
+        worker::runtime::acceptance_ready(
+            &scoped,
+            &super::RewriteWorkScope::Api {
+                api: scoped.api.clone()
+            }
+        ),
+        "target quality gates require an integrated worker handoff for the current dispatch"
     );
     let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
     ensure!(
@@ -143,7 +148,14 @@ pub(super) fn status_action(
     } else {
         Vec::new()
     };
-    if !worker::current_is_confirmed(state) {
+    if state.process_outputs.current_id.is_some()
+        || !worker::runtime::acceptance_ready(
+            state,
+            &super::RewriteWorkScope::Api {
+                api: state.api.clone(),
+            },
+        )
+    {
         return Ok(None);
     }
     if let Some(action) = required_action(target_root, state, &target_fingerprint, &gates)? {
@@ -342,7 +354,7 @@ mod tests {
         state.active_issue = Some(target_issue());
         state.target_fingerprint =
             Some(fingerprint::repository_fingerprint(target.path()).unwrap());
-        worker::confirm_current_for_test(&mut state);
+        worker::integrate_current_for_test(&mut state);
         RewriteStore::new(target.path())
             .unwrap()
             .save(&state)
@@ -419,7 +431,7 @@ mod tests {
             },
         ];
         state.current_api_index = Some(0);
-        worker::confirm_current_for_test(&mut state);
+        worker::integrate_current_for_test(&mut state);
         inventory::activate_requested(&mut state, Some(&"POST /other".parse().unwrap())).unwrap();
         assert_eq!(state.api, "POST /other");
         RewriteStore::new(target.path())

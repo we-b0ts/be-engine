@@ -1,6 +1,6 @@
 # Rewrite Coordinator Workflow
 
-Read this core guide in every main-orchestrator session before advancing the
+Read this core guide in every state-machine-coordinator session before advancing the
 workflow. Load action-specific references only through the direct routing in
 `SKILL.md`.
 
@@ -24,7 +24,7 @@ Before the first standard recording, add `--api '<METHOD path-or-pattern>'`
 only when the caller explicitly requests a single-API recording. After the
 coordinator publishes its stable inventory, select work with the exact
 inventory method/pattern. If an action response was lost or the session is
-resuming, recover the main scheduler's current action with unscoped read-only
+resuming, recover the coordinator scheduler's current action with unscoped read-only
 `status`; scoped status serves work-item inspection. Execute the returned
 action's command to advance the workflow.
 
@@ -36,7 +36,7 @@ post-confirmation advance. Keep the complete response and execute its supplied
 command directly; each response determines the following step. For a live
 operation, preserve the returned status command and its polling interval.
 
-At the start of every main-orchestrator session, read
+At the start of every state-machine-coordinator session, read
 `.traffic-e2e/local/block.md` when it exists. Project initialization may create
 it with temporary reference evidence about source configuration, Vintage
 access, startup/process activity, and local caches. The first rewrite session
@@ -75,14 +75,11 @@ source-proven Redis rule -> derive safe snapshot overlay from old Global evidenc
            -> on strict derivation failure only, join the full-scope fresh recording fallback
 ```
 
-Repeatedly execute `backend-rewrite next` or the opaque command returned by the
-current action. Wait only for:
-
-- a returned standard-recording, focused Replay, or comparison operation;
-- required caller input or a coordinator-owned mutation;
-- a serialized traffic runtime owned by another API;
-- worker handoffs after no pending API or process-output item can advance; or
-- terminal completion.
+Consume the returned action while top-level `pending > 0`. An operation waiting
+for Replay does not justify waiting while another coordinator action is ready.
+At `pending = 0`, wait for a worker event or up to 30 seconds and read global
+status again. Required caller input and explicit execution failures must be
+handled as reported; `terminal_allowed` remains the completion condition.
 
 ## Core Action Handling
 
@@ -90,9 +87,13 @@ The stable action envelope has `kind`, `summary`, `details`, and `commands`.
 Read kind-specific facts only from `details` and execute only command roles
 present in `commands`; an empty command object never implies a fallback. Status
 does not guarantee an unconditional top-level `next` command. Source-process
-traffic is issue-scoped evidence, not coordinator state. The main Agent passes
-returned evidence commands unchanged to the assigned API worker. That worker
-executes the returned `source_process_traffic` command only when startup,
+traffic is issue-scoped evidence, not coordinator state. Both unscoped and
+scoped status return compact scheduling actions, as does `next`. The state-machine
+coordinator passes the complete action and single `action.commands.evidence`
+entrypoint unchanged to the assigned worker. After dispatch confirmation, the
+worker fetches the overview (`facts.issue`), then selects relevant commands
+from its `queries`. An API worker executes the returned
+`source_process_traffic` command only when startup,
 configured process-owned traffic, background refresh, or local-cache behavior
 is relevant.
 
@@ -100,8 +101,8 @@ is relevant.
 
 Recording, Replay, and comparison share one `traffic_runtime` lease. When
 `details.reason=resource_busy`, use its requested API, blocking API, live
-operation, and `retry_after_seconds`. Execute only `commands.status` after the
-delay. A missing live operation means the blocking API has a non-preemptible
+operation, and `retry_after_seconds`. At zero global pending, execute
+`commands.status` after the delay, or report an arriving worker event sooner. A missing live operation means the blocking API has a non-preemptible
 coordinator transition to finish. Do not run `recover`, repeat `next`, or start
 a second traffic operation while the owner is live.
 
@@ -119,7 +120,7 @@ finalized run becomes `advance_required`.
 
 ### `case_pattern_identification_required`
 
-This rare post-recording batch belongs only to the main orchestrator. Read
+This rare post-recording batch belongs only to the state-machine coordinator. Read
 [case-pattern-identification.md](case-pattern-identification.md); do not
 dispatch it to an API worker or handle it as ordinary issue diagnosis.
 
@@ -146,7 +147,7 @@ request.
 
 ### `input_required`
 
-When `details.reason=configuration_commit_required`, the main Agent reviews
+When `details.reason=configuration_commit_required`, the state-machine coordinator reviews
 and commits exactly the listed persistent configuration changes in the canonical
 target worktree, then repeats the original `next` command with the same scope
 and inputs. This gate covers `project.yaml`, `source-traffic-policy.yaml`, and
@@ -169,36 +170,35 @@ the dirty `.traffic-e2e/source-traffic-policy.yaml` or
 progress snapshot. Intermediate failed or passing attempts do not
 require progress commits.
 
-### `implementation_required`
+### Worker And Integration Actions
 
-Stop before evidence, artifact, source, or target analysis. Follow
-[implementation-worker-coordination.md](implementation-worker-coordination.md)
-to create or resume the work item's dedicated worker and confirm the dispatch.
-Immediately consume the confirmation's returned action; an `advance_required`
-continues through `commands.advance` while the worker diagnoses its work item.
-The assigned worker follows [problem-diagnosis.md](problem-diagnosis.md) for
-diagnosis and returns the tested handoff described in the coordination guide.
-The main Agent integrates the handoff and executes its unchanged acceptance
-command only from the canonical worktree.
+For `implementation_required`, `worker_status_required`, and
+`integration_required`, follow
+[implementation-worker-coordination.md](implementation-worker-coordination.md).
+Dispatch/resume, runtime observations, handoffs, and integration are reported
+through the exact returned commands. Confirmation belongs to one work item;
+it does not freeze scheduling or feedback for other items. A worker ending
+without a handoff requires resume, not acceptance.
 
-When the handoff contains `startup_environment` inputs, apply each one to the
-canonical target root through `startup env ensure` as specified by
-[startup.md](startup.md) after integrating the implementation and before
-target quality or acceptance. Use `--from-source` for a captured source value;
-do not require a worker to display it. The resulting startup-environment
-revision is part of the target fingerprint used for validation.
+`pending` counts executable coordinator actions, including these worker
+operations. Waiting for worker delivery or a Replay resource contributes zero.
+The engine returns work across the whole inventory before returning a global
+wait. The coordinator consumes actions and reports runtime events; it does not
+rebuild that queue from API counters or historical confirmations.
 
-After all API items have been traversed and their implementation workers have
-been confirmed, execute each returned `next --process-output <id>` command.
-Dispatch and confirm each process-output worker, then keep advancing other
-eligible work instead of waiting. If a process-output repair changes target
-content, completed APIs become stale; let the coordinator drain their final
-revalidation before it performs the process-output comparison again.
+An integrated API handoff schedules only its own Replay and required Comparison.
+Do not promote other APIs for speculative shared-code impact. After ordinary
+work drains, the engine performs final verification against one integrated
+content fingerprint. Process-output work follows the same worker event protocol
+and retains its existing capture and final verification dependencies.
 
-If the worker returns source-proven response-rule, recorder-capture,
-process-owned-rule, or process-output-rule inputs, read
-[coordinator-evidence-actions.md](coordinator-evidence-actions.md) before the
-main orchestrator performs the coordinator-owned mutation.
+### `execution_failed`
+
+A detached coordinator operation failed. `pending` excludes that failed
+operation until its reported cause is resolved and its returned `commands.retry`
+is executed. Continue other executable worker actions. Never hot-loop the retry
+or treat the failure as completion. A stopped operation without a completion
+record uses the existing recovery action.
 
 ### `target_quality_required`
 
@@ -206,11 +206,11 @@ Execute only `action.commands.execute` in its absolute canonical `cwd`. The
 only permitted command extension is one or more exact
 `--hardcode-ai-verified` arguments after this built-in gate reports the matching
 locations and the required source evidence has been committed. Never run this
-gate in a worker worktree. A successful run records the integrated
-target fingerprint and returns `advance_required`; execute that action to start
-focused Replay. A later integration or quality-gate configuration change
+gate in a worker worktree. The command launches a detached operation; continue
+consuming its returned action. Successful execution records the integrated
+target fingerprint and makes focused Replay eligible through `advance_required`. A later integration or quality-gate configuration change
 creates a new fingerprint and another quality action. On failure, fix the
-integrated target and recover the same action with scoped `status`.
+reported cause and execute the returned `execution_failed.commands.retry`.
 
 The gate list always starts with the built-in `replay-isolation` scan. Relative
 to the configured `pr_base`, it checks only added lines in changed or untracked
@@ -224,7 +224,7 @@ contains the replay-only `.trp.test` suffix. Other replay-private environment,
 fake-IP, runtime-path, and recording-artifact markers remain restricted to
 production paths. Every added Rust line is also checked case-insensitively for
 `sample.test` and `demo.test`. Those public domains are allowed only when the
-main orchestrator proves that the same value is hardcoded in source code and
+state-machine coordinator proves that the same value is hardcoded in source code and
 records one commit trailer per target occurrence:
 
 ```text
@@ -276,7 +276,7 @@ fingerprint and the final public `progress.yaml` is committed. Use
 ## API Inventory And Serialized Traffic
 
 Every initialized action or status includes a bounded `api_inventory` summary:
-`total`, `completed`, `pending`, `implementation_required`,
+`total`, `completed`, `unverified`, `implementation_required`,
 `awaiting_recording_refresh`, `revalidation_pending`, `current_index`, and
 `current_api`. The coordinator owns this inventory. Keep `workflow.scope`, the
 selector of the shared standard recording, separate from the selected API. An
@@ -286,8 +286,8 @@ an API with no observed traffic is not required and does not block completion.
 The scope remains stable as selected workers change.
 
 Every `implementation_required` action uses a worker. Inventory size controls
-only whether the orchestrator advances another pending API after dispatch or
-waits. The coordinator may park implementation issues while it serializes the
+only how much work the engine can make ready. Worker concurrency belongs to
+the task runtime; the coordinator does not impose a limit. The coordinator may park implementation issues while it serializes the
 selected API's Replay or comparison. Expensive worker diagnosis, coding, and
 tests may overlap; only one traffic operation may be live.
 
@@ -309,7 +309,8 @@ one final content fingerprint. A commit with no effective content change does
 not create a new validation epoch.
 
 For a high-impact shared module, global configuration, or startup change, the
-main orchestrator may request earlier verification for selected stale APIs:
+caller may explicitly request earlier verification for selected stale APIs; routine
+coordination defers these checks to the final epoch:
 
 ```text
 backend-rewrite verification request \

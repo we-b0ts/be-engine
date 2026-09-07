@@ -26,12 +26,26 @@ pub fn inventory_rewrite(context: RewriteContext) -> Result<RewriteInventoryRepo
             let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
             inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
             process_outputs::defer_for_target_change(&mut state, &target_fingerprint);
+            let envelope = if let Some(report) = super::configuration_commit::status(&target_root)?
+            {
+                super::execution::from_status(report)
+            } else {
+                api_envelope(&target_root, &state, None)?
+            };
+            let details = super::coordination::details(
+                &state,
+                &envelope.action,
+                super::coordination::resources_busy(&target_root)?,
+            );
             RewriteInventoryReport {
                 schema_version: ACTION_SCHEMA_VERSION,
                 initialized: true,
                 workflow: Some(action::workflow_view(&state)),
                 api_inventory: Some(inventory::details(&state)),
                 process_output_inventory: Some(super::process_outputs::details(&state)),
+                pending: details.pending(),
+                details,
+                workers: super::worker::scheduler::inventory(&target_root, &state),
             }
         }
         None => RewriteInventoryReport {
@@ -40,6 +54,9 @@ pub fn inventory_rewrite(context: RewriteContext) -> Result<RewriteInventoryRepo
             workflow: None,
             api_inventory: None,
             process_output_inventory: None,
+            pending: 0,
+            details: Default::default(),
+            workers: Vec::new(),
         },
     })
 }
@@ -73,52 +90,11 @@ pub fn status_rewrite_for_api(
                 state.active_issue = None;
                 state.target_fingerprint = None;
             }
-            let requested_api = api.map(ToString::to_string);
-            let envelope = match traffic_operation::state(&target_root)? {
-                traffic_operation::TrafficOperationState::Live(active)
-                    if active.kind == traffic_operation::TrafficOperationKind::Replay
-                        || active.kind == traffic_operation::TrafficOperationKind::Comparison
-                        || requested_api.as_ref().is_some_and(|requested| {
-                            active.api.as_deref() != Some(requested.as_str())
-                        }) =>
-                {
-                    action::wait_envelope(&target_root, &state, requested_api, &active)
-                }
-                traffic_operation::TrafficOperationState::Stale(_) => {
-                    action::recovery_required(&target_root)
-                }
-                traffic_operation::TrafficOperationState::Live(_) => {
-                    projected_action(&target_root, &state, api)?
-                }
-                traffic_operation::TrafficOperationState::Absent => {
-                    if let Some(requested) = requested_api.as_ref()
-                        && requested != &state.api
-                        && matches!(
-                            state.phase,
-                            RewritePhase::RecordingRequired
-                                | RewritePhase::ComparisonRecordingRequired
-                                | RewritePhase::SystemRepairRequired
-                        )
-                    {
-                        action::api_selection_wait_envelope(&target_root, &state, requested.clone())
-                    } else {
-                        match RewriteStore::new(&target_root)?.lock_state()? {
-                            RewriteLockState::Live => action::coordinator_wait_envelope(
-                                &target_root,
-                                &state,
-                                requested_api,
-                            ),
-                            RewriteLockState::Stale => action::recovery_required(&target_root),
-                            RewriteLockState::Absent => {
-                                projected_action(&target_root, &state, api)?
-                            }
-                        }
-                    }
-                }
-            };
+            let envelope = api_envelope(&target_root, &state, api)?;
             let scoped = inventory::scoped(&state, api).unwrap_or(state);
             RewriteStatusReport {
                 schema_version: envelope.schema_version,
+                pending: envelope.pending,
                 initialized: true,
                 workflow: envelope.workflow,
                 api_inventory: envelope.api_inventory,
@@ -131,7 +107,7 @@ pub fn status_rewrite_for_api(
             }
         }
         None => {
-            let envelope = match RewriteStore::new(&target_root)?.lock_state()? {
+            let mut envelope = match RewriteStore::new(&target_root)?.lock_state()? {
                 RewriteLockState::Live => action::uninitialized_coordinator_wait_envelope(
                     &target_root,
                     api.map(ToString::to_string),
@@ -139,8 +115,16 @@ pub fn status_rewrite_for_api(
                 RewriteLockState::Stale => action::recovery_required(&target_root),
                 RewriteLockState::Absent => action::input_required(&target_root),
             };
+            if let Some(selected) = super::execution::status_action(&target_root)? {
+                envelope.pending = usize::from(matches!(
+                    selected,
+                    super::RewriteAction::RecoveryRequired { .. }
+                ));
+                envelope.action = selected;
+            }
             RewriteStatusReport {
                 schema_version: envelope.schema_version,
+                pending: envelope.pending,
                 initialized: false,
                 workflow: None,
                 api_inventory: None,
@@ -174,26 +158,46 @@ pub fn status_rewrite_for_process_output(
             inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
             process_outputs::defer_for_target_change(&mut state, &target_fingerprint);
             let scoped = process_outputs::scoped(&state, id)?;
-            let mut envelope = match traffic_operation::state(&target_root)? {
-                traffic_operation::TrafficOperationState::Live(active) => {
-                    action::wait_envelope(&target_root, &scoped, None, &active)
-                }
-                traffic_operation::TrafficOperationState::Stale(_) => {
-                    action::recovery_required(&target_root)
-                }
-                traffic_operation::TrafficOperationState::Absent => {
-                    match RewriteStore::new(&target_root)?.lock_state()? {
-                        RewriteLockState::Live => {
-                            action::coordinator_wait_envelope(&target_root, &scoped, None)
+            let worker_ready = super::worker::runtime::scopes(&scoped)
+                .contains(&super::RewriteWorkScope::ProcessOutput { id: id.to_string() })
+                && matches!(
+                    super::worker::runtime::coverage(
+                        &scoped,
+                        &super::RewriteWorkScope::ProcessOutput { id: id.to_string() }
+                    ),
+                    super::worker::model::RewriteWorkerCoverageState::DispatchRequired
+                        | super::worker::model::RewriteWorkerCoverageState::ResumeRequired
+                        | super::worker::model::RewriteWorkerCoverageState::StatusRequired
+                );
+            let mut envelope = if worker_ready {
+                action::for_scoped_status(&target_root, &scoped)?
+            } else if let Some(selected) = super::execution::status_action(&target_root)? {
+                action::envelope(&target_root, &scoped, selected)
+            } else {
+                match traffic_operation::state(&target_root)? {
+                    traffic_operation::TrafficOperationState::Live(active) => {
+                        action::wait_envelope(&target_root, &scoped, None, &active)
+                    }
+                    traffic_operation::TrafficOperationState::Stale(_) => {
+                        action::recovery_required(&target_root)
+                    }
+                    traffic_operation::TrafficOperationState::Absent => {
+                        match RewriteStore::new(&target_root)?.lock_state()? {
+                            RewriteLockState::Live => {
+                                action::coordinator_wait_envelope(&target_root, &scoped, None)
+                            }
+                            RewriteLockState::Stale => action::recovery_required(&target_root),
+                            RewriteLockState::Absent => {
+                                action::for_scoped_status(&target_root, &scoped)?
+                            }
                         }
-                        RewriteLockState::Stale => action::recovery_required(&target_root),
-                        RewriteLockState::Absent => action::for_status(&target_root, &scoped)?,
                     }
                 }
             };
             action::retarget_wait_status_for_process_output(&mut envelope, &target_root, id);
             RewriteStatusReport {
                 schema_version: envelope.schema_version,
+                pending: envelope.pending,
                 initialized: true,
                 workflow: envelope.workflow,
                 api_inventory: envelope.api_inventory,
@@ -215,6 +219,7 @@ pub fn status_rewrite_for_process_output(
             };
             RewriteStatusReport {
                 schema_version: envelope.schema_version,
+                pending: envelope.pending,
                 initialized: false,
                 workflow: None,
                 api_inventory: None,
@@ -239,6 +244,93 @@ fn projected_action(
     {
         return Ok(envelope);
     }
-    let scoped = inventory::scoped(state, api)?;
-    action::for_status(target_root, &scoped)
+    let mut scoped = inventory::scoped(state, api)?;
+    if api.is_some() {
+        scoped.process_outputs.current_id = None;
+        action::for_scoped_status(target_root, &scoped)
+    } else {
+        action::for_status(target_root, &scoped)
+    }
+}
+
+fn api_envelope(
+    target_root: &std::path::Path,
+    state: &super::model::RewriteState,
+    api: Option<&RecordingApi>,
+) -> Result<super::model::RewriteActionEnvelope> {
+    let requested_api = api.map(ToString::to_string);
+    let envelope = if super::coordination::resources_busy(target_root)? {
+        if let Some(envelope) = super::coordination::busy_workers(target_root, state, api)? {
+            Some(envelope)
+        } else {
+            super::execution::status_action(target_root)?
+                .map(|selected| action::envelope(target_root, state, selected))
+        }
+    } else if let Some(failed) = super::execution::status_action(target_root)? {
+        let worker = if let Some(api) = api {
+            let scope = super::RewriteWorkScope::Api {
+                api: api.to_string(),
+            };
+            super::worker::runtime::scopes(state)
+                .contains(&scope)
+                .then(|| super::worker::scheduler::scope_action(target_root, state, &scope))
+                .filter(|_| {
+                    super::worker::runtime::coverage(state, &scope)
+                        != super::worker::model::RewriteWorkerCoverageState::Running
+                })
+        } else {
+            super::worker::scheduler::global_action(target_root, state, false)
+        }
+        .filter(|action| !matches!(action, super::RewriteAction::AdvanceRequired { .. }));
+        Some(action::envelope(
+            target_root,
+            state,
+            worker.unwrap_or(failed),
+        ))
+    } else {
+        None
+    };
+    let envelope = if let Some(envelope) = envelope {
+        envelope
+    } else {
+        match traffic_operation::state(target_root)? {
+            traffic_operation::TrafficOperationState::Live(active)
+                if active.kind == traffic_operation::TrafficOperationKind::Replay
+                    || active.kind == traffic_operation::TrafficOperationKind::Comparison
+                    || requested_api.as_ref().is_some_and(|requested| {
+                        active.api.as_deref() != Some(requested.as_str())
+                    }) =>
+            {
+                action::wait_envelope(target_root, state, requested_api, &active)
+            }
+            traffic_operation::TrafficOperationState::Stale(_) => {
+                action::recovery_required(target_root)
+            }
+            traffic_operation::TrafficOperationState::Live(_) => {
+                projected_action(target_root, state, api)?
+            }
+            traffic_operation::TrafficOperationState::Absent => {
+                if let Some(requested) = requested_api.as_ref()
+                    && requested != &state.api
+                    && matches!(
+                        state.phase,
+                        RewritePhase::RecordingRequired
+                            | RewritePhase::ComparisonRecordingRequired
+                            | RewritePhase::SystemRepairRequired
+                    )
+                {
+                    action::api_selection_wait_envelope(target_root, state, requested.clone())
+                } else {
+                    match RewriteStore::new(target_root)?.lock_state()? {
+                        RewriteLockState::Live => {
+                            action::coordinator_wait_envelope(target_root, state, requested_api)
+                        }
+                        RewriteLockState::Stale => action::recovery_required(target_root),
+                        RewriteLockState::Absent => projected_action(target_root, state, api)?,
+                    }
+                }
+            }
+        }
+    };
+    Ok(envelope)
 }

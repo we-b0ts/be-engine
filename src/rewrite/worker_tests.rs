@@ -109,8 +109,8 @@ fn process_output_issue_dispatches_an_independent_worker() {
         Some(&serde_json::json!("--process-output"))
     );
     assert_eq!(
-        action.pointer("/commands/evidence"),
-        Some(&serde_json::json!([]))
+        action.pointer("/commands/evidence/argv/3"),
+        Some(&serde_json::json!("evidence"))
     );
     assert!(
         action["summary"]
@@ -354,7 +354,9 @@ fn transfer_rejects_a_handle_owned_by_another_api() {
             agent_name: None,
             confirmed_dispatch_id: "other-dispatch".to_string(),
             transfer_generation: 0,
+            rework_generation: 0,
             last_transfer: None,
+            observation: None,
         },
     );
 
@@ -407,7 +409,7 @@ fn transfer_entrypoint_requires_approval_and_current_binding_id() {
 }
 
 #[test]
-fn cross_api_selection_returns_a_structured_worker_dispatch_gate() {
+fn work_item_diagnostics_retain_a_structured_dispatch_gate() {
     let mut state = crate::rewrite::test_state();
     state.phase = RewritePhase::ImplementationRequired;
     state.active_issue = Some(issue("issue-response", 1, "target-a"));
@@ -439,10 +441,7 @@ fn cross_api_selection_returns_a_structured_worker_dispatch_gate() {
 
     confirm_current_for_test(&mut state);
     let confirmed = serde_json::to_value(action::for_state(target, &state)).unwrap();
-    assert_eq!(
-        confirmed["action"]["details"]["worker"]["state"],
-        "confirmed"
-    );
+    assert_eq!(confirmed["action"]["kind"], "wait_required");
     assert!(
         confirmed
             .pointer("/action/commands/confirm_worker")
@@ -475,7 +474,7 @@ fn confirmed_worker_advances_the_next_pending_api_before_waiting() {
 }
 
 #[test]
-fn confirmed_worker_without_a_pending_api_remains_implementation_required() {
+fn confirmed_running_worker_without_executable_work_waits_for_handoff() {
     let mut state = implementation_state_with_inventory(false);
     confirm_current_for_test(&mut state);
 
@@ -484,11 +483,8 @@ fn confirmed_worker_without_a_pending_api_remains_implementation_required() {
         &state,
     ))
     .unwrap();
-    assert_eq!(action["action"]["kind"], "implementation_required");
-    assert_eq!(
-        action.pointer("/action/details/worker/state"),
-        Some(&serde_json::json!("confirmed"))
-    );
+    assert_eq!(action["action"]["kind"], "wait_required");
+    assert_eq!(action["pending"], 0);
     assert!(action.pointer("/action/commands/advance").is_none());
 }
 
@@ -632,7 +628,9 @@ fn status_recovers_confirmation_and_advance_across_repeated_worker_dispatches() 
     );
 }
 
-fn implementation_state_with_inventory(include_pending: bool) -> RewriteState {
+pub(in crate::rewrite) fn implementation_state_with_inventory(
+    include_pending: bool,
+) -> RewriteState {
     let mut state = crate::rewrite::test_state();
     state.phase = RewritePhase::ImplementationRequired;
     state.active_issue = Some(issue("issue-a", 1, "target-a"));
@@ -668,7 +666,7 @@ fn assert_confirmation_error(error: anyhow::Error, operation: &str) {
     );
 }
 
-fn configured_target() -> tempfile::TempDir {
+pub(in crate::rewrite) fn configured_target() -> tempfile::TempDir {
     let target = tempfile::tempdir().unwrap();
     fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
     crate::rewrite::test_support::install_project_config(
@@ -716,7 +714,7 @@ fn git_ok(repository: &Path, args: &[&str]) {
     assert!(status.success(), "git command failed: {args:?}");
 }
 
-fn issue(id: &str, attempt: u64, target_fingerprint: &str) -> RewriteIssue {
+pub(in crate::rewrite) fn issue(id: &str, attempt: u64, target_fingerprint: &str) -> RewriteIssue {
     RewriteIssue {
         id: id.to_string(),
         kind: RewriteIssueKind::Response,

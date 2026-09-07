@@ -154,10 +154,15 @@ fn response_evidence_starts_with_paged_case_differences_and_rejects_stale_pages(
     let next_page =
         case_response_difference_query_id(&state, state.active_issue.as_ref().unwrap(), 20);
     assert_eq!(
+        inventory::api_for_evidence_query(&state, &next_page).as_deref(),
+        Some("GET /api")
+    );
+    assert_eq!(
         case_response_difference_offset(&state, state.active_issue.as_ref().unwrap(), &next_page,),
         Some(20)
     );
     state.active_issue.as_mut().unwrap().attempt += 1;
+    assert!(inventory::api_for_evidence_query(&state, &next_page).is_none());
     assert_eq!(
         case_response_difference_offset(&state, state.active_issue.as_ref().unwrap(), &next_page,),
         None
@@ -303,8 +308,7 @@ fn parked_api_evidence_survives_unrelated_api_revisions() {
 
     assert!(state.revision > original_revision);
     assert_eq!(
-        inventory::api_for_evidence_query(target_root, &state, &evidence_command.query_id)
-            .as_deref(),
+        inventory::api_for_evidence_query(&state, &evidence_command.query_id).as_deref(),
         Some("GET /a")
     );
     assert_eq!(
@@ -320,10 +324,7 @@ fn parked_api_evidence_survives_unrelated_api_revisions() {
         .as_mut()
         .unwrap()
         .attempt += 1;
-    assert!(
-        inventory::api_for_evidence_query(target_root, &state, &evidence_command.query_id)
-            .is_none()
-    );
+    assert!(inventory::api_for_evidence_query(&state, &evidence_command.query_id).is_none());
     assert!(inventory::api_for_evidence_id(target_root, &state, &evidence.evidence_id).is_none());
 }
 

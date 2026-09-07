@@ -57,7 +57,7 @@ An implementation worker in an isolated worktree returns a
 `startup_environment` coordinator input instead of mutating the canonical
 ignored file. Prefer `from_source: true` when the captured source value is the
 required value; otherwise provide the exact caller-owned value and evidence.
-The main orchestrator applies it after integration and before acceptance.
+The state-machine coordinator applies it after integration and before acceptance.
 
 ```yaml
 startup_environment:

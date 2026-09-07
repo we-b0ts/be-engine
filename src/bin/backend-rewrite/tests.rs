@@ -29,12 +29,55 @@ fn exposes_only_the_rewrite_coordinator_surface() {
             "route",
             "repair",
             "worker",
+            "operation",
             "verification",
             "target-quality",
             "recording",
             "recover",
         ]
     );
+}
+
+#[test]
+fn parses_worker_feedback_and_explicit_operation_retry() {
+    for activity in [
+        "running",
+        "queued",
+        "idle",
+        "handoff_ready",
+        "integrated",
+        "rework_required",
+    ] {
+        assert!(
+            Cli::try_parse_from([
+                "test",
+                "worker",
+                "report",
+                "dispatch-id",
+                "--agent-handle",
+                "runtime-handle",
+                "--activity",
+                activity,
+                "--handoff-id",
+                "commit-id",
+            ])
+            .is_ok()
+        );
+    }
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "worker",
+            "report",
+            "dispatch-id",
+            "--agent-handle",
+            "runtime-handle",
+            "--activity",
+            "finished",
+        ])
+        .is_err()
+    );
+    assert!(Cli::try_parse_from(["test", "operation", "retry", "operation-id"]).is_ok());
 }
 
 #[test]

@@ -14,12 +14,12 @@ results.
 
 Choose exactly one role before taking action:
 
-- **Main orchestrator:** use this role unless a parent explicitly assigned one
+- **State-machine coordinator (main/root agent):** use this role unless a parent explicitly assigned one
   complete implementation work scope, action, and absolute worker worktree.
   Own coordinator commands and state mutations, worker/worktree bindings,
   integration, serialized traffic, repository gates, and final delivery. Stop
   at every `implementation_required` action and dispatch its dedicated worker
-  before diagnosis.
+  before work-item diagnosis; continue other executable items after dispatch.
 - **Assigned API worker:** use this role only when the handoff contains
   `action.details.work_scope.kind=api`, its exact API, the complete action, and
   an absolute worker worktree. Own that API's returned evidence, source/target
@@ -34,11 +34,11 @@ Choose exactly one role before taking action:
   state, execute acceptance, or operate another work item.
 
 If the handoff omits an exact work scope, complete action, or absolute
-worktree, remain the main orchestrator rather than inferring a worker role.
+worktree, remain the state-machine coordinator rather than inferring a worker role.
 
 ## Reference Routing
 
-The main orchestrator reads [workflow.md](references/workflow.md) before
+The state-machine coordinator reads [workflow.md](references/workflow.md) before
 advancing the workflow. Load these conditional references directly from this
 file only when their trigger occurs:
 
@@ -118,8 +118,8 @@ before changing startup inputs or either Dockerfile. A required environment
 variable is actionable as soon as source behavior proves the target logic needs
 it; do not wait for a target failure. Source application environment captured
 during initialization is already injected into every target start. Workers
-return a startup input only for an override or addition, and the main
-orchestrator applies it through the documented startup API, using
+return a startup input only for an override or addition, and the state-machine
+coordinator applies it through the documented startup API, using
 `--from-source` when appropriate. Do not load this reference during one-time
 initialization merely to search for possible inputs.
 
@@ -132,13 +132,20 @@ assume it is complete and never rerun it.
 
 A fresh standard recording requires explicit user authorization.
 
-Response schema v22 contains an `action` object with exactly `kind`, `summary`,
+Response schema v24 contains an `action` object with exactly `kind`, `summary`,
 `details`, and `commands`. This action schema version is independent of target
-repository configuration versions. Read kind-specific facts only from
-`action.details`. An API worker uses only the issue-scoped evidence commands
-returned under `action.commands.evidence`; a process-output worker normally
-receives none. Execute only command roles actually present under
-`action.commands`; never guess legacy fields or missing transitions.
+repository configuration versions. `status` (including scoped status) and
+`next` return scheduling state, a short issue summary, and legal commands;
+they do not embed issue diagnostics. Read scheduling facts from
+`action.details`. For either worker role, after dispatch confirmation execute
+the single `action.commands.evidence` command to fetch the issue overview.
+Read diagnostic facts from `facts.issue`; API workers then use the exact
+commands under the overview's `queries`. Process-output workers read
+`facts.issue.comparison_observation` and receive no API queries. The state-machine
+coordinator forwards the compact action and evidence entrypoint to its worker
+without fetching diagnostics for scheduling. Execute only command roles
+actually present under `action.commands`; never guess legacy fields or missing
+transitions.
 
 Every returned command has a canonical `cwd` and argv whose absolute
 `--target-root` is already bound. Execute it opaquely without reconstructing,
@@ -148,17 +155,27 @@ default; use global `--pretty` only for interactive human inspection. The sole
 documented argv extension is the target-quality exception in
 [workflow.md](references/workflow.md).
 
-The main orchestrator completes each worker dispatch as one scheduling cycle:
-spawn/resume the worker, execute the current `commands.confirm_worker`, then
-follow the returned action. After a user interruption, worker handoff,
-integration, or other side work, and before waiting or ending a turn, reenter
-the [post-dispatch scheduler](references/implementation-worker-coordination.md#post-dispatch-scheduler)
-through `backend-rewrite status`. For a live operation, honor its polling delay
-and exact returned status command. Execute each returned command directly and
-retain the complete action so its next command remains available.
+The state-machine coordinator consumes one executable-work loop. Top-level
+`pending` counts only actions it can perform now; running or resource-waiting
+work is excluded. While `pending > 0`, execute the returned action and report
+its result. When it reaches zero, wait for a runtime completion event or the
+returned polling delay (normally 30 seconds), then query status again. End only
+when `terminal_allowed` permits delivery. `inventory` expands English ready and
+waiting counts; API `unverified` counts are not a dispatch queue.
+
+The engine owns selection across all APIs and process-output items, including
+parked implementation issues. The coordinator imposes no worker concurrency
+limit; the runtime owns its concurrency and queuing. `next` and target-quality
+execution are detached so the coordinator can continue dispatch and feedback
+while verification runs. Follow the
+[coordination loop and event protocol](references/implementation-worker-coordination.md)
+for actual dispatch/resume, `worker_status_required`, `integration_required`,
+worker completion callbacks, and recovery. A received and integrated handoff
+schedules only its owning API's acceptance. Defer cross-API impact to final
+unified verification. Preserve evidence confirmation and final coverage gates.
 
 Use `backend-rewrite status [--api '<METHOD pattern>' | --process-output <id>]`
-when an action response was lost or a session resumes. Main scheduling uses the
+when an action response was lost or a session resumes. Coordinator scheduling uses the
 canonical coordinator's unscoped status; assigned workers use their scoped
 status. Never infer state from artifact recency. Never
 mutate coordinator runtime files. Use action, status, and evidence APIs as the

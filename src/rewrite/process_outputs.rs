@@ -135,16 +135,6 @@ pub(super) fn activate_and_compare(
         "process output {id} is not available for verification"
     );
     if status == RewriteProcessOutputStatus::ImplementationRequired {
-        let observed = state.process_outputs.inventory[index]
-            .issue
-            .as_ref()
-            .context("implementation-required process output has no issue")?
-            .observed_target_fingerprint
-            .clone();
-        if observed == target_fingerprint {
-            state.process_outputs.current_id = Some(id.to_string());
-            return Ok(ProcessOutputActivation::Deferred);
-        }
         let item = &mut state.process_outputs.inventory[index];
         item.status = RewriteProcessOutputStatus::RevalidationPending;
         item.issue = None;

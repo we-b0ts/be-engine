@@ -1,12 +1,9 @@
 use serde::{Serialize, Serializer};
-use serde_json::Value;
-
-use crate::{E2eRepresentativeDifference, E2eResponseDifferenceDiagnosis};
 
 use super::model::{
-    RewriteAction, RewriteCommandSpec, RewriteEvidenceCommand, RewriteInputRequiredReason,
-    RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewriteRecordingInputDiagnosis,
-    RewriteRecordingInputMode, RewriteRouteRecord, RewriteWorkerDispatchView,
+    RewriteAction, RewriteCommandSpec, RewriteInputRequiredReason, RewriteIssue, RewriteIssueKind,
+    RewriteIssueOwner, RewriteRecordingInputDiagnosis, RewriteRecordingInputMode,
+    RewriteRouteRecord, RewriteWorkerDispatchView,
 };
 
 impl Serialize for RewriteAction {
@@ -119,7 +116,8 @@ impl Serialize for RewriteAction {
                 issue,
                 worker,
                 confirm_worker,
-                evidence_commands,
+                report_worker,
+                evidence,
                 acceptance,
             } => RewriteActionView {
                 kind: "implementation_required",
@@ -131,9 +129,59 @@ impl Serialize for RewriteAction {
                 },
                 commands: RewriteImplementationCommands {
                     confirm_worker: confirm_worker.as_ref(),
-                    evidence: evidence_commands,
+                    report_worker,
+                    evidence,
                     acceptance,
                 },
+            }
+            .serialize(serializer),
+            Self::WorkerStatusRequired {
+                summary,
+                worker,
+                report_worker,
+                evidence,
+            } => RewriteActionView {
+                kind: "worker_status_required",
+                summary,
+                details: RewriteWorkerCoordinationDetails {
+                    worker,
+                    handoff_id: None,
+                },
+                commands: RewriteWorkerCoordinationCommands {
+                    report_worker,
+                    evidence,
+                },
+            }
+            .serialize(serializer),
+            Self::IntegrationRequired {
+                summary,
+                worker,
+                handoff_id,
+                report_worker,
+                evidence,
+            } => RewriteActionView {
+                kind: "integration_required",
+                summary,
+                details: RewriteWorkerCoordinationDetails {
+                    worker,
+                    handoff_id: Some(handoff_id),
+                },
+                commands: RewriteWorkerCoordinationCommands {
+                    report_worker,
+                    evidence,
+                },
+            }
+            .serialize(serializer),
+            Self::ExecutionFailed {
+                summary,
+                operation_id,
+                retry,
+                status,
+            } => RewriteActionView {
+                kind: "execution_failed",
+                summary,
+                details: serde_json::json!({"operation_id": operation_id}),
+                commands: serde_json::json!({"retry": retry, "status": status}),
             }
             .serialize(serializer),
             Self::TargetQualityRequired {
@@ -181,6 +229,7 @@ impl Serialize for RewriteAction {
             Self::SystemRepairRequired {
                 issue,
                 route,
+                evidence,
                 acceptance,
             } => RewriteActionView {
                 kind: "system_repair_required",
@@ -190,6 +239,7 @@ impl Serialize for RewriteAction {
                     route: route.as_ref(),
                 },
                 commands: RewriteAcceptanceCommands {
+                    evidence,
                     acceptance: acceptance.as_ref(),
                 },
             }
@@ -303,25 +353,11 @@ struct RewriteWaitRequiredDetails<'a> {
 
 #[derive(Serialize)]
 struct RewriteIssueDetails<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    egress_rejections: Option<&'a Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    recorder_capture_diagnosis: Option<&'a Value>,
     issue_id: &'a str,
     issue_kind: &'a RewriteIssueKind,
     owner: &'a RewriteIssueOwner,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pointer_pattern: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    representative: Option<&'a E2eRepresentativeDifference>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    response_diagnosis: Option<&'a E2eResponseDifferenceDiagnosis>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    possible_causes: &'a Vec<String>,
     observed_target_fingerprint: &'a str,
     attempt: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    comparison_observation: Option<&'a Value>,
 }
 
 #[derive(Serialize)]
@@ -342,18 +378,11 @@ struct RewriteTargetQualityDetails<'a> {
 impl<'a> From<&'a RewriteIssue> for RewriteIssueDetails<'a> {
     fn from(issue: &'a RewriteIssue) -> Self {
         Self {
-            egress_rejections: issue.egress_rejections.as_ref(),
-            recorder_capture_diagnosis: issue.recorder_capture_diagnosis.as_ref(),
             issue_id: &issue.id,
             issue_kind: &issue.kind,
             owner: &issue.owner,
-            pointer_pattern: issue.pointer_pattern.as_deref(),
-            representative: issue.representative.as_ref(),
-            response_diagnosis: issue.response_diagnosis.as_ref(),
-            possible_causes: &issue.possible_causes,
             observed_target_fingerprint: &issue.observed_target_fingerprint,
             attempt: issue.attempt,
-            comparison_observation: issue.comparison_observation.as_ref(),
         }
     }
 }
@@ -391,8 +420,22 @@ struct RewriteStatusCommands<'a> {
 struct RewriteImplementationCommands<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     confirm_worker: Option<&'a RewriteCommandSpec>,
-    evidence: &'a [RewriteEvidenceCommand],
+    report_worker: &'a RewriteCommandSpec,
+    evidence: &'a RewriteCommandSpec,
     acceptance: &'a RewriteCommandSpec,
+}
+
+#[derive(Serialize)]
+struct RewriteWorkerCoordinationDetails<'a> {
+    worker: &'a RewriteWorkerDispatchView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    handoff_id: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct RewriteWorkerCoordinationCommands<'a> {
+    report_worker: &'a RewriteCommandSpec,
+    evidence: &'a RewriteCommandSpec,
 }
 
 #[derive(Serialize)]
@@ -407,6 +450,7 @@ struct RewriteAdvanceCommands<'a> {
 
 #[derive(Serialize)]
 struct RewriteAcceptanceCommands<'a> {
+    evidence: &'a RewriteCommandSpec,
     #[serde(skip_serializing_if = "Option::is_none")]
     acceptance: Option<&'a RewriteCommandSpec>,
 }
