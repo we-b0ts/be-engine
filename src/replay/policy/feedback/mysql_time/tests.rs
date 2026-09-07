@@ -46,6 +46,7 @@ fn sql_time_plan_validates_evidence_and_preserves_other_policy_sections() {
     let original = fs::read_to_string(&path).unwrap();
     let plan = plan_mysql_time_rule(feedback.clone()).unwrap();
     assert!(plan.report().changed);
+    assert_eq!(plan.report().source_evidence, feedback.source_evidence);
     assert_eq!(plan.report().evidence_case_id, "case-1");
     assert_eq!(fs::read_to_string(&path).unwrap(), original);
     let report = plan.apply().unwrap();
@@ -56,6 +57,18 @@ fn sql_time_plan_validates_evidence_and_preserves_other_policy_sections() {
         updated.ends_with("response_settings:\n  comparison:\n    source_match: before_or_after\n")
     );
     assert!(updated.contains("sql_values:"));
+    assert!(updated.contains("sql_values: {0: {\"time\":\"replay_now\",\"tolerance\":\"5s\"}}"));
+    for omitted in [
+        "case:",
+        "target:",
+        "username:",
+        "command:",
+        "source_evidence:",
+        "format:",
+        "timezone:",
+    ] {
+        assert!(!updated.contains(omitted), "{omitted}");
+    }
     let repeated = plan_mysql_time_rule(feedback).unwrap();
     assert!(repeated.report().reused_existing);
     assert!(!repeated.report().changed);
@@ -68,6 +81,42 @@ fn sql_time_plan_validates_evidence_and_preserves_other_policy_sections() {
             .params
             .is_empty()
     );
+}
+
+#[test]
+fn sql_time_rule_is_reused_across_apis_and_evidence_filters_are_optional() {
+    let (temp, mut feedback) = fixture();
+    feedback.selector.target_host.clear();
+    feedback.selector.username.clear();
+    plan_mysql_time_rule(feedback.clone())
+        .unwrap()
+        .apply()
+        .unwrap();
+    fs::write(
+        temp.path().join("case/request.json"),
+        r#"{"method":"POST","uri":"/documents/content"}"#,
+    )
+    .unwrap();
+    feedback.api = "POST /documents/content".into();
+    feedback.rule_id = "document-last-use".into();
+    let repeated = plan_mysql_time_rule(feedback.clone()).unwrap();
+    assert!(repeated.report().reused_existing);
+    assert_eq!(repeated.report().effective_rule_id, "last-use");
+    assert!(!repeated.report().changed);
+
+    let source_path = temp.path().join("case/dependencies.jsonl");
+    let original: Value = serde_json::from_slice(&fs::read(&source_path).unwrap()).unwrap();
+    for (field, value) in [
+        ("target_host", json!("another-db")),
+        ("target_port", json!(3307)),
+        ("username", json!("another-user")),
+        ("database", json!("another-db")),
+    ] {
+        let mut source = original.clone();
+        source[field] = value;
+        fs::write(&source_path, source.to_string()).unwrap();
+        assert!(plan_mysql_time_rule(feedback.clone()).is_err(), "{field}");
+    }
 }
 
 #[test]

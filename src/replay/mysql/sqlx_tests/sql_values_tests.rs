@@ -5,7 +5,7 @@ const TEMPLATE: &str = "UPDATE api_keys SET last_used_at=?, updated_at=now() WHE
 
 fn policy(template: &str) -> String {
     format!(
-        "version: 3\nexpected_response: assertions_only\ndependency_rules:\n  - id: key-last-use\n    protocol: mysql\n    case: {{method: GET, path: /users}}\n    target: {{host: 127.0.0.1, port: 3306}}\n    mysql:\n      command: COM_QUERY\n      database: appdb\n      username: root\n      sql: {template:?}\n      sql_values:\n        0:\n          source_evidence: 'security.py:get_auth_context assigns datetime.utcnow() before commit'\n          time:\n            relative_to: replay_now\n            tolerance: 5s\n            format: '%Y-%m-%d %H:%M:%S%.f'\n            timezone: '+00:00'\n"
+        "version: 3\nexpected_response: assertions_only\ndependency_rules:\n  - id: key-last-use\n    protocol: mysql\n    mysql:\n      database: appdb\n      sql: {template:?}\n      sql_values: {{0: {{time: replay_now, tolerance: 5s}}}}\n"
     )
 }
 

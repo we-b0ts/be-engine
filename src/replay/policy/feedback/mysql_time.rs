@@ -3,8 +3,8 @@ mod evidence;
 use super::document::{render_dependency_rules, replace_dependency_rules};
 use crate::config::edit::write_atomic;
 use crate::replay::policy::config::{
-    CaseSelector, DependencyProtocol, MysqlSelector, MysqlTimeValueRule, ReplayDependencyRule,
-    TargetSelector, TimeReference, TimeRule, load_replay_policy,
+    DependencyProtocol, MysqlSelector, MysqlTimeValueRule, ReplayDependencyRule, TargetSelector,
+    TimeReference, TimeRule, load_replay_policy,
 };
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -78,15 +78,12 @@ impl MysqlTimeRulePlan {
 pub fn plan_mysql_time_rule(feedback: MysqlTimeRuleFeedback) -> Result<MysqlTimeRulePlan> {
     let original = fs::read_to_string(&feedback.policy_path)?;
     let mut loaded = load_replay_policy(&feedback.policy_path)?;
-    let (method, path) = super::super::response::parse_api(&feedback.api)?;
     let s = &feedback.selector;
     ensure!(
-        !s.target_host.trim().is_empty()
-            && s.target_port > 0
-            && !s.database.is_empty()
-            && !s.username.is_empty(),
-        "SQL time rule requires an exact endpoint, database and username"
+        !s.database.trim().is_empty() && s.target_port > 0,
+        "SQL time rule requires a database and a valid evidence endpoint port"
     );
+    crate::config::process_owned_dependencies::validate_source_evidence(&feedback.source_evidence)?;
     let time = TimeRule {
         relative_to: TimeReference::ReplayNow,
         offset: s.offset.clone(),
@@ -96,25 +93,19 @@ pub fn plan_mysql_time_rule(feedback: MysqlTimeRuleFeedback) -> Result<MysqlTime
     };
     let proposed = ReplayDependencyRule {
         id: feedback.rule_id.clone(),
-        case_selector: Some(CaseSelector {
-            method: method.into(),
-            path: path.into(),
-        }),
+        case_selector: None,
         protocol: DependencyProtocol::Mysql,
-        target: TargetSelector {
-            host: Some(s.target_host.clone()),
-            port: Some(s.target_port),
-        },
+        target: TargetSelector::default(),
         mysql: Some(MysqlSelector {
             command: "COM_QUERY".into(),
             sql: s.sql.clone(),
             database: Some(s.database.clone()),
-            username: Some(s.username.clone()),
+            username: None,
             params: BTreeMap::new(),
             sql_values: BTreeMap::from([(
                 s.value_index,
                 MysqlTimeValueRule {
-                    source_evidence: feedback.source_evidence.clone(),
+                    source_evidence: String::new(),
                     time: time.clone(),
                 },
             )]),

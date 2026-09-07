@@ -17,6 +17,45 @@ use crate::replay::{
 const CASE_ID: &str = "case-1";
 
 #[test]
+fn compact_sql_time_rule_matches_across_api_paths_but_not_databases() {
+    let fixture = policy_fixture(
+        "version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: last-use\n  protocol: mysql\n  mysql:\n    database: pluto_audit\n    sql: UPDATE api_keys SET last_used_at=? WHERE id=?\n    sql_values: {0: {time: replay_now, tolerance: 5s}}\n",
+    );
+    let now = Utc.with_ymd_and_hms(2026, 9, 7, 12, 0, 0).unwrap();
+    for (method, path) in [("GET", "/responses/7"), ("POST", "/documents/content")] {
+        fs::write(
+            fixture.cases[CASE_ID].dir.join("request.json"),
+            json!({"method":method,"uri":path}).to_string(),
+        )
+        .unwrap();
+        let runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
+        for database in ["pluto_audit", "other_database"] {
+            let mut identity = mysql_identity();
+            identity.database = Some(database.into());
+            let context = MysqlPolicyContext {
+                case_id: Some(CASE_ID),
+                identity: &identity,
+                command: "COM_STMT_EXECUTE",
+                recorded_sql: Some(
+                    "UPDATE api_keys SET last_used_at='2020-01-01 00:00:00.123456' WHERE id=7",
+                ),
+                sql: Some(
+                    "UPDATE api_keys SET last_used_at='2026-09-07 12:00:01.123456' WHERE id=7",
+                ),
+                recorded: None,
+                actual: None,
+            };
+            let decision = runtime.preview_mysql_sql_values(&context, now);
+            if database == "pluto_audit" {
+                assert!(decision.unwrap().is_ok(), "{path}");
+            } else {
+                assert!(decision.is_none());
+            }
+        }
+    }
+}
+
+#[test]
 fn validates_verification_policy_example() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("config")

@@ -15,10 +15,11 @@ fn identity(s: &MysqlTimeSelector, event: &Value, recorded: bool) -> bool {
     } else {
         event["target"]["port"].as_u64()
     };
-    host.is_some_and(|host| host.eq_ignore_ascii_case(&s.target_host))
-        && port == Some(u64::from(s.target_port))
+    (s.target_host.is_empty()
+        || (host.is_some_and(|host| host.eq_ignore_ascii_case(&s.target_host))
+            && port == Some(u64::from(s.target_port))))
         && event["database"] == s.database
-        && event["username"] == s.username
+        && (s.username.is_empty() || event["username"] == s.username)
         && matches!(
             event["command"].as_str(),
             Some("COM_QUERY" | "COM_STMT_EXECUTE")
@@ -95,6 +96,19 @@ pub(super) fn validate(feedback: &MysqlTimeRuleFeedback, time: &TimeRule) -> Res
         for line in bytes.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
             let event: Value = serde_json::from_slice(line)?;
             if event["event_type"] != "mysql_exchange" || !identity(s, &event, true) {
+                continue;
+            }
+            // An unscoped rule still requires proof from the same actual
+            // database connection identity, never from an unrelated endpoint.
+            if !event["target_host"].as_str().is_some_and(|host| {
+                actual["target"]["host"]
+                    .as_str()
+                    .is_some_and(|other| host.eq_ignore_ascii_case(other))
+            }) || event["target_port"].as_u64().is_none()
+                || event["target_port"] != actual["target"]["port"]
+                || event["username"].as_str().is_none()
+                || event["username"] != actual["username"]
+            {
                 continue;
             }
             let Some(source) = event_values(s, &event) else {

@@ -3,6 +3,14 @@ use super::*;
 use crate::mysql::sql::Token;
 use crate::replay::policy::sql_template::bounded_tokens;
 
+pub(super) fn default_command() -> String {
+    "COM_QUERY".into()
+}
+
+pub(super) fn is_default_command(command: &str) -> bool {
+    command == "COM_QUERY"
+}
+
 pub(in crate::replay::policy) fn validate_selector(mysql: &MysqlSelector) -> Result<()> {
     ensure!(
         mysql.params.is_empty(),
@@ -30,9 +38,11 @@ pub(in crate::replay::policy) fn validate_selector(mysql: &MysqlSelector) -> Res
             *index < count,
             "MySQL sql_values[{index}] exceeds the {count} SQL template slots"
         );
-        crate::config::process_owned_dependencies::validate_source_evidence(
-            &field.source_evidence,
-        )?;
+        if !field.source_evidence.is_empty() {
+            crate::config::process_owned_dependencies::validate_source_evidence(
+                &field.source_evidence,
+            )?;
+        }
         parse_duration(&field.time.offset).context("invalid time.offset")?;
         ensure!(
             parse_duration(&field.time.tolerance)? >= 0,

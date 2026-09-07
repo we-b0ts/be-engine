@@ -257,7 +257,9 @@ explicit repository-wide audit.
   across text and prepared calls. It reuses `replay/mysql/sql_match` value
   materialization; the MySQL matcher retains identity and finite consumption.
   `replay/policy/sql_template` owns pure bounded template extraction, and
-  `replay/policy/config/mysql` owns rule-schema validation.
+  `replay/policy/config/mysql` owns rule-schema validation. Its sibling
+  `config/mysql_time` owns compact time defaults and legacy syntax conversion;
+  the policy document renderer keeps SQL value maps on one line.
   `replay/policy/feedback/mysql_time` owns atomic policy plan/apply; its evidence
   child correlates immutable writes. Coordinator dependency rules persist the plan
   and invalidate validation without changing dependency ownership.

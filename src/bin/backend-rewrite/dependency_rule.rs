@@ -51,13 +51,15 @@ struct MysqlTimeArgs {
     evidence_id: String,
     #[arg(long)]
     rule_id: String,
-    #[arg(long)]
+    /// Optional endpoint filter for evidence lookup; not written to the rule.
+    #[arg(long, default_value = "")]
     target_host: String,
     #[arg(long, default_value_t = 3306)]
     target_port: u16,
     #[arg(long)]
     database: String,
-    #[arg(long)]
+    /// Optional user filter for evidence lookup; not written to the rule.
+    #[arg(long, default_value = "")]
     username: String,
     /// SQL template: each ? represents one scalar value; other tokens stay exact.
     #[arg(long)]
@@ -528,12 +530,8 @@ mod tests {
             "current",
             "--rule-id",
             "last-used",
-            "--target-host",
-            "db.internal",
             "--database",
             "app",
-            "--username",
-            "user",
             "--sql",
             "UPDATE api_keys SET last_used_at=? WHERE id=?",
             "--value-index",
@@ -552,6 +550,8 @@ mod tests {
         let RewriteDependencyRuleSelector::MysqlSqlTime { selector } = options.selector else {
             panic!("expected MySQL time")
         };
+        assert!(selector.target_host.is_empty());
+        assert!(selector.username.is_empty());
         assert_eq!(selector.value_index, 0);
         assert_eq!(selector.tolerance, "5s");
         assert_eq!(selector.timezone, "+00:00");

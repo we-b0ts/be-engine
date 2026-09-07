@@ -62,15 +62,38 @@ pub(crate) fn replace_root_section(
     Ok(updated)
 }
 
-#[derive(Serialize)]
-struct DependencyRulesDocument<'a> {
-    dependency_rules: &'a [ReplayDependencyRule],
-}
-
 pub(super) fn render_dependency_rules(dependency_rules: &[ReplayDependencyRule]) -> Result<String> {
-    Ok(serde_yaml::to_string(&DependencyRulesDocument {
-        dependency_rules,
-    })?)
+    if dependency_rules.is_empty() {
+        return Ok("dependency_rules: []\n".into());
+    }
+    let mut rendered = String::from("dependency_rules:\n");
+    for rule in dependency_rules {
+        let mut yaml = serde_yaml::to_string(rule)?;
+        if let Some(mysql) = &rule.mysql
+            && !mysql.sql_values.is_empty()
+        {
+            let block = serde_yaml::to_string(&mysql.sql_values)?
+                .lines()
+                .map(|line| format!("    {line}\n"))
+                .collect::<String>();
+            let slots = mysql
+                .sql_values
+                .iter()
+                .map(|(index, value)| Ok(format!("{index}: {}", serde_json::to_string(value)?)))
+                .collect::<Result<Vec<_>>>()?
+                .join(", ");
+            yaml = yaml.replace(
+                &format!("  sql_values:\n{block}"),
+                &format!("  sql_values: {{{slots}}}\n"),
+            );
+        }
+        for (index, line) in yaml.lines().enumerate() {
+            rendered.push_str(if index == 0 { "- " } else { "  " });
+            rendered.push_str(line);
+            rendered.push('\n');
+        }
+    }
+    Ok(rendered)
 }
 
 #[derive(Serialize)]

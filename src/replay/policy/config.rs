@@ -1,4 +1,5 @@
 mod mysql;
+mod mysql_time;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -91,11 +92,15 @@ impl TargetSelector {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct MysqlSelector {
+    #[serde(
+        default = "mysql::default_command",
+        skip_serializing_if = "mysql::is_default_command"
+    )]
     pub(super) command: String,
     pub(super) sql: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) database: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) username: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) params: BTreeMap<usize, DynamicValueRule>,
@@ -104,7 +109,7 @@ pub(super) struct MysqlSelector {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "mysql_time::Config", into = "mysql_time::Config")]
 pub(super) struct MysqlTimeValueRule {
     pub(super) source_evidence: String,
     pub(super) time: TimeRule,
