@@ -164,5 +164,5 @@ rows.
 4. Verify stable endpoint names and, when enabled, both normal and `all_`
    profile rows without high-cardinality path or query values.
 5. Run the target repository's focused checks. Return the coordinator-issued
-   acceptance command unchanged; the main orchestrator runs it after
+   acceptance command unchanged; the state-machine coordinator runs it after
    integration.

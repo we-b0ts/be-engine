@@ -6,7 +6,6 @@ use super::model::{
 };
 use crate::RecordingApi;
 
-const MAX_CONCURRENT_AI_WORK_ITEMS: usize = 32;
 pub(super) const RECORDED_API_INVENTORY_SCOPE: &str = "recorded_api_inventory";
 
 pub(super) fn initialize_legacy(state: &mut RewriteState) -> bool {
@@ -134,15 +133,7 @@ pub(super) fn activate_requested(
         ),
         "API {requested} is not available for concurrent AI work"
     );
-    if state.api_inventory[requested_index].status == RewriteApiStatus::Pending {
-        ensure!(
-            concurrent_ai_capacity_available(state),
-            "concurrent AI work item limit of {MAX_CONCURRENT_AI_WORK_ITEMS} was reached"
-        );
-    }
-
     if state.phase == RewritePhase::ImplementationRequired {
-        super::worker::ensure_current_confirmed(state)?;
         park_current_implementation(state)?;
     } else {
         let current_index = state
@@ -233,21 +224,20 @@ pub(super) fn scoped(
         None => anyhow::bail!("API {requested} has no concurrent AI work state"),
     };
     let mut scoped = state.clone();
+    if state.phase == RewritePhase::ImplementationRequired {
+        scoped
+            .parked_slices
+            .insert(state.api.clone(), state.active_slice.clone());
+    }
+    scoped.parked_slices.remove(&requested);
     scoped.active_slice = slice;
     scoped.current_api_index = Some(index);
     Ok(scoped)
 }
 
-pub(super) fn api_for_evidence_query(
-    target_root: &std::path::Path,
-    state: &RewriteState,
-    query_id: &str,
-) -> Option<String> {
+pub(super) fn api_for_evidence_query(state: &RewriteState, query_id: &str) -> Option<String> {
     slices(state).find_map(|slice| {
-        super::evidence::commands(target_root, &slice)
-            .iter()
-            .any(|command| command.query_id == query_id)
-            .then(|| slice.api.clone())
+        super::evidence::accepts_query(&slice, query_id).then(|| slice.api.clone())
     })
 }
 
@@ -556,6 +546,11 @@ pub(super) fn view(state: &RewriteState) -> RewriteApiInventoryView {
             .iter()
             .filter(|item| item.status == RewriteApiStatus::Pending)
             .count(),
+        active: state
+            .api_inventory
+            .iter()
+            .filter(|item| item.status == RewriteApiStatus::Active)
+            .count(),
         implementation_required: state
             .api_inventory
             .iter()
@@ -580,20 +575,11 @@ pub(super) fn view(state: &RewriteState) -> RewriteApiInventoryView {
 }
 
 pub(super) fn next_pending_api_for_concurrent_work(state: &RewriteState) -> Option<&str> {
-    if !concurrent_ai_capacity_available(state) {
-        return None;
-    }
     state
         .api_inventory
         .iter()
         .find(|item| item.status == RewriteApiStatus::Pending)
         .map(|item| item.api.as_str())
-}
-
-fn concurrent_ai_capacity_available(state: &RewriteState) -> bool {
-    let retained_work_items = state.parked_slices.len()
-        + usize::from(state.phase == RewritePhase::ImplementationRequired);
-    retained_work_items < MAX_CONCURRENT_AI_WORK_ITEMS
 }
 
 pub(super) fn details(state: &RewriteState) -> RewriteApiInventoryDetails {
@@ -775,10 +761,6 @@ mod tests {
         state.active_issue = Some(test_issue("issue-a", "target-a"));
 
         let api_b = "POST /b".parse::<RecordingApi>().unwrap();
-        let error = activate_requested(&mut state, Some(&api_b)).unwrap_err();
-        assert!(error.to_string().contains("subagent dispatch is confirmed"));
-        super::super::worker::confirm_current_for_test(&mut state);
-
         assert!(activate_requested(&mut state, Some(&api_b)).unwrap());
         assert_eq!(state.api, "POST /b");
         assert_eq!(state.phase, RewritePhase::ApiPending);

@@ -138,16 +138,22 @@ is unclear.
   keeps pending batches, idempotency, and irreversible failure barriers;
   `verification_progress/public.rs` owns only the compact committed
   `.traffic-e2e/progress.yaml` projection and migration parser.
-- Within `rewrite`, `mod.rs` remains the atomic coordinator-transition facade,
-  `action.rs` keeps the exhaustive action/command projection, and `recording.rs`
-  keeps the managed recording request/start/worker lifecycle. `worker.rs` owns
-  the complete dedicated API-subagent identity lifecycle: dispatch,
-  confirmation, explicit ownership transfer, and their state-machine tests;
-  it does not own worktrees or the task runtime. `model.rs` owns the single
-  persisted and public coordinator serialization contract so state
-  compatibility and action-schema changes remain reviewable together.
+- Within `rewrite`, `mod.rs` is the public coordinator facade and `advance.rs`
+  owns the atomic verification transition. `action.rs` projects actions and
+  commands; `coordination.rs` projects executable `pending` and the expanded
+  ready/waiting breakdown. `recording.rs` owns managed recording execution.
+  `execution.rs` owns detached Next/quality launch, completion, failure, and
+  recovery without moving verification semantics out of their existing owners.
+  `worker.rs` owns persistent dedicated identity, confirmation, and transfer;
+  `worker/model.rs` owns worker serialization, `worker/runtime.rs` validates task
+  observations and handoffs, and `worker/scheduler.rs` selects executable work
+  across current and parked scopes. `worker/events.rs` owns the independent
+  durable feedback transaction; `store.rs` folds newer feedback into coordinator
+  snapshots on both load and save. These modules never manufacture task-runtime
+  handles or manage worktrees. `model.rs` owns the remaining persisted state and
+  public action contract and reexports the worker contract for compatibility.
   `inventory.rs` owns the API inventory state machine: stable installation,
-  bounded activation and parking, deferred revalidation, and summary/detail
+  activation and parking, deferred revalidation, and summary/detail
   views. `case_patterns.rs` owns the low-frequency post-recording pattern
   identification gate, persistent canonical API catalog, and add-only policy
   application; it does not mutate recorded cases or delegate this gate to API
@@ -157,14 +163,18 @@ is unclear.
   capture configuration and immutable source/target file evidence.
   `revalidation.rs` owns the coordinator's explicit early-validation
   request boundary and projection for deferred API status.
-  Together, these files are intentionally cohesive near the 1000-line hard limit;
-  status projection and the traffic lease are separate modules, and further
-  splitting should follow a real responsibility boundary rather than divide
-  one transaction, action contract, or inventory transition.
+  Status projection and the traffic lease remain separate owners. Further
+  splitting must follow a responsibility boundary rather than divide one
+  transaction, action contract, or inventory transition.
   `transition.rs` applies each batch's frozen Comparison requirement and leaves
   parked-slice completion scheduling to the root coordinator. `progress_publication.rs`
   owns the durable first-completion latch for future recording batches alongside
   its existing final delivery publication gate.
+  `evidence/overview` owns issue overview identity and projection, including
+  process-output diagnostics. `evidence` owns read-only query access, work-item
+  resolution, and worker-confirmation checks. Action serialization retains
+  scheduling facts and one evidence entrypoint; diagnostic payloads stay in
+  evidence reports. Persisted issue payloads retain their evidence contract.
   `configuration_commit` owns the separate persistent-configuration Git commit
   boundary for `status` and `next`; it detects pending configuration before
   dispatch or verification without committing files or treating routine progress

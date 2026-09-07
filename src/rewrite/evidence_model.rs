@@ -1,7 +1,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use super::model::RewriteCommandSpec;
+use super::model::{RewriteCommandSpec, RewriteEvidenceCommand};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RewriteApplicableRulePlanner {
@@ -26,6 +26,8 @@ pub struct RewriteEvidenceReport {
     pub issue_id: String,
     pub query: String,
     pub facts: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queries: Vec<RewriteEvidenceCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub applicable_rule_planners: Vec<RewriteApplicableRulePlanner>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

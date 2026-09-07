@@ -10,6 +10,11 @@ use super::store::RewriteStore;
 use super::{action, evidence, fingerprint, inventory, process_outputs};
 use crate::RecordingApi;
 
+pub(super) mod events;
+pub(super) mod model;
+pub(super) mod runtime;
+pub(super) mod scheduler;
+
 #[derive(Debug, Clone)]
 pub struct RewriteWorkerConfirmOptions {
     pub target_root: std::path::PathBuf,
@@ -30,6 +35,7 @@ pub struct RewriteWorkerTransferOptions {
 
 pub(super) const AGENT_HANDLE_ENV: &str = "BACKEND_REWRITE_SUBAGENT_HANDLE";
 
+#[cfg(test)]
 pub(super) fn gate_envelope(
     target_root: &std::path::Path,
     state: &RewriteState,
@@ -71,49 +77,27 @@ pub(super) fn implementation_action(
         }
     };
     let confirm_worker = confirmation_command(target_root, &worker);
-    let (evidence_commands, acceptance) = match &scope {
-        RewriteWorkScope::Api { api } => (
-            evidence::commands(target_root, state),
-            action::next_command_for_api(target_root, api),
-        ),
-        RewriteWorkScope::ProcessOutput { id } => (
-            Vec::new(),
-            action::next_command_for_process_output(target_root, id),
-        ),
+    let report_worker = runtime::report_command(target_root, &worker.dispatch_id, false);
+    let evidence = evidence::overview_command(target_root, state, &scope, &issue);
+    let acceptance = match &scope {
+        RewriteWorkScope::Api { api } => action::next_command_for_api(target_root, api),
+        RewriteWorkScope::ProcessOutput { id } => {
+            action::next_command_for_process_output(target_root, id)
+        }
     };
     RewriteAction::ImplementationRequired {
         summary,
         issue,
         worker,
         confirm_worker,
-        evidence_commands,
+        report_worker,
+        evidence,
         acceptance,
     }
 }
 
 pub(super) fn state_action(target_root: &std::path::Path, state: &RewriteState) -> RewriteAction {
-    let scope = active_scope(state).expect("implementation action requires a work scope");
-    if is_confirmed(state, &scope) {
-        if let Some(pending_api) = inventory::next_pending_api_for_concurrent_work(state) {
-            return RewriteAction::AdvanceRequired {
-                summary: format!(
-                    "dedicated subagent for {} is confirmed; execute commands.advance to continue with pending API {pending_api}",
-                    scope.label()
-                ),
-                command: action::next_command_for_api(target_root, pending_api),
-            };
-        }
-        if let Some(id) = process_outputs::next_eligible_id(state) {
-            return RewriteAction::AdvanceRequired {
-                summary: format!(
-                    "dedicated subagent for {} is confirmed; execute commands.advance to verify process output {id}",
-                    scope.label()
-                ),
-                command: action::next_command_for_process_output(target_root, id),
-            };
-        }
-    }
-    implementation_action(target_root, state, None)
+    scheduler::after_dispatch(target_root, state)
 }
 
 pub(super) fn dispatch_view(
@@ -159,24 +143,9 @@ pub(super) fn confirmation_command(
     })
 }
 
+#[cfg(test)]
 pub(super) fn current_is_confirmed(state: &RewriteState) -> bool {
     active_scope(state).is_some_and(|scope| is_confirmed(state, &scope))
-}
-
-pub(super) fn active_dispatch_required(state: &RewriteState) -> bool {
-    active_scope(state).is_some() && !current_is_confirmed(state)
-}
-
-pub(super) fn ensure_current_confirmed(state: &RewriteState) -> Result<()> {
-    let scope = RewriteWorkScope::Api {
-        api: state.api.clone(),
-    };
-    ensure!(
-        is_confirmed(state, &scope),
-        "API {} cannot be parked until its dedicated subagent dispatch is confirmed",
-        state.api
-    );
-    Ok(())
 }
 
 pub(super) fn ensure_api_confirmed(state: &RewriteState, api: &str, operation: &str) -> Result<()> {
@@ -185,9 +154,18 @@ pub(super) fn ensure_api_confirmed(state: &RewriteState, api: &str, operation: &
     let scope = RewriteWorkScope::Api {
         api: api.to_string(),
     };
+    ensure_scope_confirmed(&scoped, &scope, operation)
+}
+
+pub(super) fn ensure_scope_confirmed(
+    state: &RewriteState,
+    scope: &RewriteWorkScope,
+    operation: &str,
+) -> Result<()> {
     ensure!(
-        is_confirmed(&scoped, &scope),
-        "API {api} requires a confirmed dedicated subagent dispatch before {operation}; inspect its scoped status and execute action.commands.confirm_worker"
+        is_confirmed(state, scope),
+        "{} requires a confirmed dedicated subagent dispatch before {operation}; inspect its scoped status and execute action.commands.confirm_worker",
+        scope.label()
     );
     Ok(())
 }
@@ -200,11 +178,11 @@ pub fn confirm(options: RewriteWorkerConfirmOptions) -> Result<RewriteActionEnve
     }
 
     let store = RewriteStore::new(&target_root)?;
-    let _lock = store.lock()?;
+    let _lock = events::lock(&target_root)?;
     let mut state = store
         .load()?
         .context("rewrite workflow is not initialized")?;
-    let scope = active_scope(&state).context("rewrite workflow has no implementation work item")?;
+    let scope = runtime::scope_for_dispatch(&state, &options.dispatch_id)?;
     ensure!(
         issue_for_scope(&state, &scope).is_some(),
         "{} is not implementation_required",
@@ -225,10 +203,10 @@ pub fn confirm(options: RewriteWorkerConfirmOptions) -> Result<RewriteActionEnve
         options.agent_name,
     )?;
     if changed {
-        state.bump();
-        store.save(&state)?;
+        events::publish(&target_root, &state, &scope)?;
     }
-    Ok(action::for_state(&target_root, &state))
+    drop(_lock);
+    runtime::current_envelope(&target_root)
 }
 
 pub fn transfer(options: RewriteWorkerTransferOptions) -> Result<RewriteActionEnvelope> {
@@ -244,11 +222,16 @@ pub fn transfer(options: RewriteWorkerTransferOptions) -> Result<RewriteActionEn
     );
 
     let store = RewriteStore::new(&target_root)?;
-    let _lock = store.lock()?;
+    let _lock = events::lock(&target_root)?;
     let mut state = store
         .load()?
         .context("rewrite workflow is not initialized")?;
-    let scope = active_scope(&state).context("rewrite workflow has no implementation work item")?;
+    let scope = runtime::scopes(&state)
+        .into_iter()
+        .find(|scope| binding_id(&state, scope) == options.binding_id)
+        .context(
+            "worker binding id is stale; inspect backend-rewrite inventory and scoped status",
+        )?;
     ensure!(
         issue_for_scope(&state, &scope).is_some(),
         "{} is not implementation_required",
@@ -267,9 +250,9 @@ pub fn transfer(options: RewriteWorkerTransferOptions) -> Result<RewriteActionEn
         options.agent_name,
         options.reason,
     )?;
-    state.bump();
-    store.save(&state)?;
-    Ok(action::for_state(&target_root, &state))
+    events::publish(&target_root, &state, &scope)?;
+    drop(_lock);
+    runtime::current_envelope(&target_root)
 }
 
 fn confirm_binding(
@@ -286,6 +269,12 @@ fn confirm_binding(
             key != &binding_key && binding.agent_handle_fingerprint == handle_fingerprint
         }),
         "subagent handle is already dedicated to another work item in this workflow"
+    );
+    let started = !matches!(
+        runtime::coverage(state, scope),
+        model::RewriteWorkerCoverageState::Running
+            | model::RewriteWorkerCoverageState::IntegrationRequired
+            | model::RewriteWorkerCoverageState::VerificationRequired
     );
     let mut changed = false;
     match state.worker_bindings.get_mut(&binding_key) {
@@ -312,11 +301,17 @@ fn confirm_binding(
                     agent_name,
                     confirmed_dispatch_id: expected_dispatch_id.to_string(),
                     transfer_generation: 0,
+                    rework_generation: 0,
                     last_transfer: None,
+                    observation: None,
                 },
             );
             changed = true;
         }
+    }
+    if started {
+        runtime::record_start(state, scope);
+        changed = true;
     }
     Ok(changed)
 }
@@ -355,6 +350,7 @@ fn transfer_binding(
         reason,
         transferred_at: chrono::Utc::now().to_rfc3339(),
     });
+    runtime::record_start(state, scope);
     Ok(())
 }
 
@@ -380,14 +376,27 @@ fn dispatch_id(state: &RewriteState, scope: &RewriteWorkScope) -> String {
     let issue = issue_for_scope(state, scope).expect("implementation phase requires an issue");
     let binding_key = scope.binding_key();
     let attempt = issue.attempt.to_string();
-    fingerprint::id(&[
+    let original = fingerprint::id(&[
         "rewrite-worker-dispatch-v1",
         state.workflow_id.as_str(),
         binding_key.as_str(),
         issue.id.as_str(),
         attempt.as_str(),
         issue.observed_target_fingerprint.as_str(),
-    ])
+    ]);
+    let generation = state
+        .worker_bindings
+        .get(&binding_key)
+        .map_or(0, |binding| binding.rework_generation);
+    if generation == 0 {
+        original
+    } else {
+        fingerprint::id(&[
+            "rewrite-worker-rework-v1",
+            &original,
+            &generation.to_string(),
+        ])
+    }
 }
 
 fn dispatch_state(
@@ -398,7 +407,13 @@ fn dispatch_state(
     match state.worker_bindings.get(&scope.binding_key()) {
         None => RewriteWorkerDispatchState::DispatchRequired,
         Some(binding) if binding.confirmed_dispatch_id == dispatch_id => {
-            RewriteWorkerDispatchState::Confirmed
+            if runtime::observation(state, scope).is_some_and(|observation| {
+                observation.activity == model::RewriteWorkerActivity::Idle
+            }) {
+                RewriteWorkerDispatchState::ResumeRequired
+            } else {
+                RewriteWorkerDispatchState::Confirmed
+            }
         }
         Some(_) => RewriteWorkerDispatchState::ResumeRequired,
     }
@@ -452,5 +467,21 @@ pub(super) fn confirm_current_for_test(state: &mut RewriteState) {
 }
 
 #[cfg(test)]
+pub(super) fn integrate_current_for_test(state: &mut RewriteState) {
+    confirm_current_for_test(state);
+    let scope = active_scope(state).unwrap();
+    let value = state
+        .worker_bindings
+        .get_mut(&scope.binding_key())
+        .unwrap()
+        .observation
+        .as_mut()
+        .unwrap();
+    value.activity = model::RewriteWorkerActivity::Integrated;
+    value.handoff_id = Some("tested-handoff".into());
+    value.integrated_target_fingerprint = Some("integrated-test-target".into());
+}
+
+#[cfg(test)]
 #[path = "worker_tests.rs"]
-mod tests;
+pub(super) mod tests;

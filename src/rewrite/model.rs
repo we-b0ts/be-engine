@@ -11,6 +11,10 @@ use super::process_output_model::{
     RewriteProcessOutputInventoryDetails, RewriteProcessOutputInventoryView,
     RewriteProcessOutputState, RewriteWorkScope,
 };
+pub(super) use super::worker::model::{RewriteWorkerBinding, RewriteWorkerTransferRecord};
+pub use super::worker::model::{
+    RewriteWorkerBlockingReason, RewriteWorkerDispatchState, RewriteWorkerDispatchView,
+};
 use crate::RedisKeyPatternConfig;
 use crate::{
     E2eDiagnosisCounts, E2eRepresentativeDifference, E2eResponseDifferenceDiagnosis,
@@ -18,7 +22,7 @@ use crate::{
 };
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 22;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 24;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -68,7 +72,9 @@ pub struct RewriteApiProgress {
 pub struct RewriteApiInventoryView {
     pub total: usize,
     pub completed: usize,
+    #[serde(rename = "unverified")]
     pub pending: usize,
+    pub active: usize,
     pub implementation_required: usize,
     pub awaiting_recording_refresh: usize,
     pub revalidation_pending: usize,
@@ -390,25 +396,6 @@ pub(super) struct RewriteRecordingRefreshState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct RewriteWorkerBinding {
-    pub agent_handle_fingerprint: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_name: Option<String>,
-    pub confirmed_dispatch_id: String,
-    #[serde(default)]
-    pub transfer_generation: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_transfer: Option<RewriteWorkerTransferRecord>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct RewriteWorkerTransferRecord {
-    pub previous_agent_handle_fingerprint: String,
-    pub reason: String,
-    pub transferred_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct RewriteSliceState {
     pub phase: RewritePhase,
     pub api: String,
@@ -476,6 +463,8 @@ pub(super) struct RewriteState {
     pub parked_slices: BTreeMap<String, RewriteSliceState>,
     #[serde(default)]
     pub worker_bindings: BTreeMap<String, RewriteWorkerBinding>,
+    #[serde(default)]
+    pub worker_event_revision: u64,
     #[serde(default)]
     pub process_outputs: RewriteProcessOutputState,
     #[serde(default)]
@@ -569,34 +558,6 @@ pub struct RewriteCommandSpec {
     pub argv: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_env_names: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RewriteWorkerDispatchState {
-    DispatchRequired,
-    ResumeRequired,
-    Confirmed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RewriteWorkerBlockingReason {
-    WorkerDispatchUnconfirmed,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RewriteWorkerDispatchView {
-    pub binding_id: String,
-    pub dispatch_id: String,
-    pub work_scope: RewriteWorkScope,
-    pub state: RewriteWorkerDispatchState,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub blocking_reason: Option<RewriteWorkerBlockingReason>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub requested_api: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -717,8 +678,28 @@ pub enum RewriteAction {
         issue: RewriteIssue,
         worker: RewriteWorkerDispatchView,
         confirm_worker: Option<RewriteCommandSpec>,
-        evidence_commands: Vec<RewriteEvidenceCommand>,
+        report_worker: RewriteCommandSpec,
+        evidence: RewriteCommandSpec,
         acceptance: RewriteCommandSpec,
+    },
+    WorkerStatusRequired {
+        summary: String,
+        worker: RewriteWorkerDispatchView,
+        report_worker: RewriteCommandSpec,
+        evidence: RewriteCommandSpec,
+    },
+    IntegrationRequired {
+        summary: String,
+        worker: RewriteWorkerDispatchView,
+        handoff_id: String,
+        report_worker: RewriteCommandSpec,
+        evidence: RewriteCommandSpec,
+    },
+    ExecutionFailed {
+        summary: String,
+        operation_id: String,
+        retry: RewriteCommandSpec,
+        status: RewriteCommandSpec,
     },
     TargetQualityRequired {
         summary: String,
@@ -743,6 +724,7 @@ pub enum RewriteAction {
     SystemRepairRequired {
         issue: RewriteIssue,
         route: Option<RewriteRouteRecord>,
+        evidence: RewriteCommandSpec,
         acceptance: Option<RewriteCommandSpec>,
     },
     RecordingRefreshPending {
@@ -774,6 +756,7 @@ pub struct RewriteActionEnvelope {
     pub api_inventory: Option<RewriteApiInventoryView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process_output_inventory: Option<RewriteProcessOutputInventoryView>,
+    pub pending: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_focused_e2e: Option<RewriteFocusedE2eExecution>,
     pub action: RewriteAction,
@@ -790,6 +773,7 @@ pub struct RewriteStatusReport {
     pub api_inventory: Option<RewriteApiInventoryView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process_output_inventory: Option<RewriteProcessOutputInventoryView>,
+    pub pending: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_focused_e2e: Option<RewriteFocusedE2eExecution>,
     pub e2e_current: bool,
@@ -808,6 +792,10 @@ pub struct RewriteInventoryReport {
     pub api_inventory: Option<RewriteApiInventoryDetails>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process_output_inventory: Option<RewriteProcessOutputInventoryDetails>,
+    pub pending: usize,
+    pub details: super::coordination::RewriteCoordinationDetails,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub workers: Vec<super::worker::model::RewriteWorkerInventoryItem>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -4,9 +4,13 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
+use super::RewriteContext;
 use super::evidence_model::RewriteEvidenceReport;
 use super::model::{RewriteEvidenceCommand, RewriteIssue, RewriteIssueKind, RewriteState};
-use super::{artifacts, fingerprint, source_process_traffic};
+use super::process_output_model::RewriteWorkScope;
+use super::store::RewriteStore;
+use super::{artifacts, fingerprint, inventory, source_process_traffic, worker};
+use crate::RecordingApi;
 use crate::case_group::resolve_published_case_dir;
 use crate::comparison_recording::resolve_comparison_case_dir;
 use crate::e2e_run::response_pointer_scope;
@@ -17,6 +21,8 @@ use crate::{
     query_e2e_target_runtime_diagnostics,
 };
 
+mod overview;
+pub(super) use overview::command as overview_command;
 mod response_body;
 mod rule_guidance;
 pub(super) use rule_guidance::supports_response_body_codec;
@@ -34,6 +40,24 @@ const QUERY_DIRTY_CLUSTERS: &str = "dirty_clusters";
 const QUERY_POLICY_APPLICABILITY: &str = "policy_applicability";
 const QUERY_ATTEMPT_DELTA: &str = "attempt_delta";
 const QUERY_TARGET_RUNTIME_DIAGNOSTICS: &str = "target_runtime_diagnostics";
+
+pub fn query_rewrite_evidence(
+    context: RewriteContext,
+    query_id: &str,
+) -> Result<RewriteEvidenceReport> {
+    let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
+    let state = RewriteStore::new(&target_root)?
+        .load()?
+        .context("rewrite workflow has not been initialized")?;
+    if let Some(report) = overview::query_process_output(&target_root, &state, query_id)? {
+        return Ok(report);
+    }
+    let api = inventory::api_for_evidence_query(&state, query_id)
+        .context("evidence query is stale or belongs to no concurrent API work item")?;
+    worker::ensure_api_confirmed(&state, &api, "querying evidence")?;
+    let scoped = inventory::scoped(&state, Some(&api.parse::<RecordingApi>()?))?;
+    query(&target_root, &scoped, query_id)
+}
 
 pub(super) fn commands(target_root: &Path, state: &RewriteState) -> Vec<RewriteEvidenceCommand> {
     let Some(issue) = &state.active_issue else {
@@ -56,6 +80,29 @@ pub(super) fn commands(target_root: &Path, state: &RewriteState) -> Vec<RewriteE
         .collect()
 }
 
+pub(super) fn accepts_query(state: &RewriteState, requested_id: &str) -> bool {
+    state.active_issue.as_ref().is_some_and(|issue| {
+        requested_id == overview::api_query_id(state, issue)
+            || requested_query(state, issue, requested_id).is_some()
+    })
+}
+
+fn requested_query(
+    state: &RewriteState,
+    issue: &RewriteIssue,
+    requested_id: &str,
+) -> Option<(&'static str, usize)> {
+    query_kinds(state, issue)
+        .into_iter()
+        .find_map(|(kind, _)| {
+            (query_identifier(state, issue, kind, 0) == requested_id).then_some((kind, 0))
+        })
+        .or_else(|| {
+            case_response_difference_offset(state, issue, requested_id)
+                .map(|offset| (QUERY_CASE_RESPONSE_DIFFERENCES, offset))
+        })
+}
+
 pub(super) fn query(
     target_root: &Path,
     state: &RewriteState,
@@ -65,21 +112,23 @@ pub(super) fn query(
         .active_issue
         .as_ref()
         .context("rewrite workflow has no active issue")?;
-    let requested = query_kinds(state, issue)
-        .into_iter()
-        .find_map(|(kind, _)| {
-            (query_identifier(state, issue, kind, 0) == requested_id).then_some((kind, 0))
-        })
-        .or_else(|| {
-            case_response_difference_offset(state, issue, requested_id)
-                .map(|offset| (QUERY_CASE_RESPONSE_DIFFERENCES, offset))
-        })
-        .with_context(|| {
-            format!(
-                "evidence query is stale or is not valid for active issue {}",
-                issue.id
-            )
-        })?;
+    if requested_id == overview::api_query_id(state, issue) {
+        return overview::report(
+            target_root,
+            state,
+            RewriteWorkScope::Api {
+                api: state.api.clone(),
+            },
+            issue,
+            requested_id,
+        );
+    }
+    let requested = requested_query(state, issue, requested_id).with_context(|| {
+        format!(
+            "evidence query is stale or is not valid for active issue {}",
+            issue.id
+        )
+    })?;
     let (kind, offset) = requested;
     let (facts, does_not_prove, next_step) = facts(target_root, state, issue, kind, offset)?;
     let evidence_id = format!(
@@ -101,6 +150,7 @@ pub(super) fn query(
         ),
         rule_hints: rule_hints(target_root, kind, &facts),
         facts,
+        queries: Vec::new(),
         does_not_prove,
         next_step,
     })

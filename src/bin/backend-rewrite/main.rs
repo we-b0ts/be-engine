@@ -13,13 +13,13 @@ use traffic_e2e::{
     RewriteContext, RewriteNextOptions, RewriteRecordingKind, RewriteRecordingReason,
     RewriteRecordingRequestOptions, RewriteRevalidationRequestOptions, RewriteRouteCause,
     RewriteRouteOptions, RewriteRulePlanOptions, RewriteTargetQualityOptions,
-    RewriteWorkerConfirmOptions, RewriteWorkerTransferOptions, apply_rewrite_case_patterns,
-    apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite, next_rewrite, plan_rewrite_rule,
-    query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
-    request_rewrite_recording, request_rewrite_revalidation, resume_rewrite_replay_planning,
-    route_rewrite, run_rewrite_target_quality, start_rewrite_recording, status_rewrite,
-    status_rewrite_for_api, status_rewrite_for_process_output, transfer_rewrite_worker,
-    verify_rewrite_repair,
+    RewriteWorkerConfirmOptions, RewriteWorkerReportOptions, RewriteWorkerTransferOptions,
+    apply_rewrite_case_patterns, apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite,
+    plan_rewrite_rule, query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
+    report_rewrite_worker, request_rewrite_recording, request_rewrite_revalidation,
+    resume_rewrite_replay_planning, retry_rewrite_operation, route_rewrite, start_rewrite_next,
+    start_rewrite_recording, start_rewrite_target_quality, status_rewrite, status_rewrite_for_api,
+    status_rewrite_for_process_output, transfer_rewrite_worker, verify_rewrite_repair,
 };
 
 mod config_protocol;
@@ -111,7 +111,7 @@ enum RewriteCommand {
     Case(CaseArgs),
     /// Apply one coordinator-requested batch of API case path patterns.
     CasePattern(CasePatternArgs),
-    /// Execute one current, bounded evidence query.
+    /// Inspect an issue overview or execute one returned bounded evidence query.
     Evidence(EvidenceArgs),
     /// Plan or apply one evidence-backed response rule.
     Rule(RuleArgs),
@@ -125,6 +125,8 @@ enum RewriteCommand {
     Repair(RepairArgs),
     /// Confirm the runtime identity of one dispatched or resumed API subagent.
     Worker(WorkerArgs),
+    /// Retry a failed detached coordinator operation after its cause is resolved.
+    Operation(OperationArgs),
     /// Schedule selected stale APIs before the deferred final verification batch.
     Verification(VerificationArgs),
     /// Execute coordinator-issued target repository quality gates.
@@ -392,6 +394,8 @@ struct WorkerArgs {
 enum WorkerCommand {
     /// Bind an actual subagent handle to the current implementation dispatch.
     Confirm(WorkerConfirmArgs),
+    /// Report a runtime observation, worker handoff, or completed integration.
+    Report(WorkerReportArgs),
     /// Transfer one API to a replacement subagent after explicit caller approval.
     Transfer(WorkerTransferArgs),
 }
@@ -406,6 +410,34 @@ struct WorkerConfirmArgs {
     /// Optional human-readable subagent name for diagnostics.
     #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_NAME", hide_env_values = true)]
     agent_name: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct WorkerReportArgs {
+    dispatch_id: String,
+    #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_HANDLE", hide_env_values = true)]
+    agent_handle: String,
+    #[arg(long, env = "BACKEND_REWRITE_WORKER_ACTIVITY", hide_env_values = true,
+        value_parser = ["running", "queued", "idle", "handoff_ready", "integrated", "rework_required"])]
+    activity: String,
+    /// Stable handoff identity; required for handoff_ready, integrated, and rework_required.
+    #[arg(
+        long,
+        env = "BACKEND_REWRITE_WORKER_HANDOFF_ID",
+        hide_env_values = true
+    )]
+    handoff_id: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct OperationArgs {
+    #[command(subcommand)]
+    command: OperationCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum OperationCommand {
+    Retry { operation_id: String },
 }
 
 #[derive(Debug, Args)]
@@ -541,28 +573,21 @@ async fn run(cli: Cli) -> Result<()> {
         RewriteCommand::Init(args) => project_init::run(target_root, args, pretty).await,
         RewriteCommand::Startup(args) => startup::run(target_root, args, pretty),
         RewriteCommand::Config(args) => config_protocol::run(target_root, args, pretty),
-        RewriteCommand::Next(args) => {
-            let recovery_root = target_root.clone();
-            let mut operation = Box::pin(next_rewrite(RewriteNextOptions {
+        RewriteCommand::Next(args) => print_json(
+            &start_rewrite_next(RewriteNextOptions {
                 target_root,
                 api: args.api,
                 process_output: args.process_output,
                 source_route: args.source_route,
-            }));
-            tokio::select! {
-                biased;
-                result = &mut operation => print_json(&result?, pretty),
-                signal = shutdown_signal() => {
-                    signal?;
-                    drop(operation);
-                    let recovery = recover_rewrite(RewriteContext {
-                        target_root: recovery_root,
-                    }).await?;
-                    print_json(&recovery, pretty)?;
-                    bail!("rewrite next was interrupted; runtime cleanup completed")
-                }
-            }
-        }
+            })?,
+            pretty,
+        ),
+        RewriteCommand::Operation(args) => match args.command {
+            OperationCommand::Retry { operation_id } => print_json(
+                &retry_rewrite_operation(RewriteContext { target_root }, &operation_id)?,
+                pretty,
+            ),
+        },
         RewriteCommand::Status(args) => {
             let context = RewriteContext { target_root };
             let report = if let Some(api) = args.api.as_ref() {
@@ -680,6 +705,16 @@ async fn run(cli: Cli) -> Result<()> {
                 })?,
                 pretty,
             ),
+            WorkerCommand::Report(args) => print_json(
+                &report_rewrite_worker(RewriteWorkerReportOptions {
+                    target_root,
+                    dispatch_id: args.dispatch_id,
+                    agent_handle: args.agent_handle,
+                    activity: args.activity.parse()?,
+                    handoff_id: args.handoff_id,
+                })?,
+                pretty,
+            ),
             WorkerCommand::Transfer(args) => print_json(
                 &transfer_rewrite_worker(RewriteWorkerTransferOptions {
                     target_root,
@@ -704,7 +739,7 @@ async fn run(cli: Cli) -> Result<()> {
         },
         RewriteCommand::TargetQuality(args) => match args.command {
             TargetQualityCommand::Run(args) => print_json(
-                &run_rewrite_target_quality(RewriteTargetQualityOptions {
+                &start_rewrite_target_quality(RewriteTargetQualityOptions {
                     target_root,
                     gate_id: args.gate_id,
                     api: args.api,
@@ -807,23 +842,6 @@ fn write_json(mut writer: impl Write, value: &impl serde::Serialize, pretty: boo
 
 fn print_json(value: &impl serde::Serialize, pretty: bool) -> Result<()> {
     write_json(std::io::stdout(), value, pretty)
-}
-
-async fn shutdown_signal() -> Result<()> {
-    #[cfg(unix)]
-    {
-        let mut terminate =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-        let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
-        tokio::select! {
-            result = tokio::signal::ctrl_c() => result?,
-            _ = terminate.recv() => {}
-            _ = hangup.recv() => {}
-        }
-    }
-    #[cfg(not(unix))]
-    tokio::signal::ctrl_c().await?;
-    Ok(())
 }
 
 #[cfg(test)]

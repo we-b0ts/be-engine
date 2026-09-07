@@ -22,6 +22,10 @@ expressible by bootstrap Replay planning instead receives
 runtime-input revision change. Neither `next` nor `recording request` may
 bypass the returned command.
 
+System-repair actions retain the route and acceptance command as scheduling
+information. Fetch the issue diagnostics through their single
+`action.commands.evidence` entrypoint when needed; status does not embed them.
+
 Successful verification chooses the next transition. Replay and external-input
 repairs reuse the same cases; Recorder or source-baseline repairs allocate
 fresh standard traffic. The AI never chooses between those transitions.

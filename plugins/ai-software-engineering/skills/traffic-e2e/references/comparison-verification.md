@@ -109,8 +109,8 @@ require source-positive `HTTP` plus the logical `RPC_SERVICE_CLIENT` Motan
 group on target. Redis, Memcached, and service-internal metrics are not product
 comparison policies.
 
-For a source-only HTTP or Motan client metric,
-`action.details.comparison_observation.rule_candidate` describes
+For a source-only HTTP or Motan client metric, the issue overview's
+`facts.issue.comparison_observation.rule_candidate` describes
 `allow_target_missing`. It is a diagnosis candidate, not authorization. The
 target AI must inspect the returned metric's source startup/configuration and
 indirect-emitter paths. Return exactly the canonical metric, dependency path,

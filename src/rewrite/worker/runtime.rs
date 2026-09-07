@@ -1,0 +1,347 @@
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, ensure};
+use chrono::{DateTime, Utc};
+
+use super::super::model::{RewriteActionEnvelope, RewritePhase, RewriteState};
+use super::super::process_output_model::{RewriteProcessOutputStatus, RewriteWorkScope};
+use super::super::{action, fingerprint, inventory, process_outputs, store::RewriteStore};
+use super::model::{RewriteWorkerActivity, RewriteWorkerCoverageState, RewriteWorkerObservation};
+
+pub(in crate::rewrite) const RUNNING_OBSERVATION_SECONDS: i64 = 300;
+pub(in crate::rewrite) const ACTIVITY_ENV: &str = "BACKEND_REWRITE_WORKER_ACTIVITY";
+pub(in crate::rewrite) const HANDOFF_ENV: &str = "BACKEND_REWRITE_WORKER_HANDOFF_ID";
+
+#[derive(Debug, Clone)]
+pub struct RewriteWorkerReportOptions {
+    pub target_root: PathBuf,
+    pub dispatch_id: String,
+    pub agent_handle: String,
+    pub activity: RewriteWorkerActivity,
+    pub handoff_id: Option<String>,
+}
+
+pub fn report(options: RewriteWorkerReportOptions) -> Result<RewriteActionEnvelope> {
+    let (target_root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
+    super::validate_identity("subagent handle", &options.agent_handle, 4096)?;
+    let store = RewriteStore::new(&target_root)?;
+    let integration_lock = if matches!(
+        options.activity,
+        RewriteWorkerActivity::Integrated | RewriteWorkerActivity::ReworkRequired
+    ) {
+        let lock = store.try_lock()?.context(
+            "integration must wait for the current verification or coordinator transition",
+        )?;
+        ensure!(
+            matches!(
+                super::super::traffic_operation::state(&target_root)?,
+                super::super::traffic_operation::TrafficOperationState::Absent
+            ),
+            "integration must wait for the current traffic operation"
+        );
+        Some(lock)
+    } else {
+        None
+    };
+    let _lock = super::events::lock(&target_root)?;
+    let mut state = store
+        .load()?
+        .context("rewrite workflow is not initialized")?;
+    let scope = scope_for_dispatch(&state, &options.dispatch_id)?;
+    let target_fingerprint = (options.activity == RewriteWorkerActivity::Integrated)
+        .then(|| fingerprint::repository_fingerprint(&target_root))
+        .transpose()?;
+    let changed = apply_report(&mut state, &scope, &options, target_fingerprint)?;
+    if changed {
+        super::events::publish(&target_root, &state, &scope)?;
+    }
+    // A worker report never activates a slice or starts a traffic operation.
+    // Recover the global action through status, which also honors live leases.
+    drop(_lock);
+    drop(integration_lock);
+    current_envelope(&target_root)
+}
+
+pub(in crate::rewrite) fn current_envelope(target_root: &Path) -> Result<RewriteActionEnvelope> {
+    let status = super::super::status_rewrite(super::super::RewriteContext {
+        target_root: target_root.to_path_buf(),
+    })?;
+    Ok(RewriteActionEnvelope {
+        schema_version: status.schema_version,
+        pending: status.pending,
+        workflow: status.workflow,
+        api_inventory: status.api_inventory,
+        process_output_inventory: status.process_output_inventory,
+        latest_focused_e2e: status.latest_focused_e2e,
+        action: status.action,
+        terminal_allowed: status.terminal_allowed,
+    })
+}
+
+fn apply_report(
+    state: &mut RewriteState,
+    scope: &RewriteWorkScope,
+    options: &RewriteWorkerReportOptions,
+    target_fingerprint: Option<String>,
+) -> Result<bool> {
+    let binding = state.worker_bindings.get(&scope.binding_key()).context(
+        "worker report requires an existing dedicated binding; dispatch and confirm first",
+    )?;
+    ensure!(
+        binding.agent_handle_fingerprint
+            == fingerprint::id(&["rewrite-subagent-handle-v1", &options.agent_handle]),
+        "worker report handle does not own this work item"
+    );
+    ensure!(
+        binding.confirmed_dispatch_id == options.dispatch_id,
+        "worker report requires confirmation of the current dispatch"
+    );
+    let previous = observation(state, scope);
+    // Duplicate callbacks are harmless, including a repeated handoff after integration.
+    if previous.is_some_and(|value| {
+        value.handoff_id == options.handoff_id
+            && ((value.activity == options.activity
+                && options.activity != RewriteWorkerActivity::Running
+                && options.activity != RewriteWorkerActivity::Queued)
+                || (value.activity == RewriteWorkerActivity::Integrated
+                    && options.activity == RewriteWorkerActivity::HandoffReady))
+    }) {
+        return Ok(false);
+    }
+    match options.activity {
+        RewriteWorkerActivity::Running | RewriteWorkerActivity::Queued => {
+            ensure!(
+                !previous.is_some_and(|value| value.activity == RewriteWorkerActivity::Idle),
+                "resume the idle worker and execute confirm_worker before reporting it running"
+            );
+            ensure!(
+                !previous.is_some_and(|value| matches!(
+                    value.activity,
+                    RewriteWorkerActivity::HandoffReady | RewriteWorkerActivity::Integrated
+                )),
+                "a handed-off dispatch cannot become running without a new repair dispatch"
+            );
+            ensure!(
+                options.handoff_id.is_none(),
+                "running reports do not accept a handoff id"
+            );
+        }
+        RewriteWorkerActivity::Idle => {
+            ensure!(
+                !previous.is_some_and(|value| matches!(
+                    value.activity,
+                    RewriteWorkerActivity::HandoffReady | RewriteWorkerActivity::Integrated
+                )),
+                "retain the ready handoff instead of reporting its worker idle"
+            );
+            ensure!(
+                options.handoff_id.is_none(),
+                "idle reports do not accept a handoff id"
+            );
+            supersede_dispatch(state, scope)?;
+        }
+        RewriteWorkerActivity::HandoffReady | RewriteWorkerActivity::Integrated => {
+            let handoff = options
+                .handoff_id
+                .as_deref()
+                .context("worker handoff id is required")?;
+            super::validate_identity("worker handoff id", handoff, 512)?;
+            if options.activity == RewriteWorkerActivity::Integrated {
+                ensure!(
+                    previous.is_some_and(|value| matches!(
+                        value.activity,
+                        RewriteWorkerActivity::HandoffReady | RewriteWorkerActivity::Integrated
+                    ) && value.handoff_id.as_deref() == Some(handoff)),
+                    "report the same handoff_ready before acknowledging its integration"
+                );
+            } else {
+                ensure!(
+                    !previous
+                        .is_some_and(|value| value.activity == RewriteWorkerActivity::Integrated),
+                    "an integrated handoff cannot return to handoff_ready"
+                );
+            }
+        }
+        RewriteWorkerActivity::ReworkRequired => {
+            ensure!(
+                previous.is_some_and(|value| matches!(
+                    value.activity,
+                    RewriteWorkerActivity::HandoffReady | RewriteWorkerActivity::Integrated
+                ) && value.handoff_id.is_some()
+                    && value.handoff_id == options.handoff_id),
+                "rework requires the current handoff identity and a free verification resource"
+            );
+            supersede_dispatch(state, scope)?;
+        }
+    }
+    let observation = RewriteWorkerObservation {
+        dispatch_id: super::dispatch_id(state, scope),
+        recording_run_id: state.recording_run_id.clone(),
+        activity: options.activity,
+        observed_at: Utc::now().to_rfc3339(),
+        handoff_id: options.handoff_id.clone(),
+        integrated_target_fingerprint: target_fingerprint,
+    };
+    state
+        .worker_bindings
+        .get_mut(&scope.binding_key())
+        .unwrap()
+        .observation = Some(observation);
+    Ok(true)
+}
+
+fn supersede_dispatch(state: &mut RewriteState, scope: &RewriteWorkScope) -> Result<()> {
+    let binding = state.worker_bindings.get_mut(&scope.binding_key()).unwrap();
+    binding.rework_generation = binding
+        .rework_generation
+        .checked_add(1)
+        .context("worker rework generation overflow")?;
+    Ok(())
+}
+
+pub(in crate::rewrite) fn scopes(state: &RewriteState) -> Vec<RewriteWorkScope> {
+    let mut scopes = Vec::new();
+    if state.phase == RewritePhase::ImplementationRequired && state.active_issue.is_some() {
+        scopes.push(RewriteWorkScope::Api {
+            api: state.api.clone(),
+        });
+    }
+    for (api, slice) in &state.parked_slices {
+        if api != &state.api
+            && slice.phase == RewritePhase::ImplementationRequired
+            && slice.active_issue.is_some()
+        {
+            scopes.push(RewriteWorkScope::Api { api: api.clone() });
+        }
+    }
+    scopes.extend(
+        state
+            .process_outputs
+            .inventory
+            .iter()
+            .filter(|item| {
+                item.status == RewriteProcessOutputStatus::ImplementationRequired
+                    && item.issue.is_some()
+            })
+            .map(|item| RewriteWorkScope::ProcessOutput {
+                id: item.id.clone(),
+            }),
+    );
+    scopes
+}
+
+pub(in crate::rewrite) fn scope_for_dispatch(
+    state: &RewriteState,
+    dispatch_id: &str,
+) -> Result<RewriteWorkScope> {
+    scopes(state).into_iter().find(|scope| super::dispatch_id(state, scope) == dispatch_id)
+        .context("worker dispatch id is stale; inspect backend-rewrite inventory and the owning scoped status")
+}
+
+pub(in crate::rewrite) fn scoped(
+    state: &RewriteState,
+    scope: &RewriteWorkScope,
+) -> Result<RewriteState> {
+    match scope {
+        RewriteWorkScope::Api { api } => {
+            let mut selected = inventory::scoped(state, Some(&api.parse()?))?;
+            selected.process_outputs.current_id = None;
+            Ok(selected)
+        }
+        RewriteWorkScope::ProcessOutput { id } => process_outputs::scoped(state, id),
+    }
+}
+
+pub(in crate::rewrite) fn observation<'a>(
+    state: &'a RewriteState,
+    scope: &RewriteWorkScope,
+) -> Option<&'a RewriteWorkerObservation> {
+    let observation = state
+        .worker_bindings
+        .get(&scope.binding_key())?
+        .observation
+        .as_ref()?;
+    (observation.dispatch_id == super::dispatch_id(state, scope)
+        && observation.recording_run_id == state.recording_run_id)
+        .then_some(observation)
+}
+
+pub(in crate::rewrite) fn coverage(
+    state: &RewriteState,
+    scope: &RewriteWorkScope,
+) -> RewriteWorkerCoverageState {
+    use RewriteWorkerCoverageState as Coverage;
+    let Some(binding) = state.worker_bindings.get(&scope.binding_key()) else {
+        return Coverage::DispatchRequired;
+    };
+    if binding.confirmed_dispatch_id != super::dispatch_id(state, scope) {
+        return Coverage::ResumeRequired;
+    }
+    let Some(observation) = observation(state, scope) else {
+        return Coverage::StatusRequired;
+    };
+    match observation.activity {
+        RewriteWorkerActivity::Idle | RewriteWorkerActivity::ReworkRequired => {
+            Coverage::ResumeRequired
+        }
+        RewriteWorkerActivity::HandoffReady => Coverage::IntegrationRequired,
+        RewriteWorkerActivity::Integrated => Coverage::VerificationRequired,
+        RewriteWorkerActivity::Running | RewriteWorkerActivity::Queued => {
+            let fresh = DateTime::parse_from_rfc3339(&observation.observed_at)
+                .ok()
+                .is_some_and(|observed| {
+                    let age = Utc::now().signed_duration_since(observed).num_seconds();
+                    (0..RUNNING_OBSERVATION_SECONDS).contains(&age)
+                });
+            if fresh {
+                Coverage::Running
+            } else {
+                Coverage::StatusRequired
+            }
+        }
+    }
+}
+
+pub(in crate::rewrite) fn record_start(state: &mut RewriteState, scope: &RewriteWorkScope) {
+    let observation = RewriteWorkerObservation {
+        dispatch_id: super::dispatch_id(state, scope),
+        recording_run_id: state.recording_run_id.clone(),
+        activity: RewriteWorkerActivity::Running,
+        observed_at: Utc::now().to_rfc3339(),
+        handoff_id: None,
+        integrated_target_fingerprint: None,
+    };
+    state
+        .worker_bindings
+        .get_mut(&scope.binding_key())
+        .unwrap()
+        .observation = Some(observation);
+}
+
+pub(in crate::rewrite) fn acceptance_ready(state: &RewriteState, scope: &RewriteWorkScope) -> bool {
+    super::issue_for_scope(state, scope).is_some()
+        && coverage(state, scope) == RewriteWorkerCoverageState::VerificationRequired
+}
+
+pub(in crate::rewrite) fn report_command(
+    target_root: &Path,
+    dispatch_id: &str,
+    integrated: bool,
+) -> super::super::model::RewriteCommandSpec {
+    let mut argv = vec![
+        "worker".to_string(),
+        "report".to_string(),
+        dispatch_id.to_string(),
+    ];
+    let mut env = vec![super::AGENT_HANDLE_ENV.to_string()];
+    if integrated {
+        argv.extend(["--activity".to_string(), "integrated".to_string()]);
+        env.push(HANDOFF_ENV.to_string());
+    } else {
+        env.push(ACTIVITY_ENV.to_string());
+    }
+    action::command(target_root, argv, env)
+}
+
+#[cfg(test)]
+mod tests;

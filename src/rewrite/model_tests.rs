@@ -95,11 +95,8 @@ fn implementation_action_has_one_stable_public_shape() {
             agent_name: None,
         },
         confirm_worker: Some(command.clone()),
-        evidence_commands: vec![RewriteEvidenceCommand {
-            purpose: "inspect representative".to_string(),
-            query_id: "representatives".to_string(),
-            command: command.clone(),
-        }],
+        report_worker: command.clone(),
+        evidence: command.clone(),
         acceptance: command,
     };
 
@@ -122,22 +119,15 @@ fn implementation_action_has_one_stable_public_shape() {
         value.pointer("/details/work_scope/kind"),
         Some(&serde_json::json!("api"))
     );
-    assert_eq!(
-        value.pointer("/details/possible_causes/0"),
-        Some(&serde_json::json!("target behavior differs"))
-    );
-    assert_eq!(
-        value.pointer("/details/response_diagnosis/total_differences"),
-        Some(&serde_json::json!(7))
-    );
-    assert_eq!(
-        value.pointer("/details/response_diagnosis/failure_clusters/0/affected_cases"),
-        Some(&serde_json::json!(3))
-    );
-    assert_eq!(
-        value.pointer("/commands/evidence/0/query_id"),
-        Some(&serde_json::json!("representatives"))
-    );
+    for field in [
+        "possible_causes",
+        "response_diagnosis",
+        "representative",
+        "comparison_observation",
+    ] {
+        assert!(value["details"].get(field).is_none());
+    }
+    assert_eq!(value["commands"]["evidence"]["cwd"], "/target");
     assert_eq!(
         value.pointer("/details/worker/state"),
         Some(&serde_json::json!("dispatch_required"))
@@ -152,6 +142,7 @@ fn implementation_action_has_one_stable_public_shape() {
 
     let status = serde_json::to_value(RewriteStatusReport {
         schema_version: ACTION_SCHEMA_VERSION,
+        pending: 0,
         initialized: true,
         workflow: None,
         api_inventory: None,
@@ -163,7 +154,7 @@ fn implementation_action_has_one_stable_public_shape() {
         action,
     })
     .unwrap();
-    assert_eq!(status.get("schema_version"), Some(&serde_json::json!(22)));
+    assert_eq!(status.get("schema_version"), Some(&serde_json::json!(24)));
     assert!(status.get("active_issue").is_none());
     assert!(status.get("next").is_none());
 }

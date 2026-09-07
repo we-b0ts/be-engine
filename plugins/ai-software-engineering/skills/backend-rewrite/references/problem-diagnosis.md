@@ -17,15 +17,19 @@ work-item evidence.
 
 ## Work-Scope Contract
 
-The coordinator supplies one active issue in `action.details`, including
-bounded possible causes and one representative when available. Treat possible
-causes as hypotheses. The sole acceptance command is
+The coordinator supplies the active issue identity and work scope in
+`action.details`. After the state-machine coordinator confirms the current dispatch,
+execute the single `action.commands.evidence` command. Its overview returns the
+complete bounded issue in `facts.issue`, including possible causes and a
+representative when available. Treat possible causes as hypotheses. Scoped
+status restores this compact action and evidence entrypoint, not diagnostics.
+The sole acceptance command is
 `action.commands.acceptance`; return it unchanged to the orchestrator and never
 execute it as a worker. In both worker roles, prove one cause from source and
 target code, make one coherent repair, and run focused local tests.
 
-For `work_scope.kind=api`, exact evidence-query argv are under
-`action.commands.evidence`. Traffic facts come only from those returned queries
+For `work_scope.kind=api`, exact further evidence-query argv are under the
+overview's `queries`. Traffic facts come only from the overview, returned queries
 and immutable artifacts. Standard and comparison artifacts are readable,
 read-only diagnostic evidence. Start from the representative `case_dir`
 returned by the coordinator and inspect its complete contents. Inspect other
@@ -54,10 +58,10 @@ after completing that diagnosis path.
 
 ## Process-Output Issues
 
-For `work_scope.kind=process_output`, an empty
-`action.commands.evidence` list is expected. Start from
-`action.details.comparison_observation`, which identifies the process-output
-ID, configured path, classification, comparison contract, and source/target
+For `work_scope.kind=process_output`, execute the single
+`action.commands.evidence` command after dispatch confirmation. The overview
+has no API `queries`. Start from `facts.issue.comparison_observation`, which
+identifies the process-output ID, configured path, classification, comparison contract, and source/target
 presence. Do not look for an API representative or `case_dir`, execute API
 evidence queries, inspect dependency traffic, or invent a recording operation.
 
@@ -69,7 +73,7 @@ configured output -> component loading -> initialization -> startup -> write
 or flush -> observation timing -> shutdown
 ```
 
-Confirm the configured path and source-side presence from the action, then
+Confirm the configured path and source-side presence from the overview, then
 inspect the corresponding source and target component wiring.
 
 When `comparison_observation.rule_candidate` names
@@ -99,7 +103,8 @@ does not run process-output comparison itself.
 
 ## API Evidence Queries
 
-Run only query IDs returned by `action.commands.evidence`:
+Run only query IDs returned by the overview's `queries` or a subsequent
+evidence report:
 
 | Problem signal | Evidence | Command |
 | --- | --- | --- |
@@ -112,8 +117,8 @@ Always execute the exact opaque command returned by the current action or
 evidence report. The suffixes above are discovery labels; never reconstruct a
 query ID.
 
-- `case_response_differences`: for a response issue, the first evidence command
-  returns one fixed-size page of every structured response difference in the
+- `case_response_differences`: for a response issue, the first entry in the
+  overview's `queries` returns one fixed-size page of every structured response difference in the
   representative case, including normalized Pointer patterns and explicit
   expected/actual value presence. A case that produced no usable target
   response assertion evidence appears as one `response_unavailable` difference
@@ -153,7 +158,7 @@ query ID.
   MySQL supports source-proven process-owned SELECT templates with exact
   connection identity and exact, numeric-series, or patterned physical tables,
   including `AS {{table}}_id` aliases tied to the selected table. Return the
-  source-proven selector inputs to the main orchestrator, which plans and applies
+  source-proven selector inputs to the state-machine coordinator, which plans and applies
   the rule to reclassify existing unused evidence without a new recording;
   target unmatched queries and incomplete evidence remain dirty.
 - `policy_applicability`: structural rule eligibility; eligibility does not
@@ -316,8 +321,8 @@ out-of-order calls remain target behavior issues when proven by source evidence.
 
 ## Rejected Egress And IP Capture Preflight
 
-When response/dependency verification fails, `action.details.egress_rejections`
-and `dirty_clusters` may report REJECT packet-count deltas and sampled time
+When response/dependency verification fails, the issue overview's
+`facts.issue.egress_rejections` and `dirty_clusters` may report REJECT packet-count deltas and sampled time
 windows. Treat these as investigation leads: they identify no IP or origin,
 include retries/background traffic, and do not prove response causality. A null
 count means the read or rule generation was unavailable, not zero rejections.

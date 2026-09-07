@@ -70,6 +70,7 @@ pub(super) struct RewriteProcessOutputState {
 pub struct RewriteProcessOutputInventoryView {
     pub total: usize,
     pub completed: usize,
+    #[serde(rename = "unverified")]
     pub pending: usize,
     pub implementation_required: usize,
     pub revalidation_pending: usize,

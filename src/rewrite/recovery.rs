@@ -7,6 +7,7 @@ use crate::{E2eRunContext, ManagedRecordingOperation};
 
 pub(super) async fn recover(context: RewriteContext) -> Result<RewriteRecoveryReport> {
     let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
+    super::execution::recover(&target_root)?;
     let store = RewriteStore::new(&target_root)?;
     let recording_execution_state = recording_execution::state(&target_root)?;
     if let recording_execution::RecordingExecutionState::Live(marker) = &recording_execution_state {

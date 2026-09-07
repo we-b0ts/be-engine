@@ -18,6 +18,7 @@ pub(super) enum RewriteLockState {
 
 pub(super) struct RewriteStore {
     root: PathBuf,
+    target_root: PathBuf,
     state_path: PathBuf,
 }
 
@@ -28,6 +29,7 @@ impl RewriteStore {
         let root = crate::internal_runtime::root(&target_root).join("rewrite");
         Ok(Self {
             state_path: root.join("state.json"),
+            target_root,
             root,
         })
     }
@@ -42,24 +44,28 @@ impl RewriteStore {
                 });
             }
         };
-        let state: RewriteState = serde_json::from_slice(&bytes)
+        let mut state: RewriteState = serde_json::from_slice(&bytes)
             .with_context(|| format!("invalid rewrite state {}", self.state_path.display()))?;
         ensure!(
             state.version == STATE_VERSION,
             "unsupported rewrite state version {}",
             state.version
         );
+        super::worker::events::overlay(&self.target_root, &mut state)?;
         Ok(Some(state))
     }
 
     pub(super) fn save(&self, state: &RewriteState) -> Result<()> {
+        let _feedback = super::worker::events::lock(&self.target_root)?;
+        let mut state = state.clone();
+        super::worker::events::overlay(&self.target_root, &mut state)?;
         fs::create_dir_all(&self.root).with_context(|| {
             format!(
                 "failed to create rewrite state root {}",
                 self.root.display()
             )
         })?;
-        let mut payload = serde_json::to_vec_pretty(state)?;
+        let mut payload = serde_json::to_vec_pretty(&state)?;
         payload.push(b'\n');
         let temporary = self.root.join(format!(
             ".state.json.tmp.{}.{}",
@@ -91,6 +97,9 @@ impl RewriteStore {
     }
 
     pub(super) fn try_lock(&self) -> Result<Option<RewriteLock>> {
+        if super::execution::owned_by_other_process(&self.target_root)? {
+            return Ok(None);
+        }
         fs::create_dir_all(&self.root).with_context(|| {
             format!(
                 "failed to create rewrite state root {}",

@@ -18,7 +18,7 @@ execute the state-mutating commands here.
 ## Typed Response Rules
 
 The target never receives a response-rule selector. A worker returns the
-codec-specific path plus source proof; the main orchestrator plans and applies
+codec-specific path plus source proof; the state-machine coordinator plans and applies
 the rule. Replay and comparison load the applied selector from
 `.traffic-e2e/verification.yaml` and normalize source and target observations
 without changing target code, configuration, or RPC signatures.
@@ -158,7 +158,7 @@ listed source paths and proved both that source code does not start the
 interaction and that the interaction does not affect source behavior. Either
 contrary finding requires target implementation and forbids this rule.
 
-The main orchestrator supplies the current process-output ID, source revision,
+The state-machine coordinator supplies the current process-output ID, source revision,
 and finalized comparison run to `traffic-e2e config comparison plan
 allow-target-missing`, then reviews the preview and repeats the same arguments
 with `apply`. Do not hand-edit `.traffic-e2e/verification.yaml`. The structured

@@ -16,10 +16,30 @@ const CONFIGURATION_PATHS: &[&str] = &[
     ".traffic-e2e/verification.yaml",
 ];
 
-pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
+pub async fn next_rewrite(mut options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
     let target_root = options.target_root.clone();
     if let Some(envelope) = pending(&target_root)? {
         return Ok(envelope);
+    }
+    if options.api.is_none() && options.process_output.is_none() && options.source_route.is_none() {
+        let status = super::status_rewrite(super::RewriteContext {
+            target_root: target_root.clone(),
+        })?;
+        if status.initialized {
+            if let RewriteAction::AdvanceRequired { command, .. } = &status.action {
+                // These command specs are engine-owned argv, never shell programs.
+                for pair in command.argv.windows(2) {
+                    if pair[0] == "--api" {
+                        options.api = Some(pair[1].parse()?);
+                    }
+                    if pair[0] == "--process-output" {
+                        options.process_output = Some(pair[1].clone());
+                    }
+                }
+            } else {
+                return Ok(super::execution::from_status(status));
+            }
+        }
     }
     let envelope = super::advance_rewrite(options).await?;
     // A transition may itself persist configuration (for example a source route).
@@ -30,6 +50,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
 pub(super) fn status(target_root: &Path) -> Result<Option<RewriteStatusReport>> {
     Ok(pending(target_root)?.map(|envelope| RewriteStatusReport {
         schema_version: envelope.schema_version,
+        pending: envelope.pending,
         initialized: envelope.workflow.is_some(),
         workflow: envelope.workflow,
         api_inventory: envelope.api_inventory,
@@ -46,6 +67,7 @@ pub(super) fn status(target_root: &Path) -> Result<Option<RewriteStatusReport>> 
 fn pending(target_root: &Path) -> Result<Option<RewriteActionEnvelope>> {
     let store = RewriteStore::new(target_root)?;
     if store.lock_state()? != RewriteLockState::Absent
+        || super::execution::owned_by_other_process(target_root)?
         || !matches!(
             traffic_operation::state(target_root)?,
             traffic_operation::TrafficOperationState::Absent
