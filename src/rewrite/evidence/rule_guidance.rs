@@ -222,6 +222,33 @@ pub(super) fn applicable_rule_planners(
             ),
         });
     }
+    if query_kind == QUERY_DIRTY_CLUSTERS
+        && matches!(
+            issue_kind,
+            RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
+        )
+        && facts["clusters"].as_array().is_some_and(|clusters| {
+            clusters
+                .iter()
+                .any(|cluster| cluster["protocol"] == "mysql")
+        })
+    {
+        planners.push(RewriteApplicableRulePlanner {
+            kind: "dependency_value".into(),
+            capability: "mysql_sql_time".into(),
+            evidence_id: evidence_id.into(),
+            command: super::super::action::command(
+                target_root,
+                vec![
+                    "dependency-rule".into(),
+                    "plan".into(),
+                    "mysql-time".into(),
+                    "--help".into(),
+                ],
+                Vec::new(),
+            ),
+        });
+    }
     if issue_kind != RewriteIssueKind::Dependency || query_kind != QUERY_DIRTY_CLUSTERS {
         return planners;
     }
@@ -275,6 +302,40 @@ pub(in crate::rewrite) fn supports_response_body_codec(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mysql_time_planner_is_discoverable_for_response_failures_with_dependency_evidence() {
+        for kind in [
+            RewriteIssueKind::Response,
+            RewriteIssueKind::Replay,
+            RewriteIssueKind::Dependency,
+        ] {
+            let planners = applicable_rule_planners(
+                Path::new("/target"),
+                kind,
+                QUERY_DIRTY_CLUSTERS,
+                &serde_json::json!({"clusters":[{"protocol":"mysql"}]}),
+                "current",
+            );
+            let time = planners
+                .iter()
+                .find(|p| p.capability == "mysql_sql_time")
+                .unwrap();
+            assert_eq!(time.evidence_id, "current");
+            assert!(time.command.argv.contains(&"mysql-time".into()));
+        }
+        assert!(
+            applicable_rule_planners(
+                Path::new("/target"),
+                RewriteIssueKind::Response,
+                QUERY_DIRTY_CLUSTERS,
+                &serde_json::json!({"clusters":[{"protocol":"redis"}]}),
+                "current"
+            )
+            .iter()
+            .all(|p| p.capability != "mysql_sql_time")
+        );
+    }
 
     #[test]
     fn counter_evidence_offers_discovery_but_requires_source_evidence_for_a_plan() {

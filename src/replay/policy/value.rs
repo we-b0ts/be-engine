@@ -45,7 +45,7 @@ pub(super) fn validate_time(
     Ok(())
 }
 
-fn parse_time(actual: &Value, rule: &TimeRule) -> Result<DateTime<Utc>> {
+pub(super) fn parse_time(actual: &Value, rule: &TimeRule) -> Result<DateTime<Utc>> {
     if let Some(seconds) = actual.as_i64() {
         return DateTime::from_timestamp(seconds, 0).context("Unix timestamp is out of range");
     }

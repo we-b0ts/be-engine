@@ -23,6 +23,10 @@ uses default MySQL quoting and escapes. Executable comments, optimizer hints,
 ANSI_QUOTES and NO_BACKSLASH_ESCAPES are not normalized across protocols.
 Unsupported initialization or SQL remains visible as unmatched evidence.
 
+Explicit [SQL time rules](mysql-time-rules.md) validate source-proven generated
+time slots in writes across text and prepared protocols. They preserve stable
+SQL values and require normal Replay after plan/apply.
+
 Recorded responses take precedence over builtin responses. The builtin fallback
 recognizes narrowly bounded driver initialization, not arbitrary SET statements
 or business SQL containing `version()`. Replay preserves unsigned BIGINT,
@@ -60,6 +64,10 @@ SELECTs with direct columns, literals, wildcards, DISTINCT, pure
 boolean/arithmetic expressions, grouping, HAVING, ordering and pagination.
 Derived tables, UNION/UNION ALL, ordinary joins and EXISTS are checked recursively:
 every branch, joined relation, join condition and nested query must be read-only.
+Unqualified `COUNT(*)`, `COUNT(expr)` and `COUNT(DISTINCT expr)` preserve the read
+proof when their arguments and all underlying queries are pure, including
+`COUNT(DISTINCT ...)` over a UNION. Unknown functions inside COUNT, qualified
+function names and unsupported function extensions remain strict.
 The unqualified builtin `ROW_NUMBER()` is admitted only with an inline OVER
 specification whose partition/order expressions are pure and which has no frame
 or function extensions. Flat expression and UNION chains are traversed iteratively,

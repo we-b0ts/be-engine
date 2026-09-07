@@ -3,6 +3,11 @@ pub(crate) use document::replace_request_rule_section;
 mod evidence;
 mod justification;
 mod memcached;
+mod mysql_time;
+pub use mysql_time::{
+    MysqlTimeRuleFeedback, MysqlTimeRulePlan, MysqlTimeRuleReport, MysqlTimeSelector,
+    plan_mysql_time_rule,
+};
 mod model;
 mod profile_target_missing;
 mod response_body;

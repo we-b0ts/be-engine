@@ -1,6 +1,31 @@
 use super::*;
 
 #[tokio::test]
+async fn count_distinct_union_query_allows_only_proven_session_cleanup() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let sql = "SELECT count(distinct(combined.team_id)) AS total FROM (SELECT id AS team_id FROM kinds WHERE owner=7 UNION SELECT id AS team_id FROM kinds WHERE namespace='shared') combined";
+        let mut records = transaction_records();
+        records.remove(1);
+        records[0]["sql"] = json!(sql);
+        records[0]["server_status_before"] = json!(0);
+        records[0]["response"] = json!({"status":"resultset","server_status":33,"columns":[{"name":"total","family":"integer","sql_type":"BIGINT"}],"rows":[[{"kind":"integer","value":12}]]});
+        for (index, record) in records.iter_mut().enumerate() {
+            record["query_sequence"] = json!(100+index);
+            if index > 0 {record["server_status_before"] = json!(if index == 1 {33} else {0});}
+        }
+        let (temp,addr,runtime,task) = fixture(&records,false).await;
+        let mut client = connect(addr,&temp.path().join("case-id/.replay/ca.pem")).await;
+        assert_eq!(sqlx::query(sql).fetch_one(&mut client).await.unwrap().get::<i64,_>("total"),12);
+        client.close().await.unwrap();
+        let state = runtime.state.lock().await;
+        assert_eq!(state.mysql.events.matched_query_count,1);
+        assert_eq!(state.allowed_unused_rollbacks().len(),2);
+        assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
+        task.abort();
+    }).await.unwrap();
+}
+
+#[tokio::test]
 async fn matched_ranked_union_read_allows_cleanup_only_with_proven_pure_children() {
     tokio::time::timeout(Duration::from_secs(15), async {
         for pure in [true, false] {

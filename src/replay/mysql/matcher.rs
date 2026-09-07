@@ -142,7 +142,26 @@ impl ReplayState {
                                 .and_then(crate::mysql::autocommit::assignment)
                                 == Some(actual)
                     });
-                    let (policy_decision, projected) = if semantic {
+                    let sql_value_decision = self.replay_policy.as_ref().and_then(|policy| {
+                        policy.preview_mysql_sql_values(
+                            &MysqlPolicyContext {
+                                case_id: active_case_id.as_deref(),
+                                identity,
+                                command,
+                                recorded_sql: exchange.record.sql.as_deref(),
+                                sql,
+                                recorded: exchange.record.params.as_deref(),
+                                actual: params,
+                            },
+                            Utc::now(),
+                        )
+                    });
+                    let (policy_decision, projected) = if let Some(decision) = sql_value_decision {
+                        let Ok(decision) = decision else {
+                            continue;
+                        };
+                        (decision, None)
+                    } else if semantic {
                         let Some(actual) = semantic_target
                             .get_or_insert_with(|| {
                                 sql.and_then(|sql| {

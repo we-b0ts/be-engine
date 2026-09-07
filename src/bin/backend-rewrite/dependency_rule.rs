@@ -31,6 +31,8 @@ struct DependencyRulePlanArgs {
 
 #[derive(Debug, Subcommand)]
 enum DependencyRuleProtocolArgs {
+    /// Validate a source-generated time value in a MySQL SQL template across text/prepared protocols.
+    MysqlTime(Box<MysqlTimeArgs>),
     /// Classify source-proven MySQL reads using bounded tables and a SELECT template.
     Mysql(Box<MysqlDependencyRuleArgs>),
     /// Classify an HTTP dependency using an exact selector.
@@ -41,6 +43,39 @@ enum DependencyRuleProtocolArgs {
     Motan(MotanDependencyRuleArgs),
     /// Classify a Redis dependency using a command-specific selector.
     Redis(RedisDependencyRuleArgs),
+}
+
+#[derive(Debug, Args)]
+struct MysqlTimeArgs {
+    #[arg(long)]
+    evidence_id: String,
+    #[arg(long)]
+    rule_id: String,
+    #[arg(long)]
+    target_host: String,
+    #[arg(long, default_value_t = 3306)]
+    target_port: u16,
+    #[arg(long)]
+    database: String,
+    #[arg(long)]
+    username: String,
+    /// SQL template: each ? represents one scalar value; other tokens stay exact.
+    #[arg(long)]
+    sql: String,
+    /// Zero-based ? slot in the SQL template, independent of wire parameter positions.
+    #[arg(long)]
+    value_index: usize,
+    #[arg(long, default_value = "5s")]
+    tolerance: String,
+    #[arg(long, default_value = "0s")]
+    offset: String,
+    #[arg(long, default_value = "%Y-%m-%d %H:%M:%S%.f")]
+    format: String,
+    #[arg(long, default_value = "+00:00")]
+    timezone: String,
+    /// Source file/symbol proving how this field obtains the current time.
+    #[arg(long)]
+    source_evidence: String,
 }
 
 #[derive(Debug, Args)]
@@ -288,6 +323,26 @@ impl TryFrom<DependencyRuleProtocolArgs> for DependencyPlan {
 
     fn try_from(value: DependencyRuleProtocolArgs) -> Result<Self> {
         Ok(Self::Ownership(match value {
+            DependencyRuleProtocolArgs::MysqlTime(args) => RewriteDependencyRulePlanOptions {
+                evidence_id: args.evidence_id,
+                ownership: RewriteDependencyOwnership::RequestOwned,
+                name: Some(args.rule_id),
+                source_evidence: Some(args.source_evidence),
+                selector: RewriteDependencyRuleSelector::MysqlSqlTime {
+                    selector: traffic_e2e::MysqlTimeSelector {
+                        target_host: args.target_host,
+                        target_port: args.target_port,
+                        database: args.database,
+                        username: args.username,
+                        sql: args.sql,
+                        value_index: args.value_index,
+                        tolerance: args.tolerance,
+                        offset: args.offset,
+                        format: args.format,
+                        timezone: args.timezone,
+                    },
+                },
+            },
             DependencyRuleProtocolArgs::Mysql(args) => {
                 let table_series =
                     args.table_prefix
@@ -461,6 +516,45 @@ mod tests {
     struct TestCli {
         #[command(flatten)]
         dependency_rule: DependencyRuleArgs,
+    }
+
+    #[test]
+    fn mysql_time_cli_plans_request_owned_values_without_ownership_reclassification() {
+        let parsed = TestCli::try_parse_from([
+            "test",
+            "plan",
+            "mysql-time",
+            "--evidence-id",
+            "current",
+            "--rule-id",
+            "last-used",
+            "--target-host",
+            "db.internal",
+            "--database",
+            "app",
+            "--username",
+            "user",
+            "--sql",
+            "UPDATE api_keys SET last_used_at=? WHERE id=?",
+            "--value-index",
+            "0",
+            "--source-evidence",
+            "security.py:auth assigns datetime.utcnow()",
+        ])
+        .unwrap();
+        let DependencyRuleCommand::Plan(plan) = parsed.dependency_rule.command else {
+            panic!("expected plan")
+        };
+        let DependencyPlan::Ownership(options) = plan.protocol.try_into().unwrap() else {
+            panic!("expected value plan")
+        };
+        assert_eq!(options.ownership, RewriteDependencyOwnership::RequestOwned);
+        let RewriteDependencyRuleSelector::MysqlSqlTime { selector } = options.selector else {
+            panic!("expected MySQL time")
+        };
+        assert_eq!(selector.value_index, 0);
+        assert_eq!(selector.tolerance, "5s");
+        assert_eq!(selector.timezone, "+00:00");
     }
 
     #[test]

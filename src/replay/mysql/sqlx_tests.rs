@@ -16,6 +16,7 @@ mod or_tests;
 mod predicate_tests;
 mod projection_tests;
 mod rollback_tests;
+mod sql_values_tests;
 mod tuple_tests;
 
 fn exchange(sql: &str, response: Value) -> Value {
@@ -37,6 +38,22 @@ async fn fixture(
     Arc<ReplayRuntime>,
     tokio::task::JoinHandle<()>,
 ) {
+    fixture_with_policy(
+        records,
+        policy.then_some("version: 1\nexpected_response: assertions_only\ndependency_rules: []\n"),
+    )
+    .await
+}
+
+async fn fixture_with_policy(
+    records: &[Value],
+    policy: Option<&str>,
+) -> (
+    tempfile::TempDir,
+    SocketAddr,
+    Arc<ReplayRuntime>,
+    tokio::task::JoinHandle<()>,
+) {
     let temp = tempdir().unwrap();
     let case = temp.path().join("case-id");
     std::fs::create_dir(&case).unwrap();
@@ -49,7 +66,7 @@ async fn fixture(
             .join("\n"),
     )
     .unwrap();
-    let policy_path = if policy {
+    let policy_path = if let Some(policy) = policy {
         std::fs::write(
             case.join("request.json"),
             r#"{"method":"GET","uri":"/users"}"#,
@@ -57,11 +74,7 @@ async fn fixture(
         .unwrap();
         std::fs::write(case.join("expected-response.json"), "{}").unwrap();
         let path = temp.path().join("policy.yaml");
-        std::fs::write(
-            &path,
-            "version: 1\nexpected_response: assertions_only\ndependency_rules: []\n",
-        )
-        .unwrap();
+        std::fs::write(&path, policy).unwrap();
         Some(path)
     } else {
         None

@@ -610,7 +610,10 @@ fn dirty_cluster_evidence_returns_only_protocol_specific_rule_planners() {
         "evidence-current",
     );
 
-    assert_eq!(planners.len(), 4);
+    assert_eq!(planners.len(), 5);
+    assert_eq!(planners[0].capability, "mysql_sql_time");
+    assert_eq!(planners[0].kind, "dependency_value");
+    let planners = &planners[1..];
     assert_eq!(planners[0].capability, "http");
     assert_eq!(planners[1].capability, "memcached");
     assert_eq!(planners[2].capability, "mysql");
