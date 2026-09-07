@@ -4,6 +4,8 @@ use std::{fs, io::Read as _};
 
 use anyhow::{Context, Result, ensure};
 
+mod engine;
+
 const RUNTIME_PROGRESS_PATHSPECS: &[&str] = &[
     ":(exclude).traffic-e2e/progress.yaml",
     ":(exclude).traffic-e2e/replay-progress.yaml",
@@ -109,24 +111,7 @@ pub(super) fn source_image_revision(target_root: &Path) -> Result<String> {
 }
 
 pub(super) fn traffic_e2e_revision() -> Result<String> {
-    let executable = crate::engine_binary::executable()?;
-    let mut file = fs::File::open(&executable)
-        .with_context(|| format!("failed to read traffic-e2e binary {}", executable.display()))?;
-    let mut hash = Fnv1a::default();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let count = file.read(&mut buffer).with_context(|| {
-            format!(
-                "failed to fingerprint traffic-e2e binary {}",
-                executable.display()
-            )
-        })?;
-        if count == 0 {
-            break;
-        }
-        hash.update(&buffer[..count]);
-    }
-    Ok(hash.finish())
+    engine::revision(&crate::engine_binary::executable()?)
 }
 
 pub(super) fn project_config_revision(target_root: &Path) -> Result<String> {

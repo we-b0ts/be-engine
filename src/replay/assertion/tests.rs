@@ -15,6 +15,7 @@ use tempfile::tempdir;
 use super::model::ResponseDifferenceKind;
 use super::*;
 
+mod json_arrays;
 mod motan1;
 mod simple_motan;
 
@@ -44,6 +45,7 @@ fn write_raw_case(
         &request,
         serde_json::to_vec(&json!({
             "method": "GET",
+            "timestamp": "2023-11-14T22:13:20Z",
             "uri": "/api/resource/token"
         }))
         .unwrap(),
@@ -66,6 +68,7 @@ fn write_raw_case(
         &actual,
         serde_json::to_vec(&json!({
             "version": 1,
+            "request_sent_at": "2023-11-14T22:14:20Z",
             "status": 200,
             "body": {
                 "encoding": "utf8",

@@ -142,6 +142,20 @@ pub(super) fn response_possible_causes(kind: Option<ResponseDifferenceKind>) -> 
             "intentional_source_nondeterminism",
             "unordered_policy_candidate_only_if_contents_are_equal",
         ],
+        Some(ResponseDifferenceKind::TimeReferenceMissing) => &[
+            "missing_recorded_request_start_time",
+            "missing_target_request_start_time",
+            "recording_or_replay_time_capture",
+        ],
+        Some(
+            ResponseDifferenceKind::TimeFieldInvalid
+            | ResponseDifferenceKind::TimestampOutsideRequestWindow
+            | ResponseDifferenceKind::DurationDeltaMismatch,
+        ) => &[
+            "time_rule_unit_or_format",
+            "request_relative_time_generation",
+            "source_or_target_clock",
+        ],
         Some(
             ResponseDifferenceKind::GeneratedFieldNotScalar
             | ResponseDifferenceKind::UnorderedFieldNotArray

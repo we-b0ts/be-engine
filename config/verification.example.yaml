@@ -100,8 +100,13 @@ response_settings:
 
 # Add source-proven replay fields through `config replay` and comparison-only
 # fields through `config comparison`. Response rules are grouped by body codec, then API.
+# JSON pointers support array segments such as /data/*/created_at and
+# /data/*/items/*/id; object keys remain exact.
 # JSON generated scalars use concrete `timestamp`, `duration`, `uuid`, or
-# `random` keys. Nonces and random salts use `random`; they are business uses,
+# `random` keys. Timestamp requires format: unix_seconds / unix_milliseconds /
+# rfc3339; duration requires unit: milliseconds / seconds / minutes / hours.
+# Both validate request-relative time with a fixed ±5 second tolerance.
+# Nonces and random salts use `random`; they are business uses,
 # not separate comparison strategies. Every value-relaxing selector persists
 # one-line `source_evidence`; generated scalars and counters also persist
 # distinct redacted source/target examples. JSON, protobuf, and Hessian2 can

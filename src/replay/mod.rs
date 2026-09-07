@@ -148,11 +148,11 @@ pub use policy::{
     ReplayPolicyInitResult, ReplayPolicyValidationReport, ResponseBodyCodec,
     ResponseBodyJoinedStringPath, ResponseBodyRuleEvidence, ResponseBodyRuleEvidenceKind,
     ResponseBodyRuleFeedback, ResponseBodyRulePlan, ResponseBodyRuleReport,
-    ResponseBodyRuleVerificationOutcome, ResponseBodyUnorderedPath, ResponseRuleFeedback,
-    ResponseRuleKind, ResponseRulePlan, ResponseRuleReport, initialize_replay_policy,
-    plan_comparison_response_rule, plan_memcached_timestamp_rule, plan_mysql_time_rule,
-    plan_profile_target_missing, plan_response_body_rule, plan_response_rule,
-    validate_replay_policy,
+    ResponseBodyRuleVerificationOutcome, ResponseBodyUnorderedPath, ResponseDurationUnit,
+    ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan, ResponseRuleReport, ResponseTimeRule,
+    ResponseTimestampFormat, initialize_replay_policy, plan_comparison_response_rule,
+    plan_memcached_timestamp_rule, plan_mysql_time_rule, plan_profile_target_missing,
+    plan_response_body_rule, plan_response_rule, validate_replay_policy,
 };
 pub(crate) use redis::snapshot_overlay::inspect_case_source_snapshot_overlay;
 pub use report::aggregate::{

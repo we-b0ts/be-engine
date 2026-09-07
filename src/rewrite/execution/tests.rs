@@ -69,6 +69,14 @@ fn failed_execution_waits_for_explicit_retry_while_workers_remain_dispatchable()
         agent_name: None,
     })
     .unwrap();
+    worker::runtime::report(worker::runtime::RewriteWorkerReportOptions {
+        target_root: target.path().into(),
+        dispatch_id: worker::dispatch_view(&state, scope, None).dispatch_id,
+        agent_handle: "runtime-worker".into(),
+        activity: worker::model::RewriteWorkerActivity::Running,
+        handoff_id: None,
+    })
+    .unwrap();
     let status = super::super::status_rewrite(RewriteContext {
         target_root: target.path().into(),
     })

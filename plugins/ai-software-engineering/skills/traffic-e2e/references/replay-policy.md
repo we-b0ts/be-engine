@@ -249,12 +249,74 @@ both expected and actual JSON; both values must have the same scalar JSON kind.
 If both responses omit the Pointer because that API has another response
 shape, the rule does not participate and produces no coverage requirement. If
 only one response omits it, the missing field remains an exact structural
-difference. Only literal equality is skipped. Status, body structure,
-undeclared fields, nulls, arrays, and non-JSON bodies remain exact. The rule
-does not validate UUID shape, randomness, timestamps, or other generation
-semantics. Its concrete rule kind, persisted source citation, and distinct
+difference. UUID/random skip literal equality without validating UUID shape
+or randomness. Timestamp/duration enforce the time relationships below. Status,
+body structure, undeclared fields, and non-JSON bodies remain exact. Its concrete rule kind, persisted source citation, and distinct
 redacted source/target examples make the decision reviewable but do not replace
 source review, unit tests, or real-traffic integration tests.
+
+JSON response Pointers also support a whole `*` segment for array elements,
+for example `/data/*/created_at` or `/data/*/items/*/id`. This is shared by
+`timestamp`, `duration`, `uuid`, `random`, `unordered`,
+`unordered_joined_string`, and Comparison-only `counter` rules. A numeric
+segment still selects one exact index; `/*` selects each element of a root
+array. Object keys remain exact (including a literal `*` key); `*` does not
+expand object members. Standard `~0` and `~1` escaping still applies.
+
+Each selected value is checked independently. UUID and random rules require
+matching non-null scalar types and skip literal equality. Timestamp and duration
+rules parse and validate time values as described below. Array length, order,
+missing fields, and undeclared values remain checked. Empty arrays or fields
+absent on both sides create no coverage requirement. Reports keep concrete
+numeric Pointers for differences and one rule ID for the wildcard selector.
+Plan/apply accepts the same pattern against concrete difference evidence; the
+source citation must justify every selected element. Overlapping patterns,
+explicit indexes, and ancestor rules are rejected when they could select the
+same subtree.
+
+Time rules use a fixed ±5 second tolerance and the engine's captured request
+start times. Replay reads source `request.json.timestamp` and target
+`request_sent_at`; Comparison uses each capture's request-start `timestamp`.
+No current wall-clock fallback or configurable tolerance is allowed.
+
+- `timestamp` requires `format: unix_seconds`, `unix_milliseconds`, or
+  `rfc3339`. Each source/target timestamp must be within five seconds of its
+  own request start, even if the two field literals are equal.
+- `duration` requires `unit: milliseconds`, `seconds`, `minutes`, or `hours`.
+  After conversion to the same unit, it requires
+  `abs((target_duration - source_duration) - (target_request_time - source_request_time)) <= 5 seconds`.
+  This describes elapsed time since a shared origin, not processing latency or
+  a decreasing expiry countdown. The deltas are signed.
+- Numeric formats accept JSON numbers or numeric strings, including decimals;
+  both sides must retain the same JSON type. RFC3339 requires strings with a
+  timezone. Boolean/null/container values, invalid formats, overflow, and
+  missing request-time evidence fail comparison. Empty selectors remain
+  inapplicable. Old timestamp/duration declarations must add format/unit;
+  they never silently fall back to scalar-only comparison.
+
+```yaml
+response_rules:
+  json:
+    "GET /api/items":
+      timestamp:
+        - pointer: /data/*/generated_at
+          format: unix_seconds
+          source_evidence: src/items.rs:generated_at uses the current time
+          source_example: "1700000000"
+          target_example: "1700003600"
+      duration:
+        - pointer: /data/*/elapsed_hours
+          unit: hours
+          source_evidence: src/items.rs:elapsed_hours measures time since creation
+          source_example: "1.5"
+          target_example: "2.5"
+```
+
+CLI planning/application uses `--timestamp-format unix-seconds`,
+`--timestamp-format unix-milliseconds`, or `--timestamp-format rfc3339` for
+`--kind timestamp`, and `--unit hours` (or another supported unit) for
+`--kind duration`. Quote wildcard Pointers, e.g. `--json-pointer '/data/*/elapsed_hours'`.
+These settings also persist through `backend-rewrite rule plan` / `rule apply`.
 
 On an exact scalar mismatch the assertion report may expose the pointer as a
 diagnostic candidate. That mechanical candidate is not authorization to weaken
@@ -272,8 +334,9 @@ as one generated string when the target omits the required signature
 parameters.
 Supported rule kinds are `timestamp`, `duration`, `uuid`, and `random`. A nonce
 or random salt uses `random`; those names are business uses, not comparison
-strategies. For a digest, signature, or encoding derived from a generated
-input, use the root rule kind and explain the derivation in `source_evidence`.
+strategies. Time rules select actual time values; they cannot exempt an entire
+signed URL or digest derived from time. For UUID/random-derived values, explain
+the derivation in `source_evidence`.
 The command requires a single-line source file/symbol citation,
 and different redacted source and target examples. It writes the citation and
 both examples into the policy beside each selected Pointer. Multiple Pointers

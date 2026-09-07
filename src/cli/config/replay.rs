@@ -48,8 +48,13 @@ enum ReplayStrategy {
 struct ResponseRuleArgs {
     #[arg(long, value_enum)]
     kind: ResponseRuleKindArg,
+    #[arg(long, value_enum)]
+    unit: Option<traffic_e2e::ResponseDurationUnit>,
+    #[arg(long, value_enum)]
+    timestamp_format: Option<traffic_e2e::ResponseTimestampFormat>,
     #[arg(long)]
     api: String,
+    /// JSON Pointer; a whole * segment selects every array element (quote in the shell).
     #[arg(long = "json-pointer", required = true)]
     json_pointers: Vec<String>,
     #[arg(long)]
@@ -134,8 +139,11 @@ fn response_rule_plan(
 ) -> Result<traffic_e2e::ResponseRulePlan> {
     let policy_path = target_root.join(".traffic-e2e/verification.yaml");
     let kind = args.kind.into();
+    let time =
+        traffic_e2e::ResponseTimeRule::from_options(Some(kind), args.unit, args.timestamp_format)?;
     if let Some(comparison_run) = args.comparison_run {
         plan_comparison_response_rule(ComparisonResponseRuleFeedback {
+            time,
             policy_path,
             kind,
             api: args.api,
@@ -158,6 +166,7 @@ fn response_rule_plan(
             &args.api,
         )?;
         plan_response_rule(ResponseRuleFeedback {
+            time,
             policy_path,
             kind,
             api: args.api,

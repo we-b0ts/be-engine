@@ -141,7 +141,11 @@ is unclear.
 - Within `rewrite`, `mod.rs` is the public coordinator facade and `advance.rs`
   owns the atomic verification transition. `action.rs` projects actions and
   commands; `coordination.rs` projects executable `pending` and the expanded
-  ready/waiting breakdown. `recording.rs` owns managed recording execution.
+  ready/waiting breakdown from the native workflow gate before worker selection.
+  `repair.rs` owns revision readiness and the API-scoped permission to replay an
+  accepted system repair. `fingerprint/engine.rs` caches the executable digest
+  within a process and invalidates it when the file identity changes.
+  `recording.rs` owns managed recording execution.
   `execution.rs` owns detached Next/quality launch, completion, failure, and
   recovery without moving verification semantics out of their existing owners.
   `worker.rs` owns persistent dedicated identity, confirmation, and transfer;
@@ -283,3 +287,11 @@ explicit repository-wide audit.
   coordinator plan/apply transaction and global revalidation. Its `discovery`
   child projects existing startup inspection contracts without secret values.
   These modules never make expected responses available to request execution.
+
+- `replay/policy/response/json_pointer` owns JSON response selector validation,
+  array expansion, evidence matching, and subtree overlap checks. The assertion
+  comparator owns value comparison and rule applicability using those resolved
+  locations; feedback keeps plan/apply evidence validation and persistence.
+- `replay/policy/response/time_rule` owns explicit timestamp-format and duration-unit
+  contracts. `replay/assertion/time` owns numeric parsing and fixed five-second
+  request-relative validation; artifact adapters supply captured request times.

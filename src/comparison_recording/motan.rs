@@ -273,6 +273,7 @@ async fn fetch(
     upstream: &str,
 ) -> MotanCapture {
     let started = Instant::now();
+    let request_sent_at = Utc::now();
     let result = transport::forward_request(
         request,
         upstream,
@@ -331,7 +332,7 @@ async fn fetch(
                 capture: UpstreamCapture {
                     record: ComparisonRecordingResponse {
                         version: 1,
-                        timestamp: Utc::now(),
+                        timestamp: request_sent_at,
                         upstream: upstream.to_string(),
                         status,
                         headers: None,

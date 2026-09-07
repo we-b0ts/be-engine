@@ -7,6 +7,9 @@ use super::evidence::{AssertionCaseEvidence, DifferenceEvidence, source_change_o
 use super::*;
 use crate::replay::validate_replay_policy;
 
+#[path = "tests/json_arrays.rs"]
+mod json_arrays;
+
 #[test]
 fn plans_and_applies_evidence_backed_uuid_field() {
     let temp = tempdir().unwrap();
@@ -60,6 +63,7 @@ fn plans_and_applies_evidence_backed_uuid_field() {
     )
     .unwrap();
     let feedback = ResponseRuleFeedback {
+        time: None,
         policy_path: policy.clone(),
         kind: ResponseRuleKind::Uuid,
         api: "GET /api/resource/token".to_string(),
@@ -172,6 +176,7 @@ fn replay_rule_planning_resolves_runner_owned_assertion_details() {
     .unwrap();
 
     let plan = plan_response_rule(ResponseRuleFeedback {
+        time: None,
         policy_path: policy,
         kind: ResponseRuleKind::Uuid,
         api: "GET /api/resource/token".to_string(),
@@ -504,6 +509,7 @@ fn plans_and_applies_uuid_field_from_comparison_recording_evidence() {
     )
     .unwrap();
     let feedback = ComparisonResponseRuleFeedback {
+        time: None,
         policy_path: policy.clone(),
         kind: ResponseRuleKind::Uuid,
         api: "GET /api/resource/token".to_string(),
@@ -566,6 +572,7 @@ fn plans_and_applies_comparison_only_counter_fields() {
     )
     .unwrap();
     let feedback = ComparisonResponseRuleFeedback {
+        time: None,
         policy_path: policy.clone(),
         kind: ResponseRuleKind::Counter,
         api: "GET /api/users/show".to_string(),
@@ -640,6 +647,7 @@ fn a_permitted_source_after_match_does_not_authorize_a_response_rule() {
     )
     .unwrap();
     let feedback = ComparisonResponseRuleFeedback {
+        time: None,
         policy_path: policy,
         kind: ResponseRuleKind::Counter,
         api: "GET /api/users/show".to_string(),
@@ -714,6 +722,7 @@ fn plans_and_applies_evidence_backed_unordered_array() {
     )
     .unwrap();
     let feedback = ResponseRuleFeedback {
+        time: None,
         policy_path: policy.clone(),
         kind: ResponseRuleKind::Unordered,
         api: "GET /api/config/ansible_facts".to_string(),
@@ -795,6 +804,7 @@ fn plans_and_applies_separator_specific_joined_string_rule() {
     )
     .unwrap();
     let feedback = ResponseRuleFeedback {
+        time: None,
         policy_path: policy.clone(),
         kind: ResponseRuleKind::UnorderedJoinedString,
         api: "GET /api/config/ansible_facts".to_string(),
@@ -850,16 +860,17 @@ fn unordered_evidence_rejects_content_differences() {
 
 #[test]
 fn generated_rule_requires_auditable_source_evidence() {
-    let error = justification::validate(ResponseRuleKind::Uuid, None, None, None, None)
+    let error = justification::validate(ResponseRuleKind::Uuid, None, None, None, None, None)
         .err()
         .expect("missing UUID evidence must fail");
     assert!(error.to_string().contains("--source-evidence"));
 
     let justification = justification::validate(
-        ResponseRuleKind::Timestamp,
-        Some("src/signed_url.rs:sign derives the signature from current time".to_string()),
-        Some("https://img.test/a?Expires=<source-time>&ssig=<source-signature>".to_string()),
-        Some("https://img.test/a?Expires=<target-time>&ssig=<target-signature>".to_string()),
+        ResponseRuleKind::Random,
+        None,
+        Some("src/token.rs:generate uses a random nonce".to_string()),
+        Some("<source random token>".to_string()),
+        Some("<target random token>".to_string()),
         None,
     )
     .unwrap();
@@ -969,6 +980,7 @@ fn write_generated_replay_feedback(
     )
     .unwrap();
     ResponseRuleFeedback {
+        time: None,
         policy_path: policy,
         kind: ResponseRuleKind::Uuid,
         api: "GET /api/resource/token".to_string(),

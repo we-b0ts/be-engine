@@ -9,6 +9,7 @@ use super::model::ResponseGatewayProtocol;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct RecordedRequest {
+    pub(super) timestamp: Option<chrono::DateTime<chrono::Utc>>,
     pub(super) method: String,
     pub(super) uri: String,
     pub(super) protocol_version: Option<String>,
@@ -66,6 +67,7 @@ impl RecordedStatus {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ComparisonResponse {
+    pub(super) timestamp: Option<chrono::DateTime<chrono::Utc>>,
     pub(super) version: u8,
     pub(super) status: Option<u16>,
     pub(super) headers: Option<HeaderMapSnapshot>,
@@ -80,8 +82,8 @@ pub(super) struct ComparisonResponse {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ActualResponse {
-    #[serde(default, rename = "request_sent_at")]
-    _request_sent_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub(super) request_sent_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default, rename = "request_rules")]
     _request_rules: Vec<crate::request_rules::RequestRuleObservation>,
     pub(super) version: u8,

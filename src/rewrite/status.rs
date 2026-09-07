@@ -26,17 +26,12 @@ pub fn inventory_rewrite(context: RewriteContext) -> Result<RewriteInventoryRepo
             let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
             inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
             process_outputs::defer_for_target_change(&mut state, &target_fingerprint);
-            let envelope = if let Some(report) = super::configuration_commit::status(&target_root)?
-            {
-                super::execution::from_status(report)
+            project_stale_comparison(&mut state, &target_fingerprint);
+            let details = if let Some(report) = super::configuration_commit::status(&target_root)? {
+                super::coordination::single_ready("commit_configuration", report.pending)
             } else {
-                api_envelope(&target_root, &state, None)?
+                super::coordination::status_details(&target_root, &state)?
             };
-            let details = super::coordination::details(
-                &state,
-                &envelope.action,
-                super::coordination::resources_busy(&target_root)?,
-            );
             RewriteInventoryReport {
                 schema_version: ACTION_SCHEMA_VERSION,
                 initialized: true,
@@ -48,16 +43,19 @@ pub fn inventory_rewrite(context: RewriteContext) -> Result<RewriteInventoryRepo
                 workers: super::worker::scheduler::inventory(&target_root, &state),
             }
         }
-        None => RewriteInventoryReport {
-            schema_version: ACTION_SCHEMA_VERSION,
-            initialized: false,
-            workflow: None,
-            api_inventory: None,
-            process_output_inventory: None,
-            pending: 0,
-            details: Default::default(),
-            workers: Vec::new(),
-        },
+        None => {
+            let pending = status_rewrite(context)?.pending;
+            RewriteInventoryReport {
+                schema_version: ACTION_SCHEMA_VERSION,
+                initialized: false,
+                workflow: None,
+                api_inventory: None,
+                process_output_inventory: None,
+                pending,
+                details: super::coordination::initial_details(pending),
+                workers: Vec::new(),
+            }
+        }
     })
 }
 
@@ -79,22 +77,13 @@ pub fn status_rewrite_for_api(
             let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
             inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
             process_outputs::defer_for_target_change(&mut state, &target_fingerprint);
-            if state.phase == RewritePhase::ComparisonRecordingRequired
-                && state.target_fingerprint.as_deref() != Some(target_fingerprint.as_str())
-            {
-                state.phase = RewritePhase::ApiPending;
-                state.e2e_current = false;
-                state.comparison_current = false;
-                state.comparison_run_id = None;
-                state.comparison_rejection = None;
-                state.active_issue = None;
-                state.target_fingerprint = None;
-            }
+            project_stale_comparison(&mut state, &target_fingerprint);
+            let pending = super::coordination::status_details(&target_root, &state)?.pending();
             let envelope = api_envelope(&target_root, &state, api)?;
             let scoped = inventory::scoped(&state, api).unwrap_or(state);
             RewriteStatusReport {
                 schema_version: envelope.schema_version,
-                pending: envelope.pending,
+                pending,
                 initialized: true,
                 workflow: envelope.workflow,
                 api_inventory: envelope.api_inventory,
@@ -157,6 +146,7 @@ pub fn status_rewrite_for_process_output(
             let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
             inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
             process_outputs::defer_for_target_change(&mut state, &target_fingerprint);
+            project_stale_comparison(&mut state, &target_fingerprint);
             let scoped = process_outputs::scoped(&state, id)?;
             let worker_ready = super::worker::runtime::scopes(&scoped)
                 .contains(&super::RewriteWorkScope::ProcessOutput { id: id.to_string() })
@@ -194,6 +184,7 @@ pub fn status_rewrite_for_process_output(
                     }
                 }
             };
+            envelope.pending = super::coordination::status_details(&target_root, &state)?.pending();
             action::retarget_wait_status_for_process_output(&mut envelope, &target_root, id);
             RewriteStatusReport {
                 schema_version: envelope.schema_version,
@@ -234,6 +225,20 @@ pub fn status_rewrite_for_process_output(
     })
 }
 
+fn project_stale_comparison(state: &mut super::model::RewriteState, fingerprint: &str) {
+    if state.phase == RewritePhase::ComparisonRecordingRequired
+        && state.target_fingerprint.as_deref() != Some(fingerprint)
+    {
+        state.phase = RewritePhase::ApiPending;
+        state.e2e_current = false;
+        state.comparison_current = false;
+        state.comparison_run_id = None;
+        state.comparison_rejection = None;
+        state.active_issue = None;
+        state.target_fingerprint = None;
+    }
+}
+
 fn projected_action(
     target_root: &std::path::Path,
     state: &super::model::RewriteState,
@@ -258,6 +263,13 @@ fn api_envelope(
     state: &super::model::RewriteState,
     api: Option<&RecordingApi>,
 ) -> Result<super::model::RewriteActionEnvelope> {
+    // Inspecting a parked worker does not activate that API. Dispatch and status
+    // feedback stay available while another API is at a system-repair gate.
+    if api.is_some()
+        && let Some(envelope) = super::coordination::busy_workers(target_root, state, api)?
+    {
+        return Ok(envelope);
+    }
     let requested_api = api.map(ToString::to_string);
     let envelope = if super::coordination::resources_busy(target_root)? {
         if let Some(envelope) = super::coordination::busy_workers(target_root, state, api)? {

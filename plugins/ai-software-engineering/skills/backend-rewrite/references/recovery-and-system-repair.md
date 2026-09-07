@@ -14,21 +14,27 @@ never supply an invented acceptance command. `missing-recorded-resource` is a
 validated route cause but resolves to a recorder-capture plan and never enters
 this phase.
 
-Apply the required repair and execute the exact
-`action.commands.acceptance`. New repairs use
+Apply the required repair. Read global status again after installing the repair.
+Until the relevant revision changes, it is counted in `waiting.system_repair`
+and `action.details.acceptance_ready` is false. Other ready worker work continues.
+Once ready and the verification resource is free, it contributes one
+`ready.verify_system_repair` and is selected before worker checks or dispatch.
+Execute the exact `action.commands.acceptance` returned then. New repairs use
 `repair verify <repair-id>`. A legacy Response `external_data_blocker` now
 expressible by bootstrap Replay planning instead receives
 `repair resume-replay-planning <repair-id>`; that migration does not require a
 runtime-input revision change. Neither `next` nor `recording request` may
 bypass the returned command.
 
-System-repair actions retain the route and acceptance command as scheduling
-information. Fetch the issue diagnostics through their single
+System-repair actions retain the route, triggering `work_scope`, readiness, and
+available acceptance command as scheduling information. Fetch the issue diagnostics through their single
 `action.commands.evidence` entrypoint when needed; status does not embed them.
 
 Successful verification chooses the next transition. Replay and external-input
-repairs reuse the same cases; Recorder or source-baseline repairs allocate
-fresh standard traffic. The AI never chooses between those transitions.
+repairs authorize Replay for the same owning API and immutable cases without a
+new implementation handoff; target quality gates still apply. Recorder or
+source-baseline repairs allocate fresh standard traffic. The AI never chooses
+between those transitions.
 
 For an accepted `source_change` caused by an upgraded source image, an
 administrator replaces the source baseline without rerunning initialization:

@@ -2,12 +2,13 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use super::super::response::ResponseRuleKind;
+use super::super::response::{ResponseRuleKind, ResponseTimeRule};
 
 #[derive(Debug, Clone)]
 pub struct ResponseRuleFeedback {
     pub policy_path: PathBuf,
     pub kind: ResponseRuleKind,
+    pub time: Option<ResponseTimeRule>,
     pub api: String,
     pub json_pointers: Vec<String>,
     pub source_evidence: Option<String>,
@@ -22,6 +23,7 @@ pub struct ResponseRuleFeedback {
 pub struct ComparisonResponseRuleFeedback {
     pub policy_path: PathBuf,
     pub kind: ResponseRuleKind,
+    pub time: Option<ResponseTimeRule>,
     pub api: String,
     pub json_pointers: Vec<String>,
     pub source_evidence: Option<String>,
@@ -48,6 +50,7 @@ pub struct ResponseRuleReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comparison_fingerprint: Option<String>,
     pub kind: ResponseRuleKind,
+    pub time: Option<ResponseTimeRule>,
     pub api: String,
     pub json_pointers: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

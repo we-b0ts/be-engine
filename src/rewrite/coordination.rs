@@ -21,6 +21,31 @@ impl RewriteCoordinationDetails {
     }
 }
 
+/// One global projection, independent of the action selected for scoped inspection.
+pub(super) fn status_details(
+    target_root: &Path,
+    state: &RewriteState,
+) -> Result<RewriteCoordinationDetails> {
+    let busy = resources_busy(target_root)?;
+    let base = super::action::status_base(target_root, state)?;
+    let execution = super::execution::status_action(target_root)?;
+    let failed = matches!(execution, Some(RewriteAction::ExecutionFailed { .. }));
+    let mut result = details(state, &base, busy || failed);
+    if matches!(execution, Some(RewriteAction::RecoveryRequired { .. }))
+        || matches!(
+            super::store::RewriteStore::new(target_root)?.lock_state()?,
+            super::store::RewriteLockState::Stale
+        )
+        || matches!(
+            super::traffic_operation::state(target_root)?,
+            super::traffic_operation::TrafficOperationState::Stale(_)
+        )
+    {
+        add(&mut result.ready, "recover_workflow", 1);
+    }
+    Ok(result)
+}
+
 pub(super) fn resources_busy(target_root: &Path) -> Result<bool> {
     Ok(!matches!(
         super::traffic_operation::state(target_root)?,
@@ -81,7 +106,13 @@ pub(super) fn details(
         .iter()
         .filter(|item| item.status == RewriteApiStatus::Pending)
         .count()
-        + usize::from(state.phase == RewritePhase::ApiPending);
+        + usize::from(state.phase == RewritePhase::ApiPending)
+        + usize::from(state.system_repair_accepted)
+        + state
+            .parked_slices
+            .values()
+            .filter(|slice| slice.api != state.api && slice.system_repair_accepted)
+            .count();
     if !busy
         && matches!(
             state.phase,
@@ -107,27 +138,41 @@ pub(super) fn details(
         .filter(|item| item.status == RewriteApiStatus::Complete)
         .count();
     match action {
+        RewriteAction::SystemRepairRequired { acceptance, .. } => {
+            if acceptance.is_some() && !busy {
+                add(&mut result.ready, "verify_system_repair", 1);
+            } else {
+                add(&mut result.waiting, "system_repair", 1);
+            }
+        }
+
         RewriteAction::WaitRequired { .. }
         | RewriteAction::RecordingInProgress { .. }
         | RewriteAction::RecordingRefreshPending { .. }
         | RewriteAction::Complete { .. }
-        | RewriteAction::ExecutionFailed { .. } => result.ready.clear(),
+        | RewriteAction::ExecutionFailed { .. } => {}
         RewriteAction::InputRequired {
             reason: super::model::RewriteInputRequiredReason::WorkflowNotInitialized,
             ..
-        } => result.ready.clear(),
+        } => {}
         RewriteAction::ImplementationRequired { .. }
         | RewriteAction::WorkerStatusRequired { .. }
         | RewriteAction::IntegrationRequired { .. } => {}
         RewriteAction::AdvanceRequired { .. }
             if result.ready.contains_key("verify_api")
                 || result.ready.contains_key("verify_handoff") => {}
-        RewriteAction::TargetQualityRequired { .. } => {
-            replace_one(&mut result.ready, "verify_handoff", "target_quality")
+        RewriteAction::TargetQualityRequired { .. } if !busy => {
+            let previous = if state.system_repair_accepted {
+                "verify_api"
+            } else {
+                "verify_handoff"
+            };
+            replace_one(&mut result.ready, previous, "target_quality")
         }
-        RewriteAction::PlanApplyRequired { .. } => {
+        RewriteAction::PlanApplyRequired { .. } if !busy => {
             replace_one(&mut result.ready, "integrate_handoff", "apply_plan")
         }
+        _ if busy => add(&mut result.waiting, "workflow_resource", 1),
         _ => add(&mut result.ready, "advance_workflow", 1),
     }
     result
@@ -167,3 +212,16 @@ pub(super) fn busy_workers(
         envelope
     }))
 }
+
+pub(super) fn initial_details(pending: usize) -> RewriteCoordinationDetails {
+    single_ready("initialize_workflow", pending)
+}
+
+pub(super) fn single_ready(kind: &str, pending: usize) -> RewriteCoordinationDetails {
+    let mut result = RewriteCoordinationDetails::default();
+    add(&mut result.ready, kind, pending);
+    result
+}
+
+#[cfg(test)]
+mod tests;

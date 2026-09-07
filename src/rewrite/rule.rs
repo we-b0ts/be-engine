@@ -22,6 +22,7 @@ pub struct RewriteRulePlanOptions {
     pub jwt: Option<super::jwt_rule::JwtRulePlanOptions>,
     pub body_codec: ResponseBodyCodec,
     pub kind: Option<ResponseRuleKind>,
+    pub time: Option<crate::ResponseTimeRule>,
     pub json_pointer: Option<String>,
     pub source_evidence: Option<String>,
     pub source_example: Option<String>,
@@ -65,6 +66,7 @@ pub(super) fn plan(
                 && options.source_example.is_none()
                 && options.target_example.is_none()
                 && options.separator.is_none()
+                && options.time.is_none()
                 && options.unordered_paths.is_empty()
                 && options.unordered_joined_string_paths.is_empty(),
             "JWT request rules cannot carry response rule options"
@@ -135,6 +137,7 @@ fn plan_json(
         issue_id: issue.id.clone(),
         kind: rule_kind(kind).to_string(),
         json_pointer: pointer,
+        time: options.time,
         source_evidence: options.source_evidence,
         source_example: options.source_example,
         target_example: options.target_example,
@@ -172,7 +175,8 @@ fn plan_response_body(
             && options.source_evidence.is_none()
             && options.source_example.is_none()
             && options.target_example.is_none()
-            && options.separator.is_none(),
+            && options.separator.is_none()
+            && options.time.is_none(),
         "typed response-body rules cannot carry JSON rule arguments"
     );
     validate_response_body_plan_evidence(
@@ -203,6 +207,7 @@ fn plan_response_body(
         issue_id: issue.id.clone(),
         kind: "response_body".to_string(),
         json_pointer: String::new(),
+        time: None,
         source_evidence: None,
         source_example: None,
         target_example: None,
@@ -318,6 +323,7 @@ fn build_plan(
         let comparison_run = comparison_run.context("comparison rule requires a comparison run")?;
         return Ok(VerificationRulePlan::Response(Box::new(
             plan_comparison_response_rule(ComparisonResponseRuleFeedback {
+                time: record.time,
                 policy_path,
                 kind,
                 api: state.api.clone(),
@@ -348,6 +354,7 @@ fn build_plan(
     )?;
     Ok(VerificationRulePlan::Response(Box::new(
         plan_response_rule(ResponseRuleFeedback {
+            time: record.time,
             policy_path,
             kind,
             api: state.api.clone(),
@@ -445,6 +452,7 @@ fn project_response_report(report: &crate::ResponseRuleReport) -> Result<Value> 
         "api": report.api,
         "json_pointers": report.json_pointers,
         "separator": report.separator,
+        "time": report.time,
         "matching_cases": report.matching_cases,
         "selected_difference_cases": report.selected_difference_cases,
         "residual_difference_cases": report.residual_difference_cases,

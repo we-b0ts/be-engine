@@ -14,12 +14,13 @@ workflow. Load action-specific references only through the direct routing in
 
 ## Session Start And Resume
 
-Start the workflow from the initialized canonical target repository:
+Start and resume from the initialized canonical target repository:
 
 ```bash
-backend-rewrite next
+backend-rewrite status
 ```
 
+Follow the returned action to start an absent rewrite workflow.
 Before the first standard recording, add `--api '<METHOD path-or-pattern>'`
 only when the caller explicitly requests a single-API recording. After the
 coordinator publishes its stable inventory, select work with the exact
@@ -278,8 +279,8 @@ fingerprint and the final public `progress.yaml` is committed. Use
 Every initialized action or status includes a bounded `api_inventory` summary:
 `total`, `completed`, `unverified`, `implementation_required`,
 `awaiting_recording_refresh`, `revalidation_pending`, `current_index`, and
-`current_api`. The coordinator owns this inventory. Keep `workflow.scope`, the
-selector of the shared standard recording, separate from the selected API. An
+`current_api`. The coordinator owns this inventory. In expanded `inventory`, `workflow.scope` is the
+selector of the shared standard recording and is separate from the selected API. An
 omitted selector produces `recorded_api_inventory`: every API that actually
 publishes a case in the selected standard recording enters the inventory, while
 an API with no observed traffic is not required and does not block completion.

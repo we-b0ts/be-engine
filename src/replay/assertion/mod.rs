@@ -4,6 +4,8 @@ mod compare;
 pub(in crate::replay) mod hessian2;
 mod joined_string;
 mod model;
+mod time;
+use time::RequestTimes;
 mod motan;
 pub(in crate::replay) mod protobuf;
 
@@ -209,6 +211,10 @@ pub fn assert_recorded_response(
     };
     evaluate_response(AssertionInputs {
         mode: AssertionMode::Replay,
+        times: RequestTimes {
+            source: request.timestamp,
+            target: actual.request_sent_at,
+        },
         case_id: options.case_id,
         request,
         request_path: options.request,
@@ -257,6 +263,10 @@ pub(crate) fn assert_comparison_response(
     let actual_body = comparison_assertion_body(&request, &response, "response")?;
     evaluate_response(AssertionInputs {
         mode: AssertionMode::Comparison,
+        times: RequestTimes {
+            source: expected.timestamp,
+            target: response.timestamp,
+        },
         case_id: options.case_id,
         request,
         request_path: options.request,
@@ -379,6 +389,7 @@ fn captured_body(response: &ComparisonResponse, label: &str) -> Result<Vec<u8>> 
 }
 
 struct AssertionInputs {
+    times: RequestTimes,
     mode: AssertionMode,
     case_id: String,
     request: RecordedRequest,
@@ -457,6 +468,7 @@ enum AssertionMode {
 
 fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseReport> {
     let AssertionInputs {
+        times,
         mode,
         case_id,
         request,
@@ -727,7 +739,8 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
     ) {
         (Ok(expected), Ok(actual)) => {
             report.body_codec = ResponseBodyCodec::Json;
-            compare_json(&expected, &actual, &response_fields, &mut report);
+            let applicable_fields =
+                compare_json(&expected, &actual, &response_fields, &mut report, times);
             if let Some(difference) = expected_body.type_difference(&actual_body) {
                 report.differences.push(difference);
             }
@@ -736,14 +749,6 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                     .differences
                     .push(ResponseDifference::gateway_metadata_mismatch());
             }
-            let applicable_fields = response_fields
-                .iter()
-                .filter(|field| {
-                    expected.pointer(&field.pointer).is_some()
-                        && actual.pointer(&field.pointer).is_some()
-                })
-                .cloned()
-                .collect::<Vec<_>>();
             report.finish(&applicable_fields, &[]);
         }
         _ => {

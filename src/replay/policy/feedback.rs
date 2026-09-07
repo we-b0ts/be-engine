@@ -88,6 +88,7 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
     );
     let justification = justification::validate(
         feedback.kind,
+        feedback.time,
         feedback.source_evidence,
         feedback.source_example,
         feedback.target_example,
@@ -204,6 +205,7 @@ pub fn plan_comparison_response_rule(
 ) -> Result<ResponseRulePlan> {
     let justification = justification::validate(
         feedback.kind,
+        feedback.time,
         feedback.source_evidence,
         feedback.source_example,
         feedback.target_example,
@@ -393,6 +395,13 @@ fn validate_response_evidence(
                     case.case_id,
                     difference.pointer
                 );
+                ensure!(
+                    kind != ResponseRuleKind::UnorderedJoinedString
+                        || response.has_candidate(kind, &difference.pointer, separator),
+                    "case {:?} does not provide joined-string evidence for {}",
+                    case.case_id,
+                    difference.pointer
+                );
                 observed_difference = true;
                 case_has_selected_difference = true;
             } else {
@@ -492,6 +501,12 @@ fn build_response_rule_plan(
                 .expect("generated kind has a rule collection");
             for pointer in &prepared.requested {
                 let proposed = GeneratedResponseRule {
+                    unit: justification
+                        .time
+                        .and_then(super::response::ResponseTimeRule::unit),
+                    format: justification
+                        .time
+                        .and_then(super::response::ResponseTimeRule::format),
                     pointer: pointer.clone(),
                     source_evidence: justification
                         .source_evidence
@@ -654,6 +669,7 @@ fn build_response_rule_plan(
             comparison_report,
             comparison_fingerprint,
             kind,
+            time: justification.time,
             api,
             json_pointers: prepared.requested.into_iter().collect(),
             source_evidence: justification.source_evidence,

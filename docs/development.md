@@ -1154,7 +1154,7 @@ backend-rewrite verification request \
   --reason 'shared response mapper changed'
 ```
 
-Rewrite action schema v24 always returns `action.kind`, `action.summary`,
+Rewrite action schema v25 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under role-named `commands` such as
 `execute`, `status`, `advance`, `recover`, `evidence`, `apply`, and `acceptance`.
@@ -1172,11 +1172,22 @@ scheduling and reject replaced evidence. The overview itself does not authorize
 rule planning; use the applicable planner returned by a specific evidence query.
 Compared with v22, `commands.evidence` is a single command object rather than a
 query list. Existing issued detail-query IDs remain valid for unchanged evidence;
-Schema v24 adds top-level `pending`, counting only coordinator actions executable
+Schema v24 added top-level `pending`, counting only coordinator actions executable
 now. Inventory summaries rename their old `pending` count to `unverified`.
 Persisted state remains version 1, with optional worker observations and a
 worker-event revision cursor; legacy confirmed bindings require an actual runtime
 status check. Update AI skills with the binary when adopting this schema.
+Schema v25 keeps only workflow identity and revision in scheduling responses;
+`inventory` retains the full workflow metadata. Global and scoped status share
+the same global pending projection. System-repair actions identify their API:
+unchanged repairs wait, while a changed acceptance revision schedules repair
+verification before worker dispatch. Accepted replay repairs authorize the same
+API's replay without requiring another worker handoff. `worker confirm` records
+binding delivery only; explicit coordinator reports supply running/queued state.
+The engine does not query an external AI runtime. Reports expire after five
+minutes; missing or legacy unclassified observations require a fresh report.
+Start and resume with `backend-rewrite status`; an initialized project without a
+workflow returns an executable initialization action with `pending: 1`.
 Status does not duplicate an `active_issue` or publish an unconditional
 top-level `next`. Every returned command contains a canonical `cwd` plus exact
 argv. The argv includes the canonical absolute `--target-root`, so executing a
@@ -1415,7 +1426,7 @@ the updated policy.
 
 Recording, focused Replay, and comparison share one serialized traffic-runtime
 lease. Global status first returns any executable worker dispatch or feedback
-action. When no action is executable, schema v24 returns `wait_required` with
+action. When no action is executable, schema v25 returns `wait_required` with
 the requested and blocking APIs, the live operation when available, a retry
 delay, and the exact `commands.status` argv. This lease serializes each traffic
 operation, not a complete API lifecycle: while worker A implements, the

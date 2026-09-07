@@ -179,6 +179,7 @@ fn apply_report(
         recording_run_id: state.recording_run_id.clone(),
         activity: options.activity,
         observed_at: Utc::now().to_rfc3339(),
+        coordinator_reported: true,
         handoff_id: options.handoff_id.clone(),
         integrated_target_fingerprint: target_fingerprint,
     };
@@ -201,7 +202,10 @@ fn supersede_dispatch(state: &mut RewriteState, scope: &RewriteWorkScope) -> Res
 
 pub(in crate::rewrite) fn scopes(state: &RewriteState) -> Vec<RewriteWorkScope> {
     let mut scopes = Vec::new();
-    if state.phase == RewritePhase::ImplementationRequired && state.active_issue.is_some() {
+    if state.phase == RewritePhase::ImplementationRequired
+        && state.active_issue.is_some()
+        && !state.system_repair_accepted
+    {
         scopes.push(RewriteWorkScope::Api {
             api: state.api.clone(),
         });
@@ -210,6 +214,7 @@ pub(in crate::rewrite) fn scopes(state: &RewriteState) -> Vec<RewriteWorkScope> 
         if api != &state.api
             && slice.phase == RewritePhase::ImplementationRequired
             && slice.active_issue.is_some()
+            && !slice.system_repair_accepted
         {
             scopes.push(RewriteWorkScope::Api { api: api.clone() });
         }
@@ -287,12 +292,13 @@ pub(in crate::rewrite) fn coverage(
         RewriteWorkerActivity::HandoffReady => Coverage::IntegrationRequired,
         RewriteWorkerActivity::Integrated => Coverage::VerificationRequired,
         RewriteWorkerActivity::Running | RewriteWorkerActivity::Queued => {
-            let fresh = DateTime::parse_from_rfc3339(&observation.observed_at)
-                .ok()
-                .is_some_and(|observed| {
-                    let age = Utc::now().signed_duration_since(observed).num_seconds();
-                    (0..RUNNING_OBSERVATION_SECONDS).contains(&age)
-                });
+            let fresh = observation.coordinator_reported
+                && DateTime::parse_from_rfc3339(&observation.observed_at)
+                    .ok()
+                    .is_some_and(|observed| {
+                        let age = Utc::now().signed_duration_since(observed).num_seconds();
+                        (0..RUNNING_OBSERVATION_SECONDS).contains(&age)
+                    });
             if fresh {
                 Coverage::Running
             } else {
@@ -302,12 +308,17 @@ pub(in crate::rewrite) fn coverage(
     }
 }
 
-pub(in crate::rewrite) fn record_start(state: &mut RewriteState, scope: &RewriteWorkScope) {
+#[cfg(test)]
+pub(in crate::rewrite) fn record_running_for_test(
+    state: &mut RewriteState,
+    scope: &RewriteWorkScope,
+) {
     let observation = RewriteWorkerObservation {
         dispatch_id: super::dispatch_id(state, scope),
         recording_run_id: state.recording_run_id.clone(),
         activity: RewriteWorkerActivity::Running,
         observed_at: Utc::now().to_rfc3339(),
+        coordinator_reported: true,
         handoff_id: None,
         integrated_target_fingerprint: None,
     };
@@ -319,8 +330,9 @@ pub(in crate::rewrite) fn record_start(state: &mut RewriteState, scope: &Rewrite
 }
 
 pub(in crate::rewrite) fn acceptance_ready(state: &RewriteState, scope: &RewriteWorkScope) -> bool {
-    super::issue_for_scope(state, scope).is_some()
-        && coverage(state, scope) == RewriteWorkerCoverageState::VerificationRequired
+    super::super::repair::replay_ready(state, scope)
+        || (super::issue_for_scope(state, scope).is_some()
+            && coverage(state, scope) == RewriteWorkerCoverageState::VerificationRequired)
 }
 
 pub(in crate::rewrite) fn report_command(

@@ -245,6 +245,7 @@ async fn capture_motan_case(
     else {
         bail!("Motan request frame is incomplete");
     };
+    let request_sent_at = chrono::Utc::now();
     let operation = async {
         let mut stream = TcpStream::connect(upstream).await?;
         stream.write_all(&raw).await?;
@@ -278,7 +279,7 @@ async fn capture_motan_case(
         actual_response_path,
         &ActualResponse {
             version: 1,
-            request_sent_at: chrono::Utc::now(),
+            request_sent_at,
             request_rules: Vec::new(),
             status,
             body: CapturedBody {

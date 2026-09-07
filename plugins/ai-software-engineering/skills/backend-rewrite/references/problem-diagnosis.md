@@ -475,6 +475,15 @@ For one representative comparison difference, distinguish:
 - proven live numeric counter: comparison-only counter candidate;
 - cache hit/miss/staleness/warmup: target behavior, never policy.
 
+JSON time rules support array Pointers such as `/data/*/generated_at`.
+Timestamp plans require `--timestamp-format unix-seconds`, `unix-milliseconds`,
+or `rfc3339`; each value must fall within five seconds of its own captured
+request start. Duration plans require `--unit milliseconds`, `seconds`,
+`minutes`, or `hours`; the duration increase must equal the request-start time
+increase within five seconds. These rules validate parsed values, not just
+JSON types, and cannot exempt complete time-derived signatures or URLs.
+
+
 A target or response-policy change invalidates comparison evidence. The
 coordinator must rerun focused E2E before requesting a fresh comparison.
 

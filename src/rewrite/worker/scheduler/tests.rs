@@ -43,9 +43,18 @@ fn all_implementation_items_dispatch_even_with_zero_unverified_and_more_than_32_
         };
         let response = worker::confirm(worker::RewriteWorkerConfirmOptions {
             target_root: target.path().into(),
-            dispatch_id: dispatch.dispatch_id,
+            dispatch_id: dispatch.dispatch_id.clone(),
             agent_handle: format!("actual-runtime-worker-{remaining}"),
             agent_name: None,
+        })
+        .unwrap();
+        assert_eq!(response.pending, remaining);
+        let response = runtime::report(runtime::RewriteWorkerReportOptions {
+            target_root: target.path().into(),
+            dispatch_id: dispatch.dispatch_id,
+            agent_handle: format!("actual-runtime-worker-{remaining}"),
+            activity: worker::model::RewriteWorkerActivity::Queued,
+            handoff_id: None,
         })
         .unwrap();
         assert_eq!(response.pending, remaining - 1);
@@ -61,6 +70,43 @@ fn all_implementation_items_dispatch_even_with_zero_unverified_and_more_than_32_
     assert!(!status.terminal_allowed);
     assert!(matches!(status.action, RewriteAction::WaitRequired { .. }));
     assert_eq!(store.load().unwrap().unwrap().worker_bindings.len(), 40);
+}
+
+#[test]
+fn accepted_parked_repair_is_scheduled_without_a_new_worker_handoff() {
+    let target = configured_target();
+    let mut state = many_issues(2);
+    worker::confirm_current_for_test(&mut state);
+    state
+        .parked_slices
+        .get_mut("GET /api-01")
+        .unwrap()
+        .system_repair_accepted = true;
+    RewriteStore::new(target.path())
+        .unwrap()
+        .save(&state)
+        .unwrap();
+    let status = rewrite::status_rewrite(RewriteContext {
+        target_root: target.path().into(),
+    })
+    .unwrap();
+    assert_eq!(status.pending, 1);
+    let RewriteAction::AdvanceRequired { command, .. } = status.action else {
+        panic!("replay the accepted repair")
+    };
+    assert_eq!(command.argv.last().unwrap(), "GET /api-01");
+    let scoped = rewrite::status_rewrite_for_api(
+        RewriteContext {
+            target_root: target.path().into(),
+        },
+        Some(&"GET /api-01".parse().unwrap()),
+    )
+    .unwrap();
+    assert_eq!(scoped.pending, 1);
+    assert!(!matches!(
+        scoped.action,
+        RewriteAction::ImplementationRequired { .. } | RewriteAction::WorkerStatusRequired { .. }
+    ));
 }
 
 #[tokio::test]
