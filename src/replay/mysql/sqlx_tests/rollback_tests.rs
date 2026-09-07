@@ -1,5 +1,76 @@
 use super::*;
 
+#[tokio::test]
+async fn optional_rollback_stays_optional_during_delivery_but_failures_stay_dirty() {
+    let mut records = transaction_records();
+    records[0]["sql"] = json!("SELECT DISTINCT id FROM users WHERE id=1 OR id=2");
+    records[0]["server_status_before"] = json!(0);
+    records[0]["response"] = json!({"status":"resultset", "server_status":1,
+        "columns":[{"name":"id","family":"integer","sql_type":"INT"}], "rows":[]});
+    records.remove(1);
+    for (i, record) in records.iter_mut().enumerate() {
+        record["query_sequence"] = json!(2109 + i);
+        if i > 0 {
+            record["server_status_before"] = json!(if i == 1 { 1 } else { 0 });
+        }
+    }
+    let (_temp, _addr, runtime, task) = fixture(&records, false).await;
+    let mut state = runtime.state.lock().await;
+    let source = &state.mysql.exchanges[0].identity;
+    let identity = ReplaySessionIdentity {
+        target: Some(source.target.clone()),
+        database: source.database.clone(),
+        username: source.username.clone(),
+    };
+    let read = state
+        .match_exchange(&identity, "COM_QUERY", records[0]["sql"].as_str(), None)
+        .unwrap();
+    assert_eq!(
+        state.mysql.exchanges[0].status,
+        ReplayExchangeStatus::Responding
+    );
+    assert_eq!(
+        state.unused_exchanges(ReplaySource::Case).len(),
+        1,
+        "in-flight business response is still required"
+    );
+    state.complete_exchange(&read);
+    let rollback = state
+        .match_exchange(&identity, "COM_QUERY", Some("ROLLBACK"), None)
+        .unwrap();
+    assert_eq!(
+        state.mysql.exchanges[rollback.index].status,
+        ReplayExchangeStatus::Responding
+    );
+    assert!(
+        state.unused_exchanges(ReplaySource::Case).is_empty(),
+        "snapshot during cleanup delivery must remain clean"
+    );
+    assert_eq!(state.allowed_unused_rollbacks().len(), 2);
+    assert_eq!(
+        state.mysql.events.matched_query_count, 1,
+        "in-flight cleanup is not a completed call"
+    );
+    state.fail_exchange(&rollback, &identity, "test delivery failure");
+    assert_eq!(
+        state.unused_exchanges(ReplaySource::Case)[0].index,
+        rollback.index
+    );
+    assert_eq!(state.allowed_unused_rollbacks().len(), 1);
+    assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
+    let last = state
+        .match_exchange(&identity, "COM_QUERY", Some("ROLLBACK"), None)
+        .unwrap();
+    state.complete_exchange(&last);
+    assert!(state.allowed_unused_rollbacks().is_empty());
+    assert_eq!(
+        state.unused_exchanges(ReplaySource::Case).len(),
+        1,
+        "failure must survive other successful cleanup"
+    );
+    task.abort();
+}
+
 fn transaction_records() -> Vec<Value> {
     let connection = Uuid::new_v4();
     [

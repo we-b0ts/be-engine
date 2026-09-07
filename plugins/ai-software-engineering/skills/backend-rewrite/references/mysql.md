@@ -229,9 +229,11 @@ element; generate the same number of SQL placeholders.
 Replay supports source text SQL with inline literals and target prepared SQL
 with `?` parameters. For ordinary single-table SELECTs it compares IN/NOT IN
 lists without requiring the same value order, and accepts reordered pure AND
-conditions after binding actual values. Do not reproduce source set iteration
+conditions and OR branches after binding actual values. Do not reproduce source set iteration
 order or sort target inputs solely for Replay. Exact values, types, NULL and
 duplicate counts remain constrained, as do tables, ordering and pagination.
+Keep AND/OR nesting and each branch's field/value pairing; the engine does not
+expand boolean expressions or treat independently matching columns as a match.
 This built-in compatibility composes with direct-column projection mapping;
 it requires no rule or new recording. Complex expressions and positional
 dynamic-parameter policies keep their existing boundaries. See
@@ -239,7 +241,7 @@ dynamic-parameter policies keep their existing boundaries. See
 
 Single-table `SELECT DISTINCT` also supports normal prepared statements, bound
 parameters, column/table aliases, table qualifiers, and reordered pure AND
-conditions. Both sides must retain DISTINCT and the same complete set of direct
+conditions and OR branches. Both sides must retain DISTINCT and the same complete set of direct
 output columns. Do not force COM_QUERY, inline dynamic values, or reproduce
 SQLAlchemy column labels to work around Replay. Column removal, aggregates,
 grouping, and other complex query forms retain their existing constraints.

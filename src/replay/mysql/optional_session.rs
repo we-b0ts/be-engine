@@ -35,7 +35,7 @@ pub(in crate::replay) fn classify(
     let mut optional = BTreeMap::new();
     // Classification happens once per loaded file. Borrow SQL already owned
     // by the records and drop this parse-result cache with the classification.
-    let mut read_sql = HashMap::<&str, bool>::new();
+    let mut read_sql = HashMap::<&str, read::Effect>::new();
     for (connection, exchanges) in connections {
         if ambiguous.contains(&connection) {
             continue;
@@ -71,9 +71,8 @@ pub(in crate::replay) fn classify(
                         .is_some_and(|flags| flags & 0x2009 == 0))
                     && complete_read(current)
                     && current.sql.as_deref().is_some_and(|sql| {
-                        *read_sql
-                            .entry(sql)
-                            .or_insert_with(|| read::plain_select(sql))
+                        *read_sql.entry(sql).or_insert_with(|| read::classify(sql))
+                            == read::Effect::ReadOnly
                     });
         }
         autocommit::classify(&exchanges, &mut read_sql, &mut optional);

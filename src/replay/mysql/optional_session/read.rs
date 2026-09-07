@@ -1,42 +1,68 @@
-//! A small SELECT allowlist for proving implicit read-only session cleanup.
+//! Bounded SQL effect analysis, independent of predicate equivalence.
 //! This is an effect check, not SQL equivalence or a general transaction model.
 use crate::mysql::sql;
 use sqlparser::{
     ast::{
-        BinaryOperator, Expr, GroupByExpr, LimitClause, OrderByKind, SelectItem, SetExpr,
+        BinaryOperator, Distinct, Expr, GroupByExpr, LimitClause, OrderByKind, SelectItem, SetExpr,
         Statement, TableFactor, UnaryOperator,
     },
     dialect::MySqlDialect,
     parser::Parser,
 };
 
-pub(super) fn plain_select(sql: &str) -> bool {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Effect {
+    ReadOnly,
+    StateChange,
+    Unknown,
+}
+
+pub(super) fn classify(sql: &str) -> Effect {
     if sql.len() > 64 * 1024 {
-        return false;
+        return Effect::Unknown;
     }
     // The shared scanner rejects executable comments/hints and bounds the
     // parser input. Parse original spelling so quoted identifiers stay quoted.
     let Some(tokens) = sql::tokens(sql).filter(|tokens| tokens.len() <= 4096) else {
-        return false;
+        return Effect::Unknown;
     };
     if tokens
         .iter()
         .any(|t| ["@", "@@", ":=", "||", "&&"].iter().any(|s| t.is(s)))
     {
-        return false;
+        return Effect::Unknown;
     }
     let Ok(mut parser) = Parser::new(&MySqlDialect {})
         .with_recursion_limit(64)
         .try_with_sql(sql)
     else {
-        return false;
+        return Effect::Unknown;
     };
     let Ok(statements) = parser.parse_statements() else {
-        return false;
+        return Effect::Unknown;
     };
+    if matches!(
+        statements.as_slice(),
+        [Statement::Insert(_) | Statement::Update(_) | Statement::Delete(_) | Statement::Call(_)]
+    ) {
+        return Effect::StateChange;
+    }
     let [Statement::Query(query)] = statements.as_slice() else {
-        return false;
+        return Effect::Unknown;
     };
+    if !query.locks.is_empty()
+        || matches!(&*query.body, SetExpr::Select(select) if select.into.is_some())
+    {
+        return Effect::StateChange;
+    }
+    if read_query(query) {
+        Effect::ReadOnly
+    } else {
+        Effect::Unknown
+    }
+}
+
+fn read_query(query: &sqlparser::ast::Query) -> bool {
     if query.with.is_some()
         || query.fetch.is_some()
         || !query.locks.is_empty()
@@ -51,7 +77,10 @@ pub(super) fn plain_select(sql: &str) -> bool {
         return false;
     };
     if !select.optimizer_hints.is_empty()
-        || select.distinct.is_some()
+        || select
+            .distinct
+            .as_ref()
+            .is_some_and(|d| !matches!(d, Distinct::Distinct | Distinct::All))
         || select.select_modifiers.is_some()
         || select.top.is_some()
         || select.exclude.is_some()
@@ -62,12 +91,11 @@ pub(super) fn plain_select(sql: &str) -> bool {
         || !select.cluster_by.is_empty()
         || !select.distribute_by.is_empty()
         || !select.sort_by.is_empty()
-        || select.having.is_some()
         || !select.named_window.is_empty()
         || select.qualify.is_some()
         || select.value_table_mode.is_some()
         || !matches!(&select.group_by, GroupByExpr::Expressions(exprs, modifiers)
-            if exprs.is_empty() && modifiers.is_empty())
+            if modifiers.is_empty() && exprs.iter().all(pure))
         || select.from.len() != 1
     {
         return false;
@@ -92,16 +120,14 @@ pub(super) fn plain_select(sql: &str) -> bool {
     }
     if select.projection.is_empty()
         || !select.projection.iter().all(|item| match item {
-            SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => atom(expr),
+            SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => pure(expr),
             SelectItem::Wildcard(options) | SelectItem::QualifiedWildcard(_, options) => {
                 *options == Default::default()
             }
             _ => false,
         })
-        || !select
-            .selection
-            .as_ref()
-            .is_none_or(|expr| predicate(expr, 0))
+        || !select.selection.as_ref().is_none_or(pure)
+        || !select.having.as_ref().is_none_or(pure)
     {
         return false;
     }
@@ -112,7 +138,7 @@ pub(super) fn plain_select(sql: &str) -> bool {
         if order.interpolate.is_some()
             || !exprs
                 .iter()
-                .all(|expr| atom(&expr.expr) && expr.with_fill.is_none())
+                .all(|expr| pure(&expr.expr) && expr.with_fill.is_none())
         {
             return false;
         }
@@ -125,10 +151,10 @@ pub(super) fn plain_select(sql: &str) -> bool {
             limit_by,
         }) => {
             limit_by.is_empty()
-                && limit.as_ref().is_none_or(atom)
-                && offset.as_ref().is_none_or(|offset| atom(&offset.value))
+                && limit.as_ref().is_none_or(pure)
+                && offset.as_ref().is_none_or(|offset| pure(&offset.value))
         }
-        Some(LimitClause::OffsetCommaLimit { offset, limit }) => atom(offset) && atom(limit),
+        Some(LimitClause::OffsetCommaLimit { offset, limit }) => pure(offset) && pure(limit),
     }
 }
 
@@ -141,21 +167,32 @@ fn atom(expr: &Expr) -> bool {
     )
 }
 
-fn predicate(expr: &Expr, depth: usize) -> bool {
+fn pure(expr: &Expr) -> bool {
+    expression(expr, 0)
+}
+
+fn expression(expr: &Expr, depth: usize) -> bool {
     if depth > 64 {
         return false;
     }
     match expr {
         Expr::Nested(expr)
         | Expr::UnaryOp {
-            op: UnaryOperator::Not,
+            op: UnaryOperator::Not | UnaryOperator::Plus | UnaryOperator::Minus,
             expr,
-        } => predicate(expr, depth + 1),
+        } => expression(expr, depth + 1),
         Expr::BinaryOp {
             left,
-            op: BinaryOperator::And | BinaryOperator::Or,
+            op:
+                BinaryOperator::And
+                | BinaryOperator::Or
+                | BinaryOperator::Plus
+                | BinaryOperator::Minus
+                | BinaryOperator::Multiply
+                | BinaryOperator::Divide
+                | BinaryOperator::Modulo,
             right,
-        } => predicate(left, depth + 1) && predicate(right, depth + 1),
+        } => expression(left, depth + 1) && expression(right, depth + 1),
         Expr::BinaryOp {
             left,
             op:
@@ -167,11 +204,13 @@ fn predicate(expr: &Expr, depth: usize) -> bool {
                 | BinaryOperator::GtEq
                 | BinaryOperator::Spaceship,
             right,
-        } => atom(left) && atom(right),
-        Expr::IsNull(expr) | Expr::IsNotNull(expr) => atom(expr),
+        } => expression(left, depth + 1) && expression(right, depth + 1),
+        Expr::IsNull(expr) | Expr::IsNotNull(expr) => expression(expr, depth + 1),
         Expr::Between {
             expr, low, high, ..
-        } => atom(expr) && atom(low) && atom(high),
+        } => {
+            expression(expr, depth + 1) && expression(low, depth + 1) && expression(high, depth + 1)
+        }
         Expr::InList { expr, list, .. } => {
             if let Expr::Tuple(fields) = &**expr {
                 fields.len() >= 2
@@ -185,7 +224,9 @@ fn predicate(expr: &Expr, depth: usize) -> bool {
                 atom(expr) && !list.is_empty() && list.iter().all(atom)
             }
         }
-        Expr::Like { expr, pattern, .. } => atom(expr) && atom(pattern),
+        Expr::Like { expr, pattern, .. } => {
+            expression(expr, depth + 1) && expression(pattern, depth + 1)
+        }
         _ => atom(expr),
     }
 }

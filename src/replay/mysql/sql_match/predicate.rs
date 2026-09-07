@@ -32,6 +32,7 @@ enum Predicate {
     Between(Operand, bool, Operand, Operand),
     In(Operand, bool, Vec<Operand>),
     And(Vec<Predicate>),
+    Or(Vec<Predicate>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -216,17 +217,24 @@ fn predicate(expr: &Expr, depth: usize) -> Option<Predicate> {
         Expr::Nested(expr) => return predicate(expr, depth + 1),
         Expr::BinaryOp {
             left,
-            op: BinaryOperator::And,
+            op: op @ (BinaryOperator::And | BinaryOperator::Or),
             right,
         } => {
             let mut terms = Vec::new();
             for expr in [left, right] {
                 match predicate(expr, depth + 1)? {
-                    Predicate::And(children) => terms.extend(children),
+                    Predicate::And(children) if *op == BinaryOperator::And => {
+                        terms.extend(children)
+                    }
+                    Predicate::Or(children) if *op == BinaryOperator::Or => terms.extend(children),
                     term => terms.push(term),
                 }
             }
-            Predicate::And(terms)
+            if *op == BinaryOperator::And {
+                Predicate::And(terms)
+            } else {
+                Predicate::Or(terms)
+            }
         }
         Expr::BinaryOp { left, op, right }
             if matches!(
@@ -309,18 +317,28 @@ impl Predicate {
             Self::In(a, not, values) => {
                 Self::In(a.bind(tokens)?, *not, in_list::bind(values, tokens)?)
             }
-            Self::And(terms) => {
+            Self::And(terms) | Self::Or(terms) => {
                 let mut terms = terms
                     .iter()
                     .map(|v| v.bind(tokens))
                     .collect::<Option<Vec<_>>>()?;
                 terms.sort();
-                Self::And(terms)
+                if matches!(self, Self::And(_)) {
+                    Self::And(terms)
+                } else {
+                    Self::Or(terms)
+                }
             }
         })
     }
 
-    fn metadata_matches(&self, recorded: &Self) -> bool {
+    fn metadata_matches(&self, recorded: &Self, budget: &mut usize) -> bool {
+        // Alternating AND/OR trees can multiply candidate comparisons across
+        // levels. Share a bound across the whole PREPARE comparison.
+        let Some(remaining) = budget.checked_sub(1) else {
+            return false;
+        };
+        *budget = remaining;
         match (self, recorded) {
             (Self::Compare(a, op, b), Self::Compare(x, rop, y)) => {
                 op == rop && a.metadata_matches(x) && b.metadata_matches(y)
@@ -335,9 +353,9 @@ impl Predicate {
             (Self::In(a, not, values), Self::In(x, rnot, recorded)) => {
                 not == rnot && a.metadata_matches(x) && in_list::metadata_matches(values, recorded)
             }
-            (Self::And(terms), Self::And(recorded)) => {
+            (Self::And(terms), Self::And(recorded)) | (Self::Or(terms), Self::Or(recorded)) => {
                 terms.len() == recorded.len()
-                    && injective_metadata(terms, recorded, Self::metadata_matches)
+                    && injective_metadata(terms, recorded, |a, r| a.metadata_matches(r, budget))
             }
             _ => false,
         }
@@ -353,15 +371,23 @@ impl Key {
                     .zip(recorded)
                     .all(|(a, r)| a == r || *a == Token::Placeholder && r.is_value())
         }
+        let mut budget = 16_384;
         same(&self.prefix, &recorded.prefix)
             && same(&self.suffix, &recorded.suffix)
-            && self.predicate.metadata_matches(&recorded.predicate)
+            && self
+                .predicate
+                .metadata_matches(&recorded.predicate, &mut budget)
+            && budget > 0
     }
 }
 
 // PREPARE has no actual values. Repeated fields and partially bound IN lists
 // require a one-to-one assignment, not a greedy match or SQL-shape wildcard.
-fn injective_metadata<T>(actual: &[T], recorded: &[T], matches: impl Fn(&T, &T) -> bool) -> bool {
+fn injective_metadata<T>(
+    actual: &[T],
+    recorded: &[T],
+    mut matches: impl FnMut(&T, &T) -> bool,
+) -> bool {
     if actual.len() > recorded.len()
         || actual.len() > 64
         || actual.len().saturating_mul(recorded.len()) > 4096

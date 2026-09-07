@@ -3,7 +3,7 @@ use super::*;
 
 pub(super) fn classify<'a>(
     exchanges: &BTreeMap<u64, (usize, &'a RecordedMysqlExchange)>,
-    read_sql: &mut HashMap<&'a str, bool>,
+    read_sql: &mut HashMap<&'a str, read::Effect>,
     optional: &mut BTreeMap<usize, OptionalSessionExchange>,
 ) {
     let mut setups = Vec::new();
@@ -53,9 +53,8 @@ pub(super) fn classify<'a>(
         } else if complete_read(current)
             && current.sql.as_deref().is_some_and(|sql| {
                 // The parent cache borrows the same dependency file.
-                *read_sql
-                    .entry(sql)
-                    .or_insert_with(|| read::plain_select(sql))
+                *read_sql.entry(sql).or_insert_with(|| read::classify(sql))
+                    == read::Effect::ReadOnly
             })
         {
             if !read_span && before & 0x2009 != 0 {

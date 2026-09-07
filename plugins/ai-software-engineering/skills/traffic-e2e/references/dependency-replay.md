@@ -72,7 +72,7 @@ wildcards and other expressions retain strict matching. See
 boundary and actual-client acceptance tests.
 
 Ordinary single-table SELECT predicates also support reordered IN/NOT IN values
-and pure AND conditions, including source text literals versus target bound `?`
+and pure AND conditions / OR branches, including source text literals versus target bound `?`
 parameters. Values, types, NULL and duplicate counts stay exact. This built-in
 compatibility needs no rule or new recording and does not require target to
 reproduce source collection order. It composes with direct-column mapping;

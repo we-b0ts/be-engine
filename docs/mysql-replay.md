@@ -52,10 +52,12 @@ before/after transaction flags, and complete successful responses. Successful
 PREPARE preserves the read proof because it does not execute SQL. The rollback
 must confirm transaction completion without chaining or further results.
 
-The read allowlist uses sqlparser and admits single-table direct-column,
-literal or wildcard SELECTs with ordinary predicates (including AND/OR),
-ordering and pagination. This effect check does not broaden SQL matching:
-OR remains outside predicate-reordering compatibility. Writes, explicit BEGIN,
+The independent SQL effect classifier uses sqlparser and caches ReadOnly,
+StateChange or Unknown for each SQL string during loading. It admits
+single-table SELECTs with direct columns, literals, wildcards, DISTINCT, pure
+boolean/arithmetic expressions, grouping, HAVING, ordering and pagination.
+This proves absence of effects; it does not require those expressions to be
+supported by the query equivalence matcher. Writes, explicit BEGIN,
 locks, savepoints, calls/functions, subqueries and unsupported SQL interrupt
 the read proof. Unknown transaction starts, sequence gaps, errors or truncated
 evidence keep the first rollback required. Classification stays within one
@@ -70,9 +72,11 @@ transaction's rollback. Preserve business transactions on one connection: a
 missing rollback can change persisted data even when the HTTP response agrees.
 
 Optional cleanup stays matchable and appears separately in
-`allowed_unused_mysql_rollback_exchanges` when omitted. It is never marked as a
-successful target call. Recorded files remain unchanged. Existing reports are
-not cleaned by SQL-summary filtering: rerun Replay to derive the classification
+`allowed_unused_mysql_rollback_exchanges` when omitted or while its recorded
+response is being delivered. In-flight cleanup is not counted as a completed
+target call. Failed delivery remains a required unused exchange and reports an
+unmatched error; ordinary in-flight business responses remain required.
+Recorded files remain unchanged. Existing reports are not cleaned by SQL-summary filtering: rerun Replay to derive the classification
 from full exchanges. Older recordings without query before/final-EOF status
 remain strict for the first read-session rollback; re-record to establish that
 proof. The existing duplicate-rollback compatibility still applies when its
@@ -194,7 +198,7 @@ and cached parameter rebinding.
 ## SELECT predicate order compatibility
 
 Replay accepts different list orders in ordinary `IN` / `NOT IN` predicates
-and different orders of pure `AND` conditions in single-table SELECTs. This is
+and different orders of pure `AND` conditions and `OR` branches in single-table SELECTs. This is
 built in and requires neither a rule nor a new recording. Source can interpolate
 literal values into text SQL while target retains its normal `?` binding:
 
@@ -243,9 +247,13 @@ can also participate in proven read-only session cleanup described above.
 
 The supported conditions are direct fields and scalar values compared with
 `=`, `!=`, `<>`, `<`, `<=`, `>`, `>=`, `<=>`, `IS NULL`, `IS NOT NULL`,
-`BETWEEN`, and literal/parameter IN lists, combined by AND and parentheses.
-AND groups are flattened without dropping duplicate conditions. The grammar
-distinguishes BETWEEN's internal AND. OR, function/arithmetic predicates,
+`BETWEEN`, and literal/parameter IN lists, combined by AND, OR and parentheses.
+Only groups with the same operator are flattened and sorted, after parameter
+binding, without dropping duplicate conditions. Mixed AND/OR nesting and each
+branch's column/value pairing remain exact. For example, `(a=1 AND b=2) OR
+(a=3 AND b=4)` matches `(b=4 AND a=3) OR (b=2 AND a=1)`, but not `(a=1 AND b=4)
+OR (a=3 AND b=2)`. No distribution, absorption or logical expansion is performed.
+The grammar distinguishes BETWEEN's internal AND. Function/arithmetic predicates,
 subqueries, tuple comparisons outside IN, joins, grouping, locks, writes and computed sorting
 retain their existing strict matching behavior. Wildcard SELECTs can match
 when their projection remains the same; supported direct-column projections
@@ -271,7 +279,10 @@ results, parameter-independent metadata shapes and normalized constant queries.
 It holds at most 256 SQL strings and 1 MiB of original SQL text (the associated
 compiled representations consume additional bounded memory). A single SQL is
 limited to 64 KiB and 4096 tokens for this compatibility path, with bounded
-parenthesis/parser depth and at most 64 AND terms for metadata assignment.
+parenthesis/parser depth and at most 64 terms per AND/OR group for metadata
+assignment. Nested boolean metadata comparisons share a 16,384-pair work budget;
+excessively ambiguous forms fall back to strict matching. Execution compares
+normalized bound trees without that combinatorial assignment.
 Unsupported/oversized forms still try the existing matcher. Actual parameters
 are bound once per semantic lookup; cached templates never retain previous
 execution parameters, selected exchanges, responses or policy decisions.
