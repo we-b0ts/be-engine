@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 mod environment;
 mod snapshot;
 
+#[cfg(test)]
+pub(crate) use snapshot::test_support::install_startup_snapshot;
+
 pub use environment::{
     StartupEnvironmentChange, StartupEnvironmentChangeStatus, StartupEnvironmentComparison,
     StartupEnvironmentImport, StartupEnvironmentList, StartupEnvironmentPresence,
@@ -15,7 +18,8 @@ pub use environment::{
     startup_environment_equals, startup_environment_exists, validate_startup_environment,
 };
 pub(crate) use environment::{
-    startup_environment_revision, startup_environment_variable_names, write_docker_environment_file,
+    startup_environment_revision, startup_environment_value, startup_environment_variable_names,
+    write_docker_environment_file,
 };
 pub(crate) use snapshot::{
     StartupSnapshotMount, capture_startup_snapshot, extend_startup_snapshot, load_startup_snapshot,

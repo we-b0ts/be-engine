@@ -46,6 +46,7 @@ mod motan;
 mod mysql;
 mod network_access;
 mod policy;
+pub(crate) use policy::replace_request_rule_section;
 mod redis;
 pub(crate) mod report;
 #[cfg(test)]

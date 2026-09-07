@@ -247,6 +247,8 @@ pub struct RewriteRulePlanRecord {
     pub separator: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_body: Option<RewriteResponseBodyRuleSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jwt: Option<super::jwt_rule::JwtPlanRecord>,
     pub evidence_id: String,
 }
 

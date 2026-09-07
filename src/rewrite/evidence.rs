@@ -22,6 +22,7 @@ mod rule_guidance;
 pub(super) use rule_guidance::supports_response_body_codec;
 use rule_guidance::{applicable_rule_planners, rule_hints};
 
+const QUERY_JWT_TIME_VALIDITY: &str = "jwt_time_validity";
 const QUERY_CASE_RESPONSE_DIFFERENCES: &str = "case_response_differences";
 const QUERY_REPRESENTATIVES: &str = "representatives";
 const QUERY_SOURCE_VARIATION: &str = "source_variation";
@@ -139,6 +140,9 @@ fn facts(
     offset: usize,
 ) -> Result<(Value, Vec<String>, String)> {
     match kind {
+        QUERY_JWT_TIME_VALIDITY => Ok((super::jwt_rule::evidence_facts(target_root, state)?,
+            vec!["Unverified JWT time claims and HTTP 401 do not alone prove authentication causality or rule applicability.".into()],
+            "For time-drift candidates, inspect signing_key_discovery for target variable names, startup mount paths/access modes, existing bindings and discovery commands. Trace the source/target JWT path, configuration precedence and expiration leeway, then use the returned rule planner with the proven signing-key source. Plan/apply verifies original signatures.".into())),
         QUERY_IP_CAPTURE => Ok((super::response_url_evidence::facts(target_root, state)?,
             vec!["The IP omission is reported by target analysis; source consumption and absence of equivalent recorded calls require source/dependency evidence.".to_string()],
             "Prove the IP origin. For a supported JSON URL, execute the returned recorder-capture plan and apply, then verify a fresh recording before submitting a remaining system defect.".to_string())),
@@ -603,6 +607,7 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
         }
     }
     if issue.kind == RewriteIssueKind::Response {
+        queries.push((QUERY_JWT_TIME_VALIDITY, "Check failed 401 requests for JWT expiration between recording and replay; plan verifies signatures"));
         queries.push((
             QUERY_DIRTY_CLUSTERS,
             "Cluster case-scoped dirty dependencies by protocol, endpoint, and reason",

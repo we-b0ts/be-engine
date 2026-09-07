@@ -139,6 +139,7 @@ fn diagnostic_entrypoints_require_worker_confirmation_without_mutating_state() {
         super::super::plan_rewrite_rule(
             context(),
             RewriteRulePlanOptions {
+                jwt: None,
                 evidence_id: evidence_id.clone(),
                 body_codec: crate::ResponseBodyCodec::Json,
                 kind: Some(ResponseRuleKind::Uuid),
@@ -152,7 +153,7 @@ fn diagnostic_entrypoints_require_worker_confirmation_without_mutating_state() {
             },
         )
         .unwrap_err(),
-        "planning a response rule",
+        "planning a verification rule",
     );
     assert_confirmation_error(
         super::super::plan_rewrite_dependency_rule(

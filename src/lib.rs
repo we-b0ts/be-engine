@@ -35,6 +35,7 @@ mod redis;
 mod replay;
 mod repository;
 mod request_headers;
+pub mod request_rules;
 mod rewrite;
 mod runtime_output;
 mod source_snapshot;
@@ -213,9 +214,9 @@ pub use replay::{
     run_replay_with_counters, run_replay_with_lifecycle, validate_replay_policy,
 };
 pub use rewrite::{
-    RewriteAction, RewriteActionEnvelope, RewriteApiInventoryDetails, RewriteApiInventoryView,
-    RewriteApiProgress, RewriteApiStatus, RewriteApplicableRulePlanner, RewriteCapturePreview,
-    RewriteCaseDependenciesOptions, RewriteCaseDependenciesReport,
+    JwtRulePlanOptions, RewriteAction, RewriteActionEnvelope, RewriteApiInventoryDetails,
+    RewriteApiInventoryView, RewriteApiProgress, RewriteApiStatus, RewriteApplicableRulePlanner,
+    RewriteCapturePreview, RewriteCaseDependenciesOptions, RewriteCaseDependenciesReport,
     RewriteCaseDependencyProtocolDetail, RewriteCaseDependencyTarget,
     RewriteCaseDependencyTargetSummary, RewriteCasePatternApplyOptions, RewriteCommandSpec,
     RewriteContext, RewriteDependencyOwnership, RewriteDependencyPayloadRulePlanOptions,

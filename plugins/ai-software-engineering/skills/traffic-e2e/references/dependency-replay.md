@@ -23,6 +23,13 @@ and query, applicable headers, and body. Remove only transport headers the
 harness must regenerate. Do not hardcode case-specific auth, tenant, query, body,
 or cookie values in target tests.
 
+An explicit `verification.yaml` `request_rules.jwt` policy may translate
+verified HMAC JWT time claims in the engine's per-send request copy. This is
+an exception only to exact credential-byte reuse: original recording files,
+identity/permission claims, target authentication behavior and all dependency
+checks remain intact. See [JWT request rules](../../../../../docs/jwt-request-rules.md)
+for evidence-backed plan/apply and reexecution without new standard recording.
+
 Treat recorder dependency summaries and final replay reports as the acceptance
 evidence for case-owned touches. Equivalent target behavior must preserve the
 dependency role, compatible operation and input, ordering or state when

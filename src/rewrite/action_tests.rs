@@ -321,6 +321,7 @@ fn pending_rule_plans_are_recoverable_by_plan_id() {
         target_example: None,
         separator: None,
         response_body: None,
+        jwt: None,
         evidence_id: "evidence-response".to_string(),
     });
 

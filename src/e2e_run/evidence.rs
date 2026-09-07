@@ -406,7 +406,7 @@ fn finalized_focused_state(context: E2eRunContext, api: &str) -> Result<model::A
     finalized_focused_evidence(context, api).map(|(state, _)| state)
 }
 
-fn finalized_focused_evidence(
+pub(super) fn finalized_focused_evidence(
     context: E2eRunContext,
     api: &str,
 ) -> Result<(model::ActiveRunState, PathBuf)> {

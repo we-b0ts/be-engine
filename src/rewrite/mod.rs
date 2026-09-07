@@ -23,6 +23,7 @@ mod recorder_capture;
 pub use ip_capture::RewriteIpCaptureReport;
 #[cfg(test)]
 mod comparison_requirement_tests;
+mod jwt_rule;
 mod recording;
 mod recording_action;
 mod recording_execution;
@@ -33,6 +34,7 @@ mod response_url_evidence;
 mod revalidation;
 mod route;
 mod rule;
+pub use jwt_rule::JwtRulePlanOptions;
 mod source_process_traffic;
 mod status;
 mod store;
@@ -695,7 +697,7 @@ pub fn plan_rewrite_rule(
         .context("rewrite workflow has not been initialized")?;
     let api = inventory::api_for_evidence_id(&target_root, &state, &options.evidence_id)
         .context("rule evidence is stale or belongs to no concurrent API work item")?;
-    worker::ensure_api_confirmed(&state, &api, "planning a response rule")?;
+    worker::ensure_api_confirmed(&state, &api, "planning a verification rule")?;
     let report = inventory::with_slice_mut(&mut state, &api, |state| {
         rule::plan(&target_root, state, options)
     })?;
@@ -717,6 +719,9 @@ pub fn apply_rewrite_rule(context: RewriteContext, plan_id: &str) -> Result<Rewr
         state.target_fingerprint = None;
         Ok(report)
     })?;
+    if report.traffic_e2e_report["kind"] == "jwt" {
+        jwt_rule::invalidate_global(&mut state);
+    }
     store.save(&state)?;
     Ok(report)
 }

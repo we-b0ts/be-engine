@@ -1,4 +1,5 @@
 mod document;
+pub(crate) use document::replace_request_rule_section;
 mod evidence;
 mod justification;
 mod memcached;

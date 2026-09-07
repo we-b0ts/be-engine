@@ -80,6 +80,10 @@ pub(super) struct ComparisonResponse {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ActualResponse {
+    #[serde(default, rename = "request_sent_at")]
+    _request_sent_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, rename = "request_rules")]
+    _request_rules: Vec<crate::request_rules::RequestRuleObservation>,
     pub(super) version: u8,
     pub(super) status: u16,
     pub(super) body: ResponseBody,

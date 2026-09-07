@@ -98,6 +98,40 @@ pub(super) fn applicable_rule_planners(
     evidence_id: &str,
 ) -> Vec<RewriteApplicableRulePlanner> {
     let mut planners = Vec::new();
+    if query_kind == QUERY_JWT_TIME_VALIDITY {
+        let mut seen = std::collections::BTreeSet::new();
+        for candidate in facts["candidates"].as_array().into_iter().flatten() {
+            let header = candidate["header"].as_str().unwrap_or_default();
+            let algorithm = candidate["algorithm"].as_str().unwrap_or_default();
+            if !seen.insert((header, algorithm)) {
+                continue;
+            }
+            planners.push(RewriteApplicableRulePlanner {
+                kind: "request_rule".into(),
+                capability: "jwt_time_shift".into(),
+                evidence_id: evidence_id.into(),
+                command: super::super::action::command(
+                    target_root,
+                    vec![
+                        "rule".into(),
+                        "plan".into(),
+                        "--request-kind".into(),
+                        "jwt".into(),
+                        "--evidence-id".into(),
+                        evidence_id.into(),
+                        "--header".into(),
+                        header.into(),
+                        "--algorithm".into(),
+                        algorithm.into(),
+                        "--help".into(),
+                    ],
+                    Vec::new(),
+                ),
+            });
+        }
+        return planners;
+    }
+
     if query_kind == QUERY_IP_CAPTURE && facts["reported"]["origin"] == "http-response" {
         for candidate in facts["http_response_url_candidates"]
             .as_array()

@@ -219,6 +219,11 @@ headers without encryption; low-level callers must explicitly configure
 encrypt_request_headers = ["authorization"]
 ```
 
+JWT expiration between recording and Replay can be handled by an explicit
+`verification.yaml` request rule. See [JWT request rules](jwt-request-rules.md)
+for the coordinator evidence, plan/apply, target key sources, and replay-only
+revalidation flow. No new standard recording is required for this rule.
+
 Header-name matching is case-insensitive, so this protects `Authorization` as
 well. Managed preflight, recording, Comparison, and Replay create and reuse one
 project key at `.traffic-e2e/local/secrets/traffic-e2e-enc.sec`. The ignored

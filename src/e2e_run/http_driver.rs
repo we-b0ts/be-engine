@@ -25,6 +25,9 @@ type HttpClient = Client<HttpConnector, Full<Bytes>>;
 #[derive(Debug, Serialize)]
 struct ActualResponse {
     version: u8,
+    request_sent_at: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    request_rules: Vec<crate::request_rules::RequestRuleObservation>,
     status: u16,
     body: CapturedBody,
 }
@@ -119,6 +122,7 @@ pub(crate) async fn wait_until_ready(config: &ResolvedProjectConfig) -> Result<(
 }
 
 pub(super) async fn capture_case(
+    target_root: &Path,
     config: &ResolvedProjectConfig,
     request_path: &Path,
     actual_response_path: &Path,
@@ -133,6 +137,7 @@ pub(super) async fn capture_case(
         config.target_request_timeout,
         config.target_max_response_bytes,
     )
+    .with_request_rules(target_root, &config.replay_policy)?
     .send(request_path)
     .await?;
     let (encoding, data) = match std::str::from_utf8(&response.body) {
@@ -143,6 +148,8 @@ pub(super) async fn capture_case(
         actual_response_path,
         &ActualResponse {
             version: 1,
+            request_sent_at: response.request_sent_at,
+            request_rules: response.request_rules,
             status: response.status.as_u16(),
             body: CapturedBody {
                 encoding,
@@ -271,6 +278,8 @@ async fn capture_motan_case(
         actual_response_path,
         &ActualResponse {
             version: 1,
+            request_sent_at: chrono::Utc::now(),
+            request_rules: Vec::new(),
             status,
             body: CapturedBody {
                 encoding,

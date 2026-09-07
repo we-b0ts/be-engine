@@ -291,6 +291,10 @@ fn load_environment(target_root: &Path) -> Result<BTreeMap<String, String>> {
     read_environment(&path)
 }
 
+pub(crate) fn startup_environment_value(target_root: &Path, name: &str) -> Result<Option<String>> {
+    Ok(effective_environment(target_root)?.remove(name))
+}
+
 fn effective_environment(target_root: &Path) -> Result<BTreeMap<String, String>> {
     let mut values = source_environment(target_root)?;
     values.extend(load_environment(target_root)?);

@@ -26,7 +26,11 @@ pub(super) fn replace_process_output_rules(
     replace_root_section(original, "process_output_rules:", &rendered)
 }
 
-fn replace_root_section(original: &str, heading: &str, rendered: &str) -> Result<String> {
+pub(crate) fn replace_root_section(
+    original: &str,
+    heading: &str,
+    rendered: &str,
+) -> Result<String> {
     let mut offset = 0;
     let mut start = None;
     let mut end = original.len();
@@ -91,4 +95,8 @@ pub(super) fn render_process_output_rules(
     Ok(serde_yaml::to_string(&ProcessOutputRulesDocument {
         process_output_rules: rules,
     })?)
+}
+
+pub(crate) fn replace_request_rule_section(original: &str, section: &str) -> Result<String> {
+    replace_root_section(original, "request_rules:", section)
 }

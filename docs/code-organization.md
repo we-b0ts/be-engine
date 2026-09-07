@@ -252,3 +252,13 @@ explicit repository-wide audit.
   projections. Its `mysql` child owns query, parameter, connection, and response
   facts for diagnosis; it does not infer process ownership or implement rule
   planning. The shared summary/detail command flow also serves Redis and Memcached.
+
+- `request_rules` owns explicit inbound-request transformation policy and the
+  per-send runtime. Its `jwt` child owns compact HMAC JWT verification and
+  relative NumericDate translation; `keys` resolves private references to
+  target startup inputs, and `policy` projects/edits only `request_rules`.
+  `request_headers` remains encryption-only. `e2e_run/jwt_evidence` projects
+  bounded historical request-time facts; `rewrite/jwt_rule` owns their
+  coordinator plan/apply transaction and global revalidation. Its `discovery`
+  child projects existing startup inspection contracts without secret values.
+  These modules never make expected responses available to request execution.

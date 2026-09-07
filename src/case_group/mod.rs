@@ -175,6 +175,15 @@ pub(crate) fn resolve_published_case_dir(case_source: &Path, case_id: &str) -> R
         })
 }
 
+pub(crate) fn published_request_paths(case_source: &Path) -> Result<Vec<PathBuf>> {
+    let cases = discover_published_cases(case_source)?;
+    reject_duplicate_case_ids(&cases)?;
+    Ok(cases
+        .into_iter()
+        .map(|case| case.dir.join("request.json"))
+        .collect())
+}
+
 pub(crate) fn published_case_dependency_paths(case_source: &Path) -> Result<Vec<PathBuf>> {
     let case_source = fs::canonicalize(case_source)
         .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
