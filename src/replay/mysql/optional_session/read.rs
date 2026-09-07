@@ -205,7 +205,14 @@ fn expression(expr: &Expr, depth: usize) -> bool {
                 | BinaryOperator::Spaceship,
             right,
         } => expression(left, depth + 1) && expression(right, depth + 1),
-        Expr::IsNull(expr) | Expr::IsNotNull(expr) => expression(expr, depth + 1),
+        Expr::IsNull(expr)
+        | Expr::IsNotNull(expr)
+        | Expr::IsTrue(expr)
+        | Expr::IsNotTrue(expr)
+        | Expr::IsFalse(expr)
+        | Expr::IsNotFalse(expr)
+        | Expr::IsUnknown(expr)
+        | Expr::IsNotUnknown(expr) => expression(expr, depth + 1),
         Expr::Between {
             expr, low, high, ..
         } => {

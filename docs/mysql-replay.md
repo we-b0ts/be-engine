@@ -56,6 +56,9 @@ The independent SQL effect classifier uses sqlparser and caches ReadOnly,
 StateChange or Unknown for each SQL string during loading. It admits
 single-table SELECTs with direct columns, literals, wildcards, DISTINCT, pure
 boolean/arithmetic expressions, grouping, HAVING, ordering and pagination.
+Boolean tests (`IS [NOT] TRUE`, `IS [NOT] FALSE`, `IS [NOT] UNKNOWN`) preserve
+the read proof only when their operand is also proven pure; wrapping a call or
+subquery in such a test never makes it read-only.
 This proves absence of effects; it does not require those expressions to be
 supported by the query equivalence matcher. Writes, explicit BEGIN,
 locks, savepoints, calls/functions, subqueries and unsupported SQL interrupt

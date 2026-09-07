@@ -120,6 +120,80 @@ fn cleanup(sequence: u64) -> Value {
 }
 
 #[test]
+fn boolean_tests_preserve_read_proof_only_for_pure_operands() {
+    use super::read::{Effect, classify};
+    for suffix in [
+        "IS TRUE",
+        "IS NOT TRUE",
+        "IS FALSE",
+        "IS NOT FALSE",
+        "IS UNKNOWN",
+        "IS NOT UNKNOWN",
+    ] {
+        let sql =
+            format!("SELECT namespace.name FROM namespace WHERE namespace.is_active {suffix}");
+        assert_eq!(classify(&sql), Effect::ReadOnly, "{sql}");
+        for operand in [
+            "custom_function()",
+            "GET_LOCK('x',1)",
+            "@value",
+            "(SELECT active FROM other)",
+        ] {
+            let sql = format!("SELECT id FROM users WHERE {operand} {suffix}");
+            assert_ne!(classify(&sql), Effect::ReadOnly, "{sql}");
+        }
+    }
+}
+
+#[test]
+fn interleaved_long_session_boolean_reads_allow_both_connections_cleanup() {
+    // models/unified shape: main sequences 215..336, a short independent
+    // session interleaved after 224, and 37 IS TRUE queries in the main span.
+    // File offsets, MySQL exchange indices, and connection sequences differ.
+    let mut records = Vec::new();
+    for sequence in 215..335 {
+        if sequence == 225 {
+            let short = Uuid::new_v4();
+            for mut record in [read(2109, 0), cleanup(2110), exchange(2111, "ROLLBACK")] {
+                record["connection_id"] = json!(short);
+                records.push(record);
+            }
+        }
+        let mut record = read(
+            sequence,
+            if sequence == 215 {
+                0
+            } else if sequence == 217 {
+                33
+            } else {
+                1
+            },
+        );
+        if sequence == 216 || (227..=332).contains(&sequence) && (sequence - 227).is_multiple_of(3)
+        {
+            record["sql"] = json!(
+                "SELECT namespace.name AS namespace_name FROM namespace WHERE namespace.is_active IS true"
+            );
+        }
+        if sequence == 216 {
+            record["response"]["server_status"] = json!(33);
+        }
+        if sequence == 224 {
+            record["sql"] = json!(
+                "SELECT DISTINCT resource_members.entity_id FROM resource_members WHERE resource_members.resource_type='Namespace'"
+            );
+        }
+        records.push(record);
+    }
+    records.extend([cleanup(335), exchange(336, "ROLLBACK")]);
+    assert_eq!(records.len(), 125);
+    assert_eq!(optional(&records), [11, 12, 123, 124].into());
+    // Consuming other traffic cannot authorize cleanup of unknown effects.
+    records[1]["sql"] = json!("SELECT custom_function() FROM namespace");
+    assert_eq!(optional(&records), [11, 12, 124].into());
+}
+
+#[test]
 fn implicit_read_only_session_cleanup_is_optional_with_complete_status_evidence() {
     let records = [
         read(116, 0),
