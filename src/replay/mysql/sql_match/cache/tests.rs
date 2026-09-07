@@ -3,6 +3,7 @@ use crate::replay::mysql::{mysql_json, mysql_null};
 use serde_json::json;
 
 mod or_tests;
+mod truth_tests;
 mod tuple_tests;
 
 fn equal(a: &str, b: &str) -> bool {

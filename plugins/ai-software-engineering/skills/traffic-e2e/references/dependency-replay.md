@@ -80,6 +80,10 @@ an unchanged wildcard projection can use predicate compatibility as well.
 Complex predicates and positional dynamic parameter rules retain their existing
 constraints. Parsed templates and constant queries are cached within Replay;
 actual values and finite dependency availability are checked for each execution.
+Large OR groups with identical parameter templates use linear PREPARE matching
+within the SQL/work limits. Boolean tests `IS [NOT] TRUE/FALSE/UNKNOWN` retain
+their semantics and can compose with tuple IN reordering. Neither support
+requires target to change its normal SQL parameter binding.
 
 Flat tuple IN/NOT IN also permits whole-row reordering, including
 `(user_id,namespace,name) IN ((?,?,?),(?,?,?))` versus source text literals.

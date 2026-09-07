@@ -10,7 +10,9 @@ direction. Matching checks target host/port, database, username and case scope
 before SQL and parameter values. SQL tokens distinguish identifiers, literals,
 comments and placeholders. Literal case, whitespace, binary bytes, NULL and exact
 numeric values are preserved. PREPARE can obtain column metadata from a text
-recording. Physical tables, predicates, parameter values and fixed LIMIT values
+recording and flushes the complete metadata response over TLS before waiting
+for execution, including queries with hundreds of parameters.
+Physical tables, predicates, parameter values and fixed LIMIT values
 remain matching constraints; the projection compatibility below handles ordinary
 ORM and driver differences without requiring target code to mimic source SQL.
 
@@ -250,7 +252,10 @@ can also participate in proven read-only session cleanup described above.
 
 The supported conditions are direct fields and scalar values compared with
 `=`, `!=`, `<>`, `<`, `<=`, `>`, `>=`, `<=>`, `IS NULL`, `IS NOT NULL`,
-`BETWEEN`, and literal/parameter IN lists, combined by AND, OR and parentheses.
+`IS [NOT] TRUE`, `IS [NOT] FALSE`, `IS [NOT] UNKNOWN`, `BETWEEN`, and
+literal/parameter IN lists, combined by AND, OR and parentheses. Truth tests
+retain their own operators: `IS TRUE` does not become `= 1`, and `IS NOT TRUE`
+does not become `IS FALSE`. This support composes with reordered tuple IN lists.
 Only groups with the same operator are flattened and sorted, after parameter
 binding, without dropping duplicate conditions. Mixed AND/OR nesting and each
 branch's column/value pairing remain exact. For example, `(a=1 AND b=2) OR
@@ -282,8 +287,14 @@ results, parameter-independent metadata shapes and normalized constant queries.
 It holds at most 256 SQL strings and 1 MiB of original SQL text (the associated
 compiled representations consume additional bounded memory). A single SQL is
 limited to 64 KiB and 4096 tokens for this compatibility path, with bounded
-parenthesis/parser depth and at most 64 terms per AND/OR group for metadata
-assignment. Nested boolean metadata comparisons share a 16,384-pair work budget;
+parenthesis/parser depth. Flat AND/OR groups are traversed iteratively; their
+term count does not consume the predicate nesting budget. PREPARE uses a linear
+path when every branch has the same parameter template, including common fixed
+literals. Each recorded branch must satisfy that template and the branch counts
+must agree. This supports large parameterized OR groups (including 79 branches
+and empty strings) without quadratic assignment work. Heterogeneous partially
+bound groups retain the 64-term / 4096-pair assignment limit.
+Nested boolean metadata comparisons share a 16,384-pair work budget;
 excessively ambiguous forms fall back to strict matching. Execution compares
 normalized bound trees without that combinatorial assignment.
 Unsupported/oversized forms still try the existing matcher. Actual parameters

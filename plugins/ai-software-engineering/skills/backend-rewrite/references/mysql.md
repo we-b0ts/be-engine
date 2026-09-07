@@ -234,6 +234,10 @@ order or sort target inputs solely for Replay. Exact values, types, NULL and
 duplicate counts remain constrained, as do tables, ordering and pagination.
 Keep AND/OR nesting and each branch's field/value pairing; the engine does not
 expand boolean expressions or treat independently matching columns as a match.
+Large OR groups with a repeated parameter template use bounded linear metadata
+matching. Empty strings remain values, distinct from NULL. `IS [NOT] TRUE`,
+`IS [NOT] FALSE` and `IS [NOT] UNKNOWN` can accompany reordered conditions and
+tuple IN lists; retain these operators instead of rewriting them as `= 1/0`.
 This built-in compatibility composes with direct-column projection mapping;
 it requires no rule or new recording. Complex expressions and positional
 dynamic-parameter policies keep their existing boundaries. See

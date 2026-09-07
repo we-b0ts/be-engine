@@ -89,7 +89,7 @@ fn or_metadata_uses_injective_branch_matching_and_keeps_fixed_values() {
 }
 
 #[test]
-fn nested_boolean_metadata_work_is_bounded() {
+fn repeated_nested_boolean_templates_use_linear_metadata_matching() {
     // Each node is locally small, but their pairwise comparisons multiply.
     fn tree(depth: usize, leaf: &str) -> String {
         if depth == 0 {
@@ -105,10 +105,7 @@ fn nested_boolean_metadata_work_is_bounded() {
         .bind("COM_QUERY", None)
         .unwrap();
     let target = cache.get(&format!("SELECT id FROM tasks WHERE {}", tree(7, "?")));
-    assert!(
-        !target.metadata().unwrap().matches(&source, true),
-        "excessive ambiguity must fall back to strict matching"
-    );
+    assert!(target.metadata().unwrap().matches(&source, true));
     let params = vec![mysql_json("integer", json!(1)); 128];
     assert!(
         target
@@ -116,5 +113,95 @@ fn nested_boolean_metadata_work_is_bounded() {
             .unwrap()
             .matches(&source, false),
         "bound values need no combinatorial assignment"
+    );
+}
+
+#[test]
+fn large_or_templates_preserve_empty_null_duplicate_values_and_fixed_constraints() {
+    for size in [63, 64, 65, 79, 128, 256] {
+        let mut cache = SqlCache::default();
+        let branches = (0..size)
+            .map(|i| format!("(user_id={i} AND name='' AND namespace='default')"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let source = cache
+            .get(&format!("SELECT id FROM kinds WHERE {branches}"))
+            .bind("COM_QUERY", None)
+            .unwrap();
+        let target = cache.get(&format!(
+            "SELECT id FROM kinds WHERE {}",
+            vec!["(name=? AND namespace='default' AND user_id=?)"; size].join(" OR ")
+        ));
+        assert!(target.metadata().unwrap().matches(&source, true), "{size}");
+        let mut params = (0..size)
+            .rev()
+            .flat_map(|i| {
+                [
+                    mysql_json("string", json!("")),
+                    mysql_json("integer", json!(i)),
+                ]
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            target
+                .bind("COM_STMT_EXECUTE", Some(&params))
+                .unwrap()
+                .matches(&source, false),
+            "{size}"
+        );
+        params[0] = mysql_null();
+        assert!(
+            !target
+                .bind("COM_STMT_EXECUTE", Some(&params))
+                .unwrap()
+                .matches(&source, false),
+            "NULL is not an empty string"
+        );
+        params[0] = mysql_json("string", json!(""));
+        params[1] = params[3].clone();
+        assert!(
+            !target
+                .bind("COM_STMT_EXECUTE", Some(&params))
+                .unwrap()
+                .matches(&source, false),
+            "duplicate branch cannot replace another value"
+        );
+        let wrong = cache
+            .get(&format!(
+                "SELECT id FROM kinds WHERE {}",
+                branches.replacen("'default'", "'other'", 1)
+            ))
+            .bind("COM_QUERY", None)
+            .unwrap();
+        assert!(
+            !target.metadata().unwrap().matches(&wrong, true),
+            "fast path must check every fixed literal"
+        );
+    }
+}
+
+#[test]
+fn heterogeneous_partial_or_metadata_keeps_ambiguity_bounded() {
+    let mut cache = SqlCache::default();
+    let source = cache
+        .get(&format!(
+            "SELECT id FROM kinds WHERE {}",
+            (0..79)
+                .map(|i| format!("(a={i} AND b={i})"))
+                .collect::<Vec<_>>()
+                .join(" OR ")
+        ))
+        .bind("COM_QUERY", None)
+        .unwrap();
+    let target = cache.get(&format!(
+        "SELECT id FROM kinds WHERE {}",
+        (0..79)
+            .map(|i| format!("(a={i} AND b=?)"))
+            .collect::<Vec<_>>()
+            .join(" OR ")
+    ));
+    assert!(
+        !target.metadata().unwrap().matches(&source, true),
+        "heterogeneous partial templates keep the bounded assignment fallback"
     );
 }

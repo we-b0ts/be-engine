@@ -146,7 +146,19 @@ fn scan(sql: &str, mut span: impl FnMut(std::ops::Range<usize>)) -> Option<Vec<T
                     i += 1;
                 }
                 let word = &sql[start..i];
-                if word.eq_ignore_ascii_case("null") {
+                let after_is = out.last().is_some_and(|t| t.is("is"))
+                    || out.len() >= 2
+                        && out[out.len() - 2].is("is")
+                        && out[out.len() - 1].is("not");
+                if after_is
+                    && ["true", "false", "unknown"]
+                        .iter()
+                        .any(|v| word.eq_ignore_ascii_case(v))
+                {
+                    // IS TRUE/FALSE are grammar, not numeric operands. Keep
+                    // these keywords distinct from IS 1/0 and parameter slots.
+                    out.push(Token::Word(word.to_ascii_lowercase()));
+                } else if word.eq_ignore_ascii_case("null") {
                     out.push(Token::Null);
                 } else if word.eq_ignore_ascii_case("true") {
                     out.push(Token::Number("1".into()));
@@ -475,6 +487,30 @@ mod tests {
         assert_ne!(
             tokens("18446744073709551615"),
             tokens("18446744073709551614")
+        );
+    }
+
+    #[test]
+    fn truth_tests_keep_keywords_while_boolean_values_keep_numeric_identity() {
+        for truth in ["TRUE", "FALSE", "UNKNOWN"] {
+            for not in ["", "NOT "] {
+                let sql = format!("SELECT id FROM t WHERE active IS {not}{truth}");
+                assert_eq!(normalize(&sql), normalize(&sql.to_ascii_lowercase()));
+                assert!(
+                    tokens(&sql)
+                        .unwrap()
+                        .last()
+                        .unwrap()
+                        .is(&truth.to_ascii_lowercase())
+                );
+            }
+        }
+        assert_ne!(tokens("active IS TRUE"), tokens("active IS 1"));
+        assert_ne!(tokens("active IS FALSE"), tokens("active IS 0"));
+        assert_eq!(tokens("active = TRUE"), tokens("active = 1"));
+        assert_eq!(
+            tokens("active IS /* comment */ NOT FALSE"),
+            tokens("active IS NOT false")
         );
     }
 }
