@@ -1209,6 +1209,14 @@ before executing evidence, and each worker owns evidence, diagnosis, target
 code, and local tests for only its API. With multiple APIs, the orchestrator
 uses `backend-rewrite inventory` to choose an exact pending item and continues
 with `next --api` after dispatch rather than waiting for the current worker.
+Worker dispatch follows `spawn/resume -> commands.confirm_worker -> returned
+action`. Implementation summaries identify the pending confirmation, and a
+successful confirmation supplies `commands.advance` when another item can run.
+After side work or an interruption, and before waiting or ending a turn, the
+main orchestrator reads canonical unscoped `status` to recover this action.
+Execute the supplied command directly and retain its complete action response;
+live operations retain their returned status command and polling delay. This
+flow uses the existing action schema and command roles.
 An enabled `project.process_outputs` entry records the supported metrics
 profile during each API comparison:
 

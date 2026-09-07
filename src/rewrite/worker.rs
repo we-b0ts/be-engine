@@ -52,21 +52,23 @@ pub(super) fn implementation_action(
         .cloned()
         .expect("implementation phase requires an issue");
     let worker = dispatch_view(state, scope.clone(), requested_scope.clone());
-    let requested_label = requested_scope.as_ref().map(RewriteWorkScope::label);
-    let summary = match (worker.state, requested_label) {
-        (RewriteWorkerDispatchState::DispatchRequired, Some(requested)) => format!(
-            "dispatch and confirm the dedicated subagent for {} before selecting {requested}",
-            scope.label()
-        ),
-        (RewriteWorkerDispatchState::ResumeRequired, Some(requested)) => format!(
-            "resume and confirm the bound subagent for {} before selecting {requested}",
-            scope.label()
-        ),
-        (_, Some(requested)) => format!(
-            "dedicated subagent confirmation for {} is required before selecting {requested}",
-            scope.label()
-        ),
-        (_, None) => issue.summary.clone(),
+    let summary = match worker.state {
+        RewriteWorkerDispatchState::Confirmed => issue.summary.clone(),
+        dispatch_state => {
+            let operation = match dispatch_state {
+                RewriteWorkerDispatchState::DispatchRequired => "dispatch the dedicated subagent",
+                _ => "resume the bound subagent",
+            };
+            let selection = requested_scope
+                .as_ref()
+                .map(|requested| format!(" before selecting {}", requested.label()))
+                .unwrap_or_default();
+            format!(
+                "{operation} for {}; execute commands.confirm_worker for this dispatch{selection}, then follow the returned action. {}",
+                scope.label(),
+                issue.summary
+            )
+        }
     };
     let confirm_worker = confirmation_command(target_root, &worker);
     let (evidence_commands, acceptance) = match &scope {
@@ -95,7 +97,7 @@ pub(super) fn state_action(target_root: &std::path::Path, state: &RewriteState) 
         if let Some(pending_api) = inventory::next_pending_api_for_concurrent_work(state) {
             return RewriteAction::AdvanceRequired {
                 summary: format!(
-                    "dedicated subagent for {} is confirmed; advance pending API {pending_api} before waiting",
+                    "dedicated subagent for {} is confirmed; execute commands.advance to continue with pending API {pending_api}",
                     scope.label()
                 ),
                 command: action::next_command_for_api(target_root, pending_api),
@@ -104,7 +106,7 @@ pub(super) fn state_action(target_root: &std::path::Path, state: &RewriteState) 
         if let Some(id) = process_outputs::next_eligible_id(state) {
             return RewriteAction::AdvanceRequired {
                 summary: format!(
-                    "dedicated subagent for {} is confirmed; verify process output {id} before waiting",
+                    "dedicated subagent for {} is confirmed; execute commands.advance to verify process output {id}",
                     scope.label()
                 ),
                 command: action::next_command_for_process_output(target_root, id),

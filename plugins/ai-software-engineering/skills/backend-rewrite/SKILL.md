@@ -148,9 +148,19 @@ default; use global `--pretty` only for interactive human inspection. The sole
 documented argv extension is the target-quality exception in
 [workflow.md](references/workflow.md).
 
+The main orchestrator completes each worker dispatch as one scheduling cycle:
+spawn/resume the worker, execute the current `commands.confirm_worker`, then
+follow the returned action. After a user interruption, worker handoff,
+integration, or other side work, and before waiting or ending a turn, reenter
+the [post-dispatch scheduler](references/implementation-worker-coordination.md#post-dispatch-scheduler)
+through `backend-rewrite status`. For a live operation, honor its polling delay
+and exact returned status command. Execute each returned command directly and
+retain the complete action so its next command remains available.
+
 Use `backend-rewrite status [--api '<METHOD pattern>' | --process-output <id>]`
-when an action response was lost or a session resumes. Never infer state from
-artifact recency. Never
+when an action response was lost or a session resumes. Main scheduling uses the
+canonical coordinator's unscoped status; assigned workers use their scoped
+status. Never infer state from artifact recency. Never
 mutate coordinator runtime files. Use action, status, and evidence APIs as the
 primary interface; report an insufficient API surface as a coordinator gap.
 Read-only runtime inspection is allowed when needed to diagnose such a gap,
