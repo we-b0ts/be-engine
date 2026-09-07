@@ -14,7 +14,7 @@ workflow. Load action-specific references only through the direct routing in
 
 ## Session Start And Resume
 
-Start or resume an initialized workflow from the canonical target repository:
+Start the workflow from the initialized canonical target repository:
 
 ```bash
 backend-rewrite next
@@ -24,8 +24,17 @@ Before the first standard recording, add `--api '<METHOD path-or-pattern>'`
 only when the caller explicitly requests a single-API recording. After the
 coordinator publishes its stable inventory, select work with the exact
 inventory method/pattern. If an action response was lost or the session is
-resuming, recover it with scoped read-only `status`; never infer workflow state
-from artifact recency.
+resuming, recover the main scheduler's current action with unscoped read-only
+`status`; scoped status serves work-item inspection. Execute the returned
+action's command to advance the workflow.
+
+After handling a user interruption, worker handoff, integration, or other side
+work, and before waiting or ending the current turn, return to the
+[post-dispatch scheduler](implementation-worker-coordination.md#post-dispatch-scheduler).
+Status restores the next action, including a pending dispatch confirmation or
+post-confirmation advance. Keep the complete response and execute its supplied
+command directly; each response determines the following step. For a live
+operation, preserve the returned status command and its polling interval.
 
 At the start of every main-orchestrator session, read
 `.traffic-e2e/local/block.md` when it exists. Project initialization may create
@@ -165,6 +174,8 @@ require progress commits.
 Stop before evidence, artifact, source, or target analysis. Follow
 [implementation-worker-coordination.md](implementation-worker-coordination.md)
 to create or resume the work item's dedicated worker and confirm the dispatch.
+Immediately consume the confirmation's returned action; an `advance_required`
+continues through `commands.advance` while the worker diagnoses its work item.
 The assigned worker follows [problem-diagnosis.md](problem-diagnosis.md) for
 diagnosis and returns the tested handoff described in the coordination guide.
 The main Agent integrates the handoff and executes its unchanged acceptance

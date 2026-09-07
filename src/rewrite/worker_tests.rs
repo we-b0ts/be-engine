@@ -112,6 +112,12 @@ fn process_output_issue_dispatches_an_independent_worker() {
         action.pointer("/commands/evidence"),
         Some(&serde_json::json!([]))
     );
+    assert!(
+        action["summary"]
+            .as_str()
+            .unwrap()
+            .contains("commands.confirm_worker")
+    );
 }
 
 #[test]
@@ -500,6 +506,129 @@ fn status_reconstructs_post_dispatch_pending_api_advance() {
     assert_eq!(
         status.pointer("/action/commands/advance/argv/5"),
         Some(&serde_json::json!("POST /other"))
+    );
+}
+
+#[test]
+fn status_recovers_confirmation_and_advance_across_repeated_worker_dispatches() {
+    let target = configured_target();
+    let store = RewriteStore::new(target.path()).unwrap();
+    let mut state = implementation_state_with_inventory(true);
+    state.target_fingerprint = Some(fingerprint::repository_fingerprint(target.path()).unwrap());
+    store.save(&state).unwrap();
+    let status = || {
+        serde_json::to_value(
+            super::super::status_rewrite(RewriteContext {
+                target_root: target.path().to_path_buf(),
+            })
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    let confirm_dispatch = |dispatch_id: &str| {
+        confirm(RewriteWorkerConfirmOptions {
+            target_root: target.path().to_path_buf(),
+            dispatch_id: dispatch_id.into(),
+            agent_handle: "persistent-worker".into(),
+            agent_name: None,
+        })
+    };
+
+    let initial = status();
+    assert_eq!(initial["action"]["kind"], "implementation_required");
+    assert!(
+        initial["action"]["summary"]
+            .as_str()
+            .unwrap()
+            .starts_with("dispatch the dedicated subagent")
+    );
+    assert!(
+        initial["action"]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("commands.confirm_worker")
+    );
+    assert_eq!(
+        initial["action"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["commands", "details", "kind", "summary"]
+    );
+    let first_dispatch = initial["action"]["commands"]["confirm_worker"]["argv"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap();
+    let confirmed = serde_json::to_value(confirm_dispatch(first_dispatch).unwrap()).unwrap();
+    assert_eq!(confirmed["action"]["kind"], "advance_required");
+
+    // A later failed acceptance keeps the worker and creates a new dispatch.
+    let mut state = store.load().unwrap().unwrap();
+    let binding = binding_id(&state);
+    state.active_issue = Some(issue("issue-later", 2, "target-b"));
+    state.bump();
+    store.save(&state).unwrap();
+    let resumed = status();
+    assert_eq!(
+        resumed["action"]["details"]["worker"]["state"],
+        "resume_required"
+    );
+    assert_eq!(
+        resumed["action"]["details"]["worker"]["binding_id"],
+        binding
+    );
+    assert!(
+        resumed["action"]["summary"]
+            .as_str()
+            .unwrap()
+            .starts_with("resume the bound subagent")
+    );
+    assert!(
+        resumed["action"]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("commands.confirm_worker")
+    );
+    assert!(
+        confirm_dispatch(first_dispatch)
+            .unwrap_err()
+            .to_string()
+            .contains("stale")
+    );
+    let next_dispatch = resumed["action"]["commands"]["confirm_worker"]["argv"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap();
+    assert_ne!(first_dispatch, next_dispatch);
+    let confirmed = serde_json::to_value(confirm_dispatch(next_dispatch).unwrap()).unwrap();
+
+    // If that response is lost during side work, status restores its command.
+    let persisted = serde_json::to_value(store.load().unwrap().unwrap()).unwrap();
+    let recovered = status();
+    assert_eq!(confirmed["action"]["kind"], "advance_required");
+    assert_eq!(recovered["action"], confirmed["action"]);
+    assert_eq!(
+        recovered["action"]["commands"]["advance"]["argv"],
+        serde_json::json!([
+            "backend-rewrite",
+            "--target-root",
+            target.path(),
+            "next",
+            "--api",
+            "POST /other"
+        ])
+    );
+    assert_eq!(
+        serde_json::to_value(store.load().unwrap().unwrap()).unwrap(),
+        persisted
     );
 }
 

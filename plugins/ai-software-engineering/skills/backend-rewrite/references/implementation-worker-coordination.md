@@ -90,6 +90,15 @@ or worktree; it loses the dedicated worker's accumulated context.
 Confirm every reactivation with the same handle through the new action's
 `commands.confirm_worker` before any later `next`.
 
+The runtime acknowledges that the worker has started or resumed; the
+coordinator acknowledges delivery of the current dispatch through
+`commands.confirm_worker`. Complete both steps and consume the confirmation's
+returned action while the worker begins its analysis. A later failed acceptance
+keeps the same worker binding and requires confirmation of the new dispatch.
+After an interruption, recover with `status`, ensure the worker has received
+the current action, and execute its current confirmation command. Refresh a
+stale dispatch ID through status while retaining the same worker.
+
 ## Worktrees And Commands
 
 Use the absolute canonical coordinator `cwd` returned by the action as
@@ -131,8 +140,8 @@ canonical target root before integrated quality and acceptance.
 
 ## Post-Dispatch Scheduler
 
-After a worker starts, inspect the current inventory instead of waiting for the
-worker by default:
+After a worker starts or resumes, confirm its current dispatch and consume the
+complete confirmation response:
 
 1. If confirmation or resumed `status` returns `advance_required`, execute its
    exact `commands.advance` argv before waiting. The coordinator selects a
@@ -140,8 +149,8 @@ worker by default:
    is lost.
 2. Run only the returned serialized Replay/comparison transition and wait for
    that operation when its action requires polling.
-3. If the selected API reaches `implementation_required`, dispatch its worker
-   immediately and repeat from step 1.
+3. If the selected API reaches `implementation_required`, dispatch or resume its
+   worker, execute its current `commands.confirm_worker`, and repeat from step 1.
 4. If the coordinator returns `wait_required`, wait at least
    `retry_after_seconds` and execute only its returned status argv.
 5. After every API work item has been traversed, dispatch returned
@@ -149,10 +158,23 @@ worker by default:
 6. Wait for worker handoffs only when no pending API or process-output item can
    advance.
 
-Do not call `TaskOutput`, join, or another worker-wait mechanism immediately
-after dispatch while a pending inventory item can advance. Do not run an
-unscoped `backend-rewrite next` and interpret the already selected API's action
-as proof that other pending APIs are blocked.
+Reenter this scheduler after a user interruption, worker notification,
+integration, or other side work, and before waiting or ending the current turn.
+Read the canonical coordinator's unscoped `status` to recover the current action;
+for a live operation, use its exact returned status command after the polling
+delay. Continue a returned `advance_required` through `commands.advance`.
+Resolve `worker_dispatch_unconfirmed` by delivering the current action to its
+worker and executing `commands.confirm_worker`. Once the workers are confirmed
+and other work has reached its current scheduling limit, integrate ready
+handoffs or wait for outstanding ones. A new integrated handoff is the trigger
+for that work item's acceptance.
+
+The coordinator supplies the scheduling loop through successive actions. Run
+each returned command directly with its supplied `cwd` and `argv`, and retain
+the complete `kind`, `summary`, `details`, and `commands`. Choose the next
+command from that response: `confirm_worker` completes dispatch delivery,
+`advance` continues scheduling, and `status` observes a live operation after
+its delay. API selection follows the returned advance command.
 
 For a single-API inventory, dispatch remains mandatory; with no other pending
 API, the orchestrator may wait for that worker. For multiple APIs, expensive AI
