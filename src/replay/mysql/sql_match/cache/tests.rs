@@ -2,6 +2,8 @@ use super::*;
 use crate::replay::mysql::{mysql_json, mysql_null};
 use serde_json::json;
 
+mod or_tests;
+mod truth_tests;
 mod tuple_tests;
 
 fn equal(a: &str, b: &str) -> bool {
@@ -79,7 +81,7 @@ fn mysql_predicates_fail_closed_for_unproven_forms() {
         "SELECT id FROM tasks WHERE id IN (1,'2')",
         "SELECT id FROM tasks WHERE id IN (1,RAND())",
         "SELECT id FROM tasks WHERE id IN (SELECT id FROM other)",
-        "SELECT id FROM tasks WHERE id=1 OR uid=2",
+        "SELECT id FROM tasks WHERE id=1 OR custom_function()=2",
         "SELECT id FROM tasks WHERE @x:=1",
         "SELECT id FROM tasks WHERE 1/id>0 AND id<>0",
         "SELECT id FROM tasks WHERE id IN ()",

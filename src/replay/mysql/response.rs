@@ -137,7 +137,12 @@ pub(in crate::replay) async fn write_stmt_prepare_ok(
         )
         .await?;
     }
-    Ok(())
+    // TLS may accept writes into its buffer without sending every packet.
+    // Deliver the complete metadata response before waiting for EXECUTE.
+    stream
+        .flush()
+        .await
+        .context("failed to flush MySQL prepare metadata")
 }
 
 pub(in crate::replay) async fn write_resultset(

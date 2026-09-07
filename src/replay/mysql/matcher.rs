@@ -448,9 +448,13 @@ impl ReplayState {
             .iter()
             .enumerate()
             .filter(|(_, exchange)| {
-                let optional = exchange
-                    .optional_session
-                    .filter(|_| exchange.status.is_available());
+                let optional = exchange.optional_session.filter(|kind| {
+                    // Successful cleanup stays optional during delivery.
+                    // Failed delivery still reports an error and stays required.
+                    exchange.status.is_available()
+                        || *kind == OptionalSessionExchange::Rollback
+                            && exchange.status == ReplayExchangeStatus::Responding
+                });
                 exchange.source == source && !exchange.status.is_consumed() && optional == allowed
             })
             .map(|(index, exchange)| RecordedExchangeSummary {

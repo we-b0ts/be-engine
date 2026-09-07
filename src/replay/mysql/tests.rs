@@ -7,6 +7,36 @@ mod autocommit_tests;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 #[tokio::test]
+async fn prepare_delivers_complete_metadata_before_waiting_for_execute() {
+    let (writer, mut reader) = tokio::io::duplex(65536);
+    let mut writer = tokio::io::BufWriter::with_capacity(32768, writer);
+    let metadata = StatementMetadata {
+        param_count: 238,
+        columns: serde_json::from_value(serde_json::json!([
+            {"name":"id", "family":"integer", "sql_type":"BIGINT"}
+        ]))
+        .unwrap(),
+    };
+    write_stmt_prepare_ok(&mut writer, 1, &metadata, SERVER_STATUS_AUTOCOMMIT)
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        // PREPARE OK, 238 parameters, EOF, one result column, EOF.
+        for sequence_id in 1..=242 {
+            let packet = read_packet(&mut reader).await.unwrap().unwrap();
+            assert_eq!(packet.sequence_id, sequence_id);
+            if sequence_id == 1 {
+                assert_eq!(packet.payload[0], 0x00);
+            } else if sequence_id == 240 || sequence_id == 242 {
+                assert_eq!(packet.payload[0], 0xfe);
+            }
+        }
+    })
+    .await
+    .expect("PREPARE metadata must reach the client without another command");
+}
+
+#[tokio::test]
 async fn accepts_tls_login_with_replay_ca() {
     let temp = tempdir().unwrap();
     let case_dir = temp.path().join("case-id");

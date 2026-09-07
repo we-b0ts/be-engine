@@ -2,7 +2,7 @@
 //! admits only pure predicates and retains the rest of each query verbatim.
 use crate::mysql::sql::{Token, render};
 use sqlparser::{
-    ast::{BinaryOperator, Expr, SelectItem, SetExpr, Statement, TableFactor, Value},
+    ast::{BinaryOperator, Distinct, Expr, SelectItem, SetExpr, Statement, TableFactor, Value},
     dialect::MySqlDialect,
     parser::Parser,
     tokenizer::Token as ParserToken,
@@ -29,9 +29,18 @@ enum Operand {
 enum Predicate {
     Compare(Operand, BinaryOperator, Operand),
     IsNull(Operand, bool),
+    TruthTest(Operand, TruthValue, bool),
     Between(Operand, bool, Operand, Operand),
     In(Operand, bool, Vec<Operand>),
     And(Vec<Predicate>),
+    Or(Vec<Predicate>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum TruthValue {
+    True,
+    False,
+    Unknown,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -89,8 +98,8 @@ impl Template {
         let expr = if whole_query {
             if tokens.iter().any(|t| {
                 [
-                    "distinct", "group", "having", "union", "join", "into", "for", "lock", "@",
-                    "@@", ":=", "||", "&&",
+                    "group", "having", "union", "join", "into", "for", "lock", "@", "@@", ":=",
+                    "||", "&&",
                 ]
                 .iter()
                 .any(|s| t.is(s))
@@ -116,6 +125,18 @@ impl Template {
             let SetExpr::Select(select) = *query.body else {
                 return None;
             };
+            if let Some(distinct) = &select.distinct
+                && !matches!(distinct, Distinct::All)
+                && (!matches!(distinct, Distinct::Distinct)
+                    || select.projection.iter().any(|item| match item {
+                        SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => {
+                            !matches!(expr, Expr::Identifier(_) | Expr::CompoundIdentifier(_))
+                        }
+                        _ => true,
+                    }))
+            {
+                return None;
+            }
             if select.from.len() != 1
                 || !select.from[0].joins.is_empty()
                 || !matches!(
@@ -204,17 +225,32 @@ fn predicate(expr: &Expr, depth: usize) -> Option<Predicate> {
         Expr::Nested(expr) => return predicate(expr, depth + 1),
         Expr::BinaryOp {
             left,
-            op: BinaryOperator::And,
+            op: op @ (BinaryOperator::And | BinaryOperator::Or),
             right,
         } => {
             let mut terms = Vec::new();
-            for expr in [left, right] {
-                match predicate(expr, depth + 1)? {
-                    Predicate::And(children) => terms.extend(children),
-                    term => terms.push(term),
+            // sqlparser represents a flat group as a left-associated tree.
+            // Count nesting of different operators, not the number of terms.
+            let mut pending = vec![right.as_ref(), left.as_ref()];
+            while let Some(expr) = pending.pop() {
+                match expr {
+                    Expr::Nested(expr) => pending.push(expr),
+                    Expr::BinaryOp {
+                        left,
+                        op: child_op,
+                        right,
+                    } if child_op == op => {
+                        pending.push(right);
+                        pending.push(left);
+                    }
+                    expr => terms.push(predicate(expr, depth + 1)?),
                 }
             }
-            Predicate::And(terms)
+            if *op == BinaryOperator::And {
+                Predicate::And(terms)
+            } else {
+                Predicate::Or(terms)
+            }
         }
         Expr::BinaryOp { left, op, right }
             if matches!(
@@ -232,6 +268,12 @@ fn predicate(expr: &Expr, depth: usize) -> Option<Predicate> {
         }
         Expr::IsNull(expr) => Predicate::IsNull(operand(expr)?, false),
         Expr::IsNotNull(expr) => Predicate::IsNull(operand(expr)?, true),
+        Expr::IsTrue(expr) => Predicate::TruthTest(operand(expr)?, TruthValue::True, false),
+        Expr::IsNotTrue(expr) => Predicate::TruthTest(operand(expr)?, TruthValue::True, true),
+        Expr::IsFalse(expr) => Predicate::TruthTest(operand(expr)?, TruthValue::False, false),
+        Expr::IsNotFalse(expr) => Predicate::TruthTest(operand(expr)?, TruthValue::False, true),
+        Expr::IsUnknown(expr) => Predicate::TruthTest(operand(expr)?, TruthValue::Unknown, false),
+        Expr::IsNotUnknown(expr) => Predicate::TruthTest(operand(expr)?, TruthValue::Unknown, true),
         Expr::Between {
             expr,
             negated,
@@ -291,29 +333,43 @@ impl Predicate {
         Some(match self {
             Self::Compare(a, op, b) => Self::Compare(a.bind(tokens)?, op.clone(), b.bind(tokens)?),
             Self::IsNull(a, not) => Self::IsNull(a.bind(tokens)?, *not),
+            Self::TruthTest(a, truth, not) => Self::TruthTest(a.bind(tokens)?, *truth, *not),
             Self::Between(a, not, b, c) => {
                 Self::Between(a.bind(tokens)?, *not, b.bind(tokens)?, c.bind(tokens)?)
             }
             Self::In(a, not, values) => {
                 Self::In(a.bind(tokens)?, *not, in_list::bind(values, tokens)?)
             }
-            Self::And(terms) => {
+            Self::And(terms) | Self::Or(terms) => {
                 let mut terms = terms
                     .iter()
                     .map(|v| v.bind(tokens))
                     .collect::<Option<Vec<_>>>()?;
                 terms.sort();
-                Self::And(terms)
+                if matches!(self, Self::And(_)) {
+                    Self::And(terms)
+                } else {
+                    Self::Or(terms)
+                }
             }
         })
     }
 
-    fn metadata_matches(&self, recorded: &Self) -> bool {
+    fn metadata_matches(&self, recorded: &Self, budget: &mut usize) -> bool {
+        // Alternating AND/OR trees can multiply candidate comparisons across
+        // levels. Share a bound across the whole PREPARE comparison.
+        let Some(remaining) = budget.checked_sub(1) else {
+            return false;
+        };
+        *budget = remaining;
         match (self, recorded) {
             (Self::Compare(a, op, b), Self::Compare(x, rop, y)) => {
                 op == rop && a.metadata_matches(x) && b.metadata_matches(y)
             }
             (Self::IsNull(a, not), Self::IsNull(x, rnot)) => not == rnot && a.metadata_matches(x),
+            (Self::TruthTest(a, truth, not), Self::TruthTest(x, rtruth, rnot)) => {
+                truth == rtruth && not == rnot && a.metadata_matches(x)
+            }
             (Self::Between(a, not, b, c), Self::Between(x, rnot, y, z)) => {
                 not == rnot
                     && a.metadata_matches(x)
@@ -323,9 +379,23 @@ impl Predicate {
             (Self::In(a, not, values), Self::In(x, rnot, recorded)) => {
                 not == rnot && a.metadata_matches(x) && in_list::metadata_matches(values, recorded)
             }
-            (Self::And(terms), Self::And(recorded)) => {
-                terms.len() == recorded.len()
-                    && injective_metadata(terms, recorded, Self::metadata_matches)
+            (Self::And(terms), Self::And(recorded)) | (Self::Or(terms), Self::Or(recorded)) => {
+                if terms.len() != recorded.len() {
+                    return false;
+                }
+                if let Some(template) = terms.first()
+                    && terms.iter().all(|term| term == template)
+                {
+                    // Identical parameter templates have identical candidate
+                    // sets. Every source branch must satisfy that template;
+                    // equal cardinality then proves a one-to-one assignment.
+                    // Preserve fixed literals and duplicates without N² work.
+                    recorded
+                        .iter()
+                        .all(|r| template.metadata_matches(r, budget))
+                } else {
+                    injective_metadata(terms, recorded, |a, r| a.metadata_matches(r, budget))
+                }
             }
             _ => false,
         }
@@ -341,15 +411,23 @@ impl Key {
                     .zip(recorded)
                     .all(|(a, r)| a == r || *a == Token::Placeholder && r.is_value())
         }
+        let mut budget = 16_384;
         same(&self.prefix, &recorded.prefix)
             && same(&self.suffix, &recorded.suffix)
-            && self.predicate.metadata_matches(&recorded.predicate)
+            && self
+                .predicate
+                .metadata_matches(&recorded.predicate, &mut budget)
+            && budget > 0
     }
 }
 
 // PREPARE has no actual values. Repeated fields and partially bound IN lists
 // require a one-to-one assignment, not a greedy match or SQL-shape wildcard.
-fn injective_metadata<T>(actual: &[T], recorded: &[T], matches: impl Fn(&T, &T) -> bool) -> bool {
+fn injective_metadata<T>(
+    actual: &[T],
+    recorded: &[T],
+    mut matches: impl FnMut(&T, &T) -> bool,
+) -> bool {
     if actual.len() > recorded.len()
         || actual.len() > 64
         || actual.len().saturating_mul(recorded.len()) > 4096

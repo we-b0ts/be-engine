@@ -119,6 +119,11 @@ fn column_mapping(
     recorded: &DirectSelect,
     actual: &DirectSelect,
 ) -> Option<Mapping> {
+    if recorded.distinct != actual.distinct
+        || recorded.distinct && recorded.columns.len() != actual.columns.len()
+    {
+        return None;
+    }
     if !complete_resultset(record) {
         return None;
     }
@@ -188,6 +193,15 @@ fn column_mapping(
         wire.table_alias = column.name.as_ref().and(actual.table_alias.clone());
         indices.push(index);
         columns.push(wire);
+    }
+    // Unlike ordinary SELECT projection, dropping or duplicating a DISTINCT
+    // column changes the tuple on which the database deduplicates rows.
+    if recorded.distinct {
+        let mut covered = indices.clone();
+        covered.sort_unstable();
+        if covered != (0..recorded.columns.len()).collect::<Vec<_>>() {
+            return None;
+        }
     }
     Some(Mapping { indices, columns })
 }

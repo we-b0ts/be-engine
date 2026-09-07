@@ -137,6 +137,16 @@ request.
 
 ### `input_required`
 
+When `details.reason=configuration_commit_required`, the main Agent reviews
+and commits exactly the listed persistent configuration changes in the canonical
+target worktree, then repeats the original `next` command with the same scope
+and inputs. This gate covers `project.yaml`, `source-traffic-policy.yaml`, and
+`verification.yaml`, including staged and new files. Staging is not sufficient.
+`status` reports this requirement without writing files; `next` stops before
+dispatch or verification, including when preparation creates a policy change.
+An active operation keeps its existing wait/recovery action. Routine generated
+`progress.yaml` updates retain the final-delivery commit flow below.
+
 When a selected dynamic API pattern lacks a proven source registration route,
 provide only the requested `--source-route` through the returned command. Do
 not infer additional input or change the shared recording scope.

@@ -600,6 +600,7 @@ pub enum RewriteInputRequiredReason {
     WorkflowNotInitialized,
     SourceRouteRequired,
     VerificationProgressCommitRequired,
+    ConfigurationCommitRequired,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

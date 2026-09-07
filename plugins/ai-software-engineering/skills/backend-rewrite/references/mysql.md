@@ -229,13 +229,29 @@ element; generate the same number of SQL placeholders.
 Replay supports source text SQL with inline literals and target prepared SQL
 with `?` parameters. For ordinary single-table SELECTs it compares IN/NOT IN
 lists without requiring the same value order, and accepts reordered pure AND
-conditions after binding actual values. Do not reproduce source set iteration
+conditions and OR branches after binding actual values. Do not reproduce source set iteration
 order or sort target inputs solely for Replay. Exact values, types, NULL and
 duplicate counts remain constrained, as do tables, ordering and pagination.
+Keep AND/OR nesting and each branch's field/value pairing; the engine does not
+expand boolean expressions or treat independently matching columns as a match.
+Large OR groups with a repeated parameter template use bounded linear metadata
+matching. Empty strings remain values, distinct from NULL. `IS [NOT] TRUE`,
+`IS [NOT] FALSE` and `IS [NOT] UNKNOWN` can accompany reordered conditions and
+tuple IN lists; retain these operators instead of rewriting them as `= 1/0`.
+The independent read-effect check also handles derived tables, UNION, ordinary
+joins, EXISTS and pure ROW_NUMBER windows, including long OR chains. Successful
+matching alone never makes unknown effects safe to omit at session cleanup.
 This built-in compatibility composes with direct-column projection mapping;
 it requires no rule or new recording. Complex expressions and positional
 dynamic-parameter policies keep their existing boundaries. See
 [MySQL predicate compatibility](../../../../../docs/mysql-replay.md#select-predicate-order-compatibility).
+
+Single-table `SELECT DISTINCT` also supports normal prepared statements, bound
+parameters, column/table aliases, table qualifiers, and reordered pure AND
+conditions and OR branches. Both sides must retain DISTINCT and the same complete set of direct
+output columns. Do not force COM_QUERY, inline dynamic values, or reproduce
+SQLAlchemy column labels to work around Replay. Column removal, aggregates,
+grouping, and other complex query forms retain their existing constraints.
 
 Flat tuple IN/NOT IN supports whole-tuple reordering for forms such as
 `(user_id,namespace,name) IN ((?,?,?),(?,?,?))`, including source SQL built from

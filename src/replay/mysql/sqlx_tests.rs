@@ -10,6 +10,9 @@ use std::time::Duration;
 use tempfile::tempdir;
 
 mod autocommit_tests;
+mod distinct_tests;
+mod large_predicate_tests;
+mod or_tests;
 mod predicate_tests;
 mod projection_tests;
 mod rollback_tests;

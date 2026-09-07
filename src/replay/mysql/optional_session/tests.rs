@@ -1,6 +1,8 @@
 use super::*;
 use serde_json::json;
 
+mod complex_read_tests;
+
 fn exchange(sequence: u64, sql: &str) -> Value {
     json!({"event_type":"mysql_exchange", "connection_id":Uuid::nil(),
         "query_sequence":sequence, "target_host":"db.internal", "target_port":3306,
@@ -120,6 +122,80 @@ fn cleanup(sequence: u64) -> Value {
 }
 
 #[test]
+fn boolean_tests_preserve_read_proof_only_for_pure_operands() {
+    use super::read::{Effect, classify};
+    for suffix in [
+        "IS TRUE",
+        "IS NOT TRUE",
+        "IS FALSE",
+        "IS NOT FALSE",
+        "IS UNKNOWN",
+        "IS NOT UNKNOWN",
+    ] {
+        let sql =
+            format!("SELECT namespace.name FROM namespace WHERE namespace.is_active {suffix}");
+        assert_eq!(classify(&sql), Effect::ReadOnly, "{sql}");
+        for operand in [
+            "custom_function()",
+            "GET_LOCK('x',1)",
+            "@value",
+            "(SELECT active FROM other)",
+        ] {
+            let sql = format!("SELECT id FROM users WHERE {operand} {suffix}");
+            assert_ne!(classify(&sql), Effect::ReadOnly, "{sql}");
+        }
+    }
+}
+
+#[test]
+fn interleaved_long_session_boolean_reads_allow_both_connections_cleanup() {
+    // models/unified shape: main sequences 215..336, a short independent
+    // session interleaved after 224, and 37 IS TRUE queries in the main span.
+    // File offsets, MySQL exchange indices, and connection sequences differ.
+    let mut records = Vec::new();
+    for sequence in 215..335 {
+        if sequence == 225 {
+            let short = Uuid::new_v4();
+            for mut record in [read(2109, 0), cleanup(2110), exchange(2111, "ROLLBACK")] {
+                record["connection_id"] = json!(short);
+                records.push(record);
+            }
+        }
+        let mut record = read(
+            sequence,
+            if sequence == 215 {
+                0
+            } else if sequence == 217 {
+                33
+            } else {
+                1
+            },
+        );
+        if sequence == 216 || (227..=332).contains(&sequence) && (sequence - 227).is_multiple_of(3)
+        {
+            record["sql"] = json!(
+                "SELECT namespace.name AS namespace_name FROM namespace WHERE namespace.is_active IS true"
+            );
+        }
+        if sequence == 216 {
+            record["response"]["server_status"] = json!(33);
+        }
+        if sequence == 224 {
+            record["sql"] = json!(
+                "SELECT DISTINCT resource_members.entity_id FROM resource_members WHERE resource_members.resource_type='Namespace'"
+            );
+        }
+        records.push(record);
+    }
+    records.extend([cleanup(335), exchange(336, "ROLLBACK")]);
+    assert_eq!(records.len(), 125);
+    assert_eq!(optional(&records), [11, 12, 123, 124].into());
+    // Consuming other traffic cannot authorize cleanup of unknown effects.
+    records[1]["sql"] = json!("SELECT custom_function() FROM namespace");
+    assert_eq!(optional(&records), [11, 12, 124].into());
+}
+
+#[test]
 fn implicit_read_only_session_cleanup_is_optional_with_complete_status_evidence() {
     let records = [
         read(116, 0),
@@ -215,7 +291,11 @@ fn read_effect_allowlist_rejects_locks_calls_and_vendor_tail_clauses() {
         "SELECT id FROM users",
         "SELECT id FROM users WHERE id IS NOT NULL",
     ] {
-        assert!(super::read::plain_select(sql), "{sql}");
+        assert_eq!(
+            super::read::classify(sql),
+            super::read::Effect::ReadOnly,
+            "{sql}"
+        );
     }
     for sql in [
         "SELECT id FROM users WHERE (id,name) IN ((1,'a'),(2,GET_LOCK('x',1)))",
@@ -230,22 +310,78 @@ fn read_effect_allowlist_rejects_locks_calls_and_vendor_tail_clauses() {
         "SELECT id FROM users WHERE custom_function()=1",
         "SELECT id FROM users ORDER BY GET_LOCK('x',1)",
         "SELECT id FROM users LIMIT custom_function()",
+        "SELECT DISTINCT custom_function() FROM users",
+        "SELECT id + custom_function() FROM users",
+        "SELECT id FROM users GROUP BY GET_LOCK('x',1)",
+        "SELECT id FROM users GROUP BY id HAVING custom_function()=1",
         "SELECT @x:=id FROM users",
         "SELECT id FROM users WHERE id IN (SELECT id FROM users)",
         "SELECT id FROM users; UPDATE users SET id=1",
         "SELECT /*!50000 SQL_CALC_FOUND_ROWS */ id FROM users",
         "SELECT id FROM users SETTINGS x=custom_function()",
         "SELECT id FROM users FORMAT JSON",
-        "SELECT id FROM users UNION SELECT id FROM users",
+        "SELECT id FROM users UNION SELECT custom_function() FROM users",
         "CALL read_users()",
         "SELECT id FROM users WHERE id =",
         "SELECT id FROM users WHERE id=1 FOR UPDATE NOWAIT",
     ] {
-        assert!(!super::read::plain_select(sql), "{sql}");
+        assert_ne!(
+            super::read::classify(sql),
+            super::read::Effect::ReadOnly,
+            "{sql}"
+        );
     }
-    assert!(!super::read::plain_select(&format!(
-        "SELECT id FROM users WHERE {}id=1{}",
-        "(".repeat(100),
-        ")".repeat(100)
-    )));
+    assert_ne!(
+        super::read::classify(&format!(
+            "SELECT id FROM users WHERE {}id=1{}",
+            "(".repeat(100),
+            ")".repeat(100)
+        )),
+        super::read::Effect::ReadOnly
+    );
+}
+
+#[test]
+fn effect_classification_is_independent_of_query_matching_and_preserves_transaction_boundaries() {
+    use super::read::{Effect, classify};
+    for sql in [
+        "UPDATE users SET id=2",
+        "DELETE FROM users",
+        "INSERT INTO users(id) VALUES(1)",
+        "CALL do_work()",
+        "SELECT id FROM users FOR UPDATE",
+    ] {
+        assert_eq!(classify(sql), Effect::StateChange, "{sql}");
+    }
+    for sql in [
+        "SELECT custom_function() FROM users",
+        "SELECT @value FROM users",
+        "invalid sql",
+        // Unsupported MySQL grammar must remain unknown, never read-only.
+        "SELECT id INTO OUTFILE '/tmp/x' FROM users",
+    ] {
+        assert_eq!(classify(sql), Effect::Unknown, "{sql}");
+    }
+    for sql in [
+        "SELECT DISTINCT namespace, name FROM kinds WHERE (namespace='default' AND name='a') OR (namespace='shared' AND name='b')",
+        "SELECT id + 1 FROM users WHERE id + 2 > 0 GROUP BY id HAVING id > 0 ORDER BY id + 1",
+        "SELECT kinds.id AS kinds_id, kinds.user_id AS kinds_user_id, kinds.kind AS kinds_kind, kinds.name AS kinds_name, kinds.namespace AS kinds_namespace, kinds.json AS kinds_json, kinds.is_active AS kinds_is_active, kinds.created_at AS kinds_created_at, kinds.updated_at AS kinds_updated_at FROM kinds WHERE kinds.kind = 'Model' AND kinds.namespace = 'default' AND kinds.is_active = true AND kinds.user_id = 126",
+    ] {
+        assert_eq!(classify(sql), Effect::ReadOnly, "{sql}");
+        let mut query = read(2109, 0);
+        query["sql"] = json!(sql);
+        let records = [query.clone(), cleanup(2110), exchange(2111, "ROLLBACK")];
+        assert_eq!(optional(&records), [1, 2].into(), "{sql}");
+        query["server_status_before"] = json!(1);
+        assert!(
+            optional(&[query.clone(), cleanup(2110)]).is_empty(),
+            "unknown transaction start"
+        );
+        query["server_status_before"] = json!(0);
+        query["response"]["rows_truncated"] = json!(true);
+        assert!(
+            optional(&[query, cleanup(2110)]).is_empty(),
+            "incomplete response"
+        );
+    }
 }

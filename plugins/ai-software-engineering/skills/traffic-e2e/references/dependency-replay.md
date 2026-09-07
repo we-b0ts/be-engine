@@ -64,13 +64,15 @@ column aliases and table aliases when every target field maps unambiguously to
 recorded data. Replay projects response metadata and cells together; it does not
 require an ownership rule or new recording. COUNT(*) and integer constants keep
 their expression identity. Physical tables, predicates, values, sorting and
-pagination remain constrained; DISTINCT, grouping, joins, subqueries, locks,
+pagination remain constrained. DISTINCT permits aliases and column reordering
+only when both queries retain the same complete direct-column projection; it
+never permits dropping/adding columns or switching to ordinary SELECT. Grouping, joins, subqueries, locks,
 wildcards and other expressions retain strict matching. See
 [MySQL interoperability](../../../../../docs/mysql-replay.md) for the exact
 boundary and actual-client acceptance tests.
 
 Ordinary single-table SELECT predicates also support reordered IN/NOT IN values
-and pure AND conditions, including source text literals versus target bound `?`
+and pure AND conditions / OR branches, including source text literals versus target bound `?`
 parameters. Values, types, NULL and duplicate counts stay exact. This built-in
 compatibility needs no rule or new recording and does not require target to
 reproduce source collection order. It composes with direct-column mapping;
@@ -78,6 +80,10 @@ an unchanged wildcard projection can use predicate compatibility as well.
 Complex predicates and positional dynamic parameter rules retain their existing
 constraints. Parsed templates and constant queries are cached within Replay;
 actual values and finite dependency availability are checked for each execution.
+Large OR groups with identical parameter templates use linear PREPARE matching
+within the SQL/work limits. Boolean tests `IS [NOT] TRUE/FALSE/UNKNOWN` retain
+their semantics and can compose with tuple IN reordering. Neither support
+requires target to change its normal SQL parameter binding.
 
 Flat tuple IN/NOT IN also permits whole-row reordering, including
 `(user_id,namespace,name) IN ((?,?,?),(?,?,?))` versus source text literals.
@@ -92,7 +98,10 @@ Replay allows a successful duplicate ROLLBACK after a confirmed transaction end,
 and a first ROLLBACK after a proven implicit read-only span. The latter requires
 captured before/after transaction status, a known inactive start, consecutive
 ordinary SELECTs and successful transaction completion on the same connection
-and identity. Writes, locks, explicit transactions, unknown starts and incomplete
+and identity. Read-effect checks cover derived tables, UNION, joins, EXISTS and
+pure ROW_NUMBER windows by checking every child, independently of SQL matching;
+long OR chains do not lose their read proof solely because of expression width.
+Writes, locks, explicit transactions, unknown starts and incomplete
 evidence remain strict. Older recordings lacking query status evidence require
 re-recording; do not infer eligibility from SELECT summaries or read debug JSONL
 as the replay source. Optional cleanup stays matchable, and all business reads
