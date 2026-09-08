@@ -39,7 +39,7 @@ struct Execution {
     error: Option<String>,
 }
 
-pub fn start_next(options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
+pub fn start_next(mut options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
     let target_root = fs::canonicalize(&options.target_root)?;
     let current = if let Some(api) = options.api.as_ref() {
         super::status_rewrite_for_api(
@@ -67,6 +67,21 @@ pub fn start_next(options: RewriteNextOptions) -> Result<RewriteActionEnvelope> 
         && !matches!(current.action, RewriteAction::AdvanceRequired { .. })
     {
         return Ok(from_status(current));
+    }
+    // Freeze the selected scope before launching the detached operation. Its
+    // own execution marker must not turn a later global selection into waiting.
+    if options.api.is_none()
+        && options.process_output.is_none()
+        && let RewriteAction::AdvanceRequired { command, .. } = &current.action
+    {
+        for pair in command.argv.windows(2) {
+            if pair[0] == "--api" {
+                options.api = Some(pair[1].parse()?);
+            }
+            if pair[0] == "--process-output" {
+                options.process_output = Some(pair[1].clone());
+            }
+        }
     }
     start(
         &target_root,

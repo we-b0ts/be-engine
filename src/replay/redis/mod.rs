@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow, ensure};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -27,6 +27,7 @@ use super::{
 mod builtins;
 mod connection_scope;
 mod matching;
+pub(crate) mod value;
 use connection_scope::{ConnectionScopes, TargetConnection};
 use matching::redis_authentication_hint;
 pub(super) mod snapshot_overlay;
@@ -43,7 +44,7 @@ pub(super) struct RecordedConnection {
     replay_safe: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub(super) struct RecordedExchange {
     connection_id: Uuid,
     sequence: u64,
@@ -71,7 +72,7 @@ pub(super) struct RecordedExchange {
     global_dependency_reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct RecordedCapture {
     encoding: String,
     data: String,
@@ -101,11 +102,14 @@ struct MatchedRedisExchange {
     timing: ReplayExchangeTiming,
     requires_binding: bool,
     report: CommandMatchedReport,
+    rule_ids: Vec<String>,
 }
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayState {
     connection_scopes: ConnectionScopes,
+    pub(super) value_rules: Vec<value::ValueRule>,
+    unordered_value: value::evidence::OrderEvidence,
     exchanges: Vec<ReplayExchange>,
     pub(super) events: RedisReplayEvents,
     snapshot_overlays: Vec<super::report::command::CommandSnapshotOverlayReport>,
@@ -269,6 +273,7 @@ impl RedisReplayState {
 
     pub(super) fn snapshot(&self) -> CommandProtocolReport {
         CommandProtocolReport {
+            unordered_value: Some(self.unordered_value.clone()),
             connections: self.events.connections,
             matched_count: self.events.matched_count,
             matched: self.events.matched.clone(),
@@ -414,6 +419,9 @@ pub(super) async fn handle_connection(
                 &command.args,
             ) {
                 Ok(matched) => {
+                    if let Some(policy) = &mut state.replay_policy {
+                        policy.commit_redis_value(active_case_id.as_deref(), &matched.rule_ids);
+                    }
                     if matched.requires_binding {
                         connection_binding.bind(active_case_id.as_deref(), matched.connection_id);
                     }

@@ -70,7 +70,7 @@ fn handoff_wakes_idle_coordinator_and_only_its_api_becomes_ready_for_acceptance(
         target_root: target.path().into(),
     })
     .unwrap();
-    assert_eq!(running.pending, 0);
+    assert_eq!(running.pending, 1);
     assert!(matches!(running.action, RewriteAction::WaitRequired { .. }));
     let handoff = options(
         target.path(),
@@ -159,7 +159,7 @@ fn idle_worker_becomes_resume_required_and_running_report_cannot_fake_a_resume()
         })
         .unwrap()
         .pending,
-        0
+        1
     );
 }
 
@@ -247,8 +247,7 @@ fn running_and_queued_reports_expire_after_fifteen_minutes() {
             })
             .unwrap();
             assert_eq!(
-                status.pending,
-                usize::from(expired),
+                status.pending, 1,
                 "{activity:?} report at {age_minutes} minutes"
             );
             if expired {
@@ -318,7 +317,7 @@ fn current_transition_does_not_block_feedback_but_integration_waits() {
         RewriteWorkerActivity::HandoffReady,
     ))
     .unwrap();
-    assert_eq!(handoff.pending, 0);
+    assert_eq!(handoff.pending, 1);
     assert!(
         report(options(
             target.path(),

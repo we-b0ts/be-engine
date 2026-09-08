@@ -99,13 +99,21 @@ pub(super) fn deferred_status_envelope(
     if item.status != RewriteApiStatus::RevalidationPending {
         return Ok(None);
     }
+    if !super::coordination::resources_busy(target_root)? {
+        let selected = action::for_status(target_root, state)?.action;
+        if matches!(selected, RewriteAction::AdvanceRequired { ref command, .. }
+            if command.argv.windows(2).any(|pair| pair[0] == "--api" && pair[1] == requested))
+        {
+            return Ok(None);
+        }
+    }
     let scoped = inventory::scoped(state, Some(api))?;
     Ok(Some(action::envelope(
         target_root,
         &scoped,
         RewriteAction::WaitRequired {
             summary: format!(
-                "defer final revalidation for {requested} until normal API work drains; the coordinator may request early verification when a shared change has high impact"
+                "defer revalidation for {requested} while higher-priority work or verification resources are occupied; global status selects idle revalidation automatically"
             ),
             resource: "rewrite_final_revalidation".to_string(),
             requested_api: Some(requested.clone()),
@@ -192,6 +200,7 @@ mod tests {
 
     #[test]
     fn scoped_status_explains_that_stale_success_is_deferred() {
+        let target = configured_target();
         let mut state = crate::rewrite::test_state();
         inventory::install(
             &mut state,
@@ -200,10 +209,9 @@ mod tests {
         .unwrap();
         state.api_inventory[1].status = RewriteApiStatus::RevalidationPending;
 
-        let envelope =
-            deferred_status_envelope(Path::new("/target"), &state, &"POST /b".parse().unwrap())
-                .unwrap()
-                .unwrap();
+        let envelope = deferred_status_envelope(target.path(), &state, &"POST /b".parse().unwrap())
+            .unwrap()
+            .unwrap();
         let value = serde_json::to_value(envelope).unwrap();
 
         assert_eq!(
@@ -249,7 +257,7 @@ mod tests {
         .unwrap();
 
         let value = serde_json::to_value(&report).unwrap();
-        assert_eq!(value["schema_version"], serde_json::json!(25));
+        assert_eq!(value["schema_version"], serde_json::json!(27));
         assert_eq!(
             value.pointer("/next/action/kind"),
             Some(&serde_json::json!("advance_required"))

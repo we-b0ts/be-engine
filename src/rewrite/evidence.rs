@@ -4,13 +4,10 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-use super::RewriteContext;
 use super::evidence_model::RewriteEvidenceReport;
 use super::model::{RewriteEvidenceCommand, RewriteIssue, RewriteIssueKind, RewriteState};
 use super::process_output_model::RewriteWorkScope;
-use super::store::RewriteStore;
-use super::{artifacts, fingerprint, inventory, source_process_traffic, worker};
-use crate::RecordingApi;
+use super::{artifacts, fingerprint, source_process_traffic};
 use crate::case_group::resolve_published_case_dir;
 use crate::comparison_recording::resolve_comparison_case_dir;
 use crate::e2e_run::response_pointer_scope;
@@ -21,8 +18,9 @@ use crate::{
     query_e2e_target_runtime_diagnostics,
 };
 
+mod access;
+pub use access::{query_rewrite_evidence, query_rewrite_evidence_for_scope};
 mod overview;
-pub(super) use overview::command as overview_command;
 mod response_body;
 mod rule_guidance;
 pub(super) use rule_guidance::supports_response_body_codec;
@@ -40,24 +38,6 @@ const QUERY_DIRTY_CLUSTERS: &str = "dirty_clusters";
 const QUERY_POLICY_APPLICABILITY: &str = "policy_applicability";
 const QUERY_ATTEMPT_DELTA: &str = "attempt_delta";
 const QUERY_TARGET_RUNTIME_DIAGNOSTICS: &str = "target_runtime_diagnostics";
-
-pub fn query_rewrite_evidence(
-    context: RewriteContext,
-    query_id: &str,
-) -> Result<RewriteEvidenceReport> {
-    let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
-    let state = RewriteStore::new(&target_root)?
-        .load()?
-        .context("rewrite workflow has not been initialized")?;
-    if let Some(report) = overview::query_process_output(&target_root, &state, query_id)? {
-        return Ok(report);
-    }
-    let api = inventory::api_for_evidence_query(&state, query_id)
-        .context("evidence query is stale or belongs to no concurrent API work item")?;
-    worker::ensure_api_confirmed(&state, &api, "querying evidence")?;
-    let scoped = inventory::scoped(&state, Some(&api.parse::<RecordingApi>()?))?;
-    query(&target_root, &scoped, query_id)
-}
 
 pub(super) fn commands(target_root: &Path, state: &RewriteState) -> Vec<RewriteEvidenceCommand> {
     let Some(issue) = &state.active_issue else {
@@ -137,7 +117,8 @@ pub(super) fn query(
             .trim_start_matches("fnv1a64:")
     );
     Ok(RewriteEvidenceReport {
-        schema_version: 3,
+        schema_version: 4,
+        context: None,
         evidence_id: evidence_id.clone(),
         issue_id: issue.id.clone(),
         query: kind.to_string(),
@@ -288,6 +269,7 @@ fn facts(
             let mut facts = dirty_cluster_facts(target_root, counts);
             if facts["clusters"].as_array().is_some_and(|clusters| clusters.iter().any(|c| c["protocol"] == "http" && c["reason"] == "unmatched_target")) {
                 facts["http_unordered_candidates"] = crate::e2e_run::query_http_unordered_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
+                facts["redis_unordered_candidates"] = crate::e2e_run::query_redis_unordered_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
                 facts["cross_case_candidates"] = crate::e2e_run::query_http_cross_case_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
             }
             if let Some(rejections) = &issue.egress_rejections { facts["egress_rejections"] = rejections.clone(); }

@@ -22,7 +22,7 @@ use crate::{
 };
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 25;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 27;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -46,6 +46,7 @@ pub enum RewriteApiStatus {
     Pending,
     Active,
     ImplementationRequired,
+    SystemRepairRequired,
     AwaitingRecordingRefresh,
     RevalidationPending,
     Complete,
@@ -76,6 +77,7 @@ pub struct RewriteApiInventoryView {
     pub pending: usize,
     pub active: usize,
     pub implementation_required: usize,
+    pub system_repair_required: usize,
     pub awaiting_recording_refresh: usize,
     pub revalidation_pending: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -275,6 +277,9 @@ pub(super) enum RewriteDependencyRuleSpec {
     HttpUnordered {
         selector: crate::HttpUnorderedSelector,
     },
+    RedisUnordered {
+        selector: crate::RedisUnorderedSelector,
+    },
     HttpCrossCase {
         selector: crate::HttpCrossCaseSelector,
     },
@@ -341,6 +346,8 @@ pub(super) enum RewriteDependencyRuleSpec {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct RewriteDependencyRulePlanRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_fingerprint: Option<String>,
     pub id: String,
     pub issue_id: String,
     pub evidence_id: String,
@@ -646,6 +653,17 @@ pub struct RewriteTrafficOperationView {
 
 #[derive(Debug, Clone)]
 pub enum RewriteAction {
+    Blocked {
+        summary: String,
+        system_repair_apis: Vec<String>,
+        dependent_process_outputs: Vec<String>,
+        resume: RewriteCommandSpec,
+    },
+    WorkerEventsRequired {
+        summary: String,
+        inventory: RewriteCommandSpec,
+        status: RewriteCommandSpec,
+    },
     InputRequired {
         reason: RewriteInputRequiredReason,
         summary: String,
@@ -690,21 +708,18 @@ pub enum RewriteAction {
         worker: RewriteWorkerDispatchView,
         confirm_worker: Option<RewriteCommandSpec>,
         report_worker: RewriteCommandSpec,
-        evidence: RewriteCommandSpec,
         acceptance: RewriteCommandSpec,
     },
     WorkerStatusRequired {
         summary: String,
         worker: RewriteWorkerDispatchView,
         report_worker: RewriteCommandSpec,
-        evidence: RewriteCommandSpec,
     },
     IntegrationRequired {
         summary: String,
         worker: RewriteWorkerDispatchView,
         handoff_id: String,
         report_worker: RewriteCommandSpec,
-        evidence: RewriteCommandSpec,
     },
     ExecutionFailed {
         summary: String,
@@ -736,7 +751,6 @@ pub enum RewriteAction {
         work_scope: RewriteWorkScope,
         issue: RewriteIssue,
         route: Option<RewriteRouteRecord>,
-        evidence: RewriteCommandSpec,
         acceptance: Option<RewriteCommandSpec>,
     },
     RecordingRefreshPending {

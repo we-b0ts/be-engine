@@ -117,9 +117,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 && requested_api.to_string() != state.api
                 && matches!(
                     state.phase,
-                    RewritePhase::RecordingRequired
-                        | RewritePhase::ComparisonRecordingRequired
-                        | RewritePhase::SystemRepairRequired
+                    RewritePhase::RecordingRequired | RewritePhase::ComparisonRecordingRequired
                 )
             {
                 if !state.api_inventory.is_empty() {
@@ -162,7 +160,12 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
             if options.api.is_some() {
                 state.process_outputs.current_id = None;
             }
-            if state.phase == RewritePhase::SliceComplete {
+            if state.phase == RewritePhase::SliceComplete
+                && options
+                    .api
+                    .as_ref()
+                    .is_none_or(|api| api.to_string() == state.api)
+            {
                 if transition::complete_replay_if_ready(&target_root, &mut state)? {
                     store.save(&state)?;
                     return Ok(action::for_state(&target_root, &state));

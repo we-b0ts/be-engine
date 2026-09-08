@@ -65,7 +65,7 @@ is unclear.
 - Recorder event, run, writer, and summary modules own capture, persistence,
   and reporting.
 - Replay modules own recorded dependency matching and replay lifecycle.
-- `replay/redis/matching` owns exact command selection and source-lane order
+- `replay/redis/matching` owns command selection and source-lane order
   diagnostics. `replay/redis/connection_scope` distinguishes ordinary pool
   reuse from recorded stateful lanes and owns their exclusive target connection
   claims; runtime Redis I/O and session setup remain in `replay/redis/mod.rs`.
@@ -141,7 +141,10 @@ is unclear.
 - Within `rewrite`, `mod.rs` is the public coordinator facade and `advance.rs`
   owns the atomic verification transition. `action.rs` projects actions and
   commands; `coordination.rs` projects executable `pending` and the expanded
-  ready/waiting breakdown from the native workflow gate before worker selection.
+  ready/waiting breakdown from the native workflow gate and selected action.
+  `scheduling.rs` owns idle API revalidation and resumable system-repair blocking;
+  `waiting.rs` owns bounded read-only waits and the return to external task-event
+  reconciliation. Neither implements a task-runtime adapter.
   `repair.rs` owns revision readiness and the API-scoped permission to replay an
   accepted system repair. `fingerprint/engine.rs` caches the executable digest
   within a process and invalidates it when the file identity changes.
@@ -157,7 +160,7 @@ is unclear.
   handles or manage worktrees. `model.rs` owns the remaining persisted state and
   public action contract and reexports the worker contract for compatibility.
   `inventory.rs` owns the API inventory state machine: stable installation,
-  activation and parking, deferred revalidation, and summary/detail
+  activation and parking (in `inventory/selection.rs`), deferred revalidation, and summary/detail
   views. `case_patterns.rs` owns the low-frequency post-recording pattern
   identification gate, persistent canonical API catalog, and add-only policy
   application; it does not mutate recorded cases or delegate this gate to API
@@ -166,7 +169,8 @@ is unclear.
   target-fingerprint revalidation. Root `process_output.rs` owns validated
   capture configuration and immutable source/target file evidence.
   `revalidation.rs` owns the coordinator's explicit early-validation
-  request boundary and projection for deferred API status.
+  request boundary and projection for deferred API status, including eligibility
+  of the engine-selected idle revalidation item.
   Status projection and the traffic lease remain separate owners. Further
   splitting must follow a responsibility boundary rather than divide one
   transaction, action contract, or inventory transition.
@@ -175,10 +179,13 @@ is unclear.
   owns the durable first-completion latch for future recording batches alongside
   its existing final delivery publication gate.
   `evidence/overview` owns issue overview identity and projection, including
-  process-output diagnostics. `evidence` owns read-only query access, work-item
-  resolution, and worker-confirmation checks. Action serialization retains
-  scheduling facts and one evidence entrypoint; diagnostic payloads stay in
-  evidence reports. Persisted issue payloads retain their evidence contract.
+  process-output diagnostics and current worker context outside evidence hashes.
+  `evidence/access` owns read-only assignment/opaque-query resolution and
+  worker-confirmation checks; `evidence` owns bounded API diagnostic queries.
+  `bin/backend-rewrite/evidence` owns CLI selector parsing for that read-only
+  contract. Action serialization retains scheduling facts and coordinator
+  commands; diagnostic payloads and detail queries stay in evidence reports.
+  Persisted issue payloads retain their evidence contract.
   `configuration_commit` owns the separate persistent-configuration Git commit
   boundary for `status` and `next`; it detects pending configuration before
   dispatch or verification without committing files or treating routine progress
@@ -315,3 +322,18 @@ explicit repository-wide audit.
   contract, `matcher/http_json` previews policy usage, and
   `feedback/http_unordered` owns stale-safe plan/apply. Worker discovery remains
   in `rewrite/evidence/rule_guidance`; the coordinator owns fresh verification.
+
+- `replay/redis/value` owns whole-string write value decoding and comparison;
+  its `selector` child defines endpoint/key/field selection and its `evidence`
+  child captures bounded order witnesses and verifies immutable source evidence.
+  `replay/policy/redis_value` validates the YAML contract, its matcher adapter
+  commits selected rule usage, and `feedback/redis_unordered` owns stale-safe
+  plan/apply. Redis matching continues to own source lanes and consumption.
+  `bin/backend-rewrite/dependency_rule/redis` owns Redis CLI conversion, while
+  coordinator dependency-rule and evidence owners retain lifecycle and discovery.
+- `replay/json_order` owns shared dependency JSON object identity and explicit
+  array normalization; HTTP identity and Redis values consume it.
+  `replay/recording_evidence` owns standard-run evidence file boundaries shared
+  by protocol-specific visitors. `replay/assertion/protobuf/wire` owns bounded
+  binary decoding; its `unordered_evidence` sibling exposes typed order witnesses
+  without authorizing a schema or a rule.

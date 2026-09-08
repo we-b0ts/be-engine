@@ -78,6 +78,9 @@ pub enum RewriteDependencyRuleSelector {
     HttpUnordered {
         selector: crate::HttpUnorderedSelector,
     },
+    RedisUnordered {
+        selector: crate::RedisUnorderedSelector,
+    },
     HttpCrossCase {
         selector: crate::HttpCrossCaseSelector,
     },
@@ -146,6 +149,7 @@ pub(super) fn plan(
         RewriteDependencyRuleSpec::MysqlSqlTime { .. }
             | RewriteDependencyRuleSpec::HttpCrossCase { .. }
             | RewriteDependencyRuleSpec::HttpUnordered { .. }
+            | RewriteDependencyRuleSpec::RedisUnordered { .. }
     );
     ensure!(
         !request_rule || options.ownership == RewriteDependencyOwnership::RequestOwned,
@@ -165,6 +169,7 @@ pub(super) fn plan(
         .context("--source-evidence is required when planning a dependency rule")?;
     let spec_json = serde_json::to_string(&spec)?;
     let mut record = RewriteDependencyRulePlanRecord {
+        review_fingerprint: None,
         id: format!(
             "dependency-plan-{}",
             fingerprint::id(&[
@@ -193,6 +198,12 @@ pub(super) fn plan(
         record.effective_name = Some(effective_name.to_string());
     }
     let report = plan.report()?;
+    if matches!(
+        record.spec,
+        RewriteDependencyRuleSpec::RedisUnordered { .. }
+    ) {
+        record.review_fingerprint = Some(fingerprint::id(&[&serde_json::to_string(&report)?]));
+    }
     state.rule_plan = None;
     state.recorder_capture_plan = None;
     state.dependency_rule_plan = Some(record.clone());
@@ -243,6 +254,7 @@ pub(super) fn plan_memcached_timestamp(
     };
     let spec_json = serde_json::to_string(&spec)?;
     let mut record = RewriteDependencyRulePlanRecord {
+        review_fingerprint: None,
         id: format!(
             "dependency-plan-{}",
             fingerprint::id(&[
@@ -355,6 +367,7 @@ pub(super) fn apply(
         record.spec,
         RewriteDependencyRuleSpec::HttpCrossCase { .. }
             | RewriteDependencyRuleSpec::HttpUnordered { .. }
+            | RewriteDependencyRuleSpec::RedisUnordered { .. }
     ) {
         validate_plan_evidence(
             target_root,
@@ -370,6 +383,7 @@ pub(super) fn apply(
             | RewriteDependencyRuleSpec::MysqlSqlTime { .. }
             | RewriteDependencyRuleSpec::HttpCrossCase { .. }
             | RewriteDependencyRuleSpec::HttpUnordered { .. }
+            | RewriteDependencyRuleSpec::RedisUnordered { .. }
     ) && state.case_source.is_some()
         && state.group_id.is_some()
     {
@@ -388,7 +402,14 @@ pub(super) fn apply(
                 .context("rewrite workflow has no focused API to reclassify")?,
         )?;
     }
-    let report = build_plan(target_root, state, &record)?.apply()?;
+    let plan = build_plan(target_root, state, &record)?;
+    if let Some(reviewed) = &record.review_fingerprint {
+        ensure!(
+            *reviewed == fingerprint::id(&[&serde_json::to_string(&plan.report()?)?]),
+            "dependency rule policy or evidence changed after plan; rerun plan before apply"
+        );
+    }
+    let report = plan.apply()?;
     state.dependency_rule_plan = None;
     state.e2e_current = false;
     state.comparison_current = false;
@@ -418,6 +439,7 @@ fn dependency_issue(
                 | RewriteDependencyRuleSpec::MysqlSqlTime { .. }
                 | RewriteDependencyRuleSpec::HttpCrossCase { .. }
                 | RewriteDependencyRuleSpec::HttpUnordered { .. }
+                | RewriteDependencyRuleSpec::RedisUnordered { .. }
         ) && matches!(
             issue.kind,
             RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
@@ -460,6 +482,7 @@ fn validate_plan_evidence(
         spec,
         RewriteDependencyRuleSpec::HttpCrossCase { .. }
             | RewriteDependencyRuleSpec::HttpUnordered { .. }
+            | RewriteDependencyRuleSpec::RedisUnordered { .. }
     ) && state
         .dependency_rule_plan
         .as_ref()
@@ -622,8 +645,8 @@ pub(super) fn schedule_cache_snapshot_refresh(
 #[cfg(test)]
 mod tests;
 
-/// HTTP endpoint value/scope rules can affect dependencies from any API.
-pub(super) fn invalidate_http_rule_validation(state: &mut RewriteState) {
+/// Endpoint value/scope rules can affect dependencies from any API.
+pub(super) fn invalidate_dependency_matching_validation(state: &mut RewriteState) {
     state.e2e_current = false;
     state.comparison_current = false;
     state.target_quality_fingerprint = None;

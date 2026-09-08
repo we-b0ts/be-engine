@@ -12,6 +12,22 @@ impl Serialize for RewriteAction {
         S: Serializer,
     {
         match self {
+            Self::Blocked { summary, system_repair_apis, dependent_process_outputs, resume } => RewriteActionView {
+                kind: "blocked",
+                summary,
+                details: serde_json::json!({
+                    "reason": "system_repair_required",
+                    "system_repair_apis": system_repair_apis,
+                    "dependent_process_outputs": dependent_process_outputs,
+                }),
+                commands: serde_json::json!({"resume": resume}),
+            }.serialize(serializer),
+            Self::WorkerEventsRequired { summary, inventory, status } => RewriteActionView {
+                kind: "worker_events_required",
+                summary,
+                details: RewriteNoDetails {},
+                commands: serde_json::json!({"inventory": inventory, "status": status}),
+            }.serialize(serializer),
             Self::InputRequired {
                 reason,
                 summary,
@@ -49,7 +65,7 @@ impl Serialize for RewriteAction {
                     active_operation: active_operation.as_ref(),
                     retry_after_seconds: *retry_after_seconds,
                 },
-                commands: RewriteStatusCommands { status },
+                commands: serde_json::json!({"wait": super::waiting::command(status, *retry_after_seconds)}),
             }
             .serialize(serializer),
             Self::RecordingRequired {
@@ -81,7 +97,7 @@ impl Serialize for RewriteAction {
                     run_id,
                     status_poll_after_seconds: *status_poll_after_seconds,
                 },
-                commands: RewriteStatusCommands { status },
+                commands: serde_json::json!({"wait": super::waiting::command(status, *status_poll_after_seconds)}),
             }
             .serialize(serializer),
             Self::CasePatternIdentificationRequired {
@@ -117,7 +133,6 @@ impl Serialize for RewriteAction {
                 worker,
                 confirm_worker,
                 report_worker,
-                evidence,
                 acceptance,
             } => RewriteActionView {
                 kind: "implementation_required",
@@ -130,7 +145,6 @@ impl Serialize for RewriteAction {
                 commands: RewriteImplementationCommands {
                     confirm_worker: confirm_worker.as_ref(),
                     report_worker,
-                    evidence,
                     acceptance,
                 },
             }
@@ -139,7 +153,6 @@ impl Serialize for RewriteAction {
                 summary,
                 worker,
                 report_worker,
-                evidence,
             } => RewriteActionView {
                 kind: "worker_status_required",
                 summary,
@@ -149,7 +162,6 @@ impl Serialize for RewriteAction {
                 },
                 commands: RewriteWorkerCoordinationCommands {
                     report_worker,
-                    evidence,
                 },
             }
             .serialize(serializer),
@@ -158,7 +170,6 @@ impl Serialize for RewriteAction {
                 worker,
                 handoff_id,
                 report_worker,
-                evidence,
             } => RewriteActionView {
                 kind: "integration_required",
                 summary,
@@ -168,7 +179,6 @@ impl Serialize for RewriteAction {
                 },
                 commands: RewriteWorkerCoordinationCommands {
                     report_worker,
-                    evidence,
                 },
             }
             .serialize(serializer),
@@ -230,7 +240,6 @@ impl Serialize for RewriteAction {
                 work_scope,
                 issue,
                 route,
-                evidence,
                 acceptance,
             } => RewriteActionView {
                 kind: "system_repair_required",
@@ -246,7 +255,6 @@ impl Serialize for RewriteAction {
                     route: route.as_ref(),
                 },
                 commands: RewriteAcceptanceCommands {
-                    evidence,
                     acceptance: acceptance.as_ref(),
                 },
             }
@@ -263,7 +271,7 @@ impl Serialize for RewriteAction {
                     plan_ids,
                     resource_identities,
                 },
-                commands: RewriteStatusCommands { status },
+                commands: serde_json::json!({"wait": super::waiting::command(status, 30)}),
             }
             .serialize(serializer),
             Self::Complete {
@@ -421,16 +429,10 @@ struct RewriteRecordingCommands<'a> {
 }
 
 #[derive(Serialize)]
-struct RewriteStatusCommands<'a> {
-    status: &'a RewriteCommandSpec,
-}
-
-#[derive(Serialize)]
 struct RewriteImplementationCommands<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     confirm_worker: Option<&'a RewriteCommandSpec>,
     report_worker: &'a RewriteCommandSpec,
-    evidence: &'a RewriteCommandSpec,
     acceptance: &'a RewriteCommandSpec,
 }
 
@@ -444,7 +446,6 @@ struct RewriteWorkerCoordinationDetails<'a> {
 #[derive(Serialize)]
 struct RewriteWorkerCoordinationCommands<'a> {
     report_worker: &'a RewriteCommandSpec,
-    evidence: &'a RewriteCommandSpec,
 }
 
 #[derive(Serialize)]
@@ -459,7 +460,6 @@ struct RewriteAdvanceCommands<'a> {
 
 #[derive(Serialize)]
 struct RewriteAcceptanceCommands<'a> {
-    evidence: &'a RewriteCommandSpec,
     #[serde(skip_serializing_if = "Option::is_none")]
     acceptance: Option<&'a RewriteCommandSpec>,
 }

@@ -48,6 +48,7 @@ pub(in crate::replay) enum DependencyProtocol {
     Mysql,
     Http,
     Memcached,
+    Redis,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -69,6 +70,8 @@ pub(super) struct ReplayDependencyRule {
     pub(super) http: Option<HttpSelector>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) memcached: Option<MemcachedSelector>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) redis: Option<super::redis_value::RedisSelector>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -319,12 +322,17 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
     for (output_id, rules) in &document.process_output_rules {
         crate::process_output::validate_verification_rules(output_id, rules)?;
     }
+    super::redis_value::validate_overlaps(&document.dependency_rules)?;
     super::http_json::validate_overlaps(&document.dependency_rules)?;
     let mut ids = BTreeSet::new();
     for rule in &document.dependency_rules {
         ensure!(
             document.version >= 3 || rule.replay_scope == ReplayScope::Case,
             "recording_run replay scope requires policy version 3"
+        );
+        ensure!(
+            document.version >= 3 || rule.redis.is_none(),
+            "Redis value rules require policy version 3"
         );
         validate_rule(rule)?;
         super::http_json::validate(rule)?;
@@ -370,7 +378,7 @@ fn dynamic_fields(rule: &ReplayDependencyRule) -> Vec<&DynamicValueRule> {
             .as_ref()
             .map(|http| http.query.values().collect())
             .unwrap_or_default(),
-        DependencyProtocol::Memcached => Vec::new(),
+        DependencyProtocol::Memcached | DependencyProtocol::Redis => Vec::new(),
     }
 }
 
@@ -493,6 +501,7 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
                     .with_context(|| format!("invalid HTTP rule {:?} query.{name}", rule.id))?;
             }
         }
+        DependencyProtocol::Redis => super::redis_value::validate(rule)?,
         DependencyProtocol::Memcached => {
             ensure!(
                 rule.mysql.is_none() && rule.http.is_none(),

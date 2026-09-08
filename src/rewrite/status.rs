@@ -108,6 +108,7 @@ pub fn status_rewrite_for_api(
                 envelope.pending = usize::from(matches!(
                     selected,
                     super::RewriteAction::RecoveryRequired { .. }
+                        | super::RewriteAction::WaitRequired { .. }
                 ));
                 envelope.action = selected;
             }
@@ -326,9 +327,7 @@ fn api_envelope(
                     && requested != &state.api
                     && matches!(
                         state.phase,
-                        RewritePhase::RecordingRequired
-                            | RewritePhase::ComparisonRecordingRequired
-                            | RewritePhase::SystemRepairRequired
+                        RewritePhase::RecordingRequired | RewritePhase::ComparisonRecordingRequired
                     )
                 {
                     action::api_selection_wait_envelope(target_root, state, requested.clone())

@@ -96,6 +96,7 @@ pub fn plan_mysql_time_rule(feedback: MysqlTimeRuleFeedback) -> Result<MysqlTime
         replay_scope: Default::default(),
         source_evidence: String::new(),
         case_selector: None,
+        redis: None,
         protocol: DependencyProtocol::Mysql,
         target: TargetSelector::default(),
         mysql: Some(MysqlSelector {

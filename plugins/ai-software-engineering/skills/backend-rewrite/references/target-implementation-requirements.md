@@ -136,9 +136,10 @@ product uses.
 ## Verification Ownership
 
 - A worker runs focused local tests for its changed work scope and returns the
-  exact work scope and issue ID, proven cause, changed files and shared impact,
-  patch or commit, test results, unchanged acceptance command, coordinator
-  inputs, and unresolved risks.
+  original workflow/recording, work scope, issue, binding and dispatch identities
+  from its evidence overview, proven cause and supporting evidence, changed files
+  and shared impact, patch or commit, test results, coordinator inputs, and
+  unresolved risks.
 - A worker MUST NOT execute coordinator acceptance, advance workflow state, or
   claim that the work item or workflow is complete.
 - The workflow coordinator integrates the change in the canonical target worktree

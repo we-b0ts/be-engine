@@ -78,6 +78,7 @@ pub fn plan_http_cross_case(feedback: HttpCrossCaseFeedback) -> Result<HttpCross
         replay_scope: ReplayScope::RecordingRun,
         source_evidence: feedback.source_evidence.clone(),
         case_selector: None,
+        redis: None,
         protocol: DependencyProtocol::Http,
         target: TargetSelector {
             host: Some(feedback.selector.host.clone()),

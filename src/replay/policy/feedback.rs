@@ -751,3 +751,9 @@ mod http_unordered;
 pub use http_unordered::{
     HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
 };
+
+mod redis_unordered;
+
+pub use redis_unordered::{
+    RedisUnorderedFeedback, RedisUnorderedPlan, RedisUnorderedReport, plan_redis_unordered,
+};

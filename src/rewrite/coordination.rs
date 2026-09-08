@@ -1,4 +1,4 @@
-//! Read-only projection of executable coordinator work. Waiting work is not pending.
+//! Read-only projection of coordinator work, including one explicit idle wait.
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -30,7 +30,14 @@ pub(super) fn status_details(
     let base = super::action::status_base(target_root, state)?;
     let execution = super::execution::status_action(target_root)?;
     let failed = matches!(execution, Some(RewriteAction::ExecutionFailed { .. }));
-    let mut result = details(state, &base, busy || failed);
+    let selected = if busy || failed {
+        super::worker::scheduler::global_action(target_root, state, true)
+            .or(execution.clone())
+            .unwrap_or_else(|| base.clone())
+    } else {
+        super::action::select_action(target_root, state, base.clone())
+    };
+    let mut result = projected_details(target_root, state, &base, &selected, busy || failed);
     if matches!(execution, Some(RewriteAction::RecoveryRequired { .. }))
         || matches!(
             super::store::RewriteStore::new(target_root)?.lock_state()?,
@@ -41,6 +48,7 @@ pub(super) fn status_details(
             super::traffic_operation::TrafficOperationState::Stale(_)
         )
     {
+        result.ready.remove("wait");
         add(&mut result.ready, "recover_workflow", 1);
     }
     Ok(result)
@@ -63,13 +71,17 @@ fn add(counts: &mut BTreeMap<String, usize>, name: &str, count: usize) {
 }
 
 fn replace_one(counts: &mut BTreeMap<String, usize>, previous: &str, next: &str) {
+    remove_one(counts, previous);
+    add(counts, next, 1);
+}
+
+fn remove_one(counts: &mut BTreeMap<String, usize>, previous: &str) {
     if let Some(value) = counts.get_mut(previous) {
         *value -= 1;
         if *value == 0 {
             counts.remove(previous);
         }
     }
-    add(counts, next, 1);
 }
 
 pub(super) fn details(
@@ -91,10 +103,7 @@ pub(super) fn details(
             Coverage::VerificationRequired
                 if !busy
                     && (matches!(scope, super::RewriteWorkScope::ProcessOutput { .. })
-                        || matches!(
-                            state.phase,
-                            RewritePhase::ApiPending | RewritePhase::ImplementationRequired
-                        )) =>
+                        || super::inventory::can_switch_api(state)) =>
             {
                 add(&mut result.ready, "verify_handoff", 1)
             }
@@ -113,12 +122,7 @@ pub(super) fn details(
             .values()
             .filter(|slice| slice.api != state.api && slice.system_repair_accepted)
             .count();
-    if !busy
-        && matches!(
-            state.phase,
-            RewritePhase::ApiPending | RewritePhase::ImplementationRequired
-        )
-    {
+    if !busy && super::inventory::can_switch_api(state) {
         add(&mut result.ready, "verify_api", unverified);
     } else {
         add(&mut result.waiting, "replay_resource", unverified);
@@ -147,6 +151,8 @@ pub(super) fn details(
         }
 
         RewriteAction::WaitRequired { .. }
+        | RewriteAction::Blocked { .. }
+        | RewriteAction::WorkerEventsRequired { .. }
         | RewriteAction::RecordingInProgress { .. }
         | RewriteAction::RecordingRefreshPending { .. }
         | RewriteAction::Complete { .. }
@@ -174,6 +180,55 @@ pub(super) fn details(
         }
         _ if busy => add(&mut result.waiting, "workflow_resource", 1),
         _ => add(&mut result.ready, "advance_workflow", 1),
+    }
+    result
+}
+
+pub(super) fn projected_details(
+    target_root: &Path,
+    state: &RewriteState,
+    base: &RewriteAction,
+    selected: &RewriteAction,
+    busy: bool,
+) -> RewriteCoordinationDetails {
+    let mut result = details(state, base, busy);
+    // Count parked repair acceptances as well as the active one. A repair is
+    // actionable only after its observed external revision has changed.
+    result.ready.remove("verify_system_repair");
+    result.waiting.remove("system_repair");
+    for api in super::scheduling::repair_apis(state) {
+        let ready = !busy
+            && super::inventory::can_switch_api(state)
+            && api
+                .parse()
+                .ok()
+                .and_then(|api| super::inventory::scoped(state, Some(&api)).ok())
+                .is_some_and(|scoped| {
+                    super::repair::pending_command(target_root, &scoped).is_some()
+                });
+        if ready {
+            add(&mut result.ready, "verify_system_repair", 1);
+        } else {
+            add(&mut result.waiting, "system_repair", 1);
+        }
+    }
+    if matches!(selected, RewriteAction::Blocked { .. }) {
+        result.ready.clear();
+    } else if !busy
+        && result.ready.is_empty()
+        && matches!(selected, RewriteAction::AdvanceRequired { .. })
+    {
+        if super::scheduling::revalidation_api(state).is_some() {
+            remove_one(&mut result.waiting, "final_revalidation");
+            add(&mut result.ready, "revalidate_api", 1);
+        } else {
+            add(&mut result.ready, "advance_workflow", 1);
+        }
+    } else if result.ready.is_empty()
+        && !matches!(selected, RewriteAction::ExecutionFailed { .. })
+        && (busy || !matches!(selected, RewriteAction::Complete { .. }))
+    {
+        add(&mut result.ready, "wait", 1);
     }
     result
 }
@@ -208,7 +263,9 @@ pub(super) fn busy_workers(
     };
     Ok(selected.map(|action| {
         let mut envelope = super::action::envelope(target_root, state, action);
-        envelope.pending = pending(state, &envelope.action, true);
+        envelope.pending =
+            projected_details(target_root, state, &envelope.action, &envelope.action, true)
+                .pending();
         envelope
     }))
 }

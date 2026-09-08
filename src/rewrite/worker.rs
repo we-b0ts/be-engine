@@ -7,7 +7,7 @@ use super::model::{
 };
 use super::process_output_model::RewriteWorkScope;
 use super::store::RewriteStore;
-use super::{action, evidence, fingerprint, inventory, process_outputs};
+use super::{action, fingerprint, inventory, process_outputs};
 use crate::RecordingApi;
 
 pub(super) mod events;
@@ -78,7 +78,6 @@ pub(super) fn implementation_action(
     };
     let confirm_worker = confirmation_command(target_root, &worker);
     let report_worker = runtime::report_command(target_root, &worker.dispatch_id, false);
-    let evidence = evidence::overview_command(target_root, state, &scope, &issue);
     let acceptance = match &scope {
         RewriteWorkScope::Api { api } => action::next_command_for_api(target_root, api),
         RewriteWorkScope::ProcessOutput { id } => {
@@ -91,7 +90,6 @@ pub(super) fn implementation_action(
         worker,
         confirm_worker,
         report_worker,
-        evidence,
         acceptance,
     }
 }
@@ -164,7 +162,7 @@ pub(super) fn ensure_scope_confirmed(
 ) -> Result<()> {
     ensure!(
         is_confirmed(state, scope),
-        "{} requires a confirmed dedicated subagent dispatch before {operation}; inspect its scoped status and execute action.commands.confirm_worker",
+        "{} requires a confirmed dedicated subagent dispatch before {operation}; ask the workflow coordinator to inspect scoped status and execute action.commands.confirm_worker, then retry this operation",
         scope.label()
     );
     Ok(())

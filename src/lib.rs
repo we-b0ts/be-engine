@@ -225,8 +225,8 @@ pub use rewrite::{
     RewriteContext, RewriteCoordinationDetails, RewriteDependencyOwnership,
     RewriteDependencyPayloadRulePlanOptions, RewriteDependencyPayloadRulePlanReport,
     RewriteDependencyRulePlanOptions, RewriteDependencyRulePlanReport, RewriteDependencyRuleReport,
-    RewriteDependencyRuleSelector, RewriteEvidenceCommand, RewriteEvidenceReport,
-    RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode,
+    RewriteDependencyRuleSelector, RewriteEvidenceCommand, RewriteEvidenceContext,
+    RewriteEvidenceReport, RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode,
     RewriteHttpResponseCapturePlanOptions, RewriteHttpResponseCaptureReport,
     RewriteInputRequiredReason, RewriteInventoryReport, RewriteIpCaptureReport, RewriteIssue,
     RewriteIssueKind, RewriteIssueOwner, RewriteMemcachedExchangeDetail,
@@ -247,7 +247,7 @@ pub use rewrite::{
     RewriteSourceProcessOwnedView, RewriteSourceProcessRedisSnapshotEndpointView,
     RewriteSourceProcessRedisSnapshotView, RewriteSourceProcessTrafficScopeView,
     RewriteSourceProcessTrafficView, RewriteStatusReport, RewriteTargetQualityOptions,
-    RewriteTrafficOperationKind, RewriteTrafficOperationView, RewriteWorkScope,
+    RewriteTrafficOperationKind, RewriteTrafficOperationView, RewriteWaitOptions, RewriteWorkScope,
     RewriteWorkerActivity, RewriteWorkerBlockingReason, RewriteWorkerConfirmOptions,
     RewriteWorkerCoverageState, RewriteWorkerDispatchState, RewriteWorkerDispatchView,
     RewriteWorkerInventoryItem, RewriteWorkerReportOptions, RewriteWorkerTransferOptions,
@@ -257,12 +257,13 @@ pub use rewrite::{
     inventory_rewrite, next_rewrite, plan_rewrite_dependency_payload_rule,
     plan_rewrite_dependency_rule, plan_rewrite_http_response_capture,
     plan_rewrite_recorder_capture, plan_rewrite_rule, query_rewrite_case_dependencies,
-    query_rewrite_evidence, recover_rewrite, report_rewrite_worker, request_rewrite_recording,
-    request_rewrite_revalidation, resume_rewrite_replay_planning, retry_rewrite_operation,
+    query_rewrite_evidence, query_rewrite_evidence_for_scope, recover_rewrite,
+    report_rewrite_worker, request_rewrite_recording, request_rewrite_revalidation,
+    resume_rewrite_replay_planning, retry_rewrite_operation,
     retry_rewrite_replay_after_out_of_band_run, route_rewrite, run_rewrite_target_quality,
     start_rewrite_next, start_rewrite_recording, start_rewrite_target_quality, status_rewrite,
     status_rewrite_for_api, status_rewrite_for_process_output, transfer_rewrite_worker,
-    verify_rewrite_repair,
+    verify_rewrite_repair, wait_rewrite,
 };
 pub use runtime_output::RuntimeOutputLocation;
 pub use source_snapshot::{
@@ -949,4 +950,10 @@ pub use replay::HttpUnorderedSelector;
 
 pub use replay::{
     HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
+};
+
+pub use replay::{RedisUnorderedField, RedisUnorderedSelector, RedisValueKeySelector};
+
+pub use replay::{
+    RedisUnorderedFeedback, RedisUnorderedPlan, RedisUnorderedReport, plan_redis_unordered,
 };

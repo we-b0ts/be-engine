@@ -1,4 +1,4 @@
-//! Exact Redis command matching and source-lane order diagnostics.
+//! Redis command selection with semantic value matching and source-lane order diagnostics.
 use super::*;
 use crate::replay::command_matching::{
     CommandExchangeScope, PreferredMatch, lane_blocked_diagnostic, preferred_match,
@@ -35,7 +35,7 @@ impl RedisReplayState {
                 && normalize_optional(username)
                     == normalize_optional(exchange.record.username.as_deref())
                 && exchange.record.command.eq_ignore_ascii_case(command)
-                && exchange.args == args
+                && value::arguments_match(exchange, args, &self.value_rules)
         });
         let index = match matched {
             PreferredMatch::Matched(index) => index,
@@ -43,6 +43,16 @@ impl RedisReplayState {
                 return Err(lane_blocked_diagnostic(&self.exchanges, candidate, blocker));
             }
             PreferredMatch::NotFound => {
+                self.capture_value_candidates(
+                    active_case_id,
+                    target,
+                    connection,
+                    resp_version,
+                    database,
+                    username,
+                    command,
+                    args,
+                );
                 // Prefer the exact request whose stateful connection is
                 // unavailable over a different key with a similar signature.
                 // Otherwise a pool/session conflict can look like an argument bug.
@@ -62,6 +72,7 @@ impl RedisReplayState {
                                 username,
                                 command,
                                 args,
+                                &self.value_rules,
                             )
                             .as_slice()
                                 == ["connection"]
@@ -85,11 +96,13 @@ impl RedisReplayState {
                             username,
                             command,
                             args,
+                            &self.value_rules,
                         )
                     },
                 ));
             }
         };
+        let rule_ids = value::used_rules(&self.exchanges[index], args, &self.value_rules);
         let requires_binding =
             self.connection_scopes
                 .claim(&self.exchanges[index], active_case_id, connection);
@@ -107,6 +120,7 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Ok(MatchedRedisExchange {
+            rule_ids,
             index,
             connection_id: exchange.record.connection_id,
             response: exchange.response.clone(),
@@ -167,6 +181,7 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Some(MatchedRedisExchange {
+            rule_ids: Vec::new(),
             index,
             connection_id: exchange.record.connection_id,
             response: exchange.response.clone(),
@@ -230,6 +245,7 @@ fn redis_mismatch_fields(
     username: Option<&str>,
     command: &str,
     args: &[Vec<u8>],
+    rules: &[value::ValueRule],
 ) -> Vec<&'static str> {
     let mut fields = Vec::new();
     if !connection_matches {
@@ -259,7 +275,7 @@ fn redis_mismatch_fields(
     if !exchange.record.command.eq_ignore_ascii_case(command) {
         fields.push("command");
     }
-    if exchange.args != args {
+    if !value::arguments_match(exchange, args, rules) {
         fields.push("arguments");
     }
     fields

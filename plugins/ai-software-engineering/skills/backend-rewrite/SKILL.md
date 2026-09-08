@@ -29,9 +29,9 @@ Role follows the task assignment, not the completeness of its attached data:
 - **Implementation worker:** a task dispatched to implement one work item.
   Its role remains worker through missing inputs, interruptions, resumed turns,
   failed acceptance, and completion. It never becomes a workflow coordinator.
-  Recover the current work scope, action, and evidence from the engine's scoped
-  `status` and returned evidence APIs using the assignment's canonical root and
-  identity. Never advance engine state, execute acceptance, or take another item.
+  Fetch current issue and dispatch identity through `evidence --api` or
+  `evidence --process-output` using the assignment's canonical root and exact
+  scope. Follow [worker-diagnosis.md](references/worker-diagnosis.md). Never advance engine state, execute acceptance, or take another item.
 
 Worker scope determines the diagnosis path, not a different authority level:
 
@@ -147,33 +147,48 @@ assume it is complete and never rerun it.
 
 A fresh standard recording requires explicit user authorization.
 
-Response schema v25 contains an `action` object with exactly `kind`, `summary`,
+Response schema v27 contains an `action` object with exactly `kind`, `summary`,
 `details`, and `commands`. This action schema version is independent of target
 repository configuration versions. `status` (including scoped status) and
-`next` return scheduling state, a short issue summary, and legal commands;
-they do not embed issue diagnostics. Read scheduling facts from
-`action.details`. For either worker scope, after dispatch confirmation execute
-the single `action.commands.evidence` command to fetch the issue overview.
-Read diagnostic facts from `facts.issue`; API workers then use the exact
-commands under the overview's `queries`. Process-output workers read
-`facts.issue.comparison_observation` and receive no API queries. The workflow
-coordinator forwards the compact action and evidence entrypoint to its worker
-without fetching diagnostics for scheduling. Execute only command roles
-actually present under `action.commands`; never guess legacy fields or missing
-transitions.
+`next` return scheduling state, a short issue summary, and coordinator commands.
+They do not embed issue diagnostics or an evidence command. Read scheduling
+facts from `action.details` and execute only command roles actually present;
+never guess legacy fields or missing transitions.
+
+The coordinator dispatches the worker role, exact work scope, canonical target
+root, and absolute assigned worktree. It does not forward action JSON, evidence
+IDs, commands, or diagnostic payloads. Workers start or resume with the stable
+read-only entrypoint for their assignment:
+
+```text
+backend-rewrite --target-root <canonical-root> evidence --api '<METHOD pattern>'
+backend-rewrite --target-root <canonical-root> evidence --process-output <id>
+```
+
+Use exactly one selector. After dispatch confirmation, the overview supplies
+current workflow/recording and binding/dispatch identity in `context`, the full
+issue in `facts.issue`, and API detail commands in `queries`. Process-output
+workers read `facts.issue.comparison_observation` and receive no API queries.
+Workers retain this identity for their return handoff; further opaque
+`evidence <query-id>` commands remain bound to the evidence they describe.
+See [worker-diagnosis.md](references/worker-diagnosis.md) for confirmation
+waiting and stale-context handling.
 
 Every returned command has a canonical `cwd` and argv whose absolute
 `--target-root` is already bound. Execute it opaquely without reconstructing,
 combining, shell-evaluating, or changing arguments. Supply named required
 environment variables without printing their values. Compact JSON is the
-default; use global `--pretty` only for interactive human inspection. The sole
-documented argv extension is the target-quality exception in
-[workflow.md](references/workflow.md).
+default; use global `--pretty` only for interactive human inspection. The scoped
+evidence commands above are worker entrypoints; returned query and action argv
+remain opaque. The sole documented argv extension is the target-quality
+exception in [workflow.md](references/workflow.md).
 
 The workflow coordinator starts and resumes with unscoped
 `backend-rewrite status` and follows [workflow.md](references/workflow.md#coordinator-loop) for
 its executable-work loop, event handling, and periodic polling. `pending` counts
-ready coordinator operations; `terminal_allowed` governs completion. The engine
+ready coordinator operations, including one explicit `wait` when nothing else
+is ready. `blocked` ends this run with preserved resume state;
+`terminal_allowed` alone governs successful completion. The engine
 selects work; the task runtime limits worker concurrency. Scoped status serves
 assigned work-item inspection and does not replace the global coordinator loop.
 Default `workflow` contains only `id` and `revision`; `inventory` expands its
@@ -181,8 +196,8 @@ metadata and ready/waiting counts. Do not infer scheduling from `workflow.phase`
 
 Use `backend-rewrite status [--api '<METHOD pattern>' | --process-output <id>]`
 when an action response was lost or a session resumes. Coordinator scheduling uses the
-canonical target's unscoped status; assigned workers use their scoped
-status. Never infer state from artifact recency. Never
+canonical target's unscoped status; assigned workers restore diagnostics through
+their scoped evidence entrypoint. Never infer state from artifact recency. Never
 mutate engine runtime files. Use action, status, and evidence APIs as the
 primary interface; report an insufficient API surface as an engine API gap.
 Read-only runtime inspection is allowed when needed to diagnose such a gap,
@@ -192,10 +207,10 @@ but its layout is not a stable workflow contract.
 
 Keep these states distinct:
 
-- **Worker handoff ready:** the assigned worker returned its work-scope and
-  issue identity, proven cause, changed files/shared impact, patch or commit,
-  local tests, coordinator inputs, unchanged acceptance, and unresolved risks.
-  Its binding and worktree remain active.
+- **Worker handoff ready:** the assigned worker returned the initial overview's
+  work-scope, issue and dispatch identity, proven cause and supporting evidence,
+  changed files/shared impact, patch or commit, local tests, coordinator inputs,
+  and unresolved risks. Its binding and worktree remain active.
 - **Work item complete:** the workflow coordinator integrated the handoff and the
   engine-issued acceptance returned the API or process output as complete
   for the current target content fingerprint. A later integration may make it
@@ -209,6 +224,10 @@ Keep these states distinct:
   never override the batch requirement or infer it from historical pass counts.
   Only then run the
   caller-required repository checks and finish delivery.
+
+A global `blocked` action stops this run after eligible API revalidation drains
+and remaining APIs require system repair. Preserve bindings and evidence and
+resume after repair; this is not successful completion.
 
 An evidence-proven unavailable external response-driving value may stop work as
 blocked under [worker-diagnosis.md](references/worker-diagnosis.md). A blocker

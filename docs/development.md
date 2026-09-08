@@ -11,6 +11,9 @@ Cross-case HTTP initialization dependencies use explicit Replay scope rules; see
 strict matching and fresh verification.
 Source-proven arrays in outbound JSON requests use [HTTP unordered rules](http-unordered-rules.md).
 
+Redis JSON/Protobuf values and source-proven collection ordering use
+[Redis value rules](redis-value-rules.md), with the same discovery and plan/apply lifecycle.
+
 ## Rust Tooling
 
 Use the standard Cargo workflow:
@@ -1159,24 +1162,45 @@ backend-rewrite verification request \
   --reason 'shared response mapper changed'
 ```
 
-Rewrite action schema v25 always returns `action.kind`, `action.summary`,
+Rewrite action schema v27 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
-`details`; executable argv exist only under role-named `commands` such as
-`execute`, `status`, `advance`, `recover`, `evidence`, `apply`, and `acceptance`.
+`details`; executable argv exist only under coordinator command roles such as
+`execute`, `status`, `advance`, `recover`, `apply`, and `acceptance`.
 Unscoped and scoped `status` and `next` expose scheduling state and short issue
-summaries, not diagnostic payloads. Each implementation or system-repair action
-returns one issue-bound `commands.evidence` command. After worker confirmation,
-that read-only command returns an overview with the complete bounded issue in
-`facts.issue` and, for APIs, further exact evidence commands in `queries`.
-Process-output overviews expose `facts.issue.comparison_observation` and no API
-queries. The state-machine coordinator forwards the compact action and entrypoint; workers fetch their
-own diagnostic facts. Relevant API overviews include a `source_process_traffic`
-query for bounded bootstrap, configured `process_owned`, and Redis snapshot
-triage. Query identities follow the owning work item across concurrent
-scheduling and reject replaced evidence. The overview itself does not authorize
-rule planning; use the applicable planner returned by a specific evidence query.
-Compared with v22, `commands.evidence` is a single command object rather than a
-query list. Existing issued detail-query IDs remain valid for unchanged evidence;
+summaries. They contain neither diagnostics nor an evidence command.
+
+The coordinator dispatches the implementation-worker role, exact API or
+process-output scope, canonical target root, and absolute assigned worktree.
+Workers fetch their own current context and evidence:
+
+```bash
+backend-rewrite --target-root /path/to/target evidence --api 'GET /api/widgets/*'
+backend-rewrite --target-root /path/to/target evidence --process-output metrics-profile
+```
+
+Exactly one selector or opaque query ID is required. These read-only selectors
+resolve the requested item without switching the active API or advancing state,
+including parked APIs. Unknown items and items with no current issue fail
+explicitly. Dispatch confirmation still gates evidence; workers wait for the
+coordinator to confirm and retry the same query if they start too early.
+Evidence schema v4 overviews include `context` with canonical target root,
+workflow/recording identity, revision, comparison requirement, and the worker's
+binding/dispatch identity. `facts.issue` retains the complete bounded issue.
+API overviews supply further exact commands in `queries`; process-output
+overviews expose `facts.issue.comparison_observation` and no API queries.
+Workers retain the initial identity in their returned handoff along with
+supporting proof, tests, commit/patch and necessary coordinator inputs. The
+coordinator gets current acceptance commands from the engine; workers do not
+need an action JSON or evidence command in their assignment.
+
+Relevant API overviews include a `source_process_traffic` query for bounded
+bootstrap, configured `process_owned`, and Redis snapshot triage. Existing
+`evidence <query-id>` calls remain supported for overview/detail queries and
+pagination. Query identities follow the owning item across concurrent scheduling
+and reject replaced evidence. Current context metadata is excluded from evidence
+hashing so unrelated workflow revisions do not invalidate diagnostic evidence.
+The overview does not authorize rule planning; use the applicable planner
+returned by a specific evidence query.
 Schema v24 added top-level `pending`, counting only coordinator actions executable
 now. Inventory summaries rename their old `pending` count to `unverified`.
 Persisted state remains version 1, with optional worker observations and a
@@ -1189,7 +1213,7 @@ unchanged repairs wait, while a changed acceptance revision schedules repair
 verification before worker dispatch. Accepted replay repairs authorize the same
 API's replay without requiring another worker handoff. `worker confirm` records
 binding delivery only; explicit coordinator reports supply running/queued state.
-The engine does not query an external AI runtime. Reports expire after five
+The engine does not query an external AI runtime. Reports expire after fifteen
 minutes; missing or legacy unclassified observations require a fresh report.
 Start and resume with `backend-rewrite status`; an initialized project without a
 workflow returns an executable initialization action with `pending: 1`.
@@ -1224,8 +1248,8 @@ returns immediately. A start report that requires delayed observation includes
 command without repeating `execute`. `already_completed` omits the delay so
 its status can be queried immediately. While the worker remains live,
 `recording_in_progress.action.details.status_poll_after_seconds` carries the
-same polling delay and `action.commands.status` remains the only polling
-command. `advance_required` means finalization and cleanup completed, so its
+same polling delay and `action.commands.wait` performs the bounded wait.
+After waiting, reconcile task-runtime worker events and refresh global status. `advance_required` means finalization and cleanup completed, so its
 exact `action.commands.advance` can advance coordinator state. It does not mean
 rerunning the completed action. Historical
 input is reused only when its API selector exactly equals the requested
@@ -1236,12 +1260,22 @@ recording window and includes bounded candidate/rejection diagnostics under
 configuration limits the standard run and the coordinator derives a stable
 API inventory from its published cases. `next` and `status` expose only its
 bounded summary (`total`, `completed`, `unverified`, `active`, `implementation_required`,
-`awaiting_recording_refresh`, `revalidation_pending`, `current_index`, and
-`current_api`) so their size does not grow with API count.
+`system_repair_required`, `awaiting_recording_refresh`, `revalidation_pending`,
+`current_index`, and `current_api`) so their size does not grow with API count.
 The state-machine coordinator consumes the global action while top-level
 `pending > 0`, executes the indicated command or runtime dispatch, and continues
-from its response. At zero, it waits for a worker event or up to 30 seconds and
-reads global `status` again. `terminal_allowed` is the separate completion gate.
+from its response. When only asynchronous work remains, `pending=1` selects
+`commands.wait` (`backend-rewrite wait --seconds 30`, with a 1–30 second bound).
+Wait observes engine-state changes and returns `worker_events_required`: inspect
+actual task-runtime completion/failure/interruption events, report changes with
+their original identities, then execute global status. It does not infer runtime
+liveness or refresh every running worker; activity observations still expire
+at fifteen minutes. `terminal_allowed` is the separate successful completion gate.
+A global `blocked` action has `pending=0` and stops this run after eligible
+revalidation drains and remaining APIs require external system repair. Repair
+APIs and dependent process outputs remain incomplete, with bindings/evidence
+retained. Resume with global status after repair; the engine cannot wake a
+stopped AI session. Other explicit failures retain their recovery/retry contracts.
 The engine selects across the whole inventory, including parked implementation
 issues. The coordinator does not scan `unverified` to choose work. `inventory`
 expands the English `details.ready` and `details.waiting` breakdown and dedicated
@@ -1252,7 +1286,8 @@ worktree. There is no coordinator worker limit; the task runtime controls
 concurrency and accepted queuing. Dispatch/resume a real worker, then execute
 `commands.confirm_worker` with its actual handle. Confirmation of one API never
 blocks dispatch or feedback for another. Workers own evidence, diagnosis,
-implementation, and local tests; the coordinator forwards compact actions.
+implementation, and local tests; the coordinator supplies only the assignment
+fields described above and retains the actual dispatch identity.
 
 Runtime completion events drive `worker report <dispatch-id>`. Set
 `BACKEND_REWRITE_SUBAGENT_HANDLE` and `BACKEND_REWRITE_WORKER_ACTIVITY` to
@@ -1405,12 +1440,17 @@ For batches requiring Comparison, passing Replay requests Comparison; once it
 passes, the following `next` prepares the next inventory item from the same
 standard recording. A repository or policy content change makes prior
 E2E/comparison evidence stale. Completed APIs become `revalidation_pending`
-and remain deferred while ordinary pending or implementation work exists. The
-coordinator drains them in one final verification epoch. A commit that
+and receive lower scheduling priority than executable ordinary work. When
+ordinary actions are waiting and verification resources are free, the engine
+selects one stale API in inventory order. Worker execution and API-scoped system
+repair do not block unrelated revalidation. A target failure creates worker
+work; a system failure can be parked with its exact repair identity. Completed
+APIs are not repeated at an unchanged target fingerprint. Later integrations
+still invalidate stale successes for the final verification epoch. A commit that
 preserves the effective worktree content does not change the fingerprint.
 `verification request` remains available for an explicit caller request to
-verify selected stale APIs early; normal coordination defers shared-change checks
-to the final epoch; the returned advance command starts
+verify selected stale APIs early; ordinary coordination already uses idle
+verification capacity; the returned advance command starts
 their normal Replay/comparison flow, and final whole-inventory coverage remains
 mandatory. `terminal_allowed` is false until every API inventory item has
 passing E2E and, when required by its batch, comparison evidence, and every process output has passing
@@ -1431,9 +1471,10 @@ the updated policy.
 
 Recording, focused Replay, and comparison share one serialized traffic-runtime
 lease. Global status first returns any executable worker dispatch or feedback
-action. When no action is executable, schema v25 returns `wait_required` with
+action. When resources or running workers are the only remaining activity,
+schema v27 returns `wait_required` with
 the requested and blocking APIs, the live operation when available, a retry
-delay, and the exact `commands.status` argv. This lease serializes each traffic
+delay, and the exact `commands.wait` argv. This lease serializes each traffic
 operation, not a complete API lifecycle: while worker A implements, the
 orchestrator may run Replay for API B and dispatch worker B. No worker may start
 a traffic operation. If code changes during Replay, that result is discarded;
@@ -1481,8 +1522,10 @@ previous/current attempt numbers, and whether the latest attempt passed. It
 describes the latest completed attempt, so a repeated `next` with no target
 change returns the same evidence without claiming another replay occurred.
 
-Only use returned `backend-rewrite evidence` query IDs for coordinator gate and
-aggregate facts. Fetch the overview from `action.commands.evidence` first.
+Workers fetch the overview through `backend-rewrite evidence --api` or
+`--process-output`, bound to their canonical target root. Further gate and
+aggregate facts use only the returned `backend-rewrite evidence <query-id>`
+commands.
 For a response issue, `facts.issue.response_diagnosis` in that overview
 contains exact total/indexed/omitted difference counts plus at most 20 clusters
 grouped by normalized Pointer pattern and difference kind. Each cluster reports

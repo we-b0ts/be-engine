@@ -26,22 +26,7 @@ pub(super) fn request_fingerprint(uri: &str, body: &[u8], headers: &HeaderSnapsh
     format!("sha256:{:x}", digest.finalize())
 }
 
-pub(super) fn canonical_json(value: &Value) -> Vec<u8> {
-    fn ordered(value: &Value) -> Value {
-        match value {
-            Value::Object(map) => Value::Object(
-                map.iter()
-                    .map(|(k, v)| (k.clone(), ordered(v)))
-                    .collect::<BTreeMap<_, _>>()
-                    .into_iter()
-                    .collect(),
-            ),
-            Value::Array(values) => Value::Array(values.iter().map(ordered).collect()),
-            _ => value.clone(),
-        }
-    }
-    serde_json::to_vec(&ordered(value)).expect("JSON is serializable")
-}
+pub(super) use crate::replay::json_order::canonical_json;
 
 pub(super) fn recorded_fingerprint(record: &RecordedHttpExchange) -> Result<String> {
     Ok(request_fingerprint(

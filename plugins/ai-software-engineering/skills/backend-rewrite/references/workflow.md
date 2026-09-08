@@ -38,7 +38,7 @@ work, and before waiting or ending the current turn, return to the
 Status restores the next action, including a pending dispatch confirmation or
 post-confirmation advance. Keep the complete response and execute its supplied
 command directly; each response determines the following step. For a live
-operation, preserve the returned status command and its polling interval.
+operation, execute its returned wait command and reconcile worker events on return.
 
 At the start of every workflow-coordinator session, read
 `.traffic-e2e/local/block.md` when it exists. Project initialization may create
@@ -55,7 +55,8 @@ AI-owned reference and handoff context, never as engine state;
 ## Coordinator Loop
 
 Start with unscoped `status` in the canonical target repository. Top-level
-`pending` counts operations the coordinator can perform now. The engine selects
+`pending` counts operations the coordinator can perform now, including one
+explicit wait when no productive action is ready. The engine selects
 across all APIs and process outputs, including parked implementation issues.
 Use `pending`, `action`, and `terminal_allowed`; do not reconstruct scheduling
 from `workflow.phase`, `current_api`, or `api_inventory.unverified`.
@@ -67,15 +68,16 @@ while true:
     match each event to its dispatch and report through its owning engine command
     refresh state from the latest report response, or status() if needed
     if state.terminal_allowed:
-        break
+        finish delivery and break
+    if state.action.kind == "blocked":
+        preserve resume context, report the blocker, and stop this run
     if state.pending > 0:
         execute the returned action's command or task runtime operation
         report its actual result when confirmation or feedback is required
         state = the current response, or status() if the response was lost
         continue
-    handle any reported input requirement, blocker, or execution failure
-    wait for a task runtime event or the returned polling delay (normally 30 seconds)
-    state = status()
+    handle any reported input requirement or execution failure
+    do not infer completion from zero pending
 ```
 
 Check for arrived events after every action, even while `pending` stays positive;
@@ -86,13 +88,23 @@ check them against the engine's current binding. Never relabel a stale event
 with a newer dispatch or another handoff ID. An unknown worker activity is not
 a running or idle observation.
 
-At zero pending, wait and query status again; zero does not mean completion.
-Handle required caller input and failures as reported, continuing other ready
-work. A proven blocker may require returning to the caller; preserve resume
-context and do not claim completion. Periodic polling is the coordinator's
-responsibility while its session is active. The engine does not wake a stopped
-AI session. A completion event can wake the loop sooner if the task runtime
-provides that capability.
+When no productive action is ready but workers or engine operations remain,
+`pending=1` selects `commands.wait`. Execute it; the command waits at most
+30 seconds and may return sooner when engine-observable state changes. The
+returned `worker_events_required` asks you to inspect task-runtime completion,
+failure and interruption events, report actual changes, then execute global
+`commands.status`. Use `commands.inventory` only when bindings need recovery.
+This is event reconciliation, not a requirement to re-report every running
+worker every 30 seconds. Fifteen-minute activity expiry still requests explicit
+worker status checks. Unknown runtime state is never reported as running.
+
+A zero-pending `blocked` action stops this coordinator run without completing
+the workflow. Retain bindings, worktrees and blocker context. Resume through
+its `commands.resume` after the external repair is installed. The engine does
+not wake a stopped AI session; the caller or task runtime must resume it.
+Input requirements and execution failures retain their explicit handling;
+never hot-loop a failed command. A task-runtime event can wake the loop sooner
+when that runtime provides such a capability.
 
 `next` advances an engine step and returns an action. When that action requires
 a worker, the coordinator must invoke the task runtime and confirm the accepted
@@ -111,13 +123,13 @@ background the commands yourself or wait for a worker's entire lifecycle.
 Recording, Replay, and Comparison share a serialized traffic lease. Dispatch,
 confirmation, and feedback remain available during verification; integration
 waits while the canonical target is being verified. When every remaining item
-is waiting for Replay, waiting is correct. Use the returned status command and
-polling delay. A stopped executor requires its recovery action; an
+is waiting for Replay, execute the returned bounded wait command. A stopped executor requires its recovery action; an
 `execution_failed` operation requires its reported cause to be resolved before
 its returned retry, without a hot loop.
 
 Use `inventory` when a scheduling breakdown or binding recovery is needed.
-`details.ready` counts sum to `pending`; `details.waiting` is excluded. Scoped
+`details.ready` counts sum to `pending`; `details.waiting` describes outstanding
+work. When waiting is the selected coordinator operation, `details.ready.wait=1`. Scoped
 status retains global `pending` while showing one item's action. After inspecting
 an item, return to global status for the loop. Worker event, dispatch, and handoff
 mechanics are in [coordinator-worker-protocol.md](coordinator-worker-protocol.md).
@@ -156,23 +168,37 @@ Read kind-specific facts only from `details` and execute only command roles
 present in `commands`; an empty command object never implies a fallback. Status
 does not guarantee an unconditional top-level `next` command. Source-process
 traffic is issue-scoped evidence, not engine state. Both unscoped and
-scoped status return compact scheduling actions, as does `next`. The workflow
-coordinator passes the complete action and single `action.commands.evidence`
-entrypoint unchanged to the assigned worker. After dispatch confirmation, the
-worker fetches the overview (`facts.issue`), then selects relevant commands
-from its `queries`. An API worker executes the returned
+scoped status return compact scheduling actions, as does `next`. Dispatch the
+worker role, exact scope, canonical target root, and absolute worktree as defined
+in [coordinator-worker-protocol.md](coordinator-worker-protocol.md). The worker
+fetches its own overview through `evidence --api` or `evidence --process-output`,
+then selects relevant commands from `queries`. Scheduling responses contain no
+evidence command or diagnostic payload. An API worker executes the returned
 `source_process_traffic` command only when startup,
 configured process-owned traffic, background refresh, or local-cache behavior
 is relevant.
 
-### `wait_required`
+### `wait_required` and `worker_events_required`
 
-Recording, Replay, and comparison share one `traffic_runtime` lease. When
-`details.reason=resource_busy`, use its requested API, blocking API, live
-operation, and `retry_after_seconds`. At zero global pending, execute
-`commands.status` after the delay, or report an arriving worker event sooner. A missing live operation means the blocking API has a non-preemptible
-engine transition to finish. Do not run `recover`, repeat `next`, or start
-a second traffic operation while the owner is live.
+Execute `commands.wait` when verification resources are occupied or all workers
+are running/queued. Preserve the reported blocking API and operation as context;
+never start another traffic operation or recover a live owner. Wait returns
+`worker_events_required`: inspect actual completion, failure and interruption
+events in the task runtime, report each with its original dispatch/handoff
+identity, then execute `commands.status`. Inspect `commands.inventory` only to
+restore missing bindings. The engine does not inspect the task runtime itself.
+The coordinator performs coordination while idle; implementation and diagnosis
+remain assigned to workers.
+
+### `blocked`
+
+All remaining incomplete APIs require external system repair, no implementation
+worker needs coordination, and eligible revalidation has drained. End this run
+as blocked; `pending=0` and `terminal_allowed=false`. The action lists repair
+APIs and any process outputs whose final baseline depends on them. Those outputs
+remain incomplete. Preserve the worktrees and resume context. Execute
+`commands.resume` only after repair or an explicit resumed session; do not loop
+on it immediately and do not claim successful delivery.
 
 ### `recording_required`
 
@@ -182,8 +208,8 @@ Do not reconstruct a recording command or discover its run by recency.
 
 ### `recording_in_progress`
 
-Read [recording-lifecycle.md](recording-lifecycle.md) and execute only
-`commands.status`. Do not start another executor or advance before the exact
+Read [recording-lifecycle.md](recording-lifecycle.md) and execute `commands.wait`. After it returns, reconcile worker events and
+refresh global status. Do not start another executor or advance before the exact
 finalized run becomes `advance_required`.
 
 ### `case_pattern_identification_required`
@@ -249,7 +275,8 @@ it does not freeze scheduling or feedback for other items. A worker ending
 without a handoff requires resume, not acceptance.
 
 `pending` counts executable coordinator actions, including these worker
-operations. Waiting for worker delivery or a Replay resource contributes zero.
+operations. If worker delivery or a Replay resource is the only remaining
+activity, one explicit `wait` contributes one pending operation.
 The engine returns work across the whole inventory before returning a global
 wait. The coordinator consumes actions and reports task runtime events; it does not
 rebuild that queue from API counters or historical confirmations.
@@ -327,8 +354,7 @@ authorizes recovery.
 ### `recording_refresh_pending`
 
 The scoped API is parked until one consolidated standard recording can replace
-the baseline. Read [recording-lifecycle.md](recording-lifecycle.md), execute only
-`commands.status` for the waiting API, and never execute its stale acceptance.
+the baseline. Read [recording-lifecycle.md](recording-lifecycle.md), execute `commands.wait`, and never execute its stale acceptance.
 Continue other runnable work only through current engine-issued commands.
 
 ### `complete`
@@ -345,7 +371,7 @@ fingerprint and the final public `progress.yaml` is committed. Use
 
 Every initialized action or status includes a bounded `api_inventory` summary:
 `total`, `completed`, `unverified`, `implementation_required`,
-`awaiting_recording_refresh`, `revalidation_pending`, `current_index`, and
+`system_repair_required`, `awaiting_recording_refresh`, `revalidation_pending`, `current_index`, and
 `current_api`. The engine owns this inventory. In expanded `inventory`,
 `workflow.scope` is the selector of the shared standard recording and is separate
 from the selected API. An
@@ -357,7 +383,7 @@ The scope remains stable as selected workers change.
 Every `implementation_required` action uses a worker. Inventory size controls
 only how much work the engine can make ready. Worker concurrency belongs to
 the task runtime; the coordinator does not impose a limit. The engine may park
-implementation issues while it serializes the selected API's Replay or
+implementation and system-repair issues while it serializes the selected API's Replay or
 comparison. Expensive worker diagnosis, coding, and
 tests may overlap; only one traffic operation may be live.
 
@@ -373,13 +399,19 @@ new standard recording or handling a consolidated capture refresh.
 If the target fingerprint changes during focused Replay, discard that result
 and return the API to Replay. If later integration changes the fingerprint of a
 completed API, move it to deferred `revalidation_pending`. Ordinary pending and
-implementation work runs first; once it drains, verify every stale API against
-one final content fingerprint. A commit with no effective content change does
+implementation actions run first. When none is executable and verification
+resources are free, the engine selects one stale API in stable inventory order,
+even while other workers run or APIs wait for system repair. A passing API is
+verified for the current fingerprint; a target-code failure dispatches/resumes
+its worker, and a system failure is parked with its repair route. Continue
+selecting eligible work until all APIs pass or remaining failures require
+external system repair. A later integration may invalidate earlier successes;
+final completion still requires one current content fingerprint. A commit with no effective content change does
 not create a new validation epoch.
 
 For a high-impact shared module, global configuration, or startup change, the
 caller may explicitly request earlier verification for selected stale APIs; routine
-coordination defers these checks to the final epoch:
+coordination already uses idle verification capacity without such a request:
 
 ```text
 backend-rewrite verification request \

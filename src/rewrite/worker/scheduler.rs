@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use super::super::model::{RewriteAction, RewritePhase, RewriteState};
+use super::super::model::{RewriteAction, RewriteState};
 use super::super::process_output_model::RewriteWorkScope;
-use super::super::{action, evidence, inventory, process_outputs};
+use super::super::{action, inventory};
 use super::model::{
     RewriteWorkerCoverageState as Coverage, RewriteWorkerInventoryCommands,
     RewriteWorkerInventoryItem,
@@ -63,10 +63,7 @@ pub(in crate::rewrite) fn global_action(
                 Coverage::VerificationRequired
                     if !busy
                         && (matches!(scope, RewriteWorkScope::ProcessOutput { .. })
-                            || matches!(
-                                state.phase,
-                                RewritePhase::ApiPending | RewritePhase::ImplementationRequired
-                            )) =>
+                            || inventory::can_switch_api(state)) =>
                 {
                     3
                 }
@@ -99,8 +96,6 @@ pub(in crate::rewrite) fn scope_action(
             .action;
     }
     let worker = super::dispatch_view(state, scope.clone(), None);
-    let issue = super::issue_for_scope(&scoped, scope).expect("unresolved scope has an issue");
-    let evidence = evidence::overview_command(target_root, &scoped, scope, issue);
     match runtime::coverage(state, scope) {
         Coverage::StatusRequired => RewriteAction::WorkerStatusRequired {
             summary: format!(
@@ -109,7 +104,6 @@ pub(in crate::rewrite) fn scope_action(
             ),
             report_worker: runtime::report_command(target_root, &worker.dispatch_id, false),
             worker,
-            evidence,
         },
         Coverage::IntegrationRequired => RewriteAction::IntegrationRequired {
             summary: format!(
@@ -121,7 +115,6 @@ pub(in crate::rewrite) fn scope_action(
                 .expect("ready handoff has an identity"),
             report_worker: runtime::report_command(target_root, &worker.dispatch_id, true),
             worker,
-            evidence,
         },
         Coverage::VerificationRequired => RewriteAction::AdvanceRequired {
             summary: format!(
@@ -142,41 +135,8 @@ pub(in crate::rewrite) fn after_dispatch(
     if let Some(action) = global_action(target_root, state, false) {
         return action;
     }
-    if let Some(slice) = state
-        .parked_slices
-        .values()
-        .find(|slice| slice.api != state.api && slice.system_repair_accepted)
-    {
-        return RewriteAction::AdvanceRequired {
-            summary: format!(
-                "system repair accepted for {}; replay its immutable cases",
-                slice.api
-            ),
-            command: action::next_command_for_api(target_root, &slice.api),
-        };
-    }
-    if let Some(api) = inventory::next_pending_api_for_concurrent_work(state) {
-        return RewriteAction::AdvanceRequired {
-            summary: format!("execute commands.advance to continue with pending API {api}"),
-            command: action::next_command_for_api(target_root, api),
-        };
-    }
-    if let Some(id) = process_outputs::next_eligible_id(state) {
-        return RewriteAction::AdvanceRequired {
-            summary: format!("execute commands.advance to verify process output {id}"),
-            command: action::next_command_for_process_output(target_root, id),
-        };
-    }
-    if runtime::coverage(state, &scope) == Coverage::Running {
-        return RewriteAction::WaitRequired {
-            summary: "all remaining items are waiting; collect worker completion events or retry global status after 30 seconds".into(),
-            resource: "worker_handoff".into(),
-            requested_api: None,
-            blocking_api: None,
-            active_operation: None,
-            retry_after_seconds: 30,
-            status: action::status_command_for_api(target_root, None),
-        };
+    if let Some(action) = super::super::scheduling::idle_action(target_root, state) {
+        return action;
     }
     scope_action(target_root, state, &scope)
 }

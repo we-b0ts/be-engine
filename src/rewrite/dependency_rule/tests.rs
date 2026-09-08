@@ -22,6 +22,7 @@ fn dependency_state() -> RewriteState {
         comparison_observation: None,
     });
     state.dependency_rule_plan = Some(RewriteDependencyRulePlanRecord {
+        review_fingerprint: None,
         id: "dependency-plan-original".to_string(),
         issue_id: "issue-dependency".to_string(),
         evidence_id: "evidence-dirty-clusters".to_string(),
@@ -58,6 +59,43 @@ fn http_unordered_remains_request_owned_and_rechecks_persisted_evidence() {
             method: "POST".into(),
             path: "/membership".into(),
             pointer: "/department_ids".into(),
+        },
+    };
+    state.dependency_rule_plan.as_mut().unwrap().spec = spec.clone();
+    for kind in [
+        RewriteIssueKind::Response,
+        RewriteIssueKind::Dependency,
+        RewriteIssueKind::Replay,
+    ] {
+        state.active_issue.as_mut().unwrap().kind = kind;
+        assert!(dependency_issue(&state, &spec).is_ok());
+        assert!(
+            validate_plan_evidence(
+                Path::new("/missing-target"),
+                &state,
+                "issue-dependency",
+                "evidence-dirty-clusters",
+                &spec
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn redis_unordered_remains_request_owned_and_rechecks_persisted_evidence() {
+    let mut state = dependency_state();
+    let spec = RewriteDependencyRuleSpec::RedisUnordered {
+        selector: crate::RedisUnorderedSelector {
+            host: "redis.test".into(),
+            port: 6379,
+            key: crate::RedisValueKeySelector::Affix {
+                prefix: "erp:membership:".into(),
+                suffix: String::new(),
+            },
+            field: crate::RedisUnorderedField::Json {
+                pointer: "/ids".into(),
+            },
         },
     };
     state.dependency_rule_plan.as_mut().unwrap().spec = spec.clone();

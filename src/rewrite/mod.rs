@@ -23,7 +23,7 @@ pub use worker::runtime::{RewriteWorkerReportOptions, report as report_rewrite_w
 mod dependency_rule;
 mod evidence;
 mod evidence_model;
-pub use evidence::query_rewrite_evidence;
+pub use evidence::{query_rewrite_evidence, query_rewrite_evidence_for_scope};
 mod fingerprint;
 mod inventory;
 mod ip_capture;
@@ -49,8 +49,11 @@ mod revalidation;
 mod route;
 mod rule;
 pub use jwt_rule::JwtRulePlanOptions;
+mod scheduling;
 mod source_process_traffic;
 mod status;
+mod waiting;
+pub use waiting::{RewriteWaitOptions, wait as wait_rewrite};
 mod store;
 mod target_quality;
 #[cfg(test)]
@@ -78,7 +81,9 @@ pub use dependency_rule::{
     RewriteDependencyPayloadRulePlanReport, RewriteDependencyRulePlanOptions,
     RewriteDependencyRulePlanReport, RewriteDependencyRuleSelector,
 };
-pub use evidence_model::{RewriteApplicableRulePlanner, RewriteEvidenceReport, RewriteRuleHint};
+pub use evidence_model::{
+    RewriteApplicableRulePlanner, RewriteEvidenceContext, RewriteEvidenceReport, RewriteRuleHint,
+};
 pub use model::{
     RewriteAction, RewriteActionEnvelope, RewriteApiInventoryDetails, RewriteApiInventoryView,
     RewriteApiProgress, RewriteApiStatus, RewriteCommandSpec, RewriteDependencyRuleReport,
@@ -266,12 +271,13 @@ pub fn apply_rewrite_dependency_rule(
         .context("rewrite workflow has not been initialized")?;
     let owner_api = inventory::api_for_dependency_rule_plan(&state, plan_id)
         .context("dependency-rule plan is stale or belongs to no concurrent API work item")?;
-    let changes_http_matching = inventory::with_slice_mut(&mut state, &owner_api, |slice| {
+    let changes_dependency_matching = inventory::with_slice_mut(&mut state, &owner_api, |slice| {
         Ok(slice.dependency_rule_plan.as_ref().is_some_and(|p| {
             matches!(
                 p.spec,
                 model::RewriteDependencyRuleSpec::HttpCrossCase { .. }
                     | model::RewriteDependencyRuleSpec::HttpUnordered { .. }
+                    | model::RewriteDependencyRuleSpec::RedisUnordered { .. }
             )
         }))
     })?;
@@ -284,6 +290,7 @@ pub fn apply_rewrite_dependency_rule(
                         | model::RewriteDependencyRuleSpec::MysqlSqlTime { .. }
                         | model::RewriteDependencyRuleSpec::HttpCrossCase { .. }
                         | model::RewriteDependencyRuleSpec::HttpUnordered { .. }
+                        | model::RewriteDependencyRuleSpec::RedisUnordered { .. }
                 )
             });
             let cache_snapshot_refresh =
@@ -336,8 +343,8 @@ pub fn apply_rewrite_dependency_rule(
             report.next_command = action::next_command_for_api(&target_root, &state.api);
             Ok((report, false))
         })?;
-    if changes_http_matching {
-        dependency_rule::invalidate_http_rule_validation(&mut state);
+    if changes_dependency_matching {
+        dependency_rule::invalidate_dependency_matching_validation(&mut state);
     }
     if cache_snapshot_refresh {
         let runnable = inventory::mark_awaiting_recording_refresh(&mut state, &owner_api)?;
@@ -359,6 +366,13 @@ pub fn verify_rewrite_repair(
     let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
     let store = RewriteStore::new(&target_root)?;
     let _lock = store.lock()?;
+    ensure!(
+        matches!(
+            traffic_operation::state(&target_root)?,
+            traffic_operation::TrafficOperationState::Absent
+        ),
+        "system repair acceptance cannot switch APIs while a traffic operation is active"
+    );
     let mut state = store
         .load()?
         .context("rewrite workflow has not been initialized")?;
@@ -368,6 +382,7 @@ pub fn verify_rewrite_repair(
         let requested_api = api.parse::<RecordingApi>()?;
         inventory::activate_requested(&mut state, Some(&requested_api))?;
     }
+    state.process_outputs.current_id = None;
     let report = repair::verify(&target_root, &mut state, repair_id)?;
     store.save(&state)?;
     Ok(report)

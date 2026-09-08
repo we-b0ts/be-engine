@@ -25,8 +25,10 @@ pub(super) fn for_status(
     state: &RewriteState,
 ) -> Result<RewriteActionEnvelope> {
     let base = status_base(target_root, state)?;
-    let pending = super::coordination::pending(state, &base, false);
-    let selected = select_action(target_root, state, base);
+    let selected = select_action(target_root, state, base.clone());
+    let pending =
+        super::coordination::projected_details(target_root, state, &base, &selected, false)
+            .pending();
     let mut result = envelope(target_root, state, selected);
     result.pending = pending;
     Ok(result)
@@ -40,8 +42,9 @@ pub(super) fn status_base(target_root: &Path, state: &RewriteState) -> Result<Re
     {
         return Ok(state_action(target_root, state));
     }
-    if state.phase == RewritePhase::SystemRepairRequired {
-        repair::acceptance_ready(target_root, state)?;
+    for api in super::scheduling::repair_apis(state) {
+        let scoped = inventory::scoped(state, Some(&api.parse()?))?;
+        repair::acceptance_ready(target_root, &scoped)?;
     }
     let recording_status = recording_action::status_action(target_root, state)?;
     let target_change = target_quality::status_action(target_root, state)?;
@@ -56,7 +59,11 @@ pub(super) fn status_base(target_root: &Path, state: &RewriteState) -> Result<Re
     })
 }
 
-fn select_action(target_root: &Path, state: &RewriteState, base: RewriteAction) -> RewriteAction {
+pub(super) fn select_action(
+    target_root: &Path,
+    state: &RewriteState,
+    base: RewriteAction,
+) -> RewriteAction {
     if matches!(
         base,
         RewriteAction::SystemRepairRequired {
@@ -66,11 +73,28 @@ fn select_action(target_root: &Path, state: &RewriteState, base: RewriteAction) 
     ) {
         return base;
     }
+    if !matches!(
+        base,
+        RewriteAction::PlanApplyRequired { .. } | RewriteAction::TargetQualityRequired { .. }
+    ) && let Some(repair) = super::scheduling::repair_action(target_root, state)
+    {
+        return repair;
+    }
     if let Some(selected) = global_worker_action(target_root, state, &base) {
         return selected;
     }
     if matches!(base, RewriteAction::ImplementationRequired { .. }) {
         return worker::state_action(target_root, state);
+    }
+    if matches!(
+        base,
+        RewriteAction::SystemRepairRequired {
+            acceptance: None,
+            ..
+        } | RewriteAction::Complete { .. }
+    ) && let Some(idle) = super::scheduling::idle_action(target_root, state)
+    {
+        return idle;
     }
     base
 }
@@ -199,7 +223,7 @@ pub(super) fn uninitialized_coordinator_wait_envelope(
     let status = status_command_for_api(target_root, requested_api.as_deref());
     RewriteActionEnvelope {
         schema_version: ACTION_SCHEMA_VERSION,
-        pending: 0,
+        pending: 1,
         workflow: None,
         api_inventory: None,
         process_output_inventory: None,
@@ -229,7 +253,14 @@ pub(super) fn envelope(
     );
     RewriteActionEnvelope {
         schema_version: ACTION_SCHEMA_VERSION,
-        pending: super::coordination::pending(state, &state_action(target_root, state), busy),
+        pending: super::coordination::projected_details(
+            target_root,
+            state,
+            &state_action(target_root, state),
+            &action,
+            busy,
+        )
+        .pending(),
         workflow,
         api_inventory: Some(inventory::view(state)),
         process_output_inventory: Some(process_outputs::view(state)),
@@ -390,12 +421,6 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
                 .clone()
                 .expect("system repair phase requires an issue"),
             route: state.route.clone(),
-            evidence: super::evidence::overview_command(
-                target_root,
-                state,
-                &super::process_output_model::RewriteWorkScope::Api { api: state.api.clone() },
-                state.active_issue.as_ref().expect("system repair phase requires an issue"),
-            ),
             acceptance: repair::pending_command(target_root, state),
         },
         RewritePhase::SliceComplete => {

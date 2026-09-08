@@ -96,7 +96,6 @@ fn implementation_action_has_one_stable_public_shape() {
         },
         confirm_worker: Some(command.clone()),
         report_worker: command.clone(),
-        evidence: command.clone(),
         acceptance: command,
     };
 
@@ -127,7 +126,7 @@ fn implementation_action_has_one_stable_public_shape() {
     ] {
         assert!(value["details"].get(field).is_none());
     }
-    assert_eq!(value["commands"]["evidence"]["cwd"], "/target");
+    assert!(value["commands"].get("evidence").is_none());
     assert_eq!(
         value.pointer("/details/worker/state"),
         Some(&serde_json::json!("dispatch_required"))
@@ -154,7 +153,7 @@ fn implementation_action_has_one_stable_public_shape() {
         action,
     })
     .unwrap();
-    assert_eq!(status.get("schema_version"), Some(&serde_json::json!(25)));
+    assert_eq!(status.get("schema_version"), Some(&serde_json::json!(27)));
     assert!(status.get("active_issue").is_none());
     assert!(status.get("next").is_none());
 }

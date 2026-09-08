@@ -18,6 +18,7 @@ mod motan_concurrency_tests;
 mod redis_authentication_tests;
 mod redis_client_info_tests;
 mod redis_connection_tests;
+mod redis_value_tests;
 
 #[tokio::test]
 async fn replays_redis_pipeline_in_recorded_lane_order() {

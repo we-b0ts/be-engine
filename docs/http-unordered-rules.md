@@ -51,7 +51,8 @@ the full request fingerprint required by shared `cross-case` exchanges.
 ## Discovery and worker handoff
 
 1. After a failed Replay, follow `status`/`next` to the assigned worker's
-   `action.commands.evidence`, then the overview's `dirty_clusters` query.
+   `evidence --api '<METHOD pattern>'` against the canonical target root, then
+   the overview's `dirty_clusters` query.
    Discovery is available during response, dependency and Replay issues; a
    passing response is not a prerequisite.
 2. An HTTP unmatched cluster exposes an `unordered` entry in `rule_hints`.

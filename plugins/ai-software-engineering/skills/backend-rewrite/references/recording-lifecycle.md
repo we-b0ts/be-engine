@@ -22,7 +22,8 @@ environment variables. The returned argv already binds the canonical absolute
 `--target-root`; use its `cwd` unchanged. The command starts a detached
 recording executor and returns immediately. Poll only the status command
 returned by that execution. While recording is live,
-`recording_in_progress.action.commands.status` remains the only polling command.
+`recording_in_progress.action.commands.wait` performs bounded waiting. After
+waiting, reconcile task-runtime worker events and refresh global status.
 
 Run `action.commands.advance` only after `advance_required`. The allocated
 identity is `action.details.run_id`; the engine owns its input mode,
