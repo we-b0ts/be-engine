@@ -108,10 +108,7 @@ fn process_output_issue_dispatches_an_independent_worker() {
         action.pointer("/commands/acceptance/argv/4"),
         Some(&serde_json::json!("--process-output"))
     );
-    assert_eq!(
-        action.pointer("/commands/evidence/argv/3"),
-        Some(&serde_json::json!("evidence"))
-    );
+    assert!(action["commands"].get("evidence").is_none());
     assert!(
         action["summary"]
             .as_str()
@@ -739,3 +736,4 @@ pub(in crate::rewrite) fn issue(id: &str, attempt: u64, target_fingerprint: &str
         comparison_observation: None,
     }
 }
+use crate::rewrite::evidence;

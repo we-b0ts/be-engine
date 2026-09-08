@@ -22,7 +22,7 @@ use crate::{
 };
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 25;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 26;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -690,21 +690,18 @@ pub enum RewriteAction {
         worker: RewriteWorkerDispatchView,
         confirm_worker: Option<RewriteCommandSpec>,
         report_worker: RewriteCommandSpec,
-        evidence: RewriteCommandSpec,
         acceptance: RewriteCommandSpec,
     },
     WorkerStatusRequired {
         summary: String,
         worker: RewriteWorkerDispatchView,
         report_worker: RewriteCommandSpec,
-        evidence: RewriteCommandSpec,
     },
     IntegrationRequired {
         summary: String,
         worker: RewriteWorkerDispatchView,
         handoff_id: String,
         report_worker: RewriteCommandSpec,
-        evidence: RewriteCommandSpec,
     },
     ExecutionFailed {
         summary: String,
@@ -736,7 +733,6 @@ pub enum RewriteAction {
         work_scope: RewriteWorkScope,
         issue: RewriteIssue,
         route: Option<RewriteRouteRecord>,
-        evidence: RewriteCommandSpec,
         acceptance: Option<RewriteCommandSpec>,
     },
     RecordingRefreshPending {

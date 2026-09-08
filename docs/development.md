@@ -1159,24 +1159,45 @@ backend-rewrite verification request \
   --reason 'shared response mapper changed'
 ```
 
-Rewrite action schema v25 always returns `action.kind`, `action.summary`,
+Rewrite action schema v26 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
-`details`; executable argv exist only under role-named `commands` such as
-`execute`, `status`, `advance`, `recover`, `evidence`, `apply`, and `acceptance`.
+`details`; executable argv exist only under coordinator command roles such as
+`execute`, `status`, `advance`, `recover`, `apply`, and `acceptance`.
 Unscoped and scoped `status` and `next` expose scheduling state and short issue
-summaries, not diagnostic payloads. Each implementation or system-repair action
-returns one issue-bound `commands.evidence` command. After worker confirmation,
-that read-only command returns an overview with the complete bounded issue in
-`facts.issue` and, for APIs, further exact evidence commands in `queries`.
-Process-output overviews expose `facts.issue.comparison_observation` and no API
-queries. The state-machine coordinator forwards the compact action and entrypoint; workers fetch their
-own diagnostic facts. Relevant API overviews include a `source_process_traffic`
-query for bounded bootstrap, configured `process_owned`, and Redis snapshot
-triage. Query identities follow the owning work item across concurrent
-scheduling and reject replaced evidence. The overview itself does not authorize
-rule planning; use the applicable planner returned by a specific evidence query.
-Compared with v22, `commands.evidence` is a single command object rather than a
-query list. Existing issued detail-query IDs remain valid for unchanged evidence;
+summaries. They contain neither diagnostics nor an evidence command.
+
+The coordinator dispatches the implementation-worker role, exact API or
+process-output scope, canonical target root, and absolute assigned worktree.
+Workers fetch their own current context and evidence:
+
+```bash
+backend-rewrite --target-root /path/to/target evidence --api 'GET /api/widgets/*'
+backend-rewrite --target-root /path/to/target evidence --process-output metrics-profile
+```
+
+Exactly one selector or opaque query ID is required. These read-only selectors
+resolve the requested item without switching the active API or advancing state,
+including parked APIs. Unknown items and items with no current issue fail
+explicitly. Dispatch confirmation still gates evidence; workers wait for the
+coordinator to confirm and retry the same query if they start too early.
+Evidence schema v4 overviews include `context` with canonical target root,
+workflow/recording identity, revision, comparison requirement, and the worker's
+binding/dispatch identity. `facts.issue` retains the complete bounded issue.
+API overviews supply further exact commands in `queries`; process-output
+overviews expose `facts.issue.comparison_observation` and no API queries.
+Workers retain the initial identity in their returned handoff along with
+supporting proof, tests, commit/patch and necessary coordinator inputs. The
+coordinator gets current acceptance commands from the engine; workers do not
+need an action JSON or evidence command in their assignment.
+
+Relevant API overviews include a `source_process_traffic` query for bounded
+bootstrap, configured `process_owned`, and Redis snapshot triage. Existing
+`evidence <query-id>` calls remain supported for overview/detail queries and
+pagination. Query identities follow the owning item across concurrent scheduling
+and reject replaced evidence. Current context metadata is excluded from evidence
+hashing so unrelated workflow revisions do not invalidate diagnostic evidence.
+The overview does not authorize rule planning; use the applicable planner
+returned by a specific evidence query.
 Schema v24 added top-level `pending`, counting only coordinator actions executable
 now. Inventory summaries rename their old `pending` count to `unverified`.
 Persisted state remains version 1, with optional worker observations and a
@@ -1189,7 +1210,7 @@ unchanged repairs wait, while a changed acceptance revision schedules repair
 verification before worker dispatch. Accepted replay repairs authorize the same
 API's replay without requiring another worker handoff. `worker confirm` records
 binding delivery only; explicit coordinator reports supply running/queued state.
-The engine does not query an external AI runtime. Reports expire after five
+The engine does not query an external AI runtime. Reports expire after fifteen
 minutes; missing or legacy unclassified observations require a fresh report.
 Start and resume with `backend-rewrite status`; an initialized project without a
 workflow returns an executable initialization action with `pending: 1`.
@@ -1252,7 +1273,8 @@ worktree. There is no coordinator worker limit; the task runtime controls
 concurrency and accepted queuing. Dispatch/resume a real worker, then execute
 `commands.confirm_worker` with its actual handle. Confirmation of one API never
 blocks dispatch or feedback for another. Workers own evidence, diagnosis,
-implementation, and local tests; the coordinator forwards compact actions.
+implementation, and local tests; the coordinator supplies only the assignment
+fields described above and retains the actual dispatch identity.
 
 Runtime completion events drive `worker report <dispatch-id>`. Set
 `BACKEND_REWRITE_SUBAGENT_HANDLE` and `BACKEND_REWRITE_WORKER_ACTIVITY` to
@@ -1481,8 +1503,10 @@ previous/current attempt numbers, and whether the latest attempt passed. It
 describes the latest completed attempt, so a repeated `next` with no target
 change returns the same evidence without claiming another replay occurred.
 
-Only use returned `backend-rewrite evidence` query IDs for coordinator gate and
-aggregate facts. Fetch the overview from `action.commands.evidence` first.
+Workers fetch the overview through `backend-rewrite evidence --api` or
+`--process-output`, bound to their canonical target root. Further gate and
+aggregate facts use only the returned `backend-rewrite evidence <query-id>`
+commands.
 For a response issue, `facts.issue.response_diagnosis` in that overview
 contains exact total/indexed/omitted difference counts plus at most 20 clusters
 grouped by normalized Pointer pattern and difference kind. Each cluster reports

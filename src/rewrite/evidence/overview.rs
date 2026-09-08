@@ -3,25 +3,12 @@ use std::path::Path;
 use anyhow::Result;
 use serde_json::json;
 
-use super::super::model::{RewriteCommandSpec, RewriteIssue, RewriteState};
+use super::super::model::{RewriteIssue, RewriteState};
 use super::super::process_output_model::RewriteWorkScope;
-use super::super::{action, fingerprint, worker};
+use super::super::{fingerprint, worker};
 use super::RewriteEvidenceReport;
 
 const QUERY_OVERVIEW: &str = "overview";
-
-pub(in crate::rewrite) fn command(
-    target_root: &Path,
-    state: &RewriteState,
-    scope: &RewriteWorkScope,
-    issue: &RewriteIssue,
-) -> RewriteCommandSpec {
-    action::command(
-        target_root,
-        vec!["evidence".to_string(), query_id(state, scope, issue)],
-        Vec::new(),
-    )
-}
 
 pub(super) fn query_id(
     state: &RewriteState,
@@ -84,7 +71,15 @@ pub(super) fn report(
             .trim_start_matches("fnv1a64:")
     );
     Ok(RewriteEvidenceReport {
-        schema_version: 3,
+        schema_version: 4,
+        context: Some(Box::new(super::super::evidence_model::RewriteEvidenceContext {
+            target_root: target_root.to_path_buf(),
+            workflow_id: state.workflow_id.clone(),
+            revision: state.revision,
+            recording_run_id: state.recording_run_id.clone(),
+            require_comparison: state.require_comparison,
+            worker: worker::dispatch_view(state, scope.clone(), None),
+        })),
         evidence_id,
         issue_id: issue.id.clone(),
         query: QUERY_OVERVIEW.to_string(),

@@ -15,15 +15,16 @@ use traffic_e2e::{
     RewriteRouteOptions, RewriteRulePlanOptions, RewriteTargetQualityOptions,
     RewriteWorkerConfirmOptions, RewriteWorkerReportOptions, RewriteWorkerTransferOptions,
     apply_rewrite_case_patterns, apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite,
-    plan_rewrite_rule, query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
-    report_rewrite_worker, request_rewrite_recording, request_rewrite_revalidation,
-    resume_rewrite_replay_planning, retry_rewrite_operation, route_rewrite, start_rewrite_next,
-    start_rewrite_recording, start_rewrite_target_quality, status_rewrite, status_rewrite_for_api,
+    plan_rewrite_rule, query_rewrite_case_dependencies, recover_rewrite, report_rewrite_worker,
+    request_rewrite_recording, request_rewrite_revalidation, resume_rewrite_replay_planning,
+    retry_rewrite_operation, route_rewrite, start_rewrite_next, start_rewrite_recording,
+    start_rewrite_target_quality, status_rewrite, status_rewrite_for_api,
     status_rewrite_for_process_output, transfer_rewrite_worker, verify_rewrite_repair,
 };
 
 mod config_protocol;
 mod dependency_rule;
+mod evidence;
 mod project_init;
 mod recorder_capture;
 mod startup;
@@ -112,7 +113,7 @@ enum RewriteCommand {
     /// Apply one coordinator-requested batch of API case path patterns.
     CasePattern(CasePatternArgs),
     /// Inspect an issue overview or execute one returned bounded evidence query.
-    Evidence(EvidenceArgs),
+    Evidence(evidence::EvidenceArgs),
     /// Plan or apply one evidence-backed response rule.
     Rule(RuleArgs),
     /// Classify dependency ownership, or plan/apply one process-owned rule.
@@ -158,12 +159,6 @@ struct StatusArgs {
     /// Process-level output work item whose action should be reconstructed.
     #[arg(long, conflicts_with = "api")]
     process_output: Option<String>,
-}
-
-#[derive(Debug, Args)]
-struct EvidenceArgs {
-    /// Opaque current query id returned by rewrite next.
-    query_id: String,
 }
 
 #[derive(Debug, Args)]
@@ -630,10 +625,9 @@ async fn run(cli: Cli) -> Result<()> {
                 )
             }
         },
-        RewriteCommand::Evidence(args) => print_json(
-            &query_rewrite_evidence(RewriteContext { target_root }, &args.query_id)?,
-            pretty,
-        ),
+        RewriteCommand::Evidence(args) => {
+            print_json(&args.query(RewriteContext { target_root })?, pretty)
+        }
         RewriteCommand::Rule(args) => match args.command {
             RuleCommand::Plan(args) => print_json(
                 &plan_rewrite_rule(

@@ -175,10 +175,13 @@ is unclear.
   owns the durable first-completion latch for future recording batches alongside
   its existing final delivery publication gate.
   `evidence/overview` owns issue overview identity and projection, including
-  process-output diagnostics. `evidence` owns read-only query access, work-item
-  resolution, and worker-confirmation checks. Action serialization retains
-  scheduling facts and one evidence entrypoint; diagnostic payloads stay in
-  evidence reports. Persisted issue payloads retain their evidence contract.
+  process-output diagnostics and current worker context outside evidence hashes.
+  `evidence/access` owns read-only assignment/opaque-query resolution and
+  worker-confirmation checks; `evidence` owns bounded API diagnostic queries.
+  `bin/backend-rewrite/evidence` owns CLI selector parsing for that read-only
+  contract. Action serialization retains scheduling facts and coordinator
+  commands; diagnostic payloads and detail queries stay in evidence reports.
+  Persisted issue payloads retain their evidence contract.
   `configuration_commit` owns the separate persistent-configuration Git commit
   boundary for `status` and `next`; it detects pending configuration before
   dispatch or verification without committing files or treating routine progress

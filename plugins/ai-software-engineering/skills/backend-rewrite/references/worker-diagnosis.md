@@ -3,8 +3,8 @@
 Audience: implementation workers assigned an `implementation_required` work
 item. Read before work-item diagnosis or code changes. Use the engine's current
 work-item facts to identify one repair before the engine-issued acceptance.
-Select the diagnosis path from `action.details.work_scope.kind` before reading
-work-item evidence.
+Select the diagnosis path from the assigned work scope and confirm it against
+the evidence overview.
 
 ## Contents
 
@@ -18,20 +18,45 @@ work-item evidence.
 
 ## Work-Scope Contract
 
-The engine supplies the active issue identity and work scope in `action.details`.
-If the dispatch message omits current facts, recover them through scoped status
-using the assigned canonical target root and work-item identity. Then follow the
-returned evidence commands. Missing information never changes a worker's role;
-report an unresolvable identity or API gap without assuming coordinator authority.
-After the workflow coordinator confirms the current dispatch,
-execute the single `action.commands.evidence` command. Its overview returns the
-complete bounded issue in `facts.issue`, including possible causes and a
-representative when available. Treat possible causes as hypotheses. Scoped
-status restores this compact action and evidence entrypoint, not diagnostics.
-The sole acceptance command is
-`action.commands.acceptance`; return it unchanged to the workflow coordinator and never
-execute it as a worker. For either worker scope, prove one cause from source and
-target code, make one coherent repair, and run focused local tests.
+Start each worker turn by querying the exact assigned scope against the canonical
+target root, even while editing a separate worktree:
+
+```text
+backend-rewrite --target-root <canonical-root> evidence --api '<METHOD pattern>'
+backend-rewrite --target-root <canonical-root> evidence --process-output <id>
+```
+
+Choose the entrypoint matching the assigned scope. Do not query a worker-local rewrite
+workflow. The coordinator supplies your role, exact scope, canonical target root,
+and absolute worktree; the engine supplies current facts. Missing information
+never changes a worker's role. Report an unresolvable identity or API gap without
+assuming coordinator authority or guessing another work item.
+
+If the engine reports an unconfirmed dispatch, wait for the coordinator's
+confirmation and retry this same read-only entrypoint; a worker can start before
+the coordinator has completed confirmation. Do not confirm or report yourself.
+An unknown scope or a scope with no current issue is an explicit error; report it
+to the coordinator instead of implementing from a previous issue.
+
+The overview's `context` contains `target_root`, `workflow_id`, `revision`,
+`recording_run_id`, `require_comparison`, and `worker` with exact scope, binding
+and dispatch identity. Read the complete bounded issue in `facts.issue`,
+including its ID, attempt, observed target fingerprint, possible causes, and
+representative when available. Treat possible causes as hypotheses.
+
+Retain the initial overview's workflow/recording, scope, issue, binding and
+dispatch identities for this turn and include them in the return handoff. If a
+later query is stale, fetch the same scoped entrypoint to check its identity. A
+changed issue or dispatch requires coordinator reconciliation; never relabel old
+work with the new identity. A workflow revision change alone does not replace
+this assignment. Opaque detail-query IDs remain valid only for their original
+evidence; use newly returned IDs when evidence changes within the same assignment.
+
+For either scope, prove one cause from source and target code, make one coherent
+repair, and run focused local tests. Return the identified commit/patch, root cause
+and supporting evidence, local test results, shared impact, necessary coordinator
+inputs and unresolved risks. Do not return or execute an acceptance command;
+the coordinator obtains its current legal action from the engine after handoff.
 
 For `work_scope.kind=api`, exact further evidence-query argv are under the
 overview's `queries`. Traffic facts come only from the overview, returned queries
@@ -63,8 +88,8 @@ after completing that diagnosis path.
 
 ## Process-Output Issues
 
-For `work_scope.kind=process_output`, execute the single
-`action.commands.evidence` command after dispatch confirmation. The overview
+For `work_scope.kind=process_output`, query `evidence --process-output <id>`
+against the assigned canonical root after dispatch confirmation. The overview
 has no API `queries`. Start from `facts.issue.comparison_observation`, which
 identifies the process-output ID, configured path, classification, comparison contract, and source/target
 presence. Do not look for an API representative or `case_dir`, execute API
@@ -99,10 +124,10 @@ Do not create a replay-only file, copy a recorded output into the target, or
 make target code read engine artifacts.
 
 For a target repair, return the exact work scope and issue ID, proven cause,
-changed files and shared impact, patch or commit, local test results, unchanged
-acceptance command, and unresolved risks. For an eligible rule candidate,
-return the same work scope and issue identity plus only the three requested rule
-inputs and unresolved risks; no target patch or local test is required. The
+changed files and shared impact, patch or commit, local test results, original
+dispatch identity, and unresolved risks. For an eligible rule candidate,
+return the same work scope, issue and original dispatch identities plus the three
+requested rule inputs and unresolved risks; no target patch or local test is required. The
 workflow coordinator owns rule planning/application and acceptance; the worker
 does not run process-output comparison itself.
 
@@ -581,15 +606,15 @@ Route the proven cause to exactly one action:
 
 - process-output generation defect: repair normal target component loading,
   configuration, startup, write/flush, or shutdown behavior, run focused local
-  tests, and return the tested handoff plus unchanged acceptance to the
+  tests, and return the tested handoff with its original dispatch identity to the
   workflow coordinator;
 - target implementation or cache defect: change target code under
   [target-implementation-requirements.md](target-implementation-requirements.md),
-  run focused target tests, and return the tested handoff plus unchanged
-  `action.commands.acceptance` to the workflow coordinator;
+  run focused target tests, and return the tested handoff with its original
+  dispatch identity to the workflow coordinator;
 - startup/configuration defect: repair source-compatible loading or the fixed
-  start/stop boundary, test it, and return the handoff plus unchanged acceptance
-  to the workflow coordinator;
+  start/stop boundary, test it, and return the handoff with its original dispatch
+  identity to the workflow coordinator;
 - supported nondeterminism/order/counter: return source proof and proposed rule
   inputs; the workflow coordinator owns `backend-rewrite rule plan|apply` and rerun;
 - source-proven omitted dependency: return the evidence ID,

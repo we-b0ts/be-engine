@@ -390,12 +390,6 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
                 .clone()
                 .expect("system repair phase requires an issue"),
             route: state.route.clone(),
-            evidence: super::evidence::overview_command(
-                target_root,
-                state,
-                &super::process_output_model::RewriteWorkScope::Api { api: state.api.clone() },
-                state.active_issue.as_ref().expect("system repair phase requires an issue"),
-            ),
             acceptance: repair::pending_command(target_root, state),
         },
         RewritePhase::SliceComplete => {

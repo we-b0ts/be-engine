@@ -23,7 +23,7 @@ pub use worker::runtime::{RewriteWorkerReportOptions, report as report_rewrite_w
 mod dependency_rule;
 mod evidence;
 mod evidence_model;
-pub use evidence::query_rewrite_evidence;
+pub use evidence::{query_rewrite_evidence, query_rewrite_evidence_for_scope};
 mod fingerprint;
 mod inventory;
 mod ip_capture;
@@ -78,7 +78,9 @@ pub use dependency_rule::{
     RewriteDependencyPayloadRulePlanReport, RewriteDependencyRulePlanOptions,
     RewriteDependencyRulePlanReport, RewriteDependencyRuleSelector,
 };
-pub use evidence_model::{RewriteApplicableRulePlanner, RewriteEvidenceReport, RewriteRuleHint};
+pub use evidence_model::{
+    RewriteApplicableRulePlanner, RewriteEvidenceContext, RewriteEvidenceReport, RewriteRuleHint,
+};
 pub use model::{
     RewriteAction, RewriteActionEnvelope, RewriteApiInventoryDetails, RewriteApiInventoryView,
     RewriteApiProgress, RewriteApiStatus, RewriteCommandSpec, RewriteDependencyRuleReport,

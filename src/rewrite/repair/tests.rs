@@ -28,7 +28,8 @@ fn response_replay_repair_requires_dirty_evidence_and_reuses_the_recording() {
     let issue = state.active_issue.as_ref().unwrap();
     validate_route_kind(issue, "replay_capability_gap").unwrap();
     let mut report = super::super::evidence_model::RewriteEvidenceReport {
-        schema_version: 3,
+        schema_version: 4,
+        context: None,
         evidence_id: "current".into(),
         issue_id: issue.id.clone(),
         query: "dirty_clusters".into(),

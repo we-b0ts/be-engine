@@ -156,11 +156,12 @@ Read kind-specific facts only from `details` and execute only command roles
 present in `commands`; an empty command object never implies a fallback. Status
 does not guarantee an unconditional top-level `next` command. Source-process
 traffic is issue-scoped evidence, not engine state. Both unscoped and
-scoped status return compact scheduling actions, as does `next`. The workflow
-coordinator passes the complete action and single `action.commands.evidence`
-entrypoint unchanged to the assigned worker. After dispatch confirmation, the
-worker fetches the overview (`facts.issue`), then selects relevant commands
-from its `queries`. An API worker executes the returned
+scoped status return compact scheduling actions, as does `next`. Dispatch the
+worker role, exact scope, canonical target root, and absolute worktree as defined
+in [coordinator-worker-protocol.md](coordinator-worker-protocol.md). The worker
+fetches its own overview through `evidence --api` or `evidence --process-output`,
+then selects relevant commands from `queries`. Scheduling responses contain no
+evidence command or diagnostic payload. An API worker executes the returned
 `source_process_traffic` command only when startup,
 configured process-owned traffic, background refresh, or local-cache behavior
 is relevant.

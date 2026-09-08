@@ -27,8 +27,9 @@ runtime-input revision change. Neither `next` nor `recording request` may
 bypass the returned command.
 
 System-repair actions retain the route, triggering `work_scope`, readiness, and
-available acceptance command as scheduling information. Fetch the issue diagnostics through their single
-`action.commands.evidence` entrypoint when needed; status does not embed them.
+available acceptance command as scheduling information. The assigned worker
+fetches any needed diagnostics through `evidence --api '<METHOD pattern>'`
+against the canonical target root; status does not embed evidence or its command.
 
 Successful verification chooses the next transition. Replay and external-input
 repairs authorize Replay for the same owning API and immutable cases without a

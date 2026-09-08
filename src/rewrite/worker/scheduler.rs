@@ -2,7 +2,7 @@ use std::path::Path;
 
 use super::super::model::{RewriteAction, RewritePhase, RewriteState};
 use super::super::process_output_model::RewriteWorkScope;
-use super::super::{action, evidence, inventory, process_outputs};
+use super::super::{action, inventory, process_outputs};
 use super::model::{
     RewriteWorkerCoverageState as Coverage, RewriteWorkerInventoryCommands,
     RewriteWorkerInventoryItem,
@@ -99,8 +99,6 @@ pub(in crate::rewrite) fn scope_action(
             .action;
     }
     let worker = super::dispatch_view(state, scope.clone(), None);
-    let issue = super::issue_for_scope(&scoped, scope).expect("unresolved scope has an issue");
-    let evidence = evidence::overview_command(target_root, &scoped, scope, issue);
     match runtime::coverage(state, scope) {
         Coverage::StatusRequired => RewriteAction::WorkerStatusRequired {
             summary: format!(
@@ -109,7 +107,6 @@ pub(in crate::rewrite) fn scope_action(
             ),
             report_worker: runtime::report_command(target_root, &worker.dispatch_id, false),
             worker,
-            evidence,
         },
         Coverage::IntegrationRequired => RewriteAction::IntegrationRequired {
             summary: format!(
@@ -121,7 +118,6 @@ pub(in crate::rewrite) fn scope_action(
                 .expect("ready handoff has an identity"),
             report_worker: runtime::report_command(target_root, &worker.dispatch_id, true),
             worker,
-            evidence,
         },
         Coverage::VerificationRequired => RewriteAction::AdvanceRequired {
             summary: format!(

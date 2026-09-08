@@ -1,7 +1,19 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use super::model::{RewriteCommandSpec, RewriteEvidenceCommand};
+use super::model::{RewriteCommandSpec, RewriteEvidenceCommand, RewriteWorkerDispatchView};
+
+/// Current assignment metadata. Excluded from diagnostic evidence hashing so unrelated
+/// coordinator revisions and activity observations cannot invalidate evidence.
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteEvidenceContext {
+    pub target_root: std::path::PathBuf,
+    pub workflow_id: String,
+    pub revision: u64,
+    pub recording_run_id: String,
+    pub require_comparison: bool,
+    pub worker: RewriteWorkerDispatchView,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RewriteApplicableRulePlanner {
@@ -22,6 +34,8 @@ pub struct RewriteRuleHint {
 #[derive(Debug, Clone, Serialize)]
 pub struct RewriteEvidenceReport {
     pub schema_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<Box<RewriteEvidenceContext>>,
     pub evidence_id: String,
     pub issue_id: String,
     pub query: String,

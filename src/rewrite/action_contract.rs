@@ -117,7 +117,6 @@ impl Serialize for RewriteAction {
                 worker,
                 confirm_worker,
                 report_worker,
-                evidence,
                 acceptance,
             } => RewriteActionView {
                 kind: "implementation_required",
@@ -130,7 +129,6 @@ impl Serialize for RewriteAction {
                 commands: RewriteImplementationCommands {
                     confirm_worker: confirm_worker.as_ref(),
                     report_worker,
-                    evidence,
                     acceptance,
                 },
             }
@@ -139,7 +137,6 @@ impl Serialize for RewriteAction {
                 summary,
                 worker,
                 report_worker,
-                evidence,
             } => RewriteActionView {
                 kind: "worker_status_required",
                 summary,
@@ -149,7 +146,6 @@ impl Serialize for RewriteAction {
                 },
                 commands: RewriteWorkerCoordinationCommands {
                     report_worker,
-                    evidence,
                 },
             }
             .serialize(serializer),
@@ -158,7 +154,6 @@ impl Serialize for RewriteAction {
                 worker,
                 handoff_id,
                 report_worker,
-                evidence,
             } => RewriteActionView {
                 kind: "integration_required",
                 summary,
@@ -168,7 +163,6 @@ impl Serialize for RewriteAction {
                 },
                 commands: RewriteWorkerCoordinationCommands {
                     report_worker,
-                    evidence,
                 },
             }
             .serialize(serializer),
@@ -230,7 +224,6 @@ impl Serialize for RewriteAction {
                 work_scope,
                 issue,
                 route,
-                evidence,
                 acceptance,
             } => RewriteActionView {
                 kind: "system_repair_required",
@@ -246,7 +239,6 @@ impl Serialize for RewriteAction {
                     route: route.as_ref(),
                 },
                 commands: RewriteAcceptanceCommands {
-                    evidence,
                     acceptance: acceptance.as_ref(),
                 },
             }
@@ -430,7 +422,6 @@ struct RewriteImplementationCommands<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     confirm_worker: Option<&'a RewriteCommandSpec>,
     report_worker: &'a RewriteCommandSpec,
-    evidence: &'a RewriteCommandSpec,
     acceptance: &'a RewriteCommandSpec,
 }
 
@@ -444,7 +435,6 @@ struct RewriteWorkerCoordinationDetails<'a> {
 #[derive(Serialize)]
 struct RewriteWorkerCoordinationCommands<'a> {
     report_worker: &'a RewriteCommandSpec,
-    evidence: &'a RewriteCommandSpec,
 }
 
 #[derive(Serialize)]
@@ -459,7 +449,6 @@ struct RewriteAdvanceCommands<'a> {
 
 #[derive(Serialize)]
 struct RewriteAcceptanceCommands<'a> {
-    evidence: &'a RewriteCommandSpec,
     #[serde(skip_serializing_if = "Option::is_none")]
     acceptance: Option<&'a RewriteCommandSpec>,
 }
