@@ -347,6 +347,7 @@ fn pending_rule_plans_are_recoverable_by_plan_id() {
 
     state.rule_plan = None;
     state.dependency_rule_plan = Some(RewriteDependencyRulePlanRecord {
+        review_fingerprint: None,
         id: "plan-dependency".to_string(),
         issue_id: "issue-dependency".to_string(),
         evidence_id: "evidence-dependency".to_string(),

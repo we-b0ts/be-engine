@@ -167,6 +167,7 @@ fn proposed_rule(feedback: &MemcachedTimestampRuleFeedback) -> ReplayDependencyR
         replay_scope: Default::default(),
         source_evidence: String::new(),
         case_selector: None,
+        redis: None,
         protocol: DependencyProtocol::Memcached,
         target: TargetSelector::default(),
         mysql: None,

@@ -79,6 +79,7 @@ pub fn plan_http_unordered(feedback: HttpUnorderedFeedback) -> Result<HttpUnorde
         replay_scope: ReplayScope::Case,
         source_evidence: String::new(),
         case_selector: None,
+        redis: None,
         protocol: DependencyProtocol::Http,
         target: TargetSelector {
             host: Some(feedback.selector.host.clone()),

@@ -354,3 +354,12 @@ acceptance across the service. Reexecute the existing recorded cases; this
 request rule does not require new standard recording and cannot be verified
 by reclassifying old actual responses. Preserve normal JWT expiry checks in
 target code and keep dependency verification strict.
+
+For Redis string-write value mismatches, inspect
+`dirty_clusters.facts.redis_unordered_candidates`. The normal planner is
+`kind=dependency_value`, `capability=redis_value_unordered`, with
+`dependency-rule plan redis unordered` followed by `dependency-rule apply` and
+fresh Replay. JSON object key order is handled automatically; JSON arrays and
+Protobuf repeated fields require source proof. Confirm exact host/port, key or
+key affixes, field selector, and Protobuf schema type. These rules do not change
+process ownership. See [Redis value rules](../../../../../docs/redis-value-rules.md).

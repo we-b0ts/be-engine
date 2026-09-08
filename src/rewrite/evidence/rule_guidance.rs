@@ -74,6 +74,17 @@ pub(super) fn rule_hints(
             help: super::super::action::command(target_root, vec!["dependency-rule".into(), "plan".into(), "http".into(), "cross-case".into(), "--help".into()], Vec::new()),
         });
     }
+    if facts["clusters"].as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|c| c["protocol"] == "redis" && c["reason"] == "unmatched_target")
+    }) {
+        hints.push(RewriteRuleHint {
+            capability: "redis_value_unordered".into(), rule: "unordered".into(),
+            hint: "Inspect redis_unordered_candidates. Redis string-write values automatically compare JSON objects by content; JSON arrays and Protobuf repeated fields require source-proven unordered semantics. Confirm host, port, exact key or key affixes, field path and Protobuf element type. Use dependency-rule plan redis unordered, apply and fresh Replay; this never changes dependency ownership. Old reports require fresh Replay.".into(),
+            help: super::super::action::command(target_root, vec!["dependency-rule".into(), "plan".into(), "redis".into(), "unordered".into(), "--help".into()], Vec::new()),
+        });
+    }
     if facts["egress_rejections"]["rejected_packets_in_samples"]
         .as_u64()
         .is_some_and(|count| count > 0)
@@ -134,6 +145,35 @@ pub(super) fn applicable_rule_planners(
                     "dependency-rule".into(),
                     "plan".into(),
                     "http".into(),
+                    "unordered".into(),
+                    "--evidence-id".into(),
+                    evidence_id.into(),
+                    "--help".into(),
+                ],
+                Vec::new(),
+            ),
+        });
+    }
+    if query_kind == QUERY_DIRTY_CLUSTERS
+        && matches!(
+            issue_kind,
+            RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
+        )
+        && facts["redis_unordered_candidates"]["candidates"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+        && facts["redis_unordered_candidates"]["omitted_candidates"] == 0
+    {
+        planners.push(RewriteApplicableRulePlanner {
+            kind: "dependency_value".into(),
+            capability: "redis_value_unordered".into(),
+            evidence_id: evidence_id.into(),
+            command: super::super::action::command(
+                target_root,
+                vec![
+                    "dependency-rule".into(),
+                    "plan".into(),
+                    "redis".into(),
                     "unordered".into(),
                     "--evidence-id".into(),
                     evidence_id.into(),
@@ -530,6 +570,60 @@ mod http_unordered_tests {
             )
             .iter()
             .any(|p| p.capability == "http_json_unordered")
+        );
+    }
+}
+
+#[cfg(test)]
+mod redis_unordered_tests {
+    use super::*;
+    #[test]
+    fn unordered_is_discoverable_before_responses_pass_but_planning_requires_candidates() {
+        let root = Path::new("/target");
+        let mut facts =
+            serde_json::json!({"clusters":[{"protocol":"redis","reason":"unmatched_target"}]});
+        assert!(
+            rule_hints(root, QUERY_DIRTY_CLUSTERS, &facts)
+                .iter()
+                .any(|h| h.rule == "unordered")
+        );
+        for kind in [
+            RewriteIssueKind::Response,
+            RewriteIssueKind::Dependency,
+            RewriteIssueKind::Replay,
+        ] {
+            assert!(
+                !applicable_rule_planners(root, kind, QUERY_DIRTY_CLUSTERS, &facts, "ev")
+                    .iter()
+                    .any(|p| p.capability == "redis_value_unordered")
+            );
+        }
+        facts["redis_unordered_candidates"] = serde_json::json!({"candidates":[{"selector":{"field":{"codec":"json","pointer":"/ids"}}}],"omitted_candidates":0});
+        for kind in [
+            RewriteIssueKind::Response,
+            RewriteIssueKind::Dependency,
+            RewriteIssueKind::Replay,
+        ] {
+            let planners = applicable_rule_planners(root, kind, QUERY_DIRTY_CLUSTERS, &facts, "ev");
+            let planner = planners
+                .iter()
+                .find(|p| p.capability == "redis_value_unordered")
+                .unwrap();
+            assert_eq!(planner.kind, "dependency_value");
+            assert!(planner.command.argv.contains(&"unordered".into()));
+            assert!(planner.command.argv.contains(&"ev".into()));
+        }
+        facts["redis_unordered_candidates"]["omitted_candidates"] = serde_json::json!(1);
+        assert!(
+            !applicable_rule_planners(
+                root,
+                RewriteIssueKind::Dependency,
+                QUERY_DIRTY_CLUSTERS,
+                &facts,
+                "ev"
+            )
+            .iter()
+            .any(|p| p.capability == "redis_value_unordered")
         );
     }
 }

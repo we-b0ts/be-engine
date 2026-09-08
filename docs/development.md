@@ -11,6 +11,9 @@ Cross-case HTTP initialization dependencies use explicit Replay scope rules; see
 strict matching and fresh verification.
 Source-proven arrays in outbound JSON requests use [HTTP unordered rules](http-unordered-rules.md).
 
+Redis JSON/Protobuf values and source-proven collection ordering use
+[Redis value rules](redis-value-rules.md), with the same discovery and plan/apply lifecycle.
+
 ## Rust Tooling
 
 Use the standard Cargo workflow:

@@ -1,5 +1,6 @@
 //! Bounded request-time witnesses and stale-safe, read-only candidate verification.
 use super::*;
+use crate::replay::json_order::canonical_json;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{fs, path::Path};

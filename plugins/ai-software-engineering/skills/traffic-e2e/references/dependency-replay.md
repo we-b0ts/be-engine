@@ -232,3 +232,10 @@ completed standard recording. The scope is derived in memory and exchanges
 remain single-use per session. Query, body and identity headers stay strict;
 this is not a background-ownership rule or an unmatched-request allowance.
 See [HTTP cross-case replay](../../../../../docs/http-cross-case-replay.md).
+
+Redis whole-string writes (`SET`, `SETNX`, `SETEX`, `PSETEX`) detect JSON and
+Protobuf value encoding. JSON object keys compare independent of order; explicit
+unordered rules for JSON arrays and Protobuf repeated fields use the same
+coordinator discovery/plan/apply lifecycle as HTTP. Key patterns select rule
+scope, while key bytes, TTL/options and source lanes stay exact. See
+[Redis value rules](../../../../../docs/redis-value-rules.md).

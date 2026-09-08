@@ -782,3 +782,5 @@ fn rule_matches_target(rule: &ReplayDependencyRule, actual: Option<&TargetKey>) 
 }
 
 mod http_json;
+
+mod redis_value;

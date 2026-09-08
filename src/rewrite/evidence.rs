@@ -269,6 +269,7 @@ fn facts(
             let mut facts = dirty_cluster_facts(target_root, counts);
             if facts["clusters"].as_array().is_some_and(|clusters| clusters.iter().any(|c| c["protocol"] == "http" && c["reason"] == "unmatched_target")) {
                 facts["http_unordered_candidates"] = crate::e2e_run::query_http_unordered_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
+                facts["redis_unordered_candidates"] = crate::e2e_run::query_redis_unordered_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
                 facts["cross_case_candidates"] = crate::e2e_run::query_http_cross_case_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
             }
             if let Some(rejections) = &issue.egress_rejections { facts["egress_rejections"] = rejections.clone(); }

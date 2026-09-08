@@ -268,12 +268,13 @@ pub fn apply_rewrite_dependency_rule(
         .context("rewrite workflow has not been initialized")?;
     let owner_api = inventory::api_for_dependency_rule_plan(&state, plan_id)
         .context("dependency-rule plan is stale or belongs to no concurrent API work item")?;
-    let changes_http_matching = inventory::with_slice_mut(&mut state, &owner_api, |slice| {
+    let changes_dependency_matching = inventory::with_slice_mut(&mut state, &owner_api, |slice| {
         Ok(slice.dependency_rule_plan.as_ref().is_some_and(|p| {
             matches!(
                 p.spec,
                 model::RewriteDependencyRuleSpec::HttpCrossCase { .. }
                     | model::RewriteDependencyRuleSpec::HttpUnordered { .. }
+                    | model::RewriteDependencyRuleSpec::RedisUnordered { .. }
             )
         }))
     })?;
@@ -286,6 +287,7 @@ pub fn apply_rewrite_dependency_rule(
                         | model::RewriteDependencyRuleSpec::MysqlSqlTime { .. }
                         | model::RewriteDependencyRuleSpec::HttpCrossCase { .. }
                         | model::RewriteDependencyRuleSpec::HttpUnordered { .. }
+                        | model::RewriteDependencyRuleSpec::RedisUnordered { .. }
                 )
             });
             let cache_snapshot_refresh =
@@ -338,8 +340,8 @@ pub fn apply_rewrite_dependency_rule(
             report.next_command = action::next_command_for_api(&target_root, &state.api);
             Ok((report, false))
         })?;
-    if changes_http_matching {
-        dependency_rule::invalidate_http_rule_validation(&mut state);
+    if changes_dependency_matching {
+        dependency_rule::invalidate_dependency_matching_validation(&mut state);
     }
     if cache_snapshot_refresh {
         let runnable = inventory::mark_awaiting_recording_refresh(&mut state, &owner_api)?;

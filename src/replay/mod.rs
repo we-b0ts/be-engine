@@ -425,6 +425,7 @@ impl ReplayRuntime {
             }
             http::observe_recorded_policy_exchanges(policy, &http_exchanges);
             memcached::observe_recorded_policy_exchanges(policy, &memcached);
+            redis.value_rules = policy.redis_value_rules();
             policy.reject_http_ignore_overlap(&http_ignore_query_params)?;
         }
 
@@ -893,3 +894,14 @@ fn original_dst(stream: &TcpStream) -> Result<SocketAddr> {
 pub use policy::{
     HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
 };
+
+pub use redis::value::{RedisUnorderedField, RedisUnorderedSelector, RedisValueKeySelector};
+
+pub use policy::{
+    RedisUnorderedFeedback, RedisUnorderedPlan, RedisUnorderedReport, plan_redis_unordered,
+};
+
+pub(crate) use redis::value as redis_value;
+
+mod json_order;
+mod recording_evidence;

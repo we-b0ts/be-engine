@@ -81,3 +81,9 @@ pub(in crate::replay) use response::{response_pointer_matches, validate_json_poi
 pub use feedback::{
     HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
 };
+
+mod redis_value;
+
+pub use feedback::{
+    RedisUnorderedFeedback, RedisUnorderedPlan, RedisUnorderedReport, plan_redis_unordered,
+};

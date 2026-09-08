@@ -951,3 +951,9 @@ pub use replay::HttpUnorderedSelector;
 pub use replay::{
     HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
 };
+
+pub use replay::{RedisUnorderedField, RedisUnorderedSelector, RedisValueKeySelector};
+
+pub use replay::{
+    RedisUnorderedFeedback, RedisUnorderedPlan, RedisUnorderedReport, plan_redis_unordered,
+};

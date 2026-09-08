@@ -275,6 +275,9 @@ pub(super) enum RewriteDependencyRuleSpec {
     HttpUnordered {
         selector: crate::HttpUnorderedSelector,
     },
+    RedisUnordered {
+        selector: crate::RedisUnorderedSelector,
+    },
     HttpCrossCase {
         selector: crate::HttpCrossCaseSelector,
     },
@@ -341,6 +344,8 @@ pub(super) enum RewriteDependencyRuleSpec {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct RewriteDependencyRulePlanRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_fingerprint: Option<String>,
     pub id: String,
     pub issue_id: String,
     pub evidence_id: String,

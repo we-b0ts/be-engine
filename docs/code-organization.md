@@ -65,7 +65,7 @@ is unclear.
 - Recorder event, run, writer, and summary modules own capture, persistence,
   and reporting.
 - Replay modules own recorded dependency matching and replay lifecycle.
-- `replay/redis/matching` owns exact command selection and source-lane order
+- `replay/redis/matching` owns command selection and source-lane order
   diagnostics. `replay/redis/connection_scope` distinguishes ordinary pool
   reuse from recorded stateful lanes and owns their exclusive target connection
   claims; runtime Redis I/O and session setup remain in `replay/redis/mod.rs`.
@@ -318,3 +318,18 @@ explicit repository-wide audit.
   contract, `matcher/http_json` previews policy usage, and
   `feedback/http_unordered` owns stale-safe plan/apply. Worker discovery remains
   in `rewrite/evidence/rule_guidance`; the coordinator owns fresh verification.
+
+- `replay/redis/value` owns whole-string write value decoding and comparison;
+  its `selector` child defines endpoint/key/field selection and its `evidence`
+  child captures bounded order witnesses and verifies immutable source evidence.
+  `replay/policy/redis_value` validates the YAML contract, its matcher adapter
+  commits selected rule usage, and `feedback/redis_unordered` owns stale-safe
+  plan/apply. Redis matching continues to own source lanes and consumption.
+  `bin/backend-rewrite/dependency_rule/redis` owns Redis CLI conversion, while
+  coordinator dependency-rule and evidence owners retain lifecycle and discovery.
+- `replay/json_order` owns shared dependency JSON object identity and explicit
+  array normalization; HTTP identity and Redis values consume it.
+  `replay/recording_evidence` owns standard-run evidence file boundaries shared
+  by protocol-specific visitors. `replay/assertion/protobuf/wire` owns bounded
+  binary decoding; its `unordered_evidence` sibling exposes typed order witnesses
+  without authorizing a schema or a rule.
