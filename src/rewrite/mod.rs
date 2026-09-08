@@ -266,6 +266,14 @@ pub fn apply_rewrite_dependency_rule(
         .context("rewrite workflow has not been initialized")?;
     let owner_api = inventory::api_for_dependency_rule_plan(&state, plan_id)
         .context("dependency-rule plan is stale or belongs to no concurrent API work item")?;
+    let cross_case = inventory::with_slice_mut(&mut state, &owner_api, |slice| {
+        Ok(slice.dependency_rule_plan.as_ref().is_some_and(|p| {
+            matches!(
+                p.spec,
+                model::RewriteDependencyRuleSpec::HttpCrossCase { .. }
+            )
+        }))
+    })?;
     let (mut report, cache_snapshot_refresh) =
         inventory::with_slice_mut(&mut state, &owner_api, |state| {
             let dependency_payload = state.dependency_rule_plan.as_ref().is_some_and(|plan| {
@@ -273,6 +281,7 @@ pub fn apply_rewrite_dependency_rule(
                     plan.spec,
                     model::RewriteDependencyRuleSpec::MemcachedProtobufTimestamp { .. }
                         | model::RewriteDependencyRuleSpec::MysqlSqlTime { .. }
+                        | model::RewriteDependencyRuleSpec::HttpCrossCase { .. }
                 )
             });
             let cache_snapshot_refresh =
@@ -325,6 +334,9 @@ pub fn apply_rewrite_dependency_rule(
             report.next_command = action::next_command_for_api(&target_root, &state.api);
             Ok((report, false))
         })?;
+    if cross_case {
+        dependency_rule::invalidate_scope_validation(&mut state);
+    }
     if cache_snapshot_refresh {
         let runnable = inventory::mark_awaiting_recording_refresh(&mut state, &owner_api)?;
         if !runnable {

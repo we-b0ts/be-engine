@@ -75,6 +75,9 @@ pub struct RewriteDependencyRulePlanReport {
 
 #[derive(Debug, Clone)]
 pub enum RewriteDependencyRuleSelector {
+    HttpCrossCase {
+        selector: crate::HttpCrossCaseSelector,
+    },
     MysqlSqlTime {
         selector: crate::MysqlTimeSelector,
     },
@@ -135,15 +138,19 @@ pub(super) fn plan(
     options: RewriteDependencyRulePlanOptions,
 ) -> Result<RewriteDependencyRulePlanReport> {
     let spec = spec_from_selector(options.selector.clone());
-    let sql_time = matches!(&spec, RewriteDependencyRuleSpec::MysqlSqlTime { .. });
+    let request_rule = matches!(
+        &spec,
+        RewriteDependencyRuleSpec::MysqlSqlTime { .. }
+            | RewriteDependencyRuleSpec::HttpCrossCase { .. }
+    );
     ensure!(
-        !sql_time || options.ownership == RewriteDependencyOwnership::RequestOwned,
-        "SQL time validation does not change dependency ownership; use request-owned"
+        !request_rule || options.ownership == RewriteDependencyOwnership::RequestOwned,
+        "value and scope rules do not change dependency ownership; use request-owned"
     );
     let issue = dependency_issue(state, &spec)?;
     validate_plan_evidence(target_root, state, &issue.id, &options.evidence_id, &spec)?;
     let selector = serde_json::to_value(&spec)?;
-    if !sql_time && options.ownership != RewriteDependencyOwnership::ProcessOwned {
+    if !request_rule && options.ownership != RewriteDependencyOwnership::ProcessOwned {
         return classify_non_process_owned(target_root, state, issue, options, selector);
     }
     let name = options
@@ -190,7 +197,7 @@ pub(super) fn plan(
         ownership: options.ownership,
         issue_id: issue.id,
         evidence_id: options.evidence_id,
-        process_owned_rule_applicable: !sql_time,
+        process_owned_rule_applicable: !request_rule,
         target_implementation_required: false,
         selector,
         plan_id: Some(record.id.clone()),
@@ -340,10 +347,20 @@ pub(super) fn apply(
     plan_id: &str,
 ) -> Result<RewriteDependencyRuleReport> {
     let record = pending_plan_for_apply(state, plan_id)?;
+    if matches!(record.spec, RewriteDependencyRuleSpec::HttpCrossCase { .. }) {
+        validate_plan_evidence(
+            target_root,
+            state,
+            &record.issue_id,
+            &record.evidence_id,
+            &record.spec,
+        )?;
+    }
     if !matches!(
         &record.spec,
         RewriteDependencyRuleSpec::MemcachedProtobufTimestamp { .. }
             | RewriteDependencyRuleSpec::MysqlSqlTime { .. }
+            | RewriteDependencyRuleSpec::HttpCrossCase { .. }
     ) && state.case_source.is_some()
         && state.group_id.is_some()
     {
@@ -390,6 +407,7 @@ fn dependency_issue(
             spec,
             RewriteDependencyRuleSpec::MemcachedProtobufTimestamp { .. }
                 | RewriteDependencyRuleSpec::MysqlSqlTime { .. }
+                | RewriteDependencyRuleSpec::HttpCrossCase { .. }
         ) && matches!(
             issue.kind,
             RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
@@ -428,10 +446,11 @@ fn validate_plan_evidence(
     evidence_id: &str,
     spec: &RewriteDependencyRuleSpec,
 ) -> Result<()> {
-    if state
-        .dependency_rule_plan
-        .as_ref()
-        .is_some_and(|plan| plan.issue_id == issue_id && plan.evidence_id == evidence_id)
+    if !matches!(spec, RewriteDependencyRuleSpec::HttpCrossCase { .. })
+        && state
+            .dependency_rule_plan
+            .as_ref()
+            .is_some_and(|plan| plan.issue_id == issue_id && plan.evidence_id == evidence_id)
     {
         return Ok(());
     }
@@ -589,3 +608,23 @@ pub(super) fn schedule_cache_snapshot_refresh(
 
 #[cfg(test)]
 mod tests;
+
+/// Sharing affects the whole run, so old per-API coverage cannot remain current.
+pub(super) fn invalidate_scope_validation(state: &mut RewriteState) {
+    state.e2e_current = false;
+    state.comparison_current = false;
+    state.target_quality_fingerprint = None;
+    for item in &mut state.api_inventory {
+        item.e2e_current = false;
+        item.comparison_current = false;
+        item.verified_target_fingerprint = None;
+        if item.status == super::model::RewriteApiStatus::Complete {
+            item.status = super::model::RewriteApiStatus::RevalidationPending;
+        }
+    }
+    for slice in state.parked_slices.values_mut() {
+        slice.e2e_current = false;
+        slice.comparison_current = false;
+        slice.target_fingerprint = None;
+    }
+}

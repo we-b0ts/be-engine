@@ -164,6 +164,8 @@ pub fn plan_memcached_timestamp_rule(
 fn proposed_rule(feedback: &MemcachedTimestampRuleFeedback) -> ReplayDependencyRule {
     ReplayDependencyRule {
         id: feedback.rule_id.clone(),
+        replay_scope: Default::default(),
+        source_evidence: String::new(),
         case_selector: None,
         protocol: DependencyProtocol::Memcached,
         target: TargetSelector::default(),

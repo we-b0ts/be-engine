@@ -213,3 +213,12 @@ routes alongside the rewritten JSON. Replay reserves those fake IPs and uses
 recorded subsequent HTTP(S) exchanges; configuring a new capture rule cannot
 synthesize missing historical exchanges. Rejection packet counts are auxiliary
 context for failures and never count as semantic dependency mismatches.
+
+## Explicit Cross-Case HTTP Scope
+
+A `cross-case` verification rule with `replay_scope: recording_run` may make
+source-proven shared initialization exchanges available across APIs in the same
+completed standard recording. The scope is derived in memory and exchanges
+remain single-use per session. Query, body and identity headers stay strict;
+this is not a background-ownership rule or an unmatched-request allowance.
+See [HTTP cross-case replay](../../../../../docs/http-cross-case-replay.md).

@@ -380,3 +380,5 @@ fn run_status_label(status: RunStatus) -> &'static str {
         RunStatus::Interrupted => "interrupted",
     }
 }
+
+pub(crate) use evidence::query_http_cross_case_candidates;

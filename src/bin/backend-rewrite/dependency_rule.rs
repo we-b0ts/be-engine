@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use clap::{Args, Subcommand, ValueEnum};
 use traffic_e2e::{
     RedisKeyPatternConfig, RewriteContext, RewriteDependencyOwnership,
@@ -17,8 +17,8 @@ pub(super) struct DependencyRuleArgs {
 
 #[derive(Debug, Subcommand)]
 enum DependencyRuleCommand {
-    /// Classify current evidence and preview a rule only when process-owned.
-    Plan(DependencyRulePlanArgs),
+    /// Preview an evidence-backed ownership, value or cross-case scope rule.
+    Plan(Box<DependencyRulePlanArgs>),
     /// Atomically apply the persisted, evidence-validated pending plan.
     Apply(DependencyRuleApplyArgs),
 }
@@ -35,7 +35,7 @@ enum DependencyRuleProtocolArgs {
     MysqlTime(Box<MysqlTimeArgs>),
     /// Classify source-proven MySQL reads using bounded tables and a SELECT template.
     Mysql(Box<MysqlDependencyRuleArgs>),
-    /// Classify an HTTP dependency using an exact selector.
+    /// Classify HTTP ownership or plan cross-case replay scope.
     Http(HttpDependencyRuleArgs),
     /// Plan a Memcached dependency rule.
     Memcached(MemcachedDependencyRuleArgs),
@@ -152,15 +152,88 @@ struct MysqlDependencyRuleArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
 struct HttpDependencyRuleArgs {
-    #[command(flatten)]
-    common: DependencyRuleCommonArgs,
+    #[command(subcommand)]
+    mode: Option<HttpDependencyMode>,
+    #[arg(long, required = true)]
+    evidence_id: Option<String>,
+    #[arg(long, value_enum, required = true)]
+    ownership: Option<DependencyOwnershipArg>,
     #[arg(long)]
-    authority: String,
+    name: Option<String>,
+    #[arg(long)]
+    source_evidence: Option<String>,
+    #[arg(long, required = true)]
+    authority: Option<String>,
+    #[arg(long, required = true)]
+    method: Option<String>,
+    #[arg(long, required = true)]
+    path_prefix: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+enum HttpDependencyMode {
+    /// Share finite, exactly matched HTTP exchanges across cases of one recording run.
+    CrossCase(HttpCrossCaseArgs),
+}
+
+#[derive(Debug, Args)]
+struct HttpCrossCaseArgs {
+    #[arg(long)]
+    evidence_id: String,
+    #[arg(long)]
+    rule_id: String,
+    #[arg(long)]
+    host: String,
+    #[arg(long)]
+    port: u16,
     #[arg(long)]
     method: String,
     #[arg(long)]
-    path_prefix: String,
+    path: String,
+    /// Source file/symbol proving shared initialization, cache and refresh semantics.
+    #[arg(long)]
+    source_evidence: String,
+}
+
+fn http_options(args: HttpDependencyRuleArgs) -> Result<RewriteDependencyRulePlanOptions> {
+    if let Some(HttpDependencyMode::CrossCase(args)) = args.mode {
+        return Ok(RewriteDependencyRulePlanOptions {
+            evidence_id: args.evidence_id,
+            ownership: RewriteDependencyOwnership::RequestOwned,
+            name: Some(args.rule_id),
+            source_evidence: Some(args.source_evidence),
+            selector: RewriteDependencyRuleSelector::HttpCrossCase {
+                selector: traffic_e2e::HttpCrossCaseSelector {
+                    host: args.host,
+                    port: args.port,
+                    method: args.method,
+                    path: args.path,
+                },
+            },
+        });
+    }
+    let ownership = args.ownership.context("--ownership is required")?;
+    ensure!(
+        !matches!(ownership, DependencyOwnershipArg::ProcessOwned) || args.name.is_some(),
+        "--name is required for process-owned HTTP"
+    );
+    ensure!(
+        matches!(ownership, DependencyOwnershipArg::Unresolved) || args.source_evidence.is_some(),
+        "--source-evidence is required"
+    );
+    Ok(RewriteDependencyRulePlanOptions {
+        evidence_id: args.evidence_id.context("--evidence-id is required")?,
+        ownership: ownership.into(),
+        name: args.name,
+        source_evidence: args.source_evidence,
+        selector: RewriteDependencyRuleSelector::Http {
+            authority: args.authority.context("--authority is required")?,
+            method: args.method.context("--method is required")?,
+            path_prefix: args.path_prefix.context("--path-prefix is required")?,
+        },
+    })
 }
 
 #[derive(Debug, Args)]
@@ -370,14 +443,7 @@ impl TryFrom<DependencyRuleProtocolArgs> for DependencyPlan {
                     },
                 )
             }
-            DependencyRuleProtocolArgs::Http(args) => dependency_rule_options(
-                args.common,
-                RewriteDependencyRuleSelector::Http {
-                    authority: args.authority,
-                    method: args.method,
-                    path_prefix: args.path_prefix,
-                },
-            ),
+            DependencyRuleProtocolArgs::Http(args) => http_options(args)?,
             DependencyRuleProtocolArgs::Memcached(args) => match args.mode {
                 MemcachedDependencyRuleModeArgs::Get(args) => dependency_rule_options(
                     args.common,
@@ -518,6 +584,72 @@ mod tests {
     struct TestCli {
         #[command(flatten)]
         dependency_rule: DependencyRuleArgs,
+    }
+
+    #[test]
+    fn http_cross_case_is_a_request_scope_plan_without_ownership_or_query_flags() {
+        let parsed = TestCli::try_parse_from([
+            "test",
+            "plan",
+            "http",
+            "cross-case",
+            "--evidence-id",
+            "current",
+            "--rule-id",
+            "token",
+            "--host",
+            "erp.example.test",
+            "--port",
+            "80",
+            "--method",
+            "POST",
+            "--path",
+            "/token",
+            "--source-evidence",
+            "erp.py:ensure_token shared cache",
+        ])
+        .unwrap();
+        let DependencyRuleCommand::Plan(plan) = parsed.dependency_rule.command else {
+            panic!("plan")
+        };
+        let DependencyPlan::Ownership(options) = plan.protocol.try_into().unwrap() else {
+            panic!("scope")
+        };
+        assert_eq!(options.ownership, RewriteDependencyOwnership::RequestOwned);
+        assert!(matches!(
+            options.selector,
+            RewriteDependencyRuleSelector::HttpCrossCase { .. }
+        ));
+        let legacy = TestCli::try_parse_from([
+            "test",
+            "plan",
+            "http",
+            "--evidence-id",
+            "current",
+            "--ownership",
+            "process-owned",
+            "--name",
+            "refresh",
+            "--source-evidence",
+            "refresh.py:timer",
+            "--authority",
+            "config.example.test",
+            "--method",
+            "GET",
+            "--path-prefix",
+            "/config",
+        ])
+        .unwrap();
+        let DependencyRuleCommand::Plan(plan) = legacy.dependency_rule.command else {
+            panic!("plan")
+        };
+        let DependencyPlan::Ownership(options) = plan.protocol.try_into().unwrap() else {
+            panic!("ownership")
+        };
+        assert!(matches!(
+            options.selector,
+            RewriteDependencyRuleSelector::Http { .. }
+        ));
     }
 
     #[test]

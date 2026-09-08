@@ -75,6 +75,8 @@ fn one_fake_ip_is_reused_for_all_ports_on_a_host() {
 #[test]
 fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
     let record = RecordedHttpExchange {
+        request_headers: Default::default(),
+        timestamp: None,
         scheme: "http".to_string(),
         method: "GET".to_string(),
         uri: "/naming/service?action=lookup&service=yf-rpc&cluster=user/service".to_string(),
@@ -130,6 +132,8 @@ fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
 #[test]
 fn response_discovered_http_target_reserves_its_recorded_fake_ip() {
     let record = RecordedHttpExchange {
+        request_headers: Default::default(),
+        timestamp: None,
         scheme: "http".to_string(),
         method: "GET".to_string(),
         uri: "/naming/service?action=lookup&service=yf-rpc&cluster=user/service".to_string(),
@@ -690,7 +694,7 @@ async fn spawn_http_replay(
     spawn_http_replay_with_policy(case_dir, ignored_query_params, None, None).await
 }
 
-async fn spawn_http_replay_with_policy(
+pub(super) async fn spawn_http_replay_with_policy(
     case_dir: &Path,
     ignored_query_params: Vec<String>,
     policy_path: Option<PathBuf>,
@@ -737,7 +741,12 @@ async fn spawn_http_replay_with_policy(
     (addr, runtime, task)
 }
 
-async fn send_request<T>(io: TokioIo<T>, host: &str, uri: &str, body: &str) -> Response<Incoming>
+pub(super) async fn send_request<T>(
+    io: TokioIo<T>,
+    host: &str,
+    uri: &str,
+    body: &str,
+) -> Response<Incoming>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -777,7 +786,7 @@ async fn assert_http_request_hangs(addr: std::net::SocketAddr, host: &str, uri: 
     client
 }
 
-async fn write_http_case(
+pub(super) async fn write_http_case(
     case_dir: &Path,
     scheme: &str,
     authority: &str,
@@ -820,7 +829,7 @@ async fn write_tcp_gateway_dependency(path: &Path, domain: &str, port: u16) {
     .unwrap();
 }
 
-async fn write_http_dependency(
+pub(super) async fn write_http_dependency(
     path: &Path,
     scheme: &str,
     authority: &str,

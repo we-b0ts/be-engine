@@ -272,6 +272,9 @@ pub struct RewriteResponseBodyRuleSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum RewriteDependencyRuleSpec {
+    HttpCrossCase {
+        selector: crate::HttpCrossCaseSelector,
+    },
     MysqlSqlTime {
         selector: crate::MysqlTimeSelector,
     },

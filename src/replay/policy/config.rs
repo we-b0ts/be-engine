@@ -54,6 +54,10 @@ pub(in crate::replay) enum DependencyProtocol {
 #[serde(deny_unknown_fields)]
 pub(super) struct ReplayDependencyRule {
     pub(super) id: String,
+    #[serde(default, skip_serializing_if = "ReplayScope::is_case")]
+    pub(super) replay_scope: ReplayScope,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(super) source_evidence: String,
     #[serde(default, rename = "case", skip_serializing_if = "Option::is_none")]
     pub(super) case_selector: Option<CaseSelector>,
     pub(super) protocol: DependencyProtocol,
@@ -65,6 +69,20 @@ pub(super) struct ReplayDependencyRule {
     pub(super) http: Option<HttpSelector>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) memcached: Option<MemcachedSelector>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ReplayScope {
+    #[default]
+    Case,
+    RecordingRun,
+}
+
+impl ReplayScope {
+    fn is_case(&self) -> bool {
+        *self == Self::Case
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -120,6 +138,7 @@ pub(super) struct MysqlTimeValueRule {
 pub(super) struct HttpSelector {
     pub(super) method: String,
     pub(super) path: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) query: BTreeMap<String, DynamicValueRule>,
 }
 
@@ -297,6 +316,10 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
     }
     let mut ids = BTreeSet::new();
     for rule in &document.dependency_rules {
+        ensure!(
+            document.version >= 3 || rule.replay_scope == ReplayScope::Case,
+            "recording_run replay scope requires policy version 3"
+        );
         validate_rule(rule)?;
         ensure!(
             ids.insert(rule.id.as_str()),
@@ -342,6 +365,33 @@ fn dynamic_fields(rule: &ReplayDependencyRule) -> Vec<&DynamicValueRule> {
 
 fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
     ensure_identifier(&rule.id, "rule id")?;
+    if rule.replay_scope == ReplayScope::RecordingRun {
+        ensure!(
+            rule.protocol == DependencyProtocol::Http && rule.case_selector.is_none(),
+            "recording_run scope requires HTTP without a case selector"
+        );
+        validate_source_evidence(&rule.source_evidence)?;
+        let http = rule
+            .http
+            .as_ref()
+            .context("recording_run scope requires HTTP selector")?;
+        crate::replay::http_cross_case::HttpCrossCaseSelector {
+            host: rule.target.host.clone().unwrap_or_default(),
+            port: rule.target.port.unwrap_or_default(),
+            method: http.method.clone(),
+            path: http.path.clone(),
+        }
+        .validate()?;
+        ensure!(
+            http.query.is_empty(),
+            "cross-case requires exact query matching; dynamic query rules are not supported"
+        );
+    } else {
+        ensure!(
+            rule.source_evidence.is_empty(),
+            "dependency source_evidence requires recording_run scope"
+        );
+    }
     if let Some(case) = &rule.case_selector {
         ensure!(
             !case.method.trim().is_empty(),
@@ -416,7 +466,7 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
                 rule.id
             );
             ensure!(
-                !http.query.is_empty(),
+                !http.query.is_empty() || rule.replay_scope == ReplayScope::RecordingRun,
                 "HTTP rule {:?} must configure at least one query field",
                 rule.id
             );

@@ -6,6 +6,10 @@ testing details. Keep `AGENTS.md` as the short navigation map.
 MySQL replay driver compatibility and process-owned read rules are documented in
 [mysql-replay.md](mysql-replay.md).
 
+Cross-case HTTP initialization dependencies use explicit Replay scope rules; see
+[HTTP cross-case replay](http-cross-case-replay.md) for discovery, plan/apply,
+strict matching and fresh verification.
+
 ## Rust Tooling
 
 Use the standard Cargo workflow:

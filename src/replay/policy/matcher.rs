@@ -180,6 +180,7 @@ impl ReplayPolicyRuntime {
                 .iter()
                 .filter(|rule| {
                     rule.protocol == DependencyProtocol::Http
+                        && rule.replay_scope != super::config::ReplayScope::RecordingRun
                         && rule_matches_case(rule, case)
                         && rule_matches_http(rule, target, method, uri)
                 })
@@ -368,6 +369,7 @@ impl ReplayPolicyRuntime {
             .iter()
             .filter(|rule| {
                 rule.protocol == DependencyProtocol::Http
+                    && rule.replay_scope != super::config::ReplayScope::RecordingRun
                     && rule_matches_case(rule, case)
                     && rule_matches_http(rule, context.target, context.method, context.actual_uri)
             })
