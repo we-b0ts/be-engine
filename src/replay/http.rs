@@ -33,6 +33,10 @@ use super::{
 use crate::DiscoveredTcpTarget;
 
 pub(crate) mod cross_case;
+mod identity;
+mod recording;
+mod selector;
+pub(crate) mod unordered;
 
 type HeaderSnapshot = BTreeMap<String, Vec<String>>;
 
@@ -144,6 +148,8 @@ pub(super) struct HttpRequestReport {
     reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     request_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unordered_json: Option<unordered::evidence::OrderEvidence>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -491,7 +497,7 @@ impl ReplayState {
                     });
                     continue;
                 }
-                let policy_decision = if exchange.shared_origin.is_some() {
+                let mut policy_decision = if exchange.shared_origin.is_some() {
                     DependencyRuleDecision::default()
                 } else if let Some(policy) = &self.replay_policy {
                     match policy.preview_http(
@@ -518,13 +524,32 @@ impl ReplayState {
                 if exchange.shared_origin.is_some() {
                     ignored_query_params.clear();
                 }
-                let mismatch = http_request_mismatch_reason(
+                let mut mismatch = http_request_mismatch_reason(
                     exchange,
                     method,
                     uri,
                     body,
                     &ignored_query_params,
                 );
+                if mismatch.as_deref() == Some("HTTP request body did not match the recorded body")
+                    && exchange.shared_origin.is_none()
+                    && let Some(policy) = &self.replay_policy
+                    && let Ok(recorded_body) = decode_body(&exchange.record.request_body)
+                    && policy.preview_http_json(
+                        &HttpPolicyContext {
+                            case_id: active_case_id.as_deref(),
+                            target,
+                            method: method.as_str(),
+                            recorded_uri: &exchange.record.uri,
+                            actual_uri: &uri.to_string(),
+                        },
+                        &recorded_body,
+                        body,
+                        &mut policy_decision,
+                    )
+                {
+                    mismatch = None;
+                }
                 if let Some(reason) = mismatch {
                     closest_mismatch.get_or_insert(reason);
                     continue;
@@ -541,7 +566,13 @@ impl ReplayState {
             let reason = closest_mismatch.unwrap_or_else(|| {
                 "no recorded HTTP exchange matched the active case and target".to_string()
             });
+            let evidence = unordered::evidence::capture(self, scheme, target, method, uri, body);
             self.record_unmatched_http(scheme, target, method, uri, reason.clone());
+            self.http_events
+                .unmatched
+                .last_mut()
+                .unwrap()
+                .unordered_json = Some(evidence);
             return Err(HttpReplayMatchError::BadGateway(reason));
         };
         let exchange = self.http_exchanges[index].clone();
@@ -557,6 +588,7 @@ impl ReplayState {
                 uri: uri_path_only(&uri.to_string()),
                 reason: reason.clone(),
                 request_fingerprint: None,
+                unordered_json: None,
             });
             return Err(HttpReplayMatchError::BadGateway(reason));
         }
@@ -626,6 +658,7 @@ impl ReplayState {
             uri: uri_path_only(&uri.to_string()),
             reason,
             request_fingerprint: None,
+            unordered_json: Some(Default::default()),
         });
     }
 
@@ -744,7 +777,7 @@ fn uri_path_only(value: &str) -> String {
         .unwrap_or_else(|| value.split('?').next().unwrap_or(value).to_string())
 }
 
-fn uri_mismatch_reason(
+pub(in crate::replay) fn uri_mismatch_reason(
     recorded: &str,
     actual: &str,
     ignored_query_params: &[String],

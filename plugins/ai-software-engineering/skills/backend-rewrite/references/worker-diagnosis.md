@@ -505,7 +505,15 @@ Inspect dirty dependencies whenever the engine returns `dirty_clusters`,
 including while the active issue is a response mismatch. Response equality is
 not a prerequisite for discovering a dependency-value rule. Continue to use
 the gate order above when deciding which failure owns the next repair.
-For HTTP `unmatched_target`, first inspect `cross_case_candidates` and the
+For HTTP request-body mismatches, inspect `http_unordered_candidates` and the
+`unordered` hint. Same-request array reorderings may support
+`dependency-rule plan http unordered`; prove source collection and downstream
+semantics, then return the endpoint, JSON Pointer and source citation to the
+coordinator. An HTTP JSON array is ordered by default. A response unordered
+rule does not apply to dependency requests. The coordinator owns plan/apply
+and fresh Replay; no new recording is needed for complete existing exchanges.
+
+For HTTP `unmatched_target`, also inspect `cross_case_candidates` and the
 `cross-case` hint. A verified same-run exchange may support a source-proven
 shared initialization scope rule through the returned `http cross-case` planner.
 The worker supplies source proof; the coordinator owns plan/apply and fresh

@@ -74,3 +74,10 @@ pub(in crate::replay) fn http_cross_case_rules(
 pub use feedback::{
     HttpCrossCaseFeedback, HttpCrossCasePlan, HttpCrossCaseReport, plan_http_cross_case,
 };
+
+mod http_json;
+pub(in crate::replay) use response::{response_pointer_matches, validate_json_pointer};
+
+pub use feedback::{
+    HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
+};

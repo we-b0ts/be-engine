@@ -9,6 +9,7 @@ MySQL replay driver compatibility and process-owned read rules are documented in
 Cross-case HTTP initialization dependencies use explicit Replay scope rules; see
 [HTTP cross-case replay](http-cross-case-replay.md) for discovery, plan/apply,
 strict matching and fresh verification.
+Source-proven arrays in outbound JSON requests use [HTTP unordered rules](http-unordered-rules.md).
 
 ## Rust Tooling
 

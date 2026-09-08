@@ -296,10 +296,20 @@ explicit repository-wide audit.
   contracts. `replay/assertion/time` owns numeric parsing and fixed five-second
   request-relative validation; artifact adapters supply captured request times.
 
-- `replay/http/cross_case` owns finite HTTP sharing, source-run traversal and
-  post-failure request correlation. Its `recording` child streams immutable
-  evidence inside one finalized run; `evidence` owns bounded discovery and its
+- `replay/http/recording` owns bounded standard-run HTTP evidence traversal;
+  `replay/http/selector` owns exact dependency endpoint selection, and
+  `replay/http/identity` owns request fingerprints and canonical JSON identity.
+  `replay/http/cross_case` owns finite HTTP sharing and
+  post-failure request correlation. Its `evidence` child owns bounded discovery and its
   disposable cache. `replay/policy/feedback/http_cross_case` owns strict policy
   plan/apply. Coordinator dependency rules own dispatch, source proof and
   verification invalidation; neither matcher nor evidence loader changes
   recorded files, target state, or coordinator completion.
+
+- `replay/http/unordered` owns explicit request JSON array normalization and
+  bounded order-only witnesses; its `evidence` child verifies those witnesses
+  against finalized Replay and immutable source exchanges. It never shares
+  exchanges or changes ownership. `replay/policy/http_json` owns its YAML
+  contract, `matcher/http_json` previews policy usage, and
+  `feedback/http_unordered` owns stale-safe plan/apply. Worker discovery remains
+  in `rewrite/evidence/rule_guidance`; the coordinator owns fresh verification.

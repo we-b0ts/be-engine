@@ -136,6 +136,11 @@ pub(super) struct MysqlTimeValueRule {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct HttpSelector {
+    #[serde(
+        default,
+        skip_serializing_if = "super::http_json::HttpJsonRules::is_empty"
+    )]
+    pub(super) json: super::http_json::HttpJsonRules,
     pub(super) method: String,
     pub(super) path: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -314,6 +319,7 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
     for (output_id, rules) in &document.process_output_rules {
         crate::process_output::validate_verification_rules(output_id, rules)?;
     }
+    super::http_json::validate_overlaps(&document.dependency_rules)?;
     let mut ids = BTreeSet::new();
     for rule in &document.dependency_rules {
         ensure!(
@@ -321,6 +327,11 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
             "recording_run replay scope requires policy version 3"
         );
         validate_rule(rule)?;
+        super::http_json::validate(rule)?;
+        ensure!(
+            document.version >= 3 || rule.http.as_ref().is_none_or(|h| h.json.is_empty()),
+            "HTTP JSON rules require policy version 3"
+        );
         ensure!(
             ids.insert(rule.id.as_str()),
             "duplicate replay policy rule id {:?}",
@@ -466,8 +477,10 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
                 rule.id
             );
             ensure!(
-                !http.query.is_empty() || rule.replay_scope == ReplayScope::RecordingRun,
-                "HTTP rule {:?} must configure at least one query field",
+                !http.query.is_empty()
+                    || !http.json.is_empty()
+                    || rule.replay_scope == ReplayScope::RecordingRun,
+                "HTTP rule {:?} must configure query fields, JSON rules or recording_run scope",
                 rule.id
             );
             for (name, field) in &http.query {

@@ -1,5 +1,7 @@
 //! Bounded-memory traversal restricted to one finalized standard recording.
 use super::*;
+use anyhow::ensure;
+use std::path::Path;
 use std::{
     fs,
     io::{BufRead, BufReader},

@@ -49,6 +49,39 @@ fn persisted_plan_remains_applicable_after_plan_revision_bump() {
 }
 
 #[test]
+fn http_unordered_remains_request_owned_and_rechecks_persisted_evidence() {
+    let mut state = dependency_state();
+    let spec = RewriteDependencyRuleSpec::HttpUnordered {
+        selector: crate::HttpUnorderedSelector {
+            host: "erp.example.test".into(),
+            port: 80,
+            method: "POST".into(),
+            path: "/membership".into(),
+            pointer: "/department_ids".into(),
+        },
+    };
+    state.dependency_rule_plan.as_mut().unwrap().spec = spec.clone();
+    for kind in [
+        RewriteIssueKind::Response,
+        RewriteIssueKind::Dependency,
+        RewriteIssueKind::Replay,
+    ] {
+        state.active_issue.as_mut().unwrap().kind = kind;
+        assert!(dependency_issue(&state, &spec).is_ok());
+        assert!(
+            validate_plan_evidence(
+                Path::new("/missing-target"),
+                &state,
+                "issue-dependency",
+                "evidence-dirty-clusters",
+                &spec
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn apply_does_not_revalidate_revision_scoped_evidence() {
     let mut state = dependency_state();
     state.bump();

@@ -408,6 +408,12 @@ pub(crate) fn query_http_cross_case_candidates(context: E2eRunContext, api: &str
         .unwrap_or_else(|_| serde_json::json!({"candidates": [], "unavailable": "cross-case source evidence could not be inspected; existing dirty evidence remains authoritative"})))
 }
 
+pub(crate) fn query_http_unordered_candidates(context: E2eRunContext, api: &str) -> Result<Value> {
+    let state = finalized_focused_state(context, api)?;
+    Ok(crate::replay::http_unordered::evidence::discover(&state.replay_report)
+        .unwrap_or_else(|_| serde_json::json!({"candidates": [], "omitted_candidates": 0, "requires_fresh_replay": true, "unavailable": "HTTP unordered evidence is unavailable; rerun Replay"})))
+}
+
 fn finalized_focused_state(context: E2eRunContext, api: &str) -> Result<model::ActiveRunState> {
     finalized_focused_evidence(context, api).map(|(state, _)| state)
 }

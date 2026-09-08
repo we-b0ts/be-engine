@@ -181,6 +181,7 @@ impl ReplayPolicyRuntime {
                 .filter(|rule| {
                     rule.protocol == DependencyProtocol::Http
                         && rule.replay_scope != super::config::ReplayScope::RecordingRun
+                        && rule.http.as_ref().is_some_and(|h| h.json.is_empty())
                         && rule_matches_case(rule, case)
                         && rule_matches_http(rule, target, method, uri)
                 })
@@ -370,6 +371,7 @@ impl ReplayPolicyRuntime {
             .filter(|rule| {
                 rule.protocol == DependencyProtocol::Http
                     && rule.replay_scope != super::config::ReplayScope::RecordingRun
+                    && rule.http.as_ref().is_some_and(|h| h.json.is_empty())
                     && rule_matches_case(rule, case)
                     && rule_matches_http(rule, context.target, context.method, context.actual_uri)
             })
@@ -545,14 +547,14 @@ impl ReplayPolicyRuntime {
         case_id: Option<&str>,
         decision: DependencyRuleDecision,
     ) {
-        let Some(case_id) = case_id else {
-            return;
-        };
-        let bindings = self.bindings.entry(case_id.to_string()).or_default();
-        for (name, value) in decision.bindings {
-            bindings.entry(name).or_insert(value);
+        if let Some(case_id) = case_id {
+            let bindings = self.bindings.entry(case_id.to_string()).or_default();
+            for (name, value) in decision.bindings {
+                bindings.entry(name).or_insert(value);
+            }
         }
         for (rule_id, decision_usage) in decision.usage {
+            self.applicable_dependency_rule_ids.insert(rule_id.clone());
             let usage = self
                 .usage
                 .get_mut(&rule_id)
@@ -778,3 +780,5 @@ fn rule_matches_target(rule: &ReplayDependencyRule, actual: Option<&TargetKey>) 
     };
     normalize_host(host) == actual.host && rule.target.port.is_none_or(|port| port == actual.port)
 }
+
+mod http_json;
