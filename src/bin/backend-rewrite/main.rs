@@ -1,4 +1,5 @@
 mod jwt_rule;
+mod review;
 use std::io::Write;
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
@@ -131,6 +132,8 @@ enum RewriteCommand {
     Repair(RepairArgs),
     /// Confirm the runtime identity of one dispatched or resumed API subagent.
     Worker(WorkerArgs),
+    /// Check source quality before worker handoff and after integration.
+    Review(review::ReviewArgs),
     /// Retry a failed detached coordinator operation after its cause is resolved.
     Operation(OperationArgs),
     /// Schedule selected stale APIs before the deferred final verification batch.
@@ -406,6 +409,9 @@ enum WorkerCommand {
 
 #[derive(Debug, Args)]
 struct WorkerConfirmArgs {
+    /// Assigned worker worktree; register again when resuming a dispatch.
+    #[arg(long, env = "BACKEND_REWRITE_WORKER_WORKTREE")]
+    worktree: Option<PathBuf>,
     /// Opaque dispatch id returned by the current implementation_required action.
     dispatch_id: String,
     /// Runtime-returned subagent handle. Supply through the named environment variable.
@@ -418,6 +424,9 @@ struct WorkerConfirmArgs {
 
 #[derive(Debug, Args)]
 struct WorkerReportArgs {
+    /// Passing review report for the exact worker delivery; required for handoff_ready.
+    #[arg(long, env = "BACKEND_REWRITE_WORKER_REVIEW_REPORT")]
+    review_report: Option<PathBuf>,
     dispatch_id: String,
     #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_HANDLE", hide_env_values = true)]
     agent_handle: String,
@@ -711,6 +720,7 @@ async fn run(cli: Cli) -> Result<()> {
                 pretty,
             ),
         },
+        RewriteCommand::Review(args) => review::run(target_root, args, pretty),
         RewriteCommand::Worker(args) => match args.command {
             WorkerCommand::Confirm(args) => print_json(
                 &confirm_rewrite_worker(RewriteWorkerConfirmOptions {
@@ -718,6 +728,7 @@ async fn run(cli: Cli) -> Result<()> {
                     dispatch_id: args.dispatch_id,
                     agent_handle: args.agent_handle,
                     agent_name: args.agent_name,
+                    worktree: args.worktree,
                 })?,
                 pretty,
             ),
@@ -728,6 +739,7 @@ async fn run(cli: Cli) -> Result<()> {
                     agent_handle: args.agent_handle,
                     activity: args.activity.parse()?,
                     handoff_id: args.handoff_id,
+                    review_report: args.review_report,
                 })?,
                 pretty,
             ),

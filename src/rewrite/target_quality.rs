@@ -54,10 +54,6 @@ pub fn run(options: RewriteTargetQualityOptions) -> Result<RewriteActionEnvelope
         "target quality gates require an integrated worker handoff for the current dispatch"
     );
     let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
-    ensure!(
-        scoped.target_fingerprint.as_deref() != Some(target_fingerprint.as_str()),
-        "target repository has not changed since the latest focused attempt"
-    );
     let expected = id(&scoped, &target_fingerprint, &project.target_quality_gates)?;
     ensure!(
         options.gate_id == expected,
@@ -65,6 +61,9 @@ pub fn run(options: RewriteTargetQualityOptions) -> Result<RewriteActionEnvelope
         scoped.api
     );
 
+    if let Some(review) = super::review::gate(&target_root, &state, &project.pr_base)? {
+        return Ok(action::envelope(&target_root, &scoped, review));
+    }
     let replay_isolation = replay_isolation::inspect(
         &target_root,
         &project.pr_base,
@@ -81,7 +80,10 @@ pub fn run(options: RewriteTargetQualityOptions) -> Result<RewriteActionEnvelope
         verified_fingerprint == target_fingerprint,
         "target repository changed while quality gates were running; inspect status and execute the newly issued gate"
     );
-    state.target_quality_fingerprint = Some(verified_fingerprint);
+    state.target_quality_fingerprint = Some(cache_key(
+        &verified_fingerprint,
+        &project.target_quality_gates,
+    )?);
     state.bump();
     store.save(&state)?;
     let scoped = inventory::scoped(&state, Some(&options.api))?;
@@ -99,8 +101,8 @@ pub(super) fn required_action(
     target_fingerprint: &str,
     gates: &[TargetQualityGateConfig],
 ) -> Result<Option<RewriteAction>> {
-    if state.target_fingerprint.as_deref() == Some(target_fingerprint)
-        || state.target_quality_fingerprint.as_deref() == Some(target_fingerprint)
+    if state.target_quality_fingerprint.as_deref()
+        == Some(cache_key(target_fingerprint, gates)?.as_str())
     {
         return Ok(None);
     }
@@ -108,11 +110,12 @@ pub(super) fn required_action(
     Ok(Some(RewriteAction::TargetQualityRequired {
         summary: format!(
             "run {} target repository quality gate(s) in the integrated coordinator worktree before focused replay",
-            gates.len() + 1
+            gates.len() + 2
         ),
         gate_id: gate_id.clone(),
         target_fingerprint: target_fingerprint.to_string(),
         gates: std::iter::once(replay_isolation::GATE_NAME.to_string())
+            .chain(std::iter::once("source-review".to_string()))
             .chain(gates.iter().map(|gate| gate.name.clone()))
             .collect(),
         command: action::command(
@@ -137,9 +140,6 @@ pub(super) fn status_action(
         return Ok(None);
     }
     let target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
-    if state.target_fingerprint.as_deref() == Some(target_fingerprint.as_str()) {
-        return Ok(None);
-    }
     let project_config = target_root.join(".traffic-e2e/project.yaml");
     let gates = if project_config.is_file() {
         crate::e2e_run::resolve_project(target_root)?
@@ -166,6 +166,16 @@ pub(super) fn status_action(
             .to_string(),
         command: action::next_command_for_api(target_root, &state.api),
     }))
+}
+
+fn cache_key(target: &str, gates: &[TargetQualityGateConfig]) -> Result<String> {
+    Ok(fingerprint::id(&[
+        "target-quality-cache-v3",
+        target,
+        replay_isolation::GATE_VERSION,
+        super::review::RULE_VERSION,
+        &serde_json::to_string(gates)?,
+    ]))
 }
 
 fn id(
@@ -284,7 +294,11 @@ mod tests {
         );
         assert_eq!(
             value.pointer("/details/gates"),
-            Some(&serde_json::json!(["replay-isolation", "check"]))
+            Some(&serde_json::json!([
+                "replay-isolation",
+                "source-review",
+                "check"
+            ]))
         );
     }
 
@@ -301,7 +315,7 @@ mod tests {
 
         assert_eq!(
             value.pointer("/details/gates"),
-            Some(&serde_json::json!(["replay-isolation"]))
+            Some(&serde_json::json!(["replay-isolation", "source-review"]))
         );
     }
 
@@ -310,7 +324,8 @@ mod tests {
         let mut state = crate::rewrite::test_state();
         state.phase = RewritePhase::ImplementationRequired;
         state.target_fingerprint = Some("fnv1a64:old".to_string());
-        state.target_quality_fingerprint = Some("fnv1a64:new".to_string());
+        state.target_quality_fingerprint =
+            Some(cache_key("fnv1a64:new", &[gate("check", &["git", "diff", "--check"])]).unwrap());
 
         assert!(
             required_action(
@@ -491,7 +506,17 @@ mod tests {
             .unwrap();
         assert_eq!(
             saved.target_quality_fingerprint.as_deref(),
-            Some(current.as_str())
+            Some(
+                cache_key(
+                    &current,
+                    &crate::e2e_run::resolve_project(target.path())
+                        .unwrap()
+                        .1
+                        .target_quality_gates
+                )
+                .unwrap()
+                .as_str()
+            )
         );
     }
 

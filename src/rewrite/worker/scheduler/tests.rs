@@ -43,6 +43,7 @@ fn all_implementation_items_dispatch_even_with_zero_unverified_and_more_than_32_
             panic!("every unresolved item must be dispatched")
         };
         let response = worker::confirm(worker::RewriteWorkerConfirmOptions {
+            worktree: Some(target.path().to_path_buf()),
             target_root: target.path().into(),
             dispatch_id: dispatch.dispatch_id.clone(),
             agent_handle: format!("actual-runtime-worker-{remaining}"),
@@ -51,6 +52,7 @@ fn all_implementation_items_dispatch_even_with_zero_unverified_and_more_than_32_
         .unwrap();
         assert_eq!(response.pending, remaining);
         let response = runtime::report(runtime::RewriteWorkerReportOptions {
+            review_report: None,
             target_root: target.path().into(),
             dispatch_id: dispatch.dispatch_id,
             agent_handle: format!("actual-runtime-worker-{remaining}"),

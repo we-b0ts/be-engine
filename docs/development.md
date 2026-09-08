@@ -171,6 +171,30 @@ the pushed manifest digest, and pin target Dockerfiles to `tag@sha256`.
 
 ## CLI Boundaries
 
+`backend-rewrite review check --worktree /absolute/worker --api 'GET /api'`
+performs the mandatory worker handoff review. Register the worktree during
+`worker confirm --worktree /absolute/worker`; the engine records the dispatch
+base. Use `--process-output ID` for a process-output worker. After the final
+edit and commit, supply the returned report through `worker report ...
+--activity handoff_ready --review-report /absolute/report.json`.
+
+Review enforces complete changed production Rust files <=1000 lines and rejects
+explicit `serde_json::Value` use. `json!` is allowed. Added Tokio spawn paths
+require structured startup ownership evidence via `--evidence`; request-owned
+and unknown ownership cannot pass. The scanner uses syntax, ordinary imports and
+source spans; it does not expand macros, infer types or prove call graphs.
+See the [worker review protocol](../plugins/ai-software-engineering/skills/backend-rewrite/references/source-review.md).
+
+Without `--worktree` or a work-item selector, `review check` checks integrated
+source against `pr_base`. `review show` reads its current report and `review
+rework --finding ID --owner 'api:GET /api'` (or `process-output:ID`) routes a
+finding to its responsible worker, including a completed retained work item.
+An executed review returns JSON with `passed`, `changes_required` or
+`evidence_required`; inspect `status`, not merely the command exit status.
+Checks and evidence reports are not traffic evidence and never change recordings.
+Quality results are bound to code content, rules and the diff base. Old workflow
+states remain readable but old quality receipts do not waive new checks.
+
 Use `traffic-e2e config ... init` for one-time target configuration and
 `traffic-e2e prepare|run-api|run|status|recover|abort` for the standard
 workflow. Use `traffic-e2e config recorder|replay|comparison plan|apply` for
@@ -1162,7 +1186,7 @@ backend-rewrite verification request \
   --reason 'shared response mapper changed'
 ```
 
-Rewrite action schema v27 always returns `action.kind`, `action.summary`,
+Rewrite action schema v28 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under coordinator command roles such as
 `execute`, `status`, `advance`, `recover`, `apply`, and `acceptance`.
@@ -1284,21 +1308,30 @@ worker bindings; ready counts sum to `pending`.
 Each implementation issue has one persistent worker handle and isolated
 worktree. There is no coordinator worker limit; the task runtime controls
 concurrency and accepted queuing. Dispatch/resume a real worker, then execute
-`commands.confirm_worker` with its actual handle. Confirmation of one API never
+`commands.confirm_worker` with its actual handle and assigned `--worktree`.
+Confirmation of one API never
 blocks dispatch or feedback for another. Workers own evidence, diagnosis,
-implementation, and local tests; the coordinator supplies only the assignment
+implementation, local tests, and the assigned source review; the coordinator supplies only the assignment
 fields described above and retains the actual dispatch identity.
 
 Runtime completion events drive `worker report <dispatch-id>`. Set
 `BACKEND_REWRITE_SUBAGENT_HANDLE` and `BACKEND_REWRITE_WORKER_ACTIVITY` to
 `running`, `queued`, `idle`, or `handoff_ready`. Handoffs also require
-`BACKEND_REWRITE_WORKER_HANDOFF_ID`. `integration_required` asks the coordinator
+`BACKEND_REWRITE_WORKER_HANDOFF_ID` and a passing `--review-report` for the final
+delivery. The coordinator inspects the spawn evidence before accepting it.
+`integration_required` asks the coordinator
 to integrate that identified handoff and required inputs, then report
 `integrated` with the same ID. A worker ending without a handoff is `idle` and
 requires resuming its existing binding. Integration conflicts return the ready
 handoff via `rework_required` with its ID; the engine issues a new dispatch to
 the same worker and rejects callbacks for the superseded dispatch. Integration
 is acknowledged only while the verification resource is free.
+
+Source quality rework preserves assigned findings in `context.review.rework`
+alongside any behavioral issue. Repeated routing to the same owner and target
+revision extends the current repair. Worker dispatch/status/integration remain
+available; otherwise `wait_required` on `source_review_rework` waits for the
+repair without repeatedly scheduling a failing review or traffic acceptance.
 
 `worker_status_required` asks for a runtime observation, including for legacy
 bindings and running/queued observations at least fifteen minutes old. Historical
@@ -1472,7 +1505,7 @@ the updated policy.
 Recording, focused Replay, and comparison share one serialized traffic-runtime
 lease. Global status first returns any executable worker dispatch or feedback
 action. When resources or running workers are the only remaining activity,
-schema v27 returns `wait_required` with
+schema v28 returns `wait_required` with
 the requested and blocking APIs, the live operation when available, a retry
 delay, and the exact `commands.wait` argv. This lease serializes each traffic
 operation, not a complete API lifecycle: while worker A implements, the
@@ -1494,10 +1527,12 @@ does not make apply stale. A corrected plan using the same evidence ID replaces
 the pending preview before apply; recorder configuration is still changed only
 by apply. For an integrated target change, Rust repositories first return
 `target_quality_required`; its exact execute command runs format, workspace
-tests, and Clippy in the canonical coordinator worktree. Passing records the
-target fingerprint and returns the `advance_required` command that starts
+tests, and Clippy in the canonical coordinator worktree, with mandatory Replay
+isolation and source review. Passing records a rules/configuration-aware
+quality key for the target fingerprint and returns the `advance_required` command that starts
 Replay. Explicit `target.quality_gates` replace the inferred commands, and an
-explicit empty list disables them.
+explicit empty list disables only those configurable commands. Mandatory source
+review and Replay isolation remain enabled.
 
 A failed focused E2E attempt reuses the same finalized standard cases after the
 target changes. A passing attempt advances to a newly allocated comparison

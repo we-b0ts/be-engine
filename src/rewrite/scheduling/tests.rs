@@ -304,6 +304,7 @@ async fn wait_wakes_for_reported_worker_interruption_before_its_deadline() {
     let report = async {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         worker::runtime::report(worker::runtime::RewriteWorkerReportOptions {
+            review_report: None,
             target_root: target.path().into(),
             dispatch_id: worker::dispatch_view(&state, scope.clone(), None).dispatch_id,
             agent_handle: format!("test-subagent-handle:{}", scope.binding_key()),

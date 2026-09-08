@@ -75,7 +75,7 @@ fn detached_cli_operation_publishes_failure_and_status_does_not_restart_it() {
         target.path(),
         &["target-quality", "run", "invalid-gate", "--api", "GET /api"],
     );
-    assert_eq!(launched["schema_version"], 27);
+    assert_eq!(launched["schema_version"], 28);
     assert_eq!(
         launched["pending"],
         if launched["action"]["kind"] == "wait_required" {

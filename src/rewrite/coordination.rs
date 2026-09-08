@@ -167,7 +167,10 @@ pub(super) fn details(
         RewriteAction::AdvanceRequired { .. }
             if result.ready.contains_key("verify_api")
                 || result.ready.contains_key("verify_handoff") => {}
-        RewriteAction::TargetQualityRequired { .. } if !busy => {
+        RewriteAction::TargetQualityRequired { .. }
+        | RewriteAction::SourceReviewRequired { .. }
+            if !busy =>
+        {
             let previous = if state.system_repair_accepted {
                 "verify_api"
             } else {
@@ -210,6 +213,18 @@ pub(super) fn projected_details(
             add(&mut result.ready, "verify_system_repair", 1);
         } else {
             add(&mut result.waiting, "system_repair", 1);
+        }
+    }
+    if super::review::is_rework_wait(base) {
+        for key in [
+            "verify_handoff",
+            "verify_api",
+            "verify_system_repair",
+            "target_quality",
+        ] {
+            if let Some(count) = result.ready.remove(key) {
+                add(&mut result.waiting, "source_review_rework", count);
+            }
         }
     }
     if matches!(selected, RewriteAction::Blocked { .. }) {

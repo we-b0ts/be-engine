@@ -348,6 +348,8 @@ fn transfer_rejects_a_handle_owned_by_another_api() {
     state.worker_bindings.insert(
         "POST /other".to_string(),
         RewriteWorkerBinding {
+            review_assignment: None,
+            review_report: None,
             agent_handle_fingerprint: other_fingerprint,
             agent_name: None,
             confirmed_dispatch_id: "other-dispatch".to_string(),
@@ -521,12 +523,14 @@ fn status_recovers_confirmation_and_advance_across_repeated_worker_dispatches() 
     };
     let confirm_dispatch = |dispatch_id: &str| {
         confirm(RewriteWorkerConfirmOptions {
+            worktree: Some(target.path().to_path_buf()),
             target_root: target.path().to_path_buf(),
             dispatch_id: dispatch_id.into(),
             agent_handle: "persistent-worker".into(),
             agent_name: None,
         })?;
         runtime::report(runtime::RewriteWorkerReportOptions {
+            review_report: None,
             target_root: target.path().to_path_buf(),
             dispatch_id: dispatch_id.into(),
             agent_handle: "persistent-worker".into(),

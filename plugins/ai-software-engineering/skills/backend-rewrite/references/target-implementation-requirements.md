@@ -64,6 +64,12 @@ These requirements apply only to an existing initialized target repository.
   layered clients MUST NOT multiply retries invisibly.
 - Every spawned or background task MUST have an owner, bounded admission, error
   reporting, cancellation behavior, and shutdown behavior.
+- Changed `tokio::spawn` calls require evidence of initialization ownership.
+  Trace the startup entry, call chain and all callers; registering a request
+  callback in `main` does not make its execution initialization-owned.
+  Request-triggered spawning is prohibited even when its handle is immediately
+  awaited. Unknown ownership cannot pass review. Submit startup evidence through
+  the [source review contract](source-review.md), not a prose assertion alone.
 - Long-lived dependency clients and pools MUST have explicit ownership,
   capacity, reuse, health behavior, and shutdown. Do not construct them per
   request.
@@ -80,12 +86,11 @@ These requirements apply only to an existing initialized target repository.
 
 ### Rust Data Representation And Allocation
 
-- Target product code MUST NOT use `serde_json::Value`,
-  `serde_json::Map<String, serde_json::Value>`, or an equivalent dynamically
-  typed tree as the serialization or deserialization model for a known schema.
+- Target product code MUST NOT explicitly use `serde_json::Value` or
+  `serde_json::Map<String, serde_json::Value>` in changed code.
   Define dedicated `Serialize` and `Deserialize` structs for request, response,
-  configuration, and dependency payloads. Isolate a genuinely dynamic field
-  only when the source contract proves that field is open-ended.
+  configuration, and dependency payloads. Dynamic keys use typed maps.
+  `json!` is permitted and is not rejected by the source review gate.
 - Avoid unnecessary allocations and copies. Do not introduce intermediate
   `String`, `Vec`, owned collections, `clone`, `to_owned`, `format!`, or
   serialize-then-deserialize steps when direct construction, streaming, buffer
@@ -117,12 +122,10 @@ and keep each choice compatible with the source submission contract.
 - Production modules MUST NOT depend on test, fixture, recording, or Replay
   modules.
 - Rust product source files under `src/`, `crates/**/src/`, or `apps/**/src/`
-  MUST remain at or below 1000 lines. If a touched file already exceeds the
+  MUST remain at or below 1000 complete physical lines, including comments,
+  blank lines and the last line without a trailing newline. This is the whole
+  changed file's size, not the diff size. If a touched file already exceeds the
   limit, extract the touched responsibility before adding behavior.
-- Run the bundled
-  [`check-code-organization`](../scripts/check-code-organization) after the
-  final product-code edit when the target repository does not enforce an
-  equivalent source-size gate.
 
 Every used Breeze or platform SDK capability MUST be added as a Git dependency
 pinned to its documented release tag and exposed through the corresponding
@@ -135,13 +138,30 @@ product uses.
 
 ## Verification Ownership
 
+- Before handoff, finish the product edits, run focused tests, commit the
+  delivery, and execute `context.review.check` from the scoped evidence
+  response. It runs `backend-rewrite review check` against the registered
+  worker worktree and engine-frozen dispatch base. Keep `--target-root` bound
+  to the canonical workflow; do not initialize a workflow in the worker tree.
+- Inspect the report's `status`, `findings`, `next_step` and `report_path`.
+  Exit code zero only means the command executed; handoff requires `passed`.
+  For `changes_required`, repair and check again in the same worker turn.
+  For `evidence_required`, inspect each spawn's actual trigger and rerun the
+  returned check with `--evidence /absolute/path/evidence.json` using
+  [source-review.md](source-review.md). A subsequent edit or commit invalidates
+  the delivery check and requires another run. The bundled organization script
+  remains an optional earlier check and cannot replace this report.
 - A worker runs focused local tests for its changed work scope and returns the
   original workflow/recording, work scope, issue, binding and dispatch identities
   from its evidence overview, proven cause and supporting evidence, changed files
-  and shared impact, patch or commit, test results, coordinator inputs, and
-  unresolved risks.
+  and shared impact, patch or commit, test results, coordinator inputs,
+  unresolved risks, and the passing report's absolute `report_path` with any
+  spawn ownership evidence. Return these to the coordinator and end the turn.
 - A worker MUST NOT execute coordinator acceptance, advance workflow state, or
   claim that the work item or workflow is complete.
+- The coordinator checks the returned identity and review evidence, then reports
+  `handoff_ready` with `--review-report`. A worker does not report its own
+  handoff or run the coordinator's integrated review.
 - The workflow coordinator integrates the change in the canonical target worktree
   and executes the engine-issued target quality and acceptance actions.
   Worker-local checks do not replace those integrated-revision gates.

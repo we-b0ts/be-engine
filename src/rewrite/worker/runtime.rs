@@ -19,6 +19,7 @@ pub struct RewriteWorkerReportOptions {
     pub agent_handle: String,
     pub activity: RewriteWorkerActivity,
     pub handoff_id: Option<String>,
+    pub review_report: Option<PathBuf>,
 }
 
 pub fn report(options: RewriteWorkerReportOptions) -> Result<RewriteActionEnvelope> {
@@ -51,13 +52,54 @@ pub fn report(options: RewriteWorkerReportOptions) -> Result<RewriteActionEnvelo
     let target_fingerprint = (options.activity == RewriteWorkerActivity::Integrated)
         .then(|| fingerprint::repository_fingerprint(&target_root))
         .transpose()?;
+    let review = if options.activity == RewriteWorkerActivity::HandoffReady {
+        let duplicate = observation(&state, &scope).is_some_and(|o| {
+            o.handoff_id == options.handoff_id
+                && matches!(
+                    o.activity,
+                    RewriteWorkerActivity::HandoffReady | RewriteWorkerActivity::Integrated
+                )
+        });
+        if duplicate {
+            None
+        } else {
+            Some(super::super::review::accept_handoff(
+                &state,
+                &scope,
+                options.review_report.as_deref(),
+            )?)
+        }
+    } else {
+        None
+    };
     let changed = apply_report(&mut state, &scope, &options, target_fingerprint)?;
+    if let Some(review) = review {
+        state
+            .worker_bindings
+            .get_mut(&scope.binding_key())
+            .unwrap()
+            .review_report = Some(review);
+    }
+    let rework_finished = changed
+        && options.activity == RewriteWorkerActivity::Integrated
+        && state
+            .source_review_rework
+            .remove(&scope.binding_key())
+            .is_some();
+    if rework_finished {
+        state.bump();
+    }
     if changed {
         super::events::publish(&target_root, &state, &scope)?;
     }
     // A worker report never activates a slice or starts a traffic operation.
     // Recover the global action through status, which also honors live leases.
     drop(_lock);
+    if rework_finished {
+        // Integration holds the coordinator lock. Save only after releasing the
+        // feedback lock, because save folds in newer worker observations itself.
+        store.save(&state)?;
+    }
     drop(integration_lock);
     current_envelope(&target_root)
 }

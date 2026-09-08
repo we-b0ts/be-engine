@@ -24,6 +24,8 @@ fn options(
     activity: RewriteWorkerActivity,
 ) -> RewriteWorkerReportOptions {
     RewriteWorkerReportOptions {
+        review_report: (activity == RewriteWorkerActivity::HandoffReady)
+            .then(|| crate::rewrite::review::tests::worker_report(target, scope.clone())),
         target_root: target.to_path_buf(),
         dispatch_id: worker::dispatch_id(state, scope),
         agent_handle: "actual-worker-a".into(),
@@ -38,6 +40,7 @@ fn options(
 
 fn confirm(target: &Path, state: &RewriteState, scope: &RewriteWorkScope) {
     worker::confirm(worker::RewriteWorkerConfirmOptions {
+        worktree: Some(target.to_path_buf()),
         target_root: target.to_path_buf(),
         dispatch_id: worker::dispatch_id(state, scope),
         agent_handle: "actual-worker-a".into(),

@@ -145,6 +145,11 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 {
                     return Ok(action::envelope(&target_root, &state, action));
                 }
+                if worker::runtime::acceptance_ready(&state, &scope)
+                    && let Some(review) = review::gate(&target_root, &state, &project.pr_base)?
+                {
+                    return Ok(action::envelope(&target_root, &state, review));
+                }
                 process_outputs::activate_and_compare(
                     &target_root,
                     &mut state,
@@ -172,6 +177,9 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 }
                 if migrated || invalidated || process_invalidated || active_comparison_stale {
                     store.save(&state)?;
+                }
+                if let Some(review) = review::required_action(&target_root, &state)? {
+                    return Ok(action::envelope(&target_root, &state, review));
                 }
                 progress_publication::synchronize_if_complete(&target_root, &state)?;
                 progress_publication::finalize_if_published(&target_root, &store, &mut state)?;
@@ -231,6 +239,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 current_api_index: None,
                 parked_slices: std::collections::BTreeMap::new(),
                 worker_bindings: std::collections::BTreeMap::new(),
+                source_review_rework: std::collections::BTreeMap::new(),
                 worker_event_revision: 0,
                 process_outputs: Default::default(),
                 api_catalog_initialized: false,
@@ -391,6 +400,9 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
             if let Some(action) = worker::scheduler::acceptance_gate(&target_root, &state, &scope) {
                 return Ok(action::envelope(&target_root, &state, action));
             }
+            if let Some(review) = review::gate(&target_root, &state, &project.pr_base)? {
+                return Ok(action::envelope(&target_root, &state, review));
+            }
             let current = fingerprint::repository_fingerprint(&target_root)?;
             if let Some(required) = target_quality::required_action(
                 &target_root,
@@ -399,6 +411,20 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 &project.target_quality_gates,
             )? {
                 return Ok(action::envelope(&target_root, &state, required));
+            }
+            // Completed APIs reopened for quality work may retain only an inventory
+            // entry. Reuse the existing recording to restore preparation for Replay.
+            if state
+                .active_issue
+                .as_ref()
+                .is_some_and(|issue| issue.kind == RewriteIssueKind::TargetQuality)
+                && (state.case_source.is_none() || state.group_id.is_none())
+            {
+                preparation::prepare_recording(&target_root, &mut state)?;
+                store.save(&state)?;
+                if let Some(envelope) = configuration_commit::pending_locked(&target_root)? {
+                    return Ok(envelope);
+                }
             }
             state.e2e_current = false;
             state.comparison_current = false;
