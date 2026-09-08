@@ -426,6 +426,7 @@ impl ReplayRuntime {
             http::observe_recorded_policy_exchanges(policy, &http_exchanges);
             memcached::observe_recorded_policy_exchanges(policy, &memcached);
             redis.value_rules = policy.redis_value_rules();
+            redis.configure_time_shift(&policy.redis_time_shift_rules())?;
             policy.reject_http_ignore_overlap(&http_ignore_query_params)?;
         }
 
@@ -895,6 +896,13 @@ pub use policy::{
     HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
 };
 
+pub use policy::{
+    RedisTimeShiftFeedback, RedisTimeShiftPlan, RedisTimeShiftReport, plan_redis_time_shift,
+};
+pub use redis::time_shift::{
+    RedisTimeShiftRead, RedisTimeShiftSelector, RedisTimestampFormat, RelativeTime,
+    RelativeTimeField,
+};
 pub use redis::value::{RedisUnorderedField, RedisUnorderedSelector, RedisValueKeySelector};
 
 pub use policy::{

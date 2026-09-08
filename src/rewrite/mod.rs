@@ -284,6 +284,7 @@ pub fn apply_rewrite_dependency_rule(
                 model::RewriteDependencyRuleSpec::HttpCrossCase { .. }
                     | model::RewriteDependencyRuleSpec::HttpUnordered { .. }
                     | model::RewriteDependencyRuleSpec::RedisUnordered { .. }
+                    | model::RewriteDependencyRuleSpec::RedisTimeShift { .. }
             )
         }))
     })?;
@@ -297,6 +298,7 @@ pub fn apply_rewrite_dependency_rule(
                         | model::RewriteDependencyRuleSpec::HttpCrossCase { .. }
                         | model::RewriteDependencyRuleSpec::HttpUnordered { .. }
                         | model::RewriteDependencyRuleSpec::RedisUnordered { .. }
+                        | model::RewriteDependencyRuleSpec::RedisTimeShift { .. }
                 )
             });
             let cache_snapshot_refresh =

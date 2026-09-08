@@ -53,7 +53,7 @@ impl<'de> Deserialize<'de> for Strict {
     }
 }
 pub(super) fn parse(bytes: &[u8]) -> Option<Value> {
-    if bytes.len() > super::MAX_VALUE_BYTES {
+    if bytes.len() > 1024 * 1024 {
         return None;
     }
     serde_json::from_slice::<Strict>(bytes).ok().map(|v| v.0)

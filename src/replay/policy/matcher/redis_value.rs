@@ -2,6 +2,33 @@
 use super::*;
 use crate::replay::redis::value::ValueRule;
 impl ReplayPolicyRuntime {
+    pub(in crate::replay) fn redis_time_shift_rules(
+        &self,
+    ) -> Vec<(
+        String,
+        crate::replay::redis::time_shift::RedisTimeShiftSelector,
+    )> {
+        self.loaded
+            .document
+            .dependency_rules
+            .iter()
+            .filter_map(|rule| {
+                let super::super::redis_value::RedisSelector::TimeShift(read) =
+                    rule.redis.as_ref()?
+                else {
+                    return None;
+                };
+                Some((
+                    rule.id.clone(),
+                    crate::replay::redis::time_shift::RedisTimeShiftSelector {
+                        host: rule.target.host.clone().unwrap_or_default(),
+                        port: rule.target.port.unwrap_or_default(),
+                        read: read.clone(),
+                    },
+                ))
+            })
+            .collect()
+    }
     pub(in crate::replay) fn redis_value_rules(&self) -> Vec<ValueRule> {
         self.loaded
             .document

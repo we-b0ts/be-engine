@@ -5,7 +5,7 @@ use crate::replay::policy::config::{
     DependencyProtocol, ReplayDependencyRule, ReplayScope, TargetSelector, load_replay_policy,
     validate_document,
 };
-use crate::replay::policy::redis_value::{RedisFieldRule, RedisSelector};
+use crate::replay::policy::redis_value::{RedisFieldRule, RedisSelector, RedisValueSelector};
 use crate::replay::redis::value as redis_unordered;
 use anyhow::{Result, ensure};
 use serde::Serialize;
@@ -88,13 +88,13 @@ pub fn plan_redis_unordered(feedback: RedisUnorderedFeedback) -> Result<RedisUno
             port: Some(feedback.selector.port),
         },
         http: None,
-        redis: Some(RedisSelector {
+        redis: Some(RedisSelector::Value(RedisValueSelector {
             key: feedback.selector.key.clone(),
             unordered: vec![RedisFieldRule {
                 field: feedback.selector.field.clone(),
                 source_evidence: feedback.source_evidence.clone(),
             }],
-        }),
+        })),
         mysql: None,
         memcached: None,
     };
@@ -114,6 +114,9 @@ pub fn plan_redis_unordered(feedback: RedisUnorderedFeedback) -> Result<RedisUno
                 .is_some_and(|h| h.eq_ignore_ascii_case(&feedback.selector.host))
             && r.target.port == Some(feedback.selector.port)
             && r.redis.as_ref().is_some_and(|redis| {
+                let RedisSelector::Value(redis) = redis else {
+                    return false;
+                };
                 redis.key == feedback.selector.key
                     && redis
                         .unordered

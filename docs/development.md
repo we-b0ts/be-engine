@@ -13,6 +13,9 @@ Source-proven arrays in outbound JSON requests use [HTTP unordered rules](http-u
 
 Redis JSON/Protobuf values and source-proven collection ordering use
 [Redis value rules](redis-value-rules.md), with the same discovery and plan/apply lifecycle.
+Source-proven expiry drift in Redis JSON read responses uses explicit
+[Redis time-shift rules](redis-time-shift-rules.md), discovered through worker
+source diagnosis without heuristic hints.
 
 ## Rust Tooling
 

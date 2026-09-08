@@ -16,6 +16,7 @@ pub(super) enum DependencyRulePlan {
     HttpCrossCase(crate::HttpCrossCasePlan),
     HttpUnordered(crate::HttpUnorderedPlan),
     RedisUnordered(crate::RedisUnorderedPlan),
+    RedisTimeShift(crate::RedisTimeShiftPlan),
     MysqlTime(crate::MysqlTimeRulePlan),
     Mysql(MysqlBackgroundDependencyPlan),
     Http(BackgroundDependencyPlan),
@@ -41,6 +42,7 @@ impl DependencyRulePlan {
         match self {
             Self::HttpCrossCase(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::RedisUnordered(plan) => Ok(serde_json::to_value(plan.report())?),
+            Self::RedisTimeShift(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::HttpUnordered(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::MysqlTime(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::Http(plan) => Ok(serde_json::to_value(plan.report())?),
@@ -56,6 +58,7 @@ impl DependencyRulePlan {
         match self {
             Self::HttpCrossCase(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::RedisUnordered(plan) => Ok(serde_json::to_value(plan.apply()?)?),
+            Self::RedisTimeShift(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::HttpUnordered(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::MysqlTime(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::Http(plan) => Ok(serde_json::to_value(plan.apply()?)?),
@@ -70,6 +73,9 @@ impl DependencyRulePlan {
     pub(super) fn reused_existing(&self) -> Option<&str> {
         match self {
             Self::RedisUnordered(plan) if plan.report().reused_existing => {
+                Some(&plan.report().effective_rule_id)
+            }
+            Self::RedisTimeShift(plan) if plan.report().reused_existing => {
                 Some(&plan.report().effective_rule_id)
             }
             Self::HttpUnordered(plan) if plan.report().reused_existing => {
@@ -108,6 +114,7 @@ impl DependencyRulePlan {
             Self::HttpCrossCase(plan) => &plan.report().effective_rule_id,
             Self::HttpUnordered(plan) => &plan.report().effective_rule_id,
             Self::RedisUnordered(plan) => &plan.report().effective_rule_id,
+            Self::RedisTimeShift(plan) => &plan.report().effective_rule_id,
             Self::MysqlTime(plan) => &plan.report().effective_rule_id,
             Self::Http(plan) => &plan.report().effective_name,
             Self::Mysql(plan) => &plan.report().effective_name,
@@ -125,6 +132,9 @@ pub(super) fn spec_from_selector(
     match selector {
         RewriteDependencyRuleSelector::RedisUnordered { selector } => {
             RewriteDependencyRuleSpec::RedisUnordered { selector }
+        }
+        RewriteDependencyRuleSelector::RedisTimeShift { selector } => {
+            RewriteDependencyRuleSpec::RedisTimeShift { selector }
         }
         RewriteDependencyRuleSelector::HttpUnordered { selector } => {
             RewriteDependencyRuleSpec::HttpUnordered { selector }
@@ -295,6 +305,18 @@ pub(super) fn build_plan(
             })?,
         ));
     }
+    if let RewriteDependencyRuleSpec::RedisTimeShift { selector } = &record.spec {
+        return Ok(DependencyRulePlan::RedisTimeShift(
+            crate::plan_redis_time_shift(crate::RedisTimeShiftFeedback {
+                policy_path: target_root.join(".traffic-e2e/verification.yaml"),
+                case_source,
+                replay_report_path,
+                rule_id: record.name.clone(),
+                selector: selector.clone(),
+                source_evidence: record.source_evidence.clone(),
+            })?,
+        ));
+    }
     if let RewriteDependencyRuleSpec::HttpCrossCase { selector } = &record.spec {
         return Ok(DependencyRulePlan::HttpCrossCase(
             crate::plan_http_cross_case(crate::HttpCrossCaseFeedback {
@@ -379,7 +401,8 @@ pub(super) fn build_plan(
         | RewriteDependencyRuleSpec::MysqlSqlTime { .. }
         | RewriteDependencyRuleSpec::HttpCrossCase { .. }
         | RewriteDependencyRuleSpec::HttpUnordered { .. }
-        | RewriteDependencyRuleSpec::RedisUnordered { .. } => {
+        | RewriteDependencyRuleSpec::RedisUnordered { .. }
+        | RewriteDependencyRuleSpec::RedisTimeShift { .. } => {
             unreachable!("Memcached payload plans return before background evidence resolution")
         }
         RewriteDependencyRuleSpec::Motan {

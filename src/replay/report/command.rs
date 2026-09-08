@@ -69,6 +69,8 @@ pub(crate) struct CommandSnapshotOverlayReport {
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub(in crate::replay) struct CommandProtocolReport {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) time_shifts: Vec<crate::replay::redis::time_shift::TimeShiftObservation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) unordered_value:
         Option<crate::replay::redis::value::evidence::OrderEvidence>,

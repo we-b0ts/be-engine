@@ -1,5 +1,6 @@
 //! Redis dependency rule CLI selectors and conversion.
 use super::*;
+mod time_shift;
 #[derive(Debug, Args)]
 pub(super) struct RedisDependencyRuleArgs {
     #[command(subcommand)]
@@ -8,6 +9,8 @@ pub(super) struct RedisDependencyRuleArgs {
 
 #[derive(Debug, Subcommand)]
 enum RedisDependencyRuleModeArgs {
+    /// Preserve source-proven relative lifetimes in matched GET/HGET JSON responses.
+    TimeShift(time_shift::RedisTimeShiftArgs),
     /// Source-proven unordered JSON arrays or Protobuf repeated fields in string writes.
     Unordered(RedisUnorderedArgs),
     /// Redis ZCOUNT dependency selected by key affixes.
@@ -67,6 +70,7 @@ struct RedisHashReadDependencyRuleArgs {
 
 pub(super) fn options(args: RedisDependencyRuleArgs) -> Result<RewriteDependencyRulePlanOptions> {
     Ok(match args.mode {
+        RedisDependencyRuleModeArgs::TimeShift(args) => return time_shift::options(args),
         RedisDependencyRuleModeArgs::Unordered(args) => return unordered_options(args),
         RedisDependencyRuleModeArgs::Zcount(args) => dependency_rule_options(
             args.common,

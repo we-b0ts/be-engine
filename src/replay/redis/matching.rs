@@ -120,6 +120,7 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Ok(MatchedRedisExchange {
+            response_time_shift: exchange.response_time_shift.clone(),
             rule_ids,
             index,
             connection_id: exchange.record.connection_id,
@@ -181,6 +182,7 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Some(MatchedRedisExchange {
+            response_time_shift: None,
             rule_ids: Vec::new(),
             index,
             connection_id: exchange.record.connection_id,

@@ -325,6 +325,20 @@ planner. It accepts compact HGET/HMGET
 numeric-key patterns plus exact fields, applies a replay-only overlay to
 immutable Global bootstrap evidence, and returns to the same focused cases.
 
+## Redis response time drift during Replay
+
+Accept source-proven `time-shift` inputs from the worker even without an engine
+hint or applicable-planner entry. Use current dirty-cluster evidence from a
+response, dependency, or Replay issue and
+`dependency-rule plan redis time-shift --help`. The plan verifies previously
+matched responses (including earlier cases in the same API attempt), complete
+immutable recording coverage and the explicitly selected timestamp fields.
+Review source proof of cache/expiry semantics, units, and downstream uses;
+integer values alone do not prove applicability. Apply rejects changed policy
+or evidence, invalidates verification across APIs and requires fresh Replay.
+It does not reclassify old failures or change recording ownership or consumption.
+See [Redis response time rules](../../../../../docs/redis-time-shift-rules.md).
+
 ## JWT expiration during Replay
 
 For a status mismatch with target HTTP 401, use the engine-issued
