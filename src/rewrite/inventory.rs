@@ -6,6 +6,9 @@ use super::model::{
 };
 use crate::RecordingApi;
 
+mod selection;
+pub(super) use selection::{activate_requested, can_switch_api};
+
 pub(super) const RECORDED_API_INVENTORY_SCOPE: &str = "recorded_api_inventory";
 
 pub(super) fn initialize_legacy(state: &mut RewriteState) -> bool {
@@ -101,56 +104,6 @@ pub(super) fn install(state: &mut RewriteState, apis: Vec<String>) -> Result<()>
     Ok(())
 }
 
-pub(super) fn activate_requested(
-    state: &mut RewriteState,
-    requested_api: Option<&RecordingApi>,
-) -> Result<bool> {
-    let Some(requested_api) = requested_api else {
-        return Ok(false);
-    };
-    let requested = requested_api.to_string();
-    if state.api == requested {
-        return Ok(false);
-    }
-    ensure!(
-        matches!(
-            state.phase,
-            RewritePhase::ApiPending | RewritePhase::ImplementationRequired
-        ),
-        "API {} is currently in {:?}; wait for its deterministic traffic operation before selecting {requested}",
-        state.api,
-        state.phase
-    );
-    let requested_index = state
-        .api_inventory
-        .iter()
-        .position(|item| item.api == requested)
-        .with_context(|| format!("recorded API inventory does not contain {requested:?}"))?;
-    ensure!(
-        matches!(
-            state.api_inventory[requested_index].status,
-            RewriteApiStatus::Pending | RewriteApiStatus::ImplementationRequired
-        ),
-        "API {requested} is not available for concurrent AI work"
-    );
-    if state.phase == RewritePhase::ImplementationRequired {
-        park_current_implementation(state)?;
-    } else {
-        let current_index = state
-            .current_api_index
-            .context("active API has no inventory index")?;
-        state.api_inventory[current_index].status = RewriteApiStatus::Pending;
-    }
-    state.current_api_index = Some(requested_index);
-    state.api_inventory[requested_index].status = RewriteApiStatus::Active;
-    state.active_slice = match state.parked_slices.remove(&requested) {
-        Some(slice) => slice,
-        None => pending_slice(&state.api_inventory[requested_index])?,
-    };
-    state.bump();
-    Ok(true)
-}
-
 pub(super) fn bind_options(
     state: &mut RewriteState,
     requested_api: Option<&RecordingApi>,
@@ -224,7 +177,10 @@ pub(super) fn scoped(
         None => anyhow::bail!("API {requested} has no concurrent AI work state"),
     };
     let mut scoped = state.clone();
-    if state.phase == RewritePhase::ImplementationRequired {
+    if matches!(
+        state.phase,
+        RewritePhase::ImplementationRequired | RewritePhase::SystemRepairRequired
+    ) {
         scoped
             .parked_slices
             .insert(state.api.clone(), state.active_slice.clone());
@@ -533,38 +489,53 @@ pub(super) fn restore_recorded_progress(
     load_pending(state, active)
 }
 
+fn status_for_view(state: &RewriteState, item: &RewriteApiProgress) -> RewriteApiStatus {
+    if item.api == state.api && state.phase == RewritePhase::SystemRepairRequired {
+        RewriteApiStatus::SystemRepairRequired
+    } else {
+        item.status
+    }
+}
+
 pub(super) fn view(state: &RewriteState) -> RewriteApiInventoryView {
     RewriteApiInventoryView {
         total: state.api_inventory.len(),
         completed: state
             .api_inventory
             .iter()
-            .filter(|item| item.status == RewriteApiStatus::Complete)
+            .filter(|item| status_for_view(state, item) == RewriteApiStatus::Complete)
             .count(),
         pending: state
             .api_inventory
             .iter()
-            .filter(|item| item.status == RewriteApiStatus::Pending)
+            .filter(|item| status_for_view(state, item) == RewriteApiStatus::Pending)
             .count(),
         active: state
             .api_inventory
             .iter()
-            .filter(|item| item.status == RewriteApiStatus::Active)
+            .filter(|item| status_for_view(state, item) == RewriteApiStatus::Active)
             .count(),
         implementation_required: state
             .api_inventory
             .iter()
-            .filter(|item| item.status == RewriteApiStatus::ImplementationRequired)
+            .filter(|item| status_for_view(state, item) == RewriteApiStatus::ImplementationRequired)
+            .count(),
+        system_repair_required: state
+            .api_inventory
+            .iter()
+            .filter(|item| status_for_view(state, item) == RewriteApiStatus::SystemRepairRequired)
             .count(),
         awaiting_recording_refresh: state
             .api_inventory
             .iter()
-            .filter(|item| item.status == RewriteApiStatus::AwaitingRecordingRefresh)
+            .filter(|item| {
+                status_for_view(state, item) == RewriteApiStatus::AwaitingRecordingRefresh
+            })
             .count(),
         revalidation_pending: state
             .api_inventory
             .iter()
-            .filter(|item| item.status == RewriteApiStatus::RevalidationPending)
+            .filter(|item| status_for_view(state, item) == RewriteApiStatus::RevalidationPending)
             .count(),
         current_index: state.current_api_index,
         current_api: state
@@ -587,6 +558,7 @@ pub(super) fn details(state: &RewriteState) -> RewriteApiInventoryDetails {
     if let Some(index) = state.current_api_index
         && let Some(current) = items.get_mut(index)
     {
+        current.status = status_for_view(state, current);
         current.source_route = (!state.source_route.is_empty()).then(|| state.source_route.clone());
         current.attempts = state.attempts.len();
         current.e2e_current = state.e2e_current;
@@ -628,31 +600,6 @@ fn completed_slice(current: &RewriteApiProgress) -> Result<RewriteSliceState> {
     slice.e2e_current = current.e2e_current;
     slice.comparison_current = current.comparison_current;
     Ok(slice)
-}
-
-fn park_current_implementation(state: &mut RewriteState) -> Result<()> {
-    ensure!(
-        state.phase == RewritePhase::ImplementationRequired,
-        "only an implementation issue can be parked for concurrent AI work"
-    );
-    let index = state
-        .current_api_index
-        .context("active API has no inventory index")?;
-    let attempts = state.attempts.len();
-    let e2e_current = state.e2e_current;
-    let comparison_current = state.comparison_current;
-    let current = state
-        .api_inventory
-        .get_mut(index)
-        .context("active API inventory index is invalid")?;
-    current.status = RewriteApiStatus::ImplementationRequired;
-    current.attempts = attempts;
-    current.e2e_current = e2e_current;
-    current.comparison_current = comparison_current;
-    state
-        .parked_slices
-        .insert(state.api.clone(), state.active_slice.clone());
-    Ok(())
 }
 
 fn slices(state: &RewriteState) -> impl Iterator<Item = RewriteState> + '_ {

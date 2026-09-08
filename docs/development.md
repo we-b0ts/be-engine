@@ -1162,7 +1162,7 @@ backend-rewrite verification request \
   --reason 'shared response mapper changed'
 ```
 
-Rewrite action schema v26 always returns `action.kind`, `action.summary`,
+Rewrite action schema v27 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under coordinator command roles such as
 `execute`, `status`, `advance`, `recover`, `apply`, and `acceptance`.
@@ -1248,8 +1248,8 @@ returns immediately. A start report that requires delayed observation includes
 command without repeating `execute`. `already_completed` omits the delay so
 its status can be queried immediately. While the worker remains live,
 `recording_in_progress.action.details.status_poll_after_seconds` carries the
-same polling delay and `action.commands.status` remains the only polling
-command. `advance_required` means finalization and cleanup completed, so its
+same polling delay and `action.commands.wait` performs the bounded wait.
+After waiting, reconcile task-runtime worker events and refresh global status. `advance_required` means finalization and cleanup completed, so its
 exact `action.commands.advance` can advance coordinator state. It does not mean
 rerunning the completed action. Historical
 input is reused only when its API selector exactly equals the requested
@@ -1260,12 +1260,22 @@ recording window and includes bounded candidate/rejection diagnostics under
 configuration limits the standard run and the coordinator derives a stable
 API inventory from its published cases. `next` and `status` expose only its
 bounded summary (`total`, `completed`, `unverified`, `active`, `implementation_required`,
-`awaiting_recording_refresh`, `revalidation_pending`, `current_index`, and
-`current_api`) so their size does not grow with API count.
+`system_repair_required`, `awaiting_recording_refresh`, `revalidation_pending`,
+`current_index`, and `current_api`) so their size does not grow with API count.
 The state-machine coordinator consumes the global action while top-level
 `pending > 0`, executes the indicated command or runtime dispatch, and continues
-from its response. At zero, it waits for a worker event or up to 30 seconds and
-reads global `status` again. `terminal_allowed` is the separate completion gate.
+from its response. When only asynchronous work remains, `pending=1` selects
+`commands.wait` (`backend-rewrite wait --seconds 30`, with a 1–30 second bound).
+Wait observes engine-state changes and returns `worker_events_required`: inspect
+actual task-runtime completion/failure/interruption events, report changes with
+their original identities, then execute global status. It does not infer runtime
+liveness or refresh every running worker; activity observations still expire
+at fifteen minutes. `terminal_allowed` is the separate successful completion gate.
+A global `blocked` action has `pending=0` and stops this run after eligible
+revalidation drains and remaining APIs require external system repair. Repair
+APIs and dependent process outputs remain incomplete, with bindings/evidence
+retained. Resume with global status after repair; the engine cannot wake a
+stopped AI session. Other explicit failures retain their recovery/retry contracts.
 The engine selects across the whole inventory, including parked implementation
 issues. The coordinator does not scan `unverified` to choose work. `inventory`
 expands the English `details.ready` and `details.waiting` breakdown and dedicated
@@ -1430,12 +1440,17 @@ For batches requiring Comparison, passing Replay requests Comparison; once it
 passes, the following `next` prepares the next inventory item from the same
 standard recording. A repository or policy content change makes prior
 E2E/comparison evidence stale. Completed APIs become `revalidation_pending`
-and remain deferred while ordinary pending or implementation work exists. The
-coordinator drains them in one final verification epoch. A commit that
+and receive lower scheduling priority than executable ordinary work. When
+ordinary actions are waiting and verification resources are free, the engine
+selects one stale API in inventory order. Worker execution and API-scoped system
+repair do not block unrelated revalidation. A target failure creates worker
+work; a system failure can be parked with its exact repair identity. Completed
+APIs are not repeated at an unchanged target fingerprint. Later integrations
+still invalidate stale successes for the final verification epoch. A commit that
 preserves the effective worktree content does not change the fingerprint.
 `verification request` remains available for an explicit caller request to
-verify selected stale APIs early; normal coordination defers shared-change checks
-to the final epoch; the returned advance command starts
+verify selected stale APIs early; ordinary coordination already uses idle
+verification capacity; the returned advance command starts
 their normal Replay/comparison flow, and final whole-inventory coverage remains
 mandatory. `terminal_allowed` is false until every API inventory item has
 passing E2E and, when required by its batch, comparison evidence, and every process output has passing
@@ -1456,9 +1471,10 @@ the updated policy.
 
 Recording, focused Replay, and comparison share one serialized traffic-runtime
 lease. Global status first returns any executable worker dispatch or feedback
-action. When no action is executable, schema v25 returns `wait_required` with
+action. When resources or running workers are the only remaining activity,
+schema v27 returns `wait_required` with
 the requested and blocking APIs, the live operation when available, a retry
-delay, and the exact `commands.status` argv. This lease serializes each traffic
+delay, and the exact `commands.wait` argv. This lease serializes each traffic
 operation, not a complete API lifecycle: while worker A implements, the
 orchestrator may run Replay for API B and dispatch worker B. No worker may start
 a traffic operation. If code changes during Replay, that result is discarded;

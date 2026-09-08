@@ -287,14 +287,14 @@ mod tests {
         assert_eq!(value["details"]["resource"], RESOURCE);
         assert_eq!(value["details"]["active_operation"]["api"], "GET /a");
         assert_eq!(
-            value["commands"]["status"]["argv"],
+            value["commands"]["wait"]["argv"],
             serde_json::json!([
                 "backend-rewrite",
                 "--target-root",
                 target.path(),
-                "status",
-                "--api",
-                "GET /b"
+                "wait",
+                "--seconds",
+                "5"
             ])
         );
 
@@ -308,8 +308,15 @@ mod tests {
         );
         let value = serde_json::to_value(action).unwrap();
         assert_eq!(
-            value["commands"]["status"]["argv"],
-            serde_json::json!(["backend-rewrite", "--target-root", target.path(), "status"])
+            value["commands"]["wait"]["argv"],
+            serde_json::json!([
+                "backend-rewrite",
+                "--target-root",
+                target.path(),
+                "wait",
+                "--seconds",
+                "5"
+            ])
         );
     }
 }

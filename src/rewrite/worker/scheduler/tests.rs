@@ -1,4 +1,5 @@
 use super::*;
+use crate::rewrite::model::RewritePhase;
 use crate::rewrite::{self, RewriteContext, RewriteNextOptions, store::RewriteStore, worker};
 use worker::tests::{configured_target, implementation_state_with_inventory};
 
@@ -57,7 +58,7 @@ fn all_implementation_items_dispatch_even_with_zero_unverified_and_more_than_32_
             handoff_id: None,
         })
         .unwrap();
-        assert_eq!(response.pending, remaining - 1);
+        assert_eq!(response.pending, (remaining - 1).max(1));
     }
     // An old verification snapshot cannot overwrite any of the 40 confirmations.
     store.save(&state).unwrap();
@@ -66,7 +67,7 @@ fn all_implementation_items_dispatch_even_with_zero_unverified_and_more_than_32_
         target_root: target.path().into(),
     })
     .unwrap();
-    assert_eq!(status.pending, 0);
+    assert_eq!(status.pending, 1);
     assert!(!status.terminal_allowed);
     assert!(matches!(status.action, RewriteAction::WaitRequired { .. }));
     assert_eq!(store.load().unwrap().unwrap().worker_bindings.len(), 40);

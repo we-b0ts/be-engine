@@ -482,7 +482,7 @@ fn confirmed_running_worker_without_executable_work_waits_for_handoff() {
     ))
     .unwrap();
     assert_eq!(action["action"]["kind"], "wait_required");
-    assert_eq!(action["pending"], 0);
+    assert_eq!(action["pending"], 1);
     assert!(action.pointer("/action/commands/advance").is_none());
 }
 

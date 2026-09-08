@@ -104,6 +104,13 @@ impact, local test results, necessary coordinator transition inputs, and any
 remaining risks. A task ending without that handoff is `idle`, not completed. Reporting idle
 issues a fresh dispatch identity for the same worker; reject late completion
 from the superseded turn and follow the returned resume action.
+After `backend-rewrite wait` returns `worker_events_required`, inspect available
+completion and interruption events in the task runtime and report actual
+changes before refreshing global status. Keep original dispatch and handoff
+identities; do not manufacture a running observation from a historical
+confirmation. Do not re-report every running worker on each wait. The engine
+continues scheduling explicit status checks after fifteen-minute expiry.
+
 The worker returns the handoff and ends its turn; it does not wait for Replay.
 
 After interruption, on `worker_status_required`, or when an observation expires,

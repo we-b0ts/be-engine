@@ -12,6 +12,22 @@ impl Serialize for RewriteAction {
         S: Serializer,
     {
         match self {
+            Self::Blocked { summary, system_repair_apis, dependent_process_outputs, resume } => RewriteActionView {
+                kind: "blocked",
+                summary,
+                details: serde_json::json!({
+                    "reason": "system_repair_required",
+                    "system_repair_apis": system_repair_apis,
+                    "dependent_process_outputs": dependent_process_outputs,
+                }),
+                commands: serde_json::json!({"resume": resume}),
+            }.serialize(serializer),
+            Self::WorkerEventsRequired { summary, inventory, status } => RewriteActionView {
+                kind: "worker_events_required",
+                summary,
+                details: RewriteNoDetails {},
+                commands: serde_json::json!({"inventory": inventory, "status": status}),
+            }.serialize(serializer),
             Self::InputRequired {
                 reason,
                 summary,
@@ -49,7 +65,7 @@ impl Serialize for RewriteAction {
                     active_operation: active_operation.as_ref(),
                     retry_after_seconds: *retry_after_seconds,
                 },
-                commands: RewriteStatusCommands { status },
+                commands: serde_json::json!({"wait": super::waiting::command(status, *retry_after_seconds)}),
             }
             .serialize(serializer),
             Self::RecordingRequired {
@@ -81,7 +97,7 @@ impl Serialize for RewriteAction {
                     run_id,
                     status_poll_after_seconds: *status_poll_after_seconds,
                 },
-                commands: RewriteStatusCommands { status },
+                commands: serde_json::json!({"wait": super::waiting::command(status, *status_poll_after_seconds)}),
             }
             .serialize(serializer),
             Self::CasePatternIdentificationRequired {
@@ -255,7 +271,7 @@ impl Serialize for RewriteAction {
                     plan_ids,
                     resource_identities,
                 },
-                commands: RewriteStatusCommands { status },
+                commands: serde_json::json!({"wait": super::waiting::command(status, 30)}),
             }
             .serialize(serializer),
             Self::Complete {
@@ -410,11 +426,6 @@ struct RewriteRecoveryCommands<'a> {
 #[derive(Serialize)]
 struct RewriteRecordingCommands<'a> {
     execute: &'a RewriteCommandSpec,
-}
-
-#[derive(Serialize)]
-struct RewriteStatusCommands<'a> {
-    status: &'a RewriteCommandSpec,
 }
 
 #[derive(Serialize)]

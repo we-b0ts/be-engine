@@ -141,7 +141,10 @@ is unclear.
 - Within `rewrite`, `mod.rs` is the public coordinator facade and `advance.rs`
   owns the atomic verification transition. `action.rs` projects actions and
   commands; `coordination.rs` projects executable `pending` and the expanded
-  ready/waiting breakdown from the native workflow gate before worker selection.
+  ready/waiting breakdown from the native workflow gate and selected action.
+  `scheduling.rs` owns idle API revalidation and resumable system-repair blocking;
+  `waiting.rs` owns bounded read-only waits and the return to external task-event
+  reconciliation. Neither implements a task-runtime adapter.
   `repair.rs` owns revision readiness and the API-scoped permission to replay an
   accepted system repair. `fingerprint/engine.rs` caches the executable digest
   within a process and invalidates it when the file identity changes.
@@ -157,7 +160,7 @@ is unclear.
   handles or manage worktrees. `model.rs` owns the remaining persisted state and
   public action contract and reexports the worker contract for compatibility.
   `inventory.rs` owns the API inventory state machine: stable installation,
-  activation and parking, deferred revalidation, and summary/detail
+  activation and parking (in `inventory/selection.rs`), deferred revalidation, and summary/detail
   views. `case_patterns.rs` owns the low-frequency post-recording pattern
   identification gate, persistent canonical API catalog, and add-only policy
   application; it does not mutate recorded cases or delegate this gate to API
@@ -166,7 +169,8 @@ is unclear.
   target-fingerprint revalidation. Root `process_output.rs` owns validated
   capture configuration and immutable source/target file evidence.
   `revalidation.rs` owns the coordinator's explicit early-validation
-  request boundary and projection for deferred API status.
+  request boundary and projection for deferred API status, including eligibility
+  of the engine-selected idle revalidation item.
   Status projection and the traffic lease remain separate owners. Further
   splitting must follow a responsibility boundary rather than divide one
   transaction, action contract, or inventory transition.

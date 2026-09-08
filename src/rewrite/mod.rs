@@ -49,8 +49,11 @@ mod revalidation;
 mod route;
 mod rule;
 pub use jwt_rule::JwtRulePlanOptions;
+mod scheduling;
 mod source_process_traffic;
 mod status;
+mod waiting;
+pub use waiting::{RewriteWaitOptions, wait as wait_rewrite};
 mod store;
 mod target_quality;
 #[cfg(test)]
@@ -363,6 +366,13 @@ pub fn verify_rewrite_repair(
     let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
     let store = RewriteStore::new(&target_root)?;
     let _lock = store.lock()?;
+    ensure!(
+        matches!(
+            traffic_operation::state(&target_root)?,
+            traffic_operation::TrafficOperationState::Absent
+        ),
+        "system repair acceptance cannot switch APIs while a traffic operation is active"
+    );
     let mut state = store
         .load()?
         .context("rewrite workflow has not been initialized")?;
@@ -372,6 +382,7 @@ pub fn verify_rewrite_repair(
         let requested_api = api.parse::<RecordingApi>()?;
         inventory::activate_requested(&mut state, Some(&requested_api))?;
     }
+    state.process_outputs.current_id = None;
     let report = repair::verify(&target_root, &mut state, repair_id)?;
     store.save(&state)?;
     Ok(report)
