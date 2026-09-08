@@ -58,30 +58,29 @@ before/after transaction flags, and complete successful responses. Successful
 PREPARE preserves the read proof because it does not execute SQL. The rollback
 must confirm transaction completion without chaining or further results.
 
-The independent SQL effect classifier uses sqlparser and caches ReadOnly,
-StateChange or Unknown for each SQL string during loading. It admits
-SELECTs with direct columns, literals, wildcards, DISTINCT, pure
-boolean/arithmetic expressions, grouping, HAVING, ordering and pagination.
-Derived tables, UNION/UNION ALL, ordinary joins and EXISTS are checked recursively:
-every branch, joined relation, join condition and nested query must be read-only.
-Unqualified `COUNT(*)`, `COUNT(expr)` and `COUNT(DISTINCT expr)` preserve the read
-proof when their arguments and all underlying queries are pure, including
-`COUNT(DISTINCT ...)` over a UNION. Unknown functions inside COUNT, qualified
-function names and unsupported function extensions remain strict.
-The unqualified builtin `ROW_NUMBER()` is admitted only with an inline OVER
-specification whose partition/order expressions are pure and which has no frame
-or function extensions. Flat expression and UNION chains are traversed iteratively,
-so large OR groups do not exhaust a recursive expression-depth limit. SQL size,
-token count, parser depth and nested-query depth remain bounded.
-Boolean tests (`IS [NOT] TRUE`, `IS [NOT] FALSE`, `IS [NOT] UNKNOWN`) preserve
-the read proof only when their operand is also proven pure; wrapping an unknown
-call or unsupported subquery in such a test never makes it read-only.
-This proves absence of effects; it does not require those expressions to be
-supported by the query equivalence matcher. Writes, explicit BEGIN,
-locks, savepoints, unknown calls/functions, scalar/IN subqueries and unsupported SQL interrupt
-the read proof. Unknown transaction starts, sequence gaps, errors or truncated
-evidence keep the first rollback required. Classification stays within one
-dependency file and caches SQL effect checks only during that load. It neither
+The independent SQL classifier parses one bounded query and excludes common
+locking and side-effect forms across its full token stream. It does not maintain
+a whitelist of SELECT expressions or functions: JSON operations, COALESCE,
+CASE, aggregates, joins, CTEs, scalar/IN/EXISTS subqueries and window expressions
+use the same check. Literal strings, ordinary comments and quoted keywords do
+not count as executable clauses. SQL size, token count and parser depth remain
+bounded; invalid/multiple statements and executable comments/hints remain strict.
+
+The exclusions cover FOR UPDATE, FOR SHARE, LOCK IN SHARE MODE (including
+nested queries), SELECT INTO, embedded DML, session variables/assignments,
+SQL_CALC_FOUND_ROWS, and common lock/session/external-effect calls: GET_LOCK,
+RELEASE_LOCK, RELEASE_ALL_LOCKS, service lock functions, LAST_INSERT_ID with an
+argument, SLEEP, BENCHMARK, LOAD_FILE, SYS_EXEC and SYS_EVAL. Vendor output/settings
+clauses also remain unsupported. Ordinary function names, including custom
+functions, do not require registration. This is a practical cleanup classification
+with known exclusions, not a proof of arbitrary stored-function/UDF behavior.
+
+SQL query matching remains independent and strict. Business reads are still
+required dependencies; this classification only governs optional session
+setup/cleanup. Writes, explicit BEGIN, locks, savepoints and excluded calls
+interrupt the read span. Unknown transaction starts, sequence gaps, errors or
+truncated evidence keep the first rollback required. Classification stays within
+one dependency file and caches SQL checks only during that load. It neither
 joins transactions across cases/Global nor proves concurrency/isolation
 equivalence. A SELECT-only case without transaction-state evidence is insufficient.
 

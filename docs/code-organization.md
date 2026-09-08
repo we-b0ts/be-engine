@@ -244,8 +244,10 @@ explicit repository-wide audit.
   Replay protocol handling and evidence classification.
   `replay/mysql/optional_session` classifies optional transaction setup and
   cleanup from immutable connection sequence/status evidence; its `read` child
-  owns the bounded SELECT effect allowlist, and its `autocommit` child proves
-  setup omission over the loaded read-only span. Recorder's MySQL semantic
+  owns bounded query classification with common locking/side-effect exclusions,
+  independently of SQL equivalence. SELECT expressions do not require per-shape
+  registration. Its `autocommit` child checks setup omission over the loaded
+  read-only span. Recorder's MySQL semantic
   tracker owns before-command status continuity and final resultset status
   capture. Neither infers transaction
   boundaries from HTTP responses or ORM names.

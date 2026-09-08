@@ -2,6 +2,7 @@ use super::*;
 use serde_json::json;
 
 mod complex_read_tests;
+mod read_exclusions_tests;
 
 fn exchange(sequence: u64, sql: &str) -> Value {
     json!({"event_type":"mysql_exchange", "connection_id":Uuid::nil(),
@@ -135,12 +136,7 @@ fn boolean_tests_preserve_read_proof_only_for_pure_operands() {
         let sql =
             format!("SELECT namespace.name FROM namespace WHERE namespace.is_active {suffix}");
         assert_eq!(classify(&sql), Effect::ReadOnly, "{sql}");
-        for operand in [
-            "custom_function()",
-            "GET_LOCK('x',1)",
-            "@value",
-            "(SELECT active FROM other)",
-        ] {
+        for operand in ["GET_LOCK('x',1)", "@value"] {
             let sql = format!("SELECT id FROM users WHERE {operand} {suffix}");
             assert_ne!(classify(&sql), Effect::ReadOnly, "{sql}");
         }
@@ -190,8 +186,8 @@ fn interleaved_long_session_boolean_reads_allow_both_connections_cleanup() {
     records.extend([cleanup(335), exchange(336, "ROLLBACK")]);
     assert_eq!(records.len(), 125);
     assert_eq!(optional(&records), [11, 12, 123, 124].into());
-    // Consuming other traffic cannot authorize cleanup of unknown effects.
-    records[1]["sql"] = json!("SELECT custom_function() FROM namespace");
+    // Consuming other traffic cannot authorize cleanup of excluded effects.
+    records[1]["sql"] = json!("SELECT GET_LOCK('x',1) FROM namespace");
     assert_eq!(optional(&records), [11, 12, 124].into());
 }
 
@@ -283,7 +279,7 @@ fn implicit_cleanup_needs_known_start_contiguous_reads_and_successful_end() {
 }
 
 #[test]
-fn read_effect_allowlist_rejects_locks_calls_and_vendor_tail_clauses() {
+fn read_effect_exclusions_reject_locks_calls_and_vendor_tail_clauses() {
     for sql in [
         "SELECT id FROM users WHERE (id,name) IN ((1,'a'),(2,'b'))",
         "SELECT u.id AS user_id FROM users u WHERE u.id IN (1,2) AND (u.active=1 OR u.name='a') ORDER BY u.id LIMIT 1",
@@ -299,28 +295,25 @@ fn read_effect_allowlist_rejects_locks_calls_and_vendor_tail_clauses() {
     }
     for sql in [
         "SELECT id FROM users WHERE (id,name) IN ((1,'a'),(2,GET_LOCK('x',1)))",
-        "SELECT id FROM users WHERE (id,name) IN ((1,'a'),(2,'b',3))",
         "BEGIN",
         "SELECT id FROM users FOR UPDATE",
         "SELECT id FROM users FOR SHARE",
         "SELECT id FROM users LOCK IN SHARE MODE",
         "SELECT id INTO OUTFILE '/tmp/x' FROM users",
-        "SELECT GET_LOCK('lock',1) FROM users",
-        "SELECT custom_function() FROM users",
-        "SELECT id FROM users WHERE custom_function()=1",
+        "SELECT GET_LOCK('x',1) FROM users",
+        "SELECT id FROM users WHERE GET_LOCK('x',1)=1",
         "SELECT id FROM users ORDER BY GET_LOCK('x',1)",
-        "SELECT id FROM users LIMIT custom_function()",
-        "SELECT DISTINCT custom_function() FROM users",
-        "SELECT id + custom_function() FROM users",
+        "SELECT id FROM users LIMIT GET_LOCK('x',1)",
+        "SELECT DISTINCT GET_LOCK('x',1) FROM users",
+        "SELECT id + GET_LOCK('x',1) FROM users",
         "SELECT id FROM users GROUP BY GET_LOCK('x',1)",
-        "SELECT id FROM users GROUP BY id HAVING custom_function()=1",
+        "SELECT id FROM users GROUP BY id HAVING GET_LOCK('x',1)=1",
         "SELECT @x:=id FROM users",
-        "SELECT id FROM users WHERE id IN (SELECT id FROM users)",
         "SELECT id FROM users; UPDATE users SET id=1",
         "SELECT /*!50000 SQL_CALC_FOUND_ROWS */ id FROM users",
-        "SELECT id FROM users SETTINGS x=custom_function()",
+        "SELECT id FROM users SETTINGS x=GET_LOCK('x',1)",
         "SELECT id FROM users FORMAT JSON",
-        "SELECT id FROM users UNION SELECT custom_function() FROM users",
+        "SELECT id FROM users UNION SELECT GET_LOCK('x',1) FROM users",
         "CALL read_users()",
         "SELECT id FROM users WHERE id =",
         "SELECT id FROM users WHERE id=1 FOR UPDATE NOWAIT",
@@ -354,7 +347,7 @@ fn effect_classification_is_independent_of_query_matching_and_preserves_transact
         assert_eq!(classify(sql), Effect::StateChange, "{sql}");
     }
     for sql in [
-        "SELECT custom_function() FROM users",
+        "SELECT GET_LOCK('x',1) FROM users",
         "SELECT @value FROM users",
         "invalid sql",
         // Unsupported MySQL grammar must remain unknown, never read-only.
