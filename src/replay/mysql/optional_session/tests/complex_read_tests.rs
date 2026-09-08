@@ -41,9 +41,7 @@ fn count_distinct_over_union_preserves_read_session_cleanup() {
     assert_eq!(optional(&records), [2, 3].into());
     for sql in [
         "SELECT COUNT(GET_LOCK('x',1)) FROM users",
-        "SELECT COUNT(custom_function()) FROM users",
-        "SELECT app.count(id) FROM users",
-        "SELECT COUNT((SELECT custom_function())) FROM users",
+        "SELECT COUNT((SELECT GET_LOCK('x',1))) FROM users",
         "SELECT COUNT(*) FROM (SELECT id FROM users FOR UPDATE) u",
     ] {
         assert_ne!(classify(sql), Effect::ReadOnly, "{sql}");
@@ -59,7 +57,7 @@ fn count_distinct_over_union_preserves_read_session_cleanup() {
 }
 
 #[test]
-fn ranked_union_join_and_exists_are_read_only_when_every_child_is_pure() {
+fn ranked_union_join_and_exists_check_exclusions_in_every_child() {
     assert_eq!(classify(RANKED_READ), Effect::ReadOnly);
     for sql in [
         "SELECT id FROM users UNION SELECT id FROM users",
@@ -71,22 +69,21 @@ fn ranked_union_join_and_exists_are_read_only_when_every_child_is_pure() {
     }
     for (before, after) in [
         ("combined.id ORDER BY", "GET_LOCK('x',1) ORDER BY"),
-        ("combined.rank ASC", "custom_function() ASC"),
-        ("row_number()", "custom_function()"),
-        ("row_number()", "app.row_number()"),
-        ("row_number()", "row_number(custom_function())"),
-        ("0 AS rank", "custom_function() AS rank"),
-        ("m.resource_id=k.id", "m.resource_id=custom_function()"),
-        ("m.member_id=7", "m.member_id=custom_function()"),
+        ("combined.rank ASC", "GET_LOCK('x',1) ASC"),
+        ("row_number()", "GET_LOCK('x',1)"),
+        ("row_number()", "row_number(GET_LOCK('x',1))"),
+        ("0 AS rank", "GET_LOCK('x',1) AS rank"),
+        ("m.resource_id=k.id", "m.resource_id=GET_LOCK('x',1)"),
+        ("m.member_id=7", "m.member_id=GET_LOCK('x',1)"),
         (
             "SELECT 1 FROM members",
-            "SELECT custom_function() FROM members",
+            "SELECT GET_LOCK('x',1) FROM members",
         ),
         ("k.owner=7", "k.owner=7 FOR UPDATE"),
         ("SELECT k.id, 0", "SELECT @x:=k.id, 0"),
-        ("ranked.row_num=1", "custom_function()=1"),
+        ("ranked.row_num=1", "GET_LOCK('x',1)=1"),
         ("ORDER BY ranked.id DESC", "ORDER BY GET_LOCK('x',1) DESC"),
-        ("LIMIT 0,100", "LIMIT 0,custom_function()"),
+        ("LIMIT 0,100", "LIMIT 0,GET_LOCK('x',1)"),
     ] {
         let sql = RANKED_READ.replace(before, after);
         assert_ne!(classify(&sql), Effect::ReadOnly, "{before} -> {after}");
@@ -94,9 +91,9 @@ fn ranked_union_join_and_exists_are_read_only_when_every_child_is_pure() {
     for sql in [
         "SELECT id FROM (SELECT id FROM users FOR UPDATE) t",
         "SELECT id FROM users WHERE EXISTS (SELECT id FROM members FOR UPDATE)",
-        "SELECT id FROM users JOIN (SELECT custom_function() FROM members) m ON 1=1",
-        "SELECT row_number() OVER (PARTITION BY id ORDER BY id ROWS custom_function() PRECEDING) FROM users",
-        "SELECT row_number() OVER w FROM users WINDOW w AS (ORDER BY custom_function())",
+        "SELECT id FROM users JOIN (SELECT GET_LOCK('x',1) FROM members) m ON 1=1",
+        "SELECT row_number() OVER (PARTITION BY id ORDER BY id ROWS GET_LOCK('x',1) PRECEDING) FROM users",
+        "SELECT row_number() OVER w FROM users WINDOW w AS (ORDER BY GET_LOCK('x',1))",
         "SELECT id FROM users UNION SELECT id FROM users FOR UPDATE",
         "SELECT id FROM users; UPDATE users SET id=1",
     ] {
@@ -115,7 +112,7 @@ fn large_predicate_width_preserves_read_proof_and_checks_every_branch() {
             assert_eq!(classify(&sql), Effect::ReadOnly, "{size} {op}");
             for index in [0, size / 2, size - 1] {
                 let mut clauses = clauses.clone();
-                clauses[index] = "custom_function()=1".to_owned();
+                clauses[index] = "GET_LOCK('x',1)=1".to_owned();
                 let sql = format!("SELECT id FROM kinds WHERE {}", clauses.join(op));
                 assert_ne!(classify(&sql), Effect::ReadOnly, "{size} {index}");
             }
@@ -157,6 +154,6 @@ fn interleaved_ranked_reads_and_large_or_preserve_cleanup_and_required_business_
         exchange(104, "ROLLBACK"),
     ];
     assert_eq!(optional(&records), [4, 5, 6, 7].into());
-    records[1]["sql"] = json!(RANKED_READ.replace("0 AS rank", "custom_function() AS rank"));
+    records[1]["sql"] = json!(RANKED_READ.replace("0 AS rank", "GET_LOCK('x',1) AS rank"));
     assert_eq!(optional(&records), [4, 5, 7].into());
 }

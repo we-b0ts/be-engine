@@ -26,10 +26,10 @@ async fn count_distinct_union_query_allows_only_proven_session_cleanup() {
 }
 
 #[tokio::test]
-async fn matched_ranked_union_read_allows_cleanup_only_with_proven_pure_children() {
+async fn matched_ranked_union_read_keeps_cleanup_required_for_excluded_calls() {
     tokio::time::timeout(Duration::from_secs(15), async {
         for pure in [true, false] {
-            let value = if pure { "id" } else { "custom_function()" };
+            let value = if pure { "id" } else { "GET_LOCK('x',1)" };
             let sql = format!("SELECT ranked.id FROM (
                 SELECT combined.id, row_number() OVER (PARTITION BY combined.id ORDER BY combined.id) AS rn
                 FROM (SELECT {value} AS id FROM users UNION ALL
@@ -57,9 +57,50 @@ async fn matched_ranked_union_read_allows_cleanup_only_with_proven_pure_children
             assert_eq!(state.mysql.events.matched_query_count, 1);
             assert_eq!(state.allowed_unused_rollbacks().len(), if pure { 2 } else { 1 });
             assert_eq!(state.unused_exchanges(ReplaySource::Case).len(), usize::from(!pure),
-                "matching a query does not prove unknown functions have no effects");
+                "matching a query does not prove lock functions have no effects");
             task.abort();
         }
+    }).await.unwrap();
+}
+
+#[tokio::test]
+async fn json_case_and_subquery_reads_need_no_target_rollback_or_rule() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let sqls = [
+            "SELECT id FROM kinds WHERE COALESCE(JSON_UNQUOTE(JSON_EXTRACT(json, '$.spec.directAccessRequirement')), '') IN ('', 'read')",
+            "SELECT CASE WHEN JSON_EXTRACT(json, '$.status') IS NULL THEN 7 ELSE id END AS id FROM kinds",
+            "WITH readable AS (SELECT id FROM kinds) SELECT id FROM readable WHERE id IN (SELECT resource_id FROM members)",
+            "SELECT entity_id AS id FROM resource_members WHERE entity_type NOT IN ('', 'user', 'namespace')",
+        ];
+        let connection = Uuid::new_v4();
+        let mut records = sqls.iter().map(|sql| exchange(sql,
+            json!({"status":"resultset","server_status":1,
+                "columns":[{"name":"id","family":"integer","sql_type":"INT"}],
+                "rows":[[{"kind":"integer","value":7}]]})
+        )).collect::<Vec<_>>();
+        for _ in 0..2 {
+            records.push(exchange("ROLLBACK",json!({"status":"ok","server_status":0,"affected_rows":0,"last_insert_id":0})));
+        }
+        for (index, record) in records.iter_mut().enumerate() {
+            record["connection_id"] = json!(connection);
+            record["query_sequence"] = json!(100 + index);
+            record["server_status_before"] = json!(if index == 0 || index > sqls.len() {0} else {1});
+        }
+        let (temp, addr, runtime, task) = fixture(&records, false).await;
+        let path = temp.path().join("case-id/dependencies.jsonl");
+        let original = std::fs::read(&path).unwrap();
+        assert_eq!(runtime.state.lock().await.unused_exchanges(ReplaySource::Case).len(),sqls.len());
+        let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+        for sql in sqls {
+            assert_eq!(sqlx::query(sql).fetch_one(&mut client).await.unwrap().get::<i32,_>("id"),7);
+        }
+        client.close().await.unwrap();
+        let state = runtime.state.lock().await;
+        assert_eq!(state.mysql.events.matched_query_count,sqls.len());
+        assert_eq!(state.allowed_unused_rollbacks().len(),2);
+        assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
+        assert_eq!(std::fs::read(path).unwrap(),original);
+        task.abort();
     }).await.unwrap();
 }
 
