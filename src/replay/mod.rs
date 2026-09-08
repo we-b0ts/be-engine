@@ -38,6 +38,8 @@ mod global_dependency_tests;
 mod http;
 pub(crate) use http::cross_case as http_cross_case;
 pub use http::cross_case::HttpCrossCaseSelector;
+pub(crate) use http::unordered as http_unordered;
+pub use http::unordered::HttpUnorderedSelector;
 mod kafka;
 #[cfg(test)]
 #[path = "tests.rs"]
@@ -887,3 +889,7 @@ fn original_dst(stream: &TcpStream) -> Result<SocketAddr> {
     let port = u16::from_be(addr.sin_port);
     Ok(SocketAddr::new(IpAddr::V4(ip), port))
 }
+
+pub use policy::{
+    HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
+};

@@ -272,6 +272,9 @@ pub struct RewriteResponseBodyRuleSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum RewriteDependencyRuleSpec {
+    HttpUnordered {
+        selector: crate::HttpUnorderedSelector,
+    },
     HttpCrossCase {
         selector: crate::HttpCrossCaseSelector,
     },

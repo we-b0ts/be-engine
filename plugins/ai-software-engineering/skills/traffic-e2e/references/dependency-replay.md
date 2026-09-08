@@ -214,6 +214,16 @@ recorded subsequent HTTP(S) exchanges; configuring a new capture rule cannot
 synthesize missing historical exchanges. Rejection packet counts are auxiliary
 context for failures and never count as semantic dependency mismatches.
 
+## HTTP Request JSON Ordering
+
+HTTP request JSON objects compare by value; arrays remain ordered unless an
+explicit `http.json.unordered` dependency rule selects their JSON Pointer.
+The `dependency-rule plan http unordered` workflow requires a current
+order-only request witness and source proof. It preserves query identity,
+element types, contents and duplicate counts, and requires fresh Replay after
+apply. See [HTTP unordered rules](../../../../../docs/http-unordered-rules.md)
+for worker discovery, coordinator plan/apply and the verification YAML shape.
+
 ## Explicit Cross-Case HTTP Scope
 
 A `cross-case` verification rule with `replay_scope: recording_run` may make

@@ -9,6 +9,7 @@ MySQL replay driver compatibility and process-owned read rules are documented in
 Cross-case HTTP initialization dependencies use explicit Replay scope rules; see
 [HTTP cross-case replay](http-cross-case-replay.md) for discovery, plan/apply,
 strict matching and fresh verification.
+Source-proven arrays in outbound JSON requests use [HTTP unordered rules](http-unordered-rules.md).
 
 ## Rust Tooling
 
@@ -1265,7 +1266,7 @@ the same worker and rejects callbacks for the superseded dispatch. Integration
 is acknowledged only while the verification resource is free.
 
 `worker_status_required` asks for a runtime observation, including for legacy
-bindings and running/queued observations older than five minutes. Historical
+bindings and running/queued observations at least fifteen minutes old. Historical
 confirmation alone never proves liveness. Feedback uses a separate short,
 durable transaction and is folded into state on load/save, so a long Replay
 cannot prevent feedback or overwrite it when saving an older snapshot.

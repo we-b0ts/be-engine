@@ -75,6 +75,9 @@ pub struct RewriteDependencyRulePlanReport {
 
 #[derive(Debug, Clone)]
 pub enum RewriteDependencyRuleSelector {
+    HttpUnordered {
+        selector: crate::HttpUnorderedSelector,
+    },
     HttpCrossCase {
         selector: crate::HttpCrossCaseSelector,
     },
@@ -142,6 +145,7 @@ pub(super) fn plan(
         &spec,
         RewriteDependencyRuleSpec::MysqlSqlTime { .. }
             | RewriteDependencyRuleSpec::HttpCrossCase { .. }
+            | RewriteDependencyRuleSpec::HttpUnordered { .. }
     );
     ensure!(
         !request_rule || options.ownership == RewriteDependencyOwnership::RequestOwned,
@@ -347,7 +351,11 @@ pub(super) fn apply(
     plan_id: &str,
 ) -> Result<RewriteDependencyRuleReport> {
     let record = pending_plan_for_apply(state, plan_id)?;
-    if matches!(record.spec, RewriteDependencyRuleSpec::HttpCrossCase { .. }) {
+    if matches!(
+        record.spec,
+        RewriteDependencyRuleSpec::HttpCrossCase { .. }
+            | RewriteDependencyRuleSpec::HttpUnordered { .. }
+    ) {
         validate_plan_evidence(
             target_root,
             state,
@@ -361,6 +369,7 @@ pub(super) fn apply(
         RewriteDependencyRuleSpec::MemcachedProtobufTimestamp { .. }
             | RewriteDependencyRuleSpec::MysqlSqlTime { .. }
             | RewriteDependencyRuleSpec::HttpCrossCase { .. }
+            | RewriteDependencyRuleSpec::HttpUnordered { .. }
     ) && state.case_source.is_some()
         && state.group_id.is_some()
     {
@@ -408,6 +417,7 @@ fn dependency_issue(
             RewriteDependencyRuleSpec::MemcachedProtobufTimestamp { .. }
                 | RewriteDependencyRuleSpec::MysqlSqlTime { .. }
                 | RewriteDependencyRuleSpec::HttpCrossCase { .. }
+                | RewriteDependencyRuleSpec::HttpUnordered { .. }
         ) && matches!(
             issue.kind,
             RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
@@ -446,11 +456,14 @@ fn validate_plan_evidence(
     evidence_id: &str,
     spec: &RewriteDependencyRuleSpec,
 ) -> Result<()> {
-    if !matches!(spec, RewriteDependencyRuleSpec::HttpCrossCase { .. })
-        && state
-            .dependency_rule_plan
-            .as_ref()
-            .is_some_and(|plan| plan.issue_id == issue_id && plan.evidence_id == evidence_id)
+    if !matches!(
+        spec,
+        RewriteDependencyRuleSpec::HttpCrossCase { .. }
+            | RewriteDependencyRuleSpec::HttpUnordered { .. }
+    ) && state
+        .dependency_rule_plan
+        .as_ref()
+        .is_some_and(|plan| plan.issue_id == issue_id && plan.evidence_id == evidence_id)
     {
         return Ok(());
     }
@@ -609,8 +622,8 @@ pub(super) fn schedule_cache_snapshot_refresh(
 #[cfg(test)]
 mod tests;
 
-/// Sharing affects the whole run, so old per-API coverage cannot remain current.
-pub(super) fn invalidate_scope_validation(state: &mut RewriteState) {
+/// HTTP endpoint value/scope rules can affect dependencies from any API.
+pub(super) fn invalidate_http_rule_validation(state: &mut RewriteState) {
     state.e2e_current = false;
     state.comparison_current = false;
     state.target_quality_fingerprint = None;

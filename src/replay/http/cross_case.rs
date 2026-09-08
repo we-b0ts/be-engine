@@ -1,53 +1,13 @@
 //! Explicit sharing of finite HTTP exchanges within one immutable recording run.
 mod evidence;
-mod recording;
+pub(super) use super::identity::{recorded_fingerprint, request_fingerprint};
+use super::recording;
 use super::*;
 use anyhow::ensure;
 pub(crate) use evidence::{discover, verify_candidate};
-use sha2::{Digest, Sha256};
 use std::path::Path;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct HttpCrossCaseSelector {
-    pub host: String,
-    pub port: u16,
-    pub method: String,
-    pub path: String,
-}
-
-impl HttpCrossCaseSelector {
-    pub(crate) fn validate(&self) -> Result<()> {
-        let authority = self.host.parse::<Authority>().ok();
-        ensure!(
-            authority.is_some_and(|a| a.host() == self.host && a.port().is_none())
-                && !self.host.contains('*')
-                && self.port > 0,
-            "cross-case requires an exact host and nonzero port"
-        );
-        ensure!(
-            Method::from_bytes(self.method.as_bytes()).is_ok(),
-            "invalid cross-case HTTP method"
-        );
-        let uri = self.path.parse::<Uri>().ok();
-        ensure!(
-            self.path.starts_with('/')
-                && !self.path.contains('*')
-                && uri.is_some_and(|u| u.query().is_none() && u.path() == self.path),
-            "cross-case requires an exact path without a query or wildcard"
-        );
-        Ok(())
-    }
-
-    fn matches(&self, record: &RecordedHttpExchange) -> bool {
-        identity_from_record(record).is_ok_and(|i| {
-            i.target.host == super::super::normalize_host(&self.host)
-                && i.target.port == self.port
-                && record.method.eq_ignore_ascii_case(&self.method)
-                && uri_path_only(&record.uri) == self.path
-        })
-    }
-}
+pub use super::selector::HttpDependencySelector as HttpCrossCaseSelector;
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SharedOrigin {
@@ -55,55 +15,6 @@ pub(super) struct SharedOrigin {
     pub case_id: String,
     #[serde(skip)]
     pub request_fingerprint: String,
-}
-
-/// Keep secret values out of reports. Canonical JSON matches the ordinary matcher;
-/// non-JSON bodies (including forms) retain byte identity. Query multiplicity is exact.
-pub(super) fn request_fingerprint(uri: &str, body: &[u8], headers: &HeaderSnapshot) -> String {
-    let body = serde_json::from_slice::<Value>(body)
-        .map(|value| canonical_json(&value))
-        .unwrap_or_else(|_| body.to_vec());
-    let significant = ["authorization", "cookie", "content-type"].map(|name| {
-        let values: Vec<_> = headers
-            .iter()
-            .filter(|(key, _)| key.eq_ignore_ascii_case(name))
-            .flat_map(|(_, values)| values.iter())
-            .collect();
-        (name, values)
-    });
-    let material = serde_json::to_vec(&(normalize_uri(uri, &[]), significant))
-        .expect("HTTP identity is serializable");
-    let mut digest = Sha256::new();
-    digest.update(b"traffic-e2e-http-cross-case-v1\0");
-    digest.update((material.len() as u64).to_be_bytes());
-    digest.update(material);
-    digest.update(body);
-    format!("sha256:{:x}", digest.finalize())
-}
-
-fn canonical_json(value: &Value) -> Vec<u8> {
-    fn ordered(value: &Value) -> Value {
-        match value {
-            Value::Object(map) => Value::Object(
-                map.iter()
-                    .map(|(k, v)| (k.clone(), ordered(v)))
-                    .collect::<BTreeMap<_, _>>()
-                    .into_iter()
-                    .collect(),
-            ),
-            Value::Array(values) => Value::Array(values.iter().map(ordered).collect()),
-            _ => value.clone(),
-        }
-    }
-    serde_json::to_vec(&ordered(value)).expect("JSON is serializable")
-}
-
-pub(super) fn recorded_fingerprint(record: &RecordedHttpExchange) -> Result<String> {
-    Ok(request_fingerprint(
-        &record.uri,
-        &decode_body(&record.request_body)?,
-        &record.request_headers,
-    ))
 }
 
 fn require_replayable(record: &RecordedHttpExchange) -> Result<()> {

@@ -175,11 +175,13 @@ struct HttpDependencyRuleArgs {
 #[derive(Debug, Subcommand)]
 enum HttpDependencyMode {
     /// Share finite, exactly matched HTTP exchanges across cases of one recording run.
-    CrossCase(HttpCrossCaseArgs),
+    CrossCase(HttpRequestRuleArgs),
+    /// Compare source-proven HTTP request JSON arrays without element-order constraints.
+    Unordered(HttpUnorderedArgs),
 }
 
 #[derive(Debug, Args)]
-struct HttpCrossCaseArgs {
+struct HttpRequestRuleArgs {
     #[arg(long)]
     evidence_id: String,
     #[arg(long)]
@@ -192,26 +194,53 @@ struct HttpCrossCaseArgs {
     method: String,
     #[arg(long)]
     path: String,
-    /// Source file/symbol proving shared initialization, cache and refresh semantics.
+    /// Source file/symbol proving the selected dependency rule semantics.
     #[arg(long)]
     source_evidence: String,
 }
 
+#[derive(Debug, Args)]
+struct HttpUnorderedArgs {
+    #[command(flatten)]
+    common: HttpRequestRuleArgs,
+    /// Non-root JSON Pointer; an entire * segment selects array elements.
+    #[arg(long)]
+    json_pointer: String,
+}
+
 fn http_options(args: HttpDependencyRuleArgs) -> Result<RewriteDependencyRulePlanOptions> {
-    if let Some(HttpDependencyMode::CrossCase(args)) = args.mode {
+    if let Some(mode) = args.mode {
+        let (args, selector) = match mode {
+            HttpDependencyMode::CrossCase(args) => {
+                let selector = RewriteDependencyRuleSelector::HttpCrossCase {
+                    selector: traffic_e2e::HttpCrossCaseSelector {
+                        host: args.host.clone(),
+                        port: args.port,
+                        method: args.method.clone(),
+                        path: args.path.clone(),
+                    },
+                };
+                (args, selector)
+            }
+            HttpDependencyMode::Unordered(args) => {
+                let selector = RewriteDependencyRuleSelector::HttpUnordered {
+                    selector: traffic_e2e::HttpUnorderedSelector {
+                        host: args.common.host.clone(),
+                        port: args.common.port,
+                        method: args.common.method.clone(),
+                        path: args.common.path.clone(),
+                        pointer: args.json_pointer,
+                    },
+                };
+                (args.common, selector)
+            }
+        };
         return Ok(RewriteDependencyRulePlanOptions {
             evidence_id: args.evidence_id,
             ownership: RewriteDependencyOwnership::RequestOwned,
             name: Some(args.rule_id),
             source_evidence: Some(args.source_evidence),
-            selector: RewriteDependencyRuleSelector::HttpCrossCase {
-                selector: traffic_e2e::HttpCrossCaseSelector {
-                    host: args.host,
-                    port: args.port,
-                    method: args.method,
-                    path: args.path,
-                },
-            },
+            selector,
         });
     }
     let ownership = args.ownership.context("--ownership is required")?;
@@ -234,6 +263,55 @@ fn http_options(args: HttpDependencyRuleArgs) -> Result<RewriteDependencyRulePla
             path_prefix: args.path_prefix.context("--path-prefix is required")?,
         },
     })
+}
+
+#[cfg(test)]
+mod http_unordered_cli_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(flatten)]
+        rule: DependencyRuleArgs,
+    }
+
+    #[test]
+    fn http_unordered_uses_dependency_value_inputs_without_an_ownership_flag() {
+        let cli = Cli::try_parse_from([
+            "test",
+            "plan",
+            "http",
+            "unordered",
+            "--evidence-id",
+            "evidence-current",
+            "--rule-id",
+            "departments",
+            "--host",
+            "erp.example.test",
+            "--port",
+            "80",
+            "--method",
+            "POST",
+            "--path",
+            "/membership",
+            "--json-pointer",
+            "/department_ids",
+            "--source-evidence",
+            "service.py:216 membership uses an unordered set",
+        ])
+        .unwrap();
+        let DependencyRuleCommand::Plan(args) = cli.rule.command else {
+            panic!("expected plan");
+        };
+        let DependencyPlan::Ownership(options) = args.protocol.try_into().unwrap() else {
+            panic!("expected dependency plan");
+        };
+        assert_eq!(options.ownership, RewriteDependencyOwnership::RequestOwned);
+        assert!(
+            matches!(options.selector, RewriteDependencyRuleSelector::HttpUnordered { selector } if selector.pointer == "/department_ids")
+        );
+    }
 }
 
 #[derive(Debug, Args)]

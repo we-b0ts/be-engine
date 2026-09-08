@@ -1,6 +1,7 @@
 //! Post-failure candidate discovery. It never serves an unconfigured request.
 use super::*;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::fs;
 
 #[derive(Deserialize)]

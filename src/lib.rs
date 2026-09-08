@@ -944,3 +944,9 @@ fn build_upstream_tls_config(ca: &MitmCa) -> Result<Arc<ClientConfig>> {
 
 #[cfg(test)]
 mod app_state_tests;
+
+pub use replay::HttpUnorderedSelector;
+
+pub use replay::{
+    HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
+};

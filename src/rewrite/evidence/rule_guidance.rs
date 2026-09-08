@@ -64,6 +64,11 @@ pub(super) fn rule_hints(
             .any(|c| c["protocol"] == "http" && c["reason"] == "unmatched_target")
     }) {
         hints.push(RewriteRuleHint {
+            capability: "http_json_unordered".into(), rule: "unordered".into(),
+            hint: "Inspect http_unordered_candidates for same-request JSON array reorderings. A candidate is not proof that order is non-contractual: trace source collection construction and downstream use. Return the exact endpoint, JSON Pointer and source evidence to the coordinator for dependency-rule plan http unordered / apply and fresh Replay. Old reports require fresh Replay; response unordered rules do not change outbound dependency matching.".into(),
+            help: super::super::action::command(target_root, vec!["dependency-rule".into(), "plan".into(), "http".into(), "unordered".into(), "--help".into()], Vec::new()),
+        });
+        hints.push(RewriteRuleHint {
             capability: "http_cross_case".into(), rule: "cross-case".into(),
             hint: "Inspect cross_case_candidates. A matching exchange in another case is a candidate, not proof of sharing. Trace source shared initialization/cache/refresh and side effects. Unavailable request identity requires fresh Replay; do not change target behavior or treat the call as background work.".into(),
             help: super::super::action::command(target_root, vec!["dependency-rule".into(), "plan".into(), "http".into(), "cross-case".into(), "--help".into()], Vec::new()),
@@ -109,6 +114,36 @@ pub(super) fn applicable_rule_planners(
     evidence_id: &str,
 ) -> Vec<RewriteApplicableRulePlanner> {
     let mut planners = Vec::new();
+    if query_kind == QUERY_DIRTY_CLUSTERS
+        && matches!(
+            issue_kind,
+            RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
+        )
+        && facts["http_unordered_candidates"]["candidates"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+        && facts["http_unordered_candidates"]["omitted_candidates"] == 0
+    {
+        planners.push(RewriteApplicableRulePlanner {
+            kind: "dependency_value".into(),
+            capability: "http_json_unordered".into(),
+            evidence_id: evidence_id.into(),
+            command: super::super::action::command(
+                target_root,
+                vec![
+                    "dependency-rule".into(),
+                    "plan".into(),
+                    "http".into(),
+                    "unordered".into(),
+                    "--evidence-id".into(),
+                    evidence_id.into(),
+                    "--help".into(),
+                ],
+                Vec::new(),
+            ),
+        });
+    }
+
     if query_kind == QUERY_DIRTY_CLUSTERS
         && matches!(
             issue_kind,
@@ -442,5 +477,59 @@ mod cross_case_tests {
             assert_eq!(planner.kind, "dependency_scope");
             assert!(planner.command.argv.contains(&"cross-case".into()));
         }
+    }
+}
+
+#[cfg(test)]
+mod http_unordered_tests {
+    use super::*;
+    #[test]
+    fn unordered_is_discoverable_before_responses_pass_but_planning_requires_candidates() {
+        let root = Path::new("/target");
+        let mut facts =
+            serde_json::json!({"clusters":[{"protocol":"http","reason":"unmatched_target"}]});
+        assert!(
+            rule_hints(root, QUERY_DIRTY_CLUSTERS, &facts)
+                .iter()
+                .any(|h| h.rule == "unordered")
+        );
+        for kind in [
+            RewriteIssueKind::Response,
+            RewriteIssueKind::Dependency,
+            RewriteIssueKind::Replay,
+        ] {
+            assert!(
+                !applicable_rule_planners(root, kind, QUERY_DIRTY_CLUSTERS, &facts, "ev")
+                    .iter()
+                    .any(|p| p.capability == "http_json_unordered")
+            );
+        }
+        facts["http_unordered_candidates"] = serde_json::json!({"candidates":[{"selector":{"pointer":"/department_ids"}}],"omitted_candidates":0});
+        for kind in [
+            RewriteIssueKind::Response,
+            RewriteIssueKind::Dependency,
+            RewriteIssueKind::Replay,
+        ] {
+            let planners = applicable_rule_planners(root, kind, QUERY_DIRTY_CLUSTERS, &facts, "ev");
+            let planner = planners
+                .iter()
+                .find(|p| p.capability == "http_json_unordered")
+                .unwrap();
+            assert_eq!(planner.kind, "dependency_value");
+            assert!(planner.command.argv.contains(&"unordered".into()));
+            assert!(planner.command.argv.contains(&"ev".into()));
+        }
+        facts["http_unordered_candidates"]["omitted_candidates"] = serde_json::json!(1);
+        assert!(
+            !applicable_rule_planners(
+                root,
+                RewriteIssueKind::Dependency,
+                QUERY_DIRTY_CLUSTERS,
+                &facts,
+                "ev"
+            )
+            .iter()
+            .any(|p| p.capability == "http_json_unordered")
+        );
     }
 }

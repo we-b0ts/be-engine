@@ -98,7 +98,7 @@ The engine trusts the coordinator's explicit report; it does not query Claude
 Code or another task runtime, or independently prove liveness. Never report running
 merely because a dispatch was previously confirmed. A repeated confirmation does
 not create or refresh an activity report. Running/queued reports are fresh for
-five minutes. Expiry requests a check; it
+fifteen minutes. Expiry requests a check; it
 does not prove that a worker stopped and never authorizes a duplicate worker.
 Missing or legacy unclassified observations on confirmed bindings also request
 a coordinator status check. Recover the retained assignment before reporting;

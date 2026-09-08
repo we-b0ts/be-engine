@@ -746,3 +746,8 @@ mod path_tests;
 #[cfg(test)]
 #[path = "feedback/tests.rs"]
 mod tests;
+
+mod http_unordered;
+pub use http_unordered::{
+    HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
+};

@@ -167,6 +167,24 @@ Applying the policy changes the repository fingerprint; resume only through the
 coordinator, which reruns the normal quality, Replay, and comparison flow. One
 passing post-apply workflow is sufficient.
 
+## Unordered HTTP Dependency JSON
+
+For HTTP unmatched requests, inspect `dirty_clusters.facts.http_unordered_candidates`
+and the `unordered` rule hint. Verified array reorderings expose
+`kind=dependency_value`, `capability=http_json_unordered` and the
+`dependency-rule plan http unordered` help command. Discovery is available
+during response, dependency and Replay issues. Response unordered rules do not
+change dependency matching. Old reports require fresh Replay to capture the
+request comparison witness.
+
+The worker returns the exact host, port, method, path, JSON Pointer and source
+proof that array order is non-contractual. The coordinator plans with the
+current evidence ID and reviews `http.json.unordered` in the policy diff.
+Execute the returned apply and next commands. Actual Replay is required;
+changing this policy cannot reclassify an earlier unmatched request as passed.
+Keep query, element contents, duplicate counts and unselected fields exact.
+See [HTTP unordered rules](../../../../../docs/http-unordered-rules.md).
+
 ## Cross-Case HTTP Dependency Scope
 
 For HTTP unmatched requests, inspect `dirty_clusters.facts.cross_case_candidates`
