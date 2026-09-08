@@ -82,13 +82,3 @@ Preserve these result semantics:
 
 Do not select cache tiers, replicas, or shards in business code, and do not add
 an endpoint retry around `get` or `set`. `CacheService` owns those decisions.
-
-## Check before delivery
-
-1. Verify the exact source group, namespace, protocol, expiration, and timeout.
-2. Test hit, miss, dependency error, binary decoding, expiration, and both
-   boolean store results used by the target.
-3. For Vintage-backed configuration, test that a relevant namespace update is
-   observed without changing the business call sites.
-4. Run the target repository checks and the owning API's Replay/Comparison
-   acceptance.

@@ -295,3 +295,11 @@ explicit repository-wide audit.
 - `replay/policy/response/time_rule` owns explicit timestamp-format and duration-unit
   contracts. `replay/assertion/time` owns numeric parsing and fixed five-second
   request-relative validation; artifact adapters supply captured request times.
+
+- `replay/http/cross_case` owns finite HTTP sharing, source-run traversal and
+  post-failure request correlation. Its `recording` child streams immutable
+  evidence inside one finalized run; `evidence` owns bounded discovery and its
+  disposable cache. `replay/policy/feedback/http_cross_case` owns strict policy
+  plan/apply. Coordinator dependency rules own dispatch, source proof and
+  verification invalidation; neither matcher nor evidence loader changes
+  recorded files, target state, or coordinator completion.

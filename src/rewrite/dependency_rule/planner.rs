@@ -13,6 +13,7 @@ use crate::{
 use std::path::PathBuf;
 
 pub(super) enum DependencyRulePlan {
+    HttpCrossCase(crate::HttpCrossCasePlan),
     MysqlTime(crate::MysqlTimeRulePlan),
     Mysql(MysqlBackgroundDependencyPlan),
     Http(BackgroundDependencyPlan),
@@ -36,6 +37,7 @@ struct ExactKeyRedisPlanInput<'a> {
 impl DependencyRulePlan {
     pub(super) fn report(&self) -> Result<Value> {
         match self {
+            Self::HttpCrossCase(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::MysqlTime(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::Http(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::Mysql(plan) => Ok(serde_json::to_value(plan.report())?),
@@ -48,6 +50,7 @@ impl DependencyRulePlan {
 
     pub(super) fn apply(self) -> Result<Value> {
         match self {
+            Self::HttpCrossCase(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::MysqlTime(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::Http(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::Mysql(plan) => Ok(serde_json::to_value(plan.apply()?)?),
@@ -60,6 +63,9 @@ impl DependencyRulePlan {
 
     pub(super) fn reused_existing(&self) -> Option<&str> {
         match self {
+            Self::HttpCrossCase(plan) if plan.report().reused_existing => {
+                Some(&plan.report().effective_rule_id)
+            }
             Self::MysqlTime(plan) if plan.report().reused_existing => {
                 Some(&plan.report().effective_rule_id)
             }
@@ -87,6 +93,7 @@ impl DependencyRulePlan {
 
     pub(super) fn effective_name(&self) -> &str {
         match self {
+            Self::HttpCrossCase(plan) => &plan.report().effective_rule_id,
             Self::MysqlTime(plan) => &plan.report().effective_rule_id,
             Self::Http(plan) => &plan.report().effective_name,
             Self::Mysql(plan) => &plan.report().effective_name,
@@ -102,6 +109,9 @@ pub(super) fn spec_from_selector(
     selector: RewriteDependencyRuleSelector,
 ) -> RewriteDependencyRuleSpec {
     match selector {
+        RewriteDependencyRuleSelector::HttpCrossCase { selector } => {
+            RewriteDependencyRuleSpec::HttpCrossCase { selector }
+        }
         RewriteDependencyRuleSelector::MysqlSqlTime { selector } => {
             RewriteDependencyRuleSpec::MysqlSqlTime { selector }
         }
@@ -235,12 +245,24 @@ pub(super) fn build_plan(
     let replay_report_path = resolve_e2e_response_rule_evidence(
         E2eRunContext {
             target_root: target_root.to_path_buf(),
-            case_source,
+            case_source: case_source.clone(),
             run_key: None,
         },
         api,
     )?
     .replay;
+    if let RewriteDependencyRuleSpec::HttpCrossCase { selector } = &record.spec {
+        return Ok(DependencyRulePlan::HttpCrossCase(
+            crate::plan_http_cross_case(crate::HttpCrossCaseFeedback {
+                policy_path: target_root.join(".traffic-e2e/verification.yaml"),
+                case_source,
+                replay_report_path,
+                rule_id: record.name.clone(),
+                selector: selector.clone(),
+                source_evidence: record.source_evidence.clone(),
+            })?,
+        ));
+    }
     if let RewriteDependencyRuleSpec::MysqlSqlTime { selector } = &record.spec {
         return Ok(DependencyRulePlan::MysqlTime(crate::plan_mysql_time_rule(
             crate::MysqlTimeRuleFeedback {
@@ -310,7 +332,8 @@ pub(super) fn build_plan(
             )?,
         )),
         RewriteDependencyRuleSpec::MemcachedProtobufTimestamp { .. }
-        | RewriteDependencyRuleSpec::MysqlSqlTime { .. } => {
+        | RewriteDependencyRuleSpec::MysqlSqlTime { .. }
+        | RewriteDependencyRuleSpec::HttpCrossCase { .. } => {
             unreachable!("Memcached payload plans return before background evidence resolution")
         }
         RewriteDependencyRuleSpec::Motan {

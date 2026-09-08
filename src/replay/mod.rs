@@ -36,6 +36,8 @@ pub use egress_counter::{
 #[cfg(test)]
 mod global_dependency_tests;
 mod http;
+pub(crate) use http::cross_case as http_cross_case;
+pub use http::cross_case::HttpCrossCaseSelector;
 mod kafka;
 #[cfg(test)]
 #[path = "tests.rs"]
@@ -139,18 +141,19 @@ pub(crate) use policy::render_validated_replay_policy;
 pub(crate) use policy::response_locations_overlap;
 pub use policy::{
     ComparisonResponseRuleFeedback, ComparisonSourceMatch, ComparisonVerificationPolicy,
-    Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath,
-    MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MemcachedTimestampRuleReport,
-    MysqlTimeRuleFeedback, MysqlTimeRulePlan, MysqlTimeRuleReport, MysqlTimeSelector,
-    ProfileTargetMissingFeedback, ProfileTargetMissingPlan, ProfileTargetMissingReport,
-    ProtobufFieldPath, ProtobufJoinedStringFieldType, ProtobufJoinedStringPath,
-    ProtobufRepeatedElementType, ProtobufUnorderedPath, ReplayPolicyInitOptions,
-    ReplayPolicyInitResult, ReplayPolicyValidationReport, ResponseBodyCodec,
-    ResponseBodyJoinedStringPath, ResponseBodyRuleEvidence, ResponseBodyRuleEvidenceKind,
-    ResponseBodyRuleFeedback, ResponseBodyRulePlan, ResponseBodyRuleReport,
-    ResponseBodyRuleVerificationOutcome, ResponseBodyUnorderedPath, ResponseDurationUnit,
-    ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan, ResponseRuleReport, ResponseTimeRule,
-    ResponseTimestampFormat, initialize_replay_policy, plan_comparison_response_rule,
+    Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath, HttpCrossCaseFeedback,
+    HttpCrossCasePlan, HttpCrossCaseReport, MemcachedTimestampRuleFeedback,
+    MemcachedTimestampRulePlan, MemcachedTimestampRuleReport, MysqlTimeRuleFeedback,
+    MysqlTimeRulePlan, MysqlTimeRuleReport, MysqlTimeSelector, ProfileTargetMissingFeedback,
+    ProfileTargetMissingPlan, ProfileTargetMissingReport, ProtobufFieldPath,
+    ProtobufJoinedStringFieldType, ProtobufJoinedStringPath, ProtobufRepeatedElementType,
+    ProtobufUnorderedPath, ReplayPolicyInitOptions, ReplayPolicyInitResult,
+    ReplayPolicyValidationReport, ResponseBodyCodec, ResponseBodyJoinedStringPath,
+    ResponseBodyRuleEvidence, ResponseBodyRuleEvidenceKind, ResponseBodyRuleFeedback,
+    ResponseBodyRulePlan, ResponseBodyRuleReport, ResponseBodyRuleVerificationOutcome,
+    ResponseBodyUnorderedPath, ResponseDurationUnit, ResponseRuleFeedback, ResponseRuleKind,
+    ResponseRulePlan, ResponseRuleReport, ResponseTimeRule, ResponseTimestampFormat,
+    initialize_replay_policy, plan_comparison_response_rule, plan_http_cross_case,
     plan_memcached_timestamp_rule, plan_mysql_time_rule, plan_profile_target_missing,
     plan_response_body_rule, plan_response_rule, validate_replay_policy,
 };
@@ -364,6 +367,21 @@ impl ReplayRuntime {
                 next_progress_percent = (progress_percent / 5 + 1).saturating_mul(5);
             }
         }
+        let shared_root = root_dir.clone();
+        let shared_policy = config.policy_path.clone();
+        let shared_cases = cases.clone();
+        let (http_exchanges, mut targets) = tokio::task::spawn_blocking(move || -> Result<_> {
+            http_cross_case::load(
+                &shared_root,
+                shared_policy.as_deref(),
+                &shared_cases,
+                &mut http_exchanges,
+                &mut targets,
+            )?;
+            Ok((http_exchanges, targets))
+        })
+        .await
+        .context("HTTP cross-case preload task failed")??;
         redis.apply_snapshot_overlays(&root_dir, process_owned_dependencies);
 
         let recording_network_path =

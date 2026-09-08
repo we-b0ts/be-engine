@@ -130,19 +130,5 @@ mechanism.
 
 Do not add endpoint selection or blind command retries in business code.
 RedisService handles read failover. A failed write may already have executed,
-so replay it only when source application behavior explicitly requires that
+so issue it only when source application behavior explicitly requires that
 and duplicate execution is acceptable.
-
-## Check before delivery
-
-1. Verify master, replicas, timeout, and—when present—shard membership and
-   routing match the source.
-2. Test hit, nil, dependency error, and every response type and command used by
-   the target.
-3. Test that composite keys encode byte-for-byte like the source, multi-key
-   results preserve input order, and commands requiring co-location reject a
-   cross-shard key set before sending it.
-4. If source code uses a pipeline, test response order and the target's error
-   handling.
-5. Run the target repository checks and the owning API's Replay/Comparison
-   acceptance.

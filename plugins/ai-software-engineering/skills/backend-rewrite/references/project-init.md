@@ -64,8 +64,8 @@ add framework-specific port or trust mappings during initialization.
 ## Complete The Build Contracts
 
 `.traffic-e2e/Dockerfile.recording` and `.traffic-e2e/Dockerfile.e2e` are
-target-owned build contracts. The Target AI may edit either file to satisfy the
-source adaptor or target runtime contract. Both final processes must run in the
+target-owned build contracts. During initialization, complete either file as
+required by the source adaptor or target runtime contract. Both final processes must run in the
 foreground as UID/GID `998:998`; neither image may contain credentials,
 recordings, generated trust, build cache, or `.traffic-e2e/local/` content.
 
@@ -84,7 +84,7 @@ preflight. Delete the module, declaration, and call when real target
 implementation begins, as marked by generated comments.
 
 If an image needs an image-local writable directory, follow
-[startup.md](startup.md) and update the applicable Dockerfile after inspecting
+[target-startup-inputs.md](target-startup-inputs.md) and update the applicable Dockerfile after inspecting
 its real structure. Do not assume a fixed base image or available shell tool.
 
 ## Verify Initialization
@@ -100,7 +100,7 @@ reported build/startup contract or managed input and rerun the same command.
 Preflight checks initialization plumbing; it is not business API evidence and
 must not advance `backend-rewrite next`.
 
-During later implementation, read [startup.md](startup.md) only when target
+During later implementation, read [target-startup-inputs.md](target-startup-inputs.md) only when target
 behavior proves another startup input is needed. Use `startup env` and
 `startup mount` APIs rather than editing `project.yaml` or snapshot files.
 

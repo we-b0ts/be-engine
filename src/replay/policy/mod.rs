@@ -45,3 +45,32 @@ pub use response::{
     ResponseDurationUnit, ResponseField, ResponseRuleKind, ResponseTimeRule,
     ResponseTimestampFormat,
 };
+
+/// Read only explicit cross-case selectors before dependency preload.
+pub(in crate::replay) fn http_cross_case_rules(
+    path: &std::path::Path,
+) -> anyhow::Result<Vec<(String, crate::replay::HttpCrossCaseSelector)>> {
+    let loaded = load_replay_policy(path)?;
+    Ok(loaded
+        .document
+        .dependency_rules
+        .into_iter()
+        .filter(|r| r.replay_scope == config::ReplayScope::RecordingRun)
+        .map(|r| {
+            let http = r.http.expect("validated HTTP scope");
+            (
+                r.id,
+                crate::replay::HttpCrossCaseSelector {
+                    host: r.target.host.unwrap(),
+                    port: r.target.port.unwrap(),
+                    method: http.method,
+                    path: http.path,
+                },
+            )
+        })
+        .collect())
+}
+
+pub use feedback::{
+    HttpCrossCaseFeedback, HttpCrossCasePlan, HttpCrossCaseReport, plan_http_cross_case,
+};

@@ -402,6 +402,12 @@ pub fn query_e2e_dirty_counts(context: E2eRunContext, api: &str) -> Result<E2eDi
     dirty_evidence::build(&state, complete, dirty)
 }
 
+pub(crate) fn query_http_cross_case_candidates(context: E2eRunContext, api: &str) -> Result<Value> {
+    let state = finalized_focused_state(context, api)?;
+    Ok(crate::replay::http_cross_case::discover(&state.case_source, &state.replay_report, true)
+        .unwrap_or_else(|_| serde_json::json!({"candidates": [], "unavailable": "cross-case source evidence could not be inspected; existing dirty evidence remains authoritative"})))
+}
+
 fn finalized_focused_state(context: E2eRunContext, api: &str) -> Result<model::ActiveRunState> {
     finalized_focused_evidence(context, api).map(|(state, _)| state)
 }

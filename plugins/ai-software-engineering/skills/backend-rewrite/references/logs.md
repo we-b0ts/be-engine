@@ -96,8 +96,7 @@ Use `OverflowPolicy::DropNewest` for normal service logging so queue saturation
 does not block the application hot path. `LogsGuard::dropped_lines` exposes
 the cumulative loss count. With the optional `metrics` feature, a full queue
 also increments the count-only `type=LOG,name=queue_dropped` profile metric;
-its `total_count` covers one profile interval. This is operational health data,
-not traffic behavior, and must not be added to process-output comparison rules.
+its `total_count` covers one profile interval and reports operational health.
 Use `OverflowPolicy::Block` only when the product contract explicitly prefers
 backpressure over log loss and the affected call paths can tolerate blocking.
 
@@ -138,18 +137,3 @@ the normal shutdown path. If an unrecoverable path must call `process::exit`,
 emit the final event and call `LogsGuard::flush` before exiting. Treat a flush
 failure as startup or operational diagnostic evidence; do not recursively log
 that failure through the failed logger.
-
-## Check before delivery
-
-1. Verify there is exactly one subscriber initialization and the guard remains
-   owned until shutdown.
-2. Verify the image creates the configured directory writable by UID 998 and
-   no source or recorded logs are copied into it.
-3. Verify each level reaches only its designated file with the UTC+8 timestamp
-   and no timezone suffix or console duplicate.
-4. Exercise queue saturation, truncation, periodic/error flush, file-open or
-   write failure, explicit flush, and graceful shutdown behavior when changing
-   logging infrastructure.
-5. Run the target repository's focused checks. Return the coordinator-issued
-   acceptance command unchanged; the state-machine coordinator runs it after
-   integration.

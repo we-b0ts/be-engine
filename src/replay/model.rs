@@ -7,7 +7,7 @@ pub(super) enum ReplaySource {
     Case,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(super) struct TargetKey {
     pub(super) host: String,
     pub(super) port: u16,

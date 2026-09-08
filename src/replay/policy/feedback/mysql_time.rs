@@ -93,6 +93,8 @@ pub fn plan_mysql_time_rule(feedback: MysqlTimeRuleFeedback) -> Result<MysqlTime
     };
     let proposed = ReplayDependencyRule {
         id: feedback.rule_id.clone(),
+        replay_scope: Default::default(),
+        source_evidence: String::new(),
         case_selector: None,
         protocol: DependencyProtocol::Mysql,
         target: TargetSelector::default(),

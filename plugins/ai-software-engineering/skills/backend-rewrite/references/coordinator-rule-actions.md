@@ -1,7 +1,7 @@
-# Coordinator Evidence Actions
+# Coordinator Rule Actions
 
-Read this guide only after the assigned worker is confirmed and returns
-source-proven inputs for a response rule, recorder capture, process-owned
+Audience: the workflow coordinator. Read only after the assigned worker is
+confirmed and returns source-proven inputs for a response rule, recorder capture, process-owned
 dependency rule, or process-output rule, or when the current action exposes one
 of those planners. Workers may run returned read-only help commands but never
 execute the state-mutating commands here.
@@ -18,7 +18,7 @@ execute the state-mutating commands here.
 ## Typed Response Rules
 
 The target never receives a response-rule selector. A worker returns the
-codec-specific path plus source proof; the state-machine coordinator plans and applies
+codec-specific path plus source proof; the workflow coordinator plans and applies
 the rule. Replay and comparison load the applied selector from
 `.traffic-e2e/verification.yaml` and normalize source and target observations
 without changing target code, configuration, or RPC signatures.
@@ -112,7 +112,7 @@ API's next command or the consolidated full-scope recording action. For a
 scoped waiting API, poll current `status`; never execute its stale acceptance.
 
 Do not follow capture apply with `recording request`. Continue runnable work and
-read [recording-lifecycle.md](recording-lifecycle.md) when the coordinator
+read [recording-lifecycle.md](recording-lifecycle.md) when the engine
 returns the consolidated refresh.
 
 ## HTTP Response URL Capture
@@ -158,7 +158,7 @@ listed source paths and proved both that source code does not start the
 interaction and that the interaction does not affect source behavior. Either
 contrary finding requires target implementation and forbids this rule.
 
-The state-machine coordinator supplies the current process-output ID, source revision,
+The workflow coordinator supplies the current process-output ID, source revision,
 and finalized comparison run to `traffic-e2e config comparison plan
 allow-target-missing`, then reviews the preview and repeats the same arguments
 with `apply`. Do not hand-edit `.traffic-e2e/verification.yaml`. The structured
@@ -166,6 +166,28 @@ emitter evidence is JSON with exactly `inspected_paths` and `description`.
 Applying the policy changes the repository fingerprint; resume only through the
 coordinator, which reruns the normal quality, Replay, and comparison flow. One
 passing post-apply workflow is sufficient.
+
+## Cross-Case HTTP Dependency Scope
+
+For HTTP unmatched requests, inspect `dirty_clusters.facts.cross_case_candidates`
+and the top-level `rule_hints`. Verified same-run candidates expose
+`kind=dependency_scope`, `capability=http_cross_case` and the
+`dependency-rule plan http cross-case` help command in `applicable_rule_planners`.
+This entry is available during response, dependency and Replay issues. Old
+reports without request identity require fresh Replay; a URL-only candidate
+cannot authorize a rule. Source and target inspection must prove shared cache
+initialization, refresh and side-effect semantics. Do not add target prewarming,
+classify a lazy business request as background traffic, or ignore unmatched calls.
+
+The worker returns the exact host, port, method, path and source evidence; the
+coordinator plans and applies with the current evidence ID. The rule persists
+`replay_scope: recording_run` in verification.yaml, without query relaxations,
+secrets, case IDs or fixture paths. Follow apply's `next`: real Replay is
+mandatory to let the target consume the response and build its own state.
+The old failure cannot be reclassified as a pass. Existing complete exchanges
+need no new recording. Resolve this supported rule path before reporting a
+remaining engine capability gap. See
+[HTTP cross-case replay](../../../../../docs/http-cross-case-replay.md).
 
 ## Process-Owned Dependency Rules
 
@@ -180,7 +202,7 @@ does not establish ownership. Asynchronous execution, fire-and-forget calls,
 post-response timing, scheduler names, and the 100 ms attribution window do not
 make a dependency process-owned.
 
-Every `dependency-rule plan` invocation requires exactly one ownership decision:
+Every ownership-classification `dependency-rule plan` invocation requires exactly one ownership decision:
 
 - `--ownership request-owned`: the report sets
   `target_implementation_required=true`, does not create a recorder rule plan,
@@ -192,7 +214,7 @@ Every `dependency-rule plan` invocation requires exactly one ownership decision:
   investigation remains required.
 
 A process-owned dependency rule is process-scoped, not API-scoped; the
-coordinator binds its plan internally to the active API evidence, case source,
+engine binds its plan internally to the active API evidence, case source,
 and source revision. Never use `process-owned` merely because a call runs
 asynchronously or does not affect the current response.
 
@@ -224,13 +246,13 @@ returned apply action. It is a successful no-op reuse under `effective_name`
 that still refreshes current evidence, not a duplicate rule. Status
 reconstructs the same plan-ID transition.
 
-Only a `process-owned` result returns a `plan_id`. After
+For ownership classification, only a `process-owned` result returns a `plan_id`. After
 `backend-rewrite dependency-rule apply <plan-id>`, execute only the exact
 `next` returned by the report. The result includes bounded
 `evidence_reclassification` with rule coverage, remaining dirty cases, and the
 revised focused result.
 
-An ownership change alone is not a fresh-recording condition. The coordinator
+An ownership change alone is not a fresh-recording condition. The engine
 keeps capture artifacts immutable, recomputes the effective case/global ownership
 view, rebuilds dependency evidence, and revises the same progress-ledger attempt.
 Clean evidence advances to comparison;
@@ -238,7 +260,7 @@ residual case-scoped dirty evidence remains in repair. Apply returns `next`.
 Redis rules that additionally require reusable snapshot seeds first try to
 derive them from complete, consistent immutable bootstrap evidence. If that
 derivation fails, `cache_snapshot_overlay` explicitly reports
-`recording_required=true` with the reason, and the coordinator schedules its
+`recording_required=true` with the reason, and the engine schedules its
 recording refresh to obtain snapshot evidence that the existing recording cannot
 safely provide. MySQL ownership reclassification does not require Redis snapshot
 seeds. Follow the returned action in either case, without manually requesting a
@@ -287,7 +309,7 @@ immutable Global bootstrap evidence, and returns to the same focused cases.
 
 ## JWT expiration during Replay
 
-For a status mismatch with target HTTP 401, use the coordinator-issued
+For a status mismatch with target HTTP 401, use the engine-issued
 `jwt-time-validity` query. It reports recorded/replay time and unverified JWT
 expiration candidates without credentials. Trace the source and target JWT
 verification path, key source, and actual expiration leeway; 401 or zero

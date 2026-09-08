@@ -1,3 +1,7 @@
+mod http_cross_case;
+pub use http_cross_case::{
+    HttpCrossCaseFeedback, HttpCrossCasePlan, HttpCrossCaseReport, plan_http_cross_case,
+};
 mod document;
 pub(crate) use document::replace_request_rule_section;
 mod evidence;

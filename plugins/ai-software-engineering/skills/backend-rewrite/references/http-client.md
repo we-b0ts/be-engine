@@ -1,4 +1,4 @@
-# Use HTTP through `brz-http`
+# Call HTTP dependencies through `brz-http`
 
 Use this guide when target code calls an outbound HTTP dependency through
 `brz-http`. Recover the source method, URL construction, headers,
@@ -109,7 +109,7 @@ for an uncommon reqwest request option without discarding instrumentation.
 
 Do not add retries in business code merely to mask a dependency failure.
 Preserve source retry eligibility, attempt limit, backoff, total budget, and
-idempotency behavior. In particular, do not automatically replay a request
+idempotency behavior. In particular, do not automatically retry a request
 whose body may already have been accepted by the remote service.
 
 ## Preserve timeout and transport policy
@@ -152,17 +152,3 @@ converting a request or response into raw reqwest escapes the instrumentation
 contract. Use those escape hatches only for a proven unsupported capability,
 and do not use them when the target must produce the corresponding HTTP profile
 rows.
-
-## Check before delivery
-
-1. Verify method, URL encoding, query construction, headers, authentication,
-   body encoding, and redirect policy against the source.
-2. Verify client ownership and reuse, timeout and deadline behavior, pool
-   policy, TLS, proxy, compression, and retry semantics.
-3. Test success, every handled status class, transport failure, body read or
-   decode failure, and the target's external error mapping.
-4. Verify stable endpoint names and, when enabled, both normal and `all_`
-   profile rows without high-cardinality path or query values.
-5. Run the target repository's focused checks. Return the coordinator-issued
-   acceptance command unchanged; the state-machine coordinator runs it after
-   integration.

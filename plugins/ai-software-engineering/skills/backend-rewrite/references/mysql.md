@@ -226,38 +226,9 @@ async fn find_many<M: Mysql>(mysql: &M, ids: &[u64]) -> MysqlResult<Vec<Record>>
 Bind each argument with its original type. A vector supplies one argument per
 element; generate the same number of SQL placeholders.
 
-Replay supports source text SQL with inline literals and target prepared SQL
-with `?` parameters. For ordinary single-table SELECTs it compares IN/NOT IN
-lists without requiring the same value order, and accepts reordered pure AND
-conditions and OR branches after binding actual values. Do not reproduce source set iteration
-order or sort target inputs solely for Replay. Exact values, types, NULL and
-duplicate counts remain constrained, as do tables, ordering and pagination.
-Keep AND/OR nesting and each branch's field/value pairing; the engine does not
-expand boolean expressions or treat independently matching columns as a match.
-Large OR groups with a repeated parameter template use bounded linear metadata
-matching. Empty strings remain values, distinct from NULL. `IS [NOT] TRUE`,
-`IS [NOT] FALSE` and `IS [NOT] UNKNOWN` can accompany reordered conditions and
-tuple IN lists; retain these operators instead of rewriting them as `= 1/0`.
-The independent read-effect check also handles derived tables, UNION, ordinary
-joins, EXISTS and pure ROW_NUMBER windows, including long OR chains. Successful
-matching alone never makes unknown effects safe to omit at session cleanup.
-This built-in compatibility composes with direct-column projection mapping;
-it requires no rule or new recording. Complex expressions and positional
-dynamic-parameter policies keep their existing boundaries. See
-[MySQL predicate compatibility](../../../../../docs/mysql-replay.md#select-predicate-order-compatibility).
-
-Single-table `SELECT DISTINCT` also supports normal prepared statements, bound
-parameters, column/table aliases, table qualifiers, and reordered pure AND
-conditions and OR branches. Both sides must retain DISTINCT and the same complete set of direct
-output columns. Do not force COM_QUERY, inline dynamic values, or reproduce
-SQLAlchemy column labels to work around Replay. Column removal, aggregates,
-grouping, and other complex query forms retain their existing constraints.
-
-Flat tuple IN/NOT IN supports whole-tuple reordering for forms such as
-`(user_id,namespace,name) IN ((?,?,?),(?,?,?))`, including source SQL built from
-set iteration. Preserve each tuple's field order, paired values, types and
-duplicate count; use normal bound parameters. A repair still needs the affected
-immutable cases rerun; an engine revision change alone is not functional acceptance.
+Use bound parameters with their original types. Preserve each tuple's field
+order and value pairing, SQL NULL semantics, DISTINCT, result ordering, and
+pagination. Keep boolean grouping explicit when combining AND and OR conditions.
 
 ## Query sharded tables
 
@@ -329,30 +300,10 @@ MySQL's default quoting and escape rules.
 
 ## Run a transaction
 
-Keep ordinary read requests on the shared pool. Source ORMs may close an
-implicit read-only session with ROLLBACK. The engine allows this cleanup to be
-omitted when semantic recording proves a transaction-free start, consecutive
-ordinary reads, and a successful transaction end; repeated cleanup after a
-confirmed COMMIT/ROLLBACK is also optional. Omitted cleanup is reported as
-`allowed_unused_mysql_rollback_exchanges`. No rule is needed.
-
-Cold source connections may also send `SET AUTOCOMMIT=0/1` before business
-queries. Replay handles literal session assignments and tracks the target
-connection's mode. Proven read-only source-session setup can be omitted and is
-reported as `allowed_unused_mysql_autocommit_exchanges`. Do not add AUTOCOMMIT
-assignments to a shared target pool just to consume source-driver setup. No
-rule or new recording is needed when existing evidence contains the required
-transaction status. Write-containing sessions, failed assignments and incomplete
-evidence remain strict; inspect the evidence and route an engine capability
-gap if ordinary driver behavior is still blocked. Preserve real business
-transaction boundaries.
-
-Do not add `mysql.execute("ROLLBACK", ())` to the end of every handler merely
-to consume recording evidence. A pool can route that command to another
-connection. Missing status evidence in an older recording requires fresh
-recording through the coordinator workflow; unexplained failures remain an
-engine investigation. Writes, locks and explicit business transactions retain
-their required rollback/commit behavior, even when HTTP responses agree.
+Keep ordinary read requests on the shared pool. Use a transaction handle for
+business operations that require one connection and an explicit commit/rollback
+boundary. An isolated `mysql.execute("ROLLBACK", ())` on the pool can reach a
+different connection and cannot close a transaction on another connection.
 
 `with_transaction` commits when the closure returns `Ok` and rolls back on `Err`.
 Import `MysqlTransaction` to call transaction query methods. The base service

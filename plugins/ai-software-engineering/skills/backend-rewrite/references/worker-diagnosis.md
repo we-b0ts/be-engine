@@ -1,8 +1,8 @@
-# Rewrite Problem Diagnosis
+# Implementation Worker Diagnosis
 
-Use this reference for every `implementation_required` action. Problem
-diagnosis is a required rewrite phase, not optional troubleshooting. Its result
-chooses the only repair attempted before the coordinator-issued acceptance.
+Audience: implementation workers assigned an `implementation_required` work
+item. Read before work-item diagnosis or code changes. Use the engine's current
+work-item facts to identify one repair before the engine-issued acceptance.
 Select the diagnosis path from `action.details.work_scope.kind` before reading
 work-item evidence.
 
@@ -12,32 +12,37 @@ work-item evidence.
 - Process-output issues
 - API evidence queries
 - Response, missing-recording, cache, runtime, and Replay issues
+- MySQL driver and Redis connection compatibility
 - Dirty dependency and comparison issues
 - Repair routing and blocker criteria
 
 ## Work-Scope Contract
 
-The coordinator supplies the active issue identity and work scope in
-`action.details`. After the state-machine coordinator confirms the current dispatch,
+The engine supplies the active issue identity and work scope in `action.details`.
+If the dispatch message omits current facts, recover them through scoped status
+using the assigned canonical target root and work-item identity. Then follow the
+returned evidence commands. Missing information never changes a worker's role;
+report an unresolvable identity or API gap without assuming coordinator authority.
+After the workflow coordinator confirms the current dispatch,
 execute the single `action.commands.evidence` command. Its overview returns the
 complete bounded issue in `facts.issue`, including possible causes and a
 representative when available. Treat possible causes as hypotheses. Scoped
 status restores this compact action and evidence entrypoint, not diagnostics.
 The sole acceptance command is
-`action.commands.acceptance`; return it unchanged to the orchestrator and never
-execute it as a worker. In both worker roles, prove one cause from source and
+`action.commands.acceptance`; return it unchanged to the workflow coordinator and never
+execute it as a worker. For either worker scope, prove one cause from source and
 target code, make one coherent repair, and run focused local tests.
 
 For `work_scope.kind=api`, exact further evidence-query argv are under the
 overview's `queries`. Traffic facts come only from the overview, returned queries
 and immutable artifacts. Standard and comparison artifacts are readable,
 read-only diagnostic evidence. Start from the representative `case_dir`
-returned by the coordinator and inspect its complete contents. Inspect other
+returned by the engine and inspect its complete contents. Inspect other
 cases under `.traffic-e2e/local/artifacts/` only when they help distinguish
-hypotheses. Use bounded coordinator queries before inspecting
+hypotheses. Use bounded engine queries before inspecting
 `.traffic-e2e/local/runtime/`.
 Runtime inspection is read-only and diagnostic: do not infer the active run by
-recency, edit state, or use ad-hoc scripts to recreate a coordinator query.
+recency, edit state, or use ad-hoc scripts to recreate an engine query.
 Never patch multiple speculative categories in one iteration.
 
 For an API work item, evaluate gates in this order:
@@ -91,14 +96,14 @@ target's normal startup, configuration, output creation, flush, or shutdown
 behavior.
 
 Do not create a replay-only file, copy a recorded output into the target, or
-make target code read coordinator artifacts.
+make target code read engine artifacts.
 
 For a target repair, return the exact work scope and issue ID, proven cause,
 changed files and shared impact, patch or commit, local test results, unchanged
 acceptance command, and unresolved risks. For an eligible rule candidate,
 return the same work scope and issue identity plus only the three requested rule
 inputs and unresolved risks; no target patch or local test is required. The
-main orchestrator owns rule planning/application and acceptance; the worker
+workflow coordinator owns rule planning/application and acceptance; the worker
 does not run process-output comparison itself.
 
 ## API Evidence Queries
@@ -158,7 +163,7 @@ query ID.
   MySQL supports source-proven process-owned SELECT templates with exact
   connection identity and exact, numeric-series, or patterned physical tables,
   including `AS {{table}}_id` aliases tied to the selected table. Return the
-  source-proven selector inputs to the state-machine coordinator, which plans and applies
+  source-proven selector inputs to the workflow coordinator, which plans and applies
   the rule to reclassify existing unused evidence without a new recording;
   target unmatched queries and incomplete evidence remain dirty.
 - `policy_applicability`: structural rule eligibility; eligibility does not
@@ -251,7 +256,7 @@ Classify exactly one cause:
 
 Environment handling is not limited to this failure classification. If source
 analysis proves during implementation that target logic requires an
-application-owned environment variable, follow [startup.md](startup.md)
+application-owned environment variable, follow [target-startup-inputs.md](target-startup-inputs.md)
 immediately and return the startup input without waiting for a runtime failure.
 
 For a status mismatch, inspect authentication/preconditions, source error
@@ -285,20 +290,89 @@ Prove the hypothesis in this order:
 When those checks prove that the source consumes an exact response-driving
 endpoint that is absent from recorded dependencies, return the evidence ID, the
 `hostname[:port]`, and one single-line source file/symbol proof to the
-orchestrator. The hostname is required and the port is optional; include a
+workflow coordinator. The hostname is required and the port is optional; include a
 source-proven port when available. Never guess a Breeze resource or descriptor.
 
-The orchestrator reports those facts through `backend-rewrite route --cause
-missing-recorded-resource`. The coordinator resolves the endpoint through the
+The workflow coordinator reports those facts through `backend-rewrite route --cause
+missing-recorded-resource`. The engine resolves the endpoint through the
 configured Breeze snapshots and verifies that the unique resource is currently
 bypassed. A successful route returns an API-scoped recorder-capture plan instead
 of entering system repair: apply its exact next command, park that API as
 `awaiting_recording_refresh`, continue other runnable APIs, and let the
-coordinator schedule one consolidated full-scope recording after they drain. If
+engine schedule one consolidated full-scope recording after they drain. If
 the endpoint is unknown, ambiguous, or already captured, retain the exact
 source/recording proof and returned error and continue diagnosis. Use
 `recorder-capability-gap` only when the required capture mechanism itself is
 unsupported.
+
+## MySQL Driver Compatibility
+
+For MySQL dependency mismatches, inspect these engine matching and session
+contracts before changing target SQL or connection behavior. Workers use the
+returned read-only evidence APIs and report any required engine or recording
+transition to the workflow coordinator.
+
+### SQL Matching
+
+Replay supports source text SQL with inline literals and target prepared SQL
+with `?` parameters. For ordinary single-table SELECTs it compares IN/NOT IN
+lists without requiring the same value order, and accepts reordered pure AND
+conditions and OR branches after binding actual values. Do not reproduce source set iteration
+order or sort target inputs solely for Replay. Exact values, types, NULL and
+duplicate counts remain constrained, as do tables, ordering and pagination.
+Keep AND/OR nesting and each branch's field/value pairing; the engine does not
+expand boolean expressions or treat independently matching columns as a match.
+Large OR groups with a repeated parameter template use bounded linear metadata
+matching. Empty strings remain values, distinct from NULL. `IS [NOT] TRUE`,
+`IS [NOT] FALSE` and `IS [NOT] UNKNOWN` can accompany reordered conditions and
+tuple IN lists; retain these operators instead of rewriting them as `= 1/0`.
+The independent read-effect check also handles derived tables, UNION, ordinary
+joins, EXISTS and pure ROW_NUMBER windows, including long OR chains. Successful
+matching alone never makes unknown effects safe to omit at session cleanup.
+This built-in compatibility composes with direct-column projection mapping;
+it requires no rule or new recording. Complex expressions and positional
+dynamic-parameter policies keep their existing boundaries. See
+[MySQL predicate compatibility](../../../../../docs/mysql-replay.md#select-predicate-order-compatibility).
+
+Single-table `SELECT DISTINCT` also supports normal prepared statements, bound
+parameters, column/table aliases, table qualifiers, and reordered pure AND
+conditions and OR branches. Both sides must retain DISTINCT and the same complete set of direct
+output columns. Do not force COM_QUERY, inline dynamic values, or reproduce
+SQLAlchemy column labels to work around Replay. Column removal, aggregates,
+grouping, and other complex query forms retain their existing constraints.
+
+Flat tuple IN/NOT IN supports whole-tuple reordering for forms such as
+`(user_id,namespace,name) IN ((?,?,?),(?,?,?))`, including source SQL built from
+set iteration. Preserve each tuple's field order, paired values, types and
+duplicate count; use normal bound parameters. A repair still needs the affected
+immutable cases rerun; an engine revision change alone is not functional acceptance.
+
+### Read-Only Session Cleanup
+
+Keep ordinary read requests on the shared pool. Source ORMs may close an
+implicit read-only session with ROLLBACK. The engine allows this cleanup to be
+omitted when semantic recording proves a transaction-free start, consecutive
+ordinary reads, and a successful transaction end; repeated cleanup after a
+confirmed COMMIT/ROLLBACK is also optional. Omitted cleanup is reported as
+`allowed_unused_mysql_rollback_exchanges`. No rule is needed.
+
+Cold source connections may also send `SET AUTOCOMMIT=0/1` before business
+queries. Replay handles literal session assignments and tracks the target
+connection's mode. Proven read-only source-session setup can be omitted and is
+reported as `allowed_unused_mysql_autocommit_exchanges`. Do not add AUTOCOMMIT
+assignments to a shared target pool just to consume source-driver setup. No
+rule or new recording is needed when existing evidence contains the required
+transaction status. Write-containing sessions, failed assignments and incomplete
+evidence remain strict; inspect the evidence and route an engine capability
+gap if ordinary driver behavior is still blocked. Preserve real business
+transaction boundaries.
+
+Do not add `mysql.execute("ROLLBACK", ())` to the end of every handler merely
+to consume recording evidence. A pool can route that command to another
+connection. Missing status evidence in an older recording requires fresh
+recording through the coordinator workflow; unexplained failures remain an
+engine investigation. Writes, locks and explicit business transactions retain
+their required rollback/commit behavior, even when HTTP responses agree.
 
 ## Redis Connection Pool Differences
 
@@ -406,7 +480,7 @@ Replay control, or expected-response access to the target repository.
 
 ## Replay Issues
 
-`replay=incomplete` means the coordinator did not publish complete lifecycle
+`replay=incomplete` means the engine did not publish complete lifecycle
 evidence. Use the returned issue and dirty-cluster query to distinguish:
 
 - target never emitted the expected genuine dependency call;
@@ -419,18 +493,24 @@ For the last case, follow
 before classifying a capability gap or external-data blocker.
 
 If target topology differs, repair target behavior. If semantic evidence exists
-but the coordinator lacks support, return the current evidence ID, source
-reference, and exact required system change to the orchestrator. It owns
-`backend-rewrite route` and the coordinator-issued
+but the engine lacks support, return the current evidence ID, source
+reference, and exact required system change to the workflow coordinator. It owns
+`backend-rewrite route` and the engine-issued
 `repair verify <repair-id>` acceptance. Never implement a target workaround for
 a Replay capability gap or supply an arbitrary acceptance command.
 
 ## Dirty Dependency Issues
 
-Inspect dirty dependencies whenever the coordinator returns `dirty_clusters`,
+Inspect dirty dependencies whenever the engine returns `dirty_clusters`,
 including while the active issue is a response mismatch. Response equality is
 not a prerequisite for discovering a dependency-value rule. Continue to use
 the gate order above when deciding which failure owns the next repair.
+For HTTP `unmatched_target`, first inspect `cross_case_candidates` and the
+`cross-case` hint. A verified same-run exchange may support a source-proven
+shared initialization scope rule through the returned `http cross-case` planner.
+The worker supplies source proof; the coordinator owns plan/apply and fresh
+Replay. This is not background ownership or permission to ignore a request.
+
 Classify the representative protocol cluster by source ownership:
 
 - request-owned and required: repair target call topology or Replay support;
@@ -444,13 +524,13 @@ execution, and passing responses do not prove process ownership. A
 recording-rule proposal must use
 the current dirty-cluster evidence ID and one protocol-specific planner returned
 in `applicable_rule_planners`. Run its exact read-only help argv and return only
-the source-proven selector inputs to the orchestrator. Replay evidence, case
-source, and source revision come from coordinator state and are not rule
-inputs. The orchestrator owns `backend-rewrite dependency-rule plan|apply`;
-every plan requires `--ownership request-owned|process-owned|unresolved`. A
+the source-proven selector inputs to the workflow coordinator. Replay evidence, case
+source, and source revision come from engine state and are not rule
+inputs. The workflow coordinator owns `backend-rewrite dependency-rule plan|apply`;
+ownership-classification plans require `--ownership request-owned|process-owned|unresolved`. A
 request-owned result is an explicit target implementation requirement and
-never returns an applicable process-owned rule plan. The orchestrator also owns
-the apply report's exact `next`; the coordinator then reclassifies the same
+never returns an applicable process-owned rule plan. The workflow coordinator also owns
+the apply report's exact `next`; the engine then reclassifies the same
 focused replay report. Never manually rewrite replay reports, trim traffic, or
 edit immutable request/response/dependency capture files.
 
@@ -494,26 +574,26 @@ Route the proven cause to exactly one action:
 - process-output generation defect: repair normal target component loading,
   configuration, startup, write/flush, or shutdown behavior, run focused local
   tests, and return the tested handoff plus unchanged acceptance to the
-  orchestrator;
+  workflow coordinator;
 - target implementation or cache defect: change target code under
   [target-implementation-requirements.md](target-implementation-requirements.md),
   run focused target tests, and return the tested handoff plus unchanged
-  `action.commands.acceptance` to the orchestrator;
+  `action.commands.acceptance` to the workflow coordinator;
 - startup/configuration defect: repair source-compatible loading or the fixed
   start/stop boundary, test it, and return the handoff plus unchanged acceptance
-  to the orchestrator;
+  to the workflow coordinator;
 - supported nondeterminism/order/counter: return source proof and proposed rule
-  inputs; the orchestrator owns `backend-rewrite rule plan|apply` and rerun;
+  inputs; the workflow coordinator owns `backend-rewrite rule plan|apply` and rerun;
 - source-proven omitted dependency: return the evidence ID,
-  `hostname[:port]`, and source proof; the orchestrator reports
+  `hostname[:port]`, and source proof; the workflow coordinator reports
   `--cause missing-recorded-resource`, then owns the returned capture apply and
   coordinator-owned recording refresh;
 - true Recorder/Replay capability gap, where the supported planners and engine
   cannot express the required mechanism: return exact route evidence and the
-  required system change; the orchestrator owns `backend-rewrite route` and the
+  required system change; the workflow coordinator owns `backend-rewrite route` and the
   returned `repair verify <repair-id>` action;
 - source change or external-data issue: return exact route evidence and the
-  required transition without patching the target; the orchestrator owns
+  required transition without patching the target; the workflow coordinator owns
   `backend-rewrite route` and its returned acceptance;
 - unresolved: gather the named missing source/runtime proof before changing
   code or policy.
@@ -524,7 +604,7 @@ value is unavailable and completion would require invention. Repeated failed
 attempts, dirty evidence, an empty dependency stream, or a tool failure do not
 prove a blocker.
 
-After one API repair, let the orchestrator rerun the entire immutable API group;
+After one API repair, let the workflow coordinator rerun the entire immutable API group;
 after one process-output repair, let it run the returned process-output
 acceptance. If two repairs do not improve the active issue, stop adding local
 patches and produce a bounded structural replan from the current issue and

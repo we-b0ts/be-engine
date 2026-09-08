@@ -58,6 +58,17 @@ pub(super) fn rule_hints(
         .flatten()
         .any(|cluster| cluster.get("protocol").and_then(Value::as_str) == Some("memcached"));
     let mut hints = Vec::new();
+    if facts["clusters"].as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|c| c["protocol"] == "http" && c["reason"] == "unmatched_target")
+    }) {
+        hints.push(RewriteRuleHint {
+            capability: "http_cross_case".into(), rule: "cross-case".into(),
+            hint: "Inspect cross_case_candidates. A matching exchange in another case is a candidate, not proof of sharing. Trace source shared initialization/cache/refresh and side effects. Unavailable request identity requires fresh Replay; do not change target behavior or treat the call as background work.".into(),
+            help: super::super::action::command(target_root, vec!["dependency-rule".into(), "plan".into(), "http".into(), "cross-case".into(), "--help".into()], Vec::new()),
+        });
+    }
     if facts["egress_rejections"]["rejected_packets_in_samples"]
         .as_u64()
         .is_some_and(|count| count > 0)
@@ -98,6 +109,34 @@ pub(super) fn applicable_rule_planners(
     evidence_id: &str,
 ) -> Vec<RewriteApplicableRulePlanner> {
     let mut planners = Vec::new();
+    if query_kind == QUERY_DIRTY_CLUSTERS
+        && matches!(
+            issue_kind,
+            RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
+        )
+        && facts["cross_case_candidates"]["candidates"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|c| c["request_match"] == "verified"))
+    {
+        planners.push(RewriteApplicableRulePlanner {
+            kind: "dependency_scope".into(),
+            capability: "http_cross_case".into(),
+            evidence_id: evidence_id.into(),
+            command: super::super::action::command(
+                target_root,
+                vec![
+                    "dependency-rule".into(),
+                    "plan".into(),
+                    "http".into(),
+                    "cross-case".into(),
+                    "--evidence-id".into(),
+                    evidence_id.into(),
+                    "--help".into(),
+                ],
+                Vec::new(),
+            ),
+        });
+    }
     if query_kind == QUERY_JWT_TIME_VALIDITY {
         let mut seen = std::collections::BTreeSet::new();
         for candidate in facts["candidates"].as_array().into_iter().flatten() {
@@ -361,6 +400,47 @@ mod tests {
             serde_json::json!({"egress_rejections":{"rejected_packets_in_samples":0,"unavailable_cases":1}}),
         ] {
             assert!(rule_hints(root, QUERY_DIRTY_CLUSTERS, &facts).is_empty());
+        }
+    }
+}
+
+#[cfg(test)]
+mod cross_case_tests {
+    use super::*;
+    #[test]
+    fn cross_case_discovery_requires_verified_candidates_even_during_response_failure() {
+        let root = Path::new("/target");
+        let mut facts = serde_json::json!({"clusters": [{"protocol":"http", "reason":"unmatched_target"}],
+            "cross_case_candidates": {"candidates": [{"request_match":"unavailable"}]}});
+        assert!(
+            rule_hints(root, QUERY_DIRTY_CLUSTERS, &facts)
+                .iter()
+                .any(|hint| hint.rule == "cross-case")
+        );
+        assert!(
+            applicable_rule_planners(
+                root,
+                RewriteIssueKind::Response,
+                QUERY_DIRTY_CLUSTERS,
+                &facts,
+                "ev"
+            )
+            .is_empty()
+        );
+        facts["cross_case_candidates"]["candidates"][0]["request_match"] =
+            serde_json::json!("verified");
+        for kind in [
+            RewriteIssueKind::Response,
+            RewriteIssueKind::Dependency,
+            RewriteIssueKind::Replay,
+        ] {
+            let planners = applicable_rule_planners(root, kind, QUERY_DIRTY_CLUSTERS, &facts, "ev");
+            let planner = planners
+                .iter()
+                .find(|p| p.capability == "http_cross_case")
+                .unwrap();
+            assert_eq!(planner.kind, "dependency_scope");
+            assert!(planner.command.argv.contains(&"cross-case".into()));
         }
     }
 }

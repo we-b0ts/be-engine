@@ -32,15 +32,21 @@ use super::{
 };
 use crate::DiscoveredTcpTarget;
 
+pub(crate) mod cross_case;
+
 type HeaderSnapshot = BTreeMap<String, Vec<String>>;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct RecordedHttpExchange {
     scheme: String,
+    #[serde(default)]
+    timestamp: Option<chrono::DateTime<Utc>>,
     method: String,
     uri: String,
     authority: Option<String>,
     request_body: RecordedBodyCapture,
+    #[serde(default)]
+    request_headers: HeaderSnapshot,
     response_status: Option<u16>,
     response_headers: Option<HeaderSnapshot>,
     response_body: Option<RecordedBodyCapture>,
@@ -62,7 +68,7 @@ struct RecordedBodyCapture {
     data: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum HttpReplayScheme {
     Http,
@@ -82,6 +88,7 @@ pub(super) struct ReplayHttpExchange {
     identity: HttpDependencyIdentity,
     record: RecordedHttpExchange,
     consumed: bool,
+    shared_origin: Option<cross_case::SharedOrigin>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -116,6 +123,8 @@ pub(super) struct HttpReplayEvents {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct MatchedHttpExchangeReport {
     pub(super) case_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shared_origin: Option<cross_case::SharedOrigin>,
     source: ReplaySource,
     index: usize,
     scheme: HttpReplayScheme,
@@ -133,10 +142,14 @@ pub(super) struct HttpRequestReport {
     method: String,
     uri: String,
     reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct RecordedHttpExchangeSummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shared_origin: Option<cross_case::SharedOrigin>,
     index: usize,
     pub(super) case_id: Option<String>,
     scheme: HttpReplayScheme,
@@ -208,6 +221,7 @@ pub(super) fn register_http_exchange(
         identity,
         record,
         consumed: false,
+        shared_origin: None,
     });
     Ok(())
 }
@@ -360,6 +374,17 @@ async fn handle_http_request(
         .get(HOST)
         .and_then(|value| value.to_str().ok())
         .map(ToOwned::to_owned);
+    let mut headers = HeaderSnapshot::new();
+    for (name, value) in request.headers() {
+        if matches!(name.as_str(), "authorization" | "cookie" | "content-type")
+            && let Ok(value) = value.to_str()
+        {
+            headers
+                .entry(name.to_string())
+                .or_default()
+                .push(value.to_string());
+        }
+    }
     let body = match request.into_body().collect().await {
         Ok(body) => body.to_bytes(),
         Err(error) => {
@@ -379,7 +404,26 @@ async fn handle_http_request(
     };
     let matched = {
         let mut state = state.lock().await;
-        state.match_http_request(scheme, &target_key, &method, &uri, host.as_deref(), &body)
+        let unmatched_before = state.http_events.unmatched.len();
+        let result = state.match_http_request(
+            scheme,
+            &target_key,
+            &method,
+            &uri,
+            host.as_deref(),
+            &body,
+            &headers,
+        );
+        if state.http_events.unmatched.len() > unmatched_before
+            && let Some(event) = state.http_events.unmatched.last_mut()
+        {
+            event.request_fingerprint = Some(cross_case::request_fingerprint(
+                &uri.to_string(),
+                &body,
+                &headers,
+            ));
+        }
+        result
     };
     let record = match matched {
         Ok(record) => record,
@@ -399,6 +443,7 @@ async fn handle_http_request(
 }
 
 impl ReplayState {
+    #[allow(clippy::too_many_arguments)]
     fn match_http_request(
         &mut self,
         scheme: HttpReplayScheme,
@@ -407,6 +452,7 @@ impl ReplayState {
         uri: &Uri,
         host: Option<&str>,
         body: &[u8],
+        headers: &HeaderSnapshot,
     ) -> std::result::Result<RecordedHttpExchange, HttpReplayMatchError> {
         let active_case_id = self.active_case_id.clone();
         if let Some(host) = host
@@ -423,6 +469,7 @@ impl ReplayState {
         let mut matching_index = None;
         let mut matching_policy_decision = DependencyRuleDecision::default();
         let mut closest_mismatch = None;
+        let mut target_fingerprint = None;
         'sources: for source in [ReplaySource::Case, ReplaySource::Global] {
             for (index, exchange) in self.http_exchanges.iter().enumerate() {
                 if exchange.consumed && !exchange.is_repeatable_preflight_probe()
@@ -433,7 +480,20 @@ impl ReplayState {
                 {
                     continue;
                 }
-                let policy_decision = if let Some(policy) = &self.replay_policy {
+                if let Some(origin) = &exchange.shared_origin
+                    && &origin.request_fingerprint
+                        != target_fingerprint.get_or_insert_with(|| {
+                            cross_case::request_fingerprint(&uri.to_string(), body, headers)
+                        })
+                {
+                    closest_mismatch.get_or_insert_with(|| {
+                        "cross-case request query, body or identity headers differ".to_string()
+                    });
+                    continue;
+                }
+                let policy_decision = if exchange.shared_origin.is_some() {
+                    DependencyRuleDecision::default()
+                } else if let Some(policy) = &self.replay_policy {
                     match policy.preview_http(
                         &HttpPolicyContext {
                             case_id: active_case_id.as_deref(),
@@ -455,6 +515,9 @@ impl ReplayState {
                 };
                 let mut ignored_query_params = self.http_ignore_query_params.clone();
                 ignored_query_params.extend(policy_decision.dynamic_query_params.iter().cloned());
+                if exchange.shared_origin.is_some() {
+                    ignored_query_params.clear();
+                }
                 let mismatch = http_request_mismatch_reason(
                     exchange,
                     method,
@@ -493,6 +556,7 @@ impl ReplayState {
                 method: method.to_string(),
                 uri: uri_path_only(&uri.to_string()),
                 reason: reason.clone(),
+                request_fingerprint: None,
             });
             return Err(HttpReplayMatchError::BadGateway(reason));
         }
@@ -505,7 +569,12 @@ impl ReplayState {
             &mut self.http_events.matched_count,
             &mut self.http_events.matched,
             MatchedHttpExchangeReport {
-                case_id: exchange.case_id,
+                case_id: if exchange.shared_origin.is_some() {
+                    active_case_id
+                } else {
+                    exchange.case_id
+                },
+                shared_origin: exchange.shared_origin,
                 source: exchange.source,
                 index,
                 scheme,
@@ -556,6 +625,7 @@ impl ReplayState {
             method: method.to_string(),
             uri: uri_path_only(&uri.to_string()),
             reason,
+            request_fingerprint: None,
         });
     }
 
@@ -578,6 +648,7 @@ impl ReplayState {
                 is_allowed == allowed
             })
             .map(|(index, exchange)| RecordedHttpExchangeSummary {
+                shared_origin: exchange.shared_origin.clone(),
                 index,
                 case_id: exchange.case_id.clone(),
                 scheme: exchange.identity.scheme,
@@ -829,3 +900,7 @@ fn error_response(status: StatusCode, message: &str) -> Response<Full<Bytes>> {
 #[cfg(test)]
 #[path = "http_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "http/cross_case/tests.rs"]
+mod cross_case_tests;
