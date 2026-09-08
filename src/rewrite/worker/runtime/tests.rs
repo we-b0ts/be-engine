@@ -221,6 +221,49 @@ fn legacy_automatic_running_requires_an_explicit_coordinator_report() {
 }
 
 #[test]
+fn running_and_queued_reports_expire_after_fifteen_minutes() {
+    for activity in [
+        RewriteWorkerActivity::Running,
+        RewriteWorkerActivity::Queued,
+    ] {
+        let (target, mut state, scope) = setup();
+        worker::confirm_current_for_test(&mut state);
+        let store = RewriteStore::new(target.path()).unwrap();
+        for (age_minutes, expired) in [(5, false), (14, false), (15, true), (16, true)] {
+            let observation = state
+                .worker_bindings
+                .get_mut(&scope.binding_key())
+                .unwrap()
+                .observation
+                .as_mut()
+                .unwrap();
+            observation.activity = activity;
+            observation.observed_at =
+                (Utc::now() - chrono::Duration::minutes(age_minutes)).to_rfc3339();
+            store.save(&state).unwrap();
+
+            let status = rewrite::status_rewrite(RewriteContext {
+                target_root: target.path().into(),
+            })
+            .unwrap();
+            assert_eq!(
+                status.pending,
+                usize::from(expired),
+                "{activity:?} report at {age_minutes} minutes"
+            );
+            if expired {
+                assert!(matches!(
+                    status.action,
+                    RewriteAction::WorkerStatusRequired { .. }
+                ));
+            } else {
+                assert!(matches!(status.action, RewriteAction::WaitRequired { .. }));
+            }
+        }
+    }
+}
+
+#[test]
 fn historical_or_expired_confirmation_requires_runtime_observation_not_automatic_duplicate_dispatch()
  {
     let (target, mut state, scope) = setup();
