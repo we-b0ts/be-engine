@@ -22,7 +22,7 @@ use crate::{
 };
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 26;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 27;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -46,6 +46,7 @@ pub enum RewriteApiStatus {
     Pending,
     Active,
     ImplementationRequired,
+    SystemRepairRequired,
     AwaitingRecordingRefresh,
     RevalidationPending,
     Complete,
@@ -76,6 +77,7 @@ pub struct RewriteApiInventoryView {
     pub pending: usize,
     pub active: usize,
     pub implementation_required: usize,
+    pub system_repair_required: usize,
     pub awaiting_recording_refresh: usize,
     pub revalidation_pending: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -651,6 +653,17 @@ pub struct RewriteTrafficOperationView {
 
 #[derive(Debug, Clone)]
 pub enum RewriteAction {
+    Blocked {
+        summary: String,
+        system_repair_apis: Vec<String>,
+        dependent_process_outputs: Vec<String>,
+        resume: RewriteCommandSpec,
+    },
+    WorkerEventsRequired {
+        summary: String,
+        inventory: RewriteCommandSpec,
+        status: RewriteCommandSpec,
+    },
     InputRequired {
         reason: RewriteInputRequiredReason,
         summary: String,

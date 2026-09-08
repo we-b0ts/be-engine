@@ -15,7 +15,7 @@ use super::super::model::{
 };
 
 #[test]
-fn cross_api_non_preemptible_transition_returns_scoped_wait_status() {
+fn cross_api_non_preemptible_transition_returns_bounded_wait() {
     let mut state = crate::rewrite::test_state();
     state.phase = RewritePhase::ComparisonRecordingRequired;
     state.comparison_run_id = Some("20260907000000".into());
@@ -40,14 +40,14 @@ fn cross_api_non_preemptible_transition_returns_scoped_wait_status() {
             .is_none()
     );
     assert_eq!(
-        response["action"]["commands"]["status"]["argv"],
+        response["action"]["commands"]["wait"]["argv"],
         serde_json::json!([
             "backend-rewrite",
             "--target-root",
             "/target",
-            "status",
-            "--api",
-            "GET /api"
+            "wait",
+            "--seconds",
+            "5"
         ])
     );
 }
@@ -224,12 +224,14 @@ fn status_reports_a_live_recording_without_returning_execute_again() {
         Some(&serde_json::json!(30))
     );
     assert_eq!(
-        status.pointer("/action/commands/status/argv"),
+        status.pointer("/action/commands/wait/argv"),
         Some(&serde_json::json!([
             "backend-rewrite",
             "--target-root",
             target.path(),
-            "status"
+            "wait",
+            "--seconds",
+            "30"
         ]))
     );
     assert!(status.pointer("/action/commands/execute").is_none());

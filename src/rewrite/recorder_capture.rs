@@ -585,14 +585,14 @@ mod tests {
             Some(&serde_json::json!("counter-resource"))
         );
         assert_eq!(
-            value.pointer("/action/commands/status/argv"),
+            value.pointer("/action/commands/wait/argv"),
             Some(&serde_json::json!([
                 "backend-rewrite",
                 "--target-root",
                 "/target",
-                "status",
-                "--api",
-                "GET /api"
+                "wait",
+                "--seconds",
+                "30"
             ]))
         );
         assert_eq!(value["terminal_allowed"], false);

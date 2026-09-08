@@ -147,7 +147,7 @@ assume it is complete and never rerun it.
 
 A fresh standard recording requires explicit user authorization.
 
-Response schema v26 contains an `action` object with exactly `kind`, `summary`,
+Response schema v27 contains an `action` object with exactly `kind`, `summary`,
 `details`, and `commands`. This action schema version is independent of target
 repository configuration versions. `status` (including scoped status) and
 `next` return scheduling state, a short issue summary, and coordinator commands.
@@ -186,7 +186,9 @@ exception in [workflow.md](references/workflow.md).
 The workflow coordinator starts and resumes with unscoped
 `backend-rewrite status` and follows [workflow.md](references/workflow.md#coordinator-loop) for
 its executable-work loop, event handling, and periodic polling. `pending` counts
-ready coordinator operations; `terminal_allowed` governs completion. The engine
+ready coordinator operations, including one explicit `wait` when nothing else
+is ready. `blocked` ends this run with preserved resume state;
+`terminal_allowed` alone governs successful completion. The engine
 selects work; the task runtime limits worker concurrency. Scoped status serves
 assigned work-item inspection and does not replace the global coordinator loop.
 Default `workflow` contains only `id` and `revision`; `inventory` expands its
@@ -222,6 +224,10 @@ Keep these states distinct:
   never override the batch requirement or infer it from historical pass counts.
   Only then run the
   caller-required repository checks and finish delivery.
+
+A global `blocked` action stops this run after eligible API revalidation drains
+and remaining APIs require system repair. Preserve bindings and evidence and
+resume after repair; this is not successful completion.
 
 An evidence-proven unavailable external response-driving value may stop work as
 blocked under [worker-diagnosis.md](references/worker-diagnosis.md). A blocker

@@ -247,7 +247,7 @@ pub use rewrite::{
     RewriteSourceProcessOwnedView, RewriteSourceProcessRedisSnapshotEndpointView,
     RewriteSourceProcessRedisSnapshotView, RewriteSourceProcessTrafficScopeView,
     RewriteSourceProcessTrafficView, RewriteStatusReport, RewriteTargetQualityOptions,
-    RewriteTrafficOperationKind, RewriteTrafficOperationView, RewriteWorkScope,
+    RewriteTrafficOperationKind, RewriteTrafficOperationView, RewriteWaitOptions, RewriteWorkScope,
     RewriteWorkerActivity, RewriteWorkerBlockingReason, RewriteWorkerConfirmOptions,
     RewriteWorkerCoverageState, RewriteWorkerDispatchState, RewriteWorkerDispatchView,
     RewriteWorkerInventoryItem, RewriteWorkerReportOptions, RewriteWorkerTransferOptions,
@@ -263,7 +263,7 @@ pub use rewrite::{
     retry_rewrite_replay_after_out_of_band_run, route_rewrite, run_rewrite_target_quality,
     start_rewrite_next, start_rewrite_recording, start_rewrite_target_quality, status_rewrite,
     status_rewrite_for_api, status_rewrite_for_process_output, transfer_rewrite_worker,
-    verify_rewrite_repair,
+    verify_rewrite_repair, wait_rewrite,
 };
 pub use runtime_output::RuntimeOutputLocation;
 pub use source_snapshot::{

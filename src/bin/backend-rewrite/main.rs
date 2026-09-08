@@ -106,6 +106,11 @@ enum RewriteCommand {
     Next(NextArgs),
     /// Show bounded coordinator state without advancing it.
     Status(StatusArgs),
+    /// Wait at most 30 seconds, then reconcile task-runtime events and refresh status.
+    Wait {
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=30))]
+        seconds: u64,
+    },
     /// Show the full stable API inventory without advancing it.
     Inventory,
     /// Inspect bounded dependency evidence from one published case.
@@ -598,6 +603,14 @@ async fn run(cli: Cli) -> Result<()> {
             };
             print_json(&report, pretty)
         }
+        RewriteCommand::Wait { seconds } => print_json(
+            &traffic_e2e::wait_rewrite(traffic_e2e::RewriteWaitOptions {
+                target_root,
+                seconds,
+            })
+            .await?,
+            pretty,
+        ),
         RewriteCommand::Inventory => {
             print_json(&inventory_rewrite(RewriteContext { target_root })?, pretty)
         }
