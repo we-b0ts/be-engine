@@ -26,7 +26,10 @@ use super::{
 
 mod builtins;
 mod connection_scope;
+mod json;
+mod key_selector;
 mod matching;
+pub(crate) mod time_shift;
 pub(crate) mod value;
 use connection_scope::{ConnectionScopes, TargetConnection};
 use matching::redis_authentication_hint;
@@ -46,6 +49,8 @@ pub(super) struct RecordedConnection {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(super) struct RecordedExchange {
+    #[serde(default)]
+    timestamp: Option<chrono::DateTime<chrono::Utc>>,
     connection_id: Uuid,
     sequence: u64,
     target_host: String,
@@ -82,6 +87,7 @@ struct RecordedCapture {
 
 #[derive(Debug, Clone)]
 struct ReplayExchange {
+    response_time_shift: Option<time_shift::ResponseShift>,
     source: ReplaySource,
     case_id: Option<String>,
     record: RecordedExchange,
@@ -96,6 +102,7 @@ struct ReplayExchange {
 
 #[derive(Debug, Clone)]
 struct MatchedRedisExchange {
+    response_time_shift: Option<time_shift::ResponseShift>,
     index: usize,
     connection_id: Uuid,
     response: Vec<u8>,
@@ -107,6 +114,7 @@ struct MatchedRedisExchange {
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayState {
+    time_shifts: Vec<time_shift::TimeShiftObservation>,
     connection_scopes: ConnectionScopes,
     pub(super) value_rules: Vec<value::ValueRule>,
     unordered_value: value::evidence::OrderEvidence,
@@ -230,6 +238,7 @@ impl RedisReplayState {
         }
         self.connection_scopes.register(&record, &args);
         self.exchanges.push(ReplayExchange {
+            response_time_shift: None,
             source,
             case_id: case_id.map(ToOwned::to_owned),
             record,
@@ -273,6 +282,7 @@ impl RedisReplayState {
 
     pub(super) fn snapshot(&self) -> CommandProtocolReport {
         CommandProtocolReport {
+            time_shifts: self.time_shifts.clone(),
             unordered_value: Some(self.unordered_value.clone()),
             connections: self.events.connections,
             matched_count: self.events.matched_count,
@@ -497,14 +507,55 @@ async fn deliver_redis_exchange(
     }
 
     matched.timing.delay_response().await;
-    if let Err(error) = reader.inner.write_all(&matched.response).await {
+    let rendered = matched
+        .response_time_shift
+        .as_ref()
+        .map(|shift| shift.render(chrono::Utc::now()))
+        .transpose();
+    let rendered = match rendered {
+        Ok(value) => value,
+        Err(error) => {
+            state
+                .lock()
+                .await
+                .redis
+                .fail_exchange(matched, error.to_string());
+            return Err(error);
+        }
+    };
+    let response = rendered
+        .as_ref()
+        .map_or(matched.response.as_slice(), |(bytes, _)| bytes.as_slice());
+    if let Err(error) = reader.inner.write_all(response).await {
         state.lock().await.redis.fail_exchange(
             matched,
             format!("failed to deliver recorded Redis response: {error}"),
         );
         return Err(error.into());
     }
-    state.lock().await.redis.complete_exchange(matched);
+    let mut state = state.lock().await;
+    if let (Some(shift), Some((_, offset_milliseconds))) = (&matched.response_time_shift, rendered)
+    {
+        if let Some(policy) = state.replay_policy.as_mut() {
+            policy.commit_redis_value(matched.report.case_id.as_deref(), &shift.rule_ids);
+        }
+        for rule_id in &shift.rule_ids {
+            if state.redis.time_shifts.len() >= 1000 {
+                break;
+            }
+            state
+                .redis
+                .time_shifts
+                .push(time_shift::TimeShiftObservation {
+                    rule_id: rule_id.clone(),
+                    case_id: matched.report.case_id.clone(),
+                    connection_id: matched.connection_id,
+                    sequence: matched.report.sequence,
+                    offset_milliseconds,
+                });
+        }
+    }
+    state.redis.complete_exchange(matched);
     Ok(false)
 }
 

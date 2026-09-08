@@ -11,6 +11,7 @@ the evidence overview.
 - Work-scope contract
 - Process-output issues
 - API evidence queries
+- Rule discovery from source diagnosis
 - Response, missing-recording, cache, runtime, and Replay issues
 - MySQL driver and Redis connection compatibility
 - Dirty dependency and comparison issues
@@ -97,6 +98,32 @@ real differences until source evidence proves otherwise.
 The response, dependency, Replay, and comparison sections below apply only to
 API work items. A process-output worker follows the next section and returns
 after completing that diagnosis path.
+
+## Rule Discovery From Source Diagnosis
+
+For API issues, consult these capabilities after tracing source and target
+behavior. Engine hints and mechanical candidates are additional evidence;
+their absence does not mean a documented capability is unavailable.
+
+| Proven scenario | Capability and next investigation |
+| --- | --- |
+| An inbound Bearer JWT expired between capture and Replay | JWT `preserve_relative`; inspect the returned `jwt-time-validity` query and [JWT request rules](../../../../../docs/jwt-request-rules.md). |
+| A recorded Redis response timestamp makes an otherwise correct cache expire during Replay, causing extra reads or an error branch | Redis `time-shift`; inspect earlier successfully matched GET/HGET responses, including previous cases. Read [Redis response time rules](../../../../../docs/redis-time-shift-rules.md). |
+| Shared HTTP initialization was recorded in another case | HTTP `cross-case`; verify same-run request identity and source sharing semantics. |
+| An outbound HTTP array or Redis write collection differs only in order | Protocol-specific `unordered`; prove collection semantics and inspect exact order witnesses. |
+
+Redis `time-shift` has no automatic hint: a numeric value, field name, elapsed
+time, extra read, or missing exchange cannot establish business time semantics.
+Its documented read-only entrypoint is
+`backend-rewrite dependency-rule plan redis time-shift --help`. Return the current
+dirty-cluster evidence ID, source-selected endpoint/key/hash-field, response JSON
+Pointer, timestamp format, and source proof to the coordinator. Proof establishes
+the expiry/cache calculation, units, and downstream uses, including signatures.
+The coordinator may plan this capability without an `applicable_rule_planners`
+entry. Plan verifies immutable responses and prior successful matching in the
+current API attempt; it does not infer expiry causality. Apply and fresh Replay
+remain coordinator-owned. Check documented capabilities before routing a
+remaining `replay_capability_gap`.
 
 ## Process-Output Issues
 
@@ -342,6 +369,12 @@ source/recording proof and returned error and continue diagnosis. Use
 `recorder-capability-gap` only when the required capture mechanism itself is
 unsupported.
 
+An extra read may result from an absolute timestamp in an earlier successfully
+replayed response. Check [Rule Discovery From Source Diagnosis](#rule-discovery-from-source-diagnosis)
+before treating that read as missing external data or a cross-case scope problem.
+The selected response can belong to a previous case of the same API; the extra
+request itself need not have a recorded counterpart.
+
 ## MySQL Driver Compatibility
 
 For MySQL dependency mismatches, inspect these engine matching and session
@@ -477,7 +510,13 @@ endpoint is not proof that no process-local cache exists, and a high interaction
 count or configured process-owned match is not proof that the traffic populates
 a response-driving cache.
 
-Do not apply a generated-scalar rule for a cold, missing, stale, differently keyed,
+When source and target implement the same cache semantics, but recorded absolute
+time has aged between capture and Replay, inspect Redis `time-shift` above. It
+preserves the original relative age in the engine's dependency-response copy and
+lets the target build its normal cache. Preserve the original expiry threshold;
+do not reset timestamps to now or suppress refresh to fit Replay.
+
+Do not apply a generated-scalar assertion rule for a cold, missing, stale, differently keyed,
 partially loaded, or differently refreshed cache. Do not materialize recorded
 cache results as target fixtures or boot configuration. Repair the target cache
 or its genuine dependency path and rerun the same immutable group.
@@ -598,7 +637,9 @@ For one representative comparison difference, distinguish:
   `random` rule candidate;
 - proven equal-content unordered array: unordered rule candidate;
 - proven live numeric counter: comparison-only counter candidate;
-- cache hit/miss/staleness/warmup: target behavior, never policy.
+- cache hit/miss/staleness/warmup: prove whether target behavior differs;
+  response assertion rules cannot hide these differences. Recording-to-Replay
+  time drift follows the explicit input/Redis response transformation path above.
 
 JSON time rules support array Pointers such as `/data/*/generated_at`.
 Timestamp plans require `--timestamp-format unix-seconds`, `unix-milliseconds`,

@@ -346,3 +346,14 @@ explicit repository-wide audit.
   by protocol-specific visitors. `replay/assertion/protobuf/wire` owns bounded
   binary decoding; its `unordered_evidence` sibling exposes typed order witnesses
   without authorizing a schema or a rule.
+
+- `replay/redis/time_shift` owns explicit relative-time translation of matched
+  read-response copies. Its `config` child validates GET/HGET selection and
+  timestamp fields; `evidence` verifies source-selected immutable exchanges
+  against a finalized API attempt without heuristic discovery. Redis delivery
+  owns the send-time anchor and successful-use observations; finite matching
+  remains unchanged. `policy/feedback/redis_time_shift` owns stale-safe policy
+  plan/apply, with source proof retained in coordinator plan records.
+  `replay/redis/key_selector` owns compact and legacy-compatible key/hash-field
+  byte selectors; `replay/redis/json` owns bounded duplicate-rejecting JSON
+  decoding shared by request-value comparison and response transformation.

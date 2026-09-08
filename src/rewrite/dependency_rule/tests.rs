@@ -344,3 +344,32 @@ fn mysql_time_plan_survives_response_issue_persistence_without_background_reclas
             .is_none()
     );
 }
+
+#[test]
+fn redis_time_shift_manual_rule_rechecks_evidence_without_requiring_a_hint() {
+    let mut state = dependency_state();
+    let selector = serde_json::from_value(serde_json::json!({
+        "host":"redis.test","port":6379,"read":{"command":"HGET","key":"token_v2","hash_field":{"numeric":true},
+        "response_json":{"/timestamp":{"time":"preserve_relative","format":"unix_milliseconds"}}}
+    })).unwrap();
+    let spec = RewriteDependencyRuleSpec::RedisTimeShift { selector };
+    state.dependency_rule_plan.as_mut().unwrap().spec = spec.clone();
+    for kind in [
+        RewriteIssueKind::Response,
+        RewriteIssueKind::Dependency,
+        RewriteIssueKind::Replay,
+    ] {
+        state.active_issue.as_mut().unwrap().kind = kind;
+        assert!(dependency_issue(&state, &spec).is_ok());
+        assert!(
+            validate_plan_evidence(
+                Path::new("/missing-target"),
+                &state,
+                "issue-dependency",
+                "evidence-dirty-clusters",
+                &spec
+            )
+            .is_err()
+        );
+    }
+}

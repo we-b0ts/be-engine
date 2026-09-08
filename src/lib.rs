@@ -953,6 +953,11 @@ pub use replay::{
     HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
 };
 
+pub use replay::{
+    RedisTimeShiftFeedback, RedisTimeShiftPlan, RedisTimeShiftRead, RedisTimeShiftReport,
+    RedisTimeShiftSelector, RedisTimestampFormat, RelativeTime, RelativeTimeField,
+    plan_redis_time_shift,
+};
 pub use replay::{RedisUnorderedField, RedisUnorderedSelector, RedisValueKeySelector};
 
 pub use replay::{

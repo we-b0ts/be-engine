@@ -165,6 +165,12 @@ evidence. Other unmarked Redis, Memcached, HTTP, MySQL, Kafka, and Motan evidenc
 remains finite inventory. The target must issue genuine dependency calls and
 build its own local state from replayed responses.
 
+Explicit Redis `time-shift` rules translate selected timestamps in matched
+GET/HGET JSON response copies by send time minus captured response time. They
+preserve relative age, original invalidity and finite consumption. Source
+diagnosis selects fields; Replay generates no speculative hints. See
+[Redis response time rules](../../../../../docs/redis-time-shift-rules.md).
+
 A legacy, Case-local `tcp_gateway_connection` with no recorded error and zero
 bytes in both directions is finite evidence for one dependency connection that
 returned no bytes. Only after normal HTTP exchange matching fails, Replay may

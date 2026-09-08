@@ -1,4 +1,4 @@
-//! Redis value policy schema and overlap validation.
+//! Redis request-value and response-time policy schema and overlap validation.
 use super::config::{DependencyProtocol, ReplayDependencyRule, ReplayScope};
 use crate::replay::redis::value::{
     RedisUnorderedField, RedisUnorderedSelector, RedisValueKeySelector,
@@ -7,8 +7,14 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub(super) enum RedisSelector {
+    Value(RedisValueSelector),
+    TimeShift(crate::replay::redis::time_shift::RedisTimeShiftRead),
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct RedisSelector {
+pub(super) struct RedisValueSelector {
     pub key: RedisValueKeySelector,
     pub unordered: Vec<RedisFieldRule>,
 }
@@ -20,12 +26,16 @@ pub(super) struct RedisFieldRule {
 }
 impl RedisSelector {
     pub(super) fn selectors(&self, rule: &ReplayDependencyRule) -> Vec<RedisUnorderedSelector> {
-        self.unordered
+        let Self::Value(value) = self else {
+            return Vec::new();
+        };
+        value
+            .unordered
             .iter()
             .map(|f| RedisUnorderedSelector {
                 host: rule.target.host.clone().unwrap_or_default(),
                 port: rule.target.port.unwrap_or_default(),
-                key: self.key.clone(),
+                key: value.key.clone(),
                 field: f.field.clone(),
             })
             .collect()
@@ -44,19 +54,30 @@ pub(super) fn validate(rule: &ReplayDependencyRule) -> Result<()> {
         rule.http.is_none() && rule.mysql.is_none() && rule.memcached.is_none(),
         "Redis rule cannot define another protocol selector"
     );
+    if let RedisSelector::TimeShift(read) = redis {
+        return crate::replay::redis::time_shift::RedisTimeShiftSelector {
+            host: rule.target.host.clone().unwrap_or_default(),
+            port: rule.target.port.unwrap_or_default(),
+            read: read.clone(),
+        }
+        .validate();
+    }
+    let RedisSelector::Value(value) = redis else {
+        unreachable!()
+    };
     ensure!(
-        !redis.unordered.is_empty() && redis.unordered.len() <= 32,
+        !value.unordered.is_empty() && value.unordered.len() <= 32,
         "Redis unordered requires 1..32 fields"
     );
     for selector in redis.selectors(rule) {
         selector.validate()?;
     }
-    for (index, field) in redis.unordered.iter().enumerate() {
+    for (index, field) in value.unordered.iter().enumerate() {
         crate::config::process_owned_dependencies::validate_source_evidence(
             &field.source_evidence,
         )?;
         ensure!(
-            redis.unordered[..index]
+            value.unordered[..index]
                 .iter()
                 .all(|other| !field.field.overlaps(&other.field)),
             "Redis unordered fields overlap"
@@ -84,8 +105,24 @@ pub(super) fn validate_overlaps(rules: &[ReplayDependencyRule]) -> Result<()> {
                     .as_ref()
                     .zip(other.target.host.as_ref())
                     .is_none_or(|(a, b)| !a.eq_ignore_ascii_case(b))
-                || !redis.key.overlaps(&other_redis.key)
             {
+                continue;
+            }
+            if let (RedisSelector::TimeShift(a), RedisSelector::TimeShift(b)) = (redis, other_redis)
+            {
+                ensure!(
+                    !a.overlaps(b),
+                    "Redis time-shift response fields overlap between rules {:?} and {:?}",
+                    rule.id,
+                    other.id
+                );
+            }
+            let (RedisSelector::Value(redis), RedisSelector::Value(other_redis)) =
+                (redis, other_redis)
+            else {
+                continue;
+            };
+            if !redis.key.overlaps(&other_redis.key) {
                 continue;
             }
             ensure!(

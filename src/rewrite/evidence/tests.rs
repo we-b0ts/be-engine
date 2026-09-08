@@ -888,3 +888,18 @@ fn source_process_query_returns_bounded_bootstrap_and_process_owned_evidence() {
             .any(|planner| planner.capability == "redis_bootstrap")
     );
 }
+
+#[test]
+fn redis_time_shift_is_not_hinted_from_extra_reads_or_timestamp_shaped_values() {
+    let target = tempfile::tempdir().unwrap();
+    let facts = serde_json::json!({
+        "clusters":[{"protocol":"redis","reason":"unmatched_target","operations":{"HGET":1}}],
+        "previously_matched_response":{"timestamp":1788761925496_i64}
+    });
+    let hints = rule_hints(target.path(), QUERY_DIRTY_CLUSTERS, &facts);
+    assert!(
+        hints
+            .iter()
+            .all(|hint| hint.rule != "time-shift" && hint.capability != "redis_time_shift")
+    );
+}

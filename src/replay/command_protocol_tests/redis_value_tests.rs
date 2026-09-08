@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 const SOURCE: &str = r#"{"ids":["B","A","A"],"ordered":[1,2]}"#;
 const TARGET: &str = r#"{"ordered":[1,2],"ids":["A","B","A"]}"#;
 
-async fn spawn(
+pub(super) async fn spawn(
     case: &Path,
     policy: Option<PathBuf>,
 ) -> (

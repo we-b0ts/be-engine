@@ -1,6 +1,9 @@
 mod config;
 mod feedback;
 pub(crate) use feedback::replace_request_rule_section;
+pub use feedback::{
+    RedisTimeShiftFeedback, RedisTimeShiftPlan, RedisTimeShiftReport, plan_redis_time_shift,
+};
 mod initialization;
 mod matcher;
 mod pattern;

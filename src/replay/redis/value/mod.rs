@@ -3,7 +3,7 @@ use super::ReplayExchange;
 use crate::replay::assertion::protobuf;
 use serde_json::Value;
 pub(crate) mod evidence;
-mod json;
+use super::json;
 mod selector;
 pub use selector::{RedisUnorderedField, RedisUnorderedSelector, RedisValueKeySelector};
 

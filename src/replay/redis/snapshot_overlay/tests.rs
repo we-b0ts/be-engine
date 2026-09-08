@@ -34,6 +34,7 @@ fn capture(data: &str) -> RecordedCapture {
 
 fn record(reason: Option<&str>, response: &str) -> RecordedExchange {
     RecordedExchange {
+        timestamp: None,
         connection_id: Uuid::new_v4(),
         sequence: 1,
         target_host: "redis.example".to_string(),
