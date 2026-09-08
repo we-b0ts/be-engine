@@ -1,4 +1,5 @@
 use super::*;
+use std::fs;
 
 #[test]
 fn reports_replay_literals_on_added_lines_without_echoing_the_complete_value() {

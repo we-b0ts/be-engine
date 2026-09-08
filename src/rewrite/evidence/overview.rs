@@ -61,7 +61,12 @@ pub(super) fn report(
     requested_id: &str,
 ) -> Result<RewriteEvidenceReport> {
     let queries = match &scope {
-        RewriteWorkScope::Api { .. } => super::commands(target_root, state),
+        RewriteWorkScope::Api { .. }
+            if issue.kind != crate::rewrite::RewriteIssueKind::TargetQuality =>
+        {
+            super::commands(target_root, state)
+        }
+        RewriteWorkScope::Api { .. } => Vec::new(),
         RewriteWorkScope::ProcessOutput { .. } => Vec::new(),
     };
     let facts = json!({ "work_scope": scope, "issue": issue });
@@ -78,6 +83,7 @@ pub(super) fn report(
             revision: state.revision,
             recording_run_id: state.recording_run_id.clone(),
             require_comparison: state.require_comparison,
+            review: crate::rewrite::review::context(target_root, state, &scope),
             worker: worker::dispatch_view(state, scope.clone(), None),
         })),
         evidence_id,
@@ -91,12 +97,14 @@ pub(super) fn report(
             "Issue ownership and possible causes are investigation guidance, not a proven root cause."
                 .to_string(),
         ],
-        next_step: match scope {
+        next_step: if issue.kind == crate::rewrite::RewriteIssueKind::TargetQuality {
+            "Read context.review.integrated_findings, fix the assigned quality finding, then run context.review.check for this dispatch before handoff.".to_string()
+        } else { match scope {
             RewriteWorkScope::Api { .. } =>
                 "Inspect this issue and execute the relevant returned queries before tracing source and target behavior.",
             RewriteWorkScope::ProcessOutput { .. } =>
                 "Inspect facts.issue.comparison_observation and trace the source and target startup/output path; no API evidence queries apply.",
-        }.to_string(),
+        }.to_string() },
     })
 }
 

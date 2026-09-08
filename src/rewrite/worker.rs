@@ -19,6 +19,7 @@ pub(super) mod scheduler;
 pub struct RewriteWorkerConfirmOptions {
     pub target_root: std::path::PathBuf,
     pub dispatch_id: String,
+    pub worktree: Option<std::path::PathBuf>,
     pub agent_handle: String,
     pub agent_name: Option<String>,
 }
@@ -136,7 +137,10 @@ pub(super) fn confirmation_command(
                 "confirm".to_string(),
                 view.dispatch_id.clone(),
             ],
-            vec![AGENT_HANDLE_ENV.to_string()],
+            vec![
+                AGENT_HANDLE_ENV.to_string(),
+                "BACKEND_REWRITE_WORKER_WORKTREE".into(),
+            ],
         )
     })
 }
@@ -193,12 +197,23 @@ pub fn confirm(options: RewriteWorkerConfirmOptions) -> Result<RewriteActionEnve
         scope.label()
     );
 
-    let changed = confirm_binding(
+    let new_dispatch = state
+        .worker_bindings
+        .get(&scope.binding_key())
+        .is_none_or(|b| b.confirmed_dispatch_id != expected_dispatch_id);
+    let mut changed = confirm_binding(
         &mut state,
         &scope,
         &expected_dispatch_id,
         &options.agent_handle,
         options.agent_name,
+    )?;
+    changed |= super::review::bind(
+        &target_root,
+        &mut state,
+        &scope,
+        options.worktree.as_deref(),
+        new_dispatch,
     )?;
     if changed {
         events::publish(&target_root, &state, &scope)?;
@@ -297,6 +312,8 @@ fn confirm_binding(
                     rework_generation: 0,
                     last_transfer: None,
                     observation: None,
+                    review_assignment: None,
+                    review_report: None,
                 },
             );
             changed = true;

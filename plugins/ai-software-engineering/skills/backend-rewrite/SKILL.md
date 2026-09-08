@@ -94,6 +94,12 @@ diagnosis branch selected by `work_scope.kind`. Do not preload conditional
 coordinator references or target implementation requirements merely to
 anticipate a later action.
 
+Before every worker handoff, read [source-review.md](references/source-review.md)
+and execute the scoped evidence context's `review.check` command in the assigned
+worktree. A passing report for the exact delivered commit is mandatory.
+Coordinators read the same reference for `source_review_required`, before
+accepting a handoff, or when routing a quality finding back to a worker.
+
 When an assigned API worker exposes a Motan service through `brz-motan`, read
 [motan-exporter.md](references/motan-exporter.md) before defining DTOs, service
 adapters, or export endpoints. When target code calls a Motan dependency, read
@@ -147,7 +153,7 @@ assume it is complete and never rerun it.
 
 A fresh standard recording requires explicit user authorization.
 
-Response schema v27 contains an `action` object with exactly `kind`, `summary`,
+Response schema v28 contains an `action` object with exactly `kind`, `summary`,
 `details`, and `commands`. This action schema version is independent of target
 repository configuration versions. `status` (including scoped status) and
 `next` return scheduling state, a short issue summary, and coordinator commands.
@@ -180,8 +186,11 @@ combining, shell-evaluating, or changing arguments. Supply named required
 environment variables without printing their values. Compact JSON is the
 default; use global `--pretty` only for interactive human inspection. The scoped
 evidence commands above are worker entrypoints; returned query and action argv
-remain opaque. The sole documented argv extension is the target-quality
-exception in [workflow.md](references/workflow.md).
+remain opaque. The permitted extensions are `review check --evidence` in
+[source-review.md](references/source-review.md), worker confirmation/report
+inputs in [coordinator-worker-protocol.md](references/coordinator-worker-protocol.md),
+and the target-quality exception in [workflow.md](references/workflow.md).
+Preserve the returned target root, worktree, scope and dispatch arguments.
 
 The workflow coordinator starts and resumes with unscoped
 `backend-rewrite status` and follows [workflow.md](references/workflow.md#coordinator-loop) for
@@ -210,7 +219,8 @@ Keep these states distinct:
 - **Worker handoff ready:** the assigned worker returned the initial overview's
   work-scope, issue and dispatch identity, proven cause and supporting evidence,
   changed files/shared impact, patch or commit, local tests, coordinator inputs,
-  and unresolved risks. Its binding and worktree remain active.
+  unresolved risks, and the passing source review's `report_path` and spawn
+  evidence for that exact delivery. Its binding and worktree remain active.
 - **Work item complete:** the workflow coordinator integrated the handoff and the
   engine-issued acceptance returned the API or process output as complete
   for the current target content fingerprint. A later integration may make it

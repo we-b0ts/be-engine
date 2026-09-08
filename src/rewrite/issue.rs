@@ -214,6 +214,7 @@ pub(super) fn id(api: &str, kind: &str, pointer: &str) -> String {
 
 fn kind_name(kind: RewriteIssueKind) -> &'static str {
     match kind {
+        RewriteIssueKind::TargetQuality => "target_quality",
         RewriteIssueKind::Response => "response",
         RewriteIssueKind::TargetRuntime => "target_runtime",
         RewriteIssueKind::Replay => "replay",

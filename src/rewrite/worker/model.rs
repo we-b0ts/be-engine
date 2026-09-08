@@ -17,6 +17,10 @@ pub(in crate::rewrite) struct RewriteWorkerBinding {
     pub last_transfer: Option<RewriteWorkerTransferRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observation: Option<RewriteWorkerObservation>,
+    #[serde(default)]
+    pub review_assignment: Option<crate::rewrite::review::ReviewAssignment>,
+    #[serde(default)]
+    pub review_report: Option<crate::rewrite::review::RewriteReviewReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

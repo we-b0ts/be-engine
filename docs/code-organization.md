@@ -197,6 +197,15 @@ is unclear.
   artifacts. Keep this product-policy gate separate from the generic
   code-organization checker. Configured repository gates extend it; an empty
   configured gate list does not disable it.
+- `rewrite/source_diff.rs` owns the Git source-diff boundary shared by Replay
+  isolation and source review, including committed/worktree/untracked files and
+  rename handling. `rewrite/review` owns worker review reports, spawn evidence,
+  handoff admission, integrated review and quality rework routing. Its `scan`
+  child owns Rust syntax findings and complete-file line limits; `evidence`
+  validates AI-provided locations and lifecycle explanations without claiming
+  call-graph proof. `integrated` owns freshness and action projection; `repair`
+  returns quality findings to existing API/process-output worker ownership.
+  Review does not create traffic failures or a second migration state machine.
 - `config/source_traffic_policy.rs` owns the canonical, whole-file YAML contract
   for source-traffic evidence acquisition and classification policy. Static
   recorder fields remain embedded in `.traffic-e2e/project.yaml`; planners

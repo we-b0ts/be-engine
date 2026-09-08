@@ -295,6 +295,19 @@ is executed. Continue other executable worker actions. Never hot-loop the retry
 or treat the failure as completion. A stopped operation without a completion
 record uses the existing recovery action.
 
+### `source_review_required`
+
+Worker handoffs require a passing local review report. The integrated quality
+operation also runs the mandatory source review. A `source_review_required`
+action requests inspection, spawn evidence or worker rework through
+[source-review.md](source-review.md). It is actionable work, not an execution
+failure. Return to global status after handling it. Final delivery requires a
+current source review even when no API remains in implementation.
+Once a finding has been routed, worker dispatch, status and integration take
+priority. With no such action ready, `wait_required` on `source_review_rework`
+waits for that repair; follow `commands.wait` and runtime events. Scoped status
+continues exposing each worker's own handoff commands.
+
 ### `target_quality_required`
 
 Execute only `action.commands.execute` in its absolute canonical `cwd`. The

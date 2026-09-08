@@ -44,6 +44,18 @@ and dispatch identity. Read the complete bounded issue in `facts.issue`,
 including its ID, attempt, observed target fingerprint, possible causes, and
 representative when available. Treat possible causes as hypotheses.
 
+The same context includes `review` with the registered worktree/base and the
+local check command. For a `target_quality` issue, read its integrated findings
+and follow [source-review.md](source-review.md); no traffic mismatch is implied.
+For a quality rework alongside an existing behavioral issue, read the assigned
+findings in `context.review.rework.findings` and address them as well. These
+retain the routing evidence if a later integration makes `review show` stale.
+Every handoff requires a `passed` review after the final
+edit and commit; include its absolute `report_path` and any spawn ownership
+evidence. Follow the delivery steps in
+[target-implementation-requirements.md](target-implementation-requirements.md#verification-ownership).
+Do not run coordinator-owned integrated checks or report your own handoff.
+
 Retain the initial overview's workflow/recording, scope, issue, binding and
 dispatch identities for this turn and include them in the return handoff. If a
 later query is stale, fetch the same scoped entrypoint to check its identity. A

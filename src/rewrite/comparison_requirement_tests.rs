@@ -11,6 +11,7 @@ use super::{action, fingerprint, inventory, progress_publication, recording};
 #[tokio::test]
 async fn first_terminal_persists_latch_without_changing_batch_and_next_batch_requires_comparison() {
     let target = target();
+    git(target.path(), &["switch", "-qc", "rewrite-feature"]);
     let initial = next(target.path()).await;
     assert!(!initial.workflow.unwrap().require_comparison);
     let store = RewriteStore::new(target.path()).unwrap();
@@ -32,6 +33,13 @@ async fn first_terminal_persists_latch_without_changing_batch_and_next_batch_req
     assert_eq!(state.phase, RewritePhase::SliceComplete);
     write_progress(target.path(), &state);
     store.save(&state).unwrap();
+    super::review::check(super::review::RewriteReviewOptions {
+        target_root: target.path().into(),
+        worktree: None,
+        scope: None,
+        evidence: None,
+    })
+    .unwrap();
     let awaiting_commit = next(target.path()).await;
     assert!(!awaiting_commit.terminal_allowed);
     assert!(!store.load().unwrap().unwrap().require_comparison);

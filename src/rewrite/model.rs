@@ -22,7 +22,7 @@ use crate::{
 };
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 27;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 28;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -96,6 +96,7 @@ pub struct RewriteApiInventoryDetails {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RewriteIssueKind {
+    TargetQuality,
     Response,
     TargetRuntime,
     Replay,
@@ -482,6 +483,8 @@ pub(super) struct RewriteState {
     #[serde(default)]
     pub worker_bindings: BTreeMap<String, RewriteWorkerBinding>,
     #[serde(default)]
+    pub source_review_rework: BTreeMap<String, super::review::ReviewRework>,
+    #[serde(default)]
     pub worker_event_revision: u64,
     #[serde(default)]
     pub process_outputs: RewriteProcessOutputState,
@@ -726,6 +729,12 @@ pub enum RewriteAction {
         operation_id: String,
         retry: RewriteCommandSpec,
         status: RewriteCommandSpec,
+    },
+    SourceReviewRequired {
+        summary: String,
+        check: RewriteCommandSpec,
+        show: RewriteCommandSpec,
+        rework: RewriteCommandSpec,
     },
     TargetQualityRequired {
         summary: String,

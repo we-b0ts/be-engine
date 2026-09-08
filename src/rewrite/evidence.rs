@@ -157,6 +157,9 @@ fn source_process_next_step(kind: RewriteIssueKind) -> &'static str {
         RewriteIssueKind::TargetRuntime => {
             "Inspect source startup and readiness paths only for matching bootstrap dependencies."
         }
+        RewriteIssueKind::TargetQuality => {
+            "Read review show and address the target source quality finding; no traffic diagnosis is required."
+        }
         RewriteIssueKind::ProcessOutput => {
             "Use the recorded process output manifests and inspect the target startup path."
         }
@@ -663,7 +666,7 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
 
 fn source_process_evidence_relevant(issue: &RewriteIssue) -> bool {
     match issue.kind {
-        RewriteIssueKind::ProcessOutput => false,
+        RewriteIssueKind::ProcessOutput | RewriteIssueKind::TargetQuality => false,
         RewriteIssueKind::TargetRuntime => issue
             .possible_causes
             .iter()
@@ -682,6 +685,9 @@ fn source_process_evidence_purpose(kind: RewriteIssueKind) -> &'static str {
         }
         RewriteIssueKind::TargetRuntime => {
             "Use this evidence when target startup or readiness may depend on source bootstrap traffic"
+        }
+        RewriteIssueKind::TargetQuality => {
+            "Read review show and address the target source quality finding; no traffic diagnosis is required."
         }
         RewriteIssueKind::ProcessOutput => {
             "Inspect the recorded process output manifests and target startup path"

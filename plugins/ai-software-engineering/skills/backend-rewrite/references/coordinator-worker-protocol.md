@@ -48,11 +48,14 @@ For `implementation_required`:
 1. Read `details.worker.state` and recover the assigned handle if one exists.
 2. For `dispatch_required`, create its worktree and dispatch a real dedicated
    worker. For `resume_required`, refresh the retained worktree from the
-   integrated revision and resume the same task runtime handle with those same
-   assignment fields. The worker fetches the new engine context itself.
+   integrated revision, preserving unintegrated worker changes, and resume the
+   same task runtime handle with those same assignment fields. The worker
+   fetches the new engine context itself.
 3. After the task runtime accepts the submission, execute `commands.confirm_worker`
    with `BACKEND_REWRITE_SUBAGENT_HANDLE` and optional
-   `BACKEND_REWRITE_SUBAGENT_NAME`. Confirm accepted queued work as well; report
+   `BACKEND_REWRITE_SUBAGENT_NAME`. Register the assigned absolute worktree using
+   `--worktree` or `BACKEND_REWRITE_WORKER_WORKTREE`; repeat this on resume so the
+   engine freezes the new dispatch's base. Confirm accepted queued work as well; report
    `queued` when the task runtime exposes that state.
 4. Confirmation records the accepted binding only. Report `running` or `queued`
    explicitly using the owning action's `commands.report_worker` when that state
@@ -97,10 +100,17 @@ received handoff. Duplicate handoff events do not create duplicate work. Stale
 attempts or wrong handles cannot advance the current issue; recover its current
 status without replacing the dedicated worker.
 
+A usable handoff requires a passing `review check` report for its final code;
+follow [source-review.md](source-review.md) and inspect any spawn evidence.
+Report `handoff_ready` with `--review-report` or
+`BACKEND_REWRITE_WORKER_REVIEW_REPORT`. An unaccepted incomplete delivery from
+an ended worker is `idle`, so the same worker can resume and finish its review.
+
 A usable handoff contains the original overview's workflow/recording,
 work scope, issue, binding and dispatch identities, proven cause and
 supporting evidence, commit/patch identity, changed files and shared-module
-impact, local test results, necessary coordinator transition inputs, and any
+impact, local test results, the passing review's absolute `report_path` and any
+spawn ownership evidence, necessary coordinator transition inputs, and any
 remaining risks. A task ending without that handoff is `idle`, not completed. Reporting idle
 issues a fresh dispatch identity for the same worker; reject late completion
 from the superseded turn and follow the returned resume action.
@@ -158,6 +168,8 @@ read-only query/help commands in the canonical command `cwd`. The engine
 supplies diagnostics directly; the coordinator obtains fresh scheduling and
 acceptance commands from scoped status when handling a handoff.
 
+Workers may execute their assigned `review check --worktree` command and write
+its local review report; this does not mutate the coordinator's workflow.
 Only the coordinator executes mutations: worker confirmation/report/transfer,
 integration, quality checks, `next`, recording, rule plan/apply, routing, repair
 verification, and recovery. Execute returned argv unchanged with their absolute

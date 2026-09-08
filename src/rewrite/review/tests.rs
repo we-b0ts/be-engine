@@ -1,0 +1,563 @@
+use super::*;
+use crate::rewrite::worker::tests::{configured_target, implementation_state_with_inventory};
+
+pub(in crate::rewrite) fn worker_report(root: &Path, scope: RewriteWorkScope) -> PathBuf {
+    check(RewriteReviewOptions {
+        target_root: root.into(),
+        worktree: Some(root.into()),
+        scope: Some(scope),
+        evidence: None,
+    })
+    .map(|report| report.report_path)
+    .unwrap_or_else(|_| worker_report_path(root))
+}
+
+fn setup() -> (tempfile::TempDir, RewriteWorkScope) {
+    let target = configured_target();
+    let state = implementation_state_with_inventory(false);
+    let scope = RewriteWorkScope::Api {
+        api: state.api.clone(),
+    };
+    RewriteStore::new(target.path())
+        .unwrap()
+        .save(&state)
+        .unwrap();
+    worker::confirm(super::super::RewriteWorkerConfirmOptions {
+        target_root: target.path().into(),
+        dispatch_id: worker::dispatch_view(&state, scope.clone(), None).dispatch_id,
+        worktree: Some(target.path().into()),
+        agent_handle: "review-worker".into(),
+        agent_name: None,
+    })
+    .unwrap();
+    (target, scope)
+}
+
+fn options(root: &Path, scope: RewriteWorkScope) -> RewriteReviewOptions {
+    RewriteReviewOptions {
+        target_root: root.into(),
+        worktree: Some(root.into()),
+        scope: Some(scope),
+        evidence: None,
+    }
+}
+
+fn git(root: &Path, args: &[&str]) {
+    source_diff::git_text(root, args).unwrap();
+}
+
+#[test]
+fn complete_file_size_includes_committed_changes_and_last_line_without_newline() {
+    let (target, scope) = setup();
+    fs::create_dir_all(target.path().join("src")).unwrap();
+    let path = target.path().join("src/oversized.rs");
+    fs::write(&path, format!("{}// last", "// line\n".repeat(1000))).unwrap();
+    git(target.path(), &["add", "src/oversized.rs"]);
+    git(target.path(), &["commit", "-qm", "worker delivery"]);
+    let report = check(options(target.path(), scope.clone())).unwrap();
+    assert_eq!(report.status, ReviewStatus::ChangesRequired);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.message.contains("1001 lines"))
+    );
+    fs::write(path, "// line\n".repeat(1000)).unwrap();
+    assert_eq!(
+        check(options(target.path(), scope)).unwrap().status,
+        ReviewStatus::Passed
+    );
+}
+
+#[test]
+fn spawn_review_requires_startup_evidence_and_rejects_request_ownership() {
+    let (target, scope) = setup();
+    fs::create_dir_all(target.path().join("src")).unwrap();
+    fs::write(
+        target.path().join("src/jobs.rs"),
+        "fn main() { start(); }\nfn start() { tokio::spawn(async {}); }\n",
+    )
+    .unwrap();
+    let mut opts = options(target.path(), scope);
+    let report = check(opts.clone()).unwrap();
+    assert_eq!(report.status, ReviewStatus::EvidenceRequired);
+    let found = report
+        .findings
+        .iter()
+        .find(|f| f.rule == ReviewRule::SpawnOwnership)
+        .unwrap();
+    let location = |line| ReviewCodeEvidence {
+        file: "src/jobs.rs".into(),
+        line,
+        fact: "startup call chain".into(),
+    };
+    let mut proof = ReviewEvidence {
+        spawns: vec![SpawnEvidence {
+            finding_id: found.id.clone(),
+            ownership: SpawnOwnership::Request,
+            startup_entry: None,
+            call_chain: Vec::new(),
+            request_path_review: "handler invokes this task".into(),
+            task_lifecycle: String::new(),
+        }],
+    };
+    let path = target.path().join(".traffic-e2e/local/proof.json");
+    write_json(&path, &proof).unwrap();
+    opts.evidence = Some(path.clone());
+    assert_eq!(
+        check(opts.clone()).unwrap().status,
+        ReviewStatus::ChangesRequired
+    );
+    proof.spawns[0].ownership = SpawnOwnership::Startup;
+    write_json(&path, &proof).unwrap();
+    assert!(
+        check(opts.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("startup_entry")
+    );
+    proof.spawns[0].startup_entry = Some(location(1));
+    proof.spawns[0].call_chain = vec![location(1), location(2)];
+    proof.spawns[0].request_path_review =
+        "All callers inspected: only startup calls start, no request callback invokes it".into();
+    proof.spawns[0].task_lifecycle = "Application owns one worker with bounded queue, error reporting, shutdown cancellation and join".into();
+    write_json(&path, &proof).unwrap();
+    let passed = check(opts).unwrap();
+    assert_eq!(passed.status, ReviewStatus::Passed);
+    assert!(evidence::reusable(target.path(), &passed));
+    fs::write(target.path().join("src/jobs.rs"), "fn main() {}\n").unwrap();
+    assert!(!evidence::reusable(target.path(), &passed));
+}
+
+#[test]
+fn handoff_requires_current_review_without_advancing_worker_state_on_rejection() {
+    let (target, scope) = setup();
+    let store = RewriteStore::new(target.path()).unwrap();
+    let state = store.load().unwrap().unwrap();
+    let mut opts = worker::runtime::RewriteWorkerReportOptions {
+        target_root: target.path().into(),
+        dispatch_id: worker::dispatch_view(&state, scope.clone(), None).dispatch_id,
+        agent_handle: "review-worker".into(),
+        activity: worker::model::RewriteWorkerActivity::HandoffReady,
+        handoff_id: Some("delivery-1".into()),
+        review_report: None,
+    };
+    assert!(
+        worker::runtime::report(opts.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("--review-report")
+    );
+    assert!(worker::runtime::observation(&store.load().unwrap().unwrap(), &scope).is_none());
+    let report = check(options(target.path(), scope.clone())).unwrap();
+    opts.review_report = Some(report.report_path);
+    fs::write(target.path().join("changed-after-review"), "stale").unwrap();
+    assert!(
+        worker::runtime::report(opts.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("changed")
+    );
+    fs::remove_file(target.path().join("changed-after-review")).unwrap();
+    git(
+        target.path(),
+        &["commit", "--allow-empty", "-qm", "new delivery identity"],
+    );
+    assert!(
+        worker::runtime::report(opts.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("commit changed")
+    );
+    check(options(target.path(), scope)).unwrap();
+    worker::runtime::report(opts.clone()).unwrap();
+    let revision = store.load().unwrap().unwrap().revision;
+    worker::runtime::report(opts).unwrap();
+    assert_eq!(revision, store.load().unwrap().unwrap().revision);
+}
+
+#[test]
+fn local_review_does_not_mutate_workflow_and_integrated_receipt_survives_resume() {
+    let (target, scope) = setup();
+    let store = RewriteStore::new(target.path()).unwrap();
+    let state = store.load().unwrap().unwrap();
+    let lock = store.lock().unwrap();
+    check(options(target.path(), scope)).unwrap();
+    assert_eq!(store.load().unwrap().unwrap().revision, state.revision);
+    drop(lock);
+    let report = check(RewriteReviewOptions {
+        target_root: target.path().into(),
+        worktree: None,
+        scope: None,
+        evidence: None,
+    })
+    .unwrap();
+    assert_eq!(report.status, ReviewStatus::Passed);
+    assert!(terminal_current(target.path(), &state));
+    let mut old = report.clone();
+    old.rules_version = "old-rule".into();
+    write_json(&report.report_path, &old).unwrap();
+    assert!(!terminal_current(target.path(), &state));
+    assert!(show(target.path().into()).is_err());
+}
+
+#[test]
+fn assigned_git_worktree_review_is_accepted_and_integrated_without_a_private_workflow() {
+    let target = configured_target();
+    git(target.path(), &["switch", "-qc", "coordinator"]);
+    let directory = tempfile::tempdir().unwrap();
+    let worktree = directory.path().join("worker");
+    git(
+        target.path(),
+        &[
+            "worktree",
+            "add",
+            "-qb",
+            "worker-code",
+            worktree.to_str().unwrap(),
+        ],
+    );
+    let state = implementation_state_with_inventory(false);
+    let scope = RewriteWorkScope::Api {
+        api: state.api.clone(),
+    };
+    let store = RewriteStore::new(target.path()).unwrap();
+    store.save(&state).unwrap();
+    let dispatch_id = worker::dispatch_view(&state, scope.clone(), None).dispatch_id;
+    worker::confirm(crate::rewrite::RewriteWorkerConfirmOptions {
+        target_root: target.path().into(),
+        dispatch_id: dispatch_id.clone(),
+        worktree: Some(worktree.clone()),
+        agent_handle: "separate-worker".into(),
+        agent_name: None,
+    })
+    .unwrap();
+    fs::create_dir_all(worktree.join("src")).unwrap();
+    fs::write(
+        worktree.join("src/lib.rs"),
+        "fn main() { start(); }\nfn start() { tokio::spawn(async {}); }\nfn response() { let _ = serde_json::json!({\"success\": true}); }\n",
+    )
+    .unwrap();
+    git(&worktree, &["add", "src"]);
+    git(&worktree, &["commit", "-qm", "typed delivery"]);
+    let mut opts = RewriteReviewOptions {
+        target_root: target.path().into(),
+        worktree: Some(worktree.clone()),
+        scope: Some(scope),
+        evidence: None,
+    };
+    let report = check(opts.clone()).unwrap();
+    assert_eq!(report.status, ReviewStatus::EvidenceRequired);
+    let location = |line| ReviewCodeEvidence {
+        file: "src/lib.rs".into(),
+        line,
+        fact: "Inspected startup path".into(),
+    };
+    let proof = ReviewEvidence {
+        spawns: vec![SpawnEvidence {
+            finding_id: report.findings[0].id.clone(),
+            ownership: SpawnOwnership::Startup,
+            startup_entry: Some(location(1)),
+            call_chain: vec![location(1), location(2)],
+            request_path_review: "Only main calls start; the response function never starts tasks"
+                .into(),
+            task_lifecycle:
+                "Single application-owned task finishes immediately; no queue or retained work"
+                    .into(),
+        }],
+    };
+    let proof_path = crate::internal_runtime::root(&worktree).join("spawn-evidence.json");
+    write_json(&proof_path, &proof).unwrap();
+    opts.evidence = Some(proof_path);
+    let report = check(opts).unwrap();
+    assert_eq!(report.status, ReviewStatus::Passed);
+    assert!(
+        !crate::internal_runtime::root(&worktree)
+            .join("rewrite/state.json")
+            .exists()
+    );
+    let mut delivery = worker::runtime::RewriteWorkerReportOptions {
+        target_root: target.path().into(),
+        dispatch_id,
+        agent_handle: "separate-worker".into(),
+        activity: worker::model::RewriteWorkerActivity::HandoffReady,
+        handoff_id: Some(report.head_revision.clone()),
+        review_report: Some(report.report_path),
+    };
+    worker::runtime::report(delivery.clone()).unwrap();
+    git(target.path(), &["cherry-pick", &report.head_revision]);
+    delivery.activity = worker::model::RewriteWorkerActivity::Integrated;
+    worker::runtime::report(delivery).unwrap();
+    assert!(
+        gate(target.path(), &store.load().unwrap().unwrap(), "master")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(show(target.path().into()).unwrap().evidence.spawns.len(), 1);
+    fs::write(target.path().join("src/lib.rs"), "fn main() { start(); }\nfn start() { tokio::spawn(async {}); }\nfn response() { start(); }\n").unwrap();
+    assert!(matches!(
+        gate(target.path(), &store.load().unwrap().unwrap(), "master").unwrap(),
+        Some(RewriteAction::SourceReviewRequired { .. })
+    ));
+    assert_eq!(
+        show(target.path().into()).unwrap().status,
+        ReviewStatus::EvidenceRequired
+    );
+}
+
+#[test]
+fn completed_api_quality_rework_reuses_worker_and_duplicate_route_is_idempotent() {
+    let (target, scope) = setup();
+    let store = RewriteStore::new(target.path()).unwrap();
+    let mut state = store.load().unwrap().unwrap();
+    state.phase = crate::rewrite::RewritePhase::SliceComplete;
+    state.active_issue = None;
+    state.api_inventory[0].status = crate::rewrite::RewriteApiStatus::Complete;
+    store.save(&state).unwrap();
+    fs::create_dir_all(target.path().join("src")).unwrap();
+    fs::write(
+        target.path().join("src/bad.rs"),
+        "fn bad() { let _: serde_json::Value; }\n",
+    )
+    .unwrap();
+    let report = check(RewriteReviewOptions {
+        target_root: target.path().into(),
+        worktree: None,
+        scope: None,
+        evidence: None,
+    })
+    .unwrap();
+    assert_eq!(report.status, ReviewStatus::ChangesRequired);
+    let routed = rework(target.path().into(), &report.findings[0].id, scope.clone()).unwrap();
+    assert!(!routed.terminal_allowed);
+    assert!(matches!(
+        routed.action,
+        RewriteAction::ImplementationRequired { .. }
+    ));
+    let saved = store.load().unwrap().unwrap();
+    assert_eq!(
+        saved.active_issue.as_ref().unwrap().kind,
+        crate::rewrite::RewriteIssueKind::TargetQuality
+    );
+    assert_eq!(
+        saved.worker_bindings[&scope.binding_key()].agent_handle_fingerprint,
+        state.worker_bindings[&scope.binding_key()].agent_handle_fingerprint
+    );
+    rework(target.path().into(), &report.findings[0].id, scope).unwrap();
+    assert_eq!(store.load().unwrap().unwrap().revision, saved.revision);
+}
+
+#[test]
+fn process_output_review_uses_its_own_dispatch_and_blocks_integrated_acceptance() {
+    let (target, _) = setup();
+    let store = RewriteStore::new(target.path()).unwrap();
+    let mut state = store.load().unwrap().unwrap();
+    let scope = RewriteWorkScope::ProcessOutput {
+        id: "startup-profile".into(),
+    };
+    state.process_outputs.inventory = vec![crate::rewrite::RewriteProcessOutputProgress {
+        id: "startup-profile".into(),
+        status: crate::rewrite::RewriteProcessOutputStatus::ImplementationRequired,
+        attempts: 1,
+        verified_target_fingerprint: None,
+        issue: state.active_issue.clone(),
+    }];
+    state.process_outputs.current_id = Some("startup-profile".into());
+    worker::integrate_current_for_test(&mut state);
+    bind(target.path(), &mut state, &scope, Some(target.path()), true).unwrap();
+    store.save(&state).unwrap();
+    let report = check(options(target.path(), scope.clone())).unwrap();
+    assert_eq!(report.scope, Some(scope.clone()));
+    assert!(accept_handoff(&state, &scope, Some(&report.report_path)).is_ok());
+    fs::create_dir_all(target.path().join("src")).unwrap();
+    fs::write(
+        target.path().join("src/bad.rs"),
+        "fn bad() { let _: serde_json::Value; }\n",
+    )
+    .unwrap();
+    assert!(matches!(
+        gate(target.path(), &state, "master").unwrap(),
+        Some(RewriteAction::SourceReviewRequired { .. })
+    ));
+    assert_eq!(
+        store.load().unwrap().unwrap().process_outputs.inventory[0].status,
+        crate::rewrite::RewriteProcessOutputStatus::ImplementationRequired
+    );
+}
+
+fn integrated_and_parked_worker() -> (tempfile::TempDir, RewriteWorkScope) {
+    let target = configured_target();
+    let mut state = implementation_state_with_inventory(false);
+    worker::integrate_current_for_test(&mut state);
+    let api = "POST /other".to_string();
+    let mut item = state.api_inventory[0].clone();
+    item.api = api.clone();
+    item.status = crate::rewrite::RewriteApiStatus::ImplementationRequired;
+    state.api_inventory.push(item);
+    let mut slice = state.active_slice.clone();
+    slice.api = api.clone();
+    state.parked_slices.insert(api.clone(), slice);
+    RewriteStore::new(target.path())
+        .unwrap()
+        .save(&state)
+        .unwrap();
+    (target, RewriteWorkScope::Api { api })
+}
+
+fn failing_integrated_review(root: &Path) -> RewriteReviewReport {
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("src/bad.rs"),
+        "fn bad() {\nlet _: serde_json::Value;\nlet _: serde_json::Value;\n}\n",
+    )
+    .unwrap();
+    check(RewriteReviewOptions {
+        target_root: root.into(),
+        worktree: None,
+        scope: None,
+        evidence: None,
+    })
+    .unwrap()
+}
+
+#[test]
+fn another_apis_failed_review_does_not_hide_scoped_worker_commands() {
+    let (target, scope) = integrated_and_parked_worker();
+    failing_integrated_review(target.path());
+    let state = RewriteStore::new(target.path())
+        .unwrap()
+        .load()
+        .unwrap()
+        .unwrap();
+    let scoped = worker::runtime::scoped(&state, &scope).unwrap();
+    let action = action::for_scoped_status(target.path(), &scoped)
+        .unwrap()
+        .action;
+    assert!(
+        matches!(
+            action,
+            RewriteAction::ImplementationRequired {
+                confirm_worker: Some(_),
+                ..
+            }
+        ),
+        "{action:?}"
+    );
+}
+
+#[test]
+fn routed_review_waits_for_worker_and_keeps_handoff_and_integration_available() {
+    use worker::model::RewriteWorkerActivity as Activity;
+    let (target, scope) = integrated_and_parked_worker();
+    let store = RewriteStore::new(target.path()).unwrap();
+    let report = failing_integrated_review(target.path());
+    rework(target.path().into(), &report.findings[0].id, scope.clone()).unwrap();
+    let state = store.load().unwrap().unwrap();
+    let dispatch_id = worker::dispatch_view(&state, scope.clone(), None).dispatch_id;
+    worker::confirm(crate::rewrite::RewriteWorkerConfirmOptions {
+        target_root: target.path().into(),
+        dispatch_id: dispatch_id.clone(),
+        worktree: Some(target.path().into()),
+        agent_handle: "repair-worker".into(),
+        agent_name: None,
+    })
+    .unwrap();
+    let mut feedback = worker::runtime::RewriteWorkerReportOptions {
+        target_root: target.path().into(),
+        dispatch_id,
+        agent_handle: "repair-worker".into(),
+        activity: Activity::Running,
+        handoff_id: None,
+        review_report: None,
+    };
+    let waiting = worker::runtime::report(feedback.clone()).unwrap();
+    assert!(
+        matches!(waiting.action, RewriteAction::WaitRequired { .. }),
+        "{:?}",
+        waiting.action
+    );
+    assert_eq!(waiting.pending, 1);
+    let inventory = crate::rewrite::inventory_rewrite(crate::rewrite::RewriteContext {
+        target_root: target.path().into(),
+    })
+    .unwrap();
+    assert_eq!(inventory.details.ready.get("wait"), Some(&1));
+    assert!(!inventory.details.ready.contains_key("verify_handoff"));
+    let dispatch =
+        worker::dispatch_view(&store.load().unwrap().unwrap(), scope.clone(), None).dispatch_id;
+    rework(target.path().into(), &report.findings[1].id, scope.clone()).unwrap();
+    let saved = store.load().unwrap().unwrap();
+    assert_eq!(
+        worker::dispatch_view(&saved, scope.clone(), None).dispatch_id,
+        dispatch
+    );
+    assert_eq!(
+        worker::runtime::observation(&saved, &scope)
+            .unwrap()
+            .activity,
+        Activity::Running
+    );
+    assert_eq!(
+        context(target.path(), &saved, &scope)
+            .rework
+            .unwrap()
+            .findings
+            .len(),
+        2
+    );
+    assert_eq!(
+        worker::runtime::scoped(&saved, &scope)
+            .unwrap()
+            .active_slice
+            .active_issue
+            .unwrap()
+            .id,
+        "issue-a"
+    );
+
+    fs::write(
+        target.path().join("other-api.txt"),
+        "unrelated integration\n",
+    )
+    .unwrap();
+    assert!(is_rework_wait(
+        &gate(target.path(), &saved, "master").unwrap().unwrap()
+    ));
+    assert_eq!(
+        worker::dispatch_view(&store.load().unwrap().unwrap(), scope.clone(), None).dispatch_id,
+        dispatch
+    );
+
+    fs::write(target.path().join("src/bad.rs"), "fn fixed() {}\n").unwrap();
+    let passed = check(options(target.path(), scope.clone())).unwrap();
+    feedback.activity = Activity::HandoffReady;
+    feedback.handoff_id = Some("quality-repair".into());
+    feedback.review_report = Some(passed.report_path);
+    let handoff = worker::runtime::report(feedback.clone()).unwrap();
+    assert!(matches!(
+        handoff.action,
+        RewriteAction::IntegrationRequired { .. }
+    ));
+    let scoped = worker::runtime::scoped(&store.load().unwrap().unwrap(), &scope).unwrap();
+    assert!(matches!(
+        action::for_scoped_status(target.path(), &scoped)
+            .unwrap()
+            .action,
+        RewriteAction::IntegrationRequired { .. }
+    ));
+    feedback.activity = Activity::Integrated;
+    worker::runtime::report(feedback).unwrap();
+    assert!(
+        !store
+            .load()
+            .unwrap()
+            .unwrap()
+            .source_review_rework
+            .contains_key(&scope.binding_key())
+    );
+    assert!(
+        gate(target.path(), &store.load().unwrap().unwrap(), "master")
+            .unwrap()
+            .is_none()
+    );
+}

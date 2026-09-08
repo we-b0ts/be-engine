@@ -47,6 +47,9 @@ pub(super) fn status_base(target_root: &Path, state: &RewriteState) -> Result<Re
         repair::acceptance_ready(target_root, &scoped)?;
     }
     let recording_status = recording_action::status_action(target_root, state)?;
+    if let Some(review) = super::review::required_action(target_root, state)? {
+        return Ok(review);
+    }
     let target_change = target_quality::status_action(target_root, state)?;
     Ok(match state.phase {
         RewritePhase::RecordingRequired | RewritePhase::ComparisonRecordingRequired
@@ -75,8 +78,11 @@ pub(super) fn select_action(
     }
     if !matches!(
         base,
-        RewriteAction::PlanApplyRequired { .. } | RewriteAction::TargetQualityRequired { .. }
-    ) && let Some(repair) = super::scheduling::repair_action(target_root, state)
+        RewriteAction::PlanApplyRequired { .. }
+            | RewriteAction::TargetQualityRequired { .. }
+            | RewriteAction::SourceReviewRequired { .. }
+    ) && !super::review::is_rework_wait(&base)
+        && let Some(repair) = super::scheduling::repair_action(target_root, state)
     {
         return repair;
     }
@@ -112,7 +118,11 @@ fn global_worker_action(
     }
     let selected = worker::scheduler::global_action(target_root, state, false)?;
     if matches!(selected, RewriteAction::AdvanceRequired { .. })
-        && matches!(base, RewriteAction::TargetQualityRequired { .. })
+        && (matches!(
+            base,
+            RewriteAction::TargetQualityRequired { .. }
+                | RewriteAction::SourceReviewRequired { .. }
+        ) || super::review::is_rework_wait(base))
     {
         return None;
     }
@@ -137,8 +147,13 @@ pub(super) fn for_scoped_status(
         && state.dependency_rule_plan.is_none()
         && state.recorder_capture_plan.is_none()
     {
-        if let Some(action) = target_quality::status_action(target_root, state)? {
-            return Ok(envelope(target_root, state, action));
+        if worker::runtime::acceptance_ready(state, &scope) {
+            if let Some(action) = super::review::required_action(target_root, state)? {
+                return Ok(envelope(target_root, state, action));
+            }
+            if let Some(action) = target_quality::status_action(target_root, state)? {
+                return Ok(envelope(target_root, state, action));
+            }
         }
         return Ok(envelope(
             target_root,
@@ -266,6 +281,7 @@ pub(super) fn envelope(
         process_output_inventory: Some(process_outputs::view(state)),
         latest_focused_e2e: latest_focused_e2e(state),
         terminal_allowed: state.require_comparison
+            && super::review::terminal_current(target_root, state)
             && progress_publication::state(target_root, state)
                 == Some(progress_publication::PublicationState::Published),
         action,

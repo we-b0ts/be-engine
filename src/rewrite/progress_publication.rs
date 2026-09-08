@@ -199,7 +199,8 @@ mod tests {
         git(target.path(), &["add", ".traffic-e2e/progress.yaml"]);
         git(target.path(), &["commit", "-m", "publish progress"]);
         let published = super::super::action::for_state(target.path(), &state);
-        assert!(published.terminal_allowed);
+        // Publication alone cannot bypass the independent source review gate.
+        assert!(!published.terminal_allowed);
         assert_eq!(
             serde_json::to_value(published).unwrap()["action"]["kind"],
             "complete"
@@ -240,7 +241,7 @@ mod tests {
 
         git(target.path(), &["add", "."]);
         git(target.path(), &["commit", "-m", "publish delivery files"]);
-        assert!(super::super::action::for_state(target.path(), &state).terminal_allowed);
+        assert!(!super::super::action::for_state(target.path(), &state).terminal_allowed);
     }
 
     fn complete_state() -> RewriteState {
