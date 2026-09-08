@@ -215,6 +215,16 @@ Use the `backend-rewrite` binary and its `next`, `status`, `inventory`,
 `rewrite` subcommand; `backend-rewrite` invokes the shared crate directly and
 delegates only engine-owned detached work to its sibling executable.
 
+For a dynamic API, `next --source-route` requires the complete source route,
+including every router mount prefix. For example, `GET /api/attachments/task/*/all`
+requires `/api/attachments/task/{task_id}/all`, not the local decorator path
+`/task/{task_id}/all`. The engine validates the route before saving it, including
+at workflow initialization. If an older engine saved an invalid route, repeat
+`next --api 'GET /api/attachments/task/*/all' --source-route
+'/api/attachments/task/{task_id}/all'` with the corrected full route. Correction
+is allowed only while the API is pending, with no group or verification history;
+valid bindings remain fixed. Existing recording and workflow progress are retained.
+
 ## Running Locally
 
 Record baseline/candidate responses from live frontend traffic with:

@@ -215,6 +215,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                         None if !api.is_dynamic() => api.path_pattern().to_string(),
                         None => return Ok(action::source_route_required(&target_root, &api)),
                     };
+                    inventory::validate_source_route(&api, &source_route)?;
                     (api.to_string(), source_route, vec![api.to_string()])
                 }
                 None => {
