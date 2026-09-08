@@ -1,7 +1,8 @@
 # Target Startup Inputs
 
-Read this reference only when implementation or startup diagnosis proves that
-the target needs an environment override, source-compatible mount, or
+Audience: implementation workers identifying startup inputs and the workflow
+coordinator applying them. Read only when implementation or startup diagnosis
+proves that the target needs an environment override, source-compatible mount, or
 image-local writable directory. Initialization already captures source runtime
 inputs; do not scan source code up front to enumerate them.
 
@@ -41,7 +42,7 @@ backend-rewrite --target-root <target> startup env validate
 ```
 
 `--from-source` uses the exact effective value saved during initialization
-without returning it. It lets the Agent verify or converge a source-proven
+without returning it. It verifies or converges a source-proven
 requirement; `ensure` returns `unchanged` without creating a redundant override
 when the source baseline already matches. With no value option, `equals` and `ensure` read the
 same-named caller variable; `--from-env` selects another caller name.
@@ -57,7 +58,7 @@ An implementation worker in an isolated worktree returns a
 `startup_environment` coordinator input instead of mutating the canonical
 ignored file. Prefer `from_source: true` when the captured source value is the
 required value; otherwise provide the exact caller-owned value and evidence.
-The state-machine coordinator applies it after integration and before acceptance.
+The workflow coordinator applies it after integration and before acceptance.
 
 ```yaml
 startup_environment:

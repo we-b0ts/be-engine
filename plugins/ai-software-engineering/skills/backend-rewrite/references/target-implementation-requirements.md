@@ -4,7 +4,7 @@ Read this reference only in these situations:
 
 - an assigned API or process-output worker is about to change target product
   code, target startup, or target configuration; or
-- the state-machine coordinator is about to integrate a worker change, resolve an
+- the workflow coordinator is about to integrate a worker change, resolve an
   integration conflict, or make a shared target refactor.
 
 These requirements apply only to an existing initialized target repository.
@@ -32,17 +32,17 @@ These requirements apply only to an existing initialized target repository.
 ## Evidence And Runtime Inputs
 
 - Target product code and configuration MUST NOT read traffic cases, recorded
-  responses, Replay sessions, reports, coordinator state, or files below
+  responses, Replay sessions, reports, engine state, or files below
   `.traffic-e2e/local/`.
 - Recorded artifacts are read-only diagnostic evidence. Do not copy their
   values into fixtures, generated startup input, hardcoded responses, or local
   dependency replacements.
-- Do not modify source behavior or coordinator evidence to manufacture a
+- Do not modify source behavior or engine evidence to manufacture a
   passing result.
 - When source behavior proves that implemented target logic requires an
-  application-owned environment variable, follow [startup.md](startup.md)
+  application-owned environment variable, follow [target-startup-inputs.md](target-startup-inputs.md)
   immediately. Preserve the runtime lookup in target code and return the
-  source-proven startup input for the state-machine coordinator; do not wait for a
+  source-proven startup input for the workflow coordinator; do not wait for a
   connection or startup failure and do not hardcode the effective value.
 - Never print, persist, or hard-code credentials, private keys, tokens, remote
   configuration values, source-process memory, or generated SDK snapshots.
@@ -141,8 +141,8 @@ product uses.
   inputs, and unresolved risks.
 - A worker MUST NOT execute coordinator acceptance, advance workflow state, or
   claim that the work item or workflow is complete.
-- The state-machine coordinator integrates the change in the canonical target worktree
-  and executes the coordinator-issued target quality and acceptance actions.
+- The workflow coordinator integrates the change in the canonical target worktree
+  and executes the engine-issued target quality and acceptance actions.
   Worker-local checks do not replace those integrated-revision gates.
 - Performance, throughput, capacity, scalability, and availability claims
   require measured evidence for the stated workload and environment. Otherwise

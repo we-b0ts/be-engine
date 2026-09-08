@@ -144,9 +144,8 @@ be configured in source XML, annotations, client builders, or runtime
 configuration. Preserve the source's effective attempt timeout when it is
 available. With `N` retries, reserve roughly `(N + 1) * request_timeout` inside
 the enclosing request's end-to-end deadline. Do not copy a timeout from an
-example or silently replace missing evidence with a new value. If the source
-value cannot be established, report that assumption in the worker handoff
-instead of claiming exact compatibility.
+example or silently replace missing evidence with a new value. A timeout whose
+source value is unknown does not establish exact compatibility.
 
 Set `with_retries` from source behavior as well, including zero when the source
 does not retry. A referer performs one additional attempt by default and only
@@ -182,13 +181,3 @@ threshold-protection policy. Do not duplicate those defaults in application
 code. Set the evidence-proven timeout and retry count explicitly; override any
 other value only when source or runtime evidence proves that the standard
 policy does not apply.
-
-## Check before delivery
-
-1. Test every generated method's Hessian argument encoding, response decoding,
-   nullability, DTO field contract, and remote-exception mapping.
-2. Test timeout, unavailable, and overload behavior with the configured retry
-   count; verify distinct-replica failover and the full logical-call budget.
-3. When authentication is enabled, verify that all compatible referers share
-   one TokenProxy discovery and one `getAllTokens` dependency.
-4. Replay the relevant cases and run the target repository's normal checks.

@@ -5,42 +5,57 @@ description: "Orchestrate, verify, and deliver backend service rewrites from obs
 
 # Backend Rewrite
 
-Use the `backend-rewrite` binary as the authoritative workflow coordinator.
-Treat recorded artifacts as read-only diagnostic evidence and coordinator
-actions as the only authority for workflow state, legal transitions, and gate
-results.
+Use the `backend-rewrite` binary as the authoritative **rewrite engine**. It
+maintains workflow state, selects legal actions, and evaluates verification and
+completion gates. Recorded artifacts are read-only diagnostic evidence.
+
+The **workflow coordinator** and **implementation workers** are AI roles. The
+**task runtime** creates and resumes worker tasks, supplies their handles and
+events, and controls concurrency and queuing. In this skill, `coordinator` means
+the workflow coordinator, `worker` means an implementation worker, and `target`
+means the target service or repository. Engine-owned traffic execution is
+separate from the task runtime.
 
 ## Select The Current Role
 
-Choose exactly one role before taking action:
+Role follows the task assignment, not the completeness of its attached data:
 
-- **State-machine coordinator (main/root agent):** use this role unless a parent explicitly assigned one
-  complete implementation work scope, action, and absolute worker worktree.
-  Own coordinator commands and state mutations, worker/worktree bindings,
-  integration, serialized traffic, repository gates, and final delivery. Stop
-  at every `implementation_required` action and dispatch its dedicated worker
-  before work-item diagnosis; continue other executable items after dispatch.
-- **Assigned API worker:** use this role only when the handoff contains
-  `action.details.work_scope.kind=api`, its exact API, the complete action, and
-  an absolute worker worktree. Own that API's returned evidence, source/target
-  diagnosis, implementation, and local tests. Never advance coordinator state,
-  execute acceptance, or operate another work item.
-- **Assigned process-output worker:** use this role only when the handoff
-  contains `action.details.work_scope.kind=process_output`, its ID, the complete
-  action, and an absolute worker worktree. Own diagnosis of the returned
-  `comparison_observation`, source-path analysis required by a returned profile
-  rule candidate, target startup/output implementation, and local tests. Do not
-  expect API evidence commands, invent traffic operations, advance coordinator
-  state, execute acceptance, or operate another work item.
+- **Workflow coordinator:** the main/root session that owns the rewrite workflow.
+  Execute engine-issued actions, maintain worker/worktree bindings, receive and
+  integrate handoffs, invoke verification, and deliver the completed workflow.
+  Dispatch every returned implementation action through the task runtime and
+  continue other executable work. Implementation diagnosis and code repairs
+  belong to workers.
+- **Implementation worker:** a task dispatched to implement one work item.
+  Its role remains worker through missing inputs, interruptions, resumed turns,
+  failed acceptance, and completion. It never becomes a workflow coordinator.
+  Recover the current work scope, action, and evidence from the engine's scoped
+  `status` and returned evidence APIs using the assignment's canonical root and
+  identity. Never advance engine state, execute acceptance, or take another item.
 
-If the handoff omits an exact work scope, complete action, or absolute
-worktree, remain the state-machine coordinator rather than inferring a worker role.
+Worker scope determines the diagnosis path, not a different authority level:
+
+- `work_scope.kind=api`: diagnose and implement the exact API using its returned
+  evidence, source/target code, and local tests.
+- `work_scope.kind=process_output`: diagnose the returned
+  `comparison_observation`, inspect source paths required by a profile rule
+  candidate, and implement normal startup/output behavior. Do not request API
+  evidence queries or invent traffic operations.
+
+The engine supplies current work-item facts through its APIs; a prose handoff
+is not their authoritative store. Task identity and the assigned absolute
+worktree come from the task runtime and retained assignment. If the known
+identity cannot resolve the required information, report the specific missing
+input or engine API gap to the coordinator and retain the worker role. Do not
+guess a scope, initialize another workflow, or edit before the assigned worktree
+is established. A missing input never grants coordinator permissions.
 
 ## Reference Routing
 
-The state-machine coordinator reads [workflow.md](references/workflow.md) before
-advancing the workflow. Load these conditional references directly from this
-file only when their trigger occurs:
+The workflow coordinator reads [workflow.md](references/workflow.md) at every
+session start or resume, including sessions that only monitor existing workers.
+It is the single main-loop and action-handling guide. Load conditional
+references directly from this file only when their trigger occurs:
 
 - Read [recording-lifecycle.md](references/recording-lifecycle.md) for a
   `recording_required`, `recording_in_progress`, or
@@ -51,7 +66,7 @@ file only when their trigger occurs:
   [case-pattern-identification.md](references/case-pattern-identification.md)
   only for `case_pattern_identification_required`.
 - Read
-  [coordinator-evidence-actions.md](references/coordinator-evidence-actions.md)
+  [coordinator-rule-actions.md](references/coordinator-rule-actions.md)
   only after worker confirmation and only when that worker returns inputs for
   response-rule, recorder-capture, dependency-rule, or process-output-rule
   planning, or confirmed evidence exposes one of those coordinator-owned
@@ -59,20 +74,20 @@ file only when their trigger occurs:
   inspect supported recorder rules before submitting an IP capture defect.
 - Read
   [recovery-and-system-repair.md](references/recovery-and-system-repair.md) only
-  for `recovery_required`, `system_repair_required`, or a coordinator-issued
+  for `recovery_required`, `system_repair_required`, or an engine-issued
   repair verification action.
 - Read
-  [implementation-worker-coordination.md](references/implementation-worker-coordination.md)
-  before the first implementation dispatch and whenever dispatch, resume,
-  transfer, integration, or worker cleanup is required.
+  [coordinator-worker-protocol.md](references/coordinator-worker-protocol.md)
+  before the first implementation dispatch and for worker status checks,
+  completion events, resume, transfer, integration, or worker cleanup.
 - Read
   [target-implementation-requirements.md](references/target-implementation-requirements.md)
   before integrating a worker change, resolving an integration conflict that
   changes target code, or making a shared target refactor. Ordinary coordinator
   transitions do not load target implementation requirements.
 
-Both assigned worker roles read
-[problem-diagnosis.md](references/problem-diagnosis.md) and
+Implementation workers read
+[worker-diagnosis.md](references/worker-diagnosis.md) and
 [target-implementation-requirements.md](references/target-implementation-requirements.md)
 before changing target product code, startup, or configuration. Follow the
 diagnosis branch selected by `work_scope.kind`. Do not preload conditional
@@ -87,7 +102,7 @@ contract, client, authentication, or lifecycle. Read both only when the same
 work scope owns both directions.
 
 When an assigned API worker calls an outbound HTTP dependency through
-`brz-http`, read [http.md](references/http.md) before constructing the client,
+`brz-http`, read [http-client.md](references/http-client.md) before constructing the client,
 defining endpoints, or implementing request and response handling.
 
 When an assigned API worker exposes an inbound HTTP API or starts an
@@ -113,12 +128,12 @@ product logs.
 
 When source analysis, target implementation, or startup diagnosis identifies a
 required environment variable, dotenv import, configuration mount, or
-image-local writable directory, read [startup.md](references/startup.md)
+image-local writable directory, read [target-startup-inputs.md](references/target-startup-inputs.md)
 before changing startup inputs or either Dockerfile. A required environment
 variable is actionable as soon as source behavior proves the target logic needs
 it; do not wait for a target failure. Source application environment captured
 during initialization is already injected into every target start. Workers
-return a startup input only for an override or addition, and the state-machine
+return a startup input only for an override or addition, and the workflow
 coordinator applies it through the documented startup API, using
 `--from-source` when appropriate. Do not load this reference during one-time
 initialization merely to search for possible inputs.
@@ -128,7 +143,7 @@ explicitly asks to initialize an uninitialized target repository. Project
 initialization is manual and one-time; normal rewrite and resumed sessions
 assume it is complete and never rerun it.
 
-## Shared Coordinator Contract
+## Shared Engine Contract
 
 A fresh standard recording requires explicit user authorization.
 
@@ -137,11 +152,11 @@ Response schema v25 contains an `action` object with exactly `kind`, `summary`,
 repository configuration versions. `status` (including scoped status) and
 `next` return scheduling state, a short issue summary, and legal commands;
 they do not embed issue diagnostics. Read scheduling facts from
-`action.details`. For either worker role, after dispatch confirmation execute
+`action.details`. For either worker scope, after dispatch confirmation execute
 the single `action.commands.evidence` command to fetch the issue overview.
 Read diagnostic facts from `facts.issue`; API workers then use the exact
 commands under the overview's `queries`. Process-output workers read
-`facts.issue.comparison_observation` and receive no API queries. The state-machine
+`facts.issue.comparison_observation` and receive no API queries. The workflow
 coordinator forwards the compact action and evidence entrypoint to its worker
 without fetching diagnostics for scheduling. Execute only command roles
 actually present under `action.commands`; never guess legacy fields or missing
@@ -155,40 +170,21 @@ default; use global `--pretty` only for interactive human inspection. The sole
 documented argv extension is the target-quality exception in
 [workflow.md](references/workflow.md).
 
-Start and resume in the initialized canonical target repository with unscoped
-`backend-rewrite status`. An initialized project without a workflow returns the
-command that starts it. Default `workflow` contains only `id` and `revision`;
-`inventory` retains phase, recording, comparison, and selected-scope metadata.
-Choose the next operation from `pending`, `action`, and `terminal_allowed`.
-Do not infer scheduling from `workflow.phase`.
-
-The state-machine coordinator consumes one executable-work loop. Top-level
-`pending` counts only actions it can perform now; running or resource-waiting
-work is excluded. While `pending > 0`, execute the returned action and report
-its result. When it reaches zero, wait for a runtime completion event or the
-returned polling delay (normally 30 seconds), then query status again. End only
-when `terminal_allowed` permits delivery. `inventory` expands English ready and
-waiting counts; API `unverified` counts are not a dispatch queue. Scoped status
-retains this same global `pending` count while showing the selected item's action;
-use unscoped status for the coordinator loop.
-
-The engine owns selection across all APIs and process-output items, including
-parked implementation issues. The coordinator imposes no worker concurrency
-limit; the runtime owns its concurrency and queuing. `next` and target-quality
-execution are detached so the coordinator can continue dispatch and feedback
-while verification runs. Follow the
-[coordination loop and event protocol](references/implementation-worker-coordination.md)
-for actual dispatch/resume, `worker_status_required`, `integration_required`,
-worker completion callbacks, and recovery. A received and integrated handoff
-schedules only its owning API's acceptance. Defer cross-API impact to final
-unified verification. Preserve evidence confirmation and final coverage gates.
+The workflow coordinator starts and resumes with unscoped
+`backend-rewrite status` and follows [workflow.md](references/workflow.md#coordinator-loop) for
+its executable-work loop, event handling, and periodic polling. `pending` counts
+ready coordinator operations; `terminal_allowed` governs completion. The engine
+selects work; the task runtime limits worker concurrency. Scoped status serves
+assigned work-item inspection and does not replace the global coordinator loop.
+Default `workflow` contains only `id` and `revision`; `inventory` expands its
+metadata and ready/waiting counts. Do not infer scheduling from `workflow.phase`.
 
 Use `backend-rewrite status [--api '<METHOD pattern>' | --process-output <id>]`
 when an action response was lost or a session resumes. Coordinator scheduling uses the
-canonical coordinator's unscoped status; assigned workers use their scoped
+canonical target's unscoped status; assigned workers use their scoped
 status. Never infer state from artifact recency. Never
-mutate coordinator runtime files. Use action, status, and evidence APIs as the
-primary interface; report an insufficient API surface as a coordinator gap.
+mutate engine runtime files. Use action, status, and evidence APIs as the
+primary interface; report an insufficient API surface as an engine API gap.
 Read-only runtime inspection is allowed when needed to diagnose such a gap,
 but its layout is not a stable workflow contract.
 
@@ -200,8 +196,8 @@ Keep these states distinct:
   issue identity, proven cause, changed files/shared impact, patch or commit,
   local tests, coordinator inputs, unchanged acceptance, and unresolved risks.
   Its binding and worktree remain active.
-- **Work item complete:** the orchestrator integrated the handoff and the
-  coordinator-issued acceptance returned the API or process output as complete
+- **Work item complete:** the workflow coordinator integrated the handoff and the
+  engine-issued acceptance returned the API or process output as complete
   for the current target content fingerprint. A later integration may make it
   stale and require revalidation through the same binding.
 - **Workflow complete:** `terminal_allowed=true` proves every API and process
@@ -215,21 +211,21 @@ Keep these states distinct:
   caller-required repository checks and finish delivery.
 
 An evidence-proven unavailable external response-driving value may stop work as
-blocked under [problem-diagnosis.md](references/problem-diagnosis.md). A blocker
+blocked under [worker-diagnosis.md](references/worker-diagnosis.md). A blocker
 is not successful completion and must never be reported as
 `terminal_allowed=true`.
 
 ## Target And Repository Contract
 
 `.traffic-e2e/local/artifacts/` is readable, read-only evidence. Preserve
-coordinator-generated `progress.yaml`; do not hand-edit it, replace coordinator
+engine-generated `progress.yaml`; do not hand-edit it, replace engine
 aggregation with bulk scripts, make target code consume recorded results, or
 modify source behavior to manufacture evidence. The coordinator, not a worker,
-owns every state-changing transition and final progress publication.
+executes engine-issued transitions and requests final progress publication.
 
 The target implements ordinary product behavior and source-compatible
 configuration. It must not read cases, Replay sessions, expected responses, or
-reports. The coordinator owns the isolated target runtime, build caching,
+reports. The engine owns the isolated target runtime, build caching,
 traffic dependencies, readiness, signals, and cleanup. See
 [project-init.md](references/project-init.md) only for the one-time target
 contract and initialization procedure. Target-code changes and integration use

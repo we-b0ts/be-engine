@@ -113,10 +113,6 @@ Specify `serialization` only when the source contract fixes it. When source
 evidence requires adaptive String handling, omit that attribute and let the
 generated adapter mirror the request serialization.
 
-`Json<T>` is not an instruction to the Replay comparator. Do not alter the
-target signature merely to change comparison behavior; response payload
-detection remains traffic-engine-owned.
-
 The macro generates `ExampleRpcServiceExporter` and its `PATH` constant.
 Create adapters only from this generated type; do not duplicate the interface
 string or implement separate dispatch.
@@ -160,14 +156,3 @@ async fn serve_motan(
 For multiple interfaces, pass every generated `*Exporter::new(...)` to the
 same `brz_motan::exporter!(...)` invocation and use each `*Exporter::PATH` in
 the corresponding endpoint's `interfaces`.
-
-## Check before delivery
-
-1. Test each macro method through its generated exporter, including request
-   decoding, handler invocation, response encoding, and error conversion.
-2. For DTOs, test the source field names, defaults, nullability, numeric ranges,
-   omitted fields, and any exact text that the source contract preserves.
-3. Replay recorded request frames unchanged against the running exporter,
-   preserving the descriptor when present and its absence when omitted.
-4. Run the target repository's normal tests and this API's Replay/Comparison
-   acceptance.

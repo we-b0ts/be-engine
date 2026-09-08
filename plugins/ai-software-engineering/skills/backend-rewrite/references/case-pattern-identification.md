@@ -1,8 +1,8 @@
 # Case Pattern Identification
 
-Read this guide only for `case_pattern_identification_required`. The main
-orchestrator owns this low-frequency configuration action; API and
-process-output workers never receive it.
+Audience: the workflow coordinator. Read only for
+`case_pattern_identification_required`. The coordinator owns this configuration
+action; API and process-output workers never receive it.
 
 `action.details.candidates` contains only concrete APIs that are absent from
 the persistent historical API catalog and are not covered by current
@@ -22,7 +22,7 @@ containing only the identified path patterns. Use `[]` when every candidate is
 static. Execute the exact `action.commands.apply` argv without adding pattern
 arguments.
 
-Applying the batch updates the coordinator-managed source traffic policy and
+Applying the batch updates the engine-managed source traffic policy and
 recanonicalizes the historical API catalog and current derived inventory. It
 does not edit prior `request.json` files or move recorded case directories.
 Execute the returned `advance_required` command to continue normal inventory

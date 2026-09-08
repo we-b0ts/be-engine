@@ -1,74 +1,21 @@
-# Implementation Worker Coordination
+# Coordinator Worker Protocol
 
-Use this guide for dispatch, resume, worker completion events, integration, and
-session recovery. The main/root agent is the **state-machine coordinator**. It
-executes engine-issued actions and reports results. Dedicated workers own API
-or process-output diagnosis, implementation, and local tests.
-
-## Post-Dispatch Scheduler
-
-Schema v25 exposes one top-level `pending`: the number of operations the
-coordinator can perform now. `pending > 0` requires consuming the returned
-`action`; `pending = 0` means wait for an event or the returned polling delay.
-Check `terminal_allowed` separately before ending the workflow.
-
-```text
-state = status()
-while not state.terminal_allowed:
-    collect and report any arrived worker completion events
-    while state.pending > 0:
-        execute the action's coordinator command or runtime operation
-        report the actual result when that action requires confirmation
-        state = the returned current action, or status() if it was lost
-    wait for a worker event or up to 30 seconds
-    state = status()
-```
-
-`next` means advancing one coordinator step, including executing any returned
-runtime action and reporting its result. The CLI cannot create task-runtime
-handles. The coordinator invokes the runtime's real dispatch/resume capability
-for implementation actions; it never invents a handle or substitutes a TODO.
-Do not repeatedly call `next` while ignoring the action it returns.
-
-The engine selects across the complete inventory, including parked
-`implementation_required` items. The coordinator does not infer runnable work
-from `api_inventory.unverified`, enumerate APIs to build its own scheduler, or
-fetch evidence to decide which API to repair. Use `inventory` only when a
-scheduling breakdown or binding recovery is needed. Its English `details.ready`
-counts sum to `pending`; `details.waiting` is excluded.
-
-No worker concurrency limit belongs to the coordinator. Submit every returned
-dispatch/resume to the runtime; the runtime controls concurrency and queuing.
-Accepted queued work retains its actual handle. A rejected submission is not a
-confirmed dispatch. Respect runtime backpressure before retrying a submission.
-One failed or waiting item must not cause the coordinator to ignore other
-engine-issued executable work.
-
-`next` and `target-quality run` start detached engine operations when execution
-is needed. Recording already has a detached executor. Consume the returned
-action immediately; do not background these commands yourself or wait for a
-worker's entire lifecycle. Recording, Replay, and Comparison retain their
-serialized traffic lease. Worker dispatch, confirmation, and feedback remain
-available during a live operation. Integration waits while the canonical target
-is being verified. If every remaining item is waiting for Replay, waiting is
-correct. The engine's `wait_required` response supplies the exact status command
-and polling delay. Worker completion events can wake the coordinator sooner.
-
-A detached operation's `execution_failed` response waits for its reported cause
-to be resolved. It includes the only retry command. Do not hot-loop that retry;
-continue other returned worker actions. A stopped executor requires the returned
-recovery action. Neither condition means successful completion.
+Audience: the workflow coordinator. Read for dispatch, resume, worker status
+checks, completion events, integration, or binding recovery. The coordinator
+executes the mutations in this guide; implementation workers diagnose, implement,
+test, and return handoffs. Follow the main loop in
+[workflow.md](workflow.md#coordinator-loop) throughout these operations.
 
 ## Persistent Assignment
 
-Maintain one exact work item to one dedicated runtime handle and one worktree:
+Maintain one exact work item to one dedicated task runtime handle and one worktree:
 
 ```text
 API method/pattern or process_output:<id> <-> worker handle <-> worker worktree
 ```
 
 Issue IDs, attempts, and workflow revisions can change without changing this
-binding. Store the runtime-returned handle in the coordinator's assignment
+binding. Store the task runtime handle in the coordinator's assignment
 record; the CLI deliberately persists only its fingerprint and optional name.
 A finished worker turn does not release ownership. Retain the binding and
 worktree through final workflow completion.
@@ -82,7 +29,7 @@ Create worktrees from the integrated target revision under:
 Use `api-` and `process-output-` slug prefixes. Pass the absolute worktree path,
 exact work scope, compact action, issue/dispatch identity, evidence entrypoint,
 and required handoff to the worker. Workers edit and test only their worktrees;
-they do not initialize a private coordinator or operate other work items.
+they do not initialize a private rewrite workflow or operate other work items.
 
 ## Dispatch And Resume
 
@@ -91,11 +38,11 @@ For `implementation_required`:
 1. Read `details.worker.state` and recover the assigned handle if one exists.
 2. For `dispatch_required`, create its worktree and dispatch a real dedicated
    worker. For `resume_required`, refresh the retained worktree from the
-   integrated revision and resume the same runtime handle with the new action.
-3. After the runtime accepts the submission, execute `commands.confirm_worker`
+   integrated revision and resume the same task runtime handle with the new action.
+3. After the task runtime accepts the submission, execute `commands.confirm_worker`
    with `BACKEND_REWRITE_SUBAGENT_HANDLE` and optional
    `BACKEND_REWRITE_SUBAGENT_NAME`. Confirm accepted queued work as well; report
-   `queued` when the runtime exposes that state.
+   `queued` when the task runtime exposes that state.
 4. Confirmation records the accepted binding only. Report `running` or `queued`
    explicitly using the owning action's `commands.report_worker` when that state
    is known, then continue with the returned global action. A confirmation with
@@ -123,7 +70,7 @@ The coordinator consumes the returned result and executes the work item's
 
 | Activity | Meaning |
 | --- | --- |
-| `queued` | Runtime accepted the task and is waiting to run it. |
+| `queued` | Task runtime accepted the task and is waiting to run it. |
 | `running` | The coordinator reports that this dispatch is running. |
 | `idle` | The worker stopped without a usable handoff; resume is required. |
 | `handoff_ready` | The coordinator received a reviewable handoff. |
@@ -146,9 +93,9 @@ from the superseded turn and follow the returned resume action.
 The worker returns the handoff and ends its turn; it does not wait for Replay.
 
 After interruption, on `worker_status_required`, or when an observation expires,
-inspect the actual runtime task and report its state through `report_worker`.
+inspect the actual task runtime task and report its state through `report_worker`.
 The engine trusts the coordinator's explicit report; it does not query Claude
-Code or another runtime, or independently prove liveness. Never report running
+Code or another task runtime, or independently prove liveness. Never report running
 merely because a dispatch was previously confirmed. A repeated confirmation does
 not create or refresh an activity report. Running/queued reports are fresh for
 five minutes. Expiry requests a check; it
@@ -171,7 +118,7 @@ failed quality operation, integrate the corrected handoff before executing its
 retry command; the retry validates the current integrated gate identity.
 
 If a worker returns evidence-backed rule, route, capture, or startup inputs,
-follow the relevant returned coordinator commands. Its original evidence and
+follow the relevant returned engine-issued commands. Its original evidence and
 plan identities remain authoritative. Canonical `.traffic-e2e/local/target.env`
 is coordinator-owned; apply source-proven startup inputs through the startup
 interface, never a separate worker-local environment file.

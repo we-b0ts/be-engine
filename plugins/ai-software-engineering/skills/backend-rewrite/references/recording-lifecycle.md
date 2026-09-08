@@ -2,7 +2,7 @@
 
 Read this guide only for `recording_required`, `recording_in_progress`,
 `comparison_recording_required`, an explicit fresh-standard-recording request,
-or a consolidated capture refresh. The state-machine coordinator owns every command in
+or a consolidated capture refresh. The workflow coordinator owns every command in
 this guide.
 
 ## Contents
@@ -25,7 +25,7 @@ returned by that execution. While recording is live,
 `recording_in_progress.action.commands.status` remains the only polling command.
 
 Run `action.commands.advance` only after `advance_required`. The allocated
-identity is `action.details.run_id`; the coordinator owns its input mode,
+identity is `action.details.run_id`; the engine owns its input mode,
 lifecycle, and exact finalized manifest. Never select a recording by recency or
 add manual curl, Replay, shell pipelines, backgrounding, or driver flags.
 Advancing a finalized unscoped standard recording may return the one-time
@@ -44,7 +44,7 @@ the finalized cases produce the stable inventory.
 
 Ordinary repair keeps the finalized standard cases immutable. A failed focused
 E2E attempt changes the target and reuses those cases. After focused E2E passes,
-the coordinator allocates fresh comparison evidence without replacing the
+the engine allocates fresh comparison evidence without replacing the
 standard cases.
 
 After the first focused attempt, `next` and `status` include
@@ -57,9 +57,9 @@ completed attempt; a later `next` without a target change does not imply that
 another attempt ran.
 
 Applying or confirming a source-proven process-owned dependency rule does not
-authorize fresh traffic. The coordinator reclassifies the immutable focused
+authorize fresh traffic. The engine reclassifies the immutable focused
 Replay evidence and returns its next action. Follow
-[coordinator-evidence-actions.md](coordinator-evidence-actions.md) for that
+[coordinator-rule-actions.md](coordinator-rule-actions.md) for that
 mutation.
 
 ## Request Fresh Standard Traffic
@@ -74,7 +74,7 @@ every API admitted by recorder configuration. Provide `--api` only for an
 explicitly single-API recording.
 
 An identical pending request is idempotent. A different pending request
-requires explicit `--replace-pending`. The coordinator preserves prior
+requires explicit `--replace-pending`. The engine preserves prior
 artifacts, clears state derived from the old baseline, allocates a new run, and
 returns `recording_required`; execute that action and resume with `next`.
 
@@ -98,9 +98,10 @@ files.
 For HTTP response URL capture, first call `recorder-capture plan-http-response`
 without `--pattern-checked`. It returns `path_pattern_review_required` with the
 observed path and existing rules sharing authority, method and pointer. Check
-the source's path construction even when no previous rule exists. Target owns
-the decision about dynamic IDs and consolidation; the engine does not judge
-path similarity. After checking, choose `--path-pattern 'GET /sandboxes/*'`, explicitly add
+the source's path construction even when no previous rule exists. The worker
+supplies source proof for the coordinator's decision about dynamic IDs and
+consolidation; the engine does not judge path similarity. After checking, choose
+`--path-pattern 'GET /sandboxes/*'`, explicitly add
 `--pattern-checked`, and provide one brief `--source-evidence` note about URL
 consumption and the path choice. No special proof format is needed. Keep an
 exact path when the source contract calls for it, explaining that choice.
@@ -128,7 +129,7 @@ accumulate before that one full-scope recording.
 rule but cannot be reverified against the old baseline. It is parked, not
 complete or blocked. Continue pending APIs and existing workers; other APIs may
 still compare against the current baseline. When no runnable item remains, the
-coordinator atomically returns one `recording_required` refresh.
+engine atomically returns one `recording_required` refresh.
 
 The new finalized recording replaces the shared baseline atomically and
 invalidates old Replay/comparison evidence. Its observed APIs define the new
@@ -150,6 +151,6 @@ require validation. Configuration revision checks still apply when scheduling
 a refresh that has no replacement run.
 
 After a system repair, do not choose fresh traffic yourself. The
-coordinator-issued repair verification decides whether to allocate fresh
+engine-issued repair verification decides whether to allocate fresh
 standard cases or replay the existing cases. Follow
 [recovery-and-system-repair.md](recovery-and-system-repair.md).
