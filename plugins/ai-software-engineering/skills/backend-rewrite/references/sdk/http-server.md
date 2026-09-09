@@ -55,14 +55,13 @@ use crate::{auth::Actor, users::{UpdateUser, UserService, UserView}};
 #[brz_http_server::put(
     "/v1/users/:id",
     auth = required,
-    headers(trace_id = "x-trace-id"),
 )]
 async fn update(
     #[inject(users)] service: &UserService,
     id: u64,
     verbose: Option<bool>,
     input: UpdateUser,
-    trace_id: Option<&str>,
+    #[header("x-trace-id")] trace_id: Option<&str>,
     actor: Authenticated<Actor>,
 ) -> ApiResult<UserView> {
     // Use the actual source-backed operation and authorization rules.
@@ -101,7 +100,7 @@ auth policy; register it as a function in its module through the same collection
 
 ## HTTP inputs and authentication
 
-Ignoring injected dependencies, path parameters come first in capture order
+Ignoring injected dependencies and header parameters, path parameters come first in capture order
 with matching names. Bind the remaining inputs as follows:
 
 | Input | Declaration |
@@ -109,9 +108,14 @@ with matching names. Bind the remaining inputs as follows:
 | One path segment | `"/users/:id"` with `id: u64`; static suffixes are supported |
 | Remaining path | Terminal `"/files/*path"` with `path: &str` |
 | Query | Same-named scalar parameters; `Option<T>` for optional values, `Vec<T>` for repeated keys |
-| Header | `headers(trace_id = "x-trace-id")` with `trace_id: Option<&str>` |
+| Header | `#[header] authorization: Option<&str>` or `#[header("x-trace-id")] trace_id: Option<&str>` |
 | JSON body | One business type deriving `Deserialize` |
 | Other bodies | `Form<T>`, `Multipart`, or raw `&[u8]` |
+
+`#[header]` uses the parameter name literally (without a raw identifier's `r#`
+prefix); underscores are not converted to hyphens. Specify hyphenated names
+explicitly. `Option<T>` permits missing headers; `T` requires a value. Header
+parameters can appear anywhere. Do not use route-level `headers(...)`.
 
 Use query values as decoded by the SDK; do not URL-decode them again. Request
 strings and JSON fields can borrow across `await` and response serialization;
