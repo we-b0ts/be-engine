@@ -86,10 +86,17 @@ is unclear.
   infer path similarity. `config/source_traffic_policy/http_response` owns the
   compact authority / method-path / pointer / review-note document and its
   recorder projection. `evidence/rule_guidance` owns rule discovery commands.
-- `source_snapshot` owns initial and explicit administrator-requested Kubernetes
-  Pod capture, immutable source image resolution, effective environment capture,
+- `source_snapshot` owns initialization capture from Kubernetes Pods and local
+  Docker containers, explicit administrator-requested Kubernetes Pod upgrades,
+  immutable source image resolution, effective environment capture,
   supported volume capture, rollback-safe local replacement, integrity
-  validation, and the normalized managed-source runtime projection.
+  validation, and the normalized managed-source runtime projection. Its
+  `provider` module owns source selection and typed provenance; `kubernetes`
+  and `container` own provider-specific discovery and capture. `image` owns
+  immutable-image validation, local archive recovery, and image path copying;
+  `environment` owns shared target-environment name filtering. Container
+  capture normalizes effective image launch configuration into its committed
+  image, so downstream runtimes do not branch on provider type.
 - `startup` owns the source-compatible target startup declaration,
   initialization-owned target-mount snapshot lifecycle, and merged source plus
   override Docker environment projection. Its `snapshot` child copies declared

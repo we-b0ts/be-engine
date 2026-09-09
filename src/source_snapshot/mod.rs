@@ -3,13 +3,22 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read as _, Write as _};
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+mod container;
+mod environment;
+mod image;
 mod kubernetes;
+mod provider;
+
+pub use image::SourceImage;
+use image::{copy_image_path, ensure_local_image};
+pub use provider::{
+    ContainerSourceOptions, KubernetesSourceOptions, SourceOptions, SourceProviderEvidence,
+};
 mod upgrade;
 
 pub(crate) use upgrade::begin_kubernetes_source_snapshot_upgrade;
@@ -17,38 +26,6 @@ pub(crate) use upgrade::begin_kubernetes_source_snapshot_upgrade;
 const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 const PRIVATE_FILE_MODE: u32 = 0o600;
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
-
-#[derive(Debug, Clone)]
-pub struct KubernetesSourceOptions {
-    pub pod: String,
-    pub namespace: String,
-    pub container: Option<String>,
-    pub kubeconfig: Option<PathBuf>,
-    pub context: Option<String>,
-    pub kubectl_binary: PathBuf,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SourceProviderEvidence {
-    pub kind: String,
-    pub context: Option<String>,
-    pub namespace: String,
-    pub pod: String,
-    pub pod_uid: String,
-    pub container: String,
-    pub restart_count: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SourceImage {
-    pub reference: String,
-    pub registry_digest: String,
-    pub local_id: String,
-    pub architecture: String,
-    pub os: String,
-}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SourceSnapshotReport {
@@ -159,6 +136,13 @@ pub fn capture_kubernetes_source_snapshot(
     target_root: &Path,
     options: &KubernetesSourceOptions,
 ) -> Result<SourceSnapshotReport> {
+    capture_source_snapshot(target_root, &SourceOptions::Kubernetes(options.clone()))
+}
+
+pub fn capture_source_snapshot(
+    target_root: &Path,
+    options: &SourceOptions,
+) -> Result<SourceSnapshotReport> {
     let target_root = fs::canonicalize(target_root)
         .with_context(|| format!("failed to resolve target root {}", target_root.display()))?;
     ensure!(target_root.is_dir(), "target root must be a directory");
@@ -167,15 +151,8 @@ pub fn capture_kubernetes_source_snapshot(
         Ok(_) => {
             let snapshot = load(&target_root)?;
             ensure!(
-                snapshot.manifest.provider.namespace == options.namespace
-                    && snapshot.manifest.provider.pod == options.pod
-                    && options.container.as_ref().is_none_or(|container| {
-                        container == &snapshot.manifest.provider.container
-                    })
-                    && options.context.as_ref().is_none_or(|context| {
-                        Some(context) == snapshot.manifest.provider.context.as_ref()
-                    }),
-                "existing source snapshot belongs to another Kubernetes Pod input"
+                snapshot.manifest.provider.matches(options),
+                "existing source snapshot belongs to another source input"
             );
             return Ok(snapshot_report("existing", snapshot));
         }
@@ -200,10 +177,17 @@ pub fn capture_kubernetes_source_snapshot(
     let staging = local_root.join(format!(".source-{snapshot_id}.staging"));
     fs::create_dir(&staging).context("failed to create source snapshot staging directory")?;
     fs::set_permissions(&staging, fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE))?;
+    let mut captured_container_image = None;
     let result = (|| -> Result<SourceSnapshotReport> {
         let mounts_root = staging.join("mounts");
         fs::create_dir(&mounts_root).context("failed to create source mount snapshot root")?;
-        let captured = kubernetes::capture(options, &mounts_root)?;
+        let captured = options.capture(&mounts_root)?;
+        if matches!(
+            captured.provider,
+            SourceProviderEvidence::DockerContainer { .. }
+        ) {
+            captured_container_image = Some(captured.image.local_id.clone());
+        }
         write_json(&staging.join("runtime.json"), &captured.runtime)?;
         let content_revision = snapshot_content_revision(
             &staging,
@@ -222,6 +206,7 @@ pub fn capture_kubernetes_source_snapshot(
             ignored_mounts: captured.ignored_mounts.clone(),
         };
         write_json(&staging.join("manifest.json"), &manifest)?;
+        load_root(&staging).context("captured source snapshot is invalid")?;
         fs::rename(&staging, &destination).with_context(|| {
             format!(
                 "failed to publish source snapshot {}",
@@ -247,6 +232,11 @@ pub fn capture_kubernetes_source_snapshot(
     })();
     if result.is_err() {
         let _ = fs::remove_dir_all(&staging);
+        if !destination.exists()
+            && let Some(image_id) = captured_container_image
+        {
+            image::remove_captured_image(&image_id);
+        }
     }
     result
 }
@@ -290,6 +280,12 @@ fn load_root(root: &Path) -> Result<LoadedSourceSnapshot> {
         "unsupported source snapshot schema"
     );
     validate_manifest(&manifest)?;
+    if manifest.image.archive_sha256.is_some() {
+        ensure!(
+            fs::symlink_metadata(root.join("image.tar"))?.is_file(),
+            "source image archive must be a regular file"
+        );
+    }
     let runtime: SourceRuntime =
         read_json(&root.join("runtime.json")).context("source runtime snapshot is invalid")?;
     validate_runtime(&runtime)?;
@@ -326,30 +322,14 @@ fn load_root(root: &Path) -> Result<LoadedSourceSnapshot> {
 }
 
 fn validate_manifest(manifest: &SourceSnapshotManifest) -> Result<()> {
+    manifest.provider.validate()?;
+    manifest.image.validate()?;
     ensure!(
-        manifest.provider.kind == "kubernetes_pod"
-            && !manifest.provider.namespace.is_empty()
-            && !manifest.provider.pod.is_empty()
-            && !manifest.provider.pod_uid.is_empty()
-            && !manifest.provider.container.is_empty(),
-        "source snapshot provider evidence is invalid"
-    );
-    ensure!(
-        manifest.image.local_id.starts_with("sha256:")
-            && manifest.image.local_id.len() == 71
-            && manifest.image.local_id[7..]
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit())
-            && manifest
-                .image
-                .registry_digest
-                .rsplit_once("@sha256:")
-                .is_some_and(|(_, digest)| {
-                    digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
-                })
-            && manifest.image.os == "linux"
-            && manifest.image.architecture == "amd64",
-        "source snapshot image identity is invalid"
+        !matches!(
+            manifest.provider,
+            SourceProviderEvidence::KubernetesPod { .. }
+        ) || manifest.image.registry_digest.is_some(),
+        "Kubernetes source image requires a registry digest"
     );
     for mount in &manifest.mounts {
         validate_snapshot_mount_path(&mount.path)?;
@@ -432,7 +412,7 @@ pub(crate) fn environment_value(target_root: &Path, name: &str) -> Result<String
 
 pub(crate) fn write_runtime_projection(path: &Path, target_root: &Path) -> Result<()> {
     let snapshot = load(target_root)?;
-    ensure_local_image(&snapshot.manifest.image)?;
+    ensure_local_image(&snapshot.manifest.image, &snapshot.root)?;
     let mounts = snapshot
         .manifest
         .mounts
@@ -511,7 +491,7 @@ pub(crate) fn copy_path(target_root: &Path, path: &Path, destination: &Path) -> 
             );
         }
     }
-    copy_image_path(&snapshot.manifest.image, path, destination)?;
+    copy_image_path(&snapshot.manifest.image, &snapshot.root, path, destination)?;
     Ok(false)
 }
 
@@ -541,92 +521,6 @@ pub(crate) fn validate_environment_name(name: &str) -> Result<()> {
     ensure!(
         !name.is_empty() && !name.contains(['=', '\0', '\r', '\n']) && name == name.trim(),
         "invalid source environment variable name {name:?}"
-    );
-    Ok(())
-}
-
-fn ensure_local_image(image: &SourceImage) -> Result<()> {
-    let mut output = Command::new("docker")
-        .args(["image", "inspect", "--format", "{{.Id}}", &image.local_id])
-        .stdin(Stdio::null())
-        .output()
-        .context("failed to inspect snapshotted source image")?;
-    if !output.status.success() {
-        let pull = Command::new("docker")
-            .args(["pull", "--platform", "linux/amd64", &image.registry_digest])
-            .stdin(Stdio::null())
-            .output()
-            .context("failed to restore snapshotted source image")?;
-        ensure!(
-            pull.status.success(),
-            "snapshotted source image {} is unavailable locally and could not be restored: {}",
-            image.local_id,
-            String::from_utf8_lossy(&pull.stderr).trim()
-        );
-        output = Command::new("docker")
-            .args([
-                "image",
-                "inspect",
-                "--format",
-                "{{.Id}}",
-                &image.registry_digest,
-            ])
-            .stdin(Stdio::null())
-            .output()
-            .context("failed to inspect restored source image")?;
-    }
-    ensure!(
-        output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == image.local_id,
-        "snapshotted source image {} does not resolve to its initialization image ID",
-        image.registry_digest
-    );
-    Ok(())
-}
-
-fn copy_image_path(image: &SourceImage, path: &Path, destination: &Path) -> Result<()> {
-    ensure_local_image(image)?;
-    let name = format!("traffic-e2e-source-copy-{}", Uuid::new_v4().simple());
-    let create = Command::new("docker")
-        .args(["create", "--name", &name, &image.local_id])
-        .stdin(Stdio::null())
-        .output()
-        .context("failed to create source image copy container")?;
-    ensure!(
-        create.status.success(),
-        "failed to create source image copy container: {}",
-        String::from_utf8_lossy(&create.stderr).trim()
-    );
-    let result = (|| -> Result<()> {
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let source = format!("{name}:{}", path.display());
-        let output = Command::new("docker")
-            .args(["cp", "--archive", "--follow-link", &source])
-            .arg(destination)
-            .stdin(Stdio::null())
-            .output()
-            .with_context(|| {
-                format!("failed to copy image-local source path {}", path.display())
-            })?;
-        ensure!(
-            output.status.success(),
-            "failed to copy image-local source path {}: {}",
-            path.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-        Ok(())
-    })();
-    let cleanup = Command::new("docker")
-        .args(["rm", &name])
-        .stdin(Stdio::null())
-        .output()
-        .context("failed to remove source image copy container");
-    result?;
-    let cleanup = cleanup?;
-    ensure!(
-        cleanup.status.success(),
-        "failed to remove source image copy container"
     );
     Ok(())
 }
@@ -777,8 +671,7 @@ mod tests {
             schema_version: SNAPSHOT_SCHEMA_VERSION,
             snapshot_id: "snapshot-test".to_string(),
             content_revision: "pending".to_string(),
-            provider: SourceProviderEvidence {
-                kind: "kubernetes_pod".to_string(),
+            provider: SourceProviderEvidence::KubernetesPod {
                 context: None,
                 namespace: "default".to_string(),
                 pod: "source".to_string(),
@@ -788,7 +681,8 @@ mod tests {
             },
             image: SourceImage {
                 reference: "example/app:1".to_string(),
-                registry_digest: format!("example/app@sha256:{}", "a".repeat(64)),
+                registry_digest: Some(format!("example/app@sha256:{}", "a".repeat(64))),
+                archive_sha256: None,
                 local_id: format!("sha256:{}", "b".repeat(64)),
                 architecture: "amd64".to_string(),
                 os: "linux".to_string(),

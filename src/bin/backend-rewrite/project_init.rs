@@ -6,10 +6,10 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use serde::Serialize;
 use traffic_e2e::{
-    DEFAULT_HTTP_BACKEND_PORT, DEFAULT_HTTP_GATEWAY_PORT, KubernetesSourceOptions,
-    ManagedRecordingPreflightOptions, RepositoryConfigInitOptions, RepositoryConfigInitResult,
-    SourceSnapshotReport, StartupSnapshotReport, initialize_repository_config,
-    run_managed_recording_preflight,
+    ContainerSourceOptions, DEFAULT_HTTP_BACKEND_PORT, DEFAULT_HTTP_GATEWAY_PORT,
+    KubernetesSourceOptions, ManagedRecordingPreflightOptions, RepositoryConfigInitOptions,
+    RepositoryConfigInitResult, SourceOptions, SourceSnapshotReport, StartupSnapshotReport,
+    initialize_repository_config, run_managed_recording_preflight,
 };
 
 #[derive(Debug, Args)]
@@ -17,22 +17,35 @@ pub(super) struct ProjectInitArgs {
     #[command(subcommand)]
     pub(super) command: Option<ProjectInitCommand>,
     /// Running Kubernetes Pod whose application container is snapshotted during initialization.
-    #[arg(long)]
+    #[arg(long, requires = "namespace", conflicts_with = "source_container")]
     source_pod: Option<String>,
+    /// Local Docker container name or ID; running and stopped containers are supported.
+    #[arg(long, conflicts_with = "source_pod")]
+    source_container: Option<String>,
     /// Kubernetes namespace containing the source Pod.
-    #[arg(long)]
+    #[arg(long, requires = "source_pod", conflicts_with = "source_container")]
     namespace: Option<String>,
     /// Regular Pod container to snapshot; omit when the Pod has exactly one regular container.
-    #[arg(long)]
+    #[arg(long, requires = "source_pod", conflicts_with = "source_container")]
     pod_container: Option<String>,
     /// Kubeconfig used only while creating the source snapshot.
-    #[arg(long, value_name = "PATH")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        requires = "source_pod",
+        conflicts_with = "source_container"
+    )]
     kubeconfig: Option<PathBuf>,
     /// Kubeconfig context used only while creating the source snapshot.
-    #[arg(long)]
+    #[arg(long, requires = "source_pod", conflicts_with = "source_container")]
     context: Option<String>,
     /// kubectl executable used during initialization.
-    #[arg(long, default_value = "kubectl", value_name = "PATH")]
+    #[arg(
+        long,
+        default_value = "kubectl",
+        value_name = "PATH",
+        conflicts_with = "source_container"
+    )]
     kubectl_binary: PathBuf,
     /// Native HTTP port listened to by the source and target backend processes.
     #[arg(long, default_value_t = DEFAULT_HTTP_BACKEND_PORT)]
@@ -125,22 +138,20 @@ pub(super) async fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: boo
             }
         };
     }
-    let source_pod = args
-        .source_pod
-        .context("--source-pod is required when creating repository configuration")?;
-    let namespace = args
-        .namespace
-        .context("--namespace is required when creating repository configuration")?;
-    let result = initialize_repository_config(RepositoryConfigInitOptions {
-        target_root,
-        source: KubernetesSourceOptions {
-            pod: source_pod,
-            namespace,
+    let source = match args.source_container {
+        Some(container) => SourceOptions::Container(ContainerSourceOptions { container }),
+        None => SourceOptions::Kubernetes(KubernetesSourceOptions {
+            pod: args.source_pod.context("--source-pod or --source-container is required when creating repository configuration")?,
+            namespace: args.namespace.context("--namespace is required with --source-pod")?,
             container: args.pod_container,
             kubeconfig: args.kubeconfig,
             context: args.context,
             kubectl_binary: args.kubectl_binary,
-        },
+        }),
+    };
+    let result = initialize_repository_config(RepositoryConfigInitOptions {
+        target_root,
+        source,
         http_backend_port: args.http_backend_port,
         http_gateway_port: args.http_gateway_port,
         readiness_path: args.readiness_path,
@@ -203,6 +214,27 @@ impl From<RepositoryConfigInitResult> for ProjectInitReport {
 #[cfg(test)]
 mod tests {
     use super::preflight_failure_stage;
+
+    #[test]
+    fn init_accepts_a_container_and_rejects_mixed_providers() {
+        use clap::Parser;
+        assert!(
+            super::super::Cli::try_parse_from(["test", "init", "--source-container", "local-app"])
+                .is_ok()
+        );
+        for args in [
+            vec!["--source-pod", "pod", "--namespace", "default"],
+            vec!["--namespace", "default"],
+            vec!["--pod-container", "app"],
+            vec!["--kubeconfig", "/tmp/config"],
+            vec!["--context", "cluster"],
+            vec!["--kubectl-binary", "kubectl"],
+        ] {
+            let mut argv = vec!["test", "init", "--source-container", "local-app"];
+            argv.extend(args);
+            assert!(super::super::Cli::try_parse_from(argv).is_err());
+        }
+    }
 
     #[test]
     fn classifies_preflight_failure_stages() {

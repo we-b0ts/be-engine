@@ -268,8 +268,9 @@ pub use rewrite::{
 };
 pub use runtime_output::RuntimeOutputLocation;
 pub use source_snapshot::{
-    KubernetesSourceOptions, SourceIgnoredMount, SourceImage, SourceProviderEvidence,
-    SourceSnapshotReport, capture_kubernetes_source_snapshot,
+    ContainerSourceOptions, KubernetesSourceOptions, SourceIgnoredMount, SourceImage,
+    SourceOptions, SourceProviderEvidence, SourceSnapshotReport,
+    capture_kubernetes_source_snapshot, capture_source_snapshot,
 };
 
 pub fn source_environment_value(

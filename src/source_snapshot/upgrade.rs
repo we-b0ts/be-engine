@@ -223,8 +223,7 @@ mod tests {
             status: "upgraded",
             snapshot_id: snapshot_id.to_string(),
             root: PathBuf::from(crate::repository::LOCAL_SOURCE_ROOT),
-            provider: SourceProviderEvidence {
-                kind: "kubernetes_pod".to_string(),
+            provider: SourceProviderEvidence::KubernetesPod {
                 context: None,
                 namespace: "default".to_string(),
                 pod: "source-new".to_string(),
@@ -234,7 +233,8 @@ mod tests {
             },
             image: SourceImage {
                 reference: "example/source:2".to_string(),
-                registry_digest: format!("example/source@sha256:{}", "b".repeat(64)),
+                registry_digest: Some(format!("example/source@sha256:{}", "b".repeat(64))),
+                archive_sha256: None,
                 local_id: image_id.to_string(),
                 architecture: "amd64".to_string(),
                 os: "linux".to_string(),
