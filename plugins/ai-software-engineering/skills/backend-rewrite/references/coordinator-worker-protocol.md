@@ -2,9 +2,9 @@
 
 Audience: the workflow coordinator. Read for dispatch, resume, worker status
 checks, completion events, integration, or binding recovery. The coordinator
-executes the mutations in this guide; implementation workers diagnose, implement,
-test, and return handoffs. Follow the main loop in
-[workflow.md](workflow.md#coordinator-loop) throughout these operations.
+executes the workflow mutations in this guide and delegates code operations.
+Follow the main loop in
+[coordinator.md](coordinator.md#coordinator-loop) throughout these operations.
 
 ## Persistent Assignment
 
@@ -28,10 +28,14 @@ Create worktrees from the integrated target revision under:
 
 Use `api-` and `process-output-` slug prefixes. Dispatch only:
 
-- Role: implementation worker; follow this Skill's worker diagnosis instructions.
+- Role: `api-implementer` for API scope; retain the generic implementation-worker
+  assignment for existing process-output scope.
 - Exact work scope: API method/pattern or process-output ID.
 - Absolute canonical target root for engine evidence queries.
 - Absolute assigned worktree for edits and local tests.
+- Source repository locations for behavior analysis.
+- On a post-input resume, the completed input transition and remaining delivery
+  requirement; the worker still retrieves all current issue facts itself.
 
 The worker obtains the current issue, binding/dispatch identity, and diagnostic
 facts from the engine's scoped evidence entrypoint. Do not attach action JSON,
@@ -48,9 +52,10 @@ For `implementation_required`:
 1. Read `details.worker.state` and recover the assigned handle if one exists.
 2. For `dispatch_required`, create its worktree and dispatch a real dedicated
    worker. For `resume_required`, refresh the retained worktree from the
-   integrated revision, preserving unintegrated worker changes, and resume the
-   same task runtime handle with those same assignment fields. The worker
-   fetches the new engine context itself.
+   integrated revision when synchronization is conflict-free, preserving all
+   unintegrated changes. Otherwise leave source conflict resolution to that
+   worker. Resume the same handle with the same assignment fields; its evidence
+   context supplies the frozen base for this dispatch.
 3. After the task runtime accepts the submission, execute `commands.confirm_worker`
    with `BACKEND_REWRITE_SUBAGENT_HANDLE` and optional
    `BACKEND_REWRITE_SUBAGENT_NAME`. Register the assigned absolute worktree using
@@ -100,8 +105,27 @@ received handoff. Duplicate handoff events do not create duplicate work. Stale
 attempts or wrong handles cannot advance the current issue; recover its current
 status without replacing the dedicated worker.
 
-A usable handoff requires a passing `review check` report for its final code;
-follow [source-review.md](source-review.md) and inspect any spawn evidence.
+For a result containing only rule, route, capture, or startup inputs, reconcile
+its original identity and execute the supported plan/apply or route transition
+before reporting `idle` when that transition is permitted. An idle
+report creates an unconfirmed dispatch and can invalidate the required planner
+or route preconditions. After the mutation, refresh status. If it advanced or
+parked the original implementation issue, do not report the old completion as
+`idle`, `handoff_ready`, or `integrated`. If the same dispatch still requires an
+implementation handoff, report the ended worker as `idle` and resume its handle
+for the remaining engine requirement. When no code repair remains, request review
+and delivery of the unchanged current target: its existing commit and a passing
+local report are sufficient. Do not request an artificial patch or new commit.
+Input application alone is not acceptance.
+
+If the input transition must wait and the engine requires a worker status report,
+report the actual `idle` state. Retain the old result as context; have the same
+worker revalidate its inputs after the next dispatch is confirmed. Do not relabel
+old evidence or claim the ended worker is running to preserve a planner.
+
+A usable code handoff requires a passing `review check` report for its final code;
+follow [coordinator-review.md](coordinator-review.md). Require the returned
+source evidence; send semantic questions back to its author.
 Report `handoff_ready` with `--review-report` or
 `BACKEND_REWRITE_WORKER_REVIEW_REPORT`. An unaccepted incomplete delivery from
 an ended worker is `idle`, so the same worker can resume and finish its review.
@@ -111,7 +135,8 @@ work scope, issue, binding and dispatch identities, proven cause and
 supporting evidence, commit/patch identity, changed files and shared-module
 impact, local test results, the passing review's absolute `report_path` and any
 spawn ownership evidence, necessary coordinator transition inputs, and any
-remaining risks. A task ending without that handoff is `idle`, not completed. Reporting idle
+remaining risks. After consuming any non-code result as above, a task ending
+with no usable handoff for its still-current dispatch is `idle`. Reporting idle
 issues a fresh dispatch identity for the same worker; reject late completion
 from the superseded turn and follow the returned resume action.
 After `backend-rewrite wait` returns `worker_events_required`, inspect available
@@ -138,40 +163,32 @@ Completion events should be reported immediately, not held until that interval.
 
 ## Integration And Focused Acceptance
 
-`integration_required` identifies the exact received handoff. Integrate its
-patch/commit and source-proven coordinator inputs in the canonical target,
-then execute the returned report command with the matching handoff ID. Normal
-merges are mechanical; return conflicts requiring API implementation decisions
-to the responsible worker: report `rework_required` with the current handoff ID when verification is idle,
-then follow the new dispatch for the same binding. The engine invalidates the
-old dispatch so late handoff callbacks cannot undo the rework decision. For a
-failed quality operation, integrate the corrected handoff before executing its
-retry command; the retry validates the current integrated gate identity.
+For `integration_required`, follow
+[coordinator-integration.md](coordinator-integration.md). Delegate preparation to
+`code-integrator`, publish only the matched candidate, apply necessary inputs,
+and report with the original implementation worker handle and accepted handoff
+ID. Do not analyze or resolve code conflicts in the coordinator.
 
-If a worker returns evidence-backed rule, route, capture, or startup inputs,
-follow the relevant returned engine-issued commands. Its original evidence and
-plan identities remain authoritative. Canonical `.traffic-e2e/local/target.env`
-is coordinator-owned; apply source-proven startup inputs through the startup
-interface, never a separate worker-local environment file.
+If an accepted handoff requires API changes, report `rework_required` when the
+engine permits it and resume the same binding. Preserve its original handoff
+ID; the new dispatch invalidates late results from the previous attempt.
+For a failed quality operation, integrate the corrected handoff before the
+returned retry; that retry validates the current integrated gate identity.
 
-One API's integrated handoff schedules only that API's quality checks, Replay,
-and, when required by this recording batch, Comparison. An unsuccessful
-acceptance resumes its original worker. Other workers keep implementing. Do
-not schedule extra APIs for speculative shared-service impact; final unified
-verification covers the integrated target after ordinary work drains. Preserve
-the existing final fingerprint and terminal gates.
+Evidence-backed rule, route, capture, and startup inputs use the existing
+coordinator interfaces with their original evidence/plan identities. Read
+[coordinator-rule-actions.md](coordinator-rule-actions.md) or
+[coordinator-startup-inputs.md](coordinator-startup-inputs.md) for the returned input kind.
+The canonical target environment remains coordinator-owned.
 
-Workers start or resume with `evidence --api '<METHOD pattern>'` or
-`evidence --process-output <id>`, bound to the canonical target root. They may
-also execute assigned read-only scoped status, case-dependency, and returned
-read-only query/help commands in the canonical command `cwd`. The engine
-supplies diagnostics directly; the coordinator obtains fresh scheduling and
-acceptance commands from scoped status when handling a handoff.
+One API's integrated handoff schedules only its required quality checks, Replay,
+and batch-required Comparison. An unsuccessful acceptance resumes its original
+worker. Do not schedule speculative extra APIs from shared-impact notes; final
+unified verification covers the integrated target after ordinary work drains.
 
-Workers may execute their assigned `review check --worktree` command and write
-its local review report; this does not mutate the coordinator's workflow.
-Only the coordinator executes mutations: worker confirmation/report/transfer,
-integration, quality checks, `next`, recording, rule plan/apply, routing, repair
-verification, and recovery. Execute returned argv unchanged with their absolute
-`--target-root`. Release bindings and worktrees only after `terminal_allowed`
-and final delivery no longer need them.
+Only the coordinator confirms/reports/transfers worker bindings, applies rules,
+advances the engine, requests recording, invokes formal quality/acceptance, and
+executes repair verification or recovery. The integrator returns code results;
+its runtime task is not an API worker activity. Release retained implementation
+and integration bindings/worktrees only after `terminal_allowed` and final
+delivery no longer need them.

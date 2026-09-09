@@ -1,10 +1,10 @@
-# Workflow Coordinator
+# Coordinator
 
 Audience: the workflow coordinator. Read at every session start or resume,
-including sessions waiting for existing workers. This is the single guide for
-the coordinator loop, action handling, waiting, and completion. The rewrite
-engine selects actions; the coordinator executes and reports them. Load detailed
-references through the role and action routing in `SKILL.md`.
+including sessions waiting for assigned agents. Own action execution, result
+reconciliation, waiting, and completion. Delegate source diagnosis, code edits,
+and integration analysis. Load only the coordinator references linked at the
+relevant action below.
 
 ## Contents
 
@@ -44,15 +44,22 @@ At the start of every workflow-coordinator session, read
 `.traffic-e2e/local/block.md` when it exists. Project initialization may create
 it with temporary reference evidence about source configuration, Vintage
 access, startup/process activity, and local caches. The first rewrite session
-after initialization must read that evidence completely. Remove each entry
-after the rewrite has fully understood it, implemented the required behavior,
-or proved it irrelevant; keep no resolved history and remove the file when it
-is empty. When progress is proven blocked and the workflow coordinator is about to
+after initialization must read that evidence completely. Route source questions
+in those notes to the responsible assigned agent.
+Remove each entry after receiving a proven resolution, implementation, or
+irrelevance result; keep no resolved history and remove the file when empty.
+When progress is proven blocked and the workflow coordinator is about to
 stop, create or update the same file with useful resume context. Treat it as
 AI-owned reference and handoff context, never as engine state;
 `backend-rewrite status` remains authoritative.
 
 ## Coordinator Loop
+
+Use the existing `backend-rewrite` interface. Response schema v28 actions have
+exactly `kind`, `summary`, `details`, and `commands`. Status/next expose scheduling
+and short issue facts, not diagnostic payloads. Default `workflow` has `id` and
+`revision`; use `inventory` for binding recovery and scheduling detail. Never
+infer scheduling from a phase field or create another task queue.
 
 Start with unscoped `status` in the canonical target repository. Top-level
 `pending` counts operations the coordinator can perform now, including one
@@ -64,13 +71,15 @@ from `workflow.phase`, `current_api`, or `api_inventory.unverified`.
 ```text
 state = status()
 while true:
-    collect worker events already available from the task runtime
-    match each event to its dispatch and report through its owning engine command
+    reconcile implementation-worker results through the worker protocol
+    reconcile integrator and route-analysis results with retained assignments
     refresh state from the latest report response, or status() if needed
     if state.terminal_allowed:
         finish delivery and break
     if state.action.kind == "blocked":
         preserve resume context, report the blocker, and stop this run
+    if the current action needs an integrator or route-analysis task already running or queued:
+        wait on that runtime task for a bounded interval and continue
     if state.pending > 0:
         execute the returned action's command or task runtime operation
         report its actual result when confirmation or feedback is required
@@ -79,6 +88,14 @@ while true:
     handle any reported input requirement or execution failure
     do not infer completion from zero pending
 ```
+
+Reconcile retained integrator assignments through
+[coordinator-integration.md](coordinator-integration.md). An active runtime
+assignment for the current handoff prevents duplicate dispatch; wait on that
+actual task when no independent permitted action remains. Never report its
+handle as an implementation worker or invent new engine activities.
+This wait guard does not apply to worker confirmation, status checks, or feedback;
+execute those engine actions even when the implementation worker is running.
 
 Check for arrived events after every action, even while `pending` stays positive;
 do not hold handoffs until the queue drains or a fifteen-minute activity report
@@ -165,18 +182,15 @@ source-proven Redis rule -> derive safe snapshot overlay from old Global evidenc
 
 The stable action envelope has `kind`, `summary`, `details`, and `commands`.
 Read kind-specific facts only from `details` and execute only command roles
-present in `commands`; an empty command object never implies a fallback. Status
+present in `commands`, except for the documented `input_required` continuations.
+An empty command object alone never authorizes a fallback. Status
 does not guarantee an unconditional top-level `next` command. Source-process
 traffic is issue-scoped evidence, not engine state. Both unscoped and
 scoped status return compact scheduling actions, as does `next`. Dispatch the
-worker role, exact scope, canonical target root, and absolute worktree as defined
-in [coordinator-worker-protocol.md](coordinator-worker-protocol.md). The worker
-fetches its own overview through `evidence --api` or `evidence --process-output`,
-then selects relevant commands from `queries`. Scheduling responses contain no
-evidence command or diagnostic payload. An API worker executes the returned
-`source_process_traffic` command only when startup,
-configured process-owned traffic, background refresh, or local-cache behavior
-is relevant.
+worker assignment as defined
+in [coordinator-worker-protocol.md](coordinator-worker-protocol.md). Implementation
+workers fetch their own diagnostics. Do not attach diagnostic payloads or
+investigate business source in the coordinator.
 
 ### `wait_required` and `worker_events_required`
 
@@ -202,21 +216,21 @@ on it immediately and do not claim successful delivery.
 
 ### `recording_required`
 
-Read [recording-lifecycle.md](recording-lifecycle.md), execute its exact
+Read [coordinator-recording.md](coordinator-recording.md), execute its exact
 recording action, and poll only the status command returned by that execution.
 Do not reconstruct a recording command or discover its run by recency.
 
 ### `recording_in_progress`
 
-Read [recording-lifecycle.md](recording-lifecycle.md) and execute `commands.wait`. After it returns, reconcile worker events and
+Read [coordinator-recording.md](coordinator-recording.md) and execute `commands.wait`. After it returns, reconcile worker events and
 refresh global status. Do not start another executor or advance before the exact
 finalized run becomes `advance_required`.
 
 ### `case_pattern_identification_required`
 
-This rare post-recording batch belongs only to the workflow coordinator. Read
-[case-pattern-identification.md](case-pattern-identification.md); do not
-dispatch it to an API worker or handle it as ordinary issue diagnosis.
+Read [coordinator-case-patterns.md](coordinator-case-patterns.md). Delegate
+read-only route analysis of the complete batch, then apply its matched result
+through the returned command. Do not create an implementation issue for it.
 
 ### `plan_apply_required`
 
@@ -234,26 +248,47 @@ comparison, implementation, or quality command.
 
 ### `comparison_recording_required`
 
-Read [recording-lifecycle.md](recording-lifecycle.md) and execute the exact
+Read [coordinator-recording.md](coordinator-recording.md) and execute the exact
 `commands.execute` for its allocated run ID. This creates comparison evidence;
 it never replaces the shared standard cases or authorizes a standard recording
 request.
 
 ### `input_required`
 
-When `details.reason=configuration_commit_required`, the workflow coordinator reviews
-and commits exactly the listed persistent configuration changes in the canonical
-target worktree, then repeats the original `next` command with the same scope
-and inputs. This gate covers `project.yaml`, `source-traffic-policy.yaml`, and
+This action has no returned command. Retain the triggering invocation and its
+`cwd`; after resolving the named input, repeat it with only that requested input
+changed. The recovery commands below are explicit exceptions to opaque-argv
+execution, not permission to synthesize other actions.
+
+When `details.reason=configuration_commit_required`, match the listed persistent
+configuration changes to the returned input/plan and commit exactly those files
+in the canonical target. Return unresolved semantic questions to their source
+owner. Then repeat the original `next` command with the same scope and inputs.
+This gate covers `project.yaml`, `source-traffic-policy.yaml`, and
 `verification.yaml`, including staged and new files. Staging is not sufficient.
 `status` reports this requirement without writing files; `next` stops before
 dispatch or verification, including when preparation creates a policy change.
 An active operation keeps its existing wait/recovery action. Routine generated
 `progress.yaml` updates retain the final-delivery commit flow below.
 
-When a selected dynamic API pattern lacks a proven source registration route,
-provide only the requested `--source-route` through the returned command. Do
-not infer additional input or change the shared recording scope.
+When `details.reason=source_route_required`, the selected dynamic API lacks a
+proven source registration route. Assign
+`api-implementer` a read-only `route_analysis` task with the exact API, source
+location, and a retained assignment ID. Retain its actual runtime handle and
+resume the same task for missing proof. Require that same identity and a
+source-proven complete route. Re-read status and match the same API and request
+before repeating the retained invocation with `--source-route`.
+If the invocation was lost for an existing workflow, recover the exact API from
+public status/inventory and confirm that it still requires this input, then run:
+
+```text
+backend-rewrite --target-root <canonical-root> next --api '<exact API>' --source-route '<proven complete route>'
+```
+
+Before workflow creation, the missing-route response persists no API selection.
+Recover the caller-authorized selector from retained task context; if it is
+unavailable, return that missing input. Never infer a single-API recording from
+source analysis. Do not invent a worker issue or change the shared recording scope.
 
 When `details.reason=verification_progress_commit_required`, every API is
 verified but terminal delivery is still forbidden. Commit exactly the listed
@@ -300,7 +335,7 @@ record uses the existing recovery action.
 Worker handoffs require a passing local review report. The integrated quality
 operation also runs the mandatory source review. A `source_review_required`
 action requests inspection, spawn evidence or worker rework through
-[source-review.md](source-review.md). It is actionable work, not an execution
+[coordinator-review.md](coordinator-review.md). It is actionable work, not an execution
 failure. Return to global status after handling it. Final delivery requires a
 current source review even when no API remains in implementation.
 Once a finding has been routed, worker dispatch, status and integration take
@@ -317,63 +352,41 @@ locations and the required source evidence has been committed. Never run this
 gate in a worker worktree. The command launches a detached operation; continue
 consuming its returned action. Successful execution records the integrated
 target fingerprint and makes focused Replay eligible through `advance_required`. A later integration or quality-gate configuration change
-creates a new fingerprint and another quality action. On failure, fix the
-reported cause and execute the returned `execution_failed.commands.retry`.
+creates a new fingerprint and another quality action. On failure, obtain the
+assigned agent's repair/evidence result and publish it before executing the
+returned `execution_failed.commands.retry`; never repair source yourself.
 
-The gate list always starts with the built-in `replay-isolation` scan. Relative
-to the configured `pr_base`, it checks only added lines in changed or untracked
-Rust files in the integrated worktree, including staged and unstaged changes.
-It scans text directly without parsing Rust syntax. Added comments,
-documentation, macros, invalid intermediate Rust, and test code are therefore
-visible to the gate; an unchanged legacy occurrence in a modified file is not.
+The built-in isolation gate remains mandatory even with no configured repository
+checks. For source-evidence findings, delegate a `review` task through
+[coordinator-integration.md](coordinator-integration.md), passing the exact
+findings, current target version, and known source locations. Receive committed
+source-evidence mappings or a responsible repair owner; do not prove constants
+or trace callers yourself.
 
-Every added Rust line, including files below `tests/`, is rejected when it
-contains the replay-only `.trp.test` suffix. Other replay-private environment,
-fake-IP, runtime-path, and recording-artifact markers remain restricted to
-production paths. Every added Rust line is also checked case-insensitively for
-`sample.test` and `demo.test`. Those public domains are allowed only when the
-workflow coordinator proves that the same value is hardcoded in source code and
-records one commit trailer per target occurrence:
-
-```text
-Hardcode-Source-Evidence: TARGET_FILE:LINE:COLUMN <= SOURCE_REPOSITORY@SOURCE_REVISION:SOURCE_FILE:LINE:COLUMN
-```
-
-`SOURCE_REVISION` must be the 7-64 hexadecimal commit ID inspected by the AI;
-traffic, recordings, logs, runtime configuration, and container state are not
-source-code proof. After committing the trailer, rerun the unchanged quality
-command with one repeatable target-to-source evidence mapping per occurrence.
-The argument must exactly match the committed trailer:
-
-```text
---hardcode-ai-verified TARGET_FILE:LINE:COLUMN=SOURCE_REPOSITORY@SOURCE_REVISION:SOURCE_FILE:LINE:COLUMN
-```
-
-The target occurrence itself must be committed at that exact position; an
-uncommitted line cannot reuse evidence from another commit. Missing, duplicate,
-stale, or unrelated positions fail closed. This approval applies only to the
-two source-sensitive public-domain rules and never exempts
-`.trp.test` or another replay-private marker. Repository quality-gate
-configuration may add commands but cannot disable this scan; an explicit empty
-gate list still leaves `replay-isolation` active.
+Publish any exact evidence-only candidate before retrying. After the gate has
+reported the matching source-sensitive public-domain findings, the permitted
+extension is one `--hardcode-ai-verified` per returned, committed mapping. Pass
+those mappings unchanged. This exception never waives private Replay markers.
+Re-read status if the inspected version, input, or findings changed.
 
 ### `system_repair_required` and `recovery_required`
 
 Read
-[recovery-and-system-repair.md](recovery-and-system-repair.md) and execute only
+[coordinator-recovery.md](coordinator-recovery.md) and execute only
 the engine-issued repair or recovery command. `wait_required` never
 authorizes recovery.
 
 ### `recording_refresh_pending`
 
 The scoped API is parked until one consolidated standard recording can replace
-the baseline. Read [recording-lifecycle.md](recording-lifecycle.md), execute `commands.wait`, and never execute its stale acceptance.
+the baseline. Read [coordinator-recording.md](coordinator-recording.md), execute `commands.wait`, and never execute its stale acceptance.
 Continue other runnable work only through current engine-issued commands.
 
 ### `complete`
 
-API-scoped `complete` means only that API has current passing focused E2E and
-comparison evidence. Process-output-scoped `complete` means only that output
+API-scoped `complete` means only that API satisfies the current batch's focused
+E2E and required Comparison gates. Process-output-scoped `complete` means only
+that output
 passes its configured comparison for the current target fingerprint. Finish
 repository-wide verification and delivery only when `terminal_allowed=true`
 proves every API and process output is complete for the same target content
@@ -406,7 +419,7 @@ resuming from status, and waiting for handoffs.
 Keep finalized standard cases immutable through ordinary repair attempts. A
 failed focused attempt changes the target and reuses the same cases; it does
 not authorize fresh traffic. Read
-[recording-lifecycle.md](recording-lifecycle.md) before explicitly requesting a
+[coordinator-recording.md](coordinator-recording.md) before explicitly requesting a
 new standard recording or handling a consolidated capture refresh.
 
 If the target fingerprint changes during focused Replay, discard that result
@@ -441,18 +454,26 @@ serialized traffic time and never replaces the mandatory final epoch.
 pending APIs and resume existing workers until the engine returns one
 consolidated full-scope recording action. Follow
 [coordinator-rule-actions.md](coordinator-rule-actions.md) for the
-capture/rule transition and [recording-lifecycle.md](recording-lifecycle.md)
+capture/rule transition and [coordinator-recording.md](coordinator-recording.md)
 for that recording.
 
 ## Completion Invariants
 
 Keep worker handoff, work-item completion, and workflow completion distinct. A
-worker handoff supplies a tested patch and coordinator inputs; only integrated
+worker handoff supplies a reviewed code version, local results, and required inputs; only integrated
 acceptance can complete its API or process output. Later integrated changes may
 make that item `revalidation_pending`. Retain every work item's worker binding
 and worktree until `terminal_allowed=true` and final delivery no longer needs
 them.
 
-An evidence-proven unavailable external response-driving value may be blocked
-under [worker-diagnosis.md](worker-diagnosis.md). A blocker is not successful
-completion and must never be reported as `terminal_allowed=true`.
+Preserve `workflow.require_comparison` for the current recording batch. When
+false, Replay may complete an API while `comparison_current=false`. The first
+completed batch enables Comparison for future recordings without changing this
+batch; follow its final `advance_required` to persist the transition. Never
+infer requirements from historical pass counts.
+
+Only `terminal_allowed=true` permits successful workflow completion. Finish the
+caller-required repository checks and delivery after the engine's final gates.
+A worker's external-input blocker is evidence for the existing route, not
+permission to mark completion. Preserve bindings and evidence when the engine
+returns global `blocked`, and resume through its returned action after repair.

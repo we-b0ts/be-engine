@@ -1,4 +1,4 @@
-# Recording Lifecycle
+# Coordinator Recording Actions
 
 Read this guide only for `recording_required`, `recording_in_progress`,
 `comparison_recording_required`, an explicit fresh-standard-recording request,
@@ -31,7 +31,7 @@ lifecycle, and exact finalized manifest. Never select a recording by recency or
 add manual curl, Replay, shell pipelines, backgrounding, or driver flags.
 Advancing a finalized unscoped standard recording may return the one-time
 `case_pattern_identification_required` batch described in
-[workflow.md](workflow.md) before it publishes the API inventory.
+[coordinator.md](coordinator.md) before it publishes the API inventory.
 
 Duration and case limit belong to the preceding recording request and are bound
 into the action ID. For explicit API selectors, duration is an upper bound and
@@ -96,29 +96,9 @@ HTTP JSON response URL rules use the same capture refresh lifecycle as Breeze
 resource rules. Applying either kind cannot repair old immutable dependency
 files.
 
-For HTTP response URL capture, first call `recorder-capture plan-http-response`
-without `--pattern-checked`. It returns `path_pattern_review_required` with the
-observed path and existing rules sharing authority, method and pointer. Check
-the source's path construction even when no previous rule exists. The worker
-supplies source proof for the coordinator's decision about dynamic IDs and
-consolidation; the engine does not judge path similarity. After checking, choose
-`--path-pattern 'GET /sandboxes/*'`, explicitly add
-`--pattern-checked`, and provide one brief `--source-evidence` note about URL
-consumption and the path choice. No special proof format is needed. Keep an
-exact path when the source contract calls for it, explaining that choice.
-
-The review response has no plan ID or apply command. A checked plan returns
-`status: planned`, reuses an existing covering rule or previews consolidation
-of fully covered managed rules with matching selectors and response filters.
-Inspect `traffic_e2e_report.replaced_rules` and the diff before apply. The normal
-consolidated refresh follows both new rules and merged rules.
-
-The policy groups entries under one `name` (the upstream authority) and a
-`rules` list. Each path entry has `path_pattern` (HTTP method plus path),
-`pointer` (one field), and `source_evidence` (the brief review note). A domain
-can have multiple paths or pointers; use separate path entries for them. Planner commands use
-`--name HOST --path-pattern 'GET /path/*' --pointer /field`; they carry no
-separate authority or method arguments and no generated hash name.
+Plan and apply capture rules through
+[coordinator-rule-actions.md](coordinator-rule-actions.md#http-response-url-capture)
+using worker-proven selectors, then follow the returned refresh transition here.
 
 A recorder-capture apply is coordinator-owned and is the exception to the
 explicit request rules: never follow it with `recording request`. Apply returns
@@ -154,4 +134,4 @@ a refresh that has no replacement run.
 After a system repair, do not choose fresh traffic yourself. The
 engine-issued repair verification decides whether to allocate fresh
 standard cases or replay the existing cases. Follow
-[recovery-and-system-repair.md](recovery-and-system-repair.md).
+[coordinator-recovery.md](coordinator-recovery.md).

@@ -1,13 +1,23 @@
-# Target Implementation Requirements
+# Target Code Rules
 
-Read this reference only in these situations:
+Read before changing assigned target product code, startup, configuration, or
+integration code. These rules apply to the code author and integrator.
 
-- an assigned API or process-output worker is about to change target product
-  code, target startup, or target configuration; or
-- the workflow coordinator is about to integrate a worker change, resolve an
-  integration conflict, or make a shared target refactor.
+These rules apply only to an existing initialized target repository.
 
-These requirements apply only to an existing initialized target repository.
+## SDK Contracts
+
+Read the relevant reference before defining, changing, or reviewing a client,
+listener, lifecycle, startup, or configuration contract. Load only affected SDKs:
+
+- Inbound HTTP or an `http-server` listener: [http-server.md](sdk/http-server.md).
+- Outbound HTTP through `brz-http`: [http-client.md](sdk/http-client.md).
+- Motan service export: [motan-exporter.md](sdk/motan-exporter.md).
+- Motan dependency calls: [motan-referer.md](sdk/motan-referer.md).
+- Memcache `CacheService`: [memcache.md](sdk/memcache.md).
+- `brz-redis`: [redis.md](sdk/redis.md).
+- `brz-mysql`: [mysql.md](sdk/mysql.md).
+- Application logging through `brz-logs`: [logs.md](sdk/logs.md).
 
 ## Scope And Compatibility
 
@@ -24,8 +34,7 @@ These requirements apply only to an existing initialized target repository.
   own those changes.
 - `.traffic-e2e/Dockerfile.recording` and `.traffic-e2e/Dockerfile.e2e` remain
   target-owned build contracts. Change either when the current work scope
-  requires source-adaptor or target-runtime integration; the coordinator
-  validates the result but does not own their contents.
+  requires source-adaptor or target-runtime integration; the assigned code author owns their contents.
 - Product behavior must not depend on tests, fixtures, debug branches, or
   developer-only defaults.
 
@@ -40,10 +49,9 @@ These requirements apply only to an existing initialized target repository.
 - Do not modify source behavior or engine evidence to manufacture a
   passing result.
 - When source behavior proves that implemented target logic requires an
-  application-owned environment variable, follow [target-startup-inputs.md](target-startup-inputs.md)
-  immediately. Preserve the runtime lookup in target code and return the
-  source-proven startup input for the workflow coordinator; do not wait for a
-  connection or startup failure and do not hardcode the effective value.
+  application-owned environment variable, preserve the runtime lookup and
+  include the source-proven startup requirement in the result. Do not wait for
+  a connection or startup failure or hardcode the effective value.
 - Never print, persist, or hard-code credentials, private keys, tokens, remote
   configuration values, source-process memory, or generated SDK snapshots.
   A constant proven in source code or a pinned compiled artifact may remain
@@ -69,7 +77,7 @@ These requirements apply only to an existing initialized target repository.
   callback in `main` does not make its execution initialization-owned.
   Request-triggered spawning is prohibited even when its handle is immediately
   awaited. Unknown ownership cannot pass review. Submit startup evidence through
-  the [source review contract](source-review.md), not a prose assertion alone.
+  the [source review contract](source-review-rules.md), not a prose assertion alone.
 - Long-lived dependency clients and pools MUST have explicit ownership,
   capacity, reuse, health behavior, and shutdown. Do not construct them per
   request.
@@ -136,35 +144,12 @@ and TAuth2; Memcache-backed MCQ belongs in `brz-mcq`. Product code MUST use the
 `brz-*` dependency rather than a raw SDK or driver. Add only dependencies the
 product uses.
 
-## Verification Ownership
+## Validation
 
-- Before handoff, finish the product edits, run focused tests, commit the
-  delivery, and execute `context.review.check` from the scoped evidence
-  response. It runs `backend-rewrite review check` against the registered
-  worker worktree and engine-frozen dispatch base. Keep `--target-root` bound
-  to the canonical workflow; do not initialize a workflow in the worker tree.
-- Inspect the report's `status`, `findings`, `next_step` and `report_path`.
-  Exit code zero only means the command executed; handoff requires `passed`.
-  For `changes_required`, repair and check again in the same worker turn.
-  For `evidence_required`, inspect each spawn's actual trigger and rerun the
-  returned check with `--evidence /absolute/path/evidence.json` using
-  [source-review.md](source-review.md). A subsequent edit or commit invalidates
-  the delivery check and requires another run. The bundled organization script
-  remains an optional earlier check and cannot replace this report.
-- A worker runs focused local tests for its changed work scope and returns the
-  original workflow/recording, work scope, issue, binding and dispatch identities
-  from its evidence overview, proven cause and supporting evidence, changed files
-  and shared impact, patch or commit, test results, coordinator inputs,
-  unresolved risks, and the passing report's absolute `report_path` with any
-  spawn ownership evidence. Return these to the coordinator and end the turn.
-- A worker MUST NOT execute coordinator acceptance, advance workflow state, or
-  claim that the work item or workflow is complete.
-- The coordinator checks the returned identity and review evidence, then reports
-  `handoff_ready` with `--review-report`. A worker does not report its own
-  handoff or run the coordinator's integrated review.
-- The workflow coordinator integrates the change in the canonical target worktree
-  and executes the engine-issued target quality and acceptance actions.
-  Worker-local checks do not replace those integrated-revision gates.
+Validate changed behavior with focused local checks. Preserve the exact checked
+code and evidence identity in your result. Follow your role's delivery protocol
+for its required reports; local success does not establish formal acceptance.
+
 - Performance, throughput, capacity, scalability, and availability claims
   require measured evidence for the stated workload and environment. Otherwise
   report the property as not measured or as a remaining risk.
