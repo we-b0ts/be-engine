@@ -1,11 +1,12 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use traffic_e2e::{
-    DEFAULT_HTTP_BACKEND_PORT, DEFAULT_HTTP_GATEWAY_PORT, KubernetesSourceOptions,
-    RepositoryConfigInitOptions, initialize_repository_config,
+    ContainerSourceOptions, DEFAULT_HTTP_BACKEND_PORT, DEFAULT_HTTP_GATEWAY_PORT,
+    KubernetesSourceOptions, RepositoryConfigInitOptions, SourceOptions,
+    initialize_repository_config,
 };
 
 mod comparison;
@@ -36,22 +37,40 @@ enum ConfigCommand {
 #[derive(Debug, Args)]
 struct InitArgs {
     /// Running Kubernetes Pod whose application container is snapshotted during initialization.
-    #[arg(long)]
-    source_pod: String,
+    #[arg(
+        long,
+        required_unless_present = "source_container",
+        requires = "namespace",
+        conflicts_with = "source_container"
+    )]
+    source_pod: Option<String>,
+    /// Local Docker container name or ID; running and stopped containers are supported.
+    #[arg(long, conflicts_with = "source_pod")]
+    source_container: Option<String>,
     /// Kubernetes namespace containing the source Pod.
-    #[arg(long)]
-    namespace: String,
+    #[arg(long, requires = "source_pod", conflicts_with = "source_container")]
+    namespace: Option<String>,
     /// Regular Pod container to snapshot; omit when there is exactly one.
-    #[arg(long)]
+    #[arg(long, requires = "source_pod", conflicts_with = "source_container")]
     pod_container: Option<String>,
     /// Kubeconfig used only while creating the source snapshot.
-    #[arg(long, value_name = "PATH")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        requires = "source_pod",
+        conflicts_with = "source_container"
+    )]
     kubeconfig: Option<PathBuf>,
     /// Kubeconfig context used only while creating the source snapshot.
-    #[arg(long)]
+    #[arg(long, requires = "source_pod", conflicts_with = "source_container")]
     context: Option<String>,
     /// kubectl executable used during initialization.
-    #[arg(long, default_value = "kubectl", value_name = "PATH")]
+    #[arg(
+        long,
+        default_value = "kubectl",
+        value_name = "PATH",
+        conflicts_with = "source_container"
+    )]
     kubectl_binary: PathBuf,
     /// Native HTTP port listened to by the source and target backend processes.
     #[arg(long, default_value_t = DEFAULT_HTTP_BACKEND_PORT)]
@@ -75,13 +94,22 @@ pub(super) fn run(args: ConfigArgs) -> Result<()> {
         ConfigCommand::Init(init) => print_json(&initialize_repository_config(
             RepositoryConfigInitOptions {
                 target_root: args.target_root,
-                source: KubernetesSourceOptions {
-                    pod: init.source_pod,
-                    namespace: init.namespace,
-                    container: init.pod_container,
-                    kubeconfig: init.kubeconfig,
-                    context: init.context,
-                    kubectl_binary: init.kubectl_binary,
+                source: match init.source_container {
+                    Some(container) => {
+                        SourceOptions::Container(ContainerSourceOptions { container })
+                    }
+                    None => SourceOptions::Kubernetes(KubernetesSourceOptions {
+                        pod: init
+                            .source_pod
+                            .context("--source-pod or --source-container is required")?,
+                        namespace: init
+                            .namespace
+                            .context("--namespace is required with --source-pod")?,
+                        container: init.pod_container,
+                        kubeconfig: init.kubeconfig,
+                        context: init.context,
+                        kubectl_binary: init.kubectl_binary,
+                    }),
                 },
                 http_backend_port: init.http_backend_port,
                 http_gateway_port: init.http_gateway_port,
@@ -112,6 +140,26 @@ mod tests {
     struct TestCli {
         #[command(flatten)]
         config: ConfigArgs,
+    }
+
+    #[test]
+    fn init_accepts_a_container_and_rejects_mixed_providers() {
+        use clap::Parser;
+        assert!(
+            TestCli::try_parse_from(["test", "init", "--source-container", "local-app"]).is_ok()
+        );
+        for args in [
+            vec!["--source-pod", "pod", "--namespace", "default"],
+            vec!["--namespace", "default"],
+            vec!["--pod-container", "app"],
+            vec!["--kubeconfig", "/tmp/config"],
+            vec!["--context", "cluster"],
+            vec!["--kubectl-binary", "kubectl"],
+        ] {
+            let mut argv = vec!["test", "init", "--source-container", "local-app"];
+            argv.extend(args);
+            assert!(TestCli::try_parse_from(argv).is_err());
+        }
     }
 
     #[test]

@@ -69,7 +69,7 @@ const TARGET_DOCKERIGNORE_RULES: &[&str] = &[
 #[derive(Debug, Clone)]
 pub struct RepositoryConfigInitOptions {
     pub target_root: PathBuf,
-    pub source: crate::KubernetesSourceOptions,
+    pub source: crate::SourceOptions,
     pub http_backend_port: u16,
     pub http_gateway_port: u16,
     pub readiness_path: String,
@@ -107,17 +107,14 @@ pub fn initialize_repository_config(
 ) -> Result<RepositoryConfigInitResult> {
     initialize_repository_config_with(
         options,
-        crate::capture_kubernetes_source_snapshot,
+        crate::capture_source_snapshot,
         crate::startup::capture_startup_snapshot,
     )
 }
 
 fn initialize_repository_config_with(
     options: RepositoryConfigInitOptions,
-    capture_source: impl Fn(
-        &Path,
-        &crate::KubernetesSourceOptions,
-    ) -> Result<crate::SourceSnapshotReport>,
+    capture_source: impl Fn(&Path, &crate::SourceOptions) -> Result<crate::SourceSnapshotReport>,
     capture_startup: impl Fn(
         &Path,
         &crate::startup::StartupConfig,
@@ -540,15 +537,15 @@ mod tests {
     use super::*;
     use crate::config::DEFAULT_BODY_LIMIT_BYTES;
 
-    fn source_options() -> crate::KubernetesSourceOptions {
-        crate::KubernetesSourceOptions {
+    fn source_options() -> crate::SourceOptions {
+        crate::SourceOptions::Kubernetes(crate::KubernetesSourceOptions {
             pod: "friendship".to_string(),
             namespace: "wb-plat-ide".to_string(),
             container: None,
             kubeconfig: None,
             context: None,
             kubectl_binary: PathBuf::from("kubectl"),
-        }
+        })
     }
 
     #[test]
@@ -624,13 +621,15 @@ mod tests {
                 .unwrap()
                 .success()
         );
-        let capture_source = |_root: &Path, options: &crate::KubernetesSourceOptions| {
+        let capture_source = |_root: &Path, options: &crate::SourceOptions| {
+            let crate::SourceOptions::Kubernetes(options) = options else {
+                panic!("expected Kubernetes source");
+            };
             Ok(crate::SourceSnapshotReport {
                 status: "captured",
                 snapshot_id: "source-snapshot-test".to_string(),
                 root: PathBuf::from(crate::repository::LOCAL_SOURCE_ROOT),
-                provider: crate::SourceProviderEvidence {
-                    kind: "kubernetes_pod".to_string(),
+                provider: crate::SourceProviderEvidence::KubernetesPod {
                     context: None,
                     namespace: options.namespace.clone(),
                     pod: options.pod.clone(),
@@ -640,7 +639,8 @@ mod tests {
                 },
                 image: crate::SourceImage {
                     reference: "example/app:1".to_string(),
-                    registry_digest: format!("example/app@sha256:{}", "a".repeat(64)),
+                    registry_digest: Some(format!("example/app@sha256:{}", "a".repeat(64))),
+                    archive_sha256: None,
                     local_id: format!("sha256:{}", "b".repeat(64)),
                     architecture: "amd64".to_string(),
                     os: "linux".to_string(),

@@ -1786,6 +1786,40 @@ The selected regular Pod container must be running and ready while init
 captures its immutable image and effective runtime inputs. Later commands use
 the ignored local source snapshot and do not require the Pod.
 
+Alternatively, initialize from a local Docker container by name or ID:
+
+```bash
+backend-rewrite --target-root ../target init --source-container <container>
+traffic-e2e config init --target-root ../target --source-container <container>
+```
+
+`--source-container` is mutually exclusive with the Pod provider and its
+Kubernetes options. Running, exited, and created containers are supported;
+initialization does not start, stop, or pause the input container. The Docker
+provider captures `Config.Env`, security settings, and bind/volume contents,
+and commits the writable layer plus the effective ENTRYPOINT, CMD, WORKDIR,
+and image user into an immutable local image. The existing recording adapter
+still runs as `998:998`. Configuration comes from Docker's container config,
+not the environment of a process started by an entrypoint script. The source
+image must be Linux/amd64; no registry digest is required.
+
+The image is saved privately as `.traffic-e2e/local/source/image.tar` with a
+SHA-256 checksum for recovery after local image cleanup. This archive can
+contain application files and credentials and must remain ignored with the
+rest of `.traffic-e2e/local/`. Later operations do not require the original
+container or its mounts. Writable mount snapshots are copied into each managed
+run and owned by `998:998`; the baseline is never mounted writable. tmpfs mounts
+become empty runtime mounts. Virtual system paths, Docker network identity
+files, and unsupported mount types are reported as ignored; overlapping
+mounts and unsupported security options fail initialization. Engine-managed
+networking and ports are not inherited from the input container.
+
+Capturing a running container is an online filesystem snapshot, not a
+transactionally consistent application checkpoint. Initialization rejects an
+observed restart or configuration/state change during capture, but cannot
+freeze concurrent application or external-volume writes. Use a stopped,
+quiescent source when a consistent application checkpoint is required.
+
 The command generates version-17 `.traffic-e2e/project.yaml`,
 `.traffic-e2e/source-traffic-policy.yaml`, and `.traffic-e2e/verification.yaml`.
 When the root `Cargo.toml`, `Cargo.lock`, and `src/main.rs` are all absent, it

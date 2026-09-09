@@ -99,3 +99,116 @@ fn platform_mount_policy_preserves_access_and_rejects_ambiguous_overlap() {
 
     assert!(status.success());
 }
+
+#[test]
+#[ignore = "requires Docker and TRAFFIC_E2E_TEST_CONTAINER_IMAGE with /bin/sh and GNU cp/chown"]
+fn docker_provider_writable_mounts_leave_snapshot_immutable() {
+    use std::os::unix::fs::MetadataExt;
+
+    struct RestoreOwnership<'a> {
+        path: &'a std::path::Path,
+        image: &'a str,
+        owner: String,
+    }
+    impl Drop for RestoreOwnership<'_> {
+        fn drop(&mut self) {
+            let _ = StdCommand::new("docker")
+                .args([
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    "--user",
+                    "0:0",
+                    "--entrypoint",
+                    "/bin/sh",
+                    "--volume",
+                ])
+                .arg(format!("{}:/cleanup", self.path.display()))
+                .args([
+                    self.image,
+                    "-ec",
+                    "chown -R \"$1\" /cleanup",
+                    "sh",
+                    &self.owner,
+                ])
+                .status();
+        }
+    }
+
+    let image = std::env::var("TRAFFIC_E2E_TEST_CONTAINER_IMAGE")
+        .expect("set TRAFFIC_E2E_TEST_CONTAINER_IMAGE");
+    let temp = tempfile::tempdir().unwrap();
+    let metadata = fs::metadata(temp.path()).unwrap();
+    let _restore = RestoreOwnership {
+        path: temp.path(),
+        image: &image,
+        owner: format!("{}:{}", metadata.uid(), metadata.gid()),
+    };
+    let source = temp.path().join("snapshot");
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("seed"), "baseline").unwrap();
+    std::os::unix::fs::symlink("/workspace/source/seed", source.join("seed-link")).unwrap();
+    let empty = temp.path().join("empty.tsv");
+    fs::write(&empty, "").unwrap();
+    let policy = temp.path().join("platform-mounts.sh");
+    fs::write(&policy, PLATFORM_MOUNTS).unwrap();
+    let runtime = temp.path().join("runtime");
+    let output = StdCommand::new("bash")
+        .args([
+            "-ec",
+            r#"
+            source "$1"
+            resolve_snapshotted_source_mount "$2" /data true snapshot
+            printf '%s' "$prepared_mount_source"
+        "#,
+            "sh",
+        ])
+        .arg(&policy)
+        .arg(&source)
+        .env("TRAFFIC_E2E_TARGET_STARTUP_MOUNTS_FILE", &empty)
+        .env("TRAFFIC_E2E_TARGET_RUNTIME_OUTPUTS_FILE", &empty)
+        .env("startup_snapshot_mounts_root", &source)
+        .env("platform_mounts_root", &runtime)
+        .env("anchor_image", &image)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mounted = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(mounted, runtime.join("source/data").to_str().unwrap());
+    let status = StdCommand::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--user",
+            "998:998",
+            "--entrypoint",
+            "/bin/sh",
+            "--volume",
+        ])
+        .arg(format!("{mounted}:/data:rw"))
+        .args([
+            &image,
+            "-ec",
+            "printf mutated >/data/seed; printf added >/data/new",
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert_eq!(fs::read_to_string(source.join("seed")).unwrap(), "baseline");
+    assert!(!source.join("new").exists());
+    assert_eq!(
+        fs::read_link(runtime.join("source/data/seed-link")).unwrap(),
+        std::path::Path::new("/workspace/source/seed")
+    );
+    assert_eq!(
+        fs::read_to_string(runtime.join("source/data/seed")).unwrap(),
+        "mutated"
+    );
+}

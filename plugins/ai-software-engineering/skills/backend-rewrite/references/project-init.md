@@ -6,8 +6,9 @@ rewrite work and resumed sessions must not rerun it.
 
 ## Initialize
 
-The first provider version accepts one running, ready Kubernetes Pod. Run from
-the target repository, or bind it with global `--target-root`:
+Choose one source provider: a running, ready Kubernetes Pod or a local Docker
+container (running, exited, or created). Run from the target repository, or bind
+it with global `--target-root`. For Kubernetes:
 
 ```bash
 backend-rewrite init \
@@ -31,8 +32,27 @@ registry digest. The Pod is an initialization input only: later preflight,
 recording, Comparison, Replay, and startup-input APIs use the local snapshot
 and do not require access to the original Pod.
 
+For a local Docker container, use:
+
+```bash
+backend-rewrite init --source-container <container-name-or-id>
+```
+
+The container and Kubernetes inputs are mutually exclusive. Container capture
+reads Docker configuration without `exec`, snapshots bind/volume contents, and
+commits its writable layer and effective launch configuration without starting,
+stopping, or pausing the input. It saves a private, checksummed image archive
+under `.traffic-e2e/local/source/`; no registry digest is required. The original
+container is not needed afterward. Running capture is an online snapshot; use
+a stopped, quiescent source for consistent application files. The existing
+Linux/amd64 and managed runtime user `998:998` contracts still apply. Writable
+mount snapshots are copied for each managed run, tmpfs starts empty, and ignored
+mounts are listed in the result. Do not copy the source container's host ports
+or network into the engine's isolated runtime.
+
 Run `backend-rewrite` as the current user; do not add `sudo`. The current user
-needs access to Docker and must be able to get and exec the named Pod.
+needs access to Docker. The Kubernetes provider additionally requires get and
+exec access to the named Pod.
 Initialization captures the effective container environment directly, so later
 target starts automatically receive source application variables even when a
 referenced ConfigMap or Secret is no longer API-readable.

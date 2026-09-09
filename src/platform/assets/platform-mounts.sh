@@ -253,6 +253,25 @@ resolve_recording_mount_source() {
     fi
 }
 
+prepare_writable_source_snapshot_mount() {
+    local source=$1
+    local destination=$2
+    local relative=${destination#/}
+    ensure_role_mount_root source
+    docker run --rm --platform linux/amd64 --network none --user 0:0 \
+        --entrypoint /bin/sh \
+        --mount "type=bind,source=${source},target=/workspace/source,readonly" \
+        --mount "type=bind,source=${platform_mounts_root}/source,target=/workspace/runtime" \
+        "$anchor_image" -ec '
+            target="/workspace/runtime/$1"
+            test ! -e "$target" && test ! -L "$target"
+            mkdir -p "$(dirname "$target")"
+            cp --archive --reflink=auto -- /workspace/source "$target"
+            chown -R --no-dereference 998:998 "$target"
+        ' sh "$relative"
+    prepared_mount_source="$platform_mounts_root/source/$relative"
+}
+
 resolve_snapshotted_source_mount() {
     local source=$1
     local destination=$2
@@ -302,6 +321,9 @@ resolve_snapshotted_source_mount() {
                 return 1
             }
             prepared_mount_source=$source
+            if [[ "$writable" == true ]]; then
+                prepare_writable_source_snapshot_mount "$source" "$destination"
+            fi
             ;;
         empty)
             prepare_empty_runtime_mount source "$destination"

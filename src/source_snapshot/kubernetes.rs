@@ -10,7 +10,7 @@ use serde_json::Value;
 use super::{
     CapturedSource, KubernetesSourceOptions, SourceIgnoredMount, SourceImage,
     SourceMountProjection, SourceProviderEvidence, SourceRuntime, SourceSecurityContext,
-    SourceSnapshotMount, validate_environment_name,
+    SourceSnapshotMount, environment::is_target_environment_name, validate_environment_name,
 };
 
 const MAX_KUBECTL_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
@@ -241,8 +241,7 @@ pub(super) fn capture(
         })
         .unwrap_or_default();
     Ok(CapturedSource {
-        provider: SourceProviderEvidence {
-            kind: "kubernetes_pod".to_string(),
+        provider: SourceProviderEvidence::KubernetesPod {
             context: options.context.clone(),
             namespace: before.metadata.namespace.clone(),
             pod: before.metadata.name.clone(),
@@ -387,7 +386,8 @@ fn resolve_image(
     Ok((
         SourceImage {
             reference: reference.to_string(),
-            registry_digest: registry_digest.to_string(),
+            registry_digest: Some(registry_digest.to_string()),
+            archive_sha256: None,
             local_id: inspection.id,
             architecture: inspection.architecture,
             os: inspection.os,
@@ -523,19 +523,6 @@ fn infer_environment_from(
             })
             .cloned(),
     );
-}
-
-fn is_target_environment_name(name: &str) -> bool {
-    let runtime_owned = [
-        "HOSTNAME", "PATH", "HOME", "PWD", "OLDPWD", "SHLVL", "_", "TERM",
-    ];
-    let mut bytes = name.bytes();
-    !runtime_owned.contains(&name)
-        && !name.to_ascii_uppercase().starts_with("TRAFFIC_E2E_")
-        && bytes
-            .next()
-            .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
-        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
 }
 
 fn is_kubernetes_service_environment(name: &str, environment: &BTreeMap<String, String>) -> bool {
