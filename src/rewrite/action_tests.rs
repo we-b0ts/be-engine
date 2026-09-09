@@ -134,6 +134,110 @@ fn status_recovers_the_exact_recording_action_until_a_result_exists() {
 }
 
 #[test]
+fn api_scoped_status_observes_recording_publication() {
+    for comparison in [false, true] {
+        let target = super::super::worker::tests::configured_target();
+        let mut state = crate::rewrite::test_state();
+        state.target_fingerprint =
+            Some(super::super::fingerprint::repository_fingerprint(target.path()).unwrap());
+        let (manifest, pending_kind) = if comparison {
+            state.phase = RewritePhase::ComparisonRecordingRequired;
+            state.comparison_run_id = Some("20260802000001".into());
+            state.e2e_current = true;
+            (
+                artifacts::comparison_manifest(target.path(), "20260802000001"),
+                "comparison_recording_required",
+            )
+        } else {
+            (
+                artifacts::recording_manifest(target.path(), &state.recording_run_id),
+                "recording_required",
+            )
+        };
+        let store = super::super::store::RewriteStore::new(target.path()).unwrap();
+        store.save(&state).unwrap();
+        let persisted = serde_json::to_value(store.load().unwrap()).unwrap();
+        let api = state.api.parse().unwrap();
+        let check = |kind: &str| {
+            let scoped = super::super::status_rewrite_for_api(
+                super::super::RewriteContext {
+                    target_root: target.path().into(),
+                },
+                Some(&api),
+            )
+            .unwrap();
+            let global = super::super::status_rewrite(super::super::RewriteContext {
+                target_root: target.path().into(),
+            })
+            .unwrap();
+            let scoped = serde_json::to_value(scoped.action).unwrap();
+            assert_eq!(scoped["kind"], kind, "comparison={comparison}");
+            assert_eq!(scoped, serde_json::to_value(global.action).unwrap());
+            assert_eq!(
+                serde_json::to_value(store.load().unwrap()).unwrap(),
+                persisted
+            );
+            scoped
+        };
+        check(pending_kind);
+
+        fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        let publication = |status: &str| {
+            serde_json::to_vec(&serde_json::json!({
+                "status": status,
+                "recording_apis": ["GET /api"],
+                "ready": true,
+                "published_cases": 1,
+                "failed_cases": 0,
+                "counts": {"published": 1, "failed": 0},
+                "errors": []
+            }))
+            .unwrap()
+        };
+        fs::write(&manifest, publication("running")).unwrap();
+        check("recovery_required");
+
+        let action_id = recording_action_id(&state, comparison);
+        recording_execution::publish(
+            target.path(),
+            &recording_execution::RecordingExecutionMarker {
+                action_id: action_id.clone(),
+                run_id: if comparison {
+                    state.comparison_run_id.clone().unwrap()
+                } else {
+                    state.recording_run_id.clone()
+                },
+                operation: if comparison {
+                    "record-comparison"
+                } else {
+                    "record"
+                }
+                .into(),
+                pid: std::process::id(),
+            },
+        )
+        .unwrap();
+        check("recording_in_progress");
+
+        fs::write(&manifest, publication("completed")).unwrap();
+        check("recording_in_progress");
+        recording_execution::clear(target.path(), &action_id).unwrap();
+        let finalized = check("advance_required");
+        assert_eq!(
+            finalized["commands"]["advance"]["argv"],
+            serde_json::json!([
+                "backend-rewrite",
+                "--target-root",
+                target.path(),
+                "next",
+                "--api",
+                "GET /api"
+            ])
+        );
+    }
+}
+
+#[test]
 fn status_recovers_pending_case_pattern_identification_after_recording_finalizes() {
     let target = tempfile::tempdir().unwrap();
     let mut state = crate::rewrite::test_state();
