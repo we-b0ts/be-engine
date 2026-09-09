@@ -4,8 +4,9 @@ Read when your assignment requires checking changed target code or supplying
 source evidence. This reference defines source rules and evidence format only.
 Use your role's entrypoint for report execution and handoff.
 
-`backend-rewrite review check` owns three target source rules. Do not substitute
-an untracked shell check or a prose assertion that review passed.
+`backend-rewrite review check` runs the complete shared delivery quality suite.
+Its source review includes the following rules. Do not substitute an untracked
+shell check or a prose assertion that review passed.
 
 - Changed production Rust files must have at most 1000 complete physical lines,
   including comments, blank lines and a final line without a trailing newline.
@@ -20,6 +21,17 @@ The syntax scan ignores comments, string examples and explicit `#[cfg(test)]`
 modules/functions. The full-file line limit still includes their lines. It does
 not prove a call graph or discover every macro/wrapper. When changing callers of
 an existing task launcher, inspect its ownership even if no new spawn is found.
+
+The same command also checks Replay isolation and runs all canonical project
+quality gates, with their exact argv, in the reviewed worktree. Source-sensitive
+`demo.test` and `sample.test` values are checked in test code too. `.trp.test`
+is prohibited in all added Rust lines; other private Replay hostnames, fake
+addresses, private state and recording artifacts cannot enter production paths.
+These checks prevent target behavior from depending on the verification
+environment or its expected outputs. They do not execute traffic Replay.
+Read [integrator-hardcode-evidence.md](integrator-hardcode-evidence.md) only for
+the narrowly allowed public-domain source-proof exception. Ordinary configured
+values must remain configuration; traffic samples are not source proof.
 
 ## Spawn Evidence
 

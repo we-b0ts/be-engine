@@ -12,8 +12,9 @@ commit, and relevant source locations.
 - `integrate`: exact work scope, original workflow/recording and worker
   binding/dispatch, handoff ID, worker base, delivery commit, accepted review,
   local-test results, shared impact, and required-input references.
-- `review`: exact findings/report, inspected target version, and available
-  commit-to-work-item provenance. No API issue is implied by this assignment.
+- `review`: inspected target version, current findings/report when available,
+  and available commit-to-work-item provenance. This includes a missing or stale
+  final quality report. No API issue is implied by this assignment.
 
 Return missing material. Preserve original identities; there is no dedicated
 integrator evidence endpoint or engine integration activity to invent.
@@ -31,15 +32,28 @@ integrator evidence endpoint or engine integration activity to invent.
    and shared data semantics require proof; their filenames do not make them
    mechanical. Return unresolved business decisions to the responsible owner.
 4. Check combined module boundaries, affected startup ownership, and evidence
-   locations. Run the repository's relevant build and local checks. Commit the
-   candidate and record every conflict resolution and original-to-result mapping.
-5. Return the candidate based on the exact assigned base. Do not write product
+   locations. Commit the candidate and record every conflict resolution and
+   original-to-result mapping. Run complete candidate review:
+
+   ```bash
+   backend-rewrite --target-root /absolute/canonical review check \
+     --integration --worktree /absolute/integration \
+     --api 'GET /api' --handoff-id ACCEPTED_HANDOFF_ID
+   ```
+
+   Use `--process-output ID` for that scope. Supply current `--evidence` and
+   `--hardcode-ai-verified` mappings when required. Only a `passed` report
+   qualifies. Resolve integration-induced failures here; return original
+   implementation defects with exact findings to their responsible worker.
+5. Return the candidate and its absolute passing `report_path` based on the
+   exact assigned base. Do not write product
    code or configuration in the canonical worktree or touch another worker tree.
 
-A worker's passing source review covers its delivery, not your merge edits.
-Inspect those edits under the shared source rules and return their evidence.
-Do not run the worker's registered review command against your own worktree or
-invent a candidate-review CLI. Formal integrated review remains required.
+A worker's passing report covers its delivery. Integration review runs the same
+source, Replay-isolation, public-domain, and configured quality checks against
+the complete merged candidate. It binds the accepted handoff, canonical check
+configuration and runtime inputs, and exact candidate code. Never reuse a
+worker report for integration or a candidate report after subsequent changes.
 
 When the reviewed handoff needs no code change after input application, the
 candidate may equal the assigned base. Return the identity and checks without
@@ -60,6 +74,13 @@ For a public-domain hardcode finding, read
 source-evidence commit in your worktree and return its candidate and exact
 mappings. This permits evidence metadata, not an unrelated product repair.
 
+For an evidence-only candidate or final quality refresh, run `review check
+--integration --worktree /absolute/integration` against the canonical target
+root, with neither a scope nor handoff ID. Return its passing report with the
+exact candidate. The coordinator accepts that report after publication; do not
+invent a worker handoff for global quality work. If required canonical inputs
+are still changing, return them first and recheck against their final state.
+
 A review assignment does not authorize business-code edits. Return concrete
 findings and repair ownership. Source analysis that cannot prove a safe merge
 or an allowed constant returns the missing proof; do not weaken the check.
@@ -70,14 +91,18 @@ Echo the assignment ID, original handoff/dispatch or findings, and observed base
 Return one outcome:
 
 - `ready`: candidate commit when applicable, result content identity, provenance,
-  conflict resolutions, local checks, source evidence, and required inputs.
+  conflict resolutions, local checks, source evidence, required inputs, and the
+  absolute passing integration `report_path` for every candidate being delivered.
 - `rework`: responsible work item, exact failure/conflict, evidence, and requested
-  repair. Identify whether your own integration resolution introduced it.
+  repair. Include the failed candidate's absolute `report_path` and source
+  finding IDs when available; for configured commands or isolation/domain
+  failures return their logs and exact locations instead of inventing finding
+  IDs. Identify whether your own integration resolution introduced it.
 - `stale`: the changed base, handoff, dispatch, or inspected version.
 - `needs_input`: exact missing material and completed investigation.
 - `execution_failed`: failed operation, diagnostic, and completed local steps.
 
 These are handoff outcomes, not engine worker activities. End the turn after
 returning the result. A prepared candidate does not mean the API is accepted.
-Never apply rules/startup inputs, report `integrated`, execute `next`, record,
+Never apply rules/startup inputs, report `integrated`, execute `review accept` or `next`, record,
 run formal acceptance, or claim work-item or workflow completion.

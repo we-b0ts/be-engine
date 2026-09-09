@@ -9,53 +9,67 @@ use super::model::{RewriteAction, RewriteState};
 use super::store::RewriteStore;
 use super::{action, fingerprint, source_diff, worker};
 
+mod candidate;
 mod evidence;
 mod integrated;
 mod model;
 mod repair;
 mod scan;
-pub(super) use integrated::{gate, is_rework_wait, required_action, terminal_current};
+pub use candidate::accept;
+pub(super) use candidate::accept_locked as accept_integration;
+pub(super) use integrated::{gate, has_review, is_rework_wait, required_action, terminal_current};
 pub use model::*;
-pub use repair::rework;
+pub use repair::{rework, rework_with_report};
 
 pub fn check(options: RewriteReviewOptions) -> Result<RewriteReviewReport> {
     let (target_root, project) = crate::e2e_run::resolve_project(&options.target_root)?;
-    let store = RewriteStore::new(&target_root)?;
-    // Local workers never acquire the coordinator lock or write workflow state.
-    let _lock = if options.worktree.is_none() {
-        Some(store.lock()?)
-    } else {
-        None
-    };
-    if options.worktree.is_none() {
-        ensure!(
-            matches!(
-                super::traffic_operation::state(&target_root)?,
-                super::traffic_operation::TrafficOperationState::Absent
-            ),
-            "integrated review must wait for traffic verification"
-        );
-    }
-    let state = store
+    let state = RewriteStore::new(&target_root)?
         .load()?
         .context("rewrite workflow is not initialized")?;
-    check_locked(&target_root, &project.pr_base, &state, options)
+    check_candidate(&target_root, &project, &state, options)
 }
 
-pub(super) fn check_locked(
+// The only complete quality-check pipeline. Both worker and integrator invoke
+// this explicitly in their delivery worktree; coordinator advancement never does.
+fn check_candidate(
     target_root: &Path,
-    pr_base: &str,
+    project: &crate::e2e_run::ResolvedProjectConfig,
     state: &RewriteState,
     options: RewriteReviewOptions,
 ) -> Result<RewriteReviewReport> {
-    let (root, base, dispatch) = if let Some(worktree) = &options.worktree {
+    let root = fs::canonicalize(options.worktree.as_deref().unwrap_or(target_root))?;
+    candidate::same_repository(target_root, &root)?;
+    let integration_mode = options.integration || options.worktree.is_none();
+    let canonical_head = candidate::head(target_root)?;
+    let canonical_fingerprint = fingerprint::repository_fingerprint(target_root)?;
+    let (base, dispatch, integration) = if integration_mode {
+        let dispatch =
+            candidate::handoff(state, options.scope.as_ref(), options.handoff_id.as_deref())?;
+        source_diff::git_text(
+            &root,
+            &["merge-base", "--is-ancestor", &canonical_head, "HEAD"],
+        )
+        .context("integration candidate must descend from the current canonical base")?;
+        (
+            canonical_head.clone(),
+            dispatch,
+            Some(IntegrationReview {
+                canonical_base_revision: canonical_head.clone(),
+                canonical_base_fingerprint: canonical_fingerprint.clone(),
+                handoff_id: options.handoff_id.clone(),
+            }),
+        )
+    } else {
+        ensure!(
+            options.handoff_id.is_none(),
+            "worker review does not accept an integration handoff id"
+        );
         let scope = options
             .scope
             .as_ref()
             .context("worker review requires --api or --process-output")?;
         worker::ensure_scope_confirmed(state, scope, "worker review")?;
         let assignment = assignment(state, scope)?;
-        let root = fs::canonicalize(worktree)?;
         ensure!(
             root == assignment.worktree,
             "review must run against the worktree registered by worker confirm --worktree"
@@ -63,50 +77,82 @@ pub(super) fn check_locked(
         source_diff::git_text(&root, &["merge-base", "--is-ancestor", &assignment.base_revision, "HEAD"])
             .context("worker worktree is behind its dispatch base; coordinator must refresh it before review")?;
         (
-            root,
             assignment.base_revision.clone(),
             Some(worker::dispatch_view(state, scope.clone(), None).dispatch_id),
+            None,
         )
-    } else {
-        ensure!(
-            options.scope.is_none(),
-            "integrated review does not select a worker scope"
-        );
-        let base_ref = source_diff::resolve_pr_base(target_root, pr_base)?;
-        let base = source_diff::git_text(target_root, &["merge-base", "HEAD", &base_ref])?
-            .trim()
-            .to_string();
-        (target_root.to_path_buf(), base, None)
     };
+    let head = candidate::head(&root)?;
     let current = fingerprint::repository_fingerprint(&root)?;
-    let (files, findings) = scan::scan(&root, &base)?;
+    let validation = ReviewValidation {
+        canonical_root: target_root.into(),
+        recording_run_id: state.recording_run_id.clone(),
+        code_fingerprint: fingerprint::code_fingerprint(&root)?,
+        context_fingerprint: candidate::context(target_root, project)?,
+        scan_base_revision: candidate::scan_base(&root, &project.pr_base)?,
+    };
+    // Scan the whole PR in both modes, including code inherited before dispatch.
+    let (files, findings) = scan::scan(&root, &validation.scan_base_revision)?;
     let mut evidence = if let Some(path) = &options.evidence {
         read_json::<ReviewEvidence>(path)?
     } else {
         ReviewEvidence::default()
     };
-    if dispatch.is_none() {
-        integrated::reuse_evidence(&root, state, &findings, &mut evidence)?;
-    }
-    let (status, evidence_files) = evidence::evaluate(&root, &findings, &evidence)?;
+    integrated::reuse_evidence(target_root, &root, state, &findings, &mut evidence)?;
+    let (mut status, evidence_files) = evidence::evaluate(&root, &findings, &evidence)?;
+    let quality = if status == ReviewStatus::Passed {
+        let quality = crate::rewrite::quality::run(
+            &root,
+            &validation.scan_base_revision,
+            &project.target_quality_gates,
+            &options.hardcode_ai_verified,
+        )?;
+        if !quality.passed(&project.target_quality_gates) {
+            status = ReviewStatus::ChangesRequired;
+        }
+        Some(quality)
+    } else {
+        None
+    };
     ensure!(
-        current == fingerprint::repository_fingerprint(&root)?,
+        current == fingerprint::repository_fingerprint(&root)? && head == candidate::head(&root)?,
         "code changed during review; run review check again"
     );
-    let report_path = if dispatch.is_some() {
-        worker_report_path(&root)
+    let (_, fresh_project) = crate::e2e_run::resolve_project(target_root)?;
+    ensure!(
+        validation.context_fingerprint == candidate::context(target_root, &fresh_project)?
+            && validation.scan_base_revision
+                == candidate::scan_base(&root, &fresh_project.pr_base)?,
+        "review configuration or inputs changed during checks; rerun review check"
+    );
+    if integration_mode {
+        ensure!(
+            canonical_head == candidate::head(target_root)?
+                && canonical_fingerprint == fingerprint::repository_fingerprint(target_root)?,
+            "canonical base changed while preparing integration review; refresh the candidate"
+        );
+    }
+    let report_path = if integration_mode {
+        if root == target_root {
+            integrated_path(&root)
+        } else {
+            crate::internal_runtime::root(&root).join("integration-review.json")
+        }
     } else {
-        integrated_path(&root)
+        worker_report_path(&root)
     };
     let report = RewriteReviewReport {
-        schema_version: 1, rules_version: RULE_VERSION.into(), workflow_id: state.workflow_id.clone(),
-        dispatch_id: dispatch, scope: options.scope, worktree: root.clone(), base_revision: base,
-        head_revision: source_diff::git_text(&root, &["rev-parse", "HEAD"])?.trim().into(),
-        target_fingerprint: current, status, files, findings, evidence, evidence_files, report_path: report_path.clone(),
+        schema_version: 2, rules_version: RULE_VERSION.into(), workflow_id: state.workflow_id.clone(),
+        dispatch_id: dispatch, scope: options.scope, worktree: root, base_revision: base,
+        head_revision: head, target_fingerprint: current, status, files, findings, evidence, evidence_files,
+        report_path: report_path.clone(), quality, validation: Some(validation), integration,
+        hardcode_ai_verified: options.hardcode_ai_verified, accepted_target_fingerprint: None,
+        required_gates: crate::rewrite::quality::gate_names(&project.target_quality_gates),
         next_step: match status {
-            ReviewStatus::Passed => "Deliver this exact code and review report; the coordinator must inspect spawn evidence before reporting handoff_ready with --review-report. Integrated review: return to backend-rewrite status.",
-            ReviewStatus::ChangesRequired => "Fix file-size/Value violations or request-owned spawn, then rerun review check. For an integrated finding, use review rework --finding <id> --owner 'api:METHOD /path' or --owner 'process-output:ID' to route it to its owning worker.",
-            ReviewStatus::EvidenceRequired => "Trace each spawn to its startup entry and all callers. Supply a JSON {spawns:[{finding_id,ownership,startup_entry:{file,line,fact},call_chain:[{file,line,fact}],request_path_review,task_lifecycle}]} through review check --evidence. ownership is startup, request, or unknown. A callback registered at startup may still execute per request.",
+            ReviewStatus::Passed if integration_mode => "Return the exact candidate and this report. After publication, the coordinator must submit this integration report through worker report --activity integrated --review-report, or review accept --report for an unscoped review. Publication or verification is not performed by review check.",
+            ReviewStatus::Passed => "Deliver this exact code and complete quality report; the coordinator must inspect source evidence before reporting handoff_ready with --review-report.",
+            ReviewStatus::ChangesRequired => "Fix the reported source or quality findings in the delivery worktree. Inspect quality command log_path for compiler/test errors; for hardcoded domains follow the exact source-evidence contract and --hardcode-ai-verified. Rerun review check before returning a handoff.",
+            ReviewStatus::EvidenceRequired => "Trace each spawn's startup entry and callers; supply --evidence with source locations and ownership, then rerun review check. Unknown/request ownership cannot pass.",
         }.into(),
     };
     write_json(&report_path, &report)?;
@@ -223,6 +269,7 @@ fn assignment<'a>(
 }
 
 pub(super) fn accept_handoff(
+    root: &Path,
     state: &RewriteState,
     scope: &RewriteWorkScope,
     path: Option<&Path>,
@@ -254,11 +301,12 @@ pub(super) fn accept_handoff(
             == source_diff::git_text(&assignment.worktree, &["rev-parse", "HEAD"])?.trim(),
         "commit changed after review; rerun review check for the delivered commit"
     );
-    let (status, _) = evidence::evaluate(&assignment.worktree, &report.findings, &report.evidence)?;
     ensure!(
-        status == ReviewStatus::Passed,
-        "handoff spawn review is incomplete"
+        report.integration.is_none(),
+        "worker handoff requires a worker review, not an integration candidate"
     );
+    let (_, project) = crate::e2e_run::resolve_project(root)?;
+    candidate::validate(root, &assignment.worktree, state, &report, &project)?;
     Ok(report)
 }
 
@@ -287,3 +335,6 @@ fn write_json(path: &Path, value: &impl serde::Serialize) -> Result<()> {
 
 #[cfg(test)]
 pub(in crate::rewrite) mod tests;
+
+#[cfg(test)]
+mod delivery_tests;

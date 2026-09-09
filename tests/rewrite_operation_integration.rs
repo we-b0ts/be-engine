@@ -69,11 +69,18 @@ fn configured_target() -> tempfile::TempDir {
 #[test]
 fn detached_cli_operation_publishes_failure_and_status_does_not_restart_it() {
     let target = configured_target();
-    // Deliberately fail before target execution: the workflow has no state.
-    // This exercises the real sibling traffic-e2e child and its launch handoff.
+    // Deliberately fail Next's source-route validation before target execution.
+    // This exercises the real sibling traffic-e2e child and its launch handoff;
+    // quality receipt admission itself is synchronous and no longer launches one.
     let launched = command(
         target.path(),
-        &["target-quality", "run", "invalid-gate", "--api", "GET /api"],
+        &[
+            "next",
+            "--api",
+            "GET /api",
+            "--source-route",
+            "/wrong-route",
+        ],
     );
     assert_eq!(launched["schema_version"], 28);
     assert_eq!(
@@ -106,7 +113,7 @@ fn detached_cli_operation_publishes_failure_and_status_does_not_restart_it() {
         failed["action"]["summary"]
             .as_str()
             .unwrap()
-            .contains("not initialized")
+            .contains("requires its canonical source route")
     );
     let again = command(target.path(), &["status"]);
     assert_eq!(

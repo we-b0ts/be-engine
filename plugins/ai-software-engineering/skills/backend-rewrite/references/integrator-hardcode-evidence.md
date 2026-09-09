@@ -1,8 +1,9 @@
 # Integrator Hardcode Evidence
 
-Use only when an assigned review identifies a `replay-isolation` public-domain
-finding. Inspect source and prepare exact evidence in the assigned worktree;
-do not execute the formal quality gate.
+Use when a worker or integration review identifies a `replay-isolation`
+public-domain finding. Inspect source and prepare exact evidence in the assigned
+worktree, then repeat that worktree's `review check` with the proven mappings.
+Report acceptance and traffic verification remain coordinator-owned.
 
 All added Rust lines, including tests, reject `.trp.test`. Other Replay-private
 markers remain prohibited in production paths. Only the public-domain rules for
@@ -29,6 +30,9 @@ exact corresponding mappings:
 ```text
 TARGET_FILE:LINE:COLUMN=SOURCE_REPOSITORY@SOURCE_REVISION:SOURCE_FILE:LINE:COLUMN
 ```
+
+Supply each mapping through a separate `review check --hardcode-ai-verified`
+argument. A changed target location requires a newly current mapping and report.
 
 Missing, duplicate, stale, unrelated, or uncommitted positions fail the gate.
 Do not relabel unknown provenance as source-proven. Return unproven occurrences

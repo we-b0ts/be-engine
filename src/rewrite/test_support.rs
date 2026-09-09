@@ -22,6 +22,7 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
         api_catalog: std::collections::BTreeSet::new(),
         case_pattern_identification: None,
         target_quality_fingerprint: None,
+        delivery_review_required: false,
         recording_run_id: "20260802000000".to_string(),
         require_comparison: true,
         recording_require_comparison: true,

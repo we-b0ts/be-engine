@@ -7,6 +7,9 @@ pub(in crate::rewrite) fn worker_report(root: &Path, scope: RewriteWorkScope) ->
         worktree: Some(root.into()),
         scope: Some(scope),
         evidence: None,
+        integration: false,
+        handoff_id: None,
+        hardcode_ai_verified: Vec::new(),
     })
     .map(|report| report.report_path)
     .unwrap_or_else(|_| worker_report_path(root))
@@ -14,6 +17,7 @@ pub(in crate::rewrite) fn worker_report(root: &Path, scope: RewriteWorkScope) ->
 
 fn setup() -> (tempfile::TempDir, RewriteWorkScope) {
     let target = configured_target();
+    git(target.path(), &["switch", "-qc", "coordinator"]);
     let state = implementation_state_with_inventory(false);
     let scope = RewriteWorkScope::Api {
         api: state.api.clone(),
@@ -39,6 +43,9 @@ fn options(root: &Path, scope: RewriteWorkScope) -> RewriteReviewOptions {
         worktree: Some(root.into()),
         scope: Some(scope),
         evidence: None,
+        integration: false,
+        handoff_id: None,
+        hardcode_ai_verified: Vec::new(),
     }
 }
 
@@ -190,11 +197,16 @@ fn local_review_does_not_mutate_workflow_and_integrated_receipt_survives_resume(
         worktree: None,
         scope: None,
         evidence: None,
+        integration: false,
+        handoff_id: None,
+        hardcode_ai_verified: Vec::new(),
     })
     .unwrap();
     assert_eq!(report.status, ReviewStatus::Passed);
+    assert!(!terminal_current(target.path(), &state));
+    accept(target.path().into(), report.report_path.clone()).unwrap();
     assert!(terminal_current(target.path(), &state));
-    let mut old = report.clone();
+    let mut old = show(target.path().into()).unwrap();
     old.rules_version = "old-rule".into();
     write_json(&report.report_path, &old).unwrap();
     assert!(!terminal_current(target.path(), &state));
@@ -243,8 +255,11 @@ fn assigned_git_worktree_review_is_accepted_and_integrated_without_a_private_wor
     let mut opts = RewriteReviewOptions {
         target_root: target.path().into(),
         worktree: Some(worktree.clone()),
-        scope: Some(scope),
+        scope: Some(scope.clone()),
         evidence: None,
+        integration: false,
+        handoff_id: None,
+        hardcode_ai_verified: Vec::new(),
     };
     let report = check(opts.clone()).unwrap();
     assert_eq!(report.status, ReviewStatus::EvidenceRequired);
@@ -285,8 +300,57 @@ fn assigned_git_worktree_review_is_accepted_and_integrated_without_a_private_wor
         review_report: Some(report.report_path),
     };
     worker::runtime::report(delivery.clone()).unwrap();
-    git(target.path(), &["cherry-pick", &report.head_revision]);
+
+    let integration_worktree = directory.path().join("integrator");
+    git(
+        target.path(),
+        &[
+            "worktree",
+            "add",
+            "-qb",
+            "integrated-code",
+            integration_worktree.to_str().unwrap(),
+        ],
+    );
+    git(
+        &integration_worktree,
+        &["merge", "--ff-only", &report.head_revision],
+    );
+    let candidate = check(RewriteReviewOptions {
+        target_root: target.path().into(),
+        worktree: Some(integration_worktree.clone()),
+        scope: Some(scope.clone()),
+        evidence: None,
+        integration: true,
+        handoff_id: delivery.handoff_id.clone(),
+        hardcode_ai_verified: Vec::new(),
+    })
+    .unwrap();
+    assert_eq!(candidate.status, ReviewStatus::Passed);
+    assert_eq!(candidate.evidence.spawns.len(), 1);
+    assert!(
+        !crate::internal_runtime::root(&integration_worktree)
+            .join("rewrite/state.json")
+            .exists()
+    );
+    git(
+        target.path(),
+        &["merge", "--ff-only", &candidate.head_revision],
+    );
     delivery.activity = worker::model::RewriteWorkerActivity::Integrated;
+    assert!(
+        worker::runtime::report(delivery.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("integration review report")
+    );
+    assert_eq!(
+        worker::runtime::observation(&store.load().unwrap().unwrap(), &scope)
+            .unwrap()
+            .activity,
+        worker::model::RewriteWorkerActivity::HandoffReady
+    );
+    delivery.review_report = Some(candidate.report_path);
     worker::runtime::report(delivery).unwrap();
     assert!(
         gate(target.path(), &store.load().unwrap().unwrap(), "master")
@@ -294,11 +358,28 @@ fn assigned_git_worktree_review_is_accepted_and_integrated_without_a_private_wor
             .is_none()
     );
     assert_eq!(show(target.path().into()).unwrap().evidence.spawns.len(), 1);
+    let previous_report = fs::read(integrated_path(target.path())).unwrap();
     fs::write(target.path().join("src/lib.rs"), "fn main() { start(); }\nfn start() { tokio::spawn(async {}); }\nfn response() { start(); }\n").unwrap();
     assert!(matches!(
         gate(target.path(), &store.load().unwrap().unwrap(), "master").unwrap(),
         Some(RewriteAction::SourceReviewRequired { .. })
     ));
+    assert!(show(target.path().into()).is_err());
+    assert_eq!(
+        fs::read(integrated_path(target.path())).unwrap(),
+        previous_report
+    );
+    let refreshed = check(RewriteReviewOptions {
+        target_root: target.path().into(),
+        worktree: None,
+        scope: None,
+        evidence: None,
+        integration: false,
+        handoff_id: None,
+        hardcode_ai_verified: Vec::new(),
+    })
+    .unwrap();
+    assert_eq!(refreshed.status, ReviewStatus::EvidenceRequired);
     assert_eq!(
         show(target.path().into()).unwrap().status,
         ReviewStatus::EvidenceRequired
@@ -325,6 +406,9 @@ fn completed_api_quality_rework_reuses_worker_and_duplicate_route_is_idempotent(
         worktree: None,
         scope: None,
         evidence: None,
+        integration: false,
+        handoff_id: None,
+        hardcode_ai_verified: Vec::new(),
     })
     .unwrap();
     assert_eq!(report.status, ReviewStatus::ChangesRequired);
@@ -368,7 +452,7 @@ fn process_output_review_uses_its_own_dispatch_and_blocks_integrated_acceptance(
     store.save(&state).unwrap();
     let report = check(options(target.path(), scope.clone())).unwrap();
     assert_eq!(report.scope, Some(scope.clone()));
-    assert!(accept_handoff(&state, &scope, Some(&report.report_path)).is_ok());
+    assert!(accept_handoff(target.path(), &state, &scope, Some(&report.report_path)).is_ok());
     fs::create_dir_all(target.path().join("src")).unwrap();
     fs::write(
         target.path().join("src/bad.rs"),
@@ -387,6 +471,7 @@ fn process_output_review_uses_its_own_dispatch_and_blocks_integrated_acceptance(
 
 fn integrated_and_parked_worker() -> (tempfile::TempDir, RewriteWorkScope) {
     let target = configured_target();
+    git(target.path(), &["switch", "-qc", "coordinator"]);
     let mut state = implementation_state_with_inventory(false);
     worker::integrate_current_for_test(&mut state);
     let api = "POST /other".to_string();
@@ -416,6 +501,9 @@ fn failing_integrated_review(root: &Path) -> RewriteReviewReport {
         worktree: None,
         scope: None,
         evidence: None,
+        integration: false,
+        handoff_id: None,
+        hardcode_ai_verified: Vec::new(),
     })
     .unwrap()
 }
@@ -520,6 +608,20 @@ fn routed_review_waits_for_worker_and_keeps_handoff_and_integration_available() 
         "unrelated integration\n",
     )
     .unwrap();
+    // The delivery owner refreshes the report for changed code. Coordinator
+    // gate inspection must not perform that scan on its behalf.
+    let refreshed = check(RewriteReviewOptions {
+        target_root: target.path().into(),
+        worktree: None,
+        scope: None,
+        evidence: None,
+        integration: false,
+        handoff_id: None,
+        hardcode_ai_verified: Vec::new(),
+    })
+    .unwrap();
+    assert_eq!(refreshed.status, ReviewStatus::ChangesRequired);
+    assert_eq!(refreshed.findings[0].id, report.findings[0].id);
     assert!(is_rework_wait(
         &gate(target.path(), &saved, "master").unwrap().unwrap()
     ));
@@ -545,7 +647,19 @@ fn routed_review_waits_for_worker_and_keeps_handoff_and_integration_available() 
             .action,
         RewriteAction::IntegrationRequired { .. }
     ));
+    let integrated = check(RewriteReviewOptions {
+        target_root: target.path().into(),
+        worktree: Some(target.path().into()),
+        scope: Some(scope.clone()),
+        evidence: None,
+        integration: true,
+        handoff_id: feedback.handoff_id.clone(),
+        hardcode_ai_verified: Vec::new(),
+    })
+    .unwrap();
+    assert_eq!(integrated.status, ReviewStatus::Passed);
     feedback.activity = Activity::Integrated;
+    feedback.review_report = Some(integrated.report_path);
     worker::runtime::report(feedback).unwrap();
     assert!(
         !store

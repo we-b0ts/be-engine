@@ -95,7 +95,7 @@ handle plus `BACKEND_REWRITE_WORKER_ACTIVITY`:
 | `running` | The coordinator reports that this dispatch is running. |
 | `idle` | The worker stopped without a usable handoff; resume is required. |
 | `handoff_ready` | The coordinator received a reviewable handoff. |
-| `integrated` | The identified handoff and required inputs have been integrated. |
+| `integrated` | The identified handoff and required inputs are published with a current passing integration report. |
 | `rework_required` | The identified handoff needs worker changes, such as an integration conflict or a failed quality gate. |
 
 For `handoff_ready`, `integrated`, and `rework_required`, also supply the same stable
@@ -129,6 +129,8 @@ source evidence; send semantic questions back to its author.
 Report `handoff_ready` with `--review-report` or
 `BACKEND_REWRITE_WORKER_REVIEW_REPORT`. An unaccepted incomplete delivery from
 an ended worker is `idle`, so the same worker can resume and finish its review.
+The report must pass the complete shared source, Replay-isolation, domain and
+configured repository quality checks against current canonical inputs.
 
 A usable handoff contains the original overview's workflow/recording,
 work scope, issue, binding and dispatch identities, proven cause and
@@ -168,14 +170,19 @@ Completion events should be reported immediately, not held until that interval.
 For `integration_required`, follow
 [coordinator-integration.md](coordinator-integration.md). Delegate preparation to
 `code-integrator`, publish only the matched candidate, apply necessary inputs,
-and report with the original implementation worker handle and accepted handoff
-ID. Do not analyze or resolve code conflicts in the coordinator.
+and report with the original implementation worker handle, accepted handoff ID,
+and the integrator's passing `--review-report`. Integration review is bound to
+that handoff and exact published candidate; the earlier worker report cannot
+replace it. Do not analyze or resolve code conflicts in the coordinator.
 
 If an accepted handoff requires API changes, report `rework_required` when the
 engine permits it and resume the same binding. Preserve its original handoff
 ID; the new dispatch invalidates late results from the previous attempt.
-For a failed quality operation, integrate the corrected handoff before the
-returned retry; that retry validates the current integrated gate identity.
+Quality checks execute in worker and integration worktrees before delivery.
+Return their failures to the responsible delivery owner with the report and
+exact evidence. Coordinator admission validates reports without rerunning those
+commands. Legacy failed quality operations can be retried only after a valid
+current integration receipt is admitted.
 
 Evidence-backed rule, route, capture, and startup inputs use the existing
 coordinator interfaces with their original evidence/plan identities. Read
@@ -183,13 +190,13 @@ coordinator interfaces with their original evidence/plan identities. Read
 [coordinator-startup-inputs.md](coordinator-startup-inputs.md) for the returned input kind.
 The canonical target environment remains coordinator-owned.
 
-One API's integrated handoff schedules only its required quality checks, Replay,
-and batch-required Comparison. An unsuccessful acceptance resumes its original
+One API's admitted integrated handoff schedules only its Replay and
+batch-required Comparison. An unsuccessful acceptance resumes its original
 worker. Do not schedule speculative extra APIs from shared-impact notes; final
 unified verification covers the integrated target after ordinary work drains.
 
 Only the coordinator confirms/reports/transfers worker bindings, applies rules,
-advances the engine, requests recording, invokes formal quality/acceptance, and
+advances the engine, requests recording, admits quality reports, invokes traffic acceptance, and
 executes repair verification or recovery. The integrator returns code results;
 its runtime task is not an API worker activity. Release retained implementation
 and integration bindings/worktrees only after `terminal_allowed` and final

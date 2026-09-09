@@ -14,6 +14,23 @@ const RUNTIME_PROGRESS_PATHSPECS: &[&str] = &[
 ];
 
 pub(super) fn repository_fingerprint(target_root: &Path) -> Result<String> {
+    let mut hash = repository_files_hash(target_root)?;
+    hash.update(b"startup-snapshot");
+    hash.update(crate::startup::startup_snapshot_revision(target_root)?.as_bytes());
+    hash.update(&[0]);
+    hash.update(b"target-environment");
+    hash.update(crate::startup::startup_environment_revision(target_root)?.as_bytes());
+    hash.update(&[0]);
+    Ok(hash.finish())
+}
+
+/// Portable delivery identity; private startup inputs belong to the canonical
+/// validation context, not the candidate worktree's local runtime directory.
+pub(super) fn code_fingerprint(target_root: &Path) -> Result<String> {
+    Ok(repository_files_hash(target_root)?.finish())
+}
+
+fn repository_files_hash(target_root: &Path) -> Result<Fnv1a> {
     let mut paths_args = vec![
         "ls-files",
         "--cached",
@@ -37,13 +54,7 @@ pub(super) fn repository_fingerprint(target_root: &Path) -> Result<String> {
         let relative = std::str::from_utf8(relative).context("repository path is not UTF-8")?;
         hash_repository_path(target_root, relative, &mut hash)?;
     }
-    hash.update(b"startup-snapshot");
-    hash.update(crate::startup::startup_snapshot_revision(target_root)?.as_bytes());
-    hash.update(&[0]);
-    hash.update(b"target-environment");
-    hash.update(crate::startup::startup_environment_revision(target_root)?.as_bytes());
-    hash.update(&[0]);
-    Ok(hash.finish())
+    Ok(hash)
 }
 
 fn hash_repository_path(target_root: &Path, relative: &str, hash: &mut Fnv1a) -> Result<()> {

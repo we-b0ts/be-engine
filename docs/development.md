@@ -181,22 +181,56 @@ base. Use `--process-output ID` for a process-output worker. After the final
 edit and commit, supply the returned report through `worker report ...
 --activity handoff_ready --review-report /absolute/report.json`.
 
-Review enforces complete changed production Rust files <=1000 lines and rejects
+Review runs the same complete quality implementation for worker and integration
+deliveries. It enforces complete changed production Rust files <=1000 lines and rejects
 explicit `serde_json::Value` use. `json!` is allowed. Added Tokio spawn paths
 require structured startup ownership evidence via `--evidence`; request-owned
 and unknown ownership cannot pass. The scanner uses syntax, ordinary imports and
 source spans; it does not expand macros, infer types or prove call graphs.
+It also performs the mandatory Replay-isolation and source-sensitive public
+domain checks, including `demo.test` occurrences in test fixtures, then executes
+every configured repository gate with its exact arguments in the delivery
+worktree. Configuration comes from the canonical target, so changing a worker's
+local gate configuration cannot skip checks. Worker review checks the frozen
+dispatch ancestry and uses the same full PR diff baseline as integration review.
 See the [worker review protocol](../plugins/ai-software-engineering/skills/backend-rewrite/references/worker-review.md).
 
-Without `--worktree` or a work-item selector, `review check` checks integrated
-source against `pr_base`. `review show` reads its current report and `review
-rework --finding ID --owner 'api:GET /api'` (or `process-output:ID`) routes a
-finding to its responsible worker, including a completed retained work item.
+Code integrators check their committed merged candidate using `review check
+--integration --worktree /absolute/integration --api 'GET /api' --handoff-id ID`
+(or `--process-output ID`). After publishing that exact candidate, the coordinator
+reports `worker report ... --activity integrated --review-report
+/absolute/integration-report.json`. This requires an integration report for the
+original accepted handoff, not its earlier worker report. Global evidence-only
+or final quality review uses `review check --integration --worktree
+/absolute/integration` without scope or handoff ID; after publication the
+coordinator admits it using `review accept --report /absolute/report.json`.
+`BACKEND_REWRITE_REVIEW_WORKTREE` and `BACKEND_REWRITE_REVIEW_REPORT` supply those
+paths for returned action commands. Check execution requires an explicit
+delivery worktree; the coordinator validates receipts without rerunning checks.
+
+`review show` reads the current integrated report and `review rework --finding
+ID --owner 'api:GET /api'` (or `process-output:ID`) routes a finding to its
+responsible worker, including a completed retained work item.
+For a failing unpublished integration candidate, add `--report
+/absolute/failed-candidate-report.json` to `review rework`. Routing validates
+the candidate's code, commit, workflow and canonical base without publishing or
+accepting it. Source findings use their `findings[].id`; configured command and
+isolation/domain failures use the accepted handoff's `rework_required` path with
+exact logs or source locations, not fabricated source finding IDs.
 An executed review returns JSON with `passed`, `changes_required` or
 `evidence_required`; inspect `status`, not merely the command exit status.
 Checks and evidence reports are not traffic evidence and never change recordings.
-Quality results are bound to code content, rules and the diff base. Old workflow
-states remain readable but old quality receipts do not waive new checks.
+Quality results are bound to candidate code, canonical check configuration,
+runtime inputs, rules and the diff base. Publication admission matches actual
+code content without substituting a worker's private runtime fingerprint for the
+canonical identity. Code or input changes invalidate the report. Old workflow
+states remain readable but old source-only reports do not waive full checks.
+Admission requires the exact reviewed commit. After admission, an ordinary
+progress-only commit may retain that receipt: the reviewed commit must remain
+an ancestor, with code, canonical inputs, rules and the diff base unchanged,
+and no new `Hardcode-Source-Evidence` commit trailers.
+The engine checks this automatically; do not manufacture another handoff or
+rerun checks merely to publish progress metadata.
 
 Use `traffic-e2e config ... init` for one-time target configuration and
 `traffic-e2e prepare|run-api|run|status|recover|abort` for the standard
@@ -1327,7 +1361,7 @@ concurrency and accepted queuing. Dispatch/resume a real worker, then execute
 `commands.confirm_worker` with its actual handle and assigned `--worktree`.
 Confirmation of one API never
 blocks dispatch or feedback for another. Workers own evidence, diagnosis,
-implementation, local tests, and the assigned source review; the coordinator supplies only the assignment
+implementation, local tests, and the complete delivery review; the coordinator supplies only the assignment
 fields described above and retains the actual dispatch identity.
 
 Runtime completion events drive `worker report <dispatch-id>`. Set
@@ -1336,8 +1370,9 @@ Runtime completion events drive `worker report <dispatch-id>`. Set
 `BACKEND_REWRITE_WORKER_HANDOFF_ID` and a passing `--review-report` for the final
 delivery. The coordinator inspects the spawn evidence before accepting it.
 `integration_required` asks the coordinator
-to integrate that identified handoff and required inputs, then report
-`integrated` with the same ID. A worker ending without a handoff is `idle` and
+to delegate that identified handoff and required inputs to the code integrator,
+publish its exact checked candidate, then report `integrated` with the same ID
+and the integrator's passing `--review-report`. A worker ending without a handoff is `idle` and
 requires resuming its existing binding. Integration conflicts return the ready
 handoff via `rework_required` with its ID; the engine issues a new dispatch to
 the same worker and rejects callbacks for the superseded dispatch. Integration
@@ -1355,12 +1390,15 @@ confirmation alone never proves liveness. Feedback uses a separate short,
 durable transaction and is folded into state on load/save, so a long Replay
 cannot prevent feedback or overwrite it when saving an older snapshot.
 
-CLI `next` and `target-quality run` launch detached engine operations and return
+CLI `next` launches detached engine operations and returns
 the current action immediately. Continue dispatching workers and reporting
 handoffs while verification runs. `execution_failed` retains a bounded error
 and exact `operation retry <operation-id>` command; resolve its cause before
 retrying. A stopped executor requires recovery. Neither condition is completion.
-One integrated API handoff schedules that API's quality gates, Replay, and the
+Quality gates execute during worker and integration review before delivery.
+The coordinator admits version-bound integration reports; the legacy
+`target-quality run` entry point only validates an existing receipt.
+One admitted integrated API handoff schedules that API's Replay and the
 current batch's required Comparison. Final unified verification handles shared
 changes after ordinary work drains.
 
@@ -1541,12 +1579,14 @@ managed resources and allocates a replacement run. A pending rule plan produces
 the evidence validation performed at plan time, so its own workflow revision
 does not make apply stale. A corrected plan using the same evidence ID replaces
 the pending preview before apply; recorder configuration is still changed only
-by apply. For an integrated target change, Rust repositories first return
-`target_quality_required`; its exact execute command runs format, workspace
-tests, and Clippy in the canonical coordinator worktree, with mandatory Replay
-isolation and source review. Passing records a rules/configuration-aware
-quality key for the target fingerprint and returns the `advance_required` command that starts
-Replay. Explicit `target.quality_gates` replace the inferred commands, and an
+by apply. Worker and integration `review check` run format, workspace tests,
+Clippy and the mandatory source/Replay-isolation suite before delivery. The
+coordinator admits the integration report for the exact published candidate;
+`advance_required` then starts Replay. Missing or stale proof returns
+`source_review_required` for the code integrator, including before revalidation
+when code or required inputs have changed. Initial diagnostic Replay can run
+before the workflow has a delivery report. Explicit `target.quality_gates`
+replace the inferred commands, and an
 explicit empty list disables only those configurable commands. Mandatory source
 review and Replay isolation remain enabled.
 
@@ -1785,9 +1825,11 @@ timeout remains a coordinator-owned default. The target's native HTTP port is th
 `recorder.http_gateway.matched_upstream`; Replay uses it on loopback and Comparison uses
 it on the run-owned target bridge IP.
 
-Each quality gate is an exact argv executed without a shell from the canonical
-target root. At most eight uniquely named commands may be configured, with at
-most 32 arguments each. `quality_gates: []` explicitly disables inference.
+Each quality gate is an exact argv executed without a shell by `review check`
+in the worker or integration worktree, using the canonical target's configuration.
+At most eight uniquely named commands may be configured, with at most 32
+arguments each. `quality_gates: []` explicitly disables inference; built-in
+source and Replay-isolation checks remain mandatory.
 
 Managed replay reads its target response limit from
 `recorder.recording.max_body_bytes` in `project.yaml`.
@@ -1977,12 +2019,14 @@ recording, so cache-only interception observes both source and target traffic.
 Breeze itself always uses the centrally managed pinned image and is not built
 from a target-repository Dockerfile.
 
-Before focused Replay, the built-in target `replay-isolation` quality gate
+Before worker and integration delivery, `review check` runs the same built-in
+target `replay-isolation` quality gate. It
 examines only Rust lines added relative to `delivery.pr_base`, including
 staged, unstaged, untracked, test, comment, and documentation lines. It does not
 parse Rust syntax. New `.trp.test` occurrences are always rejected. New
 case-insensitive `sample.test` or `demo.test` occurrences require an exact
-`--hardcode-ai-verified FILE:LINE:COLUMN` argument and a matching commit trailer
+`--hardcode-ai-verified TARGET_FILE:LINE:COLUMN=SOURCE_REPOSITORY@REVISION:SOURCE_FILE:LINE:COLUMN`
+argument and a matching commit trailer
 that identifies the source repository revision and source file line where the
 same hardcode was verified. The target occurrence must already be committed at
 that exact position. See the backend-rewrite workflow reference for the

@@ -23,9 +23,28 @@ fn options(
     scope: &RewriteWorkScope,
     activity: RewriteWorkerActivity,
 ) -> RewriteWorkerReportOptions {
+    let review_report = match activity {
+        RewriteWorkerActivity::HandoffReady => Some(crate::rewrite::review::tests::worker_report(
+            target,
+            scope.clone(),
+        )),
+        RewriteWorkerActivity::Integrated => {
+            crate::rewrite::review::check(crate::rewrite::RewriteReviewOptions {
+                target_root: target.into(),
+                worktree: Some(target.into()),
+                scope: Some(scope.clone()),
+                evidence: None,
+                integration: true,
+                handoff_id: Some("commit-a".into()),
+                hardcode_ai_verified: vec![],
+            })
+            .ok()
+            .map(|r| r.report_path)
+        }
+        _ => None,
+    };
     RewriteWorkerReportOptions {
-        review_report: (activity == RewriteWorkerActivity::HandoffReady)
-            .then(|| crate::rewrite::review::tests::worker_report(target, scope.clone())),
+        review_report,
         target_root: target.to_path_buf(),
         dispatch_id: worker::dispatch_id(state, scope),
         agent_handle: "actual-worker-a".into(),
@@ -99,8 +118,8 @@ fn handoff_wakes_idle_coordinator_and_only_its_api_becomes_ready_for_acceptance(
     ))
     .unwrap();
     assert_eq!(integrated.pending, 1);
-    let RewriteAction::TargetQualityRequired { command, .. } = integrated.action else {
-        panic!("quality gates must precede acceptance")
+    let RewriteAction::AdvanceRequired { command, .. } = integrated.action else {
+        panic!("accepted quality receipt should advance verification")
     };
     assert_eq!(command.argv.last().unwrap(), "GET /api");
     report(handoff).unwrap();
@@ -312,7 +331,7 @@ fn handed_off_workers_do_not_expire_while_waiting_for_integration_or_verificatio
             )),
             RewriteWorkerActivity::Integrated => assert!(matches!(
                 status.action,
-                RewriteAction::TargetQualityRequired { .. }
+                RewriteAction::AdvanceRequired { .. }
             )),
             _ => unreachable!(),
         }

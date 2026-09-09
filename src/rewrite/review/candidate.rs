@@ -1,0 +1,228 @@
+//! Candidate identity and receipt admission. No quality commands run here.
+use super::*;
+use crate::e2e_run::ResolvedProjectConfig;
+use crate::rewrite::worker::model::RewriteWorkerActivity;
+
+pub(super) fn same_repository(root: &Path, worktree: &Path) -> Result<()> {
+    let common = |path: &Path| -> Result<PathBuf> {
+        Ok(fs::canonicalize(
+            source_diff::git_text(
+                path,
+                &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            )?
+            .trim(),
+        )?)
+    };
+    ensure!(
+        common(root)? == common(worktree)?,
+        "review worktree belongs to another repository"
+    );
+    Ok(())
+}
+
+pub(super) fn head(root: &Path) -> Result<String> {
+    Ok(source_diff::git_text(root, &["rev-parse", "HEAD"])?
+        .trim()
+        .into())
+}
+
+pub(super) fn scan_base(root: &Path, pr_base: &str) -> Result<String> {
+    let base = source_diff::resolve_pr_base(root, pr_base)?;
+    Ok(source_diff::git_text(root, &["merge-base", "HEAD", &base])?
+        .trim()
+        .into())
+}
+
+pub(super) fn context(root: &Path, project: &ResolvedProjectConfig) -> Result<String> {
+    Ok(fingerprint::id(&[
+        "review-validation-context-v1",
+        &crate::rewrite::quality::policy_fingerprint(&project.target_quality_gates)?,
+        &project.pr_base,
+        &crate::startup::startup_snapshot_revision(root)?,
+        &crate::startup::startup_environment_revision(root)?,
+    ]))
+}
+
+pub(super) fn handoff(
+    state: &RewriteState,
+    scope: Option<&RewriteWorkScope>,
+    handoff_id: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(scope) = scope else {
+        ensure!(handoff_id.is_none(), "handoff id requires a work scope");
+        return Ok(None);
+    };
+    worker::ensure_scope_confirmed(state, scope, "integration review")?;
+    let observation = worker::runtime::observation(state, scope)
+        .context("integration review requires an accepted worker handoff")?;
+    ensure!(
+        handoff_id.is_some()
+            && observation.handoff_id.as_deref() == handoff_id
+            && matches!(
+                observation.activity,
+                RewriteWorkerActivity::HandoffReady | RewriteWorkerActivity::Integrated
+            ),
+        "integration review must match the accepted handoff and dispatch"
+    );
+    Ok(Some(
+        worker::dispatch_view(state, scope.clone(), None).dispatch_id,
+    ))
+}
+
+pub(super) fn fresh(
+    root: &Path,
+    code_root: &Path,
+    state: &RewriteState,
+    report: &RewriteReviewReport,
+    project: &ResolvedProjectConfig,
+) -> Result<()> {
+    let validation = report
+        .validation
+        .as_ref()
+        .context("legacy review has no complete quality receipt; rerun review check")?;
+    ensure!(
+        report.schema_version == 2
+            && report.rules_version == RULE_VERSION
+            && report.workflow_id == state.workflow_id
+            && validation.recording_run_id == state.recording_run_id
+            && validation.canonical_root == root,
+        "review workflow, recording or rules changed; rerun review check"
+    );
+    ensure!(
+        validation.code_fingerprint == fingerprint::code_fingerprint(code_root)?,
+        "code changed after review; rerun review check"
+    );
+    ensure!(
+        validation.context_fingerprint == context(root, project)?
+            && validation.scan_base_revision == scan_base(code_root, &project.pr_base)?,
+        "review configuration, base or canonical inputs changed; rerun review check"
+    );
+    Ok(())
+}
+
+pub(super) fn validate(
+    root: &Path,
+    code_root: &Path,
+    state: &RewriteState,
+    report: &RewriteReviewReport,
+    project: &ResolvedProjectConfig,
+) -> Result<()> {
+    fresh(root, code_root, state, report, project)?;
+    ensure!(
+        report.head_revision == head(code_root)?,
+        "commit changed after review; rerun review check"
+    );
+    checks_passed(code_root, report, project)
+}
+
+pub(super) fn validate_accepted(
+    root: &Path,
+    state: &RewriteState,
+    report: &RewriteReviewReport,
+    project: &ResolvedProjectConfig,
+) -> Result<()> {
+    fresh(root, root, state, report, project)?;
+    ensure!(
+        report.accepted_target_fingerprint.as_deref()
+            == Some(fingerprint::repository_fingerprint(root)?.as_str()),
+        "accepted review content or inputs changed"
+    );
+    source_diff::git_text(
+        root,
+        &["merge-base", "--is-ancestor", &report.head_revision, "HEAD"],
+    )
+    .context("accepted review commit is not an ancestor of the published target")?;
+    ensure!(
+        crate::rewrite::quality::source_evidence_unchanged(root, &report.head_revision)?,
+        "source-evidence commit trailers changed after review; rerun review check"
+    );
+    checks_passed(root, report, project)
+}
+
+fn checks_passed(
+    code_root: &Path,
+    report: &RewriteReviewReport,
+    project: &ResolvedProjectConfig,
+) -> Result<()> {
+    ensure!(
+        report.status == ReviewStatus::Passed,
+        "review did not pass; fix the delivery and rerun review check"
+    );
+    report
+        .quality
+        .as_ref()
+        .context("review lacks mandatory quality checks")?
+        .ensure_passed(&project.target_quality_gates)?;
+    let (status, _) = evidence::evaluate(code_root, &report.findings, &report.evidence)?;
+    ensure!(
+        status == ReviewStatus::Passed,
+        "review source evidence is incomplete"
+    );
+    Ok(())
+}
+
+/// Called under the coordinator lock after publication. Only validates the
+/// delivered receipt; never executes review commands or writes worker state.
+pub(in crate::rewrite) fn accept_locked(
+    root: &Path,
+    state: &mut RewriteState,
+    path: &Path,
+    expected_scope: Option<&RewriteWorkScope>,
+    expected_handoff: Option<&str>,
+) -> Result<()> {
+    let mut report: RewriteReviewReport = read_json(path)?;
+    let integration = report
+        .integration
+        .as_ref()
+        .context("integrated delivery requires an integration review report")?;
+    ensure!(
+        report.scope.as_ref() == expected_scope
+            && integration.handoff_id.as_deref() == expected_handoff,
+        "integration report does not match the delivered scope and handoff"
+    );
+    let dispatch = handoff(state, expected_scope, expected_handoff)?;
+    ensure!(
+        report.dispatch_id == dispatch,
+        "integration report dispatch is stale"
+    );
+    let (_, project) = crate::e2e_run::resolve_project(root)?;
+    validate(root, root, state, &report, &project)?;
+    source_diff::git_text(
+        root,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            &integration.canonical_base_revision,
+            "HEAD",
+        ],
+    )
+    .context("published candidate does not descend from its reviewed canonical base")?;
+    report.accepted_target_fingerprint = Some(fingerprint::repository_fingerprint(root)?);
+    write_json(&integrated_path(root), &report)?;
+    // Admission remains mandatory even when a receipt is lost or old caches
+    // are invalidated by rule/configuration changes.
+    state.delivery_review_required = true;
+    state.bump();
+    Ok(())
+}
+
+pub fn accept(
+    target_root: PathBuf,
+    path: PathBuf,
+) -> Result<crate::rewrite::RewriteActionEnvelope> {
+    let (root, _) = crate::e2e_run::resolve_project(&target_root)?;
+    let store = RewriteStore::new(&root)?;
+    let lock = store.lock()?;
+    ensure!(
+        matches!(
+            crate::rewrite::traffic_operation::state(&root)?,
+            crate::rewrite::traffic_operation::TrafficOperationState::Absent
+        ),
+        "review admission must wait for traffic verification"
+    );
+    let mut state = store.load()?.context("rewrite workflow is absent")?;
+    accept_locked(&root, &mut state, &path, None, None)?;
+    store.save(&state)?;
+    drop(lock);
+    worker::runtime::current_envelope(&root)
+}

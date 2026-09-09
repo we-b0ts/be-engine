@@ -94,15 +94,7 @@ pub fn start_next(mut options: RewriteNextOptions) -> Result<RewriteActionEnvelo
 }
 
 pub fn start_quality(options: RewriteTargetQualityOptions) -> Result<RewriteActionEnvelope> {
-    let target_root = fs::canonicalize(&options.target_root)?;
-    start(
-        &target_root,
-        Request::TargetQuality {
-            api: options.api.to_string(),
-            gate_id: options.gate_id,
-            hardcode_ai_verified: options.hardcode_ai_verified,
-        },
-    )
+    super::target_quality::run(options)
 }
 
 fn start(target_root: &Path, request: Request) -> Result<RewriteActionEnvelope> {
@@ -231,26 +223,36 @@ pub fn retry(context: RewriteContext, id: &str) -> Result<RewriteActionEnvelope>
         execution.id == id && execution.finished && execution.error.is_some(),
         "retry requires the current failed coordinator operation"
     );
-    let mut request = execution.request;
-    if let Request::TargetQuality { api, gate_id, .. } = &mut request {
-        let state = RewriteStore::new(&context.target_root)?
-            .load()?
-            .context("rewrite workflow is not initialized")?;
-        let scope = super::RewriteWorkScope::Api { api: api.clone() };
-        let scoped = super::worker::runtime::scoped(&state, &scope)?;
-        if !super::worker::runtime::acceptance_ready(&scoped, &scope) {
+    if let Request::TargetQuality {
+        api,
+        gate_id,
+        hardcode_ai_verified,
+    } = &execution.request
+    {
+        // Old failed quality operations resume receipt admission, never another
+        // coordinator-side check. Missing receipts route back to the integrator.
+        let options = RewriteTargetQualityOptions {
+            target_root: context.target_root.clone(),
+            api: api.parse()?,
+            gate_id: gate_id.clone(),
+            hardcode_ai_verified: hardcode_ai_verified.clone(),
+        };
+        let store = RewriteStore::new(&context.target_root)?;
+        let Some(lock) = store.try_lock()? else {
             return super::worker::runtime::current_envelope(&context.target_root);
-        }
-        // Resolving a gate failure may require another worker handoff. Retry
-        // validates that integrated revision using its current gate identity.
-        if let Some(RewriteAction::TargetQualityRequired {
-            gate_id: current, ..
-        }) = super::target_quality::status_action(&context.target_root, &scoped)?
-        {
-            *gate_id = current;
-        }
+        };
+        let mut resolved =
+            load(&context.target_root)?.context("coordinator operation is absent")?;
+        ensure!(
+            resolved.id == id && resolved.finished && resolved.error.is_some(),
+            "coordinator operation changed before retry"
+        );
+        resolved.error = None;
+        save(&context.target_root, &resolved)?;
+        drop(lock);
+        return super::target_quality::run(options);
     }
-    start(&context.target_root, request)
+    start(&context.target_root, execution.request)
 }
 
 pub(super) fn busy(target_root: &Path) -> Result<bool> {
@@ -377,6 +379,9 @@ fn save(target_root: &Path, execution: &Execution) -> Result<()> {
     }
     result
 }
+
+#[cfg(test)]
+mod legacy_quality_tests;
 
 #[cfg(test)]
 mod tests;

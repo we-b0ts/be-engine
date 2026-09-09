@@ -1,0 +1,478 @@
+//! Delivery-time checks and coordinator receipt admission across real worktrees.
+use super::*;
+use crate::rewrite::worker::model::RewriteWorkerActivity;
+use crate::rewrite::worker::runtime::RewriteWorkerReportOptions;
+use crate::rewrite::worker::tests::{configured_target, implementation_state_with_inventory};
+
+fn git(root: &Path, arguments: &[&str]) {
+    source_diff::git_text(root, arguments).unwrap();
+}
+
+fn configure(root: &Path, gates: serde_json::Value) {
+    crate::rewrite::test_support::install_project_config(
+        root,
+        "master",
+        crate::rewrite::test_support::managed_test_recorder(),
+        Some(gates),
+    );
+}
+
+fn target(gates: serde_json::Value) -> tempfile::TempDir {
+    let target = configured_target();
+    configure(target.path(), gates);
+    fs::write(target.path().join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();
+    git(
+        target.path(),
+        &["add", ".traffic-e2e/project.yaml", ".gitignore"],
+    );
+    git(target.path(), &["commit", "-qm", "delivery policy"]);
+    git(target.path(), &["switch", "-qc", "coordinator"]);
+    RewriteStore::new(target.path())
+        .unwrap()
+        .save(&implementation_state_with_inventory(false))
+        .unwrap();
+    target
+}
+
+fn worktree(root: &Path, directory: &Path, name: &str) -> PathBuf {
+    let path = directory.join(name);
+    git(
+        root,
+        &["worktree", "add", "-qb", name, path.to_str().unwrap()],
+    );
+    path
+}
+
+fn worker_scope(root: &Path, worktree: &Path) -> RewriteWorkScope {
+    let state = RewriteStore::new(root).unwrap().load().unwrap().unwrap();
+    let scope = RewriteWorkScope::Api {
+        api: state.api.clone(),
+    };
+    worker::confirm(crate::rewrite::RewriteWorkerConfirmOptions {
+        target_root: root.into(),
+        dispatch_id: worker::dispatch_view(&state, scope.clone(), None).dispatch_id,
+        worktree: Some(worktree.into()),
+        agent_handle: "delivery-worker".into(),
+        agent_name: None,
+    })
+    .unwrap();
+    scope
+}
+
+fn options(root: &Path, worktree: &Path, scope: Option<RewriteWorkScope>) -> RewriteReviewOptions {
+    RewriteReviewOptions {
+        target_root: root.into(),
+        worktree: Some(worktree.into()),
+        integration: scope.is_none(),
+        scope,
+        evidence: None,
+        handoff_id: None,
+        hardcode_ai_verified: Vec::new(),
+    }
+}
+
+fn delivery(
+    root: &Path,
+    scope: &RewriteWorkScope,
+    report: &RewriteReviewReport,
+) -> RewriteWorkerReportOptions {
+    let state = RewriteStore::new(root).unwrap().load().unwrap().unwrap();
+    RewriteWorkerReportOptions {
+        target_root: root.into(),
+        dispatch_id: worker::dispatch_view(&state, scope.clone(), None).dispatch_id,
+        agent_handle: "delivery-worker".into(),
+        activity: RewriteWorkerActivity::HandoffReady,
+        handoff_id: Some(report.head_revision.clone()),
+        review_report: Some(report.report_path.clone()),
+    }
+}
+
+fn commit_code(root: &Path) {
+    fs::write(root.join("lib.rs"), "pub fn value() -> u8 { 2 }\n").unwrap();
+    git(root, &["add", "lib.rs"]);
+    git(root, &["commit", "-qm", "reviewed delivery"]);
+}
+
+#[test]
+fn worker_review_blocks_sensitive_domains_in_production_and_test_code() {
+    let target = target(serde_json::json!([]));
+    let directory = tempfile::tempdir().unwrap();
+    let worker = worktree(target.path(), directory.path(), "worker");
+    let scope = worker_scope(target.path(), &worker);
+    for relative in ["src/domain.rs", "tests/domain.rs"] {
+        let path = worker.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for domain in ["demo.test", "sample.test"] {
+            fs::write(&path, format!("const DOMAIN: &str = \"{domain}\";\n")).unwrap();
+            let report = check(options(target.path(), &worker, Some(scope.clone()))).unwrap();
+            assert_eq!(
+                report.status,
+                ReviewStatus::ChangesRequired,
+                "{relative}: {domain}"
+            );
+            let isolation =
+                serde_json::to_value(&report.quality.as_ref().unwrap().replay_isolation).unwrap();
+            assert!(
+                isolation["violations"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|finding| {
+                        finding["file"] == relative
+                            && finding["matched"] == domain
+                            && finding["rule"] == "source_hardcoded_domain"
+                            && !finding["required_change"].as_str().unwrap().is_empty()
+                    }),
+                "{isolation}"
+            );
+            assert!(worker::runtime::report(delivery(target.path(), &scope, &report)).is_err());
+        }
+        fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn worker_review_includes_pr_violations_inherited_before_dispatch() {
+    let target = target(serde_json::json!([]));
+    fs::create_dir_all(target.path().join("src")).unwrap();
+    fs::write(
+        target.path().join("src/inherited.rs"),
+        "pub const DOMAIN: &str = \"demo.test\";\n",
+    )
+    .unwrap();
+    git(target.path(), &["add", "src/inherited.rs"]);
+    git(
+        target.path(),
+        &["commit", "-qm", "inherited unchecked source"],
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let worker = worktree(target.path(), directory.path(), "worker");
+    let scope = worker_scope(target.path(), &worker);
+    let report = check(options(target.path(), &worker, Some(scope))).unwrap();
+    assert_eq!(report.base_revision, report.head_revision);
+    assert_ne!(
+        report.validation.as_ref().unwrap().scan_base_revision,
+        report.base_revision
+    );
+    assert_eq!(report.status, ReviewStatus::ChangesRequired);
+    let isolation = serde_json::to_value(report.quality.unwrap().replay_isolation).unwrap();
+    assert_eq!(isolation["violations"][0]["file"], "src/inherited.rs");
+}
+
+#[test]
+fn failed_or_incomplete_quality_reports_cannot_be_delivered() {
+    let directory = tempfile::tempdir().unwrap();
+    let repaired = directory.path().join("repaired");
+    let target = target(serde_json::json!([{
+        "name": "rust-clippy",
+        "argv": ["sh", "-c", "if test -f \"$1\"; then exit 0; fi; printf 'private_interfaces warning\\n' >&2; exit 101", "quality-test", repaired]
+    }]));
+    let worker = worktree(target.path(), directory.path(), "worker");
+    let scope = worker_scope(target.path(), &worker);
+    let opts = options(target.path(), &worker, Some(scope.clone()));
+    let failed = check(opts.clone()).unwrap();
+    assert_eq!(failed.status, ReviewStatus::ChangesRequired);
+    let command = &failed.quality.as_ref().unwrap().commands[0];
+    assert_eq!(command.exit_code, Some(101));
+    assert!(
+        fs::read_to_string(&command.log_path)
+            .unwrap()
+            .contains("private_interfaces")
+    );
+    let handoff = delivery(target.path(), &scope, &failed);
+    assert!(worker::runtime::report(handoff.clone()).is_err());
+    fs::write(repaired, "fixed").unwrap();
+    let passed = check(opts).unwrap();
+    assert_eq!(passed.status, ReviewStatus::Passed);
+    let mut incomplete = passed.clone();
+    incomplete.quality = None;
+    write_json(&passed.report_path, &incomplete).unwrap();
+    assert!(
+        worker::runtime::report(handoff.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("quality")
+    );
+    incomplete.quality = passed.quality.clone();
+    incomplete.quality.as_mut().unwrap().commands.clear();
+    write_json(&passed.report_path, &incomplete).unwrap();
+    assert!(
+        worker::runtime::report(handoff.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("commands")
+    );
+    let store = RewriteStore::new(target.path()).unwrap();
+    assert!(worker::runtime::observation(&store.load().unwrap().unwrap(), &scope).is_none());
+    write_json(&passed.report_path, &passed).unwrap();
+    worker::runtime::report(handoff).unwrap();
+    assert_eq!(
+        worker::runtime::observation(&store.load().unwrap().unwrap(), &scope)
+            .unwrap()
+            .activity,
+        RewriteWorkerActivity::HandoffReady
+    );
+}
+
+#[test]
+fn integration_requires_its_own_review_and_preserves_canonical_private_runtime() {
+    let target = target(serde_json::json!([]));
+    fs::create_dir_all(target.path().join(".traffic-e2e/local")).unwrap();
+    fs::write(
+        target.path().join(".traffic-e2e/local/target.env"),
+        "APP_LOCAL_INPUT=canonical\n",
+    )
+    .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let worker = worktree(target.path(), directory.path(), "worker");
+    let scope = worker_scope(target.path(), &worker);
+    commit_code(&worker);
+    let worker_report = check(options(target.path(), &worker, Some(scope.clone()))).unwrap();
+    assert_eq!(worker_report.status, ReviewStatus::Passed);
+    let mut handoff = delivery(target.path(), &scope, &worker_report);
+    worker::runtime::report(handoff.clone()).unwrap();
+    let candidate = worktree(target.path(), directory.path(), "candidate");
+    git(
+        &candidate,
+        &["merge", "--ff-only", &worker_report.head_revision],
+    );
+    let mut opts = options(target.path(), &candidate, Some(scope.clone()));
+    opts.integration = true;
+    opts.handoff_id = handoff.handoff_id.clone();
+    let reviewed = check(opts).unwrap();
+    assert_eq!(reviewed.status, ReviewStatus::Passed);
+    assert!(!terminal_current(
+        target.path(),
+        &RewriteStore::new(target.path())
+            .unwrap()
+            .load()
+            .unwrap()
+            .unwrap()
+    ));
+    git(
+        target.path(),
+        &["merge", "--ff-only", &reviewed.head_revision],
+    );
+    handoff.activity = RewriteWorkerActivity::Integrated;
+    let error = worker::runtime::report(handoff.clone()).unwrap_err();
+    assert!(
+        error.to_string().contains("integration review report"),
+        "{error:#}"
+    );
+    let store = RewriteStore::new(target.path()).unwrap();
+    assert_eq!(
+        worker::runtime::observation(&store.load().unwrap().unwrap(), &scope)
+            .unwrap()
+            .activity,
+        RewriteWorkerActivity::HandoffReady
+    );
+    handoff.review_report = Some(reviewed.report_path.clone());
+    worker::runtime::report(handoff.clone()).unwrap();
+    assert!(terminal_current(
+        target.path(),
+        &store.load().unwrap().unwrap()
+    ));
+    assert_eq!(
+        fs::read_to_string(target.path().join(".traffic-e2e/local/target.env")).unwrap(),
+        "APP_LOCAL_INPUT=canonical\n"
+    );
+    assert_eq!(
+        fingerprint::code_fingerprint(target.path()).unwrap(),
+        fingerprint::code_fingerprint(&candidate).unwrap()
+    );
+    assert_ne!(
+        fingerprint::repository_fingerprint(target.path()).unwrap(),
+        fingerprint::repository_fingerprint(&candidate).unwrap()
+    );
+
+    // A later delivery has its own accepted receipt. Delayed callbacks from this
+    // API must remain harmless even when their original review is now stale.
+    let newer_candidate = worktree(target.path(), directory.path(), "newer-candidate");
+    fs::write(
+        newer_candidate.join("lib.rs"),
+        "pub fn value() -> u8 { 3 }\n",
+    )
+    .unwrap();
+    git(&newer_candidate, &["add", "lib.rs"]);
+    git(&newer_candidate, &["commit", "-qm", "subsequent delivery"]);
+    let newer_report = check(options(target.path(), &newer_candidate, None)).unwrap();
+    assert_eq!(newer_report.status, ReviewStatus::Passed);
+    assert_ne!(newer_report.head_revision, reviewed.head_revision);
+    git(
+        target.path(),
+        &["merge", "--ff-only", &newer_report.head_revision],
+    );
+    accept(target.path().into(), newer_report.report_path).unwrap();
+    let before_state = serde_json::to_value(store.load().unwrap().unwrap()).unwrap();
+    let before_receipt = fs::read(integrated_path(target.path())).unwrap();
+    for duplicate_report in [None, Some(reviewed.report_path)] {
+        handoff.review_report = duplicate_report;
+        worker::runtime::report(handoff.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(store.load().unwrap().unwrap()).unwrap(),
+            before_state
+        );
+        assert_eq!(
+            fs::read(integrated_path(target.path())).unwrap(),
+            before_receipt
+        );
+        assert_eq!(
+            show(target.path().into()).unwrap().head_revision,
+            newer_report.head_revision
+        );
+        assert!(terminal_current(
+            target.path(),
+            &store.load().unwrap().unwrap()
+        ));
+    }
+}
+
+#[test]
+fn reviewed_candidate_is_rejected_when_published_code_or_canonical_inputs_change() {
+    for change in ["code", "configuration", "runtime"] {
+        let target = target(serde_json::json!([]));
+        let directory = tempfile::tempdir().unwrap();
+        let candidate = worktree(target.path(), directory.path(), "candidate");
+        commit_code(&candidate);
+        let report = check(options(target.path(), &candidate, None)).unwrap();
+        assert_eq!(report.status, ReviewStatus::Passed);
+        git(
+            target.path(),
+            &["merge", "--ff-only", &report.head_revision],
+        );
+        match change {
+            "code" => {
+                fs::write(target.path().join("lib.rs"), "pub fn value() -> u8 { 3 }\n").unwrap()
+            }
+            "configuration" => configure(
+                target.path(),
+                serde_json::json!([{"name": "new-check", "argv": ["true"]}]),
+            ),
+            "runtime" => fs::write(
+                target.path().join(".traffic-e2e/local/target.env"),
+                "APP_LOCAL_INPUT=changed\n",
+            )
+            .unwrap(),
+            _ => unreachable!(),
+        }
+        let error = accept(target.path().into(), report.report_path).unwrap_err();
+        assert!(error.to_string().contains("changed"), "{change}: {error:#}");
+        let state = RewriteStore::new(target.path())
+            .unwrap()
+            .load()
+            .unwrap()
+            .unwrap();
+        assert!(!terminal_current(target.path(), &state), "{change}");
+    }
+}
+
+#[test]
+fn coordinator_status_and_admission_never_execute_quality_commands() {
+    let directory = tempfile::tempdir().unwrap();
+    let counter = directory.path().join("quality-invocations");
+    let target = target(serde_json::json!([{
+        "name": "count-checks",
+        "argv": ["sh", "-c", "printf x >> \"$1\"", "quality-test", counter]
+    }]));
+    let store = RewriteStore::new(target.path()).unwrap();
+    let state = store.load().unwrap().unwrap();
+    assert!(gate(target.path(), &state, "master").unwrap().is_some());
+    assert!(!counter.exists());
+    let candidate = worktree(target.path(), directory.path(), "candidate");
+    commit_code(&candidate);
+    let reviewed = check(options(target.path(), &candidate, None)).unwrap();
+    assert_eq!(reviewed.status, ReviewStatus::Passed);
+    assert_eq!(fs::read_to_string(&counter).unwrap(), "x");
+    assert!(gate(target.path(), &state, "master").unwrap().is_some());
+    git(
+        target.path(),
+        &["merge", "--ff-only", &reviewed.head_revision],
+    );
+    accept(target.path().into(), reviewed.report_path).unwrap();
+    assert!(gate(target.path(), &state, "master").unwrap().is_none());
+    crate::rewrite::status_rewrite(crate::rewrite::RewriteContext {
+        target_root: target.path().into(),
+    })
+    .unwrap();
+    assert_eq!(fs::read_to_string(&counter).unwrap(), "x");
+
+    // Engine progress publication changes Git history without changing the
+    // reviewed code or canonical execution inputs. Reuse the accepted receipt.
+    let progress = crate::verification_progress::ProgressReport::new(
+        crate::verification_progress::VerificationStage::Progress,
+    );
+    crate::verification_progress::write(
+        &target.path().join(".traffic-e2e/progress.yaml"),
+        &progress,
+    )
+    .unwrap();
+    git(target.path(), &["add", ".traffic-e2e/progress.yaml"]);
+    git(target.path(), &["commit", "-qm", "publish engine progress"]);
+    assert_ne!(
+        candidate::head(target.path()).unwrap(),
+        reviewed.head_revision
+    );
+    assert!(terminal_current(target.path(), &state));
+    assert!(gate(target.path(), &state, "master").unwrap().is_none());
+    crate::rewrite::status_rewrite(crate::rewrite::RewriteContext {
+        target_root: target.path().into(),
+    })
+    .unwrap();
+    assert_eq!(fs::read_to_string(&counter).unwrap(), "x");
+
+    // Source-proof metadata changes require review even without a code change.
+    git(
+        target.path(),
+        &[
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "update source evidence\n\nHardcode-Source-Evidence: lib.rs:1:1 <= source@revision:lib.rs:1:1",
+        ],
+    );
+    assert!(!terminal_current(target.path(), &state));
+    assert!(gate(target.path(), &state, "master").unwrap().is_some());
+    assert_eq!(fs::read_to_string(&counter).unwrap(), "x");
+
+    fs::write(target.path().join("lib.rs"), "pub fn value() -> u8 { 3 }\n").unwrap();
+    assert!(gate(target.path(), &state, "master").unwrap().is_some());
+    crate::rewrite::status_rewrite(crate::rewrite::RewriteContext {
+        target_root: target.path().into(),
+    })
+    .unwrap();
+    assert_eq!(fs::read_to_string(&counter).unwrap(), "x");
+
+    // Losing the receipt cannot downgrade revalidation to initial diagnosis.
+    // Persisted history requires a replacement review but never proves a pass.
+    fs::remove_file(integrated_path(target.path())).unwrap();
+    let mut revalidation = store.load().unwrap().unwrap();
+    assert!(revalidation.delivery_review_required);
+    revalidation.phase = crate::rewrite::RewritePhase::ApiPending;
+    store.save(&revalidation).unwrap();
+    assert!(!terminal_current(target.path(), &revalidation));
+    assert!(matches!(
+        required_action(target.path(), &revalidation).unwrap(),
+        Some(RewriteAction::SourceReviewRequired { .. })
+    ));
+    let status = crate::rewrite::status_rewrite(crate::rewrite::RewriteContext {
+        target_root: target.path().into(),
+    })
+    .unwrap();
+    assert!(matches!(
+        status.action,
+        RewriteAction::SourceReviewRequired { .. }
+    ));
+    assert_eq!(fs::read_to_string(&counter).unwrap(), "x");
+
+    // A malformed receipt has the same actionable recovery as an absent one.
+    fs::write(integrated_path(target.path()), "{broken report").unwrap();
+    let status = crate::rewrite::status_rewrite(crate::rewrite::RewriteContext {
+        target_root: target.path().into(),
+    })
+    .unwrap();
+    assert!(matches!(
+        status.action,
+        RewriteAction::SourceReviewRequired { .. }
+    ));
+    assert_eq!(fs::read_to_string(&counter).unwrap(), "x");
+}

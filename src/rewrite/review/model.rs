@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::rewrite::{RewriteCommandSpec, RewriteWorkScope};
 
-pub const RULE_VERSION: &str = "target-source-review-v1";
+pub const RULE_VERSION: &str = "target-source-review-v2";
 
 #[derive(Debug, Clone)]
 pub struct RewriteReviewOptions {
@@ -13,6 +13,9 @@ pub struct RewriteReviewOptions {
     pub worktree: Option<PathBuf>,
     pub scope: Option<RewriteWorkScope>,
     pub evidence: Option<PathBuf>,
+    pub integration: bool,
+    pub handoff_id: Option<String>,
+    pub hardcode_ai_verified: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +108,34 @@ pub struct RewriteReviewReport {
     pub evidence_files: BTreeMap<PathBuf, String>,
     pub report_path: PathBuf,
     pub next_step: String,
+    #[serde(default)]
+    pub required_gates: Vec<String>,
+    #[serde(default)]
+    pub quality: Option<crate::rewrite::quality::QualityReport>,
+    #[serde(default)]
+    pub validation: Option<ReviewValidation>,
+    #[serde(default)]
+    pub integration: Option<IntegrationReview>,
+    #[serde(default)]
+    pub hardcode_ai_verified: Vec<String>,
+    #[serde(default)]
+    pub accepted_target_fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewValidation {
+    pub canonical_root: PathBuf,
+    pub recording_run_id: String,
+    pub code_fingerprint: String,
+    pub context_fingerprint: String,
+    pub scan_base_revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntegrationReview {
+    pub canonical_base_revision: String,
+    pub canonical_base_fingerprint: String,
+    pub handoff_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

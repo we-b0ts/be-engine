@@ -21,6 +21,7 @@ pub(super) struct AddedRustLines {
     pub lines: Vec<AddedLine>,
 }
 
+#[cfg(test)]
 pub(super) fn added_rust_lines(target_root: &Path, pr_base: &str) -> Result<AddedRustLines> {
     let base_ref = resolve_pr_base(target_root, pr_base)?;
     let merge_base = git_text(target_root, &["merge-base", "HEAD", &base_ref])?

@@ -134,7 +134,7 @@ work, and respect runtime backpressure after a rejected submission. A rejected
 submission is not confirmed. One waiting or failed item must not prevent other
 engine-issued executable work from being handled.
 
-`next`, `target-quality run`, and recording execution start detached engine
+`next` and recording execution start detached engine
 operations when needed. Consume their returned actions immediately; do not
 background the commands yourself or wait for a worker's entire lifecycle.
 Recording, Replay, and Comparison share a serialized traffic lease. Dispatch,
@@ -332,12 +332,12 @@ record uses the existing recovery action.
 
 ### `source_review_required`
 
-Worker handoffs require a passing local review report. The integrated quality
-operation also runs the mandatory source review. A `source_review_required`
-action requests inspection, spawn evidence or worker rework through
+Worker and integration handoffs require passing reports from the same complete
+local quality suite. A `source_review_required` action requests candidate
+review, evidence or worker rework through
 [coordinator-review.md](coordinator-review.md). It is actionable work, not an execution
 failure. Return to global status after handling it. Final delivery requires a
-current source review even when no API remains in implementation.
+current accepted integration quality report even when no API remains in implementation.
 Once a finding has been routed, worker dispatch, status and integration take
 priority. With no such action ready, `wait_required` on `source_review_rework`
 waits for that repair; follow `commands.wait` and runtime events. Scoped status
@@ -345,29 +345,17 @@ continues exposing each worker's own handoff commands.
 
 ### `target_quality_required`
 
-Execute only `action.commands.execute` in its absolute canonical `cwd`. The
-only permitted command extension is one or more exact
-`--hardcode-ai-verified` arguments after this built-in gate reports the matching
-locations and the required source evidence has been committed. Never run this
-gate in a worker worktree. The command launches a detached operation; continue
-consuming its returned action. Successful execution records the integrated
-target fingerprint and makes focused Replay eligible through `advance_required`. A later integration or quality-gate configuration change
-creates a new fingerprint and another quality action. On failure, obtain the
-assigned agent's repair/evidence result and publish it before executing the
-returned `execution_failed.commands.retry`; never repair source yourself.
+This legacy action/command no longer executes quality checks in the coordinator.
+`target-quality run` validates an already accepted current quality receipt.
+Obtain missing or stale proof through `source_review_required` and the retained
+code integrator, then admit its exact published report. Do not hot-loop a legacy
+quality retry or use its arguments to waive missing candidate proof.
 
-The built-in isolation gate remains mandatory even with no configured repository
-checks. For source-evidence findings, delegate a `review` task through
-[coordinator-integration.md](coordinator-integration.md), passing the exact
-findings, current target version, and known source locations. Receive committed
-source-evidence mappings or a responsible repair owner; do not prove constants
-or trace callers yourself.
-
-Publish any exact evidence-only candidate before retrying. After the gate has
-reported the matching source-sensitive public-domain findings, the permitted
-extension is one `--hardcode-ai-verified` per returned, committed mapping. Pass
-those mappings unchanged. This exception never waives private Replay markers.
-Re-read status if the inspected version, input, or findings changed.
+`review check` in both delivery worktrees runs the mandatory isolation gate even
+with no configured repository checks, including source-sensitive public domains
+such as `demo.test`. The assignee handles findings and evidence before delivery.
+Review reports freeze code, configuration, rules and relevant runtime inputs;
+changes require a new report before the coordinator can advance.
 
 ### `system_repair_required` and `recovery_required`
 

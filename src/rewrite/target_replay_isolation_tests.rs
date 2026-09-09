@@ -2,6 +2,28 @@ use super::*;
 use std::fs;
 
 #[test]
+fn persisted_report_cannot_pass_with_remaining_violations_or_an_obsolete_schema() {
+    let target = target_with_source("pub fn value() -> u8 { 1 }\n");
+    fs::write(
+        target.path().join("src/lib.rs"),
+        "pub const DOMAIN: &str = \"demo.test\";\n",
+    )
+    .unwrap();
+    let report = inspect(target.path(), "integration", &[]).unwrap();
+    let mut report: ReplayIsolationReport =
+        serde_json::from_slice(&serde_json::to_vec(&report).unwrap()).unwrap();
+    assert!(!report.passed());
+    report.status = ReplayIsolationStatus::Passed;
+    assert!(!report.passed());
+    report.violations.clear();
+    report.omitted_violations = 1;
+    assert!(!report.passed());
+    report.omitted_violations = 0;
+    report.schema_version = 1;
+    assert!(!report.passed());
+}
+
+#[test]
 fn reports_replay_literals_on_added_lines_without_echoing_the_complete_value() {
     let target = target_with_source("pub fn value() -> u8 { 1 }\n");
     fs::write(
