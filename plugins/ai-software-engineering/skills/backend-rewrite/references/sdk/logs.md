@@ -1,139 +1,91 @@
 # Use process logging through `brz-logs`
 
-Use this guide when a Rust target installs process logging through `brz-logs`
-or changes application log routing, buffering, flushing, or shutdown. Logging
-is a process-level runtime capability: initialize it once in the final binary,
-then use `tracing` events from libraries and application modules.
+Initialize logging once in the final binary. Libraries and application modules
+emit ordinary `tracing` events; they do not install subscribers. Preserve the
+source's operational log content and the target's configured output contract.
 
-## Install one process logger
+## Dependency
 
-Pin the dependency to the fixed `v0.0.2` tag and enable `metrics` by default.
-Product packages emit events through `tracing`; only the final binary depends
-on `brz-logs` to install the global subscriber:
+Use the latest stable release from the project's configured Cargo registry and
+pin it exactly. Replace `<latest-version>` with the verified release number
+without a `v` prefix; it is a placeholder, not a Cargo version expression.
+Replace the old Git dependency, preserve registry configuration, and update
+`Cargo.lock`.
 
 ```toml
-brz-logs = { package = "logs", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/logs.git", tag = "v0.0.2", features = ["metrics"] }
+[dependencies]
+brz-logs = { package = "brz-logs", version = "=<latest-version>", features = ["metrics"] }
+tracing = "0.1"
 ```
 
-Initialize logging after startup arguments and native configuration needed to
-select the logging configuration are available, but before constructing
-dependency clients, starting workers, or emitting product events. Retain the
-guard for the process lifetime:
+Keep the explicit `package` field so the dependency is available as `brz_logs::`.
+Enable `metrics` in the final binary; library crates only need `tracing`.
 
-```rust,no_run
+## Initialize and retain the guard
+
+Initialize after reading logging configuration but before constructing clients,
+starting workers, or emitting product events. Retain `LogsGuard` until all event
+producers have stopped:
+
+```rust,ignore
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let logs = brz_logs::init_default()?;
-    tracing::info!(service = "example", "service starting");
-
-    run_service()?;
+    let result = run_service(); // Includes orderly shutdown of all workers.
     logs.flush()?;
-    Ok(())
+    result
 }
-
-# fn run_service() -> Result<(), Box<dyn std::error::Error>> { Ok(()) }
 ```
 
-`init_default` reads `BREEZE_LOG_DIR` and `RUST_LOG`, falling back to the
-standard defaults. Use `brz_logs::init(LogsConfig)` when the source-compatible
-runtime configuration requires explicit values. Do not install another global
-`tracing` subscriber or add a separate stdout/stderr formatting layer.
+`init_default()` reads `BREEZE_LOG_DIR` and `RUST_LOG`. Use
+`brz_logs::init(LogsConfig::from_env().with_directory(log_directory))` when the
+application configuration supplies an explicit directory. Do not install a
+second global subscriber or duplicate application events to stdout/stderr.
+Failures before initialization may use stderr.
 
-## Preserve the file and line contract
+## Directory and event routing
 
-The default directory is `/data1/weibo/logs`. The target image must create the
-directory and make it writable by the runtime identity, UID 998. Runtime
-configuration may override the directory without changing event call sites.
-Do not copy source logs or recorded output into the target directory.
+The SDK default directory is `../logs`, relative to the process working directory.
+If deployment requires a fixed location such as `/data1/weibo/logs`, configure it
+explicitly through `BREEZE_LOG_DIR` or `LogsConfig::with_directory`. Ensure that
+directory is writable by the runtime identity (the generated image uses UID 998).
+Do not copy source logs or recorded output into it.
 
-Each enabled event is written to exactly one file:
+Each enabled event goes to exactly one file:
 
-- `TRACE`, `DEBUG`, and `INFO` go to `info.log`;
-- `WARN` goes to `warn.log`;
-- `ERROR` goes to `error.log`.
+| Levels | File |
+| --- | --- |
+| TRACE, DEBUG, INFO | `info.log` |
+| WARN | `warn.log` |
+| ERROR | `error.log` |
 
-Do not duplicate application events to stdout, stderr, or a less severe file.
-Failures before the subscriber is installed may use stderr because the file
-logger is not yet available.
+The SDK formats fixed UTC+8 timestamps without a timezone suffix; application
+code supplies the event message and structured fields. Use `tracing::trace!`,
+`debug!`, `info!`, `warn!`, and `error!`. Preserve useful diagnostics without
+logging secrets, credentials, full sensitive payloads, or unbounded content.
 
-Lines use a fixed UTC+8 wall-clock timestamp without a timezone suffix:
+## Buffering, health, and shutdown
 
-```text
-2026-08-30 15:10:17 [INFO] ListStorage get new version. listId:6296, version:1684410575955, hash:4185ad0d, length:10000
-```
+The SDK uses a bounded queue and one background file writer. Keep file I/O off
+request/Tokio worker threads. Use `LogsConfig` for queue capacity, maximum line
+size, overflow policy, and flush policy; tune only when required by the runtime
+contract, keeping memory bounded.
 
-Emit ordinary `tracing::trace!`, `debug!`, `info!`, `warn!`, and `error!`
-events. Keep stable diagnostic fields structured, and do not log secrets,
-credentials, full sensitive payloads, or unbounded-cardinality values.
+| Setting or signal | Usage |
+| --- | --- |
+| `OverflowPolicy::DropNewest` | Default; queue saturation does not block producers |
+| `OverflowPolicy::Block` | Only when the contract prefers backpressure and callers can tolerate blocking |
+| `FlushPolicy::IntervalAndError` | Default: periodic flush plus flush after ERROR events |
+| `FlushPolicy::EveryLine` | More file-system work; select only when explicitly required |
+| `LogsGuard::dropped_lines()` | Cumulative dropped-line count |
+| `LOG / queue_dropped` metric | Full-queue losses during the current profile interval |
+| `LogsGuard::last_error()` | Background file failure for health reporting; do not poll per request |
 
-## Keep logging bounded and off the I/O path
+Dropping the guard drains accepted events, flushes files, and joins the writer.
+Stop workers first so late shutdown events are retained. Use `flush()` when a
+flush barrier or error result is required; do not recursively report flush
+failures through the failed logger.
 
-The default logger formats the event on the caller thread and transfers the
-completed line through a bounded queue. One background thread owns all three
-files and performs batched vectored writes and flushes. File I/O therefore does
-not run on a Tokio worker or request thread.
-
-`LogsConfig` controls the filter, queue capacity, arena capacity, maximum line
-size, overflow behavior, and flush policy. Every configured queue and line size
-must remain bounded:
-
-```rust,no_run
-use std::time::Duration;
-
-use brz_logs::{FlushPolicy, LogsConfig, OverflowPolicy};
-
-let config = LogsConfig::from_env()
-    .with_queue_capacity(16_384)
-    .with_arena_chunk_bytes(16 * 1024 * 1024)
-    .with_max_line_bytes(64 * 1024)
-    .with_overflow_policy(OverflowPolicy::DropNewest)
-    .with_flush_policy(FlushPolicy::IntervalAndError(Duration::from_secs(1)));
-let logs = brz_logs::init(config)?;
-# logs.flush()?;
-# Ok::<(), Box<dyn std::error::Error>>(())
-```
-
-Use `OverflowPolicy::DropNewest` for normal service logging so queue saturation
-does not block the application hot path. `LogsGuard::dropped_lines` exposes
-the cumulative loss count. With the optional `metrics` feature, a full queue
-also increments the count-only `type=LOG,name=queue_dropped` profile metric;
-its `total_count` covers one profile interval and reports operational health.
-Use `OverflowPolicy::Block` only when the product contract explicitly prefers
-backpressure over log loss and the affected call paths can tolerate blocking.
-
-The line arena owns one backing buffer divided into two chunks. Each chunk is
-16 MiB by default, for 32 MiB total reserved capacity. Change
-`arena_chunk_bytes` only during initialization. A line's initial segment adapts
-between 512 bytes, 1 KiB, and 2 KiB. Longer lines append segments up to 2 KiB
-without moving already-formatted bytes. After 512 consecutive low-usage lines,
-the initial segment shrinks by one step. Arena tickets are released after the
-background writer consumes the line.
-
-The worker drains at most `queue_capacity` entries into one logical batch and
-keeps the order of entries for each destination file. Each vectored file-system
-write contains at most 1024 arena segments, so a fully occupied default queue
-may require multiple system calls. Do not add a separate per-file byte buffer:
-the queued arena segments are written directly without another body copy.
-
-The standard `IntervalAndError` policy flushes all files periodically and
-flushes an `ERROR` event immediately. `EveryLine` trades substantially more
-file-system work for durability and is not a default production setting.
-Inspect `LogsGuard::last_error` when runtime health reporting needs to expose a
-background file failure; do not poll it per request.
-
-Do not replace the bounded queued design with an unbounded channel, a task
-per event, or synchronous file writes. A proposed allocation, queue, or
-formatting optimization requires a representative measurement before adding
-complex ownership or unsafe code.
-
-## Flush during shutdown and fatal exits
-
-On normal return, dropping `LogsGuard` drains the accepted queue, flushes all
-files, and joins the logging thread. Keep the guard alive until all event
-producers and background workers have stopped so late shutdown events are not
-lost.
-
-`std::process::exit` skips destructors. Prefer returning an exit status through
-the normal shutdown path. If an unrecoverable path must call `process::exit`,
-emit the final event and call `LogsGuard::flush` before exiting. Treat a flush
-failure as startup or operational diagnostic evidence; do not recursively log
-that failure through the failed logger.
+Prefer normal return over `std::process::exit`, which skips destructors. If a
+fatal path must exit directly, emit its final event and explicitly flush first.
+Do not add an unbounded channel, one task per event, a second file buffer, or
+synchronous per-event writes around the SDK.
