@@ -396,7 +396,11 @@ standard-recording request source. For that finite-input mode only, the HTTP
 comparison gateway reuses the configured gateway port but binds it to
 `127.0.0.1`; environment traffic sent to the host address cannot enter the
 comparison run. The input driver sends the recorded requests serially over
-that loopback listener and, after the final comparison case is published,
+that loopback listener. API selection includes matching cases across all
+recorded member directories, filters by method and path, and sends overlapping
+selections only once. If the input process fails, managed comparison stops and
+cleans up immediately instead of waiting for the recording duration.
+After the final comparison case is published, it
 keeps source, candidate, and the cache snapshot alive for a three-second final
 quiet period before recording `completion_reason = input_exhausted`. The run
 becomes `completed_with_errors` if the number of delivered templates differs
