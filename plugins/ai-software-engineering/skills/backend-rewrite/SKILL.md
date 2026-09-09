@@ -46,3 +46,9 @@ rerun initialization.
   results, expected responses, Replay sessions, reports, or private engine state.
 - Only the coordinator executes workflow mutations and formal acceptance.
   Worker-local reports and integrator results do not mark a work item complete.
+- Coordinators must actually invoke the task runtime's agent-list/status tool
+  for a fresh pass over all outstanding worker assignments before waiting and
+  after each bounded wait. In Claude Code, invoke the built-in `ListAgents`
+  (`/list-agents`) when available. Historical reports and absent stop events do
+  not satisfy this requirement. Follow the
+  [runtime query protocol](references/coordinator-worker-protocol.md#mandatory-runtime-queries).

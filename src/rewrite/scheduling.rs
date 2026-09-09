@@ -99,7 +99,7 @@ pub(super) fn idle_action(target_root: &Path, state: &RewriteState) -> Option<Re
     }
     if !worker::runtime::scopes(state).is_empty() || !blocked.is_empty() {
         return Some(RewriteAction::WaitRequired {
-            summary: "wait for worker or engine progress; after waiting inspect task-runtime completion and interruption events, then refresh global status".into(),
+            summary: "before waiting on agents and after every wait, must actually invoke built-in ListAgents (/list-agents) in Claude Code or equivalent runtime status tools for all workers awaiting results; reconcile returned states and events, then refresh global status. Historical reports and absent stop events do not establish liveness".into(),
             resource: if worker::runtime::scopes(state).is_empty() { "workflow_dependency" } else { "worker_handoff" }.into(),
             requested_api: None,
             blocking_api: None,

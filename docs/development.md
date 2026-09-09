@@ -1289,6 +1289,15 @@ The engine does not query an external AI runtime. Running/queued reports expire
 resets that interval. Handoff-ready and integrated observations do not expire
 while awaiting integration or verification. Missing or legacy unclassified
 observations require a fresh report.
+Coordinator sessions must actually invoke the task runtime's list/status tools
+for all outstanding worker assignments on resume, before waiting on agents,
+after every bounded wait, and on required status checks. Prefer a bulk listing
+such as Claude Code's `ListAgents` (the tool corresponding to `/list-agents`),
+then query omitted or unclassified tasks by their actual runtime IDs. Neither
+engine inventory, a business task list, cached reports, nor absent stop events
+establishes runtime activity. Retain the query call/result reference with the
+assignments. The sixty-minute expiry does not waive these checks; the CLI cannot
+independently verify that a coordinator invoked an external runtime tool.
 Start and resume with `backend-rewrite status`; an initialized project without a
 workflow returns an executable initialization action with `pending: 1`.
 Status does not duplicate an `active_issue` or publish an unconditional
@@ -1340,11 +1349,15 @@ The state-machine coordinator consumes the global action while top-level
 `pending > 0`, executes the indicated command or runtime dispatch, and continues
 from its response. When only asynchronous work remains, `pending=1` selects
 `commands.wait` (`backend-rewrite wait --seconds 30`, with a 1–30 second bound).
-Wait observes engine-state changes and returns `worker_events_required`: inspect
-actual task-runtime completion/failure/interruption events, report changes with
-their original identities, then execute global status. It does not infer runtime
-liveness or refresh every running worker; activity observations still expire
-at 60 minutes. `terminal_allowed` is the separate successful completion gate.
+Wait observes engine-state changes and returns `worker_events_required`: actually
+invoke runtime list/status tools for all workers awaiting results, reconcile
+their states and completion/failure/interruption events, report changes with
+their original identities, then execute global status. Each wait requires a new
+query pass even if no event arrived and stored activity has not expired. Queries
+are collected together; existing per-worker report commands persist changes or
+required refreshes. Unchanged running reports need not be refreshed every wait;
+activity observations still expire at 60 minutes. `terminal_allowed` is the
+separate successful completion gate.
 A global `blocked` action has `pending=0` and stops this run after eligible
 revalidation drains and remaining APIs require external system repair. Repair
 APIs and dependent process outputs remain incomplete, with bindings/evidence

@@ -50,6 +50,9 @@ confirmation, feedback, and dispatch when allowed. An unchanged
 `integration_required` for the active handoff is not another dispatch request.
 Use bounded runtime waits when this assignment is the outstanding operation;
 do not invent an engine wait command or call `next` to bypass it.
+Before waiting and after each wait, actually invoke runtime list/status tools
+following the [runtime query protocol](coordinator-worker-protocol.md#mandatory-runtime-queries).
+An old running observation or absence of a completion event is insufficient.
 
 Do not start canonical verification, publish another change, or apply related
 configuration while an integration result is being published. Preparation in
