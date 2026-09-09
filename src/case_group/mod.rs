@@ -132,13 +132,33 @@ fn resolve_recording_api_members(
     case_source: &Path,
     api: &crate::RecordingApi,
 ) -> Result<BTreeSet<PathBuf>> {
+    Ok(resolve_recording_api_cases(case_source, api)?
+        .into_iter()
+        .map(|case| case.member_dir)
+        .collect())
+}
+
+pub(crate) fn resolve_recording_api_case_dirs(
+    case_source: &Path,
+    api: &crate::RecordingApi,
+) -> Result<Vec<PathBuf>> {
+    Ok(resolve_recording_api_cases(case_source, api)?
+        .into_iter()
+        .map(|case| case.dir)
+        .collect())
+}
+
+fn resolve_recording_api_cases(
+    case_source: &Path,
+    api: &crate::RecordingApi,
+) -> Result<Vec<discovery::PublishedCase>> {
     let case_source = fs::canonicalize(case_source)
         .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
     let cases = discover_published_cases(&case_source)?;
     ensure!(!cases.is_empty(), "case source contains no published cases");
     reject_duplicate_case_ids(&cases)?;
-    let members = cases
-        .iter()
+    let selected = cases
+        .into_iter()
         .filter(|case| {
             let Ok(method) = case.method.parse() else {
                 return false;
@@ -148,13 +168,12 @@ fn resolve_recording_api_members(
             };
             api.matches(&method, &uri)
         })
-        .map(|case| case.member_dir.clone())
-        .collect::<BTreeSet<_>>();
+        .collect::<Vec<_>>();
     ensure!(
-        !members.is_empty(),
+        !selected.is_empty(),
         "recording API {api} has no recorded cases"
     );
-    Ok(members)
+    Ok(selected)
 }
 
 pub(crate) fn resolve_published_case_dir(case_source: &Path, case_id: &str) -> Result<PathBuf> {

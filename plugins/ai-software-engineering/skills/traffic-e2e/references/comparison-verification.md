@@ -74,6 +74,12 @@ the published comparison case count; a mismatch finalizes with errors instead
 of silently accepting missing evidence. Without finite input or a completed
 explicit case limit, comparison keeps the full recording window.
 
+Finite input selects matching cases across all standard-recording member
+directories, including concrete paths covered by a wildcard API. Overlapping
+selectors send each case once; other methods and paths are excluded. An input
+process failure ends managed comparison and triggers cleanup immediately,
+without waiting for the recording duration.
+
 For each enabled `project.process_outputs` metrics profile, the final quiet
 period is extended to
 `comparison_recording.process_output_flush_after_last_case_ms` (15 seconds by

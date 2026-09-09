@@ -847,6 +847,25 @@ wait_for_comparison_ready() {
     wait "$readiness_pid"
 }
 
+wait_for_comparison_exit() {
+    local status=0
+    while kill -0 "$comparison_pid" >/dev/null 2>&1; do
+        if [[ -n "$input_pid" ]] && ! kill -0 "$input_pid" >/dev/null 2>&1; then
+            wait "$input_pid" || status=$?
+            input_pid=""
+            if ((status != 0)); then
+                printf 'error: managed comparison request input exited with status %s\n' "$status" >&2
+                # Keep comparison_pid for the EXIT trap to stop and drain it.
+                return "$status"
+            fi
+        fi
+        sleep 0.1
+    done
+    wait "$comparison_pid" || status=$?
+    comparison_pid=""
+    return "$status"
+}
+
 run_comparison_recording() {
     local comparison_control_socket
     [[ ! -e "$artifacts_dir/comparison-recordings/$run_id" ]] || {
@@ -906,8 +925,7 @@ run_comparison_recording() {
     wait_for_comparison_ready "$comparison_control_socket"
     start_recording_input "$comparison_control_socket"
     local status=0
-    wait "$comparison_pid" || status=$?
-    comparison_pid=""
+    wait_for_comparison_exit || status=$?
     stop_recording_input || status=1
     ((status == 0)) || return "$status"
     capture_comparison_process_outputs

@@ -9,11 +9,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{info, warn};
 
+use crate::case_group::resolve_recording_api_case_dirs;
 use crate::config::DEFAULT_BODY_LIMIT_BYTES;
 use crate::recorded_request::RecordedHttpClient;
 use crate::recording_api::RecordingApi;
 use crate::recording_control::notify_recording_input_complete;
-use crate::resolve_recording_api_member;
 
 const MAX_REQUEST_FILES: usize = 1_000;
 const REQUEST_INTERVAL: Duration = Duration::from_millis(100);
@@ -265,8 +265,11 @@ fn resolve_case_sources(
     }
     let sources = recording_apis
         .iter()
-        .map(|api| resolve_recording_api_member(case_source, api))
-        .collect::<Result<BTreeSet<_>>>()?;
+        .map(|api| resolve_recording_api_case_dirs(case_source, api))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<BTreeSet<_>>();
     sources
         .into_iter()
         .map(|path| {
@@ -371,9 +374,121 @@ mod tests {
         let sources = resolve_case_sources(root.path(), &[api]).unwrap();
         let requests = discover_requests(&sources).unwrap();
 
-        assert_eq!(sources, [root.path().join("apis/api-b")]);
+        assert_eq!(sources, [root.path().join("apis/api-b/case-api-b-0")]);
         assert_eq!(requests.len(), 1);
         assert!(requests[0].starts_with(&sources[0]));
+    }
+
+    #[tokio::test]
+    async fn wildcard_input_sends_cases_from_multiple_members_once_and_excludes_other_apis() {
+        let root = tempfile::tempdir().unwrap();
+        for (member, id, method, uri) in [
+            (
+                "api-teams-110467-skills",
+                "first",
+                "GET",
+                "/api/teams/110467/skills",
+            ),
+            (
+                "api-teams-265320-skills",
+                "second",
+                "GET",
+                "/api/teams/265320/skills",
+            ),
+            (
+                "api-teams-110467-skills",
+                "other-method",
+                "POST",
+                "/api/teams/110467/skills",
+            ),
+            (
+                "api-teams-110467-skills",
+                "other-path",
+                "GET",
+                "/api/teams/110467/members",
+            ),
+        ] {
+            let case = root.path().join("apis").join(member).join(id);
+            std::fs::create_dir_all(&case).unwrap();
+            std::fs::write(
+                case.join("request.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "method": method, "uri": uri, "api_pattern": uri, "headers": {},
+                    "body": {"encoding": "utf8", "data": "", "truncated": false}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            std::fs::write(case.join("expected-response.json"), b"{}").unwrap();
+        }
+        let apis = ["GET /api/teams/*/skills", "GET /api/teams/110467/skills"]
+            .map(|api| api.parse::<RecordingApi>().unwrap());
+        let sources = resolve_case_sources(root.path(), &apis).unwrap();
+        assert_eq!(sources.len(), 2);
+        assert!(sources[0].ends_with("api-teams-110467-skills/first"));
+        assert!(sources[1].ends_with("api-teams-265320-skills/second"));
+        let missing = "GET /api/missing".parse().unwrap();
+        assert!(resolve_case_sources(root.path(), &[missing]).is_err());
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let upstream = tokio::spawn(async move {
+            let mut received = Vec::new();
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut bytes = [0; 1024];
+                    let read = stream.read(&mut bytes).await.unwrap();
+                    assert_ne!(read, 0);
+                    request.extend_from_slice(&bytes[..read]);
+                    if request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                received.push(
+                    String::from_utf8(request)
+                        .unwrap()
+                        .lines()
+                        .next()
+                        .unwrap()
+                        .to_owned(),
+                );
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    )
+                    .await
+                    .unwrap();
+            }
+            received
+        });
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            drive_managed_recording_input(ManagedRecordingInputOptions {
+                case_source: root.path().to_path_buf(),
+                recording_apis: apis.to_vec(),
+                origin,
+                motan_upstream: None,
+                request_timeout: Duration::from_secs(1),
+                completion: None,
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(result.request_templates, 2);
+        assert_eq!(result.attempted, 2);
+        assert_eq!(result.succeeded, 2);
+        assert_eq!(result.failed, 0);
+        assert!(result.input_exhausted);
+        assert_eq!(
+            upstream.await.unwrap(),
+            [
+                "GET /api/teams/110467/skills HTTP/1.1",
+                "GET /api/teams/265320/skills HTTP/1.1",
+            ]
+        );
     }
 
     #[tokio::test]
