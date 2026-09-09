@@ -164,7 +164,9 @@ pub(super) fn for_scoped_status(
     Ok(envelope(
         target_root,
         state,
-        state_action(target_root, state),
+        // Scoped next uses this action to decide whether it may advance. Include
+        // publication and executor state just as the global status projection does.
+        status_base(target_root, state)?,
     ))
 }
 

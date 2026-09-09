@@ -8,7 +8,7 @@ use super::super::process_output_model::{RewriteProcessOutputStatus, RewriteWork
 use super::super::{action, fingerprint, inventory, process_outputs, store::RewriteStore};
 use super::model::{RewriteWorkerActivity, RewriteWorkerCoverageState, RewriteWorkerObservation};
 
-pub(in crate::rewrite) const RUNNING_OBSERVATION_SECONDS: i64 = 15 * 60;
+pub(in crate::rewrite) const RUNNING_OBSERVATION_SECONDS: i64 = 60 * 60;
 pub(in crate::rewrite) const ACTIVITY_ENV: &str = "BACKEND_REWRITE_WORKER_ACTIVITY";
 pub(in crate::rewrite) const HANDOFF_ENV: &str = "BACKEND_REWRITE_WORKER_HANDOFF_ID";
 

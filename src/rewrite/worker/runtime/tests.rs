@@ -224,15 +224,17 @@ fn legacy_automatic_running_requires_an_explicit_coordinator_report() {
 }
 
 #[test]
-fn running_and_queued_reports_expire_after_fifteen_minutes() {
+fn running_and_queued_reports_have_a_refreshable_sixty_minute_expiry() {
     for activity in [
         RewriteWorkerActivity::Running,
         RewriteWorkerActivity::Queued,
     ] {
-        let (target, mut state, scope) = setup();
-        worker::confirm_current_for_test(&mut state);
+        let (target, state, scope) = setup();
+        confirm(target.path(), &state, &scope);
+        report(options(target.path(), &state, &scope, activity)).unwrap();
         let store = RewriteStore::new(target.path()).unwrap();
-        for (age_minutes, expired) in [(5, false), (14, false), (15, true), (16, true)] {
+        let mut state = store.load().unwrap().unwrap();
+        for (age_minutes, expired) in [(15, false), (59, false), (60, true), (61, true)] {
             let observation = state
                 .worker_bindings
                 .get_mut(&scope.binding_key())
@@ -261,6 +263,58 @@ fn running_and_queued_reports_expire_after_fifteen_minutes() {
             } else {
                 assert!(matches!(status.action, RewriteAction::WaitRequired { .. }));
             }
+        }
+
+        let previous = observation(&state, &scope).unwrap().observed_at.clone();
+        let refreshed = report(options(target.path(), &state, &scope, activity)).unwrap();
+        assert!(matches!(
+            refreshed.action,
+            RewriteAction::WaitRequired { .. }
+        ));
+        let state = store.load().unwrap().unwrap();
+        assert_ne!(observation(&state, &scope).unwrap().observed_at, previous);
+        assert_eq!(
+            coverage(&state, &scope),
+            RewriteWorkerCoverageState::Running
+        );
+    }
+}
+
+#[test]
+fn handed_off_workers_do_not_expire_while_waiting_for_integration_or_verification() {
+    let (target, state, scope) = setup();
+    confirm(target.path(), &state, &scope);
+    let store = RewriteStore::new(target.path()).unwrap();
+    for activity in [
+        RewriteWorkerActivity::HandoffReady,
+        RewriteWorkerActivity::Integrated,
+    ] {
+        report(options(target.path(), &state, &scope, activity)).unwrap();
+        let mut waiting = store.load().unwrap().unwrap();
+        waiting
+            .worker_bindings
+            .get_mut(&scope.binding_key())
+            .unwrap()
+            .observation
+            .as_mut()
+            .unwrap()
+            .observed_at = (Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+        store.save(&waiting).unwrap();
+
+        let status = rewrite::status_rewrite(RewriteContext {
+            target_root: target.path().into(),
+        })
+        .unwrap();
+        match activity {
+            RewriteWorkerActivity::HandoffReady => assert!(matches!(
+                status.action,
+                RewriteAction::IntegrationRequired { .. }
+            )),
+            RewriteWorkerActivity::Integrated => assert!(matches!(
+                status.action,
+                RewriteAction::TargetQualityRequired { .. }
+            )),
+            _ => unreachable!(),
         }
     }
 }

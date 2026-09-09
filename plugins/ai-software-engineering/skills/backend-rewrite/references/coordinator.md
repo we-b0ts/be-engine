@@ -98,7 +98,7 @@ This wait guard does not apply to worker confirmation, status checks, or feedbac
 execute those engine actions even when the implementation worker is running.
 
 Check for arrived events after every action, even while `pending` stays positive;
-do not hold handoffs until the queue drains or a fifteen-minute activity report
+do not hold handoffs until the queue drains or a sixty-minute activity report
 expires. Report responses replace the previous scheduling action. Preserve each
 event's actual worker handle, dispatch identity, and delivered handoff identity;
 check them against the engine's current binding. Never relabel a stale event
