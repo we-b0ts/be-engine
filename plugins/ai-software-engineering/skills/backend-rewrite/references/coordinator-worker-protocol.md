@@ -144,7 +144,7 @@ completion and interruption events in the task runtime and report actual
 changes before refreshing global status. Keep original dispatch and handoff
 identities; do not manufacture a running observation from a historical
 confirmation. Do not re-report every running worker on each wait. The engine
-continues scheduling explicit status checks after fifteen-minute expiry.
+continues scheduling explicit status checks after sixty-minute expiry.
 
 The worker returns the handoff and ends its turn; it does not wait for Replay.
 
@@ -154,7 +154,9 @@ The engine trusts the coordinator's explicit report; it does not query Claude
 Code or another task runtime, or independently prove liveness. Never report running
 merely because a dispatch was previously confirmed. A repeated confirmation does
 not create or refresh an activity report. Running/queued reports are fresh for
-fifteen minutes. Expiry requests a check; it
+60 minutes after the most recent explicit report; another running/queued report
+resets that interval. Handoff-ready and integrated observations do not expire
+while awaiting integration or verification. Expiry requests a check; it
 does not prove that a worker stopped and never authorizes a duplicate worker.
 Missing or legacy unclassified observations on confirmed bindings also request
 a coordinator status check. Recover the retained assignment before reporting;

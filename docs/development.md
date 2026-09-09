@@ -1250,8 +1250,11 @@ unchanged repairs wait, while a changed acceptance revision schedules repair
 verification before worker dispatch. Accepted replay repairs authorize the same
 API's replay without requiring another worker handoff. `worker confirm` records
 binding delivery only; explicit coordinator reports supply running/queued state.
-The engine does not query an external AI runtime. Reports expire after fifteen
-minutes; missing or legacy unclassified observations require a fresh report.
+The engine does not query an external AI runtime. Running/queued reports expire
+60 minutes after the most recent explicit report; another running/queued report
+resets that interval. Handoff-ready and integrated observations do not expire
+while awaiting integration or verification. Missing or legacy unclassified
+observations require a fresh report.
 Start and resume with `backend-rewrite status`; an initialized project without a
 workflow returns an executable initialization action with `pending: 1`.
 Status does not duplicate an `active_issue` or publish an unconditional
@@ -1307,7 +1310,7 @@ Wait observes engine-state changes and returns `worker_events_required`: inspect
 actual task-runtime completion/failure/interruption events, report changes with
 their original identities, then execute global status. It does not infer runtime
 liveness or refresh every running worker; activity observations still expire
-at fifteen minutes. `terminal_allowed` is the separate successful completion gate.
+at 60 minutes. `terminal_allowed` is the separate successful completion gate.
 A global `blocked` action has `pending=0` and stops this run after eligible
 revalidation drains and remaining APIs require external system repair. Repair
 APIs and dependent process outputs remain incomplete, with bindings/evidence
@@ -1347,7 +1350,7 @@ available; otherwise `wait_required` on `source_review_rework` waits for the
 repair without repeatedly scheduling a failing review or traffic acceptance.
 
 `worker_status_required` asks for a runtime observation, including for legacy
-bindings and running/queued observations at least fifteen minutes old. Historical
+bindings and running/queued observations at least 60 minutes old. Historical
 confirmation alone never proves liveness. Feedback uses a separate short,
 durable transaction and is folded into state on load/save, so a long Replay
 cannot prevent feedback or overwrite it when saving an older snapshot.

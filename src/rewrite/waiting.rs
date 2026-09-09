@@ -58,7 +58,7 @@ pub async fn wait(options: RewriteWaitOptions) -> Result<RewriteActionEnvelope> 
     }
     let root = std::fs::canonicalize(&options.target_root)?;
     envelope.action = RewriteAction::WorkerEventsRequired {
-        summary: "inspect available task-runtime worker completion, failure and interruption events; report actual changes with their original dispatch and handoff identities, then execute commands.status. Use commands.inventory only to recover bindings. Do not re-report every running worker or infer liveness from historical dispatch; fifteen-minute status checks remain engine-scheduled".into(),
+        summary: "inspect available task-runtime worker completion, failure and interruption events; report actual changes with their original dispatch and handoff identities, then execute commands.status. Use commands.inventory only to recover bindings. Do not re-report every running worker or infer liveness from historical dispatch; sixty-minute status checks remain engine-scheduled".into(),
         inventory: action::command(&root, vec!["inventory".into()], Vec::new()),
         status: action::status_command_for_api(&root, None),
     };
