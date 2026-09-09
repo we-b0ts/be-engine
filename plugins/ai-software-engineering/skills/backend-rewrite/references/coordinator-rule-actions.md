@@ -4,7 +4,9 @@ Audience: the workflow coordinator. Read only after the assigned worker is
 confirmed and returns source-proven inputs for a response rule, recorder capture, process-owned
 dependency rule, or process-output rule, or when the current action exposes one
 of those planners. Workers may run returned read-only help commands but never
-execute the state-mutating commands here.
+execute the state-mutating commands here. Require worker-provided semantic
+conclusions, selectors, and source proof. Return missing diagnosis to that
+worker; do not trace source or execute diagnostic evidence queries yourself.
 
 ## Contents
 
@@ -112,7 +114,7 @@ API's next command or the consolidated full-scope recording action. For a
 scoped waiting API, poll current `status`; never execute its stale acceptance.
 
 Do not follow capture apply with `recording request`. Continue runnable work and
-read [recording-lifecycle.md](recording-lifecycle.md) when the engine
+read [coordinator-recording.md](coordinator-recording.md) when the engine
 returns the consolidated refresh.
 
 ## HTTP Response URL Capture
@@ -134,14 +136,29 @@ reported endpoint with recorded response IDs and JSON pointers. This is source
 response evidence, not firewall packet evidence. It includes no full URL query,
 credentials or unrelated response body.
 
-Execute the returned `applicable_rule_planners[].command` after reviewing the
-pointer and source consumption. Set its required
+Execute the returned `applicable_rule_planners[].command` with the worker's
+proven pointer and source-consumption result. Set its required
 `BACKEND_REWRITE_SOURCE_EVIDENCE` input to a one-line source file/line/symbol
 proof; a field name alone is insufficient. The plan previews the acquisition
 rule and returns the exact apply command. Apply persists rules in
 `source-traffic-policy.yaml`, then follows the same consolidated refresh as
 Breeze capture. `status` restores pending apply commands. Workers return the
 source inputs; the coordinator performs the state mutations.
+
+For `recorder-capture plan-http-response`, first omit `--pattern-checked`.
+Its `path_pattern_review_required` response contains the observed path and
+existing rules, but no plan ID or apply command. Send those facts to the source
+owner and require a complete method/path pattern and brief proof of URL
+consumption and source path construction, even when no previous rule exists.
+Repeat the planner with the returned `--path-pattern`, `--source-evidence`, and
+explicit `--pattern-checked`; do not infer dynamic segments from path similarity.
+The planner takes `--name HOST --path-pattern 'GET /path/*' --pointer /field`,
+without separate authority/method arguments or a generated hash name.
+
+A checked plan returns `status: planned`, reuses a covering rule or previews
+consolidation of fully covered rules with matching selectors and filters.
+Match `traffic_e2e_report.replaced_rules` and the policy diff to the supplied
+scope before applying. Both new and consolidated rules use the same refresh.
 
 The preflight does not apply an assertion selector or ignore differences.
 Pending capture plans and unresolved supported candidates block capability-gap
@@ -169,8 +186,8 @@ passing post-apply workflow is sufficient.
 
 ## Unordered HTTP Dependency JSON
 
-For HTTP unmatched requests, inspect `dirty_clusters.facts.http_unordered_candidates`
-and the `unordered` rule hint. Verified array reorderings expose
+For worker-returned HTTP unordered inputs, require their current evidence ID,
+exact selectors, and source proof. Verified array reorderings expose
 `kind=dependency_value`, `capability=http_json_unordered` and the
 `dependency-rule plan http unordered` help command. Discovery is available
 during response, dependency and Replay issues. Response unordered rules do not
@@ -183,18 +200,17 @@ current evidence ID and reviews `http.json.unordered` in the policy diff.
 Execute the returned apply and next commands. Actual Replay is required;
 changing this policy cannot reclassify an earlier unmatched request as passed.
 Keep query, element contents, duplicate counts and unselected fields exact.
-See [HTTP unordered rules](../../../../../docs/http-unordered-rules.md).
 
 ## Cross-Case HTTP Dependency Scope
 
-For HTTP unmatched requests, inspect `dirty_clusters.facts.cross_case_candidates`
-and the top-level `rule_hints`. Verified same-run candidates expose
+For worker-returned HTTP cross-case inputs, require current request-identity
+evidence and source proof. Verified same-run candidates expose
 `kind=dependency_scope`, `capability=http_cross_case` and the
 `dependency-rule plan http cross-case` help command in `applicable_rule_planners`.
 This entry is available during response, dependency and Replay issues. Old
 reports without request identity require fresh Replay; a URL-only candidate
-cannot authorize a rule. Source and target inspection must prove shared cache
-initialization, refresh and side-effect semantics. Do not add target prewarming,
+cannot authorize a rule. Require the worker's proof of shared cache
+initialization, refresh, and side-effect semantics. Do not add target prewarming,
 classify a lazy business request as background traffic, or ignore unmatched calls.
 
 The worker returns the exact host, port, method, path and source evidence; the
@@ -204,21 +220,14 @@ secrets, case IDs or fixture paths. Follow apply's `next`: real Replay is
 mandatory to let the target consume the response and build its own state.
 The old failure cannot be reclassified as a pass. Existing complete exchanges
 need no new recording. Resolve this supported rule path before reporting a
-remaining engine capability gap. See
-[HTTP cross-case replay](../../../../../docs/http-cross-case-replay.md).
+remaining engine capability gap.
 
 ## Process-Owned Dependency Rules
 
-For a dependency issue, the `dirty_clusters` evidence response's top-level
-`applicable_rule_planners` contains only supported protocols present in the
-current clusters. Use the selected dirty case's
-`representative_dependencies_command`, then the selected target's returned
-`detail_command` when available. These commands read the recording internally
-and return structured protocol facts; manual JSONL parsing is unnecessary for
-ordinary diagnosis. Planner exposure
-does not establish ownership. Asynchronous execution, fire-and-forget calls,
-post-response timing, scheduler names, and the 100 ms attribution window do not
-make a dependency process-owned.
+Require the worker's current dirty-cluster evidence ID, supported planner,
+exact selector inputs, and explicit ownership conclusion. Missing ownership
+proof returns to the worker. Planner exposure, asynchronous execution,
+post-response timing, and scheduler names do not establish ownership.
 
 Every ownership-classification `dependency-rule plan` invocation requires exactly one ownership decision:
 
@@ -312,9 +321,9 @@ the case gate.
 
 Process ownership and response causality are independent. A matching
 process-owned rule carries no response-state classification and does not
-implement destination state. If source and response evidence prove that the
-dependency drives state, port source-compatible initial load, refresh, cache,
-fallback, and readiness behavior. `initial_load_timeout_ms` only bounds source
+implement destination state. If the worker proves that the dependency drives
+state, return its initial-load, refresh, cache, fallback, or readiness repair
+to the implementation owner. `initial_load_timeout_ms` only bounds source
 recording observation.
 
 ## Bootstrap Dependency Overlay
@@ -333,26 +342,23 @@ response, dependency, or Replay issue and
 `dependency-rule plan redis time-shift --help`. The plan verifies previously
 matched responses (including earlier cases in the same API attempt), complete
 immutable recording coverage and the explicitly selected timestamp fields.
-Review source proof of cache/expiry semantics, units, and downstream uses;
+Require returned proof covering cache/expiry semantics, units, and downstream uses;
 integer values alone do not prove applicability. Apply rejects changed policy
 or evidence, invalidates verification across APIs and requires fresh Replay.
 It does not reclassify old failures or change recording ownership or consumption.
-See [Redis response time rules](../../../../../docs/redis-time-shift-rules.md).
 
 ## JWT expiration during Replay
 
-For a status mismatch with target HTTP 401, use the engine-issued
-`jwt-time-validity` query. It reports recorded/replay time and unverified JWT
-expiration candidates without credentials. Trace the source and target JWT
-verification path, key source, and actual expiration leeway; 401 or zero
-observed dependencies alone does not establish the cause.
+Require the worker's current JWT evidence, source-proven expiry cause and
+leeway, and a discovered target key reference. A 401 or missing dependencies
+alone is insufficient. Return missing verification-path or key-source proof
+to the worker.
 
-Read `signing_key_discovery` in that evidence for effective target variable
-names, startup mount paths and `writable` modes, and existing key references.
-Use the returned `startup env list` and `startup mount list` commands when
-needed; do not guess mounts or dump dotenv contents. Select a file within a
-mount with `writable: false` only after source/target code proves the dotenv
-path, key field and loading precedence. Discovery needs no running target.
+Use returned key-source discovery facts for effective target variable names,
+startup mount paths/modes, and existing key references. Read-only startup
+list commands can confirm those inputs without exposing values. A file key
+requires a read-only mount and worker-proven dotenv path, field, and loading
+precedence; do not guess a source or print credentials.
 
 Use the returned `rule plan --request-kind jwt` planner with
 `--signing-key-ref`, either `--target-env` or
@@ -369,11 +375,13 @@ request rule does not require new standard recording and cannot be verified
 by reclassifying old actual responses. Preserve normal JWT expiry checks in
 target code and keep dependency verification strict.
 
-For Redis string-write value mismatches, inspect
-`dirty_clusters.facts.redis_unordered_candidates`. The normal planner is
+## Unordered Redis Dependency Values
+
+For worker-returned Redis unordered inputs, require current mismatch evidence
+and source proof for the exact selectors. The normal planner is
 `kind=dependency_value`, `capability=redis_value_unordered`, with
 `dependency-rule plan redis unordered` followed by `dependency-rule apply` and
 fresh Replay. JSON object key order is handled automatically; JSON arrays and
 Protobuf repeated fields require source proof. Confirm exact host/port, key or
 key affixes, field selector, and Protobuf schema type. These rules do not change
-process ownership. See [Redis value rules](../../../../../docs/redis-value-rules.md).
+process ownership.

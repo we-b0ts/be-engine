@@ -198,8 +198,9 @@ async fn user_settings<M: Mysql>(mysql: &M, user_id: u64)
 
 Use `FromMysqlRow` for a business struct whose fields come from named SQL
 columns. Use `FromMysqlCol` for a business type stored in a single JSON column.
-For flexible JSON, choose `serde_json::Value`; for an existing `Deserialize`
-type, `Json<T>` provides the same typed decoding without another derive.
+Model JSON columns with explicit business structs or enums; use maps with a
+concrete value type for dynamic keys. For an existing `Deserialize` business
+type, use `Json<T>` to decode it without another derive.
 
 ## Bind a dynamic list of values
 

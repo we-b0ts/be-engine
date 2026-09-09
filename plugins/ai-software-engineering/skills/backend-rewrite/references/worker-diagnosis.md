@@ -1,7 +1,11 @@
 # Implementation Worker Diagnosis
 
 Audience: implementation workers assigned an `implementation_required` work
-item. Read before work-item diagnosis or code changes. Use the engine's current
+item. Read before work-item diagnosis or code changes. Before edits, read
+[target-code-rules.md](target-code-rules.md).
+For a proven environment override, mount, or writable-directory requirement,
+read [worker-startup-inputs.md](worker-startup-inputs.md).
+Use the engine's current
 work-item facts to identify one repair before the engine-issued acceptance.
 Select the diagnosis path from the assigned work scope and confirm it against
 the evidence overview.
@@ -15,7 +19,7 @@ the evidence overview.
 - Response, missing-recording, cache, runtime, and Replay issues
 - MySQL driver and Redis connection compatibility
 - Dirty dependency and comparison issues
-- Repair routing and blocker criteria
+- Return the proven cause and blocker criteria
 
 ## Work-Scope Contract
 
@@ -29,7 +33,7 @@ backend-rewrite --target-root <canonical-root> evidence --process-output <id>
 
 Choose the entrypoint matching the assigned scope. Do not query a worker-local rewrite
 workflow. The coordinator supplies your role, exact scope, canonical target root,
-and absolute worktree; the engine supplies current facts. Missing information
+absolute worktree, and source repository locations; the engine supplies current facts. Missing information
 never changes a worker's role. Report an unresolvable identity or API gap without
 assuming coordinator authority or guessing another work item.
 
@@ -47,14 +51,14 @@ representative when available. Treat possible causes as hypotheses.
 
 The same context includes `review` with the registered worktree/base and the
 local check command. For a `target_quality` issue, read its integrated findings
-and follow [source-review.md](source-review.md); no traffic mismatch is implied.
+and follow [worker-review.md](worker-review.md); no traffic mismatch is implied.
 For a quality rework alongside an existing behavioral issue, read the assigned
 findings in `context.review.rework.findings` and address them as well. These
 retain the routing evidence if a later integration makes `review show` stale.
-Every handoff requires a `passed` review after the final
+Every changed-code handoff requires a `passed` review after the final
 edit and commit; include its absolute `report_path` and any spawn ownership
 evidence. Follow the delivery steps in
-[target-implementation-requirements.md](target-implementation-requirements.md#verification-ownership).
+[worker-review.md](worker-review.md).
 Do not run coordinator-owned integrated checks or report your own handoff.
 
 Retain the initial overview's workflow/recording, scope, issue, binding and
@@ -65,11 +69,18 @@ work with the new identity. A workflow revision change alone does not replace
 this assignment. Opaque detail-query IDs remain valid only for their original
 evidence; use newly returned IDs when evidence changes within the same assignment.
 
-For either scope, prove one cause from source and target code, make one coherent
-repair, and run focused local tests. Return the identified commit/patch, root cause
-and supporting evidence, local test results, shared impact, necessary coordinator
-inputs and unresolved risks. Do not return or execute an acceptance command;
-the coordinator obtains its current legal action from the engine after handoff.
+For either scope, prove one cause from source and target code. When it requires
+code changes, make one coherent repair and run focused local tests; return the
+commit, passing review, and local results. For a rule, startup input, or external
+repair without code changes, return proof and exact inputs without a code handoff.
+Both results include the original identity, cause, evidence, shared impact,
+necessary coordinator inputs, and unresolved risks. Do not return or execute an
+acceptance command. End your turn after returning the result.
+
+If resumed after input application while an implementation handoff is still
+required, review the current target even when no code repair remains. Follow
+[worker-review.md](worker-review.md) and return the existing commit and passing
+report; no artificial patch or new commit is needed.
 
 For `work_scope.kind=api`, exact further evidence-query argv are under the
 overview's `queries`. Traffic facts come only from the overview, returned queries
@@ -107,8 +118,8 @@ their absence does not mean a documented capability is unavailable.
 
 | Proven scenario | Capability and next investigation |
 | --- | --- |
-| An inbound Bearer JWT expired between capture and Replay | JWT `preserve_relative`; inspect the returned `jwt-time-validity` query and [JWT request rules](../../../../../docs/jwt-request-rules.md). |
-| A recorded Redis response timestamp makes an otherwise correct cache expire during Replay, causing extra reads or an error branch | Redis `time-shift`; inspect earlier successfully matched GET/HGET responses, including previous cases. Read [Redis response time rules](../../../../../docs/redis-time-shift-rules.md). |
+| An inbound Bearer JWT expired between capture and Replay | JWT `preserve_relative`; inspect the returned `jwt-time-validity` query and prove the authentication path, expiry leeway, and signing-key source. |
+| A recorded Redis response timestamp makes an otherwise correct cache expire during Replay, causing extra reads or an error branch | Redis `time-shift`; inspect earlier successfully matched GET/HGET responses, including previous cases, and prove their time semantics. |
 | Shared HTTP initialization was recorded in another case | HTTP `cross-case`; verify same-run request identity and source sharing semantics. |
 | An outbound HTTP array or Redis write collection differs only in order | Protocol-specific `unordered`; prove collection semantics and inspect exact order witnesses. |
 
@@ -119,11 +130,22 @@ Its documented read-only entrypoint is
 dirty-cluster evidence ID, source-selected endpoint/key/hash-field, response JSON
 Pointer, timestamp format, and source proof to the coordinator. Proof establishes
 the expiry/cache calculation, units, and downstream uses, including signatures.
-The coordinator may plan this capability without an `applicable_rule_planners`
-entry. Plan verifies immutable responses and prior successful matching in the
-current API attempt; it does not infer expiry causality. Apply and fresh Replay
-remain coordinator-owned. Check documented capabilities before routing a
-remaining `replay_capability_gap`.
+An absent `applicable_rule_planners` hint does not rule out this documented
+capability. Supply the expiry proof and exact inputs; immutable response matching
+alone does not establish expiry causality. Use exact JSON Pointers and explicit
+Unix seconds or milliseconds; prove any broader key/field selector shares those
+semantics. A signed timestamp or downstream dependency argument needs additional
+compatibility proof; this rule neither re-signs Redis tokens nor relaxes matching.
+
+JWT diagnosis uses the failed attempt's time and `signing_key_discovery`, never
+the current clock or raw tokens in notes. A 401, missing key, or unverified
+signature is insufficient proof. Trace authentication and configuration
+precedence; return current evidence, header, supported HMAC algorithm, key alias,
+expiry leeway, source proof, and either the effective environment variable name
+or read-only mounted dotenv path and field. Existing bindings may be reused.
+The capability supports Bearer HS256/HS384/HS512 with integer NumericDate claims;
+it preserves relative validity and does not justify weakening authentication.
+Do not apply rules or run Replay.
 
 ## Process-Output Issues
 
@@ -166,9 +188,8 @@ For a target repair, return the exact work scope and issue ID, proven cause,
 changed files and shared impact, patch or commit, local test results, original
 dispatch identity, and unresolved risks. For an eligible rule candidate,
 return the same work scope, issue and original dispatch identities plus the three
-requested rule inputs and unresolved risks; no target patch or local test is required. The
-workflow coordinator owns rule planning/application and acceptance; the worker
-does not run process-output comparison itself.
+requested rule inputs and unresolved risks; no target patch or local test is
+required. Do not apply rules or run process-output comparison yourself.
 
 ## API Evidence Queries
 
@@ -227,9 +248,9 @@ query ID.
   MySQL supports source-proven process-owned SELECT templates with exact
   connection identity and exact, numeric-series, or patterned physical tables,
   including `AS {{table}}_id` aliases tied to the selected table. Return the
-  source-proven selector inputs to the workflow coordinator, which plans and applies
-  the rule to reclassify existing unused evidence without a new recording;
-  target unmatched queries and incomplete evidence remain dirty.
+  source-proven selector inputs. Such rules can reclassify existing unused
+  evidence without a new recording; target unmatched queries and incomplete
+  evidence remain dirty.
 - `policy_applicability`: structural rule eligibility; eligibility does not
   authorize a rule;
 - `attempt_delta`: convergence against the previous attempt; improvement does
@@ -320,7 +341,7 @@ Classify exactly one cause:
 
 Environment handling is not limited to this failure classification. If source
 analysis proves during implementation that target logic requires an
-application-owned environment variable, follow [target-startup-inputs.md](target-startup-inputs.md)
+application-owned environment variable, follow [worker-startup-inputs.md](worker-startup-inputs.md)
 immediately and return the startup input without waiting for a runtime failure.
 
 For a status mismatch, inspect authentication/preconditions, source error
@@ -357,17 +378,11 @@ endpoint that is absent from recorded dependencies, return the evidence ID, the
 workflow coordinator. The hostname is required and the port is optional; include a
 source-proven port when available. Never guess a Breeze resource or descriptor.
 
-The workflow coordinator reports those facts through `backend-rewrite route --cause
-missing-recorded-resource`. The engine resolves the endpoint through the
-configured Breeze snapshots and verifies that the unique resource is currently
-bypassed. A successful route returns an API-scoped recorder-capture plan instead
-of entering system repair: apply its exact next command, park that API as
-`awaiting_recording_refresh`, continue other runnable APIs, and let the
-engine schedule one consolidated full-scope recording after they drain. If
-the endpoint is unknown, ambiguous, or already captured, retain the exact
-source/recording proof and returned error and continue diagnosis. Use
-`recorder-capability-gap` only when the required capture mechanism itself is
-unsupported.
+A configured resource bypass is a capture-rule input, not proof that the
+capture mechanism is unsupported. If returned feedback identifies an unknown,
+ambiguous, or already captured endpoint, retain the source/recording proof and
+error and continue diagnosis. Use `recorder-capability-gap` only when the
+required capture mechanism itself is unsupported.
 
 An extra read may result from an absolute timestamp in an earlier successfully
 replayed response. Check [Rule Discovery From Source Diagnosis](#rule-discovery-from-source-diagnosis)
@@ -401,8 +416,7 @@ joins, EXISTS and pure ROW_NUMBER windows, including long OR chains. Successful
 matching alone never makes unknown effects safe to omit at session cleanup.
 This built-in compatibility composes with direct-column projection mapping;
 it requires no rule or new recording. Complex expressions and positional
-dynamic-parameter policies keep their existing boundaries. See
-[MySQL predicate compatibility](../../../../../docs/mysql-replay.md#select-predicate-order-compatibility).
+dynamic-parameter policies keep their existing boundaries.
 
 Single-table `SELECT DISTINCT` also supports normal prepared statements, bound
 parameters, column/table aliases, table qualifiers, and reordered pure AND
@@ -475,11 +489,10 @@ A clean passing run needs no investigation based only on these counters.
 Follow `rule_hints[].help` to discover response URL rewriting. Trace the source
 call and the missing dependency before submitting a system defect. Return the
 current evidence ID, case ID, literal IP:port and source citation to the
-coordinator, which runs `route --cause unrecorded-ip`. The route returns missing
-inputs or `ip_capture` evidence. For a source-proven `http-response` origin,
-matching JSON fields produce `applicable_rule_planners` commands. Complete
-plan/apply and verify the consolidated fresh recording before escalating a
-remaining engine defect. Static/hardcoded addresses require source
+coordinator. If feedback requests more origin proof, supply it. A source-proven
+`http-response` origin may support a response URL capture rule; return matching
+JSON selectors and source proof. Reassess any remaining engine defect against
+the next assigned recording evidence. Static/hardcoded addresses require source
 configuration or a source mock. Unknown origins require investigation; do not
 invent a response pointer. A matching IP in recorded JSON alone does not prove
 source consumption or the absence of an equivalent recorded endpoint.
@@ -537,18 +550,8 @@ then the normal target boundary:
 5. container identity, foreground process ownership, and bounded `SIGTERM`
    shutdown behavior; and
 6. runtime-writable directories. When logs contain `Permission denied` or
-   `EACCES`, confirm each image-local path exists and is writable by numeric
-   UID/GID `998:998`. Repair both `Dockerfile.recording` and `Dockerfile.e2e`,
-   for example:
-
-   ```dockerfile
-   USER 0:0
-   RUN install -d -o 998 -g 998 -m 0775 /data1/weibo/data
-   USER 998:998
-   ```
-
-   Do not recursively change ownership of configuration or credential trees;
-   runtime-provided writable mounts do not require image-layer ownership.
+   `EACCES`, follow [worker-startup-inputs.md](worker-startup-inputs.md#writable-directories)
+   for source proof and the affected image's directory contract.
 
 Repair product startup, composition, configuration loading, or
 `.traffic-e2e/Dockerfile.e2e`. Do not add case execution, report parsing,
@@ -570,9 +573,7 @@ before classifying a capability gap or external-data blocker.
 
 If target topology differs, repair target behavior. If semantic evidence exists
 but the engine lacks support, return the current evidence ID, source
-reference, and exact required system change to the workflow coordinator. It owns
-`backend-rewrite route` and the engine-issued
-`repair verify <repair-id>` acceptance. Never implement a target workaround for
+reference, and exact required system change to the workflow coordinator. Never implement a target workaround for
 a Replay capability gap or supply an arbitrary acceptance command.
 
 ## Dirty Dependency Issues
@@ -586,14 +587,14 @@ For HTTP request-body mismatches, inspect `http_unordered_candidates` and the
 `dependency-rule plan http unordered`; prove source collection and downstream
 semantics, then return the endpoint, JSON Pointer and source citation to the
 coordinator. An HTTP JSON array is ordered by default. A response unordered
-rule does not apply to dependency requests. The coordinator owns plan/apply
-and fresh Replay; no new recording is needed for complete existing exchanges.
+rule does not apply to dependency requests. Complete existing exchanges do not
+require new recording evidence for this rule.
 
 For HTTP `unmatched_target`, also inspect `cross_case_candidates` and the
 `cross-case` hint. A verified same-run exchange may support a source-proven
 shared initialization scope rule through the returned `http cross-case` planner.
-The worker supplies source proof; the coordinator owns plan/apply and fresh
-Replay. This is not background ownership or permission to ignore a request.
+Return the source proof and exact selector inputs. Shared initialization scope
+is not background ownership or permission to ignore a request.
 
 Classify the representative protocol cluster by source ownership:
 
@@ -610,13 +611,10 @@ the current dirty-cluster evidence ID and one protocol-specific planner returned
 in `applicable_rule_planners`. Run its exact read-only help argv and return only
 the source-proven selector inputs to the workflow coordinator. Replay evidence, case
 source, and source revision come from engine state and are not rule
-inputs. The workflow coordinator owns `backend-rewrite dependency-rule plan|apply`;
-ownership-classification plans require `--ownership request-owned|process-owned|unresolved`. A
-request-owned result is an explicit target implementation requirement and
-never returns an applicable process-owned rule plan. The workflow coordinator also owns
-the apply report's exact `next`; the engine then reclassifies the same
-focused replay report. Never manually rewrite replay reports, trim traffic, or
-edit immutable request/response/dependency capture files.
+inputs. Return exactly one proven ownership classification:
+`request-owned`, `process-owned`, or `unresolved`. A request-owned result requires
+normal target implementation; it cannot justify a process-owned rule. Never
+rewrite Replay reports, trim traffic, or edit immutable capture files.
 
 For dependency value mismatches, inspect each entry returned in
 `rule_hints`. Run its exact `help` command, then verify the described value
@@ -649,49 +647,32 @@ request start. Duration plans require `--unit milliseconds`, `seconds`,
 increase within five seconds. These rules validate parsed values, not just
 JSON types, and cannot exempt complete time-derived signatures or URLs.
 
+A target or response-policy change invalidates comparison evidence. Return your
+result and end the turn; do not run replacement acceptance.
 
-A target or response-policy change invalidates comparison evidence. The
-coordinator must rerun focused E2E before requesting a fresh comparison.
+## Return The Proven Cause
 
-## Repair Routing
+Return one supported result with the original evidence/dispatch identity:
 
-Route the proven cause to exactly one action:
-
-- process-output generation defect: repair normal target component loading,
-  configuration, startup, write/flush, or shutdown behavior, run focused local
-  tests, and return the tested handoff with its original dispatch identity to the
-  workflow coordinator;
-- target implementation or cache defect: change target code under
-  [target-implementation-requirements.md](target-implementation-requirements.md),
-  run focused target tests, and return the tested handoff with its original
-  dispatch identity to the workflow coordinator;
-- startup/configuration defect: repair source-compatible loading or the fixed
-  start/stop boundary, test it, and return the handoff with its original dispatch
-  identity to the workflow coordinator;
-- supported nondeterminism/order/counter: return source proof and proposed rule
-  inputs; the workflow coordinator owns `backend-rewrite rule plan|apply` and rerun;
-- source-proven omitted dependency: return the evidence ID,
-  `hostname[:port]`, and source proof; the workflow coordinator reports
-  `--cause missing-recorded-resource`, then owns the returned capture apply and
-  coordinator-owned recording refresh;
-- true Recorder/Replay capability gap, where the supported planners and engine
-  cannot express the required mechanism: return exact route evidence and the
-  required system change; the workflow coordinator owns `backend-rewrite route` and the
-  returned `repair verify <repair-id>` action;
-- source change or external-data issue: return exact route evidence and the
-  required transition without patching the target; the workflow coordinator owns
-  `backend-rewrite route` and its returned acceptance;
-- unresolved: gather the named missing source/runtime proof before changing
-  code or policy.
+- Target API, cache, startup, or process-output generation defect: make one
+  coherent repair, run focused tests, and complete [worker-review.md](worker-review.md).
+- Supported nondeterminism/order/counter: return source proof and exact typed
+  rule inputs. Do not apply the rule.
+- Source-proven omitted dependency: return evidence ID, `hostname[:port]`,
+  source reference, and the missing resource proof.
+- Recorder/Replay capability gap: after checking supported mechanisms, return
+  the exact unsupported behavior, evidence, source reference, and required
+  system change. Do not compensate in target code.
+- Source change or external-data issue: return exact evidence and the required
+  external change without inventing a target replacement.
+- Unresolved: return the named missing source/runtime proof and completed
+  investigation; do not add speculative code or policy.
 
 Use `blocked` only when source construction, target implementation, wiring, and
-available runtime evidence prove that one required external response-driving
-value is unavailable and completion would require invention. Repeated failed
-attempts, dirty evidence, an empty dependency stream, or a tool failure do not
-prove a blocker.
+available runtime evidence prove that a required external response-driving value
+is unavailable and completion would require invention. Repeated failures, empty
+dependency streams, or tool errors do not prove that blocker.
 
-After one API repair, let the workflow coordinator rerun the entire immutable API group;
-after one process-output repair, let it run the returned process-output
-acceptance. If two repairs do not improve the active issue, stop adding local
-patches and produce a bounded structural replan from the current issue and
-attempt delta.
+End the turn after the result; do not wait for acceptance. If two repairs do not
+improve the active issue, stop adding local patches and return a bounded
+structural replan from the current issue and attempt delta.

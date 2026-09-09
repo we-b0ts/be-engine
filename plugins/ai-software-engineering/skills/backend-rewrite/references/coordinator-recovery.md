@@ -1,4 +1,4 @@
-# Recovery And System Repair
+# Coordinator Recovery And System Repair
 
 Read this guide for `recovery_required`, `system_repair_required`, `blocked`, or an
 engine-issued repair verification action. The coordinator owns every
@@ -8,7 +8,7 @@ state-mutating command in this guide.
 
 `system_repair_required` exists only after `backend-rewrite route` accepts a
 cause that requires a system/source change, together with current evidence, a
-source reference, and the required change. The route captures a
+source reference, and the required change. The route captures an
 engine-defined system/source revision and returns an opaque repair ID;
 never supply an invented acceptance command. `missing-recorded-resource` is a
 validated route cause but resolves to a recorder-capture plan and never enters
@@ -76,8 +76,9 @@ command. Execute that returned command once. It does not apply to
 `external_data_blocker`, delete evidence, or bypass ordinary AI workflow
 transitions.
 
-Before reporting an IP capture defect, use `route --cause unrecorded-ip` and
-follow its source investigation or recorder rule plan/apply instructions. A
+Before reporting an IP capture defect, use `route --cause unrecorded-ip` with
+the worker's current evidence and inputs. Return requested source investigation
+to that worker; execute recorder rule plan/apply only with its proven inputs. A
 supported JSON response URL rewrite is an acquisition rule; complete its fresh
 recording verification before escalating a remaining engine defect. Rejection
 counts alone establish neither IP origin nor a missing capture mechanism.

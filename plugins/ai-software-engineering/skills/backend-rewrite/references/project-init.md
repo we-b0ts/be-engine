@@ -73,7 +73,7 @@ The generated target uses `http-server` with its `macros` feature and exports
 the readiness GET route with `#[api(auth = none)]` and
 `#[http_server::get(...)]`. The readiness path must be literal: no captures,
 query, fragment, whitespace, or trailing slash except `/`. Keep the readiness
-endpoint when adding business APIs. Follow [http-server.md](http-server.md)
+endpoint when adding business APIs. Follow [http-server.md](sdk/http-server.md)
 to export methods in their owning modules and combine them through
 `http_server::Router::new(ReadinessApi).merge(business_api)`; retain
 `Server::serve_until` and the SIGTERM/SIGINT shutdown handling.
@@ -84,7 +84,7 @@ preflight. Delete the module, declaration, and call when real target
 implementation begins, as marked by generated comments.
 
 If an image needs an image-local writable directory, follow
-[target-startup-inputs.md](target-startup-inputs.md) and update the applicable Dockerfile after inspecting
+[worker-startup-inputs.md](worker-startup-inputs.md#writable-directories) and update the applicable Dockerfile after inspecting
 its real structure. Do not assume a fixed base image or available shell tool.
 
 ## Verify Initialization
@@ -100,9 +100,10 @@ reported build/startup contract or managed input and rerun the same command.
 Preflight checks initialization plumbing; it is not business API evidence and
 must not advance `backend-rewrite next`.
 
-During later implementation, read [target-startup-inputs.md](target-startup-inputs.md) only when target
-behavior proves another startup input is needed. Use `startup env` and
-`startup mount` APIs rather than editing `project.yaml` or snapshot files.
+For a missing managed startup input during preflight, use
+[coordinator-startup-inputs.md](coordinator-startup-inputs.md). Use `startup env`
+and `startup mount` APIs rather than editing `project.yaml` or snapshot files.
+Later rewrite sessions follow their assigned role's startup-input procedure.
 
 Initialization is complete when init succeeded, both Dockerfiles are ready,
 `.traffic-e2e/local/target.env` exists with mode `0600`, preflight passed, and

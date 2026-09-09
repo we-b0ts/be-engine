@@ -1,10 +1,9 @@
-# Target Startup Inputs
+# Coordinator Startup Inputs
 
-Audience: implementation workers identifying startup inputs and the workflow
-coordinator applying them. Read only when implementation or startup diagnosis
-proves that the target needs an environment override, source-compatible mount, or
-image-local writable directory. Initialization already captures source runtime
-inputs; do not scan source code up front to enumerate them.
+Audience: the coordinator applying returned, source-proven startup inputs.
+Read after receiving a required environment override, source-compatible mount,
+or image-local writable directory. Missing source reasoning returns to the
+implementation owner; do not inspect source to invent startup requirements.
 
 ## Environment
 
@@ -54,11 +53,12 @@ effective source-plus-override target environment; `list` separately identifies
 override names. `remove` removes only a `target.env` override, so the source
 baseline may become effective again.
 
-An implementation worker in an isolated worktree returns a
-`startup_environment` coordinator input instead of mutating the canonical
-ignored file. Prefer `from_source: true` when the captured source value is the
-required value; otherwise provide the exact caller-owned value and evidence.
-The workflow coordinator applies it after integration and before acceptance.
+Consume the returned `startup_environment` input. Use `--from-source` for
+`from_source: true`; otherwise use its explicit caller-owned value source and
+evidence. Apply inputs accompanying a code handoff after its publication;
+apply an input-only result while its original dispatch is still confirmed.
+Both paths require the engine's normal acceptance afterward.
+Do not substitute a worker-local file for the canonical override.
 
 ```yaml
 startup_environment:
@@ -98,21 +98,11 @@ administrator repair.
 
 ## Image-Local Writable Directories
 
-Do not add a startup mount when the application only needs an empty writable
-directory for logs, caches, PID files, or temporary state. Dockerfiles are not
-structurally uniform, so there is no API that rewrites them.
+An empty writable directory is a target/source-adaptor image requirement, not
+source content to mount. Require the responsible worker's Dockerfile change and
+local check result; do not inspect or rewrite Dockerfiles here. Route missing
+implementation or source proof back to that owner.
 
-After inspecting the actual build structure, update:
-
-- `.traffic-e2e/Dockerfile.recording` when the source adaptor needs the path;
-- `.traffic-e2e/Dockerfile.e2e` when the target needs it; or
-- both when both processes need it.
-
-The applicable final image must let UID/GID `998:998` read, write, and enter
-the directory. Use commands supported by the actual final stage; do not assume
-`install`, `chown`, or a shell exists, and do not recursively change ownership
-of configuration or credential trees.
-
-Use `target.runtime_outputs` when directory contents must be retained after a
-container stops. Runtime output is separate from startup input and never enters
-the startup snapshot.
+If the returned requirement includes retained output, apply the supported
+`target.runtime_outputs` configuration through the existing workflow. Runtime
+outputs are separate from startup inputs and do not enter the startup snapshot.

@@ -186,7 +186,7 @@ explicit `serde_json::Value` use. `json!` is allowed. Added Tokio spawn paths
 require structured startup ownership evidence via `--evidence`; request-owned
 and unknown ownership cannot pass. The scanner uses syntax, ordinary imports and
 source spans; it does not expand macros, infer types or prove call graphs.
-See the [worker review protocol](../plugins/ai-software-engineering/skills/backend-rewrite/references/source-review.md).
+See the [worker review protocol](../plugins/ai-software-engineering/skills/backend-rewrite/references/worker-review.md).
 
 Without `--worktree` or a work-item selector, `review check` checks integrated
 source against `pr_base`. `review show` reads its current report and `review
