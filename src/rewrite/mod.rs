@@ -54,13 +54,15 @@ mod source_process_traffic;
 mod status;
 mod waiting;
 pub use waiting::{RewriteWaitOptions, wait as wait_rewrite};
+mod quality;
 mod review;
 mod source_diff;
 mod store;
 mod target_quality;
 pub use review::{
-    RewriteReviewOptions, RewriteReviewReport, check as check_rewrite_review,
-    rework as rework_rewrite_review, show as show_rewrite_review,
+    RewriteReviewOptions, RewriteReviewReport, accept as accept_rewrite_review,
+    check as check_rewrite_review, rework as rework_rewrite_review,
+    rework_with_report as rework_rewrite_review_with_report, show as show_rewrite_review,
 };
 #[cfg(test)]
 mod test_support;

@@ -1,5 +1,6 @@
-use super::super::source_diff::{
-    AddedLine, added_rust_lines, git_text, is_production_rust_path, is_safe_relative_rust_path,
+use crate::rewrite::source_diff::{
+    AddedLine, AddedRustLines, changed_rust_lines, git_text, is_production_rust_path,
+    is_safe_relative_rust_path,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -7,7 +8,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, ensure};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub(super) const GATE_NAME: &str = "replay-isolation";
 pub(super) const GATE_VERSION: &str = "replay-isolation-v4";
@@ -24,10 +25,10 @@ const PRODUCTION_SOURCE_EXTENSIONS: &[&str] = &[
     "ts", "tsx",
 ];
 
-#[derive(Debug, Serialize)]
-pub(super) struct ReplayIsolationReport {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplayIsolationReport {
     schema_version: u8,
-    gate: &'static str,
+    gate: String,
     status: ReplayIsolationStatus,
     scanned_files: usize,
     scanned_added_lines: usize,
@@ -37,26 +38,30 @@ pub(super) struct ReplayIsolationReport {
 
 impl ReplayIsolationReport {
     pub(super) fn passed(&self) -> bool {
-        matches!(self.status, ReplayIsolationStatus::Passed)
+        self.schema_version == 2
+            && self.gate == GATE_NAME
+            && matches!(self.status, ReplayIsolationStatus::Passed)
+            && self.violations.is_empty()
+            && self.omitted_violations == 0
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ReplayIsolationStatus {
     Passed,
     Failed,
 }
 
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 struct ReplayIsolationViolation {
     file: PathBuf,
     line: usize,
     column: usize,
-    rule: &'static str,
-    matched: &'static str,
-    reason: &'static str,
-    required_change: &'static str,
+    rule: String,
+    matched: String,
+    reason: String,
+    required_change: String,
 }
 
 #[derive(Clone, Copy)]
@@ -212,12 +217,30 @@ impl fmt::Display for SourceLocation {
     }
 }
 
-pub(super) fn inspect(
+#[cfg(test)]
+fn inspect(
     target_root: &Path,
     pr_base: &str,
     hardcode_ai_verified: &[String],
 ) -> Result<ReplayIsolationReport> {
-    let added = added_rust_lines(target_root, pr_base)?;
+    let added = crate::rewrite::source_diff::added_rust_lines(target_root, pr_base)?;
+    inspect_added(target_root, added, hardcode_ai_verified)
+}
+
+pub(super) fn inspect_at_base(
+    target_root: &Path,
+    base: &str,
+    hardcode_ai_verified: &[String],
+) -> Result<ReplayIsolationReport> {
+    let added = changed_rust_lines(target_root, base)?;
+    inspect_added(target_root, added, hardcode_ai_verified)
+}
+
+fn inspect_added(
+    target_root: &Path,
+    added: AddedRustLines,
+    hardcode_ai_verified: &[String],
+) -> Result<ReplayIsolationReport> {
     let approvals = parse_approvals(hardcode_ai_verified)?;
     let mut violations = Vec::new();
     let mut hardcode_matches = BTreeSet::new();
@@ -284,7 +307,7 @@ pub(super) fn inspect(
     };
     Ok(ReplayIsolationReport {
         schema_version: 2,
-        gate: GATE_NAME,
+        gate: GATE_NAME.to_string(),
         status,
         scanned_files: added.scanned_files,
         scanned_added_lines: added.lines.len(),
@@ -302,10 +325,10 @@ fn violation(
         file: added_line.file.clone(),
         line: added_line.line,
         column: column_at(&added_line.text, byte_offset),
-        rule: marker.rule,
-        matched: marker.marker,
-        reason: marker.reason,
-        required_change: marker.required_change,
+        rule: marker.rule.to_string(),
+        matched: marker.marker.to_string(),
+        reason: marker.reason.to_string(),
+        required_change: marker.required_change.to_string(),
     }
 }
 
@@ -367,6 +390,19 @@ fn parse_location(raw: &str) -> Result<SourceLocation> {
     ensure!(line > 0, "line must be positive");
     ensure!(column > 0, "column must be positive");
     Ok(SourceLocation { file, line, column })
+}
+
+/// Commit trailers are quality inputs even when no source file changed.
+pub(in crate::rewrite) fn source_evidence_unchanged(
+    target_root: &Path,
+    reviewed_head: &str,
+) -> Result<bool> {
+    let range = format!("{reviewed_head}..HEAD");
+    let messages = git_text(target_root, &["log", "--format=%B%x00", &range])?;
+    Ok(!messages
+        .split('\0')
+        .flat_map(str::lines)
+        .any(|line| line.trim().starts_with(SOURCE_EVIDENCE_TRAILER)))
 }
 
 fn source_evidence(

@@ -149,7 +149,7 @@ is unclear.
   accepted system repair. `fingerprint/engine.rs` caches the executable digest
   within a process and invalidates it when the file identity changes.
   `recording.rs` owns managed recording execution.
-  `execution.rs` owns detached Next/quality launch, completion, failure, and
+  `execution.rs` owns detached Next and legacy quality-receipt operations, completion, failure, and
   recovery without moving verification semantics out of their existing owners.
   `worker.rs` owns persistent dedicated identity, confirmation, and transfer;
   `worker/model.rs` owns worker serialization, `worker/runtime.rs` validates task
@@ -192,8 +192,12 @@ is unclear.
   boundary for `status` and `next`; it detects pending configuration before
   dispatch or verification without committing files or treating routine progress
   updates as configuration changes.
-- Within `rewrite`, `target_quality.rs` owns the coordinator quality-gate
-  transaction. Its `target_replay_isolation` child owns the mandatory,
+- Within `rewrite`, `quality.rs` owns delivery-time isolation and configured
+  quality execution shared by worker and integration review. Its `commands`
+  child runs exact configured argv in the delivery worktree and retains result
+  logs. `target_quality.rs` is a compatibility boundary for validation of an
+  already admitted receipt; it never executes repository checks. The
+  `target_replay_isolation` module, owned by `quality`, owns the mandatory,
   deterministic scan that prevents production Rust source from consuming
   Replay-only hostnames, fake addresses, private runtime state, or recording
   artifacts. Keep this product-policy gate separate from the generic
@@ -201,12 +205,15 @@ is unclear.
   configured gate list does not disable it.
 - `rewrite/source_diff.rs` owns the Git source-diff boundary shared by Replay
   isolation and source review, including committed/worktree/untracked files and
-  rename handling. `rewrite/review` owns worker review reports, spawn evidence,
-  handoff admission, integrated review and quality rework routing. Its `scan`
+  rename handling. `rewrite/review` owns the complete worker/integrator review
+  pipeline, spawn evidence, handoff admission, and quality rework routing. Its `scan`
   child owns Rust syntax findings and complete-file line limits; `evidence`
   validates AI-provided locations and lifecycle explanations without claiming
-  call-graph proof. `integrated` owns freshness and action projection; `repair`
-  returns quality findings to existing API/process-output worker ownership.
+  call-graph proof. `candidate` owns cross-worktree candidate identity, frozen
+  canonical check context, and publication receipt admission without check
+  execution. `integrated` owns freshness and action projection; `repair`
+  returns quality findings to existing API/process-output worker ownership,
+  including fresh unpublished candidate reports without admitting failed code.
   Review does not create traffic failures or a second migration state machine.
 - `config/source_traffic_policy.rs` owns the canonical, whole-file YAML contract
   for source-traffic evidence acquisition and classification policy. Static

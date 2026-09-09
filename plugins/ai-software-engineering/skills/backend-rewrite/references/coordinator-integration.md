@@ -15,7 +15,8 @@ worktree through final delivery.
 Run one integrator assignment at a time. Record its task identity, actual
 runtime state, input identities, base, and any returned candidate. Do not put
 this handle into an API worker binding or report integrator activity through
-`worker report`. The engine has no separate integration-task lifecycle API.
+`worker report`. The engine validates candidate reports but has no separate
+integration-task lifecycle API.
 
 ## Dispatch
 
@@ -34,7 +35,8 @@ Send only the data needed for the assignment:
 - shared impact, previous integration provenance, and required-input references.
 
 For `review`, supply the same role, roots, base and assignment ID, plus exact
-findings/report and available work-item provenance. Match the inspected target
+findings/report when available and available work-item provenance. Missing or
+stale final quality reports also use this assignment. Match the inspected target
 version and prepare the retained worktree at that base, preserving unfinished
 work. A review does not imply an API implementation issue.
 
@@ -59,13 +61,18 @@ Actual runtime rejection is backpressure; do not confirm a nonexistent task.
 Require the original assignment ID, handoff/dispatch or finding identity, and
 observed base. An unrelated workflow revision alone does not invalidate it.
 
-- `ready`: require the exact candidate, checks, provenance, conflict resolutions,
-  evidence, and necessary inputs. For a read-only review, consume its evidence
+- `ready`: require the exact candidate, passing integration review report,
+  checks, provenance, conflict resolutions, evidence, and necessary inputs.
+  For a read-only ownership review, consume its evidence
   or owner without inventing a code candidate.
 - `rework`: retain cause and provenance. For an accepted handoff, report
   `rework_required` using its original worker handle and handoff ID when the
-  engine permits it, then resume that worker. Use formal review's work-item
-  routing for published defects; do not invent an integration-owner selector.
+  engine permits it, then resume that worker. For source findings from an
+  unpublished candidate, use `review rework --report /absolute/failed-report.json`
+  with the exact finding and responsible work-item owner. Configured command
+  and isolation/domain failures use the accepted handoff's `rework_required`
+  path with precise logs/locations; they need not have a source finding ID.
+  Do not invent an integration-owner selector.
 - `stale`: preserve useful work, refresh global status, and reassign only current
   work on the current base.
 - `needs_input`: return the specific request to its source owner.
@@ -83,18 +90,32 @@ ancestry and no unrelated working-tree changes. Respect the engine's live
 verification/traffic owner. If any prerequisite changed, return to status or
 the integrator instead of resolving a source conflict yourself.
 
+The integrator must run `review check --integration` on the final candidate,
+using the original work-item selector and accepted `--handoff-id`. The report
+must cover every required source, isolation and configured quality check, and
+the canonical inputs that will be used for acceptance. If applying required
+inputs changes that context, complete the supported input transition and send
+the candidate back for review before reporting integration. Do not rerun quality
+commands in the coordinator or accept only the worker's earlier report.
+
 Record publication as in progress before changing canonical HEAD. Fast-forward
 to the exact candidate using Git; when candidate equals base, verify that identity
 and leave HEAD in place. No new engine publication command is implied.
 Apply required inputs through [coordinator-startup-inputs.md](coordinator-startup-inputs.md)
 or [coordinator-rule-actions.md](coordinator-rule-actions.md), and follow
 configuration commit requirements. Only when code and required inputs are in
-place, report `integrated` with the accepted handoff ID and original worker
-handle. Then refresh global status and execute the returned quality/acceptance
-action. Local integrator checks never replace formal integrated review.
+place, report `integrated` with the accepted handoff ID, original worker handle,
+and `--review-report /absolute/integration-report.json`. The engine verifies
+the candidate's original handoff, published code and quality inputs before
+admission; a stale or failing report requires integrator recheck. Then refresh
+global status and execute the returned Replay/Comparison acceptance action.
+The coordinator validates receipts without executing quality checks again.
 
 For a source-evidence-only review candidate, publish the exact evidence commit
-while verification is idle, then use the current review/quality action. Do not
+while verification is idle, then execute `review accept --report
+/absolute/integration-report.json` (or set `BACKEND_REWRITE_REVIEW_REPORT`). The
+global report must come from `review check --integration` without a scope or
+handoff ID. Use the same path for final quality refreshes. Do not
 manufacture an API handoff or report `integrated` for this metadata-only task.
 
 If an input requires system repair or fresh recording, follow its existing

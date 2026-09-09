@@ -64,6 +64,7 @@ pub fn report(options: RewriteWorkerReportOptions) -> Result<RewriteActionEnvelo
             None
         } else {
             Some(super::super::review::accept_handoff(
+                &target_root,
                 &state,
                 &scope,
                 options.review_report.as_deref(),
@@ -73,6 +74,18 @@ pub fn report(options: RewriteWorkerReportOptions) -> Result<RewriteActionEnvelo
         None
     };
     let changed = apply_report(&mut state, &scope, &options, target_fingerprint)?;
+    let integration_received = changed && options.activity == RewriteWorkerActivity::Integrated;
+    if integration_received {
+        let path = options.review_report.as_deref().context("integrated delivery requires --review-report from code-integrator review check --integration")?;
+        super::super::review::accept_integration(
+            &target_root,
+            &mut state,
+            path,
+            Some(&scope),
+            options.handoff_id.as_deref(),
+        )?;
+    }
+
     if let Some(review) = review {
         state
             .worker_bindings
@@ -95,7 +108,7 @@ pub fn report(options: RewriteWorkerReportOptions) -> Result<RewriteActionEnvelo
     // A worker report never activates a slice or starts a traffic operation.
     // Recover the global action through status, which also honors live leases.
     drop(_lock);
-    if rework_finished {
+    if rework_finished || integration_received {
         // Integration holds the coordinator lock. Save only after releasing the
         // feedback lock, because save folds in newer worker observations itself.
         store.save(&state)?;
@@ -391,6 +404,7 @@ pub(in crate::rewrite) fn report_command(
     if integrated {
         argv.extend(["--activity".to_string(), "integrated".to_string()]);
         env.push(HANDOFF_ENV.to_string());
+        env.push("BACKEND_REWRITE_WORKER_REVIEW_REPORT".to_string());
     } else {
         env.push(ACTIVITY_ENV.to_string());
     }

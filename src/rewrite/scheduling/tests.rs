@@ -179,7 +179,10 @@ async fn integrated_handoff_can_advance_while_another_api_waits_for_system_repai
     let repair_slice = serde_json::to_value(&state.active_slice).unwrap();
     let store = RewriteStore::new(target.path()).unwrap();
     store.save(&state).unwrap();
-    assert_advance(&status(target.path()).action, &worker_api);
+    assert!(matches!(
+        status(target.path()).action,
+        RewriteAction::SourceReviewRequired { .. }
+    ));
     let result = rewrite::next_rewrite(rewrite::RewriteNextOptions {
         target_root: target.path().into(),
         api: None,
@@ -190,13 +193,13 @@ async fn integrated_handoff_can_advance_while_another_api_waits_for_system_repai
     .unwrap();
     assert!(matches!(
         result.action,
-        RewriteAction::TargetQualityRequired { .. }
+        RewriteAction::SourceReviewRequired { .. }
     ));
     let state = store.load().unwrap().unwrap();
-    assert_eq!(state.api, worker_api);
+    assert_eq!(state.api, "GET /revalidate-0");
     assert_eq!(
         repair_slice,
-        serde_json::to_value(&state.parked_slices["GET /revalidate-0"]).unwrap()
+        serde_json::to_value(&state.active_slice).unwrap()
     );
 }
 

@@ -134,16 +134,14 @@ async fn unscoped_next_selects_only_the_parked_integrated_api_and_preserves_qual
     .await
     .unwrap();
     assert_eq!(envelope.pending, 1);
-    let RewriteAction::TargetQualityRequired { command, .. } = envelope.action else {
-        panic!("integrated API must pass quality gates first")
+    let RewriteAction::SourceReviewRequired { check, accept, .. } = envelope.action else {
+        panic!("integrated API requires a delivery quality receipt")
     };
-    assert_eq!(command.argv.last().unwrap(), "GET /api-01");
+    assert!(check.argv.contains(&"--integration".to_string()));
+    assert!(accept.argv.contains(&"accept".to_string()));
     let latest = store.load().unwrap().unwrap();
-    assert_eq!(latest.api, "GET /api-01");
-    assert_eq!(
-        latest.parked_slices["GET /api"].phase,
-        RewritePhase::ImplementationRequired
-    );
+    assert_eq!(latest.api, "GET /api");
+    assert_eq!(latest.phase, RewritePhase::ImplementationRequired);
     assert_eq!(
         runtime::coverage(
             &latest,

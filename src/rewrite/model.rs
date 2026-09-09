@@ -499,6 +499,9 @@ pub(super) struct RewriteState {
     pub case_pattern_identification: Option<RewriteCasePatternIdentification>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_quality_fingerprint: Option<String>,
+    /// A lost receipt must never restore the initial diagnostic Replay exemption.
+    #[serde(default)]
+    pub delivery_review_required: bool,
     pub recording_run_id: String,
     /// Project latch: once terminal completion is published, future batches require comparison.
     #[serde(default)]
@@ -738,6 +741,7 @@ pub enum RewriteAction {
         check: RewriteCommandSpec,
         show: RewriteCommandSpec,
         rework: RewriteCommandSpec,
+        accept: RewriteCommandSpec,
     },
     TargetQualityRequired {
         summary: String,

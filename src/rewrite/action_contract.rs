@@ -194,10 +194,10 @@ impl Serialize for RewriteAction {
                 commands: serde_json::json!({"retry": retry, "status": status}),
             }
             .serialize(serializer),
-            Self::SourceReviewRequired { summary, check, show, rework } => RewriteActionView {
+            Self::SourceReviewRequired { summary, check, show, rework, accept } => RewriteActionView {
                 kind: "source_review_required", summary,
-                details: RewriteNoDetails {},
-                commands: serde_json::json!({"check": check, "show": show, "rework": rework}),
+                details: serde_json::json!({"check_owner": "code-integrator", "coordinator_action": "accept_receipt"}),
+                commands: serde_json::json!({"check": check, "show": show, "rework": rework, "accept": accept}),
             }.serialize(serializer),
             Self::TargetQualityRequired {
                 summary,

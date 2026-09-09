@@ -50,8 +50,10 @@ including its ID, attempt, observed target fingerprint, possible causes, and
 representative when available. Treat possible causes as hypotheses.
 
 The same context includes `review` with the registered worktree/base and the
-local check command. For a `target_quality` issue, read its integrated findings
-and follow [worker-review.md](worker-review.md); no traffic mismatch is implied.
+local check command. For a `target_quality` issue, read the assigned findings
+in `context.review.rework.findings` and the supplied review report, then follow
+[worker-review.md](worker-review.md); no traffic mismatch is implied. An
+unpublished candidate's findings need not appear in canonical `review show`.
 For a quality rework alongside an existing behavioral issue, read the assigned
 findings in `context.review.rework.findings` and address them as well. These
 retain the routing evidence if a later integration makes `review show` stale.
@@ -59,7 +61,7 @@ Every changed-code handoff requires a `passed` review after the final
 edit and commit; include its absolute `report_path` and any spawn ownership
 evidence. Follow the delivery steps in
 [worker-review.md](worker-review.md).
-Do not run coordinator-owned integrated checks or report your own handoff.
+Do not run integration-candidate checks or report your own handoff.
 
 Retain the initial overview's workflow/recording, scope, issue, binding and
 dispatch identities for this turn and include them in the return handoff. If a

@@ -145,7 +145,8 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 {
                     return Ok(action::envelope(&target_root, &state, action));
                 }
-                if worker::runtime::acceptance_ready(&state, &scope)
+                if (worker::runtime::acceptance_ready(&state, &scope)
+                    || review::has_review(&target_root, &state))
                     && let Some(review) = review::gate(&target_root, &state, &project.pr_base)?
                 {
                     return Ok(action::envelope(&target_root, &state, review));
@@ -247,6 +248,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 api_catalog: std::collections::BTreeSet::new(),
                 case_pattern_identification: None,
                 target_quality_fingerprint: None,
+                delivery_review_required: false,
                 recording_run_id,
                 require_comparison: false,
                 recording_require_comparison: false,
@@ -380,6 +382,14 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 store.save(&state)?;
                 return Ok(action::for_state(&target_root, &state));
             }
+            if review::has_review(&target_root, &state)
+                && let Some(required) = review::gate(&target_root, &state, &project.pr_base)?
+            {
+                // Recording validation and inventory installation remain available
+                // while the delivery owner refreshes the new batch's receipt.
+                store.save(&state)?;
+                return Ok(action::envelope(&target_root, &state, required));
+            }
             preparation::prepare_recording(&target_root, &mut state)?;
             store.save(&state)?;
             if let Some(envelope) = configuration_commit::pending_locked(&target_root)? {
@@ -403,15 +413,6 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
             }
             if let Some(review) = review::gate(&target_root, &state, &project.pr_base)? {
                 return Ok(action::envelope(&target_root, &state, review));
-            }
-            let current = fingerprint::repository_fingerprint(&target_root)?;
-            if let Some(required) = target_quality::required_action(
-                &target_root,
-                &state,
-                &current,
-                &project.target_quality_gates,
-            )? {
-                return Ok(action::envelope(&target_root, &state, required));
             }
             // Completed APIs reopened for quality work may retain only an inventory
             // entry. Reuse the existing recording to restore preparation for Replay.
@@ -439,6 +440,12 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
             Ok(action::for_state(&target_root, &state))
         }
         RewritePhase::ApiPending => {
+            if review::has_review(&target_root, &state)
+                && let Some(required) = review::gate(&target_root, &state, &project.pr_base)?
+            {
+                return Ok(action::envelope(&target_root, &state, required));
+            }
+
             if inventory::current_requires_source_route(&state) {
                 return Ok(action::for_state(&target_root, &state));
             }
@@ -481,6 +488,11 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 return Ok(action::for_state(&target_root, &state));
             }
             state.comparison_rejection = None;
+            if review::has_review(&target_root, &state)
+                && let Some(required) = review::gate(&target_root, &state, &project.pr_base)?
+            {
+                return Ok(action::envelope(&target_root, &state, required));
+            }
             let _traffic = claim_traffic_operation(
                 &target_root,
                 &state,

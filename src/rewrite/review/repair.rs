@@ -10,7 +10,18 @@ pub fn rework(
     finding_id: &str,
     scope: RewriteWorkScope,
 ) -> Result<RewriteActionEnvelope> {
-    let (root, _) = crate::e2e_run::resolve_project(&target_root)?;
+    rework_with_report(target_root, finding_id, scope, None)
+}
+
+/// Route a source finding from an unpublished integration candidate or the
+/// current canonical report. A failing candidate is never published or admitted.
+pub fn rework_with_report(
+    target_root: PathBuf,
+    finding_id: &str,
+    scope: RewriteWorkScope,
+    report_path: Option<PathBuf>,
+) -> Result<RewriteActionEnvelope> {
+    let (root, project) = crate::e2e_run::resolve_project(&target_root)?;
     let store = RewriteStore::new(&root)?;
     let _lock = store.lock()?;
     ensure!(
@@ -20,7 +31,12 @@ pub fn rework(
         ),
         "quality rework must wait for traffic verification"
     );
-    let report = show(root.clone())?;
+    let mut state = store.load()?.context("rewrite workflow is absent")?;
+    let report = if let Some(path) = report_path.as_deref() {
+        candidate_report(&root, &state, &project, path)?
+    } else {
+        show(root.clone())?
+    };
     let finding = report
         .findings
         .iter()
@@ -30,7 +46,6 @@ pub fn rework(
         report.status != ReviewStatus::Passed,
         "passed source review does not require rework"
     );
-    let mut state = store.load()?.context("rewrite workflow is absent")?;
     if state
         .source_review_rework
         .get(&scope.binding_key())
@@ -53,15 +68,24 @@ pub fn rework(
         drop(_lock);
         return worker::runtime::current_envelope(&root);
     }
+    let evidence_instruction = if let Some(path) = report_path {
+        format!(
+            "Read context.review.rework.findings and the original integration candidate report {} for source evidence; this candidate was not published.",
+            path.display()
+        )
+    } else {
+        "Read backend-rewrite review show for the current finding and evidence contract.".into()
+    };
     let issue = RewriteIssue {
         id: format!("quality-{finding_id}"),
         kind: RewriteIssueKind::TargetQuality,
         owner: RewriteIssueOwner::TargetCode,
         summary: format!(
-            "Source quality review: {}:{}: {}. Read backend-rewrite review show for the current finding and evidence contract.",
+            "Source quality review: {}:{}: {}. {}",
             finding.file.display(),
             finding.line,
-            finding.message
+            finding.message,
+            evidence_instruction,
         ),
         pointer_pattern: None,
         representative: None,
@@ -140,3 +164,32 @@ pub fn rework(
     drop(_lock);
     worker::runtime::current_envelope(&root)
 }
+
+fn candidate_report(
+    root: &Path,
+    state: &RewriteState,
+    project: &crate::e2e_run::ResolvedProjectConfig,
+    path: &Path,
+) -> Result<RewriteReviewReport> {
+    let report: RewriteReviewReport = read_json(path)?;
+    let integration = report
+        .integration
+        .as_ref()
+        .context("--report requires an integration candidate review")?;
+    let worktree = fs::canonicalize(&report.worktree)?;
+    candidate::same_repository(root, &worktree)?;
+    candidate::fresh(root, &worktree, state, &report, project)?;
+    ensure!(
+        report.head_revision == candidate::head(&worktree)?,
+        "candidate commit changed after review; rerun review check before routing rework"
+    );
+    ensure!(
+        integration.canonical_base_revision == candidate::head(root)?
+            && integration.canonical_base_fingerprint == fingerprint::repository_fingerprint(root)?,
+        "canonical integration base changed; refresh the candidate review before routing rework"
+    );
+    Ok(report)
+}
+
+#[cfg(test)]
+mod tests;

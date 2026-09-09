@@ -33,18 +33,15 @@ async fn first_terminal_persists_latch_without_changing_batch_and_next_batch_req
     assert_eq!(state.phase, RewritePhase::SliceComplete);
     write_progress(target.path(), &state);
     store.save(&state).unwrap();
-    super::review::check(super::review::RewriteReviewOptions {
-        target_root: target.path().into(),
-        worktree: None,
-        scope: None,
-        evidence: None,
-    })
-    .unwrap();
+    accept_review(target.path());
     let awaiting_commit = next(target.path()).await;
     assert!(!awaiting_commit.terminal_allowed);
     assert!(!store.load().unwrap().unwrap().require_comparison);
     git(target.path(), &["add", ".traffic-e2e/progress.yaml"]);
     git(target.path(), &["commit", "-qm", "publish first batch"]);
+    // Publication changes the commit identity. Admit a receipt for the actual
+    // final commit before attempting the terminal workflow transition.
+    accept_review(target.path());
 
     let status = super::status_rewrite(super::RewriteContext {
         target_root: target.path().to_path_buf(),
@@ -301,6 +298,21 @@ fn first_batch() -> RewriteState {
     state.recording_require_comparison = false;
     state.recording_apis.clear();
     state
+}
+
+fn accept_review(root: &Path) {
+    let report = super::review::check(super::review::RewriteReviewOptions {
+        target_root: root.into(),
+        worktree: None,
+        scope: None,
+        evidence: None,
+        integration: false,
+        handoff_id: None,
+        hardcode_ai_verified: Vec::new(),
+    })
+    .unwrap();
+    assert_eq!(report.status, super::review::ReviewStatus::Passed);
+    super::review::accept(root.into(), report.report_path).unwrap();
 }
 
 fn pass_api(target: &Path, state: &mut RewriteState) {

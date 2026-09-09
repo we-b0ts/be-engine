@@ -132,13 +132,13 @@ enum RewriteCommand {
     Repair(RepairArgs),
     /// Confirm the runtime identity of one dispatched or resumed API subagent.
     Worker(WorkerArgs),
-    /// Check source quality before worker handoff and after integration.
+    /// Check complete delivery quality and admit published integration reports.
     Review(review::ReviewArgs),
     /// Retry a failed detached coordinator operation after its cause is resolved.
     Operation(OperationArgs),
     /// Schedule selected stale APIs before the deferred final verification batch.
     Verification(VerificationArgs),
-    /// Execute coordinator-issued target repository quality gates.
+    /// Validate existing quality receipts for legacy coordinator operations.
     TargetQuality(TargetQualityArgs),
     /// Request a fresh coordinator-owned recording with explicit bounded parameters.
     Recording(RecordingArgs),
@@ -424,7 +424,7 @@ struct WorkerConfirmArgs {
 
 #[derive(Debug, Args)]
 struct WorkerReportArgs {
-    /// Passing review report for the exact worker delivery; required for handoff_ready.
+    /// Required passing worker report for handoff_ready, or candidate report for integrated.
     #[arg(long, env = "BACKEND_REWRITE_WORKER_REVIEW_REPORT")]
     review_report: Option<PathBuf>,
     dispatch_id: String,
@@ -501,7 +501,7 @@ struct TargetQualityArgs {
 
 #[derive(Debug, Subcommand)]
 enum TargetQualityCommand {
-    /// Run the exact quality gates bound to the integrated target revision.
+    /// Validate the published quality receipt; checks run through review check before delivery.
     Run(TargetQualityRunArgs),
 }
 
