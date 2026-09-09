@@ -1,154 +1,112 @@
 # Call HTTP dependencies through `brz-http`
 
-Use this guide when target code calls an outbound HTTP dependency through
-`brz-http`. Recover the source method, URL construction, headers,
-authentication, request body, timeout, redirect policy, response decoding, and
-error mapping before changing target code.
+Recover the source method, URL construction, headers, authentication, body,
+timeouts, redirects, response decoding, and error mapping before implementing
+an outbound call. Use Breeze's client and response wrappers to retain pooling
+and request metrics.
 
-## Standard application shape
+## Dependency
 
-Create one `Client` for each transport policy during process startup and retain
-it for the process lifetime. A transport policy includes TLS identity and
-roots, proxy and redirect behavior, connect and read timeouts, default headers,
-DNS behavior, and connection-pool settings. One client can serve many hosts;
-its underlying reqwest pool partitions connections by origin, so do not create
-one client per host or per request.
-
-Create and retain an `Endpoint` for every stable route. `Client` and `Endpoint`
-are cheap to clone:
-
-```rust,no_run
-use std::time::Duration;
-
-use brz_http::{Client, Endpoint, Result};
-
-struct HttpDependencies {
-    user_profile: Endpoint,
-}
-
-fn build_http_dependencies(user_service_url: &str) -> Result<HttpDependencies> {
-    let client = Client::builder()
-        .connect_timeout(Duration::from_millis(400))
-        .read_timeout(Duration::from_millis(400))
-        .pool_idle_timeout(Duration::from_secs(90))
-        .pool_max_idle_per_host(16)
-        .build()?;
-    let user_profile = client.endpoint(format!("{user_service_url}/v1/profile"))?;
-    Ok(HttpDependencies { user_profile })
-}
-```
-
-Pin the dependency to the fixed `v0.0.2` tag. Enable `metrics` by default and
-enable `json` when using the typed JSON body methods:
+Use the latest stable release from the project's configured Cargo registry and
+pin it exactly. Replace `<latest-version>` with the verified release number
+without a `v` prefix; it is a placeholder, not a Cargo version expression.
+Replace the old Git dependency, preserve registry configuration, and update
+`Cargo.lock`.
 
 ```toml
-brz-http = { package = "http", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/http.git", tag = "v0.0.2", features = ["json", "metrics"] }
+[dependencies]
+brz-http = { package = "brz-http", version = "=<latest-version>", features = ["metrics", "json"] }
 ```
 
-Use `ClientBuilder::configure` for an uncommon reqwest transport option while
-retaining the Breeze wrapper. Keep separately configured clients only when the
-source transport policies actually differ.
+Keep the explicit `package` field so the dependency is available as `brz_http::`.
+Enable `metrics` for targets; retain `json` when using typed JSON methods. Enable
+compression features only when required by the source transport contract.
 
-## Keep metric identities stable
+## Create and reuse clients and endpoints
 
-`Client::endpoint` derives a metric name from the URL after removing
-credentials, query parameters, and fragments. It does not remove dynamic path
-segments. When a route contains user IDs or other high-cardinality path values,
-use `endpoint_named` with the stable source-compatible metric name:
-
-```rust,no_run
-# use brz_http::{Client, Endpoint, Result};
-# fn user_profile_endpoint(
-#     client: &Client,
-#     base_url: &str,
-#     user_id: u64,
-# ) -> Result<Endpoint> {
-client.endpoint_named(
-    format!("{base_url}/v1/users/{user_id}"),
-    "http://user-service/v1/users/:id",
-)
-# }
-```
-
-Prefer a retained `Endpoint` for every route known at startup. Direct
-`Client::get`, `post`, `put`, `delete`, or `request` calls support genuinely
-dynamic URLs, but with the `metrics` feature they register metrics while
-building the request.
-
-## Preserve request and response semantics
-
-Build headers, query parameters, authentication, and bodies through the Breeze
-request builder, then consume the response body through the Breeze `Response`:
+Create one `Client` per transport policy during startup and retain it for the
+process lifetime. Policy includes TLS identity/roots, proxy, redirects, default
+headers, timeouts, DNS, and pool settings. One client can serve many hosts;
+clones share its connection pool. Do not create a client per request or per host.
+Retain an `Endpoint` for each stable URL:
 
 ```rust,no_run
-use brz_http::{Endpoint, Result};
+use brz_http::{Client, Endpoint, Result};
 
-async fn load_profile(endpoint: &Endpoint, user_id: u64) -> Result<String> {
-    endpoint
-        .get()
-        .query(&[("uid", user_id)])
-        .send()
-        .await?
-        .error_for_status()?
-        .text()
-        .await
+fn profile_endpoint(service_url: &str) -> Result<Endpoint> {
+    let client = Client::builder().build()?;
+    // Apply the source's explicit transport overrides before build().
+    client.endpoint(format!("{service_url}/v1/profile"))
 }
 ```
 
-Receiving an HTTP 4xx or 5xx status is a completed HTTP exchange, not a
-transport error. Call `error_for_status` only when the source client maps those
-statuses to its error path. Otherwise inspect the status and body explicitly.
-Preserve distinctions between transport failure, status failure, body read or
-decode failure, and a valid empty body until the target's external error mapping
-is complete.
+Share that client across other endpoints with the same policy. Use
+`ClientBuilder::configure` and `RequestBuilder::configure` for uncommon options
+while retaining the Breeze wrapper.
 
-Read the complete body with `bytes`, `text`, or `json`, or drive `chunk` until
-it returns `None`. Dropping a response before EOF is treated as an incomplete
-body and records a failed whole-request metric. Use `RequestBuilder::configure`
-for an uncommon reqwest request option without discarding instrumentation.
+Default connect and per-read timeouts are each 400 ms; the read timeout resets
+after each successful read. There is no default total timeout. Preserve source
+overrides and the caller's deadline with `ClientBuilder::timeout` or
+`RequestBuilder::timeout`. `pool_max_idle_per_host` limits idle connections,
+not active requests or connection-acquisition wait time.
 
-Do not add retries in business code merely to mask a dependency failure.
-Preserve source retry eligibility, attempt limit, backoff, total budget, and
-idempotency behavior. In particular, do not automatically retry a request
-whose body may already have been accepted by the remote service.
+## Request and response behavior
 
-## Preserve timeout and transport policy
+Build headers, query arguments, auth, and bodies through the request builder.
+Use the source's types and operations; the example returns status separately so
+the caller can preserve its error mapping:
 
-The default `Client` matches the api-commons `ApacheHttpClient()` transport
-timeouts:
+```rust,no_run
+use brz_http::{Endpoint, Result, StatusCode};
 
-- connect timeout: 400 ms;
-- per-read timeout: 400 ms, reset after each successful socket read;
-- no default total-request timeout.
+async fn load_profile(endpoint: &Endpoint, user_id: u64) -> Result<(StatusCode, String)> {
+    let response = endpoint.get().query(&[("uid", user_id)]).send().await?;
+    let status = response.status();
+    let body = response.text().await?;
+    Ok((status, body))
+}
+```
 
-Recover explicit source overrides and the caller's overall deadline. Apply a
-shared total timeout through `ClientBuilder::timeout`, a request-specific total
-timeout through `RequestBuilder::timeout`, or retain the caller-owned deadline
-when that is the established contract. Do not confuse
-`pool_max_idle_per_host` with an active-connection admission limit.
+HTTP 4xx/5xx is a completed HTTP exchange. Use `error_for_status()` only if the
+source maps those statuses to an error; otherwise inspect status and body.
+Keep transport failure, status failure, body/decoding failure, and a valid empty
+body distinct until applying the contract's error mapping.
 
-Preserve source TLS roots and identity, proxy bypass rules, redirect behavior,
-default headers, compression support, HTTP version requirements, and DNS
-overrides. Do not use `danger_accept_invalid_certs` or disable hostname
-verification to make a dependency call pass.
+Use `bytes()`, `text()`, or typed `json()` to consume a complete body. For streaming,
+retain the Breeze `Response` and call `chunk()` until it returns `None`; avoid
+buffering a forwarded download solely to adapt its type. Dropping an unread body
+records an incomplete request in metrics.
 
-## Metrics behavior
+Preserve source retries, attempt limits, backoff, idempotency, TLS verification,
+proxy bypass, redirect rules, compression, and HTTP version requirements. Do not
+add retries or weaken certificate verification to make dependency calls pass.
 
-With the `metrics` feature, constructing an endpoint registers two
-ProfileUtil-compatible `HTTP` rows:
+## Stable metric identities
 
-- `<scheme>://<host>/<path>`, with a 50 ms slow threshold, measured until
-  response headers arrive;
-- `all_<scheme>://<host>/<path>`, with a 200 ms slow threshold, measured until
-  the response body reaches EOF.
+With `metrics`, endpoint creation registers two `HTTP` rows:
 
-Each logical request increments both rows once even when the underlying client
-reuses a connection or follows redirects. HTTP status alone does not increment
-`error_count`; transport errors, body errors, cancellation, and dropping the
-body before EOF do.
+| Name | Timing | Slow threshold |
+| --- | --- | --- |
+| `<scheme>://<host>/<path>` | Until response headers arrive | 50 ms |
+| `all_<scheme>://<host>/<path>` | Until body consumption completes | 200 ms |
 
-Calling `Client::as_reqwest`, converting the client with `into_reqwest`, or
-converting a request or response into raw reqwest escapes the instrumentation
-contract. Use those escape hatches only for a proven unsupported capability,
-and do not use them when the target must produce the corresponding HTTP profile
-rows.
+Default names omit URL credentials, query, and fragment, but retain dynamic path
+values. Use `endpoint_named` with a stable source-compatible metric name when
+paths contain IDs:
+
+```rust,ignore
+let endpoint = client.endpoint_named(
+    format!("{base_url}/v1/users/{user_id}"),
+    "http://user-service/v1/users/:id", // Replace with the source's stable identity.
+)?;
+```
+
+Prefer retained endpoints for stable URLs. Direct `Client::get/post/put/delete`
+and `request` support dynamic URLs but register metrics while building requests.
+Each logical request counts once per row, including pooled connections and
+redirects. HTTP status alone is not a transport failure; transport/body errors,
+cancellation, and dropping an unfinished body record failures.
+
+Raw reqwest escape hatches such as `as_reqwest`, `into_reqwest`, or converting
+requests/responses bypass or shorten instrumentation. Use them only for a proven
+unsupported capability, not for calls that must retain these profile rows.
