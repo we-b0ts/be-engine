@@ -478,12 +478,17 @@ fn validate_pattern(pattern: &str) -> Result<String> {
     Ok(pattern)
 }
 
-fn validate_pattern_against_source_route(pattern: &str, source_route: &str) -> Result<()> {
+pub(crate) fn validate_pattern_against_source_route(
+    pattern: &str,
+    source_route: &str,
+) -> Result<()> {
+    let pattern = validate_pattern(pattern)?;
+    let source_route = normalize_route(source_route, "source route")?;
     let pattern_segments = pattern.split('/').collect::<Vec<_>>();
     let route_segments = source_route.split('/').collect::<Vec<_>>();
     ensure!(
         pattern_segments.len() == route_segments.len(),
-        "case path pattern and source route must have the same segment count"
+        "case path pattern and source route must have the same segment count: pattern {pattern:?}, source route {source_route:?}; include all router mount prefixes"
     );
     let route_segment_count = route_segments.len();
     for (index, (pattern_segment, route_segment)) in

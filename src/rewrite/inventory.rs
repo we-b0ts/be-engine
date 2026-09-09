@@ -8,6 +8,8 @@ use crate::RecordingApi;
 
 mod selection;
 pub(super) use selection::{activate_requested, can_switch_api};
+mod source_route;
+pub(super) use source_route::{bind_options, validate_source_route};
 
 pub(super) const RECORDED_API_INVENTORY_SCOPE: &str = "recorded_api_inventory";
 
@@ -102,49 +104,6 @@ pub(super) fn install(state: &mut RewriteState, apis: Vec<String>) -> Result<()>
     state.current_api_index = Some(0);
     load_pending(state, 0)?;
     Ok(())
-}
-
-pub(super) fn bind_options(
-    state: &mut RewriteState,
-    requested_api: Option<&RecordingApi>,
-    requested_source_route: Option<&str>,
-) -> Result<bool> {
-    if let Some(api) = requested_api {
-        ensure!(
-            state.api == api.to_string(),
-            "active rewrite API is {}; refusing a different --api",
-            state.api
-        );
-    }
-    let Some(route) = requested_source_route else {
-        return Ok(false);
-    };
-    super::validate_single_line("source route", route)?;
-    ensure!(
-        !state.api.is_empty(),
-        "--source-route requires an active API"
-    );
-    if state.source_route.is_empty() {
-        let api = state.api.parse::<RecordingApi>()?;
-        ensure!(
-            api.is_dynamic(),
-            "static API {} already has a canonical source route",
-            state.api
-        );
-        state.source_route = route.to_string();
-        let index = state
-            .current_api_index
-            .context("active API has no inventory index")?;
-        state.api_inventory[index].source_route = Some(route.to_string());
-        state.bump();
-        return Ok(true);
-    }
-    ensure!(
-        state.source_route == route,
-        "active rewrite source route is {:?}; refusing a different --source-route",
-        state.source_route
-    );
-    Ok(false)
 }
 
 pub(super) fn scoped(
