@@ -38,7 +38,7 @@ work, and before waiting or ending the current turn, return to the
 Status restores the next action, including a pending dispatch confirmation or
 post-confirmation advance. Keep the complete response and execute its supplied
 command directly; each response determines the following step. For a live
-operation, execute its returned wait command and reconcile worker events on return.
+operation, follow the mandatory runtime query pass before waiting and on return.
 
 At the start of every workflow-coordinator session, read
 `.traffic-e2e/local/block.md` when it exists. Project initialization may create
@@ -78,7 +78,12 @@ while true:
         finish delivery and break
     if state.action.kind == "blocked":
         preserve resume context, report the blocker, and stop this run
-    if the current action needs an integrator or route-analysis task already running or queued:
+    if the current action requires waiting on agents, checks worker status, or follows a bounded wait:
+        actually invoke ListAgents (Claude Code) or equivalent runtime list/status tools
+        match all outstanding assignments and query any unresolved entries
+        reconcile returned states and results through the worker protocol
+        refresh state after any reports and reconsider the action
+    if the current action needs an integrator or route-analysis task just observed running or queued:
         wait on that runtime task for a bounded interval and continue
     if state.pending > 0:
         execute the returned action's command or task runtime operation
@@ -106,14 +111,17 @@ with a newer dispatch or another handoff ID. An unknown worker activity is not
 a running or idle observation.
 
 When no productive action is ready but workers or engine operations remain,
-`pending=1` selects `commands.wait`. Execute it; the command waits at most
-30 seconds and may return sooner when engine-observable state changes. The
-returned `worker_events_required` asks you to inspect task-runtime completion,
-failure and interruption events, report actual changes, then execute global
-`commands.status`. Use `commands.inventory` only when bindings need recovery.
-This is event reconciliation, not a requirement to re-report every running
-worker every 30 seconds. Fifteen-minute activity expiry still requests explicit
-worker status checks. Unknown runtime state is never reported as running.
+`pending=1` selects `commands.wait`. Before waiting on agents, complete the
+[mandatory runtime query pass](coordinator-worker-protocol.md#mandatory-runtime-queries)
+and handle its results. Execute the returned wait only if it is still appropriate;
+the command waits at most 30 seconds and may return sooner when engine-observable
+state changes. On `worker_events_required`, actually invoke the runtime's
+list/status tools again for all outstanding assignments, reconcile results and
+events, report actual changes, then execute global `commands.status`. Use
+`commands.inventory` to recover missing bindings or coverage. Querying every
+worker does not require re-reporting every unchanged running observation.
+The sixty-minute engine expiry never waives this per-wait query requirement.
+Unknown runtime state is never reported as running.
 
 A zero-pending `blocked` action stops this coordinator run without completing
 the workflow. Retain bindings, worktrees and blocker context. Resume through
@@ -195,12 +203,16 @@ investigate business source in the coordinator.
 ### `wait_required` and `worker_events_required`
 
 Execute `commands.wait` when verification resources are occupied or all workers
-are running/queued. Preserve the reported blocking API and operation as context;
+have just been queried and are running/queued. Follow the
+[mandatory runtime query pass](coordinator-worker-protocol.md#mandatory-runtime-queries)
+before waiting on agents and after each wait returns. Preserve the reported
+blocking API and operation as context;
 never start another traffic operation or recover a live owner. Wait returns
-`worker_events_required`: inspect actual completion, failure and interruption
-events in the task runtime, report each with its original dispatch/handoff
-identity, then execute `commands.status`. Inspect `commands.inventory` only to
-restore missing bindings. The engine does not inspect the task runtime itself.
+`worker_events_required`: a runtime list/status tool invocation is mandatory even
+if no completion, failure or interruption event arrived. Reconcile all returned
+worker states, report changes with their original dispatch/handoff identities,
+then execute `commands.status`. Use `commands.inventory` to restore missing
+bindings or coverage. The engine does not inspect the task runtime itself.
 The coordinator performs coordination while idle; implementation and diagnosis
 remain assigned to workers.
 

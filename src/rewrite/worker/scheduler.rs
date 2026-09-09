@@ -99,7 +99,7 @@ pub(in crate::rewrite) fn scope_action(
     match runtime::coverage(state, scope) {
         Coverage::StatusRequired => RewriteAction::WorkerStatusRequired {
             summary: format!(
-                "inspect the actual bound task for {}; report running, idle, or handoff_ready through commands.report_worker; historical dispatch confirmation is not runtime status",
+                "must actually invoke built-in ListAgents (/list-agents) in Claude Code or equivalent runtime status tools for all workers awaiting results, including {}; collect results before reporting changes or required refreshes through the owning commands.report_worker. Resolve omitted or unclassified tasks through results or individual queries; historical dispatch confirmation is not runtime status",
                 scope.label()
             ),
             report_worker: runtime::report_command(target_root, &worker.dispatch_id, false),

@@ -58,7 +58,7 @@ pub async fn wait(options: RewriteWaitOptions) -> Result<RewriteActionEnvelope> 
     }
     let root = std::fs::canonicalize(&options.target_root)?;
     envelope.action = RewriteAction::WorkerEventsRequired {
-        summary: "inspect available task-runtime worker completion, failure and interruption events; report actual changes with their original dispatch and handoff identities, then execute commands.status. Use commands.inventory only to recover bindings. Do not re-report every running worker or infer liveness from historical dispatch; sixty-minute status checks remain engine-scheduled".into(),
+        summary: "must actually invoke built-in ListAgents (/list-agents) in Claude Code, or the available runtime equivalent, for all workers awaiting results, including parked work. Match bound identities, exclude unrelated peers, and resolve omitted or unclassified tasks through results or individual queries. Historical reports and absent stop events do not establish liveness. Report changes with original dispatch/handoff identities, then execute commands.status. Use commands.inventory to recover bindings or coverage; unknown activity is not running. Repeat this query pass after every wait; unchanged running reports need not be refreshed".into(),
         inventory: action::command(&root, vec!["inventory".into()], Vec::new()),
         status: action::status_command_for_api(&root, None),
     };

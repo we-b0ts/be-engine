@@ -17,6 +17,9 @@ API method/pattern or process_output:<id> <-> worker handle <-> worker worktree
 Issue IDs, attempts, and workflow revisions can change without changing this
 binding. Store the task runtime handle in the coordinator's assignment
 record; the CLI deliberately persists only its fingerprint and optional name.
+Retain the runtime session and task ID returned by dispatch as well when its
+status-query API requires them; do not substitute an engine binding ID or a
+business task-list ID.
 A finished worker turn does not release ownership. Retain the binding and
 worktree through final workflow completion.
 
@@ -83,6 +86,8 @@ ownership of one work item.
 ## Runtime Events And Handoffs
 
 Use completion events from the task runtime as the normal notification path.
+Events accelerate result handling; they do not replace the mandatory runtime
+queries below.
 Match the handoff's original workflow/recording, scope, issue, binding and dispatch
 identities to the retained assignment before reporting it. Do not replace a stale
 callback's identity with one from fresh status. The coordinator consumes a matching
@@ -141,17 +146,57 @@ remaining risks. After consuming any non-code result as above, a task ending
 with no usable handoff for its still-current dispatch is `idle`. Reporting idle
 issues a fresh dispatch identity for the same worker; reject late completion
 from the superseded turn and follow the returned resume action.
-After `backend-rewrite wait` returns `worker_events_required`, inspect available
-completion and interruption events in the task runtime and report actual
-changes before refreshing global status. Keep original dispatch and handoff
-identities; do not manufacture a running observation from a historical
-confirmation. Do not re-report every running worker on each wait. The engine
-continues scheduling explicit status checks after sixty-minute expiry.
+After `backend-rewrite wait` returns `worker_events_required`, perform the
+[mandatory runtime query pass](#mandatory-runtime-queries), reconcile ended
+tasks and arrived events, and report actual changes before refreshing global
+status. Keep original dispatch and handoff identities.
 
 The worker returns the handoff and ends its turn; it does not wait for Replay.
 
-After interruption, on `worker_status_required`, or when an observation expires,
-inspect the actual task runtime task and report its state through `report_worker`.
+## Mandatory Runtime Queries
+
+At session start/resume with retained assignments, after interruption, on
+`worker_status_required`, before waiting on outstanding agents, and after every
+bounded engine or task-runtime wait, **actually invoke a runtime agent-list or
+status tool**. Query all assigned workers still awaiting results in one pass,
+including parked API and process-output workers. Also check retained integrator
+and route-analysis tasks before waiting on them, without reporting their handles
+as implementation workers. A pass just completed after a wait can serve the
+immediately following wait; repeat after intervening work or assignment changes.
+
+- In Claude Code, **invoke the built-in `ListAgents` tool (`/list-agents`)**
+  for every required pass when it is available. Other runtimes use their
+  equivalent live agent-list/status API. Do not merely mention the command or
+  execute slash-command text through a shell. See the
+  [Claude Code listing contract](https://code.claude.com/docs/en/cross-session-messaging#see-which-sessions-claude-can-reach).
+- Match returned entries to the retained runtime handles/task IDs and original
+  dispatches; exclude unrelated peer sessions from worker coverage. A matching
+  total count, an agent definition catalog, or a business `TaskList` is not
+  worker coverage. `claude agents --json --all` lists independent sessions,
+  so it cannot substitute for querying in-session subagents.
+- If a listing omits an assigned worker or does not expose its activity, invoke
+  the runtime's per-task status query unless a matching result already resolves
+  that dispatch. Disappearance alone does not prove completion. If no bulk query
+  exists, issue independent per-task queries together before reporting. Claude Code's
+  `TaskOutput` with `block: false` is a fallback where available; use the returned
+  task status, not the retrieval status. It is deprecated in current releases.
+- Retain the actual query call/result reference and the matched per-worker
+  states in the coordinator's assignment context. Never claim a query occurred
+  without a tool invocation and returned result. Cached engine observations,
+  confirmation, worker messages, hooks, and absence of stop events do not
+  substitute for this pass, even while a running observation is unexpired.
+- An omitted, unreadable, or failed query is unknown, not running or idle.
+  Resolve it through an available equivalent query. If no query capability can
+  establish the state, identify the runtime interface gap; do not repeatedly
+  wait as though the worker were known to be running or create a duplicate.
+
+Collect the full pass before reporting changes or required observation refreshes
+through the existing per-worker `report_worker` commands. Do not re-query the
+whole set between those reports or refresh every unchanged running observation
+on every wait. For an ended task, consume its result and required inputs before
+deciding between `handoff_ready` and `idle`, as described above. Respect explicit
+user cancellation; a stopped state alone does not authorize undoing it.
+
 The engine trusts the coordinator's explicit report; it does not query Claude
 Code or another task runtime, or independently prove liveness. Never report running
 merely because a dispatch was previously confirmed. A repeated confirmation does
@@ -164,6 +209,8 @@ Missing or legacy unclassified observations on confirmed bindings also request
 a coordinator status check. Recover the retained assignment before reporting;
 unknown activity is not evidence of either running or idle.
 Completion events should be reported immediately, not held until that interval.
+The sixty-minute expiry is an engine fallback, not permission to skip the runtime
+queries required on every wait cycle.
 
 ## Integration And Focused Acceptance
 
