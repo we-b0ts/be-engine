@@ -50,7 +50,7 @@ fn worker_scope(root: &Path, worktree: &Path) -> RewriteWorkScope {
     };
     worker::confirm(crate::rewrite::RewriteWorkerConfirmOptions {
         target_root: root.into(),
-        dispatch_id: worker::dispatch_view(&state, scope.clone(), None).dispatch_id,
+        work_scope: scope.clone(),
         worktree: Some(worktree.into()),
         agent_handle: "delivery-worker".into(),
         agent_name: None,
@@ -73,13 +73,11 @@ fn options(root: &Path, worktree: &Path, scope: Option<RewriteWorkScope>) -> Rew
 
 fn delivery(
     root: &Path,
-    scope: &RewriteWorkScope,
+    _scope: &RewriteWorkScope,
     report: &RewriteReviewReport,
 ) -> RewriteWorkerReportOptions {
-    let state = RewriteStore::new(root).unwrap().load().unwrap().unwrap();
     RewriteWorkerReportOptions {
         target_root: root.into(),
-        dispatch_id: worker::dispatch_view(&state, scope.clone(), None).dispatch_id,
         agent_handle: "delivery-worker".into(),
         activity: RewriteWorkerActivity::HandoffReady,
         handoff_id: Some(report.head_revision.clone()),
@@ -184,6 +182,9 @@ fn failed_or_incomplete_quality_reports_cannot_be_delivered() {
     fs::write(repaired, "fixed").unwrap();
     let passed = check(opts).unwrap();
     assert_eq!(passed.status, ReviewStatus::Passed);
+    assert_ne!(failed.report_path, passed.report_path);
+    assert!(worker::runtime::report(handoff).is_err());
+    let handoff = delivery(target.path(), &scope, &passed);
     let mut incomplete = passed.clone();
     incomplete.quality = None;
     write_json(&passed.report_path, &incomplete).unwrap();
@@ -231,6 +232,12 @@ fn integration_requires_its_own_review_and_preserves_canonical_private_runtime()
     assert_eq!(worker_report.status, ReviewStatus::Passed);
     let mut handoff = delivery(target.path(), &scope, &worker_report);
     worker::runtime::report(handoff.clone()).unwrap();
+    let store = RewriteStore::new(target.path()).unwrap();
+    assert!(
+        store.load().unwrap().unwrap().worker_bindings[&scope.binding_key()]
+            .last_integrated_at
+            .is_none()
+    );
     let candidate = worktree(target.path(), directory.path(), "candidate");
     git(
         &candidate,
@@ -268,6 +275,14 @@ fn integration_requires_its_own_review_and_preserves_canonical_private_runtime()
     );
     handoff.review_report = Some(reviewed.report_path.clone());
     worker::runtime::report(handoff.clone()).unwrap();
+    let integrated = store.load().unwrap().unwrap();
+    let binding = &integrated.worker_bindings[&scope.binding_key()];
+    assert_eq!(
+        binding.last_integrated_commit.as_deref(),
+        Some(worker_report.head_revision.as_str())
+    );
+    let integrated_at = binding.last_integrated_at.clone().unwrap();
+    assert!(chrono::DateTime::parse_from_rfc3339(&integrated_at).is_ok());
     assert!(terminal_current(
         target.path(),
         &store.load().unwrap().unwrap()
@@ -303,9 +318,20 @@ fn integration_requires_its_own_review_and_preserves_canonical_private_runtime()
         &["merge", "--ff-only", &newer_report.head_revision],
     );
     accept(target.path().into(), newer_report.report_path).unwrap();
+    assert_eq!(
+        store.load().unwrap().unwrap().worker_bindings[&scope.binding_key()]
+            .last_integrated_at
+            .as_deref(),
+        Some(integrated_at.as_str())
+    );
     let before_state = serde_json::to_value(store.load().unwrap().unwrap()).unwrap();
     let before_receipt = fs::read(integrated_path(target.path())).unwrap();
-    for duplicate_report in [None, Some(reviewed.report_path)] {
+    handoff.review_report = None;
+    assert!(worker::runtime::report(handoff.clone()).is_err());
+    for duplicate_report in [
+        Some(reviewed.report_path.clone()),
+        Some(reviewed.report_path),
+    ] {
         handoff.review_report = duplicate_report;
         worker::runtime::report(handoff.clone()).unwrap();
         assert_eq!(
@@ -324,6 +350,68 @@ fn integration_requires_its_own_review_and_preserves_canonical_private_runtime()
             target.path(),
             &store.load().unwrap().unwrap()
         ));
+    }
+}
+
+#[test]
+fn unchanged_handoffs_empty_commits_and_unrelated_integration_do_not_reset_api_timer() {
+    for variant in ["unchanged", "empty_commit", "integrator_only"] {
+        let target = target(serde_json::json!([]));
+        let directory = tempfile::tempdir().unwrap();
+        let worker = worktree(target.path(), directory.path(), "worker");
+        let scope = worker_scope(target.path(), &worker);
+        let store = RewriteStore::new(target.path()).unwrap();
+        let mut state = store.load().unwrap().unwrap();
+        let original = (chrono::Utc::now() - chrono::Duration::hours(3)).to_rfc3339();
+        let binding = state.worker_bindings.get_mut(&scope.binding_key()).unwrap();
+        binding.last_integrated_at = Some(original.clone());
+        binding.last_integrated_commit = Some("previous-delivery".into());
+        store.save(&state).unwrap();
+        if variant == "empty_commit" {
+            git(
+                &worker,
+                &["commit", "--allow-empty", "-qm", "empty handoff"],
+            );
+        }
+        let report = check(options(target.path(), &worker, Some(scope.clone()))).unwrap();
+        assert_eq!(report.status, ReviewStatus::Passed);
+        let mut handoff = delivery(target.path(), &scope, &report);
+        worker::runtime::report(handoff.clone()).unwrap();
+        assert_eq!(
+            store.load().unwrap().unwrap().worker_bindings[&scope.binding_key()]
+                .last_integrated_at
+                .as_deref(),
+            Some(original.as_str())
+        );
+        let candidate = worktree(target.path(), directory.path(), "candidate");
+        git(&candidate, &["merge", "--ff-only", &report.head_revision]);
+        if variant == "integrator_only" {
+            commit_code(&candidate);
+        }
+        let mut opts = options(target.path(), &candidate, Some(scope.clone()));
+        opts.integration = true;
+        opts.handoff_id = handoff.handoff_id.clone();
+        let reviewed = check(opts).unwrap();
+        assert_eq!(reviewed.status, ReviewStatus::Passed);
+        git(
+            target.path(),
+            &["merge", "--ff-only", &reviewed.head_revision],
+        );
+        handoff.activity = RewriteWorkerActivity::Integrated;
+        handoff.review_report = Some(reviewed.report_path);
+        worker::runtime::report(handoff).unwrap();
+        let after = store.load().unwrap().unwrap();
+        let binding = &after.worker_bindings[&scope.binding_key()];
+        assert_eq!(
+            binding.last_integrated_at.as_deref(),
+            Some(original.as_str()),
+            "{variant}"
+        );
+        assert_eq!(
+            binding.last_integrated_commit.as_deref(),
+            Some("previous-delivery"),
+            "{variant}"
+        );
     }
 }
 

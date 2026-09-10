@@ -19,7 +19,7 @@ fn setup() -> (tempfile::TempDir, RewriteState, RewriteWorkScope) {
 
 fn options(
     target: &Path,
-    state: &RewriteState,
+    _state: &RewriteState,
     scope: &RewriteWorkScope,
     activity: RewriteWorkerActivity,
 ) -> RewriteWorkerReportOptions {
@@ -46,7 +46,6 @@ fn options(
     RewriteWorkerReportOptions {
         review_report,
         target_root: target.to_path_buf(),
-        dispatch_id: worker::dispatch_id(state, scope),
         agent_handle: "actual-worker-a".into(),
         activity,
         handoff_id: matches!(
@@ -57,11 +56,11 @@ fn options(
     }
 }
 
-fn confirm(target: &Path, state: &RewriteState, scope: &RewriteWorkScope) {
+fn confirm(target: &Path, _state: &RewriteState, scope: &RewriteWorkScope) {
     worker::confirm(worker::RewriteWorkerConfirmOptions {
         worktree: Some(target.to_path_buf()),
         target_root: target.to_path_buf(),
-        dispatch_id: worker::dispatch_id(state, scope),
+        work_scope: scope.clone(),
         agent_handle: "actual-worker-a".into(),
         agent_name: None,
     })
@@ -423,8 +422,17 @@ fn rejected_handle_stale_dispatch_and_unreceived_handoff_do_not_change_state() {
     let mut wrong = options(target.path(), &state, &scope, RewriteWorkerActivity::Idle);
     wrong.agent_handle = "unrelated-worker".into();
     assert!(report(wrong).is_err());
-    let mut stale = options(target.path(), &state, &scope, RewriteWorkerActivity::Idle);
-    stale.dispatch_id = "old-dispatch".into();
+    let stale = options(
+        target.path(),
+        &state,
+        &scope,
+        RewriteWorkerActivity::HandoffReady,
+    );
+    let path = stale.review_report.as_ref().unwrap();
+    let mut review: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    review["dispatch_id"] = "old-dispatch".into();
+    std::fs::write(path, serde_json::to_vec(&review).unwrap()).unwrap();
     assert!(report(stale).is_err());
     assert!(
         report(options(
@@ -466,7 +474,7 @@ fn integration_conflict_resumes_same_worker_and_rejects_old_handoff() {
         dispatch.state,
         crate::rewrite::RewriteWorkerDispatchState::ResumeRequired
     );
-    assert_ne!(dispatch.dispatch_id, handoff.dispatch_id);
+    assert_ne!(dispatch.dispatch_id, worker::dispatch_id(&state, &scope));
     assert!(report(handoff).is_err());
     let latest = RewriteStore::new(target.path())
         .unwrap()
@@ -493,5 +501,164 @@ fn integration_conflict_resumes_same_worker_and_rejects_old_handoff() {
     assert_eq!(
         latest.worker_bindings[&scope.binding_key()].rework_generation,
         1
+    );
+}
+
+#[test]
+fn resumed_review_preserves_original_report_and_rejects_late_deliveries() {
+    let (target, state, scope) = setup();
+    confirm(target.path(), &state, &scope);
+    let old = options(
+        target.path(),
+        &state,
+        &scope,
+        RewriteWorkerActivity::HandoffReady,
+    );
+    let old_path = old.review_report.as_ref().unwrap();
+    let original = std::fs::read(old_path).unwrap();
+    report(options(
+        target.path(),
+        &state,
+        &scope,
+        RewriteWorkerActivity::Idle,
+    ))
+    .unwrap();
+    confirm(target.path(), &state, &scope);
+    let new = options(
+        target.path(),
+        &state,
+        &scope,
+        RewriteWorkerActivity::HandoffReady,
+    );
+    assert_ne!(new.review_report.as_ref(), Some(old_path));
+    assert_eq!(std::fs::read(old_path).unwrap(), original);
+    report(new.clone()).unwrap();
+    let store = RewriteStore::new(target.path()).unwrap();
+    let before = serde_json::to_value(store.load().unwrap().unwrap()).unwrap();
+    for activity in [
+        RewriteWorkerActivity::HandoffReady,
+        RewriteWorkerActivity::Integrated,
+        RewriteWorkerActivity::ReworkRequired,
+    ] {
+        let mut late = old.clone();
+        late.activity = activity;
+        assert!(
+            report(late)
+                .unwrap_err()
+                .to_string()
+                .contains("stale dispatch")
+        );
+    }
+    assert_eq!(
+        serde_json::to_value(store.load().unwrap().unwrap()).unwrap(),
+        before
+    );
+    // The new report still supports idempotent callbacks and genuine rework.
+    report(new.clone()).unwrap();
+    let mut rework = new;
+    rework.activity = RewriteWorkerActivity::ReworkRequired;
+    report(rework).unwrap();
+    assert_eq!(
+        coverage(&store.load().unwrap().unwrap(), &scope),
+        RewriteWorkerCoverageState::ResumeRequired
+    );
+}
+
+#[test]
+fn handle_report_backfills_persisted_identity_and_returns_an_executable_handle_command() {
+    let (target, state, scope) = setup();
+    confirm(target.path(), &state, &scope);
+    let store = RewriteStore::new(target.path()).unwrap();
+    let mut legacy = store.load().unwrap().unwrap();
+    legacy
+        .worker_bindings
+        .get_mut(&scope.binding_key())
+        .unwrap()
+        .agent_handle = None;
+    store.save(&legacy).unwrap();
+    report(options(
+        target.path(),
+        &state,
+        &scope,
+        RewriteWorkerActivity::Running,
+    ))
+    .unwrap();
+    let persisted = store.load().unwrap().unwrap();
+    let view = worker::dispatch_view(&persisted, scope.clone(), None);
+    assert_eq!(view.agent_handle.as_deref(), Some("actual-worker-a"));
+    let command = report_command(target.path(), view.agent_handle.as_deref(), false);
+    assert!(
+        command
+            .argv
+            .windows(2)
+            .any(|args| args == ["--agent-handle", "actual-worker-a"])
+    );
+    assert!(!command.argv.contains(&view.dispatch_id));
+    assert!(
+        !command
+            .required_env_names
+            .contains(&worker::AGENT_HANDLE_ENV.to_string())
+    );
+    // The handle no longer addresses reportable work once the API has completed.
+    let mut completed = persisted;
+    completed.phase = RewritePhase::SliceComplete;
+    store.save(&completed).unwrap();
+    assert!(
+        report(options(
+            target.path(),
+            &state,
+            &scope,
+            RewriteWorkerActivity::Running
+        ))
+        .is_err()
+    );
+}
+
+#[test]
+fn replacement_handle_cannot_admit_the_previous_workers_report() {
+    let (target, state, scope) = setup();
+    confirm(target.path(), &state, &scope);
+    let old = options(
+        target.path(),
+        &state,
+        &scope,
+        RewriteWorkerActivity::HandoffReady,
+    );
+    let transfer = worker::RewriteWorkerTransferOptions {
+        target_root: target.path().into(),
+        previous_agent_handle: "actual-worker-a".into(),
+        agent_handle: "replacement-worker".into(),
+        agent_name: None,
+        reason: "runtime no longer has the original worker".into(),
+        caller_approved: true,
+    };
+    worker::transfer(transfer.clone()).unwrap();
+    let store = RewriteStore::new(target.path()).unwrap();
+    let before = serde_json::to_value(store.load().unwrap().unwrap()).unwrap();
+    assert!(worker::transfer(transfer).is_err());
+    assert!(report(old.clone()).is_err());
+    let mut mislabeled = old;
+    mislabeled.agent_handle = "replacement-worker".into();
+    assert!(
+        report(mislabeled)
+            .unwrap_err()
+            .to_string()
+            .contains("stale dispatch")
+    );
+    assert_eq!(
+        serde_json::to_value(store.load().unwrap().unwrap()).unwrap(),
+        before
+    );
+    let mut live = options(
+        target.path(),
+        &state,
+        &scope,
+        RewriteWorkerActivity::Running,
+    );
+    live.agent_handle = "replacement-worker".into();
+    report(live).unwrap();
+    assert_eq!(
+        coverage(&store.load().unwrap().unwrap(), &scope),
+        RewriteWorkerCoverageState::Running
     );
 }

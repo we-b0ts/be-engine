@@ -26,7 +26,7 @@ fn failed_candidate() -> (
         .unwrap();
     worker::confirm(crate::rewrite::RewriteWorkerConfirmOptions {
         target_root: target.path().into(),
-        dispatch_id: worker::dispatch_view(&state, scope.clone(), None).dispatch_id,
+        work_scope: scope.clone(),
         worktree: Some(target.path().into()),
         agent_handle: "repair-worker".into(),
         agent_name: None,

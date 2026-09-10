@@ -28,7 +28,8 @@ pub(in crate::rewrite) fn inventory(
                     Vec::new(),
                 ),
             };
-            let report_worker = runtime::report_command(target_root, &worker.dispatch_id, false);
+            let report_worker =
+                runtime::report_command(target_root, worker.agent_handle.as_deref(), false);
             RewriteWorkerInventoryItem {
                 coverage: runtime::coverage(state, &scope),
                 observed_at: observation.map(|value| value.observed_at.clone()),
@@ -102,7 +103,11 @@ pub(in crate::rewrite) fn scope_action(
                 "must actually invoke built-in ListAgents (/list-agents) in Claude Code or equivalent runtime status tools for all workers awaiting results, including {}; collect results before reporting changes or required refreshes through the owning commands.report_worker. Resolve omitted or unclassified tasks through results or individual queries; historical dispatch confirmation is not runtime status",
                 scope.label()
             ),
-            report_worker: runtime::report_command(target_root, &worker.dispatch_id, false),
+            report_worker: runtime::report_command(
+                target_root,
+                worker.agent_handle.as_deref(),
+                false,
+            ),
             worker,
         },
         Coverage::IntegrationRequired => RewriteAction::IntegrationRequired {
@@ -113,7 +118,11 @@ pub(in crate::rewrite) fn scope_action(
             handoff_id: runtime::observation(state, scope)
                 .and_then(|value| value.handoff_id.clone())
                 .expect("ready handoff has an identity"),
-            report_worker: runtime::report_command(target_root, &worker.dispatch_id, true),
+            report_worker: runtime::report_command(
+                target_root,
+                worker.agent_handle.as_deref(),
+                true,
+            ),
             worker,
         },
         Coverage::VerificationRequired => RewriteAction::AdvanceRequired {

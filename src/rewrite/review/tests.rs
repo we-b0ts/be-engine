@@ -12,7 +12,7 @@ pub(in crate::rewrite) fn worker_report(root: &Path, scope: RewriteWorkScope) ->
         hardcode_ai_verified: Vec::new(),
     })
     .map(|report| report.report_path)
-    .unwrap_or_else(|_| worker_report_path(root))
+    .unwrap_or_else(|_| root.join("missing-review.json"))
 }
 
 fn setup() -> (tempfile::TempDir, RewriteWorkScope) {
@@ -28,7 +28,7 @@ fn setup() -> (tempfile::TempDir, RewriteWorkScope) {
         .unwrap();
     worker::confirm(super::super::RewriteWorkerConfirmOptions {
         target_root: target.path().into(),
-        dispatch_id: worker::dispatch_view(&state, scope.clone(), None).dispatch_id,
+        work_scope: scope.clone(),
         worktree: Some(target.path().into()),
         agent_handle: "review-worker".into(),
         agent_name: None,
@@ -140,10 +140,8 @@ fn spawn_review_requires_startup_evidence_and_rejects_request_ownership() {
 fn handoff_requires_current_review_without_advancing_worker_state_on_rejection() {
     let (target, scope) = setup();
     let store = RewriteStore::new(target.path()).unwrap();
-    let state = store.load().unwrap().unwrap();
     let mut opts = worker::runtime::RewriteWorkerReportOptions {
         target_root: target.path().into(),
-        dispatch_id: worker::dispatch_view(&state, scope.clone(), None).dispatch_id,
         agent_handle: "review-worker".into(),
         activity: worker::model::RewriteWorkerActivity::HandoffReady,
         handoff_id: Some("delivery-1".into()),
@@ -176,7 +174,7 @@ fn handoff_requires_current_review_without_advancing_worker_state_on_rejection()
             .to_string()
             .contains("commit changed")
     );
-    check(options(target.path(), scope)).unwrap();
+    opts.review_report = Some(check(options(target.path(), scope)).unwrap().report_path);
     worker::runtime::report(opts.clone()).unwrap();
     let revision = store.load().unwrap().unwrap().revision;
     worker::runtime::report(opts).unwrap();
@@ -235,10 +233,9 @@ fn assigned_git_worktree_review_is_accepted_and_integrated_without_a_private_wor
     };
     let store = RewriteStore::new(target.path()).unwrap();
     store.save(&state).unwrap();
-    let dispatch_id = worker::dispatch_view(&state, scope.clone(), None).dispatch_id;
     worker::confirm(crate::rewrite::RewriteWorkerConfirmOptions {
         target_root: target.path().into(),
-        dispatch_id: dispatch_id.clone(),
+        work_scope: scope.clone(),
         worktree: Some(worktree.clone()),
         agent_handle: "separate-worker".into(),
         agent_name: None,
@@ -293,7 +290,6 @@ fn assigned_git_worktree_review_is_accepted_and_integrated_without_a_private_wor
     );
     let mut delivery = worker::runtime::RewriteWorkerReportOptions {
         target_root: target.path().into(),
-        dispatch_id,
         agent_handle: "separate-worker".into(),
         activity: worker::model::RewriteWorkerActivity::HandoffReady,
         handoff_id: Some(report.head_revision.clone()),
@@ -528,11 +524,9 @@ fn routed_review_waits_for_worker_and_keeps_handoff_and_integration_available() 
     let store = RewriteStore::new(target.path()).unwrap();
     let report = failing_integrated_review(target.path());
     rework(target.path().into(), &report.findings[0].id, scope.clone()).unwrap();
-    let state = store.load().unwrap().unwrap();
-    let dispatch_id = worker::dispatch_view(&state, scope.clone(), None).dispatch_id;
     worker::confirm(crate::rewrite::RewriteWorkerConfirmOptions {
         target_root: target.path().into(),
-        dispatch_id: dispatch_id.clone(),
+        work_scope: scope.clone(),
         worktree: Some(target.path().into()),
         agent_handle: "repair-worker".into(),
         agent_name: None,
@@ -540,7 +534,6 @@ fn routed_review_waits_for_worker_and_keeps_handoff_and_integration_available() 
     .unwrap();
     let mut feedback = worker::runtime::RewriteWorkerReportOptions {
         target_root: target.path().into(),
-        dispatch_id,
         agent_handle: "repair-worker".into(),
         activity: Activity::Running,
         handoff_id: None,

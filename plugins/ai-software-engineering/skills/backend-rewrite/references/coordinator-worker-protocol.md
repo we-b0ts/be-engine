@@ -15,11 +15,12 @@ API method/pattern or process_output:<id> <-> worker handle <-> worker worktree
 ```
 
 Issue IDs, attempts, and workflow revisions can change without changing this
-binding. Store the task runtime handle in the coordinator's assignment
-record; the CLI deliberately persists only its fingerprint and optional name.
-Retain the runtime session and task ID returned by dispatch as well when its
-status-query API requires them; do not substitute an engine binding ID or a
-business task-list ID.
+binding. The engine persists the actual runtime handle and returns `agent_handle`
+with its work scope in status and inventory. Match live runtime entries by that
+handle; do not keep a separate binding/dispatch ID table. Supply the runtime's
+addressable identifier, such as Codex's canonical `agent_name` when its tools
+use that as the target; a display label is not an addressable handle. Retain any
+additional session/task ID required by the runtime's own status query.
 A finished worker turn does not release ownership. Retain the binding and
 worktree through final workflow completion.
 
@@ -43,9 +44,8 @@ Use `api-` and `process-output-` slug prefixes. Dispatch only:
 The worker obtains the current issue, binding/dispatch identity, and diagnostic
 facts from the engine's scoped evidence entrypoint. Do not attach action JSON,
 evidence IDs, evidence commands, or diagnostic bodies to the assignment. Retain
-the dispatched identity and actual runtime handle in the coordinator's assignment
-record so returned handoffs can be matched to the correct turn. Workers edit and
-test only their worktrees; they do not initialize a private rewrite workflow or
+the original result and its review report so the engine can validate its turn.
+Workers edit and test only their worktrees; they do not initialize a private rewrite workflow or
 operate other work items.
 
 ## Dispatch And Resume
@@ -60,7 +60,7 @@ For `implementation_required`:
    worker. Resume the same handle with the same assignment fields; its evidence
    context supplies the frozen base for this dispatch.
 3. After the task runtime accepts the submission, execute `commands.confirm_worker`
-   with `BACKEND_REWRITE_SUBAGENT_HANDLE` and optional
+   with the actual `--agent-handle` or `BACKEND_REWRITE_SUBAGENT_HANDLE` and optional
    `BACKEND_REWRITE_SUBAGENT_NAME`. Register the assigned absolute worktree using
    `--worktree` or `BACKEND_REWRITE_WORKER_WORKTREE`; repeat this on resume so the
    engine freezes the new dispatch's base. Confirm accepted queued work as well; report
@@ -78,21 +78,64 @@ dispatch, not proof that the worker remains running or has completed its work.
 A later failed acceptance creates a new dispatch for the same worker. An
 unavailable stored handle requires explicit caller approval for ownership
 transfer. Preserve the worktree, create the approved replacement, then execute
-`worker transfer <binding-id>` with its actual handle, a single-line reason, and
-`--approve-ownership-transfer`. The current binding ID is available in scoped
-status or inventory, including parked items. Never give two workers simultaneous
-ownership of one work item.
+`worker transfer --previous-agent-handle OLD --agent-handle NEW` with a single-line
+reason and `--approve-ownership-transfer`. The engine verifies the old handle
+still owns the work and issues a new dispatch for the replacement. Never give
+two workers simultaneous ownership of one work item.
+
+## API Expert Assistance
+
+Dispatch an expert only when the engine returns `expert_required` with
+`details.state=dispatch_required` after reservation. The coordinator must not
+initiate expert assistance based on elapsed time, difficulty, or its own judgment.
+
+The engine returns `expert_required` when exactly one API worker is running and
+more than two hours have elapsed since that API's last integrated code delivery
+(or its first binding before any such delivery). Handle the returned action;
+the coordinator does not report timestamps, runtime duration, or calculate
+eligibility. Empty handoffs and worker resumes do not reset this timer.
+
+- For `details.state=prepare_required`, execute the exact `commands.prepare` to
+  reserve the returned API. Do not spawn an expert yet.
+- For `details.state=dispatch_required`, dispatch one `api-expert` for the
+  API in `details.apis`, supplying the canonical root, each API's read-only worktree,
+  evidence command, and source locations. Its role entrypoint is
+  [api-expert.md](api-expert.md). Retain the task under `details.expert_id`;
+  recover an existing submission before creating one after an interruption.
+- Once the runtime accepts that task, including queuing, execute
+  `commands.confirm_expert` with `BACKEND_REWRITE_EXPERT_HANDLE`. Continue the
+  returned engine work while the expert runs. Never register or report its
+  handle as an API implementation worker.
+- Query the retained expert in the normal runtime pass. When it ends, forward
+  each unfinished API's findings to its retained implementer with evidence/revision identity.
+  For an unresolved, failed, or interrupted investigation, forward the available
+  evidence and failure/missing-input result for each unfinished report as well.
+  Then execute each `inventory.experts[].apis[].commands.report_delivered` with
+  the expert handle, stable per-API report ID, and actual recipient handle.
+  Retain report and task identities until acknowledgement succeeds.
+- If the API passes first, follow `expert_required` with
+  `details.state=close_required`. Query the retained task, stop it if running or
+  queued, and confirm it has ended before executing `commands.close_expert`.
+  If the reservation never spawned a task, close it directly. Recover and confirm
+  an already accepted but unconfirmed task before closing; never create one to
+  close it. Retain late reports as reference without forwarding them as new work.
+  API success stands; closure releases the expert slot and preserves one-time
+  coverage. The engine requests this cleanup before final workflow delivery.
+- The engine permits only one active expert task. Another eligible API waits
+  until the current report is forwarded and acknowledged, or closure is acknowledged.
+  Each API is covered once per workflow, across retries, revalidation, transfers,
+  and resumes. Recover the accepted task on failure; do not create a replacement
+  expert. Expert reports do not satisfy implementation or verification gates.
 
 ## Runtime Events And Handoffs
 
 Use completion events from the task runtime as the normal notification path.
 Events accelerate result handling; they do not replace the mandatory runtime
 queries below.
-Match the handoff's original workflow/recording, scope, issue, binding and dispatch
-identities to the retained assignment before reporting it. Do not replace a stale
-callback's identity with one from fresh status. The coordinator consumes a matching
-result and executes that work item's `commands.report_worker`. Supply its actual
-handle plus `BACKEND_REWRITE_WORKER_ACTIVITY`:
+Use the result's actual worker handle and original review report. The engine
+resolves the binding and validates the report's workflow, scope and dispatch.
+Never replace a stale result's report with a newer one. Execute the returned
+`commands.report_worker`, or `worker report --agent-handle HANDLE --activity ACTIVITY`:
 
 | Activity | Meaning |
 | --- | --- |
@@ -103,10 +146,16 @@ handle plus `BACKEND_REWRITE_WORKER_ACTIVITY`:
 | `integrated` | The identified handoff and required inputs are published with a current passing integration report. |
 | `rework_required` | The identified handoff needs worker changes, such as an integration conflict or a failed quality gate. |
 
+For `running`, `queued`, and `idle`, report a fresh runtime observation for the
+current assignment. Never relabel a delayed completion as a current observation.
+These activities do not accept a review report.
+
 For `handoff_ready`, `integrated`, and `rework_required`, also supply the same stable
 `BACKEND_REWRITE_WORKER_HANDOFF_ID`, normally the worker commit or another exact
-handoff identity. The engine rejects an integration report without a matching
-received handoff. Duplicate handoff events do not create duplicate work. Stale
+handoff identity, and `--review-report` from the original delivery. For rework,
+use the accepted worker report or that handoff's integration report. Each review
+returns a separate file; retain its exact path. The engine rejects an integration
+report without a matching received handoff. Duplicate handoff events do not create duplicate work. Stale
 attempts or wrong handles cannot advance the current issue; recover its current
 status without replacing the dedicated worker.
 
@@ -149,7 +198,7 @@ from the superseded turn and follow the returned resume action.
 After `backend-rewrite wait` returns `worker_events_required`, perform the
 [mandatory runtime query pass](#mandatory-runtime-queries), reconcile ended
 tasks and arrived events, and report actual changes before refreshing global
-status. Keep original dispatch and handoff identities.
+status. Keep the original review report and handoff identity.
 
 The worker returns the handoff and ends its turn; it does not wait for Replay.
 
@@ -159,9 +208,9 @@ At session start/resume with retained assignments, after interruption, on
 `worker_status_required`, before waiting on outstanding agents, and after every
 bounded engine or task-runtime wait, **actually invoke a runtime agent-list or
 status tool**. Query all assigned workers still awaiting results in one pass,
-including parked API and process-output workers. Also check retained integrator
-and route-analysis tasks before waiting on them, without reporting their handles
-as implementation workers. A pass just completed after a wait can serve the
+including parked API and process-output workers. Also check retained integrator,
+route-analysis, and expert tasks before waiting on them, without reporting their
+handles as implementation workers. A pass just completed after a wait can serve the
 immediately following wait; repeat after intervening work or assignment changes.
 
 - In Claude Code, **invoke the built-in `ListAgents` tool (`/list-agents`)**
@@ -169,8 +218,8 @@ immediately following wait; repeat after intervening work or assignment changes.
   equivalent live agent-list/status API. Do not merely mention the command or
   execute slash-command text through a shell. See the
   [Claude Code listing contract](https://code.claude.com/docs/en/cross-session-messaging#see-which-sessions-claude-can-reach).
-- Match returned entries to the retained runtime handles/task IDs and original
-  dispatches; exclude unrelated peer sessions from worker coverage. A matching
+- Match returned entries to the engine's `agent_handle` and work scope, using
+  additional runtime task IDs where required; exclude unrelated peer sessions from worker coverage. A matching
   total count, an agent definition catalog, or a business `TaskList` is not
   worker coverage. `claude agents --json --all` lists independent sessions,
   so it cannot substitute for querying in-session subagents.
@@ -222,9 +271,10 @@ and the integrator's passing `--review-report`. Integration review is bound to
 that handoff and exact published candidate; the earlier worker report cannot
 replace it. Do not analyze or resolve code conflicts in the coordinator.
 
-If an accepted handoff requires API changes, report `rework_required` when the
-engine permits it and resume the same binding. Preserve its original handoff
-ID; the new dispatch invalidates late results from the previous attempt.
+If an accepted handoff requires API changes, report `rework_required` with its
+original `--review-report` when the engine permits it and resume the same binding.
+Preserve its original handoff ID; the new dispatch invalidates late results from
+the previous attempt.
 Quality checks execute in worker and integration worktrees before delivery.
 Return their failures to the responsible delivery owner with the report and
 exact evidence. Coordinator admission validates reports without rerunning those

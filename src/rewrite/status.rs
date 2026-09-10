@@ -27,7 +27,9 @@ pub fn inventory_rewrite(context: RewriteContext) -> Result<RewriteInventoryRepo
             inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
             process_outputs::defer_for_target_change(&mut state, &target_fingerprint);
             project_stale_comparison(&mut state, &target_fingerprint);
-            let details = if let Some(report) = super::configuration_commit::status(&target_root)? {
+            let details = if let Some(report) = super::configuration_commit::status(&target_root)?
+                && !matches!(report.action, super::RewriteAction::ExpertRequired { .. })
+            {
                 super::coordination::single_ready("commit_configuration", report.pending)
             } else {
                 super::coordination::status_details(&target_root, &state)?
@@ -41,6 +43,7 @@ pub fn inventory_rewrite(context: RewriteContext) -> Result<RewriteInventoryRepo
                 pending: details.pending(),
                 details,
                 workers: super::worker::scheduler::inventory(&target_root, &state),
+                experts: super::expert::inventory(&target_root, &state),
             }
         }
         None => {
@@ -54,6 +57,7 @@ pub fn inventory_rewrite(context: RewriteContext) -> Result<RewriteInventoryRepo
                 pending,
                 details: super::coordination::initial_details(pending),
                 workers: Vec::new(),
+                experts: Vec::new(),
             }
         }
     })
@@ -264,6 +268,11 @@ fn api_envelope(
     state: &super::model::RewriteState,
     api: Option<&RecordingApi>,
 ) -> Result<super::model::RewriteActionEnvelope> {
+    if let Some(expert) =
+        super::expert::required_action(target_root, state, api.map(ToString::to_string).as_deref())
+    {
+        return Ok(action::envelope(target_root, state, expert));
+    }
     // Inspecting a parked worker does not activate that API. Dispatch and status
     // feedback stay available while another API is at a system-repair gate.
     if api.is_some()

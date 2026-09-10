@@ -65,7 +65,7 @@ fn failed_execution_waits_for_explicit_retry_while_workers_remain_dispatchable()
     worker::confirm(worker::RewriteWorkerConfirmOptions {
         worktree: Some(target.path().to_path_buf()),
         target_root: target.path().into(),
-        dispatch_id: worker::dispatch_view(&state, scope.clone(), None).dispatch_id,
+        work_scope: scope.clone(),
         agent_handle: "runtime-worker".into(),
         agent_name: None,
     })
@@ -73,7 +73,6 @@ fn failed_execution_waits_for_explicit_retry_while_workers_remain_dispatchable()
     worker::runtime::report(worker::runtime::RewriteWorkerReportOptions {
         review_report: None,
         target_root: target.path().into(),
-        dispatch_id: worker::dispatch_view(&state, scope, None).dispatch_id,
         agent_handle: "runtime-worker".into(),
         activity: worker::model::RewriteWorkerActivity::Running,
         handoff_id: None,

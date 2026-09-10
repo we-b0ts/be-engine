@@ -26,6 +26,7 @@ use traffic_e2e::{
 mod config_protocol;
 mod dependency_rule;
 mod evidence;
+mod expert;
 mod project_init;
 mod recorder_capture;
 mod startup;
@@ -132,6 +133,8 @@ enum RewriteCommand {
     Repair(RepairArgs),
     /// Confirm the runtime identity of one dispatched or resumed API subagent.
     Worker(WorkerArgs),
+    /// Confirm one API diagnostic expert or acknowledge forwarding its report.
+    Expert(expert::ExpertArgs),
     /// Check complete delivery quality and admit published integration reports.
     Review(review::ReviewArgs),
     /// Retry a failed detached coordinator operation after its cause is resolved.
@@ -412,8 +415,15 @@ struct WorkerConfirmArgs {
     /// Assigned worker worktree; register again when resuming a dispatch.
     #[arg(long, env = "BACKEND_REWRITE_WORKER_WORKTREE")]
     worktree: Option<PathBuf>,
-    /// Opaque dispatch id returned by the current implementation_required action.
-    dispatch_id: String,
+    /// Exact API assigned to this worker.
+    #[arg(
+        long,
+        conflicts_with = "process_output",
+        required_unless_present = "process_output"
+    )]
+    api: Option<String>,
+    #[arg(long)]
+    process_output: Option<String>,
     /// Runtime-returned subagent handle. Supply through the named environment variable.
     #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_HANDLE", hide_env_values = true)]
     agent_handle: String,
@@ -424,10 +434,9 @@ struct WorkerConfirmArgs {
 
 #[derive(Debug, Args)]
 struct WorkerReportArgs {
-    /// Required passing worker report for handoff_ready, or candidate report for integrated.
+    /// Original review report for handoff_ready, integrated or rework_required.
     #[arg(long, env = "BACKEND_REWRITE_WORKER_REVIEW_REPORT")]
     review_report: Option<PathBuf>,
-    dispatch_id: String,
     #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_HANDLE", hide_env_values = true)]
     agent_handle: String,
     #[arg(long, env = "BACKEND_REWRITE_WORKER_ACTIVITY", hide_env_values = true,
@@ -455,8 +464,9 @@ enum OperationCommand {
 
 #[derive(Debug, Args)]
 struct WorkerTransferArgs {
-    /// Opaque current binding id returned by implementation_required status.
-    binding_id: String,
+    /// Runtime handle of the existing owner being replaced.
+    #[arg(long)]
+    previous_agent_handle: String,
     /// Runtime-returned replacement subagent handle.
     #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_HANDLE", hide_env_values = true)]
     agent_handle: String,
@@ -721,11 +731,19 @@ async fn run(cli: Cli) -> Result<()> {
             ),
         },
         RewriteCommand::Review(args) => review::run(target_root, args, pretty),
+        RewriteCommand::Expert(args) => expert::run(target_root, args, pretty),
         RewriteCommand::Worker(args) => match args.command {
             WorkerCommand::Confirm(args) => print_json(
                 &confirm_rewrite_worker(RewriteWorkerConfirmOptions {
                     target_root,
-                    dispatch_id: args.dispatch_id,
+                    work_scope: args
+                        .api
+                        .map(|api| traffic_e2e::RewriteWorkScope::Api { api })
+                        .or_else(|| {
+                            args.process_output
+                                .map(|id| traffic_e2e::RewriteWorkScope::ProcessOutput { id })
+                        })
+                        .context("worker confirm requires --api or --process-output")?,
                     agent_handle: args.agent_handle,
                     agent_name: args.agent_name,
                     worktree: args.worktree,
@@ -735,7 +753,6 @@ async fn run(cli: Cli) -> Result<()> {
             WorkerCommand::Report(args) => print_json(
                 &report_rewrite_worker(RewriteWorkerReportOptions {
                     target_root,
-                    dispatch_id: args.dispatch_id,
                     agent_handle: args.agent_handle,
                     activity: args.activity.parse()?,
                     handoff_id: args.handoff_id,
@@ -746,7 +763,7 @@ async fn run(cli: Cli) -> Result<()> {
             WorkerCommand::Transfer(args) => print_json(
                 &transfer_rewrite_worker(RewriteWorkerTransferOptions {
                     target_root,
-                    binding_id: args.binding_id,
+                    previous_agent_handle: args.previous_agent_handle,
                     agent_handle: args.agent_handle,
                     agent_name: args.agent_name,
                     reason: args.reason,

@@ -67,6 +67,9 @@ pub(super) fn select_action(
     state: &RewriteState,
     base: RewriteAction,
 ) -> RewriteAction {
+    if let Some(expert) = super::expert::required_action(target_root, state, None) {
+        return expert;
+    }
     if matches!(
         base,
         RewriteAction::SystemRepairRequired {
@@ -283,6 +286,7 @@ pub(super) fn envelope(
         process_output_inventory: Some(process_outputs::view(state)),
         latest_focused_e2e: latest_focused_e2e(state),
         terminal_allowed: state.require_comparison
+            && super::expert::counts(state).2 == 0
             && super::review::terminal_current(target_root, state)
             && progress_publication::state(target_root, state)
                 == Some(progress_publication::PublicationState::Published),

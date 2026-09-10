@@ -10,11 +10,21 @@ mod comparison_issue;
 mod configuration_commit;
 mod coordination;
 mod execution;
+mod expert;
 pub use configuration_commit::next_rewrite;
 pub use coordination::RewriteCoordinationDetails;
 pub use execution::{
     execute as execute_rewrite_operation, retry as retry_rewrite_operation,
     start_next as start_rewrite_next, start_quality as start_rewrite_target_quality,
+};
+pub use expert::model::{
+    RewriteExpertApiCommands, RewriteExpertApiView, RewriteExpertCloseOptions,
+    RewriteExpertCommands, RewriteExpertDeliveryOptions, RewriteExpertInventoryItem,
+    RewriteExpertOptions, RewriteExpertPrepareOptions, RewriteExpertState, RewriteExpertView,
+};
+pub use expert::{
+    close as close_rewrite_expert, confirm as confirm_rewrite_expert,
+    delivered as report_rewrite_expert_delivery, prepare as prepare_rewrite_expert,
 };
 pub use worker::model::{
     RewriteWorkerActivity, RewriteWorkerCoverageState, RewriteWorkerInventoryItem,

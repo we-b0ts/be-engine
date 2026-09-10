@@ -309,7 +309,6 @@ async fn wait_wakes_for_reported_worker_interruption_before_its_deadline() {
         worker::runtime::report(worker::runtime::RewriteWorkerReportOptions {
             review_report: None,
             target_root: target.path().into(),
-            dispatch_id: worker::dispatch_view(&state, scope.clone(), None).dispatch_id,
             agent_handle: format!("test-subagent-handle:{}", scope.binding_key()),
             activity: worker::model::RewriteWorkerActivity::Idle,
             handoff_id: None,

@@ -129,7 +129,14 @@ pub(super) fn pending_locked(target_root: &Path) -> Result<Option<RewriteActionE
         required,
     };
     let mut envelope = match RewriteStore::new(&target_root)?.load()? {
-        Some(state) => action::envelope(&target_root, &state, action),
+        Some(state) => {
+            // Read-only expert assistance cannot change the validation baseline.
+            // Its deadline remains actionable while configuration needs a commit.
+            if let Some(expert) = super::expert::required_action(&target_root, &state, None) {
+                return Ok(Some(action::envelope(&target_root, &state, expert)));
+            }
+            action::envelope(&target_root, &state, action)
+        }
         None => {
             let mut envelope = action::input_required(&target_root);
             envelope.action = action;

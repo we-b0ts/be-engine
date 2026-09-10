@@ -15,7 +15,6 @@ pub(in crate::rewrite) const HANDOFF_ENV: &str = "BACKEND_REWRITE_WORKER_HANDOFF
 #[derive(Debug, Clone)]
 pub struct RewriteWorkerReportOptions {
     pub target_root: PathBuf,
-    pub dispatch_id: String,
     pub agent_handle: String,
     pub activity: RewriteWorkerActivity,
     pub handoff_id: Option<String>,
@@ -48,7 +47,7 @@ pub fn report(options: RewriteWorkerReportOptions) -> Result<RewriteActionEnvelo
     let mut state = store
         .load()?
         .context("rewrite workflow is not initialized")?;
-    let scope = scope_for_dispatch(&state, &options.dispatch_id)?;
+    let scope = super::identity::report_scope(&state, &options)?;
     let target_fingerprint = (options.activity == RewriteWorkerActivity::Integrated)
         .then(|| fingerprint::repository_fingerprint(&target_root))
         .transpose()?;
@@ -73,17 +72,24 @@ pub fn report(options: RewriteWorkerReportOptions) -> Result<RewriteActionEnvelo
     } else {
         None
     };
-    let changed = apply_report(&mut state, &scope, &options, target_fingerprint)?;
+    let mut changed = apply_report(&mut state, &scope, &options, target_fingerprint)?;
     let integration_received = changed && options.activity == RewriteWorkerActivity::Integrated;
     if integration_received {
         let path = options.review_report.as_deref().context("integrated delivery requires --review-report from code-integrator review check --integration")?;
-        super::super::review::accept_integration(
+        let code_commit = super::super::review::accept_integration(
             &target_root,
             &mut state,
             path,
             Some(&scope),
             options.handoff_id.as_deref(),
         )?;
+        if let Some(commit) = code_commit {
+            let binding = state.worker_bindings.get_mut(&scope.binding_key()).unwrap();
+            if binding.last_integrated_commit.as_ref() != Some(&commit) {
+                binding.last_integrated_commit = Some(commit);
+                binding.last_integrated_at = Some(Utc::now().to_rfc3339());
+            }
+        }
     }
 
     if let Some(review) = review {
@@ -101,6 +107,11 @@ pub fn report(options: RewriteWorkerReportOptions) -> Result<RewriteActionEnvelo
             .is_some();
     if rework_finished {
         state.bump();
+    }
+    let binding = state.worker_bindings.get_mut(&scope.binding_key()).unwrap();
+    if binding.agent_handle.as_deref() != Some(&options.agent_handle) {
+        binding.agent_handle = Some(options.agent_handle.clone());
+        changed = true;
     }
     if changed {
         super::events::publish(&target_root, &state, &scope)?;
@@ -148,7 +159,7 @@ fn apply_report(
         "worker report handle does not own this work item"
     );
     ensure!(
-        binding.confirmed_dispatch_id == options.dispatch_id,
+        binding.confirmed_dispatch_id == super::dispatch_id(state, scope),
         "worker report requires confirmation of the current dispatch"
     );
     let previous = observation(state, scope);
@@ -238,11 +249,13 @@ fn apply_report(
         handoff_id: options.handoff_id.clone(),
         integrated_target_fingerprint: target_fingerprint,
     };
-    state
-        .worker_bindings
-        .get_mut(&scope.binding_key())
-        .unwrap()
-        .observation = Some(observation);
+    let binding = state.worker_bindings.get_mut(&scope.binding_key()).unwrap();
+    // Legacy bindings start their timer on the first accepted observation in
+    // this version. Never infer a timestamp from runtime text or Git dates.
+    binding
+        .first_bound_at
+        .get_or_insert_with(|| observation.observed_at.clone());
+    binding.observation = Some(observation);
     Ok(true)
 }
 
@@ -288,14 +301,6 @@ pub(in crate::rewrite) fn scopes(state: &RewriteState) -> Vec<RewriteWorkScope> 
             }),
     );
     scopes
-}
-
-pub(in crate::rewrite) fn scope_for_dispatch(
-    state: &RewriteState,
-    dispatch_id: &str,
-) -> Result<RewriteWorkScope> {
-    scopes(state).into_iter().find(|scope| super::dispatch_id(state, scope) == dispatch_id)
-        .context("worker dispatch id is stale; inspect backend-rewrite inventory and the owning scoped status")
 }
 
 pub(in crate::rewrite) fn scoped(
@@ -392,15 +397,12 @@ pub(in crate::rewrite) fn acceptance_ready(state: &RewriteState, scope: &Rewrite
 
 pub(in crate::rewrite) fn report_command(
     target_root: &Path,
-    dispatch_id: &str,
+    agent_handle: Option<&str>,
     integrated: bool,
 ) -> super::super::model::RewriteCommandSpec {
-    let mut argv = vec![
-        "worker".to_string(),
-        "report".to_string(),
-        dispatch_id.to_string(),
-    ];
-    let mut env = vec![super::AGENT_HANDLE_ENV.to_string()];
+    let mut argv = vec!["worker".to_string(), "report".to_string()];
+    let mut env = Vec::new();
+    super::identity::command_handle(&mut argv, &mut env, agent_handle);
     if integrated {
         argv.extend(["--activity".to_string(), "integrated".to_string()]);
         env.push(HANDOFF_ENV.to_string());

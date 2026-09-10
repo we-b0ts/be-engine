@@ -158,9 +158,17 @@ is unclear.
   `recording.rs` owns managed recording execution.
   `execution.rs` owns detached Next and legacy quality-receipt operations, completion, failure, and
   recovery without moving verification semantics out of their existing owners.
+  `expert.rs` owns the sole-running-API assistance trigger after two hours without
+  a code integration, one-time expert identity,
+  serialized batch reservation, per-API report-delivery acknowledgement, and
+  engine-directed expert closure after API verification;
+  `expert/model.rs` owns its serialized
+  contract. It uses the worker feedback transaction and never owns task-runtime
+  dispatch, API implementation, or traffic acceptance.
   `worker.rs` owns persistent dedicated identity, confirmation, and transfer;
-  `worker/model.rs` owns worker serialization, `worker/runtime.rs` validates task
-  observations and handoffs, and `worker/scheduler.rs` selects executable work
+  `worker/identity.rs` resolves runtime handles and validates delivery report
+  identity; `worker/model.rs` owns worker serialization, `worker/runtime.rs` validates task
+  observations, handoffs and the admitted code-integration clock, and `worker/scheduler.rs` selects executable work
   across current and parked scopes. `worker/events.rs` owns the independent
   durable feedback transaction; `store.rs` folds newer feedback into coordinator
   snapshots on both load and save. These modules never manufacture task-runtime

@@ -84,7 +84,11 @@ fn implementation_action_has_one_stable_public_shape() {
             comparison_observation: None,
         },
         worker: RewriteWorkerDispatchView {
+            first_bound_at: None,
+            last_integrated_at: None,
+            last_integrated_commit: None,
             binding_id: "worker-binding".to_string(),
+            agent_handle: Some("runtime-worker".into()),
             dispatch_id: "worker-dispatch".to_string(),
             work_scope: RewriteWorkScope::Api {
                 api: "GET /api".to_string(),
@@ -153,7 +157,7 @@ fn implementation_action_has_one_stable_public_shape() {
         action,
     })
     .unwrap();
-    assert_eq!(status.get("schema_version"), Some(&serde_json::json!(28)));
+    assert_eq!(status.get("schema_version"), Some(&serde_json::json!(30)));
     assert!(status.get("active_issue").is_none());
     assert!(status.get("next").is_none());
 }

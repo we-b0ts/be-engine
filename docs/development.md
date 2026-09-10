@@ -1239,7 +1239,7 @@ backend-rewrite recording request \
 backend-rewrite recording execute <action-id>
 backend-rewrite repair verify <repair-id>
 BACKEND_REWRITE_SUBAGENT_HANDLE='<replacement-handle>' \
-  backend-rewrite worker transfer <binding-id> \
+  backend-rewrite worker transfer --previous-agent-handle '<old-handle>' \
   --reason 'stored handle is unavailable after session replacement' \
   --approve-ownership-transfer
 backend-rewrite verification request \
@@ -1247,7 +1247,7 @@ backend-rewrite verification request \
   --reason 'shared response mapper changed'
 ```
 
-Rewrite action schema v28 always returns `action.kind`, `action.summary`,
+Rewrite action schema v30 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under coordinator command roles such as
 `execute`, `status`, `advance`, `recover`, `apply`, and `acceptance`.
@@ -1327,12 +1327,13 @@ atomic and avoids reconstructing one response with `head` and `tail`.
 Worker transfer is an exceptional compare-and-swap ownership change. It is
 valid for an unresolved `implementation_required` API or process-output
 work item, including a parked item, and requires its
-current opaque `binding_id`, an actual replacement handle, a bounded reason,
-and explicit caller approval. The replacement handle must not own another work
+current `--previous-agent-handle`, a replacement `--agent-handle`, a bounded
+reason, and explicit caller approval. The replacement handle must not own another work
 item in the workflow. A successful transfer preserves the worktree, records the
 prior handle fingerprint and reason, changes the binding generation, and
-atomically confirms the replacement for the current dispatch. A stale binding
-ID is rejected so an older session cannot overwrite a newer owner.
+issues a new dispatch, and atomically confirms the replacement. A handle that
+no longer owns the work cannot replace its newer owner. Old delivery reports
+retain the previous dispatch and cannot advance the replacement.
 
 `next` returns an opaque standard/comparison
 `action.commands.execute` recording action. `action.details.run_id` identifies
@@ -1389,19 +1390,91 @@ concurrency and accepted queuing. Dispatch/resume a real worker, then execute
 Confirmation of one API never
 blocks dispatch or feedback for another. Workers own evidence, diagnosis,
 implementation, local tests, and the complete delivery review; the coordinator supplies only the assignment
-fields described above and retains the actual dispatch identity.
+fields described above and retains the original delivery report.
 
-Runtime completion events drive `worker report <dispatch-id>`. Set
+API expert assistance uses existing worker confirmation, activity reports, and
+integration admission. The coordinator supplies no extra timestamps or runtime
+duration. Each binding retains `first_bound_at`, `last_integrated_at`, and
+`last_integrated_commit`. Only a newly accepted API integration containing a
+committed worker change and a nonempty published candidate updates the latter
+two fields. Empty/unchanged handoffs, duplicate reports, unrelated integrations,
+worker resumes, and ownership transfer do not reset them. Before the first code
+integration, the timer starts at initial worker confirmation. Legacy bindings
+without a timestamp initialize it on their next accepted confirmation or activity
+report, without asking the coordinator to reconstruct history.
+
+When exactly one API implementation worker is actually running, and more than
+two hours have passed since its last code integration (or initial binding), the
+engine returns `expert_required`. Queued and ended tasks do not count as running;
+unknown, stale, or unconfirmed runtime status requires reconciliation first.
+The count uses current API work scopes, including parked APIs, rather than all
+historical bindings. It does not predict workers needed after future Replay.
+The trigger has no convergence or attempt-count condition. `status`, `next`, and
+bounded `wait` checks evaluate it, including during traffic operations; `wait`
+still requires runtime-event reconciliation before the next status decision.
+
+The coordinator must not initiate expert assistance based on elapsed time,
+difficulty, or its own judgment. Only an engine-issued `expert_required` action
+authorizes the assistance flow. Execute `commands.prepare` to reserve the
+returned API. Preparation rechecks
+eligibility under the worker feedback lock. The resulting `dispatch_required`
+action asks for one read-only `api-expert`, with its API worktree and evidence
+command in `details.apis`. Recover an existing runtime task for `expert_id`
+before submitting, then execute `commands.confirm_expert` once the task is
+accepted, including queued work. Continue engine work while the expert runs.
+
+When the expert ends, forward its findings or unresolved/failure report to the
+retained implementer and execute the API's
+`inventory.experts[].apis[].commands.report_delivered`, supplying the expert
+handle, stable report ID, and recipient handle. Only one expert may be active;
+each API is covered once per workflow, across retries, revalidation, transfers,
+and recording inventory changes. Expert reports remain advisory and never
+satisfy implementation or verification gates. Experts never spawn other experts.
+
+If the API passes before its expert report arrives, the engine returns
+`expert_required` with `details.state=close_required`. The coordinator queries
+the task, stops it if running or queued, confirms it has ended, then executes
+`commands.close_expert`. An unsubmitted reservation closes without creating a
+task; recover and confirm an already accepted task before closing it. The API
+remains passed. `closed_at` records cleanup, releases the expert slot and retains
+one-time coverage. Late report callbacks cannot reopen the API or the expert;
+keep findings as reference. Final workflow delivery waits only for this cleanup
+acknowledgement, not for the investigation to finish its analysis.
+
+Reservation, confirmation, and delivery use the durable worker feedback
+transaction so an in-flight verifier's older snapshot cannot overwrite them.
+Repeated identical commands are idempotent; a second expert handle or conflicting
+delivery is rejected. Expert confirmation persists its runtime handle and fingerprint; status and
+inventory expose the known handle for task recovery and closure.
+
+Worker confirmation uses `worker confirm --api 'GET /api' --agent-handle HANDLE
+--worktree /absolute/worker` (or `--process-output ID`). The engine persists the
+actual implementation handle and returns `agent_handle` with its work scope in
+status and inventory. Returned commands already include a known handle. First
+binding and a binding whose raw handle is not yet recorded require the actual
+runtime handle. Successful confirmation/reporting records it. Display names
+are not identifiers; use the runtime's addressable handle (Codex's canonical
+`agent_name` when its tools accept that target).
+
+Runtime observations use `worker report --agent-handle HANDLE --activity ACTIVITY`.
+No binding or dispatch ID is accepted as a command argument. Internal IDs remain
+in evidence and review reports; the engine validates deliveries against them.
+Running, queued and idle describe a fresh runtime observation, not a delayed
+callback relabeled as current. Set
 `BACKEND_REWRITE_SUBAGENT_HANDLE` and `BACKEND_REWRITE_WORKER_ACTIVITY` to
 `running`, `queued`, `idle`, or `handoff_ready`. Handoffs also require
 `BACKEND_REWRITE_WORKER_HANDOFF_ID` and a passing `--review-report` for the final
-delivery. The coordinator inspects the spawn evidence before accepting it.
+delivery. Scoped reviews return a separate report path on each check, preserving
+the original workflow, scope and dispatch through retries. Retain that path;
+never substitute a new report for an old callback. The coordinator inspects the
+spawn evidence before accepting it.
 `integration_required` asks the coordinator
 to delegate that identified handoff and required inputs to the code integrator,
 publish its exact checked candidate, then report `integrated` with the same ID
 and the integrator's passing `--review-report`. A worker ending without a handoff is `idle` and
 requires resuming its existing binding. Integration conflicts return the ready
-handoff via `rework_required` with its ID; the engine issues a new dispatch to
+handoff via `rework_required` with its handoff ID and original worker or integration
+`--review-report`; the engine issues a new dispatch to
 the same worker and rejects callbacks for the superseded dispatch. Integration
 is acknowledged only while the verification resource is free.
 
@@ -1586,7 +1659,7 @@ the updated policy.
 Recording, focused Replay, and comparison share one serialized traffic-runtime
 lease. Global status first returns any executable worker dispatch or feedback
 action. When resources or running workers are the only remaining activity,
-schema v28 returns `wait_required` with
+schema v30 returns `wait_required` with
 the requested and blocking APIs, the live operation when available, a retry
 delay, and the exact `commands.wait` argv. This lease serializes each traffic
 operation, not a complete API lifecycle: while worker A implements, the

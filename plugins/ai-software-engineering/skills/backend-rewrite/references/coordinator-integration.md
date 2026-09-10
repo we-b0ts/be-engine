@@ -69,7 +69,8 @@ observed base. An unrelated workflow revision alone does not invalidate it.
   For a read-only ownership review, consume its evidence
   or owner without inventing a code candidate.
 - `rework`: retain cause and provenance. For an accepted handoff, report
-  `rework_required` using its original worker handle and handoff ID when the
+  `rework_required` using its original worker handle, handoff ID and worker or
+  integration `--review-report` when the
   engine permits it, then resume that worker. For source findings from an
   unpublished candidate, use `review rework --report /absolute/failed-report.json`
   with the exact finding and responsible work-item owner. Configured command

@@ -11,6 +11,7 @@ use super::{action, fingerprint, inventory, process_outputs};
 use crate::RecordingApi;
 
 pub(super) mod events;
+mod identity;
 pub(super) mod model;
 pub(super) mod runtime;
 pub(super) mod scheduler;
@@ -18,7 +19,7 @@ pub(super) mod scheduler;
 #[derive(Debug, Clone)]
 pub struct RewriteWorkerConfirmOptions {
     pub target_root: std::path::PathBuf,
-    pub dispatch_id: String,
+    pub work_scope: RewriteWorkScope,
     pub worktree: Option<std::path::PathBuf>,
     pub agent_handle: String,
     pub agent_name: Option<String>,
@@ -27,7 +28,7 @@ pub struct RewriteWorkerConfirmOptions {
 #[derive(Debug, Clone)]
 pub struct RewriteWorkerTransferOptions {
     pub target_root: std::path::PathBuf,
-    pub binding_id: String,
+    pub previous_agent_handle: String,
     pub agent_handle: String,
     pub agent_name: Option<String>,
     pub reason: String,
@@ -78,7 +79,7 @@ pub(super) fn implementation_action(
         }
     };
     let confirm_worker = confirmation_command(target_root, &worker);
-    let report_worker = runtime::report_command(target_root, &worker.dispatch_id, false);
+    let report_worker = runtime::report_command(target_root, worker.agent_handle.as_deref(), false);
     let acceptance = match &scope {
         RewriteWorkScope::Api { api } => action::next_command_for_api(target_root, api),
         RewriteWorkScope::ProcessOutput { id } => {
@@ -110,8 +111,24 @@ pub(super) fn dispatch_view(
     RewriteWorkerDispatchView {
         binding_id: binding_id(state, &scope),
         dispatch_id,
+        agent_handle: state
+            .worker_bindings
+            .get(&binding_key)
+            .and_then(|binding| binding.agent_handle.clone()),
         work_scope: scope,
         state: dispatch_state,
+        first_bound_at: state
+            .worker_bindings
+            .get(&binding_key)
+            .and_then(|binding| binding.first_bound_at.clone()),
+        last_integrated_at: state
+            .worker_bindings
+            .get(&binding_key)
+            .and_then(|binding| binding.last_integrated_at.clone()),
+        last_integrated_commit: state
+            .worker_bindings
+            .get(&binding_key)
+            .and_then(|binding| binding.last_integrated_commit.clone()),
         blocking_reason: (dispatch_state != RewriteWorkerDispatchState::Confirmed)
             .then_some(RewriteWorkerBlockingReason::WorkerDispatchUnconfirmed),
         requested_api: requested_scope.and_then(|scope| match scope {
@@ -130,18 +147,16 @@ pub(super) fn confirmation_command(
     view: &RewriteWorkerDispatchView,
 ) -> Option<RewriteCommandSpec> {
     (view.state != RewriteWorkerDispatchState::Confirmed).then(|| {
-        action::command(
-            target_root,
-            vec![
-                "worker".to_string(),
-                "confirm".to_string(),
-                view.dispatch_id.clone(),
-            ],
-            vec![
-                AGENT_HANDLE_ENV.to_string(),
-                "BACKEND_REWRITE_WORKER_WORKTREE".into(),
-            ],
-        )
+        let mut argv = vec!["worker".into(), "confirm".into()];
+        match &view.work_scope {
+            RewriteWorkScope::Api { api } => argv.extend(["--api".into(), api.clone()]),
+            RewriteWorkScope::ProcessOutput { id } => {
+                argv.extend(["--process-output".into(), id.clone()]);
+            }
+        }
+        let mut env = vec!["BACKEND_REWRITE_WORKER_WORKTREE".into()];
+        identity::command_handle(&mut argv, &mut env, view.agent_handle.as_deref());
+        action::command(target_root, argv, env)
     })
 }
 
@@ -184,18 +199,13 @@ pub fn confirm(options: RewriteWorkerConfirmOptions) -> Result<RewriteActionEnve
     let mut state = store
         .load()?
         .context("rewrite workflow is not initialized")?;
-    let scope = runtime::scope_for_dispatch(&state, &options.dispatch_id)?;
+    let scope = options.work_scope;
     ensure!(
-        issue_for_scope(&state, &scope).is_some(),
+        runtime::scopes(&state).contains(&scope),
         "{} is not implementation_required",
         scope.label()
     );
     let expected_dispatch_id = dispatch_id(&state, &scope);
-    ensure!(
-        options.dispatch_id == expected_dispatch_id,
-        "worker dispatch id is stale; inspect the scoped backend-rewrite status for {}",
-        scope.label()
-    );
 
     let new_dispatch = state
         .worker_bindings
@@ -225,6 +235,11 @@ pub fn confirm(options: RewriteWorkerConfirmOptions) -> Result<RewriteActionEnve
 pub fn transfer(options: RewriteWorkerTransferOptions) -> Result<RewriteActionEnvelope> {
     let (target_root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
     validate_identity("subagent handle", &options.agent_handle, 4_096)?;
+    validate_identity(
+        "previous subagent handle",
+        &options.previous_agent_handle,
+        4_096,
+    )?;
     validate_identity("ownership transfer reason", &options.reason, 512)?;
     if let Some(name) = options.agent_name.as_deref() {
         validate_identity("subagent name", name, 128)?;
@@ -239,22 +254,7 @@ pub fn transfer(options: RewriteWorkerTransferOptions) -> Result<RewriteActionEn
     let mut state = store
         .load()?
         .context("rewrite workflow is not initialized")?;
-    let scope = runtime::scopes(&state)
-        .into_iter()
-        .find(|scope| binding_id(&state, scope) == options.binding_id)
-        .context(
-            "worker binding id is stale; inspect backend-rewrite inventory and scoped status",
-        )?;
-    ensure!(
-        issue_for_scope(&state, &scope).is_some(),
-        "{} is not implementation_required",
-        scope.label()
-    );
-    ensure!(
-        options.binding_id == binding_id(&state, &scope),
-        "worker binding id is stale; inspect the scoped backend-rewrite status for {}",
-        scope.label()
-    );
+    let scope = identity::scope_for_handle(&state, &options.previous_agent_handle)?;
 
     transfer_binding(
         &mut state,
@@ -280,6 +280,9 @@ fn confirm_binding(
     ensure!(
         !state.worker_bindings.iter().any(|(key, binding)| {
             key != &binding_key && binding.agent_handle_fingerprint == handle_fingerprint
+                || binding.expert.as_ref().is_some_and(|expert| {
+                    expert.agent_handle_fingerprint.as_ref() == Some(&handle_fingerprint)
+                })
         }),
         "subagent handle is already dedicated to another work item in this workflow"
     );
@@ -295,6 +298,14 @@ fn confirm_binding(
                 binding.agent_name = agent_name;
                 changed = true;
             }
+            if binding.agent_handle.as_deref() != Some(agent_handle) {
+                binding.agent_handle = Some(agent_handle.into());
+                changed = true;
+            }
+            if binding.first_bound_at.is_none() {
+                binding.first_bound_at = Some(chrono::Utc::now().to_rfc3339());
+                changed = true;
+            }
             if binding.confirmed_dispatch_id != expected_dispatch_id {
                 binding.confirmed_dispatch_id = expected_dispatch_id.to_string();
                 binding.observation = None;
@@ -305,9 +316,14 @@ fn confirm_binding(
             state.worker_bindings.insert(
                 binding_key,
                 RewriteWorkerBinding {
+                    agent_handle: Some(agent_handle.into()),
                     agent_handle_fingerprint: handle_fingerprint,
                     agent_name,
                     confirmed_dispatch_id: expected_dispatch_id.to_string(),
+                    first_bound_at: Some(chrono::Utc::now().to_rfc3339()),
+                    last_integrated_at: None,
+                    last_integrated_commit: None,
+                    expert: None,
                     transfer_generation: 0,
                     rework_generation: 0,
                     last_transfer: None,
@@ -334,10 +350,12 @@ fn transfer_binding(
     ensure!(
         !state.worker_bindings.iter().any(|(key, binding)| {
             key != &binding_key && binding.agent_handle_fingerprint == new_fingerprint
+                || binding.expert.as_ref().is_some_and(|expert| {
+                    expert.agent_handle_fingerprint.as_ref() == Some(&new_fingerprint)
+                })
         }),
         "replacement subagent handle is already bound to another work item in this workflow"
     );
-    let expected_dispatch_id = dispatch_id(state, scope);
     let binding = state
         .worker_bindings
         .get_mut(&binding_key)
@@ -349,7 +367,11 @@ fn transfer_binding(
     let previous_fingerprint =
         std::mem::replace(&mut binding.agent_handle_fingerprint, new_fingerprint);
     binding.agent_name = agent_name;
-    binding.confirmed_dispatch_id = expected_dispatch_id;
+    binding.agent_handle = Some(agent_handle.into());
+    binding.rework_generation = binding
+        .rework_generation
+        .checked_add(1)
+        .context("worker rework generation overflow")?;
     binding.transfer_generation = binding.transfer_generation.saturating_add(1);
     binding.last_transfer = Some(RewriteWorkerTransferRecord {
         previous_agent_handle_fingerprint: previous_fingerprint,
@@ -357,6 +379,13 @@ fn transfer_binding(
         transferred_at: chrono::Utc::now().to_rfc3339(),
     });
     binding.observation = None;
+    binding.review_report = None;
+    let expected_dispatch_id = dispatch_id(state, scope);
+    state
+        .worker_bindings
+        .get_mut(&binding_key)
+        .unwrap()
+        .confirmed_dispatch_id = expected_dispatch_id;
     Ok(())
 }
 
@@ -455,7 +484,11 @@ fn is_confirmed(state: &RewriteState, scope: &RewriteWorkScope) -> bool {
             == RewriteWorkerDispatchState::Confirmed
 }
 
-fn validate_identity(label: &str, value: &str, max_bytes: usize) -> Result<()> {
+pub(in crate::rewrite) fn validate_identity(
+    label: &str,
+    value: &str,
+    max_bytes: usize,
+) -> Result<()> {
     ensure!(
         value == value.trim() && !value.is_empty() && !value.contains(['\r', '\n']),
         "{label} must be a non-empty single line"

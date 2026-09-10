@@ -97,9 +97,11 @@ pub(super) fn install(state: &mut RewriteState, apis: Vec<String>) -> Result<()>
         .iter()
         .map(|item| item.api.clone())
         .collect::<Vec<_>>();
-    state
-        .worker_bindings
-        .retain(|api, _| installed_apis.contains(api));
+    state.worker_bindings.retain(|api, binding| {
+        installed_apis.contains(api)
+            || !api.starts_with("process_output:")
+                && (binding.first_bound_at.is_some() || binding.expert.is_some())
+    });
     state.parked_slices.clear();
     state.current_api_index = Some(0);
     load_pending(state, 0)?;
