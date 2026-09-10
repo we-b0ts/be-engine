@@ -182,8 +182,8 @@ edit and commit, supply the returned report through `worker report ...
 --activity handoff_ready --review-report /absolute/report.json`.
 
 Review runs the same complete quality implementation for worker and integration
-deliveries. It enforces complete changed production Rust files <=1000 lines and rejects
-explicit `serde_json::Value` use. `json!` is allowed. Added Tokio spawn paths
+deliveries. It enforces complete changed production Rust files <=1000 lines.
+Added Tokio spawn paths
 require structured startup ownership evidence via `--evidence`; request-owned
 and unknown ownership cannot pass. The scanner uses syntax, ordinary imports and
 source spans; it does not expand macros, infer types or prove call graphs.

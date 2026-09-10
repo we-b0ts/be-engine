@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::rewrite::{RewriteCommandSpec, RewriteWorkScope};
 
-pub const RULE_VERSION: &str = "target-source-review-v2";
+pub const RULE_VERSION: &str = "target-source-review-v3";
 
 #[derive(Debug, Clone)]
 pub struct RewriteReviewOptions {
@@ -42,6 +42,7 @@ pub enum ReviewStatus {
 #[serde(rename_all = "snake_case")]
 pub enum ReviewRule {
     FileLines,
+    // Retained for deserializing historical reports; the scanner no longer emits it.
     JsonValue,
     SpawnOwnership,
     RustSyntax,
