@@ -168,8 +168,9 @@ is unclear.
   public action contract and reexports the worker contract for compatibility.
   `inventory.rs` owns the API inventory state machine: stable installation,
   activation and parking (in `inventory/selection.rs`), deferred revalidation, and summary/detail
-  views. Its `inventory/source_route` child owns source-route binding and
-  correction of unused invalid bindings, reusing case-group route validation.
+  views. Its `inventory/source_route` child owns source-route binding,
+  correction of unused invalid bindings, and validated binding retention across
+  recording batches, reusing case-group route validation.
   `case_patterns.rs` owns the low-frequency post-recording pattern
   identification gate, persistent canonical API catalog, and add-only policy
   application; it does not mutate recorded cases or delegate this gate to API

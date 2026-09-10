@@ -259,6 +259,16 @@ at workflow initialization. If an older engine saved an invalid route, repeat
 is allowed only while the API is pending, with no group or verification history;
 valid bindings remain fixed. Existing recording and workflow progress are retained.
 
+Confirmed dynamic source routes persist independently of recording batches.
+Ordinary re-recording and recorder-contract refreshes reuse a valid binding for
+the exact API method/pattern, including APIs absent from an intermediate batch.
+Verification results still reset for the new recording. Existing workflow states
+retain their valid routes when their inventory is rebuilt; routes already lost
+by older resets cannot be recovered automatically. New methods/patterns and
+invalid bindings require confirmation. An explicit `source_baseline_changed`
+recording request discards the retained bindings so the new source is checked.
+Restarting the coordinator session does not clear bindings.
+
 ## Running Locally
 
 Record baseline/candidate responses from live frontend traffic with:

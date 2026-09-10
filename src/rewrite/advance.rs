@@ -238,6 +238,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 workflow_id: format!("rewrite-{}", uuid::Uuid::new_v4().simple()),
                 recording_apis,
                 api_inventory: Vec::new(),
+                source_route_bindings: std::collections::BTreeMap::new(),
                 current_api_index: None,
                 parked_slices: std::collections::BTreeMap::new(),
                 worker_bindings: std::collections::BTreeMap::new(),

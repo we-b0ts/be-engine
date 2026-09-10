@@ -1,4 +1,4 @@
-//! Validate source-route bindings before persistence and repair unused invalid bindings.
+//! Validate and retain source-route bindings across recording batches.
 use anyhow::{Context, Result, ensure};
 
 use crate::RecordingApi;
@@ -15,6 +15,32 @@ pub(in crate::rewrite) fn validate_source_route(api: &RecordingApi, route: &str)
             api.path_pattern()
         );
         Ok(())
+    }
+}
+
+/// Preserve valid bindings from legacy state before resetting its batch inventory.
+/// Exact method/pattern keys prevent reuse for newly introduced or changed APIs.
+pub(super) fn retain_bindings(state: &mut RewriteState) {
+    let valid = |api: &str, route: &str| {
+        api.parse::<RecordingApi>()
+            .is_ok_and(|api| api.is_dynamic() && validate_source_route(&api, route).is_ok())
+    };
+    state
+        .source_route_bindings
+        .retain(|api, route| valid(api, route));
+    for item in &state.api_inventory {
+        if let Some(route) = &item.source_route
+            && valid(&item.api, route)
+        {
+            state
+                .source_route_bindings
+                .insert(item.api.clone(), route.clone());
+        }
+    }
+    if valid(&state.api, &state.source_route) {
+        let api = state.api.clone();
+        let route = state.source_route.clone();
+        state.source_route_bindings.insert(api, route);
     }
 }
 
@@ -81,9 +107,15 @@ pub(in crate::rewrite) fn bind_options(
     );
     state.api_inventory[index].source_route = Some(route.to_string());
     state.source_route = route.to_string();
+    state
+        .source_route_bindings
+        .insert(api.to_string(), route.to_string());
     state.bump();
     Ok(true)
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod recording_tests;

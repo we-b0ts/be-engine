@@ -77,6 +77,7 @@ fn persisted_invalid_source_route_can_be_corrected_and_group_existing_cases() {
     let mut expected = before;
     expected["source_route"] = FULL_ROUTE.into();
     expected["api_inventory"][0]["source_route"] = FULL_ROUTE.into();
+    expected["source_route_bindings"] = serde_json::json!({API: FULL_ROUTE});
     expected["revision"] = (expected["revision"].as_u64().unwrap() + 1).into();
     assert_eq!(serde_json::to_value(&state).unwrap(), expected);
 
