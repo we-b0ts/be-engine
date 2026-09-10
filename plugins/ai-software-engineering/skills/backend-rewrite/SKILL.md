@@ -52,3 +52,7 @@ rerun initialization.
   (`/list-agents`) when available. Historical reports and absent stop events do
   not satisfy this requirement. Follow the
   [runtime query protocol](references/coordinator-worker-protocol.md#mandatory-runtime-queries).
+- Coordinators must not invoke `sleep` or wrap or loop engine commands. Execute
+  engine commands directly, one at a time, and process each complete response
+  before the next command. Follow the
+  [coordinator execution rules](references/coordinator.md#execution-rules).

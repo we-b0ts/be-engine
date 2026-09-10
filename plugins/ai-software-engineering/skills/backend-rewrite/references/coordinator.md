@@ -9,6 +9,7 @@ relevant action below.
 ## Contents
 
 - Session start and resume
+- Execution rules
 - Coordinator loop
 - Engine phase order
 - Core action handling
@@ -53,6 +54,15 @@ stop, create or update the same file with useful resume context. Treat it as
 AI-owned reference and handoff context, never as engine state;
 `backend-rewrite status` remains authoritative.
 
+## Execution Rules
+
+- Do not invoke `sleep`. Use the engine-returned wait command or the task
+  runtime's bounded wait interface.
+- Execute engine commands directly, one at a time. Do not wrap them in scripts
+  or functions, or execute them through loops, command chains, or automatic runners.
+- Read each complete response and handle task events before deciding the next
+  engine command. Do not prearrange subsequent commands.
+
 ## Coordinator Loop
 
 Use the existing `backend-rewrite` interface. Response schema v28 actions have
@@ -67,6 +77,8 @@ explicit wait when no productive action is ready. The engine selects
 across all APIs and process outputs, including parked implementation issues.
 Use `pending`, `action`, and `terminal_allowed`; do not reconstruct scheduling
 from `workflow.phase`, `current_api`, or `api_inventory.unverified`.
+
+The following describes coordinator decisions; do not implement it as a script.
 
 ```text
 state = status()
