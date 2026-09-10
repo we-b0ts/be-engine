@@ -94,11 +94,8 @@ listener, lifecycle, startup, or configuration contract. Load only affected SDKs
 
 ### Rust Data Representation And Allocation
 
-- Target product code MUST NOT explicitly use `serde_json::Value` or
-  `serde_json::Map<String, serde_json::Value>` in changed code.
-  Define dedicated `Serialize` and `Deserialize` structs for request, response,
-  configuration, and dependency payloads. Dynamic keys use typed maps.
-  `json!` is permitted and is not rejected by the source review gate.
+- Prefer dedicated `Serialize` and `Deserialize` structs and typed maps where
+  practical.
 - Avoid unnecessary allocations and copies. Do not introduce intermediate
   `String`, `Vec`, owned collections, `clone`, `to_owned`, `format!`, or
   serialize-then-deserialize steps when direct construction, streaming, buffer

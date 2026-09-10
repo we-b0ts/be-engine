@@ -479,6 +479,9 @@ pub(super) struct RewriteState {
     pub recording_apis: Vec<String>,
     #[serde(default)]
     pub api_inventory: Vec<RewriteApiProgress>,
+    /// Confirmed dynamic routes survive recording batches, independently of verification.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub source_route_bindings: BTreeMap<String, String>,
     #[serde(default)]
     pub current_api_index: Option<usize>,
     #[serde(default)]

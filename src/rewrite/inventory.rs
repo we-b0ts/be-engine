@@ -66,14 +66,14 @@ pub(super) fn install(state: &mut RewriteState, apis: Vec<String>) -> Result<()>
         !apis.is_empty(),
         "standard recording contains no API inventory"
     );
+    source_route::retain_bindings(state);
     state.api_inventory = apis
         .into_iter()
         .enumerate()
         .map(|(index, api)| {
             let parsed = api.parse::<RecordingApi>()?;
             let source_route = if parsed.is_dynamic() {
-                (state.api == api && !state.source_route.is_empty())
-                    .then(|| state.source_route.clone())
+                state.source_route_bindings.get(&api).cloned()
             } else {
                 Some(parsed.path_pattern().to_string())
             };
@@ -373,6 +373,7 @@ fn next_runnable_index(state: &RewriteState) -> Option<usize> {
 }
 
 pub(super) fn reset_for_recording(state: &mut RewriteState) {
+    source_route::retain_bindings(state);
     super::process_outputs::reset(state);
     state.api_inventory.clear();
     state.current_api_index = None;

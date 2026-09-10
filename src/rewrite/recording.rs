@@ -637,6 +637,9 @@ pub(super) fn reset_for_fresh_recording(
     state.recording_input_diagnosis = None;
     state.phase = RewritePhase::RecordingRequired;
     inventory::reset_for_recording(state);
+    if reason == RewriteRecordingReason::SourceBaselineChanged {
+        state.source_route_bindings.clear();
+    }
     state.recording_run_id = run_id;
     state.recording_require_comparison = state.require_comparison;
     state.recording_rejection = None;

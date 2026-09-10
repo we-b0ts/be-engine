@@ -125,9 +125,6 @@ impl Scanner<'_> {
             return;
         }
         let message = match rule {
-            ReviewRule::JsonValue => {
-                "replace explicit serde_json::Value with a typed struct, enum, or map; json! is not prohibited"
-            }
             ReviewRule::SpawnOwnership => {
                 "trace the actual startup entry and every caller; request-triggered tasks are rejected, including callbacks registered during startup"
             }
@@ -168,24 +165,14 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
             visit::visit_item_fn(self, item);
         }
     }
-    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
-        let mut names = BTreeMap::new();
-        imports(&item.tree, "", &mut names);
-        if names.values().any(|name| name == "serde_json::Value") {
-            self.record(item.span(), ReviewRule::JsonValue);
-        }
-    }
     fn visit_path(&mut self, path: &'ast syn::Path) {
         let name = self.resolved(path);
-        if name == "serde_json::Value" || name.starts_with("serde_json::Value::") {
-            self.record(path.span(), ReviewRule::JsonValue);
-        }
         if matches!(name.as_str(), "tokio::spawn" | "tokio::task::spawn") {
             self.record(path.span(), ReviewRule::SpawnOwnership);
         }
         visit::visit_path(self, path);
     }
-    // Macro expansion and inferred Value types are intentionally outside this policy.
+    // Macro expansion is intentionally outside this policy.
     fn visit_macro(&mut self, _item: &'ast syn::Macro) {}
 }
 
@@ -234,7 +221,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn explicit_types_aliases_and_spawns_are_found_but_json_and_comments_are_allowed() {
+    fn explicit_json_values_imports_aliases_and_maps_are_allowed() {
+        let source = r#"
+use serde_json::Value;
+use serde_json::Value as Json;
+use serde_json as json;
+type Payload = serde_json::Value;
+fn run(value: Value, alias: Json, renamed: json::Value) {
+    let _: serde_json::Map<String, serde_json::Value>;
+    let _ = serde_json::Value::Null;
+    let _ = serde_json::json!({"ok": true});
+}
+"#;
+        assert!(scan_source(Path::new("src/lib.rs"), source, (1..=20).collect()).is_empty());
+    }
+
+    #[test]
+    fn spawn_aliases_are_found_but_json_values_and_comments_are_allowed() {
         let source = "use serde_json::Value as Json;\nuse tokio::{spawn as launch};\nfn run() {\n let _: Json;\n launch(async {});\n let _ = serde_json::json!({\"ok\": true});\n // serde_json::Value tokio::spawn\n}\n#[cfg(test)] mod tests { fn test() { let _: serde_json::Value; } }\n";
         let findings = scan_source(Path::new("src/lib.rs"), source, (1..=20).collect());
         assert_eq!(
@@ -242,7 +245,7 @@ mod tests {
                 .iter()
                 .filter(|f| f.rule == ReviewRule::JsonValue)
                 .count(),
-            2
+            0
         );
         assert_eq!(
             findings

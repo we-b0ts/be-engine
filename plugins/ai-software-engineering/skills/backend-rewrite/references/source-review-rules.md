@@ -10,9 +10,6 @@ shell check or a prose assertion that review passed.
 
 - Changed production Rust files must have at most 1000 complete physical lines,
   including comments, blank lines and a final line without a trailing newline.
-- Explicit `serde_json::Value` and ordinary imports/aliases in the diff are
-  prohibited. Use structs, enums and typed maps. `json!` is allowed: this rule
-  intentionally does not ban inferred values or expand macros.
 - Each added `tokio::spawn` or ordinary imported spelling requires AI review of
   the actual trigger. Initialization-owned tasks may pass with evidence.
   Request-owned tasks must be removed/restructured; unknown ownership cannot pass.

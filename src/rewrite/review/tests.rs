@@ -396,11 +396,7 @@ fn completed_api_quality_rework_reuses_worker_and_duplicate_route_is_idempotent(
     state.api_inventory[0].status = crate::rewrite::RewriteApiStatus::Complete;
     store.save(&state).unwrap();
     fs::create_dir_all(target.path().join("src")).unwrap();
-    fs::write(
-        target.path().join("src/bad.rs"),
-        "fn bad() { let _: serde_json::Value; }\n",
-    )
-    .unwrap();
+    fs::write(target.path().join("src/bad.rs"), "fn bad(\n").unwrap();
     let report = check(RewriteReviewOptions {
         target_root: target.path().into(),
         worktree: None,
@@ -454,11 +450,7 @@ fn process_output_review_uses_its_own_dispatch_and_blocks_integrated_acceptance(
     assert_eq!(report.scope, Some(scope.clone()));
     assert!(accept_handoff(target.path(), &state, &scope, Some(&report.report_path)).is_ok());
     fs::create_dir_all(target.path().join("src")).unwrap();
-    fs::write(
-        target.path().join("src/bad.rs"),
-        "fn bad() { let _: serde_json::Value; }\n",
-    )
-    .unwrap();
+    fs::write(target.path().join("src/bad.rs"), "fn bad(\n").unwrap();
     assert!(matches!(
         gate(target.path(), &state, "master").unwrap(),
         Some(RewriteAction::SourceReviewRequired { .. })
@@ -491,11 +483,7 @@ fn integrated_and_parked_worker() -> (tempfile::TempDir, RewriteWorkScope) {
 
 fn failing_integrated_review(root: &Path) -> RewriteReviewReport {
     fs::create_dir_all(root.join("src")).unwrap();
-    fs::write(
-        root.join("src/bad.rs"),
-        "fn bad() {\nlet _: serde_json::Value;\nlet _: serde_json::Value;\n}\n",
-    )
-    .unwrap();
+    fs::write(root.join("src/bad.rs"), "\n".repeat(1001) + "fn bad(\n").unwrap();
     check(RewriteReviewOptions {
         target_root: root.into(),
         worktree: None,

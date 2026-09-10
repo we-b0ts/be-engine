@@ -182,8 +182,8 @@ edit and commit, supply the returned report through `worker report ...
 --activity handoff_ready --review-report /absolute/report.json`.
 
 Review runs the same complete quality implementation for worker and integration
-deliveries. It enforces complete changed production Rust files <=1000 lines and rejects
-explicit `serde_json::Value` use. `json!` is allowed. Added Tokio spawn paths
+deliveries. It enforces complete changed production Rust files <=1000 lines.
+Added Tokio spawn paths
 require structured startup ownership evidence via `--evidence`; request-owned
 and unknown ownership cannot pass. The scanner uses syntax, ordinary imports and
 source spans; it does not expand macros, infer types or prove call graphs.
@@ -258,6 +258,16 @@ at workflow initialization. If an older engine saved an invalid route, repeat
 '/api/attachments/task/{task_id}/all'` with the corrected full route. Correction
 is allowed only while the API is pending, with no group or verification history;
 valid bindings remain fixed. Existing recording and workflow progress are retained.
+
+Confirmed dynamic source routes persist independently of recording batches.
+Ordinary re-recording and recorder-contract refreshes reuse a valid binding for
+the exact API method/pattern, including APIs absent from an intermediate batch.
+Verification results still reset for the new recording. Existing workflow states
+retain their valid routes when their inventory is rebuilt; routes already lost
+by older resets cannot be recovered automatically. New methods/patterns and
+invalid bindings require confirmation. An explicit `source_baseline_changed`
+recording request discards the retained bindings so the new source is checked.
+Restarting the coordinator session does not clear bindings.
 
 ## Running Locally
 
