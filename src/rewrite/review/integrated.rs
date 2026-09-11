@@ -166,7 +166,7 @@ pub(super) fn review_action(root: &Path, report: Option<&RewriteReviewReport>) -
             Some(ReviewStatus::ChangesRequired) => "source review found code changes required; inspect review show and route each finding with review rework to its owning work item",
             Some(ReviewStatus::EvidenceRequired) => "inspect review show; investigate each spawn and rerun review check --evidence with startup/request ownership evidence",
             Some(ReviewStatus::Passed) => "publish the reviewed integration candidate and accept its complete quality receipt before advancing verification",
-            _ => "delegate complete review check to the code integrator worktree; publish and accept a current passing candidate receipt before verification",
+            _ => "prepare the code integrator worktree at the current canonical commit, preserving unfinished work, and delegate complete review check; if no new changes are needed, review that exact commit without an empty merge. Otherwise publish the exact passing candidate before accepting its receipt and advancing verification",
         }.into(),
         check: action::command(root, vec!["review".into(), "check".into(), "--integration".into()], vec!["BACKEND_REWRITE_REVIEW_WORKTREE".into()]),
         accept: action::command(root, vec!["review".into(), "accept".into()], vec!["BACKEND_REWRITE_REVIEW_REPORT".into()]),

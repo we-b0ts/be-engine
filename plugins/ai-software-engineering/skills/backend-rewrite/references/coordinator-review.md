@@ -26,6 +26,10 @@ Supply `commands.check` as an integrator-local command with its actual assigned
 worktree; never execute checks in the canonical coordinator worktree.
 Candidate review covers the whole branch against `pr_base` and runs the same
 complete quality implementation as worker review.
+Changes already published on the canonical branch still need a current receipt;
+use that exact version for a global quality refresh without manufacturing a
+worker handoff. Follow the integration protocol to synchronize a retained
+worktree after external changes.
 
 The integrator returns a passing report for its exact candidate. Publish only
 that candidate after checking assignment, base and configuration freshness.
@@ -44,6 +48,12 @@ unchanged, with no new `Hardcode-Source-Evidence` trailers. Follow the resulting
 status; progress publication alone does not
 require another integration task or quality run. This reuse applies only to an
 already accepted receipt, never to a candidate awaiting admission.
+
+A HEAD mismatch at admission is a publication/reconciliation issue. Compare the
+report's reviewed commit and canonical base with the actual canonical HEAD, then
+follow [Resume Publication](coordinator-integration.md#resume-publication).
+Identical file content does not satisfy exact-commit admission, and rerunning
+checks alone cannot complete a missing publication.
 
 For missing semantic evidence or unknown ownership, delegate a `review` task
 through [coordinator-integration.md](coordinator-integration.md). Supply the exact
