@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,8 @@ const CURRENT_EPOCH_FILE: &str = "current-epoch.yaml";
 struct CurrentEpoch {
     version: u8,
     recording_run_id: String,
+    #[serde(default)]
+    generation: u64,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +25,8 @@ struct EpochBoundary {
     version: u8,
     previous_recording_run_id: Option<String>,
     next_recording_run_id: String,
+    #[serde(default)]
+    generation: u64,
 }
 
 pub(crate) fn begin(target_root: &Path, recording_run_id: &str) -> Result<()> {
@@ -40,12 +44,18 @@ pub(crate) fn begin(target_root: &Path, recording_run_id: &str) -> Result<()> {
         return synchronize_progress(target_root);
     }
 
+    let generation = current
+        .as_ref()
+        .map_or(0, |epoch| epoch.generation)
+        .checked_add(1)
+        .context("progress epoch generation overflow")?;
     synchronize_progress(target_root)?;
     archive_current_progress(
         target_root,
         &progress_root,
         current.as_ref(),
         recording_run_id,
+        generation,
     )?;
     reset_progress(target_root)?;
     write_yaml(
@@ -53,6 +63,7 @@ pub(crate) fn begin(target_root: &Path, recording_run_id: &str) -> Result<()> {
         &CurrentEpoch {
             version: EPOCH_VERSION,
             recording_run_id: recording_run_id.to_string(),
+            generation,
         },
     )?;
     synchronize_progress(target_root)
@@ -63,15 +74,15 @@ fn archive_current_progress(
     progress_root: &Path,
     current: Option<&CurrentEpoch>,
     next_recording_run_id: &str,
+    generation: u64,
 ) -> Result<()> {
-    let history_root = progress_root
-        .join("history")
-        .join(format!("before-{next_recording_run_id}"));
+    let history_root = history_root(progress_root, next_recording_run_id, generation)?;
     let boundary_path = history_root.join("boundary.yaml");
     let boundary = EpochBoundary {
         version: EPOCH_VERSION,
         previous_recording_run_id: current.map(|epoch| epoch.recording_run_id.clone()),
         next_recording_run_id: next_recording_run_id.to_string(),
+        generation,
     };
     if let Some(existing) = read_yaml::<EpochBoundary>(&boundary_path)? {
         ensure!(
@@ -99,6 +110,22 @@ fn archive_current_progress(
         archive_file(&source, &destination)?;
     }
     write_yaml(&boundary_path, &boundary)
+}
+
+// Keep legacy/first-visit locations readable. Revisiting a recording gets a
+// separate transition archive, while retrying a transition keeps the same path.
+fn history_root(progress_root: &Path, run_id: &str, generation: u64) -> Result<PathBuf> {
+    let first = progress_root
+        .join("history")
+        .join(format!("before-{run_id}"));
+    let existing = read_yaml::<EpochBoundary>(&first.join("boundary.yaml"))?;
+    if existing.is_none_or(|boundary| boundary.generation == generation) {
+        Ok(first)
+    } else {
+        Ok(progress_root
+            .join("history")
+            .join(format!("before-{run_id}-epoch-{generation}")))
+    }
 }
 
 fn archive_file(source: &Path, destination: &Path) -> Result<()> {
@@ -217,14 +244,17 @@ fn archived_baseline(
     let Some(current) = read_current_epoch(&progress_root.join(CURRENT_EPOCH_FILE))? else {
         return Ok(None);
     };
-    let history_root = progress_root
-        .join("history")
-        .join(format!("before-{}", current.recording_run_id));
+    let history_root = history_root(
+        &progress_root,
+        &current.recording_run_id,
+        current.generation,
+    )?;
     let Some(boundary) = read_yaml::<EpochBoundary>(&history_root.join("boundary.yaml"))? else {
         return Ok(None);
     };
     ensure!(
-        boundary.next_recording_run_id == current.recording_run_id,
+        boundary.next_recording_run_id == current.recording_run_id
+            && boundary.generation == current.generation,
         "progress epoch archive {} does not belong to the current recording",
         history_root.display()
     );
@@ -418,6 +448,75 @@ mod tests {
         );
         assert!(second_history.join("progress.yaml").is_file());
         assert!(second_history.join("counted-runs.yaml").is_file());
+    }
+
+    #[test]
+    fn revisiting_recordings_preserves_each_epoch_and_cumulative_progress() {
+        let target = tempfile::tempdir().unwrap();
+        fs::create_dir(target.path().join(crate::repository::TRAFFIC_E2E_ROOT)).unwrap();
+        let progress_path = target.path().join(".traffic-e2e/progress.yaml");
+        let a = "20260911093000";
+        let b = "20260911094000";
+        for (index, run_id) in [a, b, a, b].into_iter().enumerate() {
+            begin(target.path(), run_id).unwrap();
+            append_observation(&progress_path, &format!("run-{index}"), "GET /a", 2);
+            begin(target.path(), run_id).unwrap();
+            let report = load(&progress_path, VerificationStage::Progress)
+                .unwrap()
+                .unwrap();
+            assert_eq!(report.totals.runs.executed, index as u64 + 1);
+            assert_eq!(report.totals.cases.executed, (index as u64 + 1) * 2);
+            assert_eq!(report.counted_observations.len(), 1);
+        }
+        let history = target
+            .path()
+            .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
+            .join("progress/history");
+        for name in [
+            format!("before-{a}"),
+            format!("before-{b}"),
+            format!("before-{a}-epoch-3"),
+            format!("before-{b}-epoch-4"),
+        ] {
+            assert!(history.join(name).join("boundary.yaml").is_file());
+        }
+    }
+
+    #[test]
+    fn legacy_epoch_without_generation_can_be_revisited() {
+        let target = tempfile::tempdir().unwrap();
+        fs::create_dir(target.path().join(crate::repository::TRAFFIC_E2E_ROOT)).unwrap();
+        let progress_path = target.path().join(".traffic-e2e/progress.yaml");
+        let a = "20260911093000";
+        begin(target.path(), a).unwrap();
+        append_observation(&progress_path, "first", "GET /a", 3);
+        let root = target
+            .path()
+            .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
+            .join("progress");
+        for path in [
+            root.join(CURRENT_EPOCH_FILE),
+            root.join(format!("history/before-{a}/boundary.yaml")),
+        ] {
+            let mut yaml: serde_yaml::Value =
+                serde_yaml::from_slice(&fs::read(&path).unwrap()).unwrap();
+            yaml.as_mapping_mut()
+                .unwrap()
+                .remove(serde_yaml::Value::String("generation".into()));
+            fs::write(path, serde_yaml::to_string(&yaml).unwrap()).unwrap();
+        }
+        begin(target.path(), a).unwrap();
+        begin(target.path(), "20260911094000").unwrap();
+        begin(target.path(), a).unwrap();
+        let report = load(&progress_path, VerificationStage::Progress)
+            .unwrap()
+            .unwrap();
+        assert_eq!(report.totals.runs.executed, 1);
+        assert_eq!(report.totals.cases.executed, 3);
+        assert!(
+            root.join(format!("history/before-{a}-epoch-2/boundary.yaml"))
+                .is_file()
+        );
     }
 
     #[test]

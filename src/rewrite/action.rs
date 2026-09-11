@@ -285,8 +285,7 @@ pub(super) fn envelope(
         api_inventory: Some(inventory::view(state)),
         process_output_inventory: Some(process_outputs::view(state)),
         latest_focused_e2e: latest_focused_e2e(state),
-        terminal_allowed: state.require_comparison
-            && super::expert::counts(state).2 == 0
+        terminal_allowed: super::expert::counts(state).2 == 0
             && super::review::terminal_current(target_root, state)
             && progress_publication::state(target_root, state)
                 == Some(progress_publication::PublicationState::Published),
@@ -312,7 +311,7 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
         Some(progress_publication::PublicationState::SynchronizationRequired) => {
             return advance_required(
                 target_root,
-                Some(&state.api),
+                (!state.api.is_empty()).then_some(state.api.as_str()),
                 "synchronize the final verification progress snapshot from the runner-owned ledger"
                     .to_string(),
             );
@@ -323,14 +322,6 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
                 summary: "commit every listed coordinator-managed final delivery file".to_string(),
                 required,
             };
-        }
-        Some(progress_publication::PublicationState::Published) if !state.require_comparison => {
-            return advance_required(
-                target_root,
-                None,
-                "finalize this recording batch and enable comparison for future recordings"
-                    .to_string(),
-            );
         }
         Some(progress_publication::PublicationState::Published) | None => {}
     }
@@ -455,7 +446,10 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
                 };
             }
             RewriteAction::Complete {
-            summary: if state
+            summary: if super::regression_scope::has_skips(state) && state.api_inventory.iter().all(|item| item.status.is_done()) {
+                let summary = inventory::view(state);
+                format!("regression scope complete: {} API(s) verified, {} skipped by {}; {} process output(s) verified", summary.completed, summary.skipped, super::regression_scope::PATH, state.process_outputs.inventory.len())
+            } else if state
                 .api_inventory
                 .iter()
                 .all(|item| item.status == super::model::RewriteApiStatus::Complete)
@@ -620,8 +614,7 @@ pub(super) fn workflow_view(state: &RewriteState) -> RewriteWorkflowView {
         phase: state.phase,
         scope: workflow_scope(state),
         recording_run_id: state.recording_run_id.clone(),
-        require_comparison: state.recording_require_comparison,
-        next_recording_require_comparison: state.require_comparison,
+        require_comparison: state.require_comparison,
         work_scope: process_outputs::selected_scope(state).or_else(|| {
             (!state.api.is_empty()).then(|| super::process_output_model::RewriteWorkScope::Api {
                 api: state.api.clone(),

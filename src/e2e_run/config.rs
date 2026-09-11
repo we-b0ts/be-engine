@@ -92,6 +92,7 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
         ])?;
     }
     let persisted = load_project_config(&target_root, &config_path)?;
+    crate::config::regression::initialize(&target_root)?;
 
     Ok(E2eRunInitResult {
         config: config_path,

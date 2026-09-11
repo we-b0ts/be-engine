@@ -82,7 +82,7 @@ fn detached_cli_operation_publishes_failure_and_status_does_not_restart_it() {
             "/wrong-route",
         ],
     );
-    assert_eq!(launched["schema_version"], 30);
+    assert_eq!(launched["schema_version"], 31);
     assert_eq!(
         launched["pending"],
         if launched["action"]["kind"] == "wait_required" {

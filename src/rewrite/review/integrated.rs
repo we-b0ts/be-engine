@@ -1,5 +1,5 @@
 use super::*;
-use crate::rewrite::model::{RewriteApiStatus, RewritePhase};
+use crate::rewrite::model::RewritePhase;
 
 pub(super) fn reuse_evidence(
     canonical_root: &Path,
@@ -71,10 +71,7 @@ pub(in crate::rewrite) fn required_action(
 ) -> Result<Option<RewriteAction>> {
     let terminal = state.phase == RewritePhase::SliceComplete
         && !state.api_inventory.is_empty()
-        && state
-            .api_inventory
-            .iter()
-            .all(|a| a.status == RewriteApiStatus::Complete)
+        && state.api_inventory.iter().all(|a| a.status.is_done())
         && crate::rewrite::process_outputs::all_complete(state);
     let ready = worker::runtime::scopes(state)
         .iter()

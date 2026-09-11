@@ -42,40 +42,16 @@ pub(super) fn synchronize_if_complete(target_root: &Path, state: &RewriteState) 
     Ok(())
 }
 
-/// Called only while holding the coordinator lock, before terminal output or a new batch.
-/// Status stays read-only and requests `next` until this durable transition completes.
-pub(super) fn finalize_if_published(
-    target_root: &Path,
-    store: &super::store::RewriteStore,
-    workflow: &mut RewriteState,
-) -> Result<()> {
-    if workflow.require_comparison
-        || state(target_root, workflow) != Some(PublicationState::Published)
-    {
-        return Ok(());
-    }
-    let fingerprint = super::fingerprint::repository_fingerprint(target_root)?;
-    let mut current = workflow.clone();
-    super::inventory::defer_completed_for_target_change(&mut current, &fingerprint)?;
-    super::process_outputs::defer_for_target_change(&mut current, &fingerprint);
-    if !workflow_complete(&current) {
-        return Ok(());
-    }
-    current.require_comparison = true;
-    current.bump();
-    store.save(&current)?;
-    *workflow = current;
-    Ok(())
-}
-
 fn workflow_complete(state: &RewriteState) -> bool {
     state.phase == RewritePhase::SliceComplete
         && !state.api_inventory.is_empty()
         && super::process_outputs::all_complete(state)
-        && state
-            .api_inventory
-            .iter()
-            .all(|item| item.status == RewriteApiStatus::Complete)
+        && state.api_inventory.iter().all(|item| {
+            item.status == RewriteApiStatus::Skipped
+                || (item.status == RewriteApiStatus::Complete
+                    && item.e2e_current
+                    && (!state.require_comparison || item.comparison_current))
+        })
 }
 
 fn inspect(target_root: &Path) -> Result<PublicationState> {
@@ -248,6 +224,8 @@ mod tests {
         let mut state = super::super::test_state();
         super::super::inventory::install(&mut state, vec!["GET /api".to_string()]).unwrap();
         state.api_inventory[0].status = RewriteApiStatus::Complete;
+        state.api_inventory[0].e2e_current = true;
+        state.api_inventory[0].comparison_current = true;
         state.phase = RewritePhase::SliceComplete;
         state.e2e_current = true;
         state.comparison_current = true;

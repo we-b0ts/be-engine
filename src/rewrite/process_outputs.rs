@@ -75,7 +75,9 @@ pub(super) fn next_eligible_id(state: &RewriteState) -> Option<&str> {
     let api_dispatch_complete = state.api_inventory.iter().all(|item| {
         matches!(
             item.status,
-            RewriteApiStatus::ImplementationRequired | RewriteApiStatus::Complete
+            RewriteApiStatus::ImplementationRequired
+                | RewriteApiStatus::Complete
+                | RewriteApiStatus::Skipped
         ) || (state.current_api_index.is_some_and(|index| {
             state
                 .api_inventory
@@ -93,10 +95,7 @@ pub(super) fn next_eligible_id(state: &RewriteState) -> Option<&str> {
         return Some(&item.id);
     }
     let apis_complete = !state.api_inventory.is_empty()
-        && state
-            .api_inventory
-            .iter()
-            .all(|item| item.status == RewriteApiStatus::Complete);
+        && state.api_inventory.iter().all(|item| item.status.is_done());
     if !apis_complete {
         return None;
     }
@@ -252,10 +251,7 @@ fn ensure_eligible(
             "process output {id} is scheduled after every API work item is dispatched"
         ),
         RewriteProcessOutputStatus::RevalidationPending => ensure!(
-            state
-                .api_inventory
-                .iter()
-                .all(|item| item.status == RewriteApiStatus::Complete),
+            state.api_inventory.iter().all(|item| item.status.is_done()),
             "process output {id} revalidation waits for every API to complete"
         ),
         RewriteProcessOutputStatus::ImplementationRequired

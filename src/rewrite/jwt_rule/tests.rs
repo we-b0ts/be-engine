@@ -116,7 +116,11 @@ fn fixture() -> Fixture {
     state.group_id = Some("GET /api".into());
     state.e2e_current = false;
     state.require_comparison = false;
-    state.recording_require_comparison = false;
+    fs::write(
+        root.join(crate::config::regression::PATH),
+        "require_comparison: false\n",
+    )
+    .unwrap();
     state.active_issue = Some(RewriteIssue {
         id: "issue-jwt".into(),
         kind: RewriteIssueKind::Response,

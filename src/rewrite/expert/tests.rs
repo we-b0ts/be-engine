@@ -550,6 +550,10 @@ fn pass_api(root: &Path, state: &mut RewriteState) {
     state.api_inventory[0].verified_target_fingerprint = Some(fingerprint.clone());
     state.target_fingerprint = Some(fingerprint);
     state.api_inventory[0].status = RewriteApiStatus::Complete;
+    state.api_inventory[0].e2e_current = true;
+    state.api_inventory[0].comparison_current = true;
+    state.e2e_current = true;
+    state.comparison_current = true;
     state.phase = RewritePhase::SliceComplete;
     state.active_issue = None;
 }

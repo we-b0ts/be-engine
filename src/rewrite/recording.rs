@@ -49,6 +49,7 @@ pub fn request_rewrite_recording(
     options: RewriteRecordingRequestOptions,
 ) -> Result<RewriteActionEnvelope> {
     let (target_root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
+    super::regression_scope::ensure_fresh_allowed(&target_root)?;
     let store = RewriteStore::new(&target_root)?;
     let requested_api = options.api.as_ref().map(ToString::to_string);
     let Some(_lock) = store.try_lock()? else {
@@ -117,7 +118,6 @@ pub fn request_rewrite_recording(
             ExistingRecordingDisposition::Replace => {}
         }
     }
-    super::progress_publication::finalize_if_published(&target_root, &store, &mut state)?;
     let run_id = artifacts::allocate_run_id_excluding(
         &target_root,
         ManagedRecordingOperation::Record,
@@ -521,8 +521,8 @@ fn recording_action_context(
         )),
         RewritePhase::ComparisonRecordingRequired => {
             ensure!(
-                state.recording_require_comparison,
-                "this recording batch does not require comparison; execute `backend-rewrite next`"
+                state.require_comparison,
+                "regression.yaml does not require comparison; execute `backend-rewrite next`"
             );
             let run_id = state
                 .comparison_run_id
@@ -641,7 +641,6 @@ pub(super) fn reset_for_fresh_recording(
         state.source_route_bindings.clear();
     }
     state.recording_run_id = run_id;
-    state.recording_require_comparison = state.require_comparison;
     state.recording_rejection = None;
     state.recording_settings = settings;
     state.recording_request_reason = Some(reason);
@@ -700,6 +699,7 @@ pub(super) fn begin_pending_capture_refresh(
     if inventory::has_runnable_work(state) {
         return Ok(false);
     }
+    super::regression_scope::ensure_fresh_allowed(target_root)?;
     ensure!(
         super::fingerprint::project_config_revision(target_root)?
             == refresh.project_config_revision,

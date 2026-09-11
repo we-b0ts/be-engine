@@ -113,6 +113,13 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 state.target_fingerprint = None;
                 state.bump();
             }
+            if let Some(api) = options.api.as_ref()
+                && let Some(envelope) =
+                    regression_scope::skipped_envelope(&target_root, &state, &api.to_string())
+            {
+                store.save(&state)?;
+                return Ok(envelope);
+            }
             if let Some(requested_api) = options.api.as_ref()
                 && requested_api.to_string() != state.api
                 && matches!(
@@ -183,7 +190,6 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                     return Ok(action::envelope(&target_root, &state, review));
                 }
                 progress_publication::synchronize_if_complete(&target_root, &state)?;
-                progress_publication::finalize_if_published(&target_root, &store, &mut state)?;
                 let scoped = inventory::scoped(&state, options.api.as_ref())?;
                 return action::for_status(&target_root, &scoped);
             }
@@ -238,6 +244,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 workflow_id: format!("rewrite-{}", uuid::Uuid::new_v4().simple()),
                 recording_apis,
                 api_inventory: Vec::new(),
+                skipped_api_statuses: Default::default(),
                 source_route_bindings: std::collections::BTreeMap::new(),
                 current_api_index: None,
                 parked_slices: std::collections::BTreeMap::new(),
@@ -251,8 +258,8 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 target_quality_fingerprint: None,
                 delivery_review_required: false,
                 recording_run_id,
-                require_comparison: false,
-                recording_require_comparison: false,
+                require_comparison: crate::config::regression::RegressionScope::load(&target_root)?
+                    .require_comparison,
                 recording_rejection: None,
                 recording_settings: RewriteRecordingSettings::default(),
                 recording_request_reason: None,
@@ -282,8 +289,14 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                     comparison_current: false,
                 },
             };
-            let excluded_run_id = state.recording_run_id.clone();
-            recording_input::bind(&target_root, &mut state, Some(&excluded_run_id))?;
+            regression_scope::apply(&target_root, &mut state)?;
+            if crate::config::regression::RegressionScope::load(&target_root)?
+                .recording_run_id
+                .is_none()
+            {
+                let excluded_run_id = state.recording_run_id.clone();
+                recording_input::bind(&target_root, &mut state, Some(&excluded_run_id))?;
+            }
             store.save(&state)?;
             state
         }
@@ -302,6 +315,9 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
     }
 
     if state.phase == RewritePhase::RecordingRequired
+        && crate::config::regression::RegressionScope::load(&target_root)?
+            .recording_run_id
+            .is_none()
         && recording::standard_recording_input_source(&state).is_none()
         && !recording::requires_external_live_traffic(&state)
     {
@@ -332,6 +348,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 artifacts::RecordingPublication::Finalized => {}
             }
             if let Err(error) = artifacts::validate_standard_recording(&target_root, &state) {
+                regression_scope::ensure_fresh_allowed(&target_root).context(error.to_string())?;
                 state.recording_rejection = Some(artifacts::recording_rejection(&error));
                 state.recording_run_id =
                     artifacts::allocate_run_id(&target_root, ManagedRecordingOperation::Record)?;
@@ -351,6 +368,8 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
             let apis = match artifacts::standard_recording_apis(&target_root, &state) {
                 Ok(apis) => apis,
                 Err(error) => {
+                    regression_scope::ensure_fresh_allowed(&target_root)
+                        .context(error.to_string())?;
                     state.recording_rejection = Some(artifacts::recording_rejection(&error));
                     state.recording_run_id = artifacts::allocate_run_id(
                         &target_root,
@@ -377,6 +396,11 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
             inventory::install(&mut state, apis)?;
             process_outputs::install(&mut state, &project.process_outputs);
             state.recording_refresh = None;
+            regression_scope::apply(&target_root, &mut state)?;
+            if state.current_api_index.is_none() {
+                store.save(&state)?;
+                return Ok(action::for_state(&target_root, &state));
+            }
             if inventory::current_requires_source_route(&state) {
                 state.phase = RewritePhase::ApiPending;
                 state.bump();
@@ -447,6 +471,10 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 return Ok(action::envelope(&target_root, &state, required));
             }
 
+            if regression_scope::start_if_required(&target_root, &mut state)? {
+                store.save(&state)?;
+                return Ok(action::for_state(&target_root, &state));
+            }
             if inventory::current_requires_source_route(&state) {
                 return Ok(action::for_state(&target_root, &state));
             }

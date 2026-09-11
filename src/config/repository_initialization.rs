@@ -36,6 +36,7 @@ const TARGET_TEMPLATE_PACKAGE: &str = "traffic-e2e-target-template";
 const TARGET_TEMPLATE_CACHE_ID: &str = "traffic-e2e-template-target";
 const TARGET_GITIGNORE_RULES: &[&str] = &[
     crate::repository::LOCAL_GITIGNORE_RULE,
+    crate::config::regression::GITIGNORE_RULE,
     "/target/",
     "**/target/",
     "/data/",
@@ -52,6 +53,7 @@ const TARGET_GITIGNORE_RULES: &[&str] = &[
 const TARGET_DOCKERIGNORE_RULES: &[&str] = &[
     "/.git/",
     "/.traffic-e2e/local/",
+    crate::config::regression::GITIGNORE_RULE,
     "/target/",
     "**/target/",
     "/data/",
@@ -181,6 +183,13 @@ fn initialize_repository_config_with(
         ),
         (configuration_targets[2].clone(), verification.into_bytes()),
     ];
+    let regression = target_root.join(crate::config::regression::PATH);
+    if !regression.exists() {
+        files.push((
+            regression,
+            crate::config::regression::TEMPLATE.as_bytes().to_vec(),
+        ));
+    }
     files.append(&mut target_files);
     let mut generated = files
         .iter()
@@ -677,7 +686,17 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result.generated.len(), 11);
+        assert_eq!(result.generated.len(), 12);
+        assert!(
+            crate::config::regression::RegressionScope::load(target.path())
+                .unwrap()
+                .require_comparison
+        );
+        assert!(
+            result
+                .generated
+                .contains(&target.path().join(crate::config::regression::PATH))
+        );
         assert_eq!(result.http_backend_port, 8_181);
         assert_eq!(result.http_gateway_port, 4_080);
         assert_eq!(result.local_dir, PathBuf::from(LOCAL_DIR));

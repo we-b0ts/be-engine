@@ -42,6 +42,7 @@ fn repository_files_hash(target_root: &Path) -> Result<Fnv1a> {
         crate::internal_runtime::LOCAL_GIT_PATHSPEC,
     ];
     paths_args.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
+    paths_args.push(crate::config::regression::GIT_PATHSPEC);
     let listed = git_bytes(target_root, &paths_args)?;
     let mut paths = listed
         .split(|byte| *byte == 0)
@@ -252,6 +253,24 @@ mod tests {
         git_ok(repository.path(), &["commit", "-m", "baseline"]);
 
         let baseline = repository_fingerprint(repository.path()).unwrap();
+        let regression = repository.path().join(crate::config::regression::PATH);
+        fs::write(&regression, "require_comparison: false\n").unwrap();
+        assert_eq!(repository_fingerprint(repository.path()).unwrap(), baseline);
+        let code = code_fingerprint(repository.path()).unwrap();
+        git_ok(repository.path(), &["add", crate::config::regression::PATH]);
+        git_ok(
+            repository.path(),
+            &["commit", "-m", "track local regression policy"],
+        );
+        fs::write(
+            &regression,
+            "recording_run_id: \"20260911093000\"\nrequire_comparison: true\nskip: [GET /a]\n",
+        )
+        .unwrap();
+        assert_eq!(repository_fingerprint(repository.path()).unwrap(), baseline);
+        assert_eq!(code_fingerprint(repository.path()).unwrap(), code);
+        fs::remove_file(&regression).unwrap();
+        assert_eq!(repository_fingerprint(repository.path()).unwrap(), baseline);
         for name in [
             "progress.yaml",
             "replay-progress.yaml",

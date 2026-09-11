@@ -132,6 +132,7 @@ pub(super) fn verify(
 
     match route.kind.as_str() {
         "recorder_capability_gap" => {
+            super::regression_scope::ensure_fresh_allowed(target_root)?;
             let run_id = artifacts::allocate_run_id_excluding(
                 target_root,
                 ManagedRecordingOperation::Record,
@@ -145,6 +146,7 @@ pub(super) fn verify(
             );
         }
         "source_change" => {
+            super::regression_scope::ensure_fresh_allowed(target_root)?;
             let run_id = artifacts::allocate_run_id_excluding(
                 target_root,
                 ManagedRecordingOperation::Record,
