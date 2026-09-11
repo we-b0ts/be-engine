@@ -1656,9 +1656,10 @@ Switching the ID resets current API and process-output verification and retains
 historical artifacts and cumulative progress. Returning to an earlier ID starts
 a separate progress epoch. The YAML edit still does not change code or target
 fingerprints, but verification must run against the selected recording. Remove
-the field before requesting a fresh recording or completing a required capture
-refresh. Omitting the field preserves the current baseline and the existing
-automatic recording workflow.
+or clear the field before requesting a fresh recording or completing a required
+capture refresh. Omitting the field, `recording_run_id:`, `recording_run_id: null`
+and `recording_run_id: ""` all preserve the current baseline and the existing
+automatic recording workflow. Nonempty values must still be valid recording IDs.
 
 `status`, `inventory` and `next` use the current settings between traffic
 operations. Excluded APIs are reported as `skipped`, do not dispatch workers or

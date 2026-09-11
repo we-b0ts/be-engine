@@ -184,7 +184,7 @@ async fn unavailable_pinned_recording_blocks_status_and_next_without_fallback() 
 }
 
 #[test]
-fn switching_recordings_resets_verification_and_removing_pin_keeps_current_baseline() {
+fn switching_recordings_resets_verification_and_clearing_pin_keeps_current_baseline() {
     let root = target();
     record(
         root.path(),
@@ -231,6 +231,12 @@ fn switching_recordings_resets_verification_and_removing_pin_keeps_current_basel
     assert_eq!(reloaded.recording_run_id, A);
     assert_eq!(reloaded.phase, RewritePhase::SliceComplete);
     assert!(reloaded.e2e_current && reloaded.comparison_current);
+    policy(root.path(), "", "");
+    ensure_fresh_allowed(root.path()).unwrap();
+    assert_eq!(
+        serde_json::to_value(store.load().unwrap().unwrap()).unwrap(),
+        serde_json::to_value(&reloaded).unwrap()
+    );
     policy(root.path(), A, "");
     fs::remove_dir_all(artifacts::recording_run(root.path(), A)).unwrap();
     assert!(store.load().is_err());
@@ -326,7 +332,12 @@ fn invalid_run_ids_and_new_inventory_selectors_do_not_mutate_state() {
     );
     let mut state = test_support::test_state();
     let original = serde_json::to_value(&state).unwrap();
-    for id in ["", "../20260911093000", "2026091109300x", "202609110930000"] {
+    for id in [
+        " ",
+        "../20260911093000",
+        "2026091109300x",
+        "202609110930000",
+    ] {
         policy(root.path(), id, "");
         assert!(super::super::apply(root.path(), &mut state).is_err());
         assert_eq!(serde_json::to_value(&state).unwrap(), original);
@@ -334,4 +345,41 @@ fn invalid_run_ids_and_new_inventory_selectors_do_not_mutate_state() {
     policy(root.path(), A, "only: [GET /typo]\n");
     assert!(super::super::apply(root.path(), &mut state).is_err());
     assert_eq!(serde_json::to_value(&state).unwrap(), original);
+}
+
+#[tokio::test]
+async fn omitted_null_and_empty_recording_ids_keep_automatic_recording_available() {
+    for config in [
+        "only: []\n",
+        "recording_run_id:\n",
+        "recording_run_id: null\n",
+        "recording_run_id: \"\"\n",
+    ] {
+        let root = target();
+        fs::write(root.path().join(PATH), config).unwrap();
+        ensure_fresh_allowed(root.path()).unwrap();
+        let status = rewrite::status_rewrite(RewriteContext {
+            target_root: root.path().into(),
+        })
+        .unwrap();
+        assert!(!status.initialized);
+        let action = next(root.path()).await.unwrap();
+        assert!(matches!(
+            action.action,
+            RewriteAction::RecordingRequired { .. }
+        ));
+        let state = RewriteStore::new(root.path())
+            .unwrap()
+            .load()
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.phase, RewritePhase::RecordingRequired);
+        assert_eq!(state.recording_run_id.len(), 14);
+        assert!(
+            state
+                .recording_run_id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+        );
+    }
 }
