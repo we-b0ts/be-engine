@@ -161,6 +161,28 @@ fn checks_passed(
     Ok(())
 }
 
+fn require_published_head(
+    root: &Path,
+    report: &RewriteReviewReport,
+    integration: &IntegrationReview,
+) -> Result<()> {
+    let published = head(root)?;
+    if published == report.head_revision {
+        return Ok(());
+    }
+    let recovery = if published == integration.canonical_base_revision {
+        "reviewed candidate is not published; reconcile the assignment and canonical inputs, then fast-forward the canonical branch to the exact reviewed commit before retrying admission. Equal file content does not waive publication; do not rerun review check solely for this HEAD mismatch"
+    } else {
+        "canonical HEAD changed from the reviewed base; reconcile publication and return stale work to the integrator before retrying admission. Do not reset the canonical branch or repeat check/accept with unchanged inputs"
+    };
+    anyhow::bail!(
+        "{recovery}; canonical_root={}, published_head={published}, reviewed_head={}, reviewed_canonical_base={}",
+        root.display(),
+        report.head_revision,
+        integration.canonical_base_revision
+    )
+}
+
 /// Called under the coordinator lock after publication. Only validates the
 /// delivered receipt; returns the worker commit only for a nonempty integration.
 /// Never executes review commands or writes worker state.
@@ -187,6 +209,7 @@ pub(in crate::rewrite) fn accept_locked(
         "integration report dispatch is stale"
     );
     let (_, project) = crate::e2e_run::resolve_project(root)?;
+    require_published_head(root, &report, integration)?;
     validate(root, root, state, &report, &project)?;
     source_diff::git_text(
         root,

@@ -232,6 +232,16 @@ and no new `Hardcode-Source-Evidence` commit trailers.
 The engine checks this automatically; do not manufacture another handoff or
 rerun checks merely to publish progress metadata.
 
+After external changes are published on the canonical migration branch, prepare
+the retained integration worktree at that current commit for a global quality
+refresh. Preserve divergent or unfinished work; do not create an empty merge to
+refresh an obsolete integration branch. If review needs no new code or evidence
+commit, its candidate is the current canonical commit and can be admitted
+without another merge. Otherwise publish the exact reviewed candidate before
+admission, even when its files equal the canonical files. Admission errors show
+the published HEAD, reviewed HEAD and reviewed canonical base so the coordinator
+can finish publication or reconcile a changed base instead of repeating checks.
+
 Use `traffic-e2e config ... init` for one-time target configuration and
 `traffic-e2e prepare|run-api|run|status|recover|abort` for the standard
 workflow. Use `traffic-e2e config recorder|replay|comparison plan|apply` for

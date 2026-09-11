@@ -40,6 +40,16 @@ stale final quality reports also use this assignment. Match the inspected target
 version and prepare the retained worktree at that base, preserving unfinished
 work. A review does not imply an API implementation issue.
 
+When canonical code was updated outside this workflow, use its current commit
+as the review assignment base. If the retained integration branch is an
+ancestor and its worktree is clean, fast-forward it to that base. If it has
+diverged, preserve its commits and unfinished work and ask the integrator to
+identify any undelivered changes; do not merge old history merely to refresh a
+review worktree. With no remaining delivery, prepare a clean branch at the
+current base in the retained worktree and review that exact commit. External
+publication does not itself provide a quality receipt or authorize a new API
+handoff.
+
 Keep the original payload across interruptions. Do not replace its identity
 with newer status fields to make an old result current.
 
@@ -104,7 +114,9 @@ commands in the coordinator or accept only the worker's earlier report.
 
 Record publication as in progress before changing canonical HEAD. Fast-forward
 to the exact candidate using Git; when candidate equals base, verify that identity
-and leave HEAD in place. No new engine publication command is implied.
+and leave HEAD in place. Compare commit IDs, not just file diffs: a distinct
+candidate with identical files still requires publication before admission.
+No new engine publication command is implied.
 Apply required inputs through [coordinator-startup-inputs.md](coordinator-startup-inputs.md)
 or [coordinator-rule-actions.md](coordinator-rule-actions.md), and follow
 configuration commit requirements. Only when code and required inputs are in
@@ -134,3 +146,12 @@ A matching already-published candidate is not merged again. Complete missing
 supported input/report steps before starting acceptance. If publication cannot
 be proven from the retained identity, obtain the exact missing result or runtime
 state; do not reset code, assume completion, or fabricate a recovery command.
+
+If admission reports a HEAD mismatch, compare the published HEAD, report
+`head_revision`, and `integration.canonical_base_revision` before retrying.
+When the canonical branch remains at the reviewed base, complete the missing
+publication after checking assignment and input freshness, then submit the same
+passing receipt. If the canonical branch moved elsewhere, reconcile the current
+assignment and refresh stale work through the integrator. Repeating review
+checks does not publish a candidate; do not loop check/accept while these
+identities remain unchanged.

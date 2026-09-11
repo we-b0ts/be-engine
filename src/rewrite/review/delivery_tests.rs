@@ -564,3 +564,135 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
     ));
     assert_eq!(fs::read_to_string(&counter).unwrap(), "x");
 }
+
+#[test]
+fn external_change_can_refresh_review_at_the_canonical_commit_without_another_merge() {
+    let directory = tempfile::tempdir().unwrap();
+    let counter = directory.path().join("checks");
+    let target = target(serde_json::json!([{
+        "name": "count-checks",
+        "argv": ["sh", "-c", "printf x >> \"$1\"", "quality-test", counter]
+    }]));
+    let integration = worktree(target.path(), directory.path(), "integration");
+    let report = check(options(target.path(), &integration, None)).unwrap();
+    accept(target.path().into(), report.report_path).unwrap();
+
+    // External changes invalidate the receipt and leave the retained worktree behind.
+    commit_code(target.path());
+    let published = candidate::head(target.path()).unwrap();
+    let store = RewriteStore::new(target.path()).unwrap();
+    let mut state = store.load().unwrap().unwrap();
+    state.phase = crate::rewrite::RewritePhase::ApiPending;
+    store.save(&state).unwrap();
+    assert!(matches!(
+        required_action(target.path(), &state).unwrap(),
+        Some(RewriteAction::SourceReviewRequired { .. })
+    ));
+    assert!(check(options(target.path(), &integration, None)).is_err());
+    assert_eq!(fs::read_to_string(&counter).unwrap(), "x");
+
+    git(&integration, &["merge", "--ff-only", &published]);
+    let report = check(options(target.path(), &integration, None)).unwrap();
+    assert_eq!(report.status, ReviewStatus::Passed);
+    assert_eq!(report.head_revision, published);
+    assert_eq!(report.base_revision, published);
+    assert!(report.scope.is_none());
+    accept(target.path().into(), report.report_path).unwrap();
+    let state = store.load().unwrap().unwrap();
+    assert!(terminal_current(target.path(), &state));
+    assert!(required_action(target.path(), &state).unwrap().is_none());
+    assert!(state.worker_bindings.is_empty());
+    assert_eq!(candidate::head(target.path()).unwrap(), published);
+    assert_eq!(fs::read_to_string(&counter).unwrap(), "xx");
+}
+
+#[test]
+fn unpublished_candidates_require_publication_instead_of_repeated_checks() {
+    for variant in ["code_change", "empty_merge"] {
+        let directory = tempfile::tempdir().unwrap();
+        let counter = directory.path().join("checks");
+        let target = target(serde_json::json!([{
+            "name": "count-checks",
+            "argv": ["sh", "-c", "printf x >> \"$1\"", "quality-test", counter]
+        }]));
+        let integration = worktree(target.path(), directory.path(), "integration");
+        if variant == "empty_merge" {
+            git(
+                &integration,
+                &["commit", "--allow-empty", "-qm", "old integration metadata"],
+            );
+            commit_code(target.path());
+            let published = candidate::head(target.path()).unwrap();
+            git(
+                &integration,
+                &["merge", "-qm", "refresh old branch", &published],
+            );
+            assert!(
+                source_diff::git_text(&integration, &["diff", &published, "HEAD", "--"])
+                    .unwrap()
+                    .is_empty()
+            );
+        } else {
+            commit_code(&integration);
+        }
+        let published = candidate::head(target.path()).unwrap();
+        let report = check(options(target.path(), &integration, None)).unwrap();
+        assert_eq!(report.status, ReviewStatus::Passed);
+        assert_ne!(report.head_revision, published);
+        let store = RewriteStore::new(target.path()).unwrap();
+        let before = serde_json::to_value(store.load().unwrap().unwrap()).unwrap();
+        let error = accept(target.path().into(), report.report_path.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("reviewed candidate is not published"),
+            "{variant}: {error}"
+        );
+        assert!(error.contains(&format!("published_head={published}")));
+        assert!(error.contains(&format!("reviewed_head={}", report.head_revision)));
+        assert!(error.contains(&format!("reviewed_canonical_base={published}")));
+        assert_eq!(candidate::head(target.path()).unwrap(), published);
+        assert_eq!(
+            serde_json::to_value(store.load().unwrap().unwrap()).unwrap(),
+            before
+        );
+        assert!(!integrated_path(target.path()).exists());
+
+        // Publish, then admit the same receipt without executing checks again.
+        git(
+            target.path(),
+            &["merge", "--ff-only", &report.head_revision],
+        );
+        accept(target.path().into(), report.report_path).unwrap();
+        assert!(terminal_current(
+            target.path(),
+            &store.load().unwrap().unwrap()
+        ));
+        assert_eq!(fs::read_to_string(&counter).unwrap(), "x");
+    }
+}
+
+#[test]
+fn canonical_commit_drift_requires_reconciliation_even_with_identical_files() {
+    let target = target(serde_json::json!([]));
+    let directory = tempfile::tempdir().unwrap();
+    let integration = worktree(target.path(), directory.path(), "integration");
+    let report = check(options(target.path(), &integration, None)).unwrap();
+    git(
+        target.path(),
+        &["commit", "--allow-empty", "-qm", "external metadata"],
+    );
+    let published = candidate::head(target.path()).unwrap();
+    let error = accept(target.path().into(), report.report_path)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("canonical HEAD changed from the reviewed base"),
+        "{error}"
+    );
+    assert!(error.contains(&format!("published_head={published}")));
+    assert!(error.contains(&format!("reviewed_head={}", report.head_revision)));
+    assert!(!error.contains("reviewed candidate is not published"));
+    assert_eq!(candidate::head(target.path()).unwrap(), published);
+    assert!(!integrated_path(target.path()).exists());
+}

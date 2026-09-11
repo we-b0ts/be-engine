@@ -65,6 +65,12 @@ Inspect only the assigned findings at the supplied version. Read
 [source-review-rules.md](source-review-rules.md) when source rules or spawn evidence apply.
 Verify that the integration worktree matches the assigned base and inspected
 version before inspecting source; return `stale` if they differ.
+For externally published changes, the assigned version is the current canonical
+commit. A quality refresh with no new code or evidence changes returns that
+exact commit and its passing report. Do not create an empty commit or merge to
+carry old integration history forward. If the retained branch has diverged,
+preserve its work and identify any undelivered changes before preparing a clean
+branch at the assigned base in the retained worktree.
 Trace affected callers and commit provenance to supply current evidence or the
 responsible API/process-output owner. Do not assign a shared defect to the
 currently selected API merely because that API exposed it.
