@@ -51,8 +51,10 @@ pub(in crate::rewrite) fn overlay(target_root: &Path, state: &mut RewriteState) 
         if update.revision <= state.worker_event_revision {
             continue;
         }
-        // Inventory refreshes may remove items; late snapshots never resurrect them.
-        let retained = state.api == key
+        // Retained bindings also carry API expert coverage across recording batches.
+        // A removed item without a retained binding must not be resurrected.
+        let retained = state.worker_bindings.contains_key(&key)
+            || state.api == key
             || state.api_inventory.iter().any(|item| item.api == key)
             || state
                 .process_outputs
@@ -76,12 +78,15 @@ pub(in crate::rewrite) fn publish(
     state: &RewriteState,
     scope: &RewriteWorkScope,
 ) -> Result<()> {
-    let key = scope.binding_key();
-    let binding = state
-        .worker_bindings
-        .get(&key)
-        .context("worker update has no binding")?
-        .clone();
+    publish_many(target_root, state, std::slice::from_ref(scope))
+}
+
+/// Publish a whole expert batch atomically under the same feedback lock.
+pub(in crate::rewrite) fn publish_many(
+    target_root: &Path,
+    state: &RewriteState,
+    scopes: &[RewriteWorkScope],
+) -> Result<()> {
     let mut updates = load(target_root)?;
     if updates.workflow_id != state.workflow_id {
         updates = WorkerUpdates {
@@ -94,13 +99,21 @@ pub(in crate::rewrite) fn publish(
         .max(state.worker_event_revision)
         .checked_add(1)
         .context("worker feedback revision overflow")?;
-    updates.bindings.insert(
-        key,
-        BindingUpdate {
-            revision: updates.revision,
-            binding,
-        },
-    );
+    for scope in scopes {
+        let key = scope.binding_key();
+        let binding = state
+            .worker_bindings
+            .get(&key)
+            .context("worker update has no binding")?
+            .clone();
+        updates.bindings.insert(
+            key,
+            BindingUpdate {
+                revision: updates.revision,
+                binding,
+            },
+        );
+    }
     let path = root(target_root).join("worker-updates.json");
     let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4().simple()));
     let mut file = OpenOptions::new()

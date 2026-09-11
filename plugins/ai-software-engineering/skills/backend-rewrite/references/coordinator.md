@@ -65,7 +65,7 @@ AI-owned reference and handoff context, never as engine state;
 
 ## Coordinator Loop
 
-Use the existing `backend-rewrite` interface. Response schema v28 actions have
+Use the existing `backend-rewrite` interface. Response schema v30 actions have
 exactly `kind`, `summary`, `details`, and `commands`. Status/next expose scheduling
 and short issue facts, not diagnostic payloads. Default `workflow` has `id` and
 `revision`; use `inventory` for binding recovery and scheduling detail. Never
@@ -85,6 +85,7 @@ state = status()
 while true:
     reconcile implementation-worker results through the worker protocol
     reconcile integrator and route-analysis results with retained assignments
+    reconcile expert results and forward reports through the worker protocol
     refresh state from the latest report response, or status() if needed
     if state.terminal_allowed:
         finish delivery and break
@@ -116,7 +117,10 @@ execute those engine actions even when the implementation worker is running.
 
 Check for arrived events after every action, even while `pending` stays positive;
 do not hold handoffs until the queue drains or a sixty-minute activity report
-expires. Report responses replace the previous scheduling action. Preserve each
+expires. Dispatch experts only through engine-issued
+[API expert assistance](coordinator-worker-protocol.md#api-expert-assistance);
+do not initiate it yourself. Forward arrived expert reports on the same loop.
+Report responses replace the previous scheduling action. Preserve each
 event's actual worker handle, dispatch identity, and delivered handoff identity;
 check them against the engine's current binding. Never relabel a stale event
 with a newer dispatch or another handoff ID. An unknown worker activity is not
@@ -325,8 +329,8 @@ require progress commits.
 
 ### Worker And Integration Actions
 
-For `implementation_required`, `worker_status_required`, and
-`integration_required`, follow
+For `implementation_required`, `worker_status_required`, `integration_required`,
+and `expert_required`, follow
 [coordinator-worker-protocol.md](coordinator-worker-protocol.md).
 Dispatch/resume, task runtime observations, handoffs, and integration are reported
 through the exact returned commands. Confirmation belongs to one work item;

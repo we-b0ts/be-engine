@@ -273,7 +273,7 @@ fn one_handle_is_bound_and_resumed_for_later_dispatches() {
         RewriteWorkerDispatchState::Confirmed
     );
     assert!(
-        !serde_json::to_string(&dispatch_view(&state, None))
+        serde_json::to_string(&dispatch_view(&state, None))
             .unwrap()
             .contains("runtime-handle-a")
     );
@@ -351,8 +351,13 @@ fn transfer_rejects_a_handle_owned_by_another_api() {
             review_assignment: None,
             review_report: None,
             agent_handle_fingerprint: other_fingerprint,
+            agent_handle: Some("other-api-runtime-handle".into()),
             agent_name: None,
             confirmed_dispatch_id: "other-dispatch".to_string(),
+            first_bound_at: None,
+            last_integrated_at: None,
+            last_integrated_commit: None,
+            expert: None,
             transfer_generation: 0,
             rework_generation: 0,
             last_transfer: None,
@@ -376,33 +381,36 @@ fn transfer_rejects_a_handle_owned_by_another_api() {
 }
 
 #[test]
-fn transfer_entrypoint_requires_approval_and_current_binding_id() {
+fn transfer_entrypoint_requires_approval_and_current_handle() {
     let target = configured_target();
     let store = RewriteStore::new(target.path()).unwrap();
     let mut state = implementation_state_with_inventory(false);
     confirm_current_for_test(&mut state);
-    let current_binding_id = binding_id(&state);
+    let current_handle = state.worker_bindings["GET /api"]
+        .agent_handle
+        .clone()
+        .unwrap();
     store.save(&state).unwrap();
-    let options = |binding_id: &str, caller_approved| RewriteWorkerTransferOptions {
+    let options = |previous_handle: &str, caller_approved| RewriteWorkerTransferOptions {
         target_root: target.path().to_path_buf(),
-        binding_id: binding_id.to_string(),
+        previous_agent_handle: previous_handle.to_string(),
         agent_handle: "replacement-runtime-handle".to_string(),
         agent_name: Some("replacement-worker".to_string()),
         reason: "stored handle is unavailable after session replacement".to_string(),
         caller_approved,
     };
 
-    let error = transfer(options(&current_binding_id, false)).unwrap_err();
+    let error = transfer(options(&current_handle, false)).unwrap_err();
     assert!(error.to_string().contains("explicit caller approval"));
     assert_eq!(
         store.load().unwrap().unwrap().worker_bindings["GET /api"].transfer_generation,
         0
     );
 
-    let error = transfer(options("stale-binding-id", true)).unwrap_err();
-    assert!(error.to_string().contains("binding id is stale"));
+    let error = transfer(options("stale-handle", true)).unwrap_err();
+    assert!(error.to_string().contains("no outstanding worker binding"));
 
-    transfer(options(&current_binding_id, true)).unwrap();
+    transfer(options(&current_handle, true)).unwrap();
     let persisted = store.load().unwrap().unwrap();
     assert_eq!(persisted.worker_bindings["GET /api"].transfer_generation, 1);
     assert!(current_is_confirmed(&persisted));
@@ -434,9 +442,11 @@ fn work_item_diagnostics_retain_a_structured_dispatch_gate() {
         blocked["action"]["details"]["worker"]["requested_api"],
         "POST /other"
     );
-    assert_eq!(
-        blocked.pointer("/action/commands/confirm_worker/required_env_names/0"),
-        Some(&serde_json::json!(AGENT_HANDLE_ENV))
+    assert!(
+        blocked["action"]["commands"]["confirm_worker"]["required_env_names"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(AGENT_HANDLE_ENV))
     );
 
     confirm_current_for_test(&mut state);
@@ -521,18 +531,19 @@ fn status_recovers_confirmation_and_advance_across_repeated_worker_dispatches() 
         )
         .unwrap()
     };
-    let confirm_dispatch = |dispatch_id: &str| {
+    let confirm_dispatch = || {
         confirm(RewriteWorkerConfirmOptions {
             worktree: Some(target.path().to_path_buf()),
             target_root: target.path().to_path_buf(),
-            dispatch_id: dispatch_id.into(),
+            work_scope: RewriteWorkScope::Api {
+                api: "GET /api".into(),
+            },
             agent_handle: "persistent-worker".into(),
             agent_name: None,
         })?;
         runtime::report(runtime::RewriteWorkerReportOptions {
             review_report: None,
             target_root: target.path().to_path_buf(),
-            dispatch_id: dispatch_id.into(),
             agent_handle: "persistent-worker".into(),
             activity: model::RewriteWorkerActivity::Running,
             handoff_id: None,
@@ -562,14 +573,8 @@ fn status_recovers_confirmation_and_advance_across_repeated_worker_dispatches() 
             .collect::<Vec<_>>(),
         ["commands", "details", "kind", "summary"]
     );
-    let first_dispatch = initial["action"]["commands"]["confirm_worker"]["argv"]
-        .as_array()
-        .unwrap()
-        .last()
-        .unwrap()
-        .as_str()
-        .unwrap();
-    let confirmed = serde_json::to_value(confirm_dispatch(first_dispatch).unwrap()).unwrap();
+    let first_dispatch = initial["action"]["details"]["worker"]["dispatch_id"].clone();
+    let confirmed = serde_json::to_value(confirm_dispatch().unwrap()).unwrap();
     assert_eq!(confirmed["action"]["kind"], "advance_required");
 
     // A later failed acceptance keeps the worker and creates a new dispatch.
@@ -599,21 +604,9 @@ fn status_recovers_confirmation_and_advance_across_repeated_worker_dispatches() 
             .unwrap()
             .contains("commands.confirm_worker")
     );
-    assert!(
-        confirm_dispatch(first_dispatch)
-            .unwrap_err()
-            .to_string()
-            .contains("stale")
-    );
-    let next_dispatch = resumed["action"]["commands"]["confirm_worker"]["argv"]
-        .as_array()
-        .unwrap()
-        .last()
-        .unwrap()
-        .as_str()
-        .unwrap();
+    let next_dispatch = resumed["action"]["details"]["worker"]["dispatch_id"].clone();
     assert_ne!(first_dispatch, next_dispatch);
-    let confirmed = serde_json::to_value(confirm_dispatch(next_dispatch).unwrap()).unwrap();
+    let confirmed = serde_json::to_value(confirm_dispatch().unwrap()).unwrap();
 
     // If that response is lost during side work, status restores its command.
     let persisted = serde_json::to_value(store.load().unwrap().unwrap()).unwrap();

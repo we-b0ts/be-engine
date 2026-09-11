@@ -5,10 +5,21 @@ use super::super::process_output_model::RewriteWorkScope;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::rewrite) struct RewriteWorkerBinding {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_handle: Option<String>,
     pub agent_handle_fingerprint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
     pub confirmed_dispatch_id: String,
+    /// Initial timer baseline; resumes and empty handoffs never reset it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_bound_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_integrated_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_integrated_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expert: Option<super::super::expert::model::ExpertAssignment>,
     #[serde(default)]
     pub transfer_generation: u64,
     #[serde(default)]
@@ -48,8 +59,16 @@ pub enum RewriteWorkerBlockingReason {
 pub struct RewriteWorkerDispatchView {
     pub binding_id: String,
     pub dispatch_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_handle: Option<String>,
     pub work_scope: RewriteWorkScope,
     pub state: RewriteWorkerDispatchState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_bound_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_integrated_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_integrated_commit: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocking_reason: Option<RewriteWorkerBlockingReason>,
     #[serde(skip_serializing_if = "Option::is_none")]

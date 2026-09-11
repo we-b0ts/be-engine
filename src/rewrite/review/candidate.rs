@@ -162,14 +162,15 @@ fn checks_passed(
 }
 
 /// Called under the coordinator lock after publication. Only validates the
-/// delivered receipt; never executes review commands or writes worker state.
+/// delivered receipt; returns the worker commit only for a nonempty integration.
+/// Never executes review commands or writes worker state.
 pub(in crate::rewrite) fn accept_locked(
     root: &Path,
     state: &mut RewriteState,
     path: &Path,
     expected_scope: Option<&RewriteWorkScope>,
     expected_handoff: Option<&str>,
-) -> Result<()> {
+) -> Result<Option<String>> {
     let mut report: RewriteReviewReport = read_json(path)?;
     let integration = report
         .integration
@@ -197,13 +198,40 @@ pub(in crate::rewrite) fn accept_locked(
         ],
     )
     .context("published candidate does not descend from its reviewed canonical base")?;
+    let code_commit = if let Some(RewriteWorkScope::Api { api }) = expected_scope {
+        let worker_report = state
+            .worker_bindings
+            .get(api)
+            .and_then(|binding| binding.review_report.as_ref())
+            .context("integrated API delivery requires its accepted worker review")?;
+        let worker_changed = committed_changes(
+            root,
+            &worker_report.base_revision,
+            &worker_report.head_revision,
+        )?;
+        let integrated_changed = committed_changes(
+            root,
+            &integration.canonical_base_revision,
+            &report.head_revision,
+        )?;
+        (worker_changed && integrated_changed).then(|| worker_report.head_revision.clone())
+    } else {
+        None
+    };
     report.accepted_target_fingerprint = Some(fingerprint::repository_fingerprint(root)?);
     write_json(&integrated_path(root), &report)?;
     // Admission remains mandatory even when a receipt is lost or old caches
     // are invalidated by rule/configuration changes.
     state.delivery_review_required = true;
     state.bump();
-    Ok(())
+    Ok(code_commit)
+}
+
+fn committed_changes(root: &Path, base: &str, head: &str) -> Result<bool> {
+    Ok(base != head
+        && !source_diff::git_text(root, &["diff", "--name-only", base, head, "--"])?
+            .trim()
+            .is_empty())
 }
 
 pub fn accept(

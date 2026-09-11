@@ -30,6 +30,7 @@ fn exposes_only_the_rewrite_coordinator_surface() {
             "route",
             "repair",
             "worker",
+            "expert",
             "review",
             "operation",
             "verification",
@@ -55,7 +56,6 @@ fn parses_worker_feedback_and_explicit_operation_retry() {
                 "test",
                 "worker",
                 "report",
-                "dispatch-id",
                 "--agent-handle",
                 "runtime-handle",
                 "--activity",
@@ -71,7 +71,6 @@ fn parses_worker_feedback_and_explicit_operation_retry() {
             "test",
             "worker",
             "report",
-            "dispatch-id",
             "--agent-handle",
             "runtime-handle",
             "--activity",
@@ -80,6 +79,79 @@ fn parses_worker_feedback_and_explicit_operation_retry() {
         .is_err()
     );
     assert!(Cli::try_parse_from(["test", "operation", "retry", "operation-id"]).is_ok());
+}
+
+#[test]
+fn worker_identity_requires_handles_and_rejects_old_id_arguments() {
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "worker",
+            "confirm",
+            "--process-output",
+            "summary",
+            "--agent-handle",
+            "runtime-worker"
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "worker",
+            "confirm",
+            "--agent-handle",
+            "runtime-worker"
+        ])
+        .is_err()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "worker",
+            "confirm",
+            "--api",
+            "GET /api",
+            "--process-output",
+            "summary",
+            "--agent-handle",
+            "runtime-worker"
+        ])
+        .is_err()
+    );
+    for argv in [
+        vec![
+            "test",
+            "worker",
+            "confirm",
+            "old-dispatch",
+            "--agent-handle",
+            "runtime-worker",
+        ],
+        vec![
+            "test",
+            "worker",
+            "report",
+            "old-dispatch",
+            "--agent-handle",
+            "runtime-worker",
+            "--activity",
+            "running",
+        ],
+        vec![
+            "test",
+            "worker",
+            "transfer",
+            "old-binding",
+            "--agent-handle",
+            "replacement",
+            "--reason",
+            "missing",
+            "--approve-ownership-transfer",
+        ],
+    ] {
+        assert!(Cli::try_parse_from(argv).is_err());
+    }
 }
 
 #[test]
@@ -312,7 +384,8 @@ fn parses_the_bounded_rewrite_surface() {
             "test",
             "worker",
             "transfer",
-            "fnv1a64:binding",
+            "--previous-agent-handle",
+            "runtime-agent-42",
             "--agent-handle",
             "replacement-agent-43",
             "--reason",
@@ -326,7 +399,8 @@ fn parses_the_bounded_rewrite_surface() {
             "test",
             "worker",
             "transfer",
-            "fnv1a64:binding",
+            "--previous-agent-handle",
+            "runtime-agent-42",
             "--agent-handle",
             "replacement-agent-43",
             "--reason",
@@ -669,7 +743,8 @@ fn parses_the_bounded_rewrite_surface() {
             "test",
             "worker",
             "confirm",
-            "fnv1a64:dispatch",
+            "--api",
+            "GET /api",
             "--agent-handle",
             "runtime-agent-42",
             "--agent-name",

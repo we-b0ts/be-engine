@@ -12,6 +12,12 @@ impl Serialize for RewriteAction {
         S: Serializer,
     {
         match self {
+            Self::ExpertRequired { summary, expert, commands } => RewriteActionView {
+                kind: "expert_required",
+                summary,
+                details: expert,
+                commands,
+            }.serialize(serializer),
             Self::Blocked { summary, system_repair_apis, dependent_process_outputs, resume } => RewriteActionView {
                 kind: "blocked",
                 summary,

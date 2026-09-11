@@ -17,6 +17,10 @@ changing code, startup, or configuration, read
 Edit and test only the assigned worktree. Preserve unintegrated changes when
 synchronizing with the supplied canonical base; resolve your own source conflicts.
 
+When the coordinator forwards an expert report, check its evidence and inspected
+revisions against the current issue and code. Use applicable findings in your
+repair; retain implementation, local-check, and handoff responsibility.
+
 ## Return
 
 For code changes or a post-input resume that still requires reviewed delivery,

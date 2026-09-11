@@ -22,7 +22,7 @@ use crate::{
 };
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 28;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 30;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -727,6 +727,11 @@ pub enum RewriteAction {
         worker: RewriteWorkerDispatchView,
         report_worker: RewriteCommandSpec,
     },
+    ExpertRequired {
+        summary: String,
+        expert: super::expert::model::RewriteExpertView,
+        commands: super::expert::model::RewriteExpertCommands,
+    },
     IntegrationRequired {
         summary: String,
         worker: RewriteWorkerDispatchView,
@@ -847,6 +852,8 @@ pub struct RewriteInventoryReport {
     pub details: super::coordination::RewriteCoordinationDetails,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub workers: Vec<super::worker::model::RewriteWorkerInventoryItem>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub experts: Vec<super::expert::model::RewriteExpertInventoryItem>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -132,14 +132,20 @@ fn check_candidate(
             "canonical base changed while preparing integration review; refresh the candidate"
         );
     }
-    let report_path = if integration_mode {
+    // A returned delivery path must retain its original dispatch even after
+    // another review or resumed turn. The coordinator submits this exact file.
+    let report_path = if options.scope.is_some() {
+        crate::internal_runtime::root(&root)
+            .join("review-reports")
+            .join(format!("{}.json", uuid::Uuid::new_v4().simple()))
+    } else if integration_mode {
         if root == target_root {
             integrated_path(&root)
         } else {
             crate::internal_runtime::root(&root).join("integration-review.json")
         }
     } else {
-        worker_report_path(&root)
+        unreachable!("worker review requires a scope")
     };
     let report = RewriteReviewReport {
         schema_version: 2, rules_version: RULE_VERSION.into(), workflow_id: state.workflow_id.clone(),
@@ -310,9 +316,6 @@ pub(super) fn accept_handoff(
     Ok(report)
 }
 
-fn worker_report_path(root: &Path) -> PathBuf {
-    crate::internal_runtime::root(root).join("worker-review.json")
-}
 fn integrated_path(root: &Path) -> PathBuf {
     crate::internal_runtime::root(root).join("rewrite/source-review.json")
 }

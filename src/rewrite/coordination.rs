@@ -30,7 +30,9 @@ pub(super) fn status_details(
     let base = super::action::status_base(target_root, state)?;
     let execution = super::execution::status_action(target_root)?;
     let failed = matches!(execution, Some(RewriteAction::ExecutionFailed { .. }));
-    let selected = if busy || failed {
+    let selected = if let Some(expert) = super::expert::required_action(target_root, state, None) {
+        expert
+    } else if busy || failed {
         super::worker::scheduler::global_action(target_root, state, true)
             .or(execution.clone())
             .unwrap_or_else(|| base.clone())
@@ -90,6 +92,10 @@ pub(super) fn details(
     busy: bool,
 ) -> RewriteCoordinationDetails {
     let mut result = RewriteCoordinationDetails::default();
+    let (dispatch, reports, close) = super::expert::counts(state);
+    add(&mut result.ready, "dispatch_expert", dispatch);
+    add(&mut result.waiting, "expert_report", reports);
+    add(&mut result.ready, "close_expert", close);
     for scope in runtime::scopes(state) {
         match runtime::coverage(state, &scope) {
             Coverage::DispatchRequired => add(&mut result.ready, "dispatch_worker", 1),
@@ -162,6 +168,7 @@ pub(super) fn details(
             ..
         } => {}
         RewriteAction::ImplementationRequired { .. }
+        | RewriteAction::ExpertRequired { .. }
         | RewriteAction::WorkerStatusRequired { .. }
         | RewriteAction::IntegrationRequired { .. } => {}
         RewriteAction::AdvanceRequired { .. }

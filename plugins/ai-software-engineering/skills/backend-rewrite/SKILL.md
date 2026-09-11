@@ -19,6 +19,7 @@ references it requests.
 | --- | --- | --- |
 | Main/root workflow task: `coordinator` | Dispatch, reconcile results, execute engine transitions, invoke acceptance, deliver | [coordinator.md](references/coordinator.md) |
 | `api-implementer` | Diagnose and implement the assigned API; return evidence and checked code | [api-implementer.md](references/api-implementer.md) |
+| Engine-requested `api-expert` | Investigate the assigned API read-only; return findings and evidence to the coordinator | [api-expert.md](references/api-expert.md) |
 | `code-integrator` | Prepare the assigned integration or inspect assigned source findings; return a version-bound result | [code-integrator.md](references/code-integrator.md) |
 
 A legacy implementation-worker assignment with API scope uses the

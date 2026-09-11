@@ -45,7 +45,7 @@ fn all_implementation_items_dispatch_even_with_zero_unverified_and_more_than_32_
         let response = worker::confirm(worker::RewriteWorkerConfirmOptions {
             worktree: Some(target.path().to_path_buf()),
             target_root: target.path().into(),
-            dispatch_id: dispatch.dispatch_id.clone(),
+            work_scope: dispatch.work_scope.clone(),
             agent_handle: format!("actual-runtime-worker-{remaining}"),
             agent_name: None,
         })
@@ -54,7 +54,6 @@ fn all_implementation_items_dispatch_even_with_zero_unverified_and_more_than_32_
         let response = runtime::report(runtime::RewriteWorkerReportOptions {
             review_report: None,
             target_root: target.path().into(),
-            dispatch_id: dispatch.dispatch_id,
             agent_handle: format!("actual-runtime-worker-{remaining}"),
             activity: worker::model::RewriteWorkerActivity::Queued,
             handoff_id: None,
