@@ -53,6 +53,7 @@ mod recording_action;
 mod recording_execution;
 mod recording_input;
 mod recovery;
+mod regression_scope;
 mod repair;
 mod response_url_evidence;
 mod revalidation;

@@ -25,6 +25,7 @@ pub(super) fn repair_apis(state: &RewriteState) -> Vec<String> {
     state
         .api_inventory
         .iter()
+        .filter(|item| item.status != RewriteApiStatus::Skipped)
         .filter_map(|item| {
             let slice = if item.api == state.api {
                 Some(&state.active_slice)
@@ -61,7 +62,11 @@ pub(super) fn idle_action(target_root: &Path, state: &RewriteState) -> Option<Re
     let accepted = state
         .parked_slices
         .values()
-        .find(|slice| slice.api != state.api && slice.system_repair_accepted)
+        .find(|slice| {
+            slice.api != state.api
+                && slice.system_repair_accepted
+                && !super::regression_scope::is_skipped(state, &slice.api)
+        })
         .map(|slice| slice.api.as_str());
     if let Some(api) = accepted.or_else(|| inventory::next_pending_api_for_concurrent_work(state)) {
         return Some(advance(target_root, api, "verify ready API"));
@@ -84,7 +89,7 @@ pub(super) fn idle_action(target_root: &Path, state: &RewriteState) -> Option<Re
         && state
             .api_inventory
             .iter()
-            .all(|item| item.status == RewriteApiStatus::Complete || blocked.contains(&item.api));
+            .all(|item| item.status.is_done() || blocked.contains(&item.api));
     if only_complete_or_repair && worker::runtime::scopes(state).is_empty() {
         // Deferred process captures cannot be validated before their API baseline.
         // Keep them visible as dependencies of the blocked stop, never completed.

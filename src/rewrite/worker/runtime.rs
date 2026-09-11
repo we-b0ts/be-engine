@@ -270,7 +270,8 @@ fn supersede_dispatch(state: &mut RewriteState, scope: &RewriteWorkScope) -> Res
 
 pub(in crate::rewrite) fn scopes(state: &RewriteState) -> Vec<RewriteWorkScope> {
     let mut scopes = Vec::new();
-    if state.phase == RewritePhase::ImplementationRequired
+    if !super::super::regression_scope::is_skipped(state, &state.api)
+        && state.phase == RewritePhase::ImplementationRequired
         && state.active_issue.is_some()
         && !state.system_repair_accepted
     {
@@ -279,7 +280,8 @@ pub(in crate::rewrite) fn scopes(state: &RewriteState) -> Vec<RewriteWorkScope> 
         });
     }
     for (api, slice) in &state.parked_slices {
-        if api != &state.api
+        if !super::super::regression_scope::is_skipped(state, api)
+            && api != &state.api
             && slice.phase == RewritePhase::ImplementationRequired
             && slice.active_issue.is_some()
             && !slice.system_repair_accepted

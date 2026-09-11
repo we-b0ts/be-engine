@@ -84,6 +84,8 @@ pub fn status_rewrite_for_api(
             project_stale_comparison(&mut state, &target_fingerprint);
             let pending = super::coordination::status_details(&target_root, &state)?.pending();
             let envelope = api_envelope(&target_root, &state, api)?;
+            let skipped = api
+                .is_some_and(|api| super::regression_scope::is_skipped(&state, &api.to_string()));
             let scoped = inventory::scoped(&state, api).unwrap_or(state);
             RewriteStatusReport {
                 schema_version: envelope.schema_version,
@@ -93,8 +95,8 @@ pub fn status_rewrite_for_api(
                 api_inventory: envelope.api_inventory,
                 process_output_inventory: envelope.process_output_inventory,
                 latest_focused_e2e: envelope.latest_focused_e2e,
-                e2e_current: scoped.e2e_current,
-                comparison_current: scoped.comparison_current,
+                e2e_current: !skipped && scoped.e2e_current,
+                comparison_current: !skipped && scoped.comparison_current,
                 terminal_allowed: envelope.terminal_allowed,
                 action: envelope.action,
             }
@@ -268,6 +270,12 @@ fn api_envelope(
     state: &super::model::RewriteState,
     api: Option<&RecordingApi>,
 ) -> Result<super::model::RewriteActionEnvelope> {
+    if let Some(api) = api
+        && let Some(envelope) =
+            super::regression_scope::skipped_envelope(target_root, state, &api.to_string())
+    {
+        return Ok(envelope);
+    }
     if let Some(expert) =
         super::expert::required_action(target_root, state, api.map(ToString::to_string).as_deref())
     {

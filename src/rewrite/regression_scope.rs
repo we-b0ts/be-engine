@@ -1,0 +1,133 @@
+//! Reversible API exclusion at the coordinator inventory boundary. Saved slices and
+//! verification evidence remain intact; skipped items are never verified items.
+use std::path::Path;
+
+use anyhow::{Result, ensure};
+
+use super::model::{
+    RewriteAction, RewriteActionEnvelope, RewriteApiStatus, RewritePhase, RewriteSliceState,
+    RewriteState,
+};
+use super::{action, inventory};
+
+use crate::config::regression as config;
+pub(super) use config::PATH;
+mod comparison;
+pub(super) use comparison::start_if_required;
+
+pub(super) fn is_skipped(state: &RewriteState, api: &str) -> bool {
+    state
+        .api_inventory
+        .iter()
+        .any(|item| item.api == api && item.status == RewriteApiStatus::Skipped)
+}
+
+pub(super) fn has_skips(state: &RewriteState) -> bool {
+    state
+        .api_inventory
+        .iter()
+        .any(|item| item.status == RewriteApiStatus::Skipped)
+}
+
+pub(super) fn apply(target_root: &Path, state: &mut RewriteState) -> Result<bool> {
+    let policy = config::RegressionScope::load(target_root)?;
+    if !state.api_inventory.is_empty() && state.phase != RewritePhase::RecordingRequired {
+        for api in policy.selectors() {
+            ensure!(
+                state.api_inventory.iter().any(|item| item.api == *api),
+                "{PATH}: API {api:?} is absent from the recorded inventory; use backend-rewrite inventory"
+            );
+        }
+    }
+    // A running deterministic traffic operation finishes before a scope change.
+    if !matches!(
+        super::traffic_operation::state(target_root)?,
+        super::traffic_operation::TrafficOperationState::Absent
+    ) {
+        return Ok(false);
+    }
+    let mut changed = state.require_comparison != policy.require_comparison;
+    state.require_comparison = policy.require_comparison;
+    if state.api_inventory.is_empty() || state.phase == RewritePhase::RecordingRequired {
+        return Ok(changed);
+    }
+    for item in &mut state.api_inventory {
+        if policy.includes(&item.api) {
+            if item.status == RewriteApiStatus::Skipped {
+                item.status = state
+                    .skipped_api_statuses
+                    .remove(&item.api)
+                    .unwrap_or(RewriteApiStatus::Pending);
+                changed = true;
+            }
+        } else if item.status != RewriteApiStatus::Skipped {
+            state
+                .skipped_api_statuses
+                .insert(item.api.clone(), item.status);
+            item.status = RewriteApiStatus::Skipped;
+            changed = true;
+        }
+    }
+    if is_skipped(state, &state.api) {
+        let api = state.api.clone();
+        state
+            .parked_slices
+            .insert(api.clone(), state.active_slice.clone());
+        // Active is a selection, not a resumable parked status.
+        if state.skipped_api_statuses.get(&api) == Some(&RewriteApiStatus::Active) {
+            let status = match state.phase {
+                RewritePhase::ImplementationRequired => RewriteApiStatus::ImplementationRequired,
+                RewritePhase::SystemRepairRequired => RewriteApiStatus::SystemRepairRequired,
+                RewritePhase::AwaitingRecordingRefresh => {
+                    RewriteApiStatus::AwaitingRecordingRefresh
+                }
+                _ => RewriteApiStatus::Pending,
+            };
+            state.skipped_api_statuses.insert(api, status);
+        }
+        state.current_api_index = None;
+        state.active_slice = RewriteSliceState::pending(String::new(), String::new());
+        state.phase = RewritePhase::SliceComplete;
+        changed = true;
+    }
+    changed |= comparison::reconcile(state)?;
+    if state.current_api_index.is_none() {
+        let next = state
+            .api_inventory
+            .iter()
+            .position(|item| !item.status.is_done());
+        if let Some(index) = next {
+            inventory::resume_at(state, index)?;
+            changed = true;
+        }
+    }
+    if changed {
+        state.bump();
+    }
+    Ok(changed)
+}
+
+pub(super) fn skipped_envelope(
+    target_root: &Path,
+    state: &RewriteState,
+    api: &str,
+) -> Option<RewriteActionEnvelope> {
+    is_skipped(state, api).then(|| {
+        let mut envelope = action::envelope(
+            target_root,
+            state,
+            RewriteAction::Complete {
+                summary: format!(
+                    "{api} is skipped by {PATH}; no verification was performed for this scope"
+                ),
+                e2e_current: false,
+                comparison_current: false,
+            },
+        );
+        envelope.latest_focused_e2e = None;
+        envelope
+    })
+}
+
+#[cfg(test)]
+mod tests;

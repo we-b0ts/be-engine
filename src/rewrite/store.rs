@@ -52,6 +52,12 @@ impl RewriteStore {
             state.version
         );
         super::worker::events::overlay(&self.target_root, &mut state)?;
+        if state.api_inventory.is_empty()
+            && state.phase != super::model::RewritePhase::RecordingRequired
+        {
+            super::inventory::initialize_legacy(&mut state);
+        }
+        super::regression_scope::apply(&self.target_root, &mut state)?;
         Ok(Some(state))
     }
 

@@ -38,7 +38,7 @@ fn unfinished(state: &RewriteState, api: &str) -> bool {
                     && state.api == api
                     && state.phase != RewritePhase::SliceComplete
             },
-            |item| item.status != RewriteApiStatus::Complete,
+            |item| !item.status.is_done(),
         )
 }
 
@@ -251,6 +251,12 @@ pub(super) fn inventory(root: &Path, state: &RewriteState) -> Vec<RewriteExpertI
 
     let mut result = Vec::new();
     for (id, apis) in batches {
+        if apis
+            .iter()
+            .all(|api| super::regression_scope::is_skipped(state, api))
+        {
+            continue;
+        }
         let first = state.worker_bindings[&apis[0]].expert.as_ref().unwrap();
         let kind = if apis.iter().all(|api| {
             state.worker_bindings[api]

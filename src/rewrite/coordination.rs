@@ -126,7 +126,11 @@ pub(super) fn details(
         + state
             .parked_slices
             .values()
-            .filter(|slice| slice.api != state.api && slice.system_repair_accepted)
+            .filter(|slice| {
+                slice.api != state.api
+                    && slice.system_repair_accepted
+                    && !super::regression_scope::is_skipped(state, &slice.api)
+            })
             .count();
     if !busy && super::inventory::can_switch_api(state) {
         add(&mut result.ready, "verify_api", unverified);

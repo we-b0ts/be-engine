@@ -192,10 +192,13 @@ is unclear.
   Status projection and the traffic lease remain separate owners. Further
   splitting must follow a responsibility boundary rather than divide one
   transaction, action contract, or inventory transition.
-  `transition.rs` applies each batch's frozen Comparison requirement and leaves
-  parked-slice completion scheduling to the root coordinator. `progress_publication.rs`
-  owns the durable first-completion latch for future recording batches alongside
-  its existing final delivery publication gate.
+  `regression_scope` owns reversible API exclusion and current Comparison
+  requirement reconciliation at coordinator load/advance boundaries; its
+  `comparison` child reuses valid Replay evidence when that requirement changes.
+  `config/regression` owns the separate ignored YAML schema and defaults.
+  `transition.rs` applies the loaded Comparison requirement and leaves parked-slice
+  completion scheduling to the root coordinator. `progress_publication.rs` owns
+  the final delivery publication gate for the selected regression scope.
   `evidence/overview` owns issue overview identity and projection, including
   process-output diagnostics and current worker context outside evidence hashes.
   `evidence/access` owns read-only assignment/opaque-query resolution and

@@ -1,5 +1,6 @@
 //! Receipt requirements persist across later recording and verification phases.
 use super::*;
+use crate::rewrite::model::RewriteApiStatus;
 use crate::rewrite::{
     RewriteContext, RewriteNextOptions, RewriteProcessOutputProgress, RewriteProcessOutputStatus,
     artifacts, recording_action, recording_execution, traffic_operation,

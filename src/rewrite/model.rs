@@ -22,7 +22,7 @@ use crate::{
 };
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 30;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 31;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -50,6 +50,13 @@ pub enum RewriteApiStatus {
     AwaitingRecordingRefresh,
     RevalidationPending,
     Complete,
+    Skipped,
+}
+
+impl RewriteApiStatus {
+    pub(super) fn is_done(self) -> bool {
+        matches!(self, Self::Complete | Self::Skipped)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +80,7 @@ pub struct RewriteApiProgress {
 pub struct RewriteApiInventoryView {
     pub total: usize,
     pub completed: usize,
+    pub skipped: usize,
     #[serde(rename = "unverified")]
     pub pending: usize,
     pub active: usize,
@@ -479,6 +487,9 @@ pub(super) struct RewriteState {
     pub recording_apis: Vec<String>,
     #[serde(default)]
     pub api_inventory: Vec<RewriteApiProgress>,
+    /// Original scheduling status retained while regression policy excludes an API.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub skipped_api_statuses: BTreeMap<String, RewriteApiStatus>,
     /// Confirmed dynamic routes survive recording batches, independently of verification.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub source_route_bindings: BTreeMap<String, String>,
@@ -506,12 +517,9 @@ pub(super) struct RewriteState {
     #[serde(default)]
     pub delivery_review_required: bool,
     pub recording_run_id: String,
-    /// Project latch: once terminal completion is published, future batches require comparison.
-    #[serde(default)]
+    /// Last observed local policy; reloaded between operations, never frozen per batch.
+    #[serde(default = "crate::config::regression::default_require_comparison")]
     pub require_comparison: bool,
-    /// Frozen when this standard recording batch is allocated, including across recovery.
-    #[serde(default)]
-    pub recording_require_comparison: bool,
     #[serde(default)]
     pub recording_rejection: Option<String>,
     #[serde(default)]
@@ -564,7 +572,6 @@ pub struct RewriteWorkflowView {
     pub scope: String,
     pub recording_run_id: String,
     pub require_comparison: bool,
-    pub next_recording_require_comparison: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub work_scope: Option<RewriteWorkScope>,
 }

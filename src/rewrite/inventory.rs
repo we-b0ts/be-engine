@@ -67,6 +67,7 @@ pub(super) fn install(state: &mut RewriteState, apis: Vec<String>) -> Result<()>
         "standard recording contains no API inventory"
     );
     source_route::retain_bindings(state);
+    state.skipped_api_statuses.clear();
     state.api_inventory = apis
         .into_iter()
         .enumerate()
@@ -263,6 +264,9 @@ pub(super) fn complete_current_and_advance(state: &mut RewriteState) -> Result<b
     current.e2e_current = e2e_current;
     current.comparison_current = comparison_current;
     current.verified_target_fingerprint = target_fingerprint;
+    let mut completed = state.active_slice.clone();
+    completed.phase = RewritePhase::SliceComplete;
+    state.parked_slices.insert(state.api.clone(), completed);
 
     let next = state
         .api_inventory
@@ -378,6 +382,7 @@ pub(super) fn reset_for_recording(state: &mut RewriteState) {
     source_route::retain_bindings(state);
     super::process_outputs::reset(state);
     state.api_inventory.clear();
+    state.skipped_api_statuses.clear();
     state.current_api_index = None;
     state.parked_slices.clear();
     if state.recording_apis.len() == 1 {
@@ -404,6 +409,7 @@ pub(super) fn defer_completed_for_target_change(
         if item.status == RewriteApiStatus::Complete
             && item.verified_target_fingerprint.as_deref() != Some(target_fingerprint)
         {
+            state.parked_slices.remove(&item.api);
             item.status = RewriteApiStatus::RevalidationPending;
             item.e2e_current = false;
             item.comparison_current = false;
@@ -452,7 +458,10 @@ pub(super) fn restore_recorded_progress(
 }
 
 fn status_for_view(state: &RewriteState, item: &RewriteApiProgress) -> RewriteApiStatus {
-    if item.api == state.api && state.phase == RewritePhase::SystemRepairRequired {
+    if item.status != RewriteApiStatus::Skipped
+        && item.api == state.api
+        && state.phase == RewritePhase::SystemRepairRequired
+    {
         RewriteApiStatus::SystemRepairRequired
     } else {
         item.status
@@ -462,6 +471,11 @@ fn status_for_view(state: &RewriteState, item: &RewriteApiProgress) -> RewriteAp
 pub(super) fn view(state: &RewriteState) -> RewriteApiInventoryView {
     RewriteApiInventoryView {
         total: state.api_inventory.len(),
+        skipped: state
+            .api_inventory
+            .iter()
+            .filter(|item| item.status == RewriteApiStatus::Skipped)
+            .count(),
         completed: state
             .api_inventory
             .iter()
@@ -541,6 +555,17 @@ fn load_pending(state: &mut RewriteState, index: usize) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn resume_at(state: &mut RewriteState, index: usize) -> Result<()> {
+    let item = &state.api_inventory[index];
+    state.active_slice = match state.parked_slices.remove(&item.api) {
+        Some(slice) => slice,
+        None => pending_slice(item)?,
+    };
+    state.api_inventory[index].status = RewriteApiStatus::Active;
+    state.current_api_index = Some(index);
+    Ok(())
+}
+
 fn pending_slice(current: &RewriteApiProgress) -> Result<RewriteSliceState> {
     let api = current.api.parse::<RecordingApi>()?;
     Ok(RewriteSliceState::pending(
@@ -555,7 +580,7 @@ fn pending_slice(current: &RewriteApiProgress) -> Result<RewriteSliceState> {
     ))
 }
 
-fn completed_slice(current: &RewriteApiProgress) -> Result<RewriteSliceState> {
+pub(super) fn completed_slice(current: &RewriteApiProgress) -> Result<RewriteSliceState> {
     let mut slice = pending_slice(current)?;
     slice.phase = RewritePhase::SliceComplete;
     slice.target_fingerprint = current.verified_target_fingerprint.clone();

@@ -482,11 +482,17 @@ make that item `revalidation_pending`. Retain every work item's worker binding
 and worktree until `terminal_allowed=true` and final delivery no longer needs
 them.
 
-Preserve `workflow.require_comparison` for the current recording batch. When
-false, Replay may complete an API while `comparison_current=false`. The first
-completed batch enables Comparison for future recordings without changing this
-batch; follow its final `advance_required` to persist the transition. Never
-infer requirements from historical pass counts.
+Read `workflow.require_comparison` as the current local regression requirement
+from `.traffic-e2e/regression.yaml` (default true). `only` selects exact inventory
+APIs and `skip` takes precedence; excluded APIs are explicitly `skipped` and do
+not block this run. The file is ignored by Git and does not need a commit or
+change code/target fingerprints. Preserve the user's chosen scope and validation
+requirements; do not narrow them merely to resolve failures.
+When Comparison is disabled, Replay may complete an API with
+`comparison_current=false`. Enabling it schedules missing Comparison using
+still-current Replay evidence. Settings apply between traffic operations, not
+per recording batch, and never change automatically after first completion.
+A terminal result covers the selected regression scope, not skipped APIs.
 
 Only `terminal_allowed=true` permits successful workflow completion. Finish the
 caller-required repository checks and delivery after the engine's final gates.

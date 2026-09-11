@@ -50,7 +50,7 @@ pub(super) fn from_e2e_result(
     state.recorder_capture_plan = None;
     if result.passed {
         state.active_issue = None;
-        if state.recording_require_comparison {
+        if state.require_comparison {
             state.phase = RewritePhase::ComparisonRecordingRequired;
             state.comparison_run_id = Some(artifacts::allocate_run_id(
                 target_root,
@@ -72,7 +72,7 @@ pub(super) fn from_e2e_result(
 }
 
 pub(super) fn replay_completion_pending(state: &RewriteState) -> bool {
-    !state.recording_require_comparison
+    !state.require_comparison
         && matches!(
             state.phase,
             RewritePhase::SliceComplete | RewritePhase::ComparisonRecordingRequired

@@ -1614,26 +1614,55 @@ stable and bounded by the maximum number of configured profile types.
 After status returns
 `advance_required`, the returned `next` validates the
 preallocated run, prepares the current API, runs focused E2E, and returns
-either one bounded implementation issue or the next validation action. A newly
-initialized coordinator starts with comparison disabled. Each standard recording
-batch freezes that project setting when allocated; `workflow.recording_run_id`
-identifies the batch and `workflow.require_comparison` exposes its frozen value.
-When false, a passing Replay completes the API work item without generating
-Comparison evidence, and the coordinator advances through the recording inventory.
-`comparison_current` stays false for skipped Comparison.
+either one bounded implementation issue or the next validation action.
 
-After the entire batch and its ordinary process-output checks pass and the
-managed delivery files are committed, `next` atomically enables Comparison for
-future batches before returning `terminal_allowed=true`. Until that finalization,
-read-only `status` returns `advance_required`. The current batch keeps its frozen
-value across restart, recovery, reclassification, and target revalidation.
-`workflow.next_recording_require_comparison` exposes the project setting for the
-next batch. Replacement recordings before first completion remain Replay-only.
-Missing project or batch fields default to false, including in old coordinator
-states; explicit persisted values are preserved. Neither the latch nor the batch
-value is a user-editable policy.
+Regression settings are local to the target repository in
+`.traffic-e2e/regression.yaml`. Initialization generates this file with
+`require_comparison: true` and adds it to `.gitignore` and `.dockerignore`.
+It does not need a commit and is explicitly excluded from code and target
+fingerprints, even if manually tracked. Existing projects without the file use
+all recorded APIs and require Comparison; old workflow latch/batch fields no
+longer control the requirement.
 
-For batches requiring Comparison, passing Replay requests Comparison; once it
+```yaml
+# Omit only to select every API in the recorded inventory.
+only:
+  - "GET /api/users/*"
+  - "POST /api/users"
+skip:
+  - "POST /api/users"
+require_comparison: true
+```
+
+`only` and `skip` can be combined: first select `only` (or all APIs when absent),
+then remove `skip`. Selectors must be exact canonical API names from `inventory`,
+including the method and recorded path pattern; `*` is part of that inventory
+identity, not a glob over other APIs. Unknown names, duplicate entries within a
+list, unknown fields and an empty `only` list are errors. An empty `skip` list
+excludes nothing. Removing the file restores all APIs and Comparison=true.
+
+`status`, `inventory` and `next` use the current settings between traffic
+operations. Excluded APIs are reported as `skipped`, do not dispatch workers or
+block completion, and retain original progress/evidence for later re-inclusion.
+A scoped `status --api` or `next --api` for an excluded API returns `complete`
+with an explicit skipped explanation and false current-verification flags.
+Global completion is restricted to the selected scope, with separate verified
+and skipped counts; skips never become passing traffic observations.
+
+`workflow.require_comparison` exposes the current local requirement. When false,
+a passing Replay completes the API without generating Comparison evidence.
+When switched to true, selected APIs missing valid Comparison become pending;
+still-current Replay evidence is reused. Turning it off removes Comparison-only
+blocking without changing historical traffic results. Running traffic finishes
+before new settings apply. Requirements are not frozen into recording batches,
+and there is no automatic change after first completion.
+
+Both modes can return `terminal_allowed=true` once selected APIs and the existing
+process-output, quality-review and delivery-publication gates are satisfied.
+Changing this local policy does not invalidate code or Replay fingerprints;
+newly selected APIs and newly required Comparison are scheduled explicitly.
+
+When Comparison is required, passing Replay requests Comparison; once it
 passes, the following `next` prepares the next inventory item from the same
 standard recording. A repository or policy content change makes prior
 E2E/comparison evidence stale. Completed APIs become `revalidation_pending`

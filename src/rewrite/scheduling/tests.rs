@@ -118,12 +118,14 @@ fn parked_system_repair_survives_revalidation_and_becomes_resumable_after_revisi
     // A passing revalidation advances only once to the next stale API.
     state.phase = RewritePhase::SliceComplete;
     state.e2e_current = true;
+    state.comparison_current = true;
     state.target_fingerprint =
         Some(rewrite::fingerprint::repository_fingerprint(target.path()).unwrap());
     assert!(inventory::complete_current_and_advance(&mut state).unwrap());
     assert_eq!(state.api, "GET /revalidate-1");
     state.phase = RewritePhase::SliceComplete;
     state.e2e_current = true;
+    state.comparison_current = true;
     state.target_fingerprint =
         Some(rewrite::fingerprint::repository_fingerprint(target.path()).unwrap());
     assert!(!inventory::complete_current_and_advance(&mut state).unwrap());
@@ -340,7 +342,7 @@ fn recording_and_comparison_gates_cannot_be_parked_for_idle_revalidation() {
         let mut state = with_revalidation(1);
         state.phase = phase;
         state.comparison_run_id = Some("comparison-test".into());
-        state.recording_require_comparison = true;
+        state.require_comparison = true;
         assert!(idle_action(target.path(), &state).is_none());
         assert!(
             inventory::activate_requested(&mut state, Some(&"GET /revalidate-0".parse().unwrap()))
@@ -387,6 +389,7 @@ fn completed_evidence_is_revalidated_again_only_after_target_changes() {
     inventory::activate_requested(&mut state, Some(&"GET /revalidate-0".parse().unwrap())).unwrap();
     state.phase = RewritePhase::SliceComplete;
     state.e2e_current = true;
+    state.comparison_current = true;
     state.target_fingerprint = Some("target-v1".into());
     assert!(!inventory::complete_current_and_advance(&mut state).unwrap());
     assert!(!inventory::defer_completed_for_target_change(&mut state, "target-v1").unwrap());
