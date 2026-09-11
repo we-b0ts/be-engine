@@ -37,7 +37,10 @@ impl RewriteStore {
     pub(super) fn load(&self) -> Result<Option<RewriteState>> {
         let bytes = match fs::read(&self.state_path) {
             Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                super::regression_scope::validate_uninitialized(&self.target_root)?;
+                return Ok(None);
+            }
             Err(error) => {
                 return Err(error).with_context(|| {
                     format!("failed to read rewrite state {}", self.state_path.display())

@@ -289,8 +289,14 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                     comparison_current: false,
                 },
             };
-            let excluded_run_id = state.recording_run_id.clone();
-            recording_input::bind(&target_root, &mut state, Some(&excluded_run_id))?;
+            regression_scope::apply(&target_root, &mut state)?;
+            if crate::config::regression::RegressionScope::load(&target_root)?
+                .recording_run_id
+                .is_none()
+            {
+                let excluded_run_id = state.recording_run_id.clone();
+                recording_input::bind(&target_root, &mut state, Some(&excluded_run_id))?;
+            }
             store.save(&state)?;
             state
         }
@@ -309,6 +315,9 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
     }
 
     if state.phase == RewritePhase::RecordingRequired
+        && crate::config::regression::RegressionScope::load(&target_root)?
+            .recording_run_id
+            .is_none()
         && recording::standard_recording_input_source(&state).is_none()
         && !recording::requires_external_live_traffic(&state)
     {
@@ -339,6 +348,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 artifacts::RecordingPublication::Finalized => {}
             }
             if let Err(error) = artifacts::validate_standard_recording(&target_root, &state) {
+                regression_scope::ensure_fresh_allowed(&target_root).context(error.to_string())?;
                 state.recording_rejection = Some(artifacts::recording_rejection(&error));
                 state.recording_run_id =
                     artifacts::allocate_run_id(&target_root, ManagedRecordingOperation::Record)?;
@@ -358,6 +368,8 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
             let apis = match artifacts::standard_recording_apis(&target_root, &state) {
                 Ok(apis) => apis,
                 Err(error) => {
+                    regression_scope::ensure_fresh_allowed(&target_root)
+                        .context(error.to_string())?;
                     state.recording_rejection = Some(artifacts::recording_rejection(&error));
                     state.recording_run_id = artifacts::allocate_run_id(
                         &target_root,

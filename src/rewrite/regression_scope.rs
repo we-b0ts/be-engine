@@ -13,7 +13,9 @@ use super::{action, inventory};
 use crate::config::regression as config;
 pub(super) use config::PATH;
 mod comparison;
+mod recording;
 pub(super) use comparison::start_if_required;
+pub(super) use recording::{ensure_fresh_allowed, validate_uninitialized};
 
 pub(super) fn is_skipped(state: &RewriteState, api: &str) -> bool {
     state
@@ -31,6 +33,14 @@ pub(super) fn has_skips(state: &RewriteState) -> bool {
 
 pub(super) fn apply(target_root: &Path, state: &mut RewriteState) -> Result<bool> {
     let policy = config::RegressionScope::load(target_root)?;
+    // A running deterministic traffic operation finishes before inputs change.
+    if !matches!(
+        super::traffic_operation::state(target_root)?,
+        super::traffic_operation::TrafficOperationState::Absent
+    ) {
+        return Ok(false);
+    }
+    let mut changed = recording::apply(target_root, state, &policy)?;
     if !state.api_inventory.is_empty() && state.phase != RewritePhase::RecordingRequired {
         for api in policy.selectors() {
             ensure!(
@@ -39,16 +49,12 @@ pub(super) fn apply(target_root: &Path, state: &mut RewriteState) -> Result<bool
             );
         }
     }
-    // A running deterministic traffic operation finishes before a scope change.
-    if !matches!(
-        super::traffic_operation::state(target_root)?,
-        super::traffic_operation::TrafficOperationState::Absent
-    ) {
-        return Ok(false);
-    }
-    let mut changed = state.require_comparison != policy.require_comparison;
+    changed |= state.require_comparison != policy.require_comparison;
     state.require_comparison = policy.require_comparison;
     if state.api_inventory.is_empty() || state.phase == RewritePhase::RecordingRequired {
+        if changed {
+            state.bump();
+        }
         return Ok(changed);
     }
     for item in &mut state.api_inventory {

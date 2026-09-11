@@ -1625,6 +1625,8 @@ all recorded APIs and require Comparison; old workflow latch/batch fields no
 longer control the requirement.
 
 ```yaml
+# Optional: directly reuse this completed standard recording.
+# recording_run_id: "20260911093000"
 # Omit only to select every API in the recorded inventory.
 only:
   - "GET /api/users/*"
@@ -1640,6 +1642,22 @@ including the method and recorded path pattern; `*` is part of that inventory
 identity, not a glob over other APIs. Unknown names, duplicate entries within a
 list, unknown fields and an empty `only` list are errors. An empty `skip` list
 excludes nothing. Removing the file restores all APIs and Comparison=true.
+
+Set `recording_run_id` to a 14-digit standard recording ID under
+`.traffic-e2e/local/artifacts/recordings/`. The coordinator directly validates
+and uses that recording as the regression baseline. It does not start a source
+recording or use the historical requests to collect a replacement. Missing,
+unfinished, failed, empty or unusable recordings block `status` / `next`; no
+other recording is selected as a fallback. `only` / `skip` select APIs from this
+recording's inventory. Comparison remains controlled by `require_comparison`.
+
+Switching the ID resets current API and process-output verification and retains
+historical artifacts and cumulative progress. Returning to an earlier ID starts
+a separate progress epoch. The YAML edit still does not change code or target
+fingerprints, but verification must run against the selected recording. Remove
+the field before requesting a fresh recording or completing a required capture
+refresh. Omitting the field preserves the current baseline and the existing
+automatic recording workflow.
 
 `status`, `inventory` and `next` use the current settings between traffic
 operations. Excluded APIs are reported as `skipped`, do not dispatch workers or

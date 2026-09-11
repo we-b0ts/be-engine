@@ -59,19 +59,36 @@ fn validate_standard_recording_with_process_outputs(
     state: &RewriteState,
     process_outputs: &[crate::process_output::ProcessOutputConfig],
 ) -> Result<()> {
+    let scope = standard_recording_scope_with_process_outputs(
+        target_root,
+        &state.recording_run_id,
+        process_outputs,
+    )?;
+    ensure!(
+        scope == inventory::recording_scope(state),
+        "standard recording scope does not match requested rewrite scope"
+    );
+    Ok(())
+}
+
+pub(super) fn standard_recording_scope(target_root: &Path, run_id: &str) -> Result<Vec<String>> {
+    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
+    standard_recording_scope_with_process_outputs(target_root, run_id, &project.process_outputs)
+}
+
+fn standard_recording_scope_with_process_outputs(
+    target_root: &Path,
+    run_id: &str,
+    process_outputs: &[crate::process_output::ProcessOutputConfig],
+) -> Result<Vec<String>> {
     let process_outputs = crate::process_output::configs_for_observation(
         process_outputs,
         crate::process_output::ProcessOutputObservation::BeforeShutdown,
     );
-    let report: StandardRecordingManifest =
-        read_json(&recording_manifest(target_root, &state.recording_run_id))?;
+    let report: StandardRecordingManifest = read_json(&recording_manifest(target_root, run_id))?;
     ensure!(
         report.status == "completed",
         "standard recording is not completed"
-    );
-    ensure!(
-        report.recording_apis == inventory::recording_scope(state),
-        "standard recording scope does not match requested rewrite scope"
     );
     ensure!(
         report.published_cases > 0,
@@ -80,10 +97,10 @@ fn validate_standard_recording_with_process_outputs(
     crate::process_output::validate_capture_set(
         &process_outputs,
         crate::process_output::ProcessOutputCaptureSide::Source,
-        &recording_run(target_root, &state.recording_run_id).join("process-outputs"),
+        &recording_run(target_root, run_id).join("process-outputs"),
         true,
     )?;
-    Ok(())
+    Ok(report.recording_apis)
 }
 
 pub(super) fn standard_recording_publication(
@@ -100,8 +117,19 @@ pub(super) fn standard_recording_apis(
     target_root: &Path,
     state: &RewriteState,
 ) -> Result<Vec<String>> {
-    let case_source = recording_run(target_root, &state.recording_run_id);
-    let requested = inventory::recording_scope(state);
+    standard_recording_apis_for_scope(
+        target_root,
+        &state.recording_run_id,
+        inventory::recording_scope(state),
+    )
+}
+
+pub(super) fn standard_recording_apis_for_scope(
+    target_root: &Path,
+    run_id: &str,
+    requested: Vec<String>,
+) -> Result<Vec<String>> {
+    let case_source = recording_run(target_root, run_id);
     let mut apis = if requested.is_empty() {
         discover_recorded_apis(target_root, &case_source)?
     } else {

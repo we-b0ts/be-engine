@@ -262,7 +262,11 @@ mod tests {
             repository.path(),
             &["commit", "-m", "track local regression policy"],
         );
-        fs::write(&regression, "require_comparison: true\nskip: [GET /a]\n").unwrap();
+        fs::write(
+            &regression,
+            "recording_run_id: \"20260911093000\"\nrequire_comparison: true\nskip: [GET /a]\n",
+        )
+        .unwrap();
         assert_eq!(repository_fingerprint(repository.path()).unwrap(), baseline);
         assert_eq!(code_fingerprint(repository.path()).unwrap(), code);
         fs::remove_file(&regression).unwrap();

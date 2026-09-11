@@ -49,6 +49,7 @@ pub fn request_rewrite_recording(
     options: RewriteRecordingRequestOptions,
 ) -> Result<RewriteActionEnvelope> {
     let (target_root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
+    super::regression_scope::ensure_fresh_allowed(&target_root)?;
     let store = RewriteStore::new(&target_root)?;
     let requested_api = options.api.as_ref().map(ToString::to_string);
     let Some(_lock) = store.try_lock()? else {
@@ -698,6 +699,7 @@ pub(super) fn begin_pending_capture_refresh(
     if inventory::has_runnable_work(state) {
         return Ok(false);
     }
+    super::regression_scope::ensure_fresh_allowed(target_root)?;
     ensure!(
         super::fingerprint::project_config_revision(target_root)?
             == refresh.project_config_revision,
