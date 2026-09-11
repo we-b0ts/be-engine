@@ -35,10 +35,6 @@ impl RegressionScope {
                 "{PATH}: recording_run_id must be a 14-digit existing standard recording run ID"
             );
         }
-        ensure!(
-            policy.only.as_ref().is_none_or(|apis| !apis.is_empty()),
-            "{PATH}: only must contain at least one API"
-        );
         for list in policy.only.iter().chain(policy.skip.iter()) {
             let mut seen = BTreeSet::new();
             for api in list {
@@ -63,7 +59,7 @@ impl RegressionScope {
     pub(crate) fn includes(&self, api: &str) -> bool {
         self.only
             .as_ref()
-            .is_none_or(|apis| apis.iter().any(|item| item == api))
+            .is_none_or(|apis| apis.is_empty() || apis.iter().any(|item| item == api))
             && self
                 .skip
                 .as_ref()
@@ -73,7 +69,7 @@ impl RegressionScope {
 
 pub(crate) const GITIGNORE_RULE: &str = "/.traffic-e2e/regression.yaml";
 pub(crate) const GIT_PATHSPEC: &str = ":(exclude).traffic-e2e/regression.yaml";
-pub(crate) const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# recording_run_id: \"20260911093000\"\n# API names must match backend-rewrite inventory exactly.\n# Omit only to select all APIs; skip takes precedence.\n# only:\n#   - \"GET /api/users/*\"\nskip: []\nrequire_comparison: true\n";
+pub(crate) const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# recording_run_id: \"20260911093000\"\n# API names must match backend-rewrite inventory exactly.\n# Omitted or empty only selects all APIs; skip takes precedence.\n# only:\n#   - \"GET /api/users/*\"\nonly: []\nskip: []\nrequire_comparison: true\n";
 
 pub(crate) fn default_require_comparison() -> bool {
     true

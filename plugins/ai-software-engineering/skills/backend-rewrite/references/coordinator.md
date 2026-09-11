@@ -484,7 +484,8 @@ them.
 
 Read `workflow.require_comparison` as the current local regression requirement
 from `.traffic-e2e/regression.yaml` (default true). `only` selects exact inventory
-APIs and `skip` takes precedence; excluded APIs are explicitly `skipped` and do
+APIs; omitted, null or empty `only` selects all recorded APIs. `skip` takes
+precedence; excluded APIs are explicitly `skipped` and do
 not block this run. The file is ignored by Git and does not need a commit or
 change code/target fingerprints. Preserve the user's chosen scope and validation
 requirements; do not narrow them merely to resolve failures.

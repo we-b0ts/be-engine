@@ -19,7 +19,7 @@ async fn public_status_and_next_skip_requested_api_without_recording_or_dispatch
     let mut state = super::test_state();
     inventory::install(&mut state, vec!["GET /a".into(), "GET /b".into()]).unwrap();
     store.save(&state).unwrap();
-    policy(target.path(), "only: [GET /a, GET /b]\nskip: [GET /a]\n");
+    policy(target.path(), "only: []\nskip: [GET /a]\n");
     let api = "GET /a".parse().unwrap();
     let status = super::status_rewrite_for_api(
         super::RewriteContext {

@@ -86,12 +86,39 @@ fn skip_all_keeps_history_and_explicit_api_is_complete_without_fake_evidence() {
 }
 
 #[test]
+fn omitted_null_and_empty_only_restore_all_apis_and_still_apply_skip() {
+    let root = target();
+    for policy in ["", "only:\n", "only: null\n", "only: []\n"] {
+        let mut state = state();
+        write(root.path(), "only: [GET /a]\n");
+        apply(root.path(), &mut state).unwrap();
+        assert_eq!(inventory::view(&state).skipped, 2);
+
+        write(root.path(), &format!("{policy}skip: []\n"));
+        apply(root.path(), &mut state).unwrap();
+        assert_eq!(inventory::view(&state).skipped, 0, "{policy}");
+        assert!(
+            state
+                .api_inventory
+                .iter()
+                .all(|item| !item.status.is_done())
+        );
+
+        write(root.path(), &format!("{policy}skip: [GET /a]\n"));
+        apply(root.path(), &mut state).unwrap();
+        assert_eq!(inventory::view(&state).skipped, 1, "{policy}");
+        assert!(is_skipped(&state, "GET /a"));
+        assert_eq!(state.api, "GET /b");
+        assert!(!is_skipped(&state, "GET /c/*"));
+    }
+}
+
+#[test]
 fn invalid_policy_fails_without_changing_progress() {
     let root = target();
     let mut state = state();
     let original = serde_json::to_value(&state).unwrap();
     for policy in [
-        "only: []",
         "only: [GET /typo]",
         "skip: [GET /a, GET /a]",
         "skip: [not-an-api]",

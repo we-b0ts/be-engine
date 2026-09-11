@@ -1627,7 +1627,7 @@ longer control the requirement.
 ```yaml
 # Optional: directly reuse this completed standard recording.
 # recording_run_id: "20260911093000"
-# Omit only to select every API in the recorded inventory.
+# Omitted or empty only selects every API in the recorded inventory.
 only:
   - "GET /api/users/*"
   - "POST /api/users"
@@ -1636,12 +1636,13 @@ skip:
 require_comparison: true
 ```
 
-`only` and `skip` can be combined: first select `only` (or all APIs when absent),
+`only` and `skip` can be combined: first select `only` (or all APIs when absent or empty),
 then remove `skip`. Selectors must be exact canonical API names from `inventory`,
 including the method and recorded path pattern; `*` is part of that inventory
 identity, not a glob over other APIs. Unknown names, duplicate entries within a
-list, unknown fields and an empty `only` list are errors. An empty `skip` list
-excludes nothing. Removing the file restores all APIs and Comparison=true.
+list and unknown fields are errors. Omitting `only`, `only:`, `only: null` and
+`only: []` all select every recorded API before applying `skip`. An empty `skip`
+list excludes nothing. Removing the file restores all APIs and Comparison=true.
 
 Set `recording_run_id` to a 14-digit standard recording ID under
 `.traffic-e2e/local/artifacts/recordings/`. The coordinator directly validates
