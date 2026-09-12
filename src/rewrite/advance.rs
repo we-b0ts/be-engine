@@ -242,6 +242,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 version: STATE_VERSION,
                 revision: 1,
                 workflow_id: format!("rewrite-{}", uuid::Uuid::new_v4().simple()),
+                regression: None,
                 recording_apis,
                 api_inventory: Vec::new(),
                 skipped_api_statuses: Default::default(),

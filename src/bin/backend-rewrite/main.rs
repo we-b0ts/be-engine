@@ -29,6 +29,7 @@ mod evidence;
 mod expert;
 mod project_init;
 mod recorder_capture;
+mod regression;
 mod startup;
 
 #[derive(Debug, Parser)]
@@ -115,6 +116,8 @@ enum RewriteCommand {
     },
     /// Show the full stable API inventory without advancing it.
     Inventory,
+    /// Start a user-authorized regression round from the configured pr_base branch.
+    Regression(regression::RegressionArgs),
     /// Inspect bounded dependency evidence from one published case.
     Case(CaseArgs),
     /// Apply one coordinator-requested batch of API case path patterns.
@@ -603,6 +606,7 @@ async fn run(cli: Cli) -> Result<()> {
     let target_root = cli.target_root;
     let pretty = cli.pretty;
     match cli.command {
+        RewriteCommand::Regression(args) => regression::run(target_root, args, pretty),
         RewriteCommand::Init(args) => project_init::run(target_root, args, pretty).await,
         RewriteCommand::Startup(args) => startup::run(target_root, args, pretty),
         RewriteCommand::Config(args) => config_protocol::run(target_root, args, pretty),

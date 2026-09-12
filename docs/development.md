@@ -1693,6 +1693,41 @@ capture refresh. Omitting the field, `recording_run_id:`, `recording_run_id: nul
 and `recording_run_id: ""` all preserve the current baseline and the existing
 automatic recording workflow. Nonempty values must still be valid recording IDs.
 
+To start a new regression round after external changes, the user must explicitly
+approve that round and the canonical repository must be checked out on its
+configured `pr_base` branch. A feature branch pointing to the same commit and
+detached HEAD are rejected. Session restarts and branch detection do not grant
+authorization or implicitly reset the workflow.
+
+```bash
+backend-rewrite regression begin --approve-new-regression
+```
+
+When previous worker bindings exist, first actually query the task runtime and
+stop or confirm the absence of **all** old workers and experts, including skipped
+items. Then additionally supply `--runtime-query-command 'ListAgents'` (or the
+actual equivalent API/command) and `--runtime-query-at '<RFC 3339 query time>'`.
+The query is an attestation that cleanup has completed; it cannot replace user
+authorization. No caller-written evidence JSON file is needed. The engine checks
+the fields and timestamp format; the coordinator must execute and interpret the
+query, including runtime reachability limits. Query all other retained integrator
+or analysis tasks too; the engine cannot enumerate them.
+
+`regression begin` refuses an active/stale coordinator or traffic operation,
+a pending recording refresh, or an unusable standard recording. It archives the
+previous workflow under the ignored runtime history directory and starts a new
+workflow ID using the same selected recording, `only`/`skip` and Comparison policy.
+Old issues, bindings, review receipts and expert clocks cannot drive the new round;
+recording artifacts and cumulative progress remain available. The response has
+`previous_workflow_id`, `archive`, and `next`; follow `next` through code review
+and fresh verification before dispatching implementation workers for new failures.
+Call this command once per approved round, then use `status` / `next` to resume.
+
+Base-branch Replay is bound to the source, configuration and startup inputs
+admitted by this explicit command. Engine progress commits remain within the
+round; changed code/configuration needs another approved round or repairs on a
+feature branch. Ordinary workflows still require a feature branch for Replay.
+
 `status`, `inventory` and `next` use the current settings between traffic
 operations. Excluded APIs are reported as `skipped`, do not dispatch workers or
 block completion, and retain original progress/evidence for later re-inclusion.

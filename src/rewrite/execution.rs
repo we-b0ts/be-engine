@@ -255,6 +255,17 @@ pub fn retry(context: RewriteContext, id: &str) -> Result<RewriteActionEnvelope>
     start(&context.target_root, execution.request)
 }
 
+pub(super) fn retire_finished(target_root: &Path) -> Result<()> {
+    if let Some(execution) = load(target_root)? {
+        ensure!(
+            execution.finished,
+            "recover or finish the existing coordinator operation first"
+        );
+        fs::remove_file(path(target_root))?;
+    }
+    Ok(())
+}
+
 pub(super) fn busy(target_root: &Path) -> Result<bool> {
     Ok(load(target_root)?.is_some_and(|execution| !execution.finished))
 }

@@ -10,6 +10,7 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
         version: STATE_VERSION,
         revision: 1,
         workflow_id: "rewrite-test".to_string(),
+        regression: None,
         recording_apis: vec!["GET /api".to_string()],
         api_inventory: Vec::new(),
         skipped_api_statuses: Default::default(),

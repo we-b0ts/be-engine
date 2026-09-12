@@ -285,11 +285,16 @@ fn transfer_authorization(
     let query = runtime_query.context(
         "worker ownership transfer requires explicit user approval or runtime_api_confirmed_missing: supply the API/command actually queried and its query time",
     )?;
+    validate_runtime_query(&query)?;
+    Ok(RewriteWorkerTransferAuthorization::RuntimeApiConfirmedMissing { query })
+}
+
+pub(super) fn validate_runtime_query(query: &RewriteWorkerMissingQuery) -> Result<()> {
     validate_identity("runtime query API or command", &query.api_or_command, 4_096)?;
     validate_identity("runtime query time", &query.queried_at, 128)?;
     chrono::DateTime::parse_from_rfc3339(&query.queried_at)
         .context("runtime query time must be RFC 3339 with a timezone")?;
-    Ok(RewriteWorkerTransferAuthorization::RuntimeApiConfirmedMissing { query })
+    Ok(())
 }
 
 fn confirm_binding(

@@ -192,6 +192,10 @@ is unclear.
   Status projection and the traffic lease remain separate owners. Further
   splitting must follow a responsibility boundary rather than divide one
   transaction, action contract, or inventory transition.
+  `regression` owns explicit user-authorized round replacement on `pr_base`,
+  old-round archival through `store`, and the content-bound base Replay admission
+  consumed by `e2e_run/branch`. Runtime query validation stays with `worker`;
+  the coordinator attests cleanup and the engine never queries task runtimes.
   `regression_scope` owns selected recording adoption, reversible API exclusion and current Comparison
   requirement reconciliation at coordinator load/advance boundaries; its
   `comparison` child reuses valid Replay evidence when that requirement changes.
