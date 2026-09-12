@@ -453,6 +453,7 @@ fn recording_target() -> tempfile::TempDir {
             "-m",
             "baseline",
         ],
+        vec!["switch", "-qc", "fixture-work"],
     ] {
         assert!(
             std::process::Command::new("git")

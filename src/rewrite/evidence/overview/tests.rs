@@ -61,6 +61,7 @@ fn configured_target() -> tempfile::TempDir {
             "-qm",
             "baseline",
         ],
+        vec!["switch", "-qc", "fixture-work"],
     ] {
         let output = Command::new("git")
             .current_dir(target.path())
@@ -116,7 +117,7 @@ fn status_is_compact_and_overview_preserves_diagnostics_and_confirmation() {
         serde_json::to_value(status_rewrite_for_api(context(target.path()), Some(&api)).unwrap())
             .unwrap();
     assert_eq!(status, scoped);
-    assert_eq!(status["schema_version"], 31);
+    assert_eq!(status["schema_version"], 32);
     assert_eq!(status["action"]["kind"], "implementation_required");
     assert_eq!(status["api_inventory"]["active"], 1);
     assert_eq!(status["api_inventory"]["total"], 1);

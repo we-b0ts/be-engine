@@ -47,7 +47,9 @@ mod recorder_capture;
 pub use ip_capture::RewriteIpCaptureReport;
 #[cfg(test)]
 mod comparison_requirement_tests;
+mod initialization;
 mod jwt_rule;
+mod purpose;
 mod recording;
 mod recording_action;
 mod recording_execution;
@@ -55,7 +57,6 @@ mod recording_input;
 mod recovery;
 mod regression;
 mod regression_scope;
-pub(crate) use regression::allows_base_replay;
 pub use regression::{
     RewriteRegressionBeginOptions, RewriteRegressionBeginReport, begin as begin_rewrite_regression,
 };
@@ -156,7 +157,7 @@ pub use worker::{
     confirm as confirm_rewrite_worker, transfer as transfer_rewrite_worker,
 };
 
-use model::{RewriteRecordingSettings, RewriteSliceState, RewriteState, STATE_VERSION};
+use model::RewriteState;
 use store::{RewriteLockState, RewriteStore};
 #[cfg(test)]
 pub(in crate::rewrite) use test_support::test_state;

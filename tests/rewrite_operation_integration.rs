@@ -52,6 +52,7 @@ fn configured_target() -> tempfile::TempDir {
             "-qm",
             "fixture",
         ],
+        vec!["switch", "-qc", "feature"],
     ] {
         assert!(
             Command::new("git")
@@ -82,7 +83,7 @@ fn detached_cli_operation_publishes_failure_and_status_does_not_restart_it() {
             "/wrong-route",
         ],
     );
-    assert_eq!(launched["schema_version"], 31);
+    assert_eq!(launched["schema_version"], 32);
     assert_eq!(
         launched["pending"],
         if launched["action"]["kind"] == "wait_required" {
@@ -198,4 +199,59 @@ fn detached_unscoped_next_activates_idle_revalidation_while_an_api_is_blocked() 
     let waited = command(target.path(), &["wait", "--seconds", "1"]);
     assert_eq!(waited["action"]["kind"], "worker_events_required");
     assert_eq!(waited["action"]["commands"]["status"]["argv"][3], "status");
+}
+
+#[test]
+fn cli_status_returns_purpose_and_confirmation_enters_an_engine_named_branch() {
+    let target = configured_target();
+    let switch_base = || {
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(target.path())
+                .args(["switch", "-q", "dev-migration"])
+                .status()
+                .unwrap()
+                .success()
+        )
+    };
+    switch_base();
+    let first = command(target.path(), &["status"]);
+    assert_eq!(first["action"]["kind"], "purpose_required");
+    let confirmed = command(
+        target.path(),
+        &[
+            "purpose",
+            "confirm",
+            "--purpose",
+            "record",
+            "--user-approved",
+            "--active-agent-count",
+            "0",
+            "--runtime-query-command",
+            "test_runtime.list_current_session_agents",
+            "--runtime-query-at",
+            "2026-09-12T09:00:00Z",
+        ],
+    );
+    let branch = confirmed["work_branch"].as_str().unwrap();
+    assert!(branch.starts_with("record/"));
+    assert!(branch.ends_with("-1"));
+    let current = Command::new("git")
+        .arg("-C")
+        .arg(target.path())
+        .args(["branch", "--show-current"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8(current.stdout).unwrap().trim(), branch);
+    assert_eq!(confirmed["next"]["action"]["kind"], "recording_required");
+    assert_eq!(
+        command(target.path(), &["status"])["action"]["kind"],
+        "recording_required"
+    );
+    switch_base();
+    assert_eq!(
+        command(target.path(), &["status"])["action"]["kind"],
+        "purpose_required"
+    );
 }

@@ -21,7 +21,7 @@ fn exposes_only_the_rewrite_coordinator_surface() {
             "status",
             "wait",
             "inventory",
-            "regression",
+            "purpose",
             "case",
             "case-pattern",
             "evidence",

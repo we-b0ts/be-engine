@@ -16,6 +16,19 @@ pub fn status_rewrite(context: RewriteContext) -> Result<RewriteStatusReport> {
 
 pub fn inventory_rewrite(context: RewriteContext) -> Result<RewriteInventoryReport> {
     let (target_root, project) = crate::e2e_run::resolve_project(&context.target_root)?;
+    if super::purpose::pending(&target_root)?.is_some() {
+        return Ok(RewriteInventoryReport {
+            schema_version: ACTION_SCHEMA_VERSION,
+            initialized: RewriteStore::new(&target_root)?.exists(),
+            workflow: None,
+            api_inventory: None,
+            process_output_inventory: None,
+            pending: 1,
+            details: super::coordination::single_ready("confirm_purpose", 1),
+            workers: Vec::new(),
+            experts: Vec::new(),
+        });
+    }
     let state = RewriteStore::new(&target_root)?.load()?;
     Ok(match state {
         Some(mut state) => {
@@ -67,6 +80,9 @@ pub fn status_rewrite_for_api(
     context: RewriteContext,
     api: Option<&RecordingApi>,
 ) -> Result<RewriteStatusReport> {
+    if let Some(report) = super::purpose::status(&context.target_root)? {
+        return Ok(report);
+    }
     if let Some(report) = super::configuration_commit::status(&context.target_root)? {
         return Ok(report);
     }
@@ -139,6 +155,9 @@ pub fn status_rewrite_for_process_output(
     context: RewriteContext,
     id: &str,
 ) -> Result<RewriteStatusReport> {
+    if let Some(report) = super::purpose::status(&context.target_root)? {
+        return Ok(report);
+    }
     if let Some(report) = super::configuration_commit::status(&context.target_root)? {
         return Ok(report);
     }

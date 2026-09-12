@@ -1693,40 +1693,59 @@ capture refresh. Omitting the field, `recording_run_id:`, `recording_run_id: nul
 and `recording_run_id: ""` all preserve the current baseline and the existing
 automatic recording workflow. Nonempty values must still be valid recording IDs.
 
-To start a new regression round after external changes, the user must explicitly
-approve that round and the canonical repository must be checked out on its
-configured `pr_base` branch. A feature branch pointing to the same commit and
-detached HEAD are rejected. Session restarts and branch detection do not grant
-authorization or implicitly reset the workflow.
+On `pr_base`, `backend-rewrite status` always returns `purpose_required` before
+old worker, expert, completion or verification actions. Scoped status, `next`
+and `wait` preserve that boundary too. This does not depend on code changes,
+session identity, previous approval or whether the old workflow finished.
+The action contains two commands. Use the one matching the user's explicit
+request; otherwise ask the user to choose. Before confirming, actually query the
+coordinator's runtime for active child agents/sessions of the current session.
+Exclude the coordinator itself, unrelated independent sessions, engine bindings
+and historical sessions. The observed count must be zero; do not infer it from
+being on `pr_base` or automatically stop active agents. Supply the result through
+`BACKEND_REWRITE_SESSION_ACTIVE_AGENT_COUNT`,
+`BACKEND_REWRITE_SESSION_QUERY_COMMAND` and `BACKEND_REWRITE_SESSION_QUERY_AT`
+(required by the returned command), or the equivalent flags
+`--active-agent-count`, `--runtime-query-command` and `--runtime-query-at`.
+The query timestamp must be RFC 3339 with a timezone. No evidence file is needed.
+The engine validates and records the coordinator's declaration; it cannot inspect
+the coordinator runtime itself. With those query values supplied:
 
 ```bash
-backend-rewrite regression begin --approve-new-regression
+backend-rewrite purpose confirm --purpose replay --user-approved
+backend-rewrite purpose confirm --purpose record --user-approved
 ```
 
-When previous worker bindings exist, first actually query the task runtime and
-stop or confirm the absence of **all** old workers and experts, including skipped
-items. Then additionally supply `--runtime-query-command 'ListAgents'` (or the
-actual equivalent API/command) and `--runtime-query-at '<RFC 3339 query time>'`.
-The query is an attestation that cleanup has completed; it cannot replace user
-authorization. No caller-written evidence JSON file is needed. The engine checks
-the fields and timestamp format; the coordinator must execute and interpret the
-query, including runtime reachability limits. Query all other retained integrator
-or analysis tasks too; the engine cannot enumerate them.
+`replay` reuses the selected completed recording. `record` requests new external
+live traffic and continues to Replay after publication and normal case preparation.
+The latter can initialize a workflow without prior recordings. It supersedes the
+old local recording pin for this workflow; a later explicit pin change is still
+honored. `only`/`skip` and Comparison policy continue to apply.
 
-`regression begin` refuses an active/stale coordinator or traffic operation,
-a pending recording refresh, or an unusable standard recording. It archives the
-previous workflow under the ignored runtime history directory and starts a new
-workflow ID using the same selected recording, `only`/`skip` and Comparison policy.
-Old issues, bindings, review receipts and expert clocks cannot drive the new round;
-recording artifacts and cumulative progress remain available. The response has
-`previous_workflow_id`, `archive`, and `next`; follow `next` through code review
-and fresh verification before dispatching implementation workers for new failures.
-Call this command once per approved round, then use `status` / `next` to resume.
+The coordinator only confirms purpose. The engine generates a unique
+`replay/yyyyMMdd-<seq>` or `record/yyyyMMdd-<seq>` branch, creates and switches to it,
+using the machine-local date and one above the largest local/remote sequence for
+that purpose and day (starting at 1). It returns `work_branch` and `next`. No
+branch name is required. Confirmation consumes the entry permission by entering the work branch;
+subsequent `status` / `next` calls continue there. Returning to `pr_base` always
+requires a new confirmation, even with unchanged code and an unfinished workflow.
 
-Base-branch Replay is bound to the source, configuration and startup inputs
-admitted by this explicit command. Engine progress commits remain within the
-round; changed code/configuration needs another approved round or repairs on a
-feature branch. Ordinary workflows still require a feature branch for Replay.
+Existing worker bindings, failures, review receipts and expert assignments are
+archived under ignored runtime history and replaced with a new workflow identity.
+The engine does not query, wait for or resume old workers. Old callbacks cannot
+satisfy the new workflow; first Replay diagnoses current behavior without an old
+implementation/review gate. Only fresh failures lead to new workers and expert
+planning, with fresh integration timers. Each API can bind a new worker once
+under this purpose authorization, when a fresh failure needs implementation.
+This permission is independent per API and is consumed by its first binding.
+Subsequent replacement requires explicit user authorization or an actual runtime
+query confirming that worker is missing. Normal delivery review still applies.
+
+An actual active/stale engine operation must finish or recover before replacement;
+this is the serialized traffic lease, not an old task-runtime liveness check.
+Failure to create the work branch while still on base restores the previous state.
+`status` remains read-only throughout. The legacy `regression begin` CLI is hidden;
+coordinators should use the purpose command returned by `status`.
 
 `status`, `inventory` and `next` use the current settings between traffic
 operations. Excluded APIs are reported as `skipped`, do not dispatch workers or

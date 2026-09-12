@@ -48,6 +48,13 @@ pub(super) fn apply(
     state: &mut RewriteState,
     policy: &RegressionScope,
 ) -> Result<bool> {
+    if state.regression.as_ref().is_some_and(|origin| {
+        origin.superseded_recording_run_id.is_some()
+            && origin.superseded_recording_run_id == policy.recording_run_id
+    }) {
+        // Explicit new-traffic purpose supersedes the old local recording pin.
+        return Ok(false);
+    }
     let Some(selection) = load(target_root, policy)? else {
         return Ok(false);
     };

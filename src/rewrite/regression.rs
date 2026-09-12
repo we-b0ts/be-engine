@@ -5,7 +5,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    RewriteWorkerMissingQuery, action, artifacts, execution, inventory,
+    action, artifacts, execution, inventory,
     model::{ACTION_SCHEMA_VERSION, RewriteActionEnvelope, RewriteState},
     process_outputs, regression_scope, source_diff,
     store::RewriteStore,
@@ -17,8 +17,12 @@ pub struct RewriteRegressionBeginOptions {
     pub target_root: PathBuf,
     /// Attests explicit user authorization for this new round, never inferred from a session.
     pub caller_approved: bool,
-    /// Actual query confirming all previous workers/experts are stopped or absent.
-    pub runtime_query: Option<RewriteWorkerMissingQuery>,
+    /// Capture new live traffic before Replay instead of reusing existing cases.
+    pub record_new_traffic: bool,
+    /// Actual active child agent/session count in the caller's current runtime session.
+    pub active_agent_count: usize,
+    /// Query executed by that coordinator, not an engine-owned worker inventory count.
+    pub runtime_query: super::RewriteWorkerMissingQuery,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,25 +34,37 @@ pub(super) struct RegressionOrigin {
     pub base_fingerprint: String,
     pub user_approved: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub runtime_query: Option<RewriteWorkerMissingQuery>,
+    pub runtime_query: Option<super::RewriteWorkerMissingQuery>,
+    #[serde(default)]
+    pub record_new_traffic: bool,
+    #[serde(default)]
+    pub superseded_recording_run_id: Option<String>,
+    #[serde(default)]
+    pub active_session_agent_count: Option<usize>,
+    #[serde(default)]
+    pub session_runtime_query: Option<super::RewriteWorkerMissingQuery>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct RewriteRegressionBeginReport {
     pub schema_version: u32,
-    pub previous_workflow_id: String,
-    pub archive: PathBuf,
+    pub previous_workflow_id: Option<String>,
+    pub archive: Option<PathBuf>,
+    pub work_branch: String,
     pub next: RewriteActionEnvelope,
 }
 
 pub fn begin(options: RewriteRegressionBeginOptions) -> Result<RewriteRegressionBeginReport> {
     ensure!(
         options.caller_approved,
-        "starting a new regression requires explicit user authorization: --approve-new-regression"
+        "starting a new regression requires explicit user authorization: --user-approved"
     );
-    if let Some(query) = &options.runtime_query {
-        worker::validate_runtime_query(query)?;
-    }
+    ensure!(
+        options.active_agent_count == 0,
+        "purpose confirmation requires zero active child agents/sessions in the coordinator's current runtime session; observed {}. Do not stop them automatically or use engine worker bindings as this count",
+        options.active_agent_count
+    );
+    worker::validate_runtime_query(&options.runtime_query)?;
     let (target_root, project) = crate::e2e_run::resolve_project(&options.target_root)?;
     require_base(&target_root, &project.pr_base)?;
     let store = RewriteStore::new(&target_root)?;
@@ -66,22 +82,51 @@ pub fn begin(options: RewriteRegressionBeginOptions) -> Result<RewriteRegression
     );
     // Feedback cannot arrive between the archived snapshot and workflow replacement.
     let feedback = worker::events::lock(&target_root)?;
-    let previous = store.load()?.context(
-        "rewrite workflow is not initialized; initialize and complete a standard recording first",
-    )?;
-    ensure!(
-        previous.recording_refresh.is_none(),
-        "complete the pending recording refresh before regression begin"
-    );
-    ensure!(
-        previous.worker_bindings.is_empty() || options.runtime_query.is_some(),
-        "query the actual task runtime and stop all previous workers and experts before regression begin; supply --runtime-query-command and --runtime-query-at confirming they are stopped or absent (including skipped work items)"
-    );
-    artifacts::validate_standard_recording(&target_root, &previous)?;
-    let apis = artifacts::standard_recording_apis(&target_root, &previous)?;
-    let mut state = reset(previous.clone());
+    let previous = if options.record_new_traffic {
+        store.load_snapshot()?
+    } else {
+        store.load()?
+    };
+    let policy = crate::config::regression::RegressionScope::load(&target_root)?;
+    let mut state = match previous.clone() {
+        Some(previous) => reset(previous),
+        None => super::initialization::new_state(
+            &target_root,
+            String::new(),
+            String::new(),
+            Vec::new(),
+        )?,
+    };
+    if !options.record_new_traffic {
+        if previous.is_none() {
+            regression_scope::apply(&target_root, &mut state)?;
+        }
+        ensure!(
+            !state.recording_run_id.is_empty(),
+            "select a completed standard recording or choose --purpose record"
+        );
+        artifacts::validate_standard_recording(&target_root, &state)?;
+        let apis = artifacts::standard_recording_apis(&target_root, &state)?;
+        inventory::install(&mut state, apis)?;
+    } else {
+        let run_id = artifacts::allocate_run_id_excluding(
+            &target_root,
+            crate::ManagedRecordingOperation::Record,
+            &[&state.recording_run_id],
+        )?;
+        let settings = state.recording_settings;
+        super::recording::reset_for_fresh_recording(
+            &mut state,
+            run_id,
+            settings,
+            super::model::RewriteRecordingReason::UserRequested,
+        );
+    }
     state.regression = Some(RegressionOrigin {
-        previous_workflow_id: previous.workflow_id.clone(),
+        previous_workflow_id: previous
+            .as_ref()
+            .map(|s| s.workflow_id.clone())
+            .unwrap_or_default(),
         started_at: chrono::Utc::now().to_rfc3339(),
         pr_base: project.pr_base.clone(),
         base_revision: source_diff::git_text(&target_root, &["rev-parse", "HEAD"])?
@@ -89,20 +134,48 @@ pub fn begin(options: RewriteRegressionBeginOptions) -> Result<RewriteRegression
             .into(),
         base_fingerprint: super::fingerprint::repository_fingerprint(&target_root)?,
         user_approved: true,
-        runtime_query: options.runtime_query,
+        runtime_query: None,
+        record_new_traffic: options.record_new_traffic,
+        active_session_agent_count: Some(options.active_agent_count),
+        session_runtime_query: Some(options.runtime_query),
+        superseded_recording_run_id: if options.record_new_traffic {
+            policy.recording_run_id
+        } else {
+            previous
+                .as_ref()
+                .and_then(|s| s.regression.as_ref())
+                .and_then(|o| o.superseded_recording_run_id.clone())
+                .filter(|id| Some(id) == policy.recording_run_id.as_ref())
+        },
     });
-    inventory::install(&mut state, apis)?;
     process_outputs::install(&mut state, &project.process_outputs);
     regression_scope::apply(&target_root, &mut state)?;
-    let next = action::for_status(&target_root, &state)?;
     require_base(&target_root, &project.pr_base)?;
-    let archive = store.archive(&previous, &state.workflow_id)?;
+    let archive = previous
+        .as_ref()
+        .map(|old| store.archive(old, &state.workflow_id))
+        .transpose()?;
+    let work_branch = branch::next(&target_root, options.record_new_traffic)?;
+    // Publish the isolated state before entering the branch. Concurrent status must
+    // never observe a new work branch with old workers still eligible for dispatch.
     store.save_snapshot(&state, &feedback)?;
+    if let Err(error) = source_diff::git_text(&target_root, &["switch", "-c", &work_branch]) {
+        // A failing Git hook can report failure after switching. Keep the new
+        // isolated state in that case; only restore old state while still on base.
+        if super::purpose::base_branch(&target_root)?.is_some() {
+            store.restore_snapshot(previous.as_ref(), &feedback)?;
+        }
+        return Err(error).context(
+            "failed to enter the new purpose work branch; inspect status before retrying",
+        );
+    }
     execution::retire_finished(&target_root)?;
+    let next = action::for_status(&target_root, &state)?;
     Ok(RewriteRegressionBeginReport {
         schema_version: ACTION_SCHEMA_VERSION,
-        previous_workflow_id: previous.workflow_id,
+        previous_workflow_id: previous.map(|s| s.workflow_id),
         archive,
+        work_branch,
         next,
     })
 }
@@ -124,32 +197,24 @@ fn require_base(target_root: &Path, pr_base: &str) -> Result<()> {
 fn reset(mut state: RewriteState) -> RewriteState {
     state.workflow_id = format!("rewrite-{}", uuid::Uuid::new_v4().simple());
     state.revision = 1;
+    // A new workflow grants each API one first binding. Once bound, ordinary
+    // confirm/transfer rules prevent a second unapproved replacement.
     state.worker_bindings.clear();
     state.worker_event_revision = 0;
     state.source_review_rework.clear();
     state.target_quality_fingerprint = None;
-    state.delivery_review_required = true;
+    state.delivery_review_required = false;
     state.recording_rejection = None;
     state.recording_request_reason = None;
     state.recording_input_case_source = None;
     state.recording_input_diagnosis = None;
     state.case_pattern_identification = None;
+    state.recording_refresh = None;
+    state.regression = None;
     state
 }
 
-/// Base Replay stays bound to authorized source/configuration, including startup inputs.
-/// Engine progress commits do not change that identity; code repairs require a feature branch.
-pub(crate) fn allows_base_replay(target_root: &Path, pr_base: &str) -> Result<bool> {
-    let Some(state) = RewriteStore::new(target_root)?.load()? else {
-        return Ok(false);
-    };
-    let Some(origin) = state.regression else {
-        return Ok(false);
-    };
-    Ok(origin.user_approved
-        && origin.pr_base == pr_base
-        && super::fingerprint::repository_fingerprint(target_root)? == origin.base_fingerprint)
-}
+mod branch;
 
 #[cfg(test)]
 mod tests;

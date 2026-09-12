@@ -38,6 +38,7 @@ fn target() -> tempfile::TempDir {
     git(root.path(), &["config", "user.email", "test@example.com"]);
     git(root.path(), &["add", "."]);
     git(root.path(), &["commit", "-qm", "baseline"]);
+    git(root.path(), &["switch", "-qc", "fixture-work"]);
     root
 }
 

@@ -53,7 +53,12 @@ pub async fn wait(options: RewriteWaitOptions) -> Result<RewriteActionEnvelope> 
         }
     }
     let mut envelope = execution::from_status(status);
-    if envelope.terminal_allowed || matches!(envelope.action, RewriteAction::Blocked { .. }) {
+    if envelope.terminal_allowed
+        || matches!(
+            envelope.action,
+            RewriteAction::Blocked { .. } | RewriteAction::PurposeRequired { .. }
+        )
+    {
         return Ok(envelope);
     }
     let root = std::fs::canonicalize(&options.target_root)?;

@@ -192,10 +192,15 @@ is unclear.
   Status projection and the traffic lease remain separate owners. Further
   splitting must follow a responsibility boundary rather than divide one
   transaction, action contract, or inventory transition.
-  `regression` owns explicit user-authorized round replacement on `pr_base`,
-  old-round archival through `store`, and the content-bound base Replay admission
-  consumed by `e2e_run/branch`. Runtime query validation stays with `worker`;
-  the coordinator attests cleanup and the engine never queries task runtimes.
+  `purpose` owns the read-only `pr_base` purpose boundary for status/next and
+  direct worker/traffic dispatch. `regression` owns authorized purpose entry,
+  automatic work-branch creation, old-round archival through `store`, and fresh
+  recording/Replay initialization. `initialization` owns construction of a new
+  recording workflow, shared by ordinary advance and purpose entry. Entry requires
+  an actual current-coordinator runtime query declaring zero active child sessions;
+  this is independent of engine bindings and historical sessions. Old-worker
+  cleanup is not an entry prerequisite. Each API can bind once in the new workflow;
+  subsequent worker transfer retains its separate authorization contract. `e2e_run/branch` requires a work branch.
   `regression_scope` owns selected recording adoption, reversible API exclusion and current Comparison
   requirement reconciliation at coordinator load/advance boundaries; its
   `comparison` child reuses valid Replay evidence when that requirement changes.

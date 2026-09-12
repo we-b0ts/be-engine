@@ -193,6 +193,7 @@ pub(super) fn ensure_scope_confirmed(
 }
 
 pub fn confirm(options: RewriteWorkerConfirmOptions) -> Result<RewriteActionEnvelope> {
+    crate::rewrite::purpose::require_work_branch(&options.target_root)?;
     let (target_root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
     validate_identity("subagent handle", &options.agent_handle, 4_096)?;
     if let Some(name) = options.agent_name.as_deref() {
@@ -238,6 +239,7 @@ pub fn confirm(options: RewriteWorkerConfirmOptions) -> Result<RewriteActionEnve
 }
 
 pub fn transfer(options: RewriteWorkerTransferOptions) -> Result<RewriteActionEnvelope> {
+    crate::rewrite::purpose::require_work_branch(&options.target_root)?;
     let (target_root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
     validate_identity("subagent handle", &options.agent_handle, 4_096)?;
     validate_identity(

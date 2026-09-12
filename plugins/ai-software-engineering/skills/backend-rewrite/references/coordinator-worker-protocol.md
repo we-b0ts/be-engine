@@ -238,38 +238,60 @@ The worker returns the handoff and ends its turn; it does not wait for Replay.
 
 ## Authorized Regression Start
 
-Only an explicit user request/approval for a new regression round permits:
+On `pr_base`, `status` returns `purpose_required`. Handle it before querying,
+resuming or reconciling old workers/experts. This applies on every return to base,
+regardless of code changes, earlier purpose approval or unfinished old work.
+
+Execute the returned purpose confirmation command matching the user's explicit
+request. If the user has not specified a purpose, ask them to choose. Branch
+presence or previous approval does not authorize either command. First actually
+query your runtime API/command (for example `ListAgents` or `/list-agents`) for
+active child agents/sessions of your current coordinator session. Count only
+those actual active child sessions: exclude yourself, unrelated independent
+sessions, engine binding records and historical sessions. The result must be
+zero. A new session or empty engine inventory is not evidence of zero. If the
+query cannot establish this scope, do not claim zero. If nonzero, report the
+conflict; do not stop sessions automatically.
+
+Supply the observed count, actual query API/command and RFC 3339 query time via
+the returned command's required environment names:
+`BACKEND_REWRITE_SESSION_ACTIVE_AGENT_COUNT`,
+`BACKEND_REWRITE_SESSION_QUERY_COMMAND`, `BACKEND_REWRITE_SESSION_QUERY_AT`.
+Equivalent flags are `--active-agent-count`, `--runtime-query-command` and
+`--runtime-query-at`. No JSON evidence file is needed. These are your declaration
+of an actual query; the engine cannot inspect your runtime itself. With these
+values supplied, execute the matching command:
 
 ```bash
-backend-rewrite regression begin --approve-new-regression
+backend-rewrite purpose confirm --purpose replay --user-approved
+backend-rewrite purpose confirm --purpose record --user-approved
 ```
 
-The canonical target must currently be on the configured `pr_base` branch.
-The engine checks its name: an equal commit on a feature branch or detached HEAD
-is insufficient. Do not switch branches or set the approval flag merely because
-the session restarted, source changed, or old worker/expert actions are inconvenient.
+Do not supply a branch name or create the branch yourself. The engine creates and
+switches to `replay/yyyyMMdd-<seq>` or `record/yyyyMMdd-<seq>` (local date,
+sequence starting at 1), returns its name, and initializes an isolated
+workflow. No separate regression-start command is needed. This transition consumes
+the purpose permission; ordinary `status` / `next` then proceed on the work branch.
+Returning to `pr_base` always requires a new purpose confirmation.
 
-Before resetting retained work, inspect `inventory` and actually invoke the
-runtime list/status APIs covering all old workers, experts, integrators and
-analysis tasks, including skipped API scopes. Stop active tasks and query again
-until all are stopped or absent. Do not replace or resume them to satisfy an old
-dispatch action when beginning this approved round. Supply the actual query's
-`--runtime-query-command` and `--runtime-query-at` (RFC 3339 with timezone) to
-`regression begin`; these are required when worker bindings exist. An empty list
-with limited visibility is insufficient evidence about unreachable tasks.
-Runtime cleanup and user approval are separate requirements, both must be met.
-No evidence file is required; the engine validates the declaration, not the
-external runtime response. Active/stale engine operations must finish or recover
-before the command can succeed.
+Do not query, stop, wait for, transfer or restore old workers as a prerequisite to
+this entry. Old bindings, failures, review receipts and expert clocks are archived;
+old reports must not be forwarded into the new workflow. They may describe code
+already fixed externally. Only current verification failures can produce new
+implementation assignments or expert assistance. Each API receives permission
+for one new worker binding under the new purpose; consume it on that API's first
+binding when needed. No additional approval or old-worker query is required.
+Once bound, further replacement uses the normal explicit-approval or
+`runtime_api_confirmed_missing` transfer contract. Other APIs retain their own
+first-binding permission.
 
-Follow the returned `next` through source review and fresh Replay/Comparison.
-The old round is archived and its workflow identity, failures, worker bindings,
-review receipts and expert clocks are retired. Do not restore old handles or
-forward old callbacks into the new round; actual new failures may produce new
-worker assignments. Base-branch verification is bound to the starting code/configuration and startup
-inputs; engine progress commits do not revoke it. Subsequent code repairs belong
-on a feature branch. Use `status` / `next` after
-begin, never repeatedly begin to bypass blockers or obtain a passing result.
+For `replay`, follow `next` into fresh verification of the selected recording.
+For `record`, the engine requests new external live traffic, then proceeds through
+publication/case preparation to Replay. It supersedes the old recording pin for
+this workflow. Preserve local API selection and Comparison requirements. Do not
+request an implementation worker or expert before fresh verification needs one.
+Actual live/stale engine operations retain their finish/recovery contract; they
+are not task-runtime worker cleanup requirements.
 
 ## Mandatory Runtime Queries
 

@@ -24,13 +24,17 @@ Start and resume from the initialized canonical target repository:
 backend-rewrite status
 ```
 
-If the user explicitly requests a **new regression round**, handle the
-[authorized regression start](coordinator-worker-protocol.md#authorized-regression-start)
-before resuming old dispatch or expert actions. Read `status` / `inventory` to
-inspect retained work, perform actual runtime cleanup, and execute `regression
-begin` only with user authorization on `pr_base`. A fresh session, changed code,
-or merely being on `pr_base` never implies that authorization. Ordinary resume
-continues the current round without `regression begin`.
+If `status` returns `purpose_required`, handle it before all old dispatch,
+expert and old-worker runtime-query actions. Read the
+[purpose confirmation protocol](coordinator-worker-protocol.md#authorized-regression-start).
+Actually query current-session active child agents (excluding self, unrelated
+peers, engine bindings and historical sessions); require zero and supply count,
+query command and time. Confirm the user's purpose through the returned command; the engine generates and
+enters a fresh work branch. No branch creation or separate regression command is
+required from the coordinator. Old workers are not queried, resumed or waited for.
+The base branch always requires confirmation, even when code is unchanged or an
+old workflow is unfinished. An explicit user request supplies purpose authorization;
+otherwise ask the user to choose. On a work branch, continue the normal workflow.
 
 Follow the returned action to start an absent rewrite workflow.
 Before the first standard recording, add `--api '<METHOD path-or-pattern>'`
@@ -73,7 +77,7 @@ AI-owned reference and handoff context, never as engine state;
 
 ## Coordinator Loop
 
-Use the existing `backend-rewrite` interface. Response schema v30 actions have
+Use the existing `backend-rewrite` interface. Response schema v32 actions have
 exactly `kind`, `summary`, `details`, and `commands`. Status/next expose scheduling
 and short issue facts, not diagnostic payloads. Default `workflow` has `id` and
 `revision`; use `inventory` for binding recovery and scheduling detail. Never
@@ -91,6 +95,10 @@ The following describes coordinator decisions; do not implement it as a script.
 ```text
 state = status()
 while true:
+    if state.action.kind == "purpose_required":
+        actually query active child sessions of this coordinator; require zero
+        supply count, query command and time to the returned user-approved purpose command
+        refresh status and continue
     reconcile implementation-worker results through the worker protocol
     reconcile integrator and route-analysis results with retained assignments
     reconcile expert results and forward reports through the worker protocol
