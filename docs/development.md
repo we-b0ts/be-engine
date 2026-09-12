@@ -1338,12 +1338,44 @@ Worker transfer is an exceptional compare-and-swap ownership change. It is
 valid for an unresolved `implementation_required` API or process-output
 work item, including a parked item, and requires its
 current `--previous-agent-handle`, a replacement `--agent-handle`, a bounded
-reason, and explicit caller approval. The replacement handle must not own another work
+reason, and either of two equal authorization bases: `user_approved` or
+`runtime_api_confirmed_missing`. The replacement handle must not own another work
 item in the workflow. A successful transfer preserves the worktree, records the
 prior handle fingerprint and reason, changes the binding generation, and
 issues a new dispatch, and atomically confirms the replacement. A handle that
 no longer owns the work cannot replace its newer owner. Old delivery reports
 retain the previous dispatch and cannot advance the replacement.
+
+For `user_approved`, use `--approve-ownership-transfer`. An earlier explicit
+user authorization covering this transfer remains valid. For
+`runtime_api_confirmed_missing`, supply the actual queried API/tool or command
+and its query time together; no evidence file or additional user approval is needed:
+
+```bash
+backend-rewrite worker transfer --previous-agent-handle OLD --agent-handle NEW \
+  --reason 'runtime query confirmed the original worker no longer exists' \
+  --runtime-query-command 'ListAgents' \
+  --runtime-query-at '<actual query time in RFC 3339, including timezone>'
+```
+
+The coordinator must actually execute the runtime API/tool or supported command
+before creating a replacement, with query coverage sufficient to establish that
+the exact previous worker no longer exists and cannot be resumed. `ListAgents`,
+its supported `/list-agents` entrypoint, and equivalent runtime status APIs are
+examples, not an allowlist. Session restart, cached observations, incomplete
+listings, failed queries and ended-but-resumable tasks are insufficient. Obtain
+an exact per-task query when list scope cannot establish absence. Explicit user
+cancellation still takes precedence.
+
+The approval flag and runtime-query parameters are mutually exclusive. The query
+command must be a nonempty single line of at most 4096 bytes; query time must be
+RFC 3339 with a timezone (e.g. `2026-09-12T12:00:00+08:00`). Supplying them attests
+that the query actually confirmed the previous worker missing. The engine checks
+input completeness and time format, then stores `runtime_api_confirmed_missing`
+and `query.api_or_command` / `query.queried_at` in the transfer record's
+`authorization` field. It neither executes the recorded command nor independently
+proves the query ran. Historical records lacking `authorization` deserialize as
+`user_approved`, matching the requirement enforced when they were written.
 
 `next` returns an opaque standard/comparison
 `action.commands.execute` recording action. `action.details.run_id` identifies

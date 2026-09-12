@@ -75,13 +75,47 @@ another work item's dispatch or feedback. Never perform API diagnosis in the
 coordinator to bypass missing worker capability. Confirmation is delivery of a
 dispatch, not proof that the worker remains running or has completed its work.
 
-A later failed acceptance creates a new dispatch for the same worker. An
-unavailable stored handle requires explicit caller approval for ownership
-transfer. Preserve the worktree, create the approved replacement, then execute
-`worker transfer --previous-agent-handle OLD --agent-handle NEW` with a single-line
-reason and `--approve-ownership-transfer`. The engine verifies the old handle
-still owns the work and issues a new dispatch for the replacement. Never give
-two workers simultaneous ownership of one work item.
+A later failed acceptance creates a new dispatch for the same worker. Replacing
+an existing owner requires **either one of two equal authorization bases**:
+
+- `user_approved`: the user explicitly authorized the transfer, including an
+  earlier authorization that covers this replacement. Use
+  `--approve-ownership-transfer`; do not ask again for an already authorized transfer.
+- `runtime_api_confirmed_missing`: **actually invoke** a runtime API/tool or
+  supported command covering the exact stored worker handle, and obtain a result
+  establishing that the worker no longer exists and cannot be resumed. Supply
+  `--runtime-query-command` and `--runtime-query-at` together. These parameters
+  attest that the query actually ran and confirmed absence; no additional user
+  approval or evidence file is required.
+
+For the runtime basis, after the actual query and replacement creation:
+
+```bash
+backend-rewrite worker transfer --previous-agent-handle OLD --agent-handle NEW \
+  --reason 'runtime query confirmed the original worker no longer exists' \
+  --runtime-query-command 'ListAgents' \
+  --runtime-query-at '<actual query time in RFC 3339, including timezone>'
+```
+
+`--runtime-query-command` identifies the API/tool or command actually invoked:
+for example `ListAgents`, its supported `/list-agents` entrypoint, or another
+runtime's live agent-list or per-task status API. Record the actual query time
+(e.g. `2026-09-12T12:00:00+08:00`), not an invented timestamp. Follow
+[mandatory runtime queries](#mandatory-runtime-queries) for query coverage.
+Merely naming `/list-agents` does not execute a query. A new session, cached
+engine state, an incomplete listing, a timeout, permission error, or other failed
+query does not establish absence. An ended but resumable worker retains
+ownership. If list scope cannot establish absence of the exact worker, obtain a
+per-task result or explicit user approval. Explicit user cancellation still
+takes precedence over automatic replacement.
+
+After establishing either basis, preserve the worktree, create the replacement,
+then execute `worker transfer` with a single-line `--reason` and exactly one
+of the authorization alternatives. The engine checks the command and time
+format, records the authorization, verifies the old handle still owns the work
+and issues a new dispatch for the replacement. It trusts the coordinator's
+attestation; it does not execute the submitted API/command or independently
+prove the query ran. Never give two workers simultaneous ownership of one work item.
 
 ## API Expert Assistance
 
@@ -238,6 +272,9 @@ immediately following wait; repeat after intervening work or assignment changes.
   Resolve it through an available equivalent query. If no query capability can
   establish the state, identify the runtime interface gap; do not repeatedly
   wait as though the worker were known to be running or create a duplicate.
+- An actual query explicitly establishing that the stored worker no longer
+  exists permits the `runtime_api_confirmed_missing` transfer described above.
+  Record its actual API/command and query time; do not report absence as completion.
 
 Collect the full pass before reporting changes or required observation refreshes
 through the existing per-worker `report_worker` commands. Do not re-query the

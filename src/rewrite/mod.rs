@@ -147,8 +147,8 @@ pub use status::{
 };
 pub use target_quality::{RewriteTargetQualityOptions, run as run_rewrite_target_quality};
 pub use worker::{
-    RewriteWorkerConfirmOptions, RewriteWorkerTransferOptions, confirm as confirm_rewrite_worker,
-    transfer as transfer_rewrite_worker,
+    RewriteWorkerConfirmOptions, RewriteWorkerMissingQuery, RewriteWorkerTransferOptions,
+    confirm as confirm_rewrite_worker, transfer as transfer_rewrite_worker,
 };
 
 use model::{RewriteRecordingSettings, RewriteSliceState, RewriteState, STATE_VERSION};

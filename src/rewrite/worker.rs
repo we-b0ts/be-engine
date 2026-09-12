@@ -16,6 +16,9 @@ pub(super) mod model;
 pub(super) mod runtime;
 pub(super) mod scheduler;
 
+pub use model::RewriteWorkerMissingQuery;
+use model::RewriteWorkerTransferAuthorization;
+
 #[derive(Debug, Clone)]
 pub struct RewriteWorkerConfirmOptions {
     pub target_root: std::path::PathBuf,
@@ -33,6 +36,8 @@ pub struct RewriteWorkerTransferOptions {
     pub agent_name: Option<String>,
     pub reason: String,
     pub caller_approved: bool,
+    /// Attests that an actual query confirmed the previous worker no longer exists.
+    pub runtime_query: Option<RewriteWorkerMissingQuery>,
 }
 
 pub(super) const AGENT_HANDLE_ENV: &str = "BACKEND_REWRITE_SUBAGENT_HANDLE";
@@ -244,10 +249,7 @@ pub fn transfer(options: RewriteWorkerTransferOptions) -> Result<RewriteActionEn
     if let Some(name) = options.agent_name.as_deref() {
         validate_identity("subagent name", name, 128)?;
     }
-    ensure!(
-        options.caller_approved,
-        "worker ownership transfer requires explicit caller approval"
-    );
+    let authorization = transfer_authorization(options.caller_approved, options.runtime_query)?;
 
     let store = RewriteStore::new(&target_root)?;
     let _lock = events::lock(&target_root)?;
@@ -262,10 +264,32 @@ pub fn transfer(options: RewriteWorkerTransferOptions) -> Result<RewriteActionEn
         &options.agent_handle,
         options.agent_name,
         options.reason,
+        authorization,
     )?;
     events::publish(&target_root, &state, &scope)?;
     drop(_lock);
     runtime::current_envelope(&target_root)
+}
+
+fn transfer_authorization(
+    caller_approved: bool,
+    runtime_query: Option<RewriteWorkerMissingQuery>,
+) -> Result<RewriteWorkerTransferAuthorization> {
+    ensure!(
+        !(caller_approved && runtime_query.is_some()),
+        "provide only one worker transfer authorization: explicit user approval or runtime query command/time"
+    );
+    if caller_approved {
+        return Ok(RewriteWorkerTransferAuthorization::UserApproved);
+    }
+    let query = runtime_query.context(
+        "worker ownership transfer requires explicit user approval or runtime_api_confirmed_missing: supply the API/command actually queried and its query time",
+    )?;
+    validate_identity("runtime query API or command", &query.api_or_command, 4_096)?;
+    validate_identity("runtime query time", &query.queried_at, 128)?;
+    chrono::DateTime::parse_from_rfc3339(&query.queried_at)
+        .context("runtime query time must be RFC 3339 with a timezone")?;
+    Ok(RewriteWorkerTransferAuthorization::RuntimeApiConfirmedMissing { query })
 }
 
 fn confirm_binding(
@@ -344,6 +368,7 @@ fn transfer_binding(
     agent_handle: &str,
     agent_name: Option<String>,
     reason: String,
+    authorization: RewriteWorkerTransferAuthorization,
 ) -> Result<()> {
     let binding_key = scope.binding_key();
     let new_fingerprint = fingerprint::id(&["rewrite-subagent-handle-v1", agent_handle]);
@@ -377,6 +402,7 @@ fn transfer_binding(
         previous_agent_handle_fingerprint: previous_fingerprint,
         reason,
         transferred_at: chrono::Utc::now().to_rfc3339(),
+        authorization,
     });
     binding.observation = None;
     binding.review_report = None;
@@ -525,3 +551,7 @@ pub(super) fn integrate_current_for_test(state: &mut RewriteState) {
 #[cfg(test)]
 #[path = "worker_tests.rs"]
 pub(super) mod tests;
+
+#[cfg(test)]
+#[path = "worker/transfer_tests.rs"]
+mod transfer_tests;
