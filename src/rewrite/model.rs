@@ -483,6 +483,8 @@ pub(super) struct RewriteState {
     pub version: u32,
     pub revision: u64,
     pub workflow_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regression: Option<super::regression::RegressionOrigin>,
     #[serde(default)]
     pub recording_apis: Vec<String>,
     #[serde(default)]

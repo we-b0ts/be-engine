@@ -53,7 +53,12 @@ mod recording_action;
 mod recording_execution;
 mod recording_input;
 mod recovery;
+mod regression;
 mod regression_scope;
+pub(crate) use regression::allows_base_replay;
+pub use regression::{
+    RewriteRegressionBeginOptions, RewriteRegressionBeginReport, begin as begin_rewrite_regression,
+};
 mod repair;
 mod response_url_evidence;
 mod revalidation;
@@ -147,8 +152,8 @@ pub use status::{
 };
 pub use target_quality::{RewriteTargetQualityOptions, run as run_rewrite_target_quality};
 pub use worker::{
-    RewriteWorkerConfirmOptions, RewriteWorkerTransferOptions, confirm as confirm_rewrite_worker,
-    transfer as transfer_rewrite_worker,
+    RewriteWorkerConfirmOptions, RewriteWorkerMissingQuery, RewriteWorkerTransferOptions,
+    confirm as confirm_rewrite_worker, transfer as transfer_rewrite_worker,
 };
 
 use model::{RewriteRecordingSettings, RewriteSliceState, RewriteState, STATE_VERSION};

@@ -62,7 +62,14 @@ fn transfer_binding(
     reason: String,
 ) -> Result<()> {
     let scope = api_scope(state);
-    super::transfer_binding(state, &scope, agent_handle, agent_name, reason)
+    super::transfer_binding(
+        state,
+        &scope,
+        agent_handle,
+        agent_name,
+        reason,
+        RewriteWorkerTransferAuthorization::UserApproved,
+    )
 }
 
 fn binding_id(state: &RewriteState) -> String {
@@ -398,10 +405,11 @@ fn transfer_entrypoint_requires_approval_and_current_handle() {
         agent_name: Some("replacement-worker".to_string()),
         reason: "stored handle is unavailable after session replacement".to_string(),
         caller_approved,
+        runtime_query: None,
     };
 
     let error = transfer(options(&current_handle, false)).unwrap_err();
-    assert!(error.to_string().contains("explicit caller approval"));
+    assert!(error.to_string().contains("explicit user approval"));
     assert_eq!(
         store.load().unwrap().unwrap().worker_bindings["GET /api"].transfer_generation,
         0

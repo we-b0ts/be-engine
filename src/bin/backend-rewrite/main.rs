@@ -29,6 +29,7 @@ mod evidence;
 mod expert;
 mod project_init;
 mod recorder_capture;
+mod regression;
 mod startup;
 
 #[derive(Debug, Parser)]
@@ -115,6 +116,8 @@ enum RewriteCommand {
     },
     /// Show the full stable API inventory without advancing it.
     Inventory,
+    /// Start a user-authorized regression round from the configured pr_base branch.
+    Regression(regression::RegressionArgs),
     /// Inspect bounded dependency evidence from one published case.
     Case(CaseArgs),
     /// Apply one coordinator-requested batch of API case path patterns.
@@ -406,7 +409,7 @@ enum WorkerCommand {
     Confirm(WorkerConfirmArgs),
     /// Report a runtime observation, worker handoff, or completed integration.
     Report(WorkerReportArgs),
-    /// Transfer one API to a replacement subagent after explicit caller approval.
+    /// Transfer worker ownership with user approval or an actual runtime query confirming absence.
     Transfer(WorkerTransferArgs),
 }
 
@@ -476,9 +479,19 @@ struct WorkerTransferArgs {
     /// Single-line reason the stored worker cannot retain ownership.
     #[arg(long)]
     reason: String,
-    /// Attest that the caller explicitly approved replacing the API owner.
-    #[arg(long, required = true)]
+    /// Attest that the user explicitly approved replacing the worker owner.
+    #[arg(
+        long,
+        required_unless_present = "runtime_query_command",
+        conflicts_with_all = ["runtime_query_command", "runtime_query_at"]
+    )]
     approve_ownership_transfer: bool,
+    /// API/command actually queried to confirm the previous worker no longer exists (e.g. ListAgents).
+    #[arg(long, requires = "runtime_query_at")]
+    runtime_query_command: Option<String>,
+    /// Actual query time (RFC 3339 with timezone); attests runtime_api_confirmed_missing without user approval.
+    #[arg(long, requires = "runtime_query_command")]
+    runtime_query_at: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -593,6 +606,7 @@ async fn run(cli: Cli) -> Result<()> {
     let target_root = cli.target_root;
     let pretty = cli.pretty;
     match cli.command {
+        RewriteCommand::Regression(args) => regression::run(target_root, args, pretty),
         RewriteCommand::Init(args) => project_init::run(target_root, args, pretty).await,
         RewriteCommand::Startup(args) => startup::run(target_root, args, pretty),
         RewriteCommand::Config(args) => config_protocol::run(target_root, args, pretty),
@@ -768,6 +782,12 @@ async fn run(cli: Cli) -> Result<()> {
                     agent_name: args.agent_name,
                     reason: args.reason,
                     caller_approved: args.approve_ownership_transfer,
+                    runtime_query: args.runtime_query_command.zip(args.runtime_query_at).map(
+                        |(api_or_command, queried_at)| traffic_e2e::RewriteWorkerMissingQuery {
+                            api_or_command,
+                            queried_at,
+                        },
+                    ),
                 })?,
                 pretty,
             ),
@@ -891,3 +911,6 @@ fn print_json(value: &impl serde::Serialize, pretty: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod worker_transfer_tests;

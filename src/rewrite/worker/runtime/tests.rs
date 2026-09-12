@@ -630,10 +630,25 @@ fn replacement_handle_cannot_admit_the_previous_workers_report() {
         agent_handle: "replacement-worker".into(),
         agent_name: None,
         reason: "runtime no longer has the original worker".into(),
-        caller_approved: true,
+        caller_approved: false,
+        runtime_query: Some(worker::RewriteWorkerMissingQuery {
+            api_or_command: "runtime.get_agent".into(),
+            queried_at: "2026-09-12T12:00:00+08:00".into(),
+        }),
     };
-    worker::transfer(transfer.clone()).unwrap();
     let store = RewriteStore::new(target.path()).unwrap();
+    let assignment = serde_json::to_value(
+        &store.load().unwrap().unwrap().worker_bindings["GET /api"].review_assignment,
+    )
+    .unwrap();
+    worker::transfer(transfer.clone()).unwrap();
+    assert_eq!(
+        serde_json::to_value(
+            &store.load().unwrap().unwrap().worker_bindings["GET /api"].review_assignment,
+        )
+        .unwrap(),
+        assignment
+    );
     let before = serde_json::to_value(store.load().unwrap().unwrap()).unwrap();
     assert!(worker::transfer(transfer).is_err());
     assert!(report(old.clone()).is_err());

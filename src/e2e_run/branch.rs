@@ -50,8 +50,9 @@ pub(super) fn require_work_branch(target_root: &Path, pr_base: &str) -> Result<(
         .trim()
         .to_string();
     ensure!(
-        !current.is_empty() && current != pr_base,
-        "pr_base {pr_base:?} is only the pull-request target; switch to a feature branch"
+        !current.is_empty()
+            && (current != pr_base || crate::rewrite::allows_base_replay(target_root, pr_base)?),
+        "pr_base {pr_base:?} is only the pull-request target; switch to a feature branch or begin an explicitly user-authorized regression for the current base contents"
     );
     Ok(())
 }

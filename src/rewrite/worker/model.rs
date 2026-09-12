@@ -39,6 +39,29 @@ pub(in crate::rewrite) struct RewriteWorkerTransferRecord {
     pub previous_agent_handle_fingerprint: String,
     pub reason: String,
     pub transferred_at: String,
+    // Every transfer before runtime-query authorization required user approval.
+    #[serde(default)]
+    pub authorization: RewriteWorkerTransferAuthorization,
+}
+
+/// Coordinator attestation of either user approval or an actual runtime query.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "basis", rename_all = "snake_case", deny_unknown_fields)]
+pub(in crate::rewrite) enum RewriteWorkerTransferAuthorization {
+    #[default]
+    UserApproved,
+    RuntimeApiConfirmedMissing {
+        query: RewriteWorkerMissingQuery,
+    },
+}
+
+/// An executed runtime query covering the exact previous worker handle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RewriteWorkerMissingQuery {
+    pub api_or_command: String,
+    /// RFC 3339 time when the coordinator actually queried the runtime.
+    pub queried_at: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

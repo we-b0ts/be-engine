@@ -156,6 +156,7 @@ fn confirm_is_idempotent_and_rejects_second_expert_wrong_scope_and_early_confirm
             agent_name: None,
             reason: "expert cannot replace implementer".into(),
             caller_approved: true,
+            runtime_query: None,
         })
         .is_err()
     );
@@ -195,6 +196,7 @@ fn rework_transfer_and_revalidation_preserve_first_binding_and_expert() {
         agent_name: None,
         reason: "test ownership transfer".into(),
         caller_approved: true,
+        runtime_query: None,
     })
     .unwrap();
     let mut transferred = store.load().unwrap().unwrap();

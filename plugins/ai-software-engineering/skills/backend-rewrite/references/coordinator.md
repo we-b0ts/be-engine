@@ -24,6 +24,14 @@ Start and resume from the initialized canonical target repository:
 backend-rewrite status
 ```
 
+If the user explicitly requests a **new regression round**, handle the
+[authorized regression start](coordinator-worker-protocol.md#authorized-regression-start)
+before resuming old dispatch or expert actions. Read `status` / `inventory` to
+inspect retained work, perform actual runtime cleanup, and execute `regression
+begin` only with user authorization on `pr_base`. A fresh session, changed code,
+or merely being on `pr_base` never implies that authorization. Ordinary resume
+continues the current round without `regression begin`.
+
 Follow the returned action to start an absent rewrite workflow.
 Before the first standard recording, add `--api '<METHOD path-or-pattern>'`
 only when the caller explicitly requests a single-API recording. After the

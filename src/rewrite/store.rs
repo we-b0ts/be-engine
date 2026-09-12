@@ -68,6 +68,11 @@ impl RewriteStore {
         let _feedback = super::worker::events::lock(&self.target_root)?;
         let mut state = state.clone();
         super::worker::events::overlay(&self.target_root, &mut state)?;
+        self.save_snapshot(&state, &_feedback)
+    }
+
+    /// Caller holds the feedback lock for an atomic workflow replacement.
+    pub(super) fn save_snapshot(&self, state: &RewriteState, _feedback: &File) -> Result<()> {
         fs::create_dir_all(&self.root).with_context(|| {
             format!(
                 "failed to create rewrite state root {}",
@@ -103,6 +108,23 @@ impl RewriteStore {
             let _ = fs::remove_file(temporary);
         }
         result
+    }
+
+    pub(super) fn archive(&self, state: &RewriteState, next_id: &str) -> Result<PathBuf> {
+        use std::os::unix::fs::OpenOptionsExt;
+        let directory = self.root.join("history");
+        fs::create_dir_all(&directory)?;
+        let path = directory.join(format!("{next_id}.json"));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)?;
+        serde_json::to_writer_pretty(&mut file, state)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        File::open(directory)?.sync_all()?;
+        Ok(path)
     }
 
     pub(super) fn try_lock(&self) -> Result<Option<RewriteLock>> {

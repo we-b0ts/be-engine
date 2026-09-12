@@ -1338,12 +1338,44 @@ Worker transfer is an exceptional compare-and-swap ownership change. It is
 valid for an unresolved `implementation_required` API or process-output
 work item, including a parked item, and requires its
 current `--previous-agent-handle`, a replacement `--agent-handle`, a bounded
-reason, and explicit caller approval. The replacement handle must not own another work
+reason, and either of two equal authorization bases: `user_approved` or
+`runtime_api_confirmed_missing`. The replacement handle must not own another work
 item in the workflow. A successful transfer preserves the worktree, records the
 prior handle fingerprint and reason, changes the binding generation, and
 issues a new dispatch, and atomically confirms the replacement. A handle that
 no longer owns the work cannot replace its newer owner. Old delivery reports
 retain the previous dispatch and cannot advance the replacement.
+
+For `user_approved`, use `--approve-ownership-transfer`. An earlier explicit
+user authorization covering this transfer remains valid. For
+`runtime_api_confirmed_missing`, supply the actual queried API/tool or command
+and its query time together; no evidence file or additional user approval is needed:
+
+```bash
+backend-rewrite worker transfer --previous-agent-handle OLD --agent-handle NEW \
+  --reason 'runtime query confirmed the original worker no longer exists' \
+  --runtime-query-command 'ListAgents' \
+  --runtime-query-at '<actual query time in RFC 3339, including timezone>'
+```
+
+The coordinator must actually execute the runtime API/tool or supported command
+before creating a replacement, with query coverage sufficient to establish that
+the exact previous worker no longer exists and cannot be resumed. `ListAgents`,
+its supported `/list-agents` entrypoint, and equivalent runtime status APIs are
+examples, not an allowlist. Session restart, cached observations, incomplete
+listings, failed queries and ended-but-resumable tasks are insufficient. Obtain
+an exact per-task query when list scope cannot establish absence. Explicit user
+cancellation still takes precedence.
+
+The approval flag and runtime-query parameters are mutually exclusive. The query
+command must be a nonempty single line of at most 4096 bytes; query time must be
+RFC 3339 with a timezone (e.g. `2026-09-12T12:00:00+08:00`). Supplying them attests
+that the query actually confirmed the previous worker missing. The engine checks
+input completeness and time format, then stores `runtime_api_confirmed_missing`
+and `query.api_or_command` / `query.queried_at` in the transfer record's
+`authorization` field. It neither executes the recorded command nor independently
+proves the query ran. Historical records lacking `authorization` deserialize as
+`user_approved`, matching the requirement enforced when they were written.
 
 `next` returns an opaque standard/comparison
 `action.commands.execute` recording action. `action.details.run_id` identifies
@@ -1660,6 +1692,41 @@ or clear the field before requesting a fresh recording or completing a required
 capture refresh. Omitting the field, `recording_run_id:`, `recording_run_id: null`
 and `recording_run_id: ""` all preserve the current baseline and the existing
 automatic recording workflow. Nonempty values must still be valid recording IDs.
+
+To start a new regression round after external changes, the user must explicitly
+approve that round and the canonical repository must be checked out on its
+configured `pr_base` branch. A feature branch pointing to the same commit and
+detached HEAD are rejected. Session restarts and branch detection do not grant
+authorization or implicitly reset the workflow.
+
+```bash
+backend-rewrite regression begin --approve-new-regression
+```
+
+When previous worker bindings exist, first actually query the task runtime and
+stop or confirm the absence of **all** old workers and experts, including skipped
+items. Then additionally supply `--runtime-query-command 'ListAgents'` (or the
+actual equivalent API/command) and `--runtime-query-at '<RFC 3339 query time>'`.
+The query is an attestation that cleanup has completed; it cannot replace user
+authorization. No caller-written evidence JSON file is needed. The engine checks
+the fields and timestamp format; the coordinator must execute and interpret the
+query, including runtime reachability limits. Query all other retained integrator
+or analysis tasks too; the engine cannot enumerate them.
+
+`regression begin` refuses an active/stale coordinator or traffic operation,
+a pending recording refresh, or an unusable standard recording. It archives the
+previous workflow under the ignored runtime history directory and starts a new
+workflow ID using the same selected recording, `only`/`skip` and Comparison policy.
+Old issues, bindings, review receipts and expert clocks cannot drive the new round;
+recording artifacts and cumulative progress remain available. The response has
+`previous_workflow_id`, `archive`, and `next`; follow `next` through code review
+and fresh verification before dispatching implementation workers for new failures.
+Call this command once per approved round, then use `status` / `next` to resume.
+
+Base-branch Replay is bound to the source, configuration and startup inputs
+admitted by this explicit command. Engine progress commits remain within the
+round; changed code/configuration needs another approved round or repairs on a
+feature branch. Ordinary workflows still require a feature branch for Replay.
 
 `status`, `inventory` and `next` use the current settings between traffic
 operations. Excluded APIs are reported as `skipped`, do not dispatch workers or
