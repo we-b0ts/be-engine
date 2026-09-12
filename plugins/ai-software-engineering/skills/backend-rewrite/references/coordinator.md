@@ -500,8 +500,8 @@ recording as the regression baseline. Missing or unusable recordings block
 progress; do not substitute another recording or recapture historical requests.
 Switching IDs resets current verification, with `only` / `skip` applied to the
 selected inventory. Respect this selection; a required fresh capture needs the
-user to remove the field. Without the field, the existing recording workflow
-and current baseline remain in effect.
+user to remove or clear the field. Omitted, null or empty-string values keep the
+existing recording workflow and current baseline in effect.
 
 Only `terminal_allowed=true` permits successful workflow completion. Finish the
 caller-required repository checks and delivery after the engine's final gates.
