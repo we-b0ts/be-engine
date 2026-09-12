@@ -156,7 +156,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                     return Ok(action::envelope(&target_root, &state, action));
                 }
                 if (worker::runtime::acceptance_ready(&state, &scope)
-                    || review::has_review(&target_root, &state))
+                    || review::requires_delivery_review(&target_root, &state))
                     && let Some(review) = review::gate(&target_root, &state, &project.pr_base)?
                 {
                     return Ok(action::envelope(&target_root, &state, review));
@@ -359,7 +359,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 store.save(&state)?;
                 return Ok(action::for_state(&target_root, &state));
             }
-            if review::has_review(&target_root, &state)
+            if review::requires_delivery_review(&target_root, &state)
                 && let Some(required) = review::gate(&target_root, &state, &project.pr_base)?
             {
                 // Recording validation and inventory installation remain available
@@ -417,7 +417,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
             Ok(action::for_state(&target_root, &state))
         }
         RewritePhase::ApiPending => {
-            if review::has_review(&target_root, &state)
+            if review::requires_delivery_review(&target_root, &state)
                 && let Some(required) = review::gate(&target_root, &state, &project.pr_base)?
             {
                 return Ok(action::envelope(&target_root, &state, required));
@@ -469,7 +469,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 return Ok(action::for_state(&target_root, &state));
             }
             state.comparison_rejection = None;
-            if review::has_review(&target_root, &state)
+            if review::requires_delivery_review(&target_root, &state)
                 && let Some(required) = review::gate(&target_root, &state, &project.pr_base)?
             {
                 return Ok(action::envelope(&target_root, &state, required));

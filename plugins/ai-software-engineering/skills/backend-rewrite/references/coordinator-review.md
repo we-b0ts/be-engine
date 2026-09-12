@@ -19,6 +19,14 @@ handoff. Admission does not replace integration or formal acceptance.
 
 ## Delegate Candidate Review And Admit The Report
 
+Purpose confirmation establishes the committed `pr_base` snapshot as trusted.
+Start its recording/Replay directly; an unchanged baseline needs no source review
+at startup or final completion. Ignore historical receipts as a reason to create
+an integrator assignment. Progress-only commits do not change this exemption.
+Source/configuration changes relative to the purpose baseline restore normal
+review admission before verification and delivery, including external edits.
+Worker handoff and outstanding finding admission still require their reports.
+
 On `source_review_required`, execute `commands.show` when a current report is
 available. Delegate missing/stale quality proof or findings to the retained
 code integrator through [coordinator-integration.md](coordinator-integration.md).

@@ -1739,7 +1739,18 @@ planning, with fresh integration timers. Each API can bind a new worker once
 under this purpose authorization, when a fresh failure needs implementation.
 This permission is independent per API and is consumed by its first binding.
 Subsequent replacement requires explicit user authorization or an actual runtime
-query confirming that worker is missing. Normal delivery review still applies.
+query confirming that worker is missing.
+
+The committed `pr_base` revision captured by purpose confirmation is the trusted
+review baseline. An unchanged baseline proceeds directly through recording/Replay
+and can complete without a source-review receipt, including when an old or broken
+`source-review.json` remains on disk. Committing engine progress files does not
+create a source-review obligation. New committed, staged, working-tree or untracked
+source/configuration changes require a current accepted integration review before
+verification and final delivery. Pending handoff/finding admission retains its
+ordinary review contract; the exemption does not admit an unpublished candidate.
+Source review and configured quality commands belong to the delegated integrator,
+not the coordinator's startup path.
 
 An actual active/stale engine operation must finish or recover before replacement;
 this is the serialized traffic lease, not an old task-runtime liveness check.

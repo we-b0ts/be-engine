@@ -59,10 +59,37 @@ pub(in crate::rewrite) fn terminal_current(root: &Path, state: &RewriteState) ->
         .is_some_and(|report| report.accepted_target_fingerprint.is_some())
 }
 
-pub(in crate::rewrite) fn has_review(root: &Path, state: &RewriteState) -> bool {
+pub(in crate::rewrite) fn requires_delivery_review(root: &Path, state: &RewriteState) -> bool {
+    if state.regression.is_some() {
+        // Purpose entry trusts its pr_base snapshot, never a previous workflow's
+        // receipt. New local/integrated changes still require delivery review.
+        return !unchanged_purpose_baseline(root, state);
+    }
     state.delivery_review_required
         || state.target_quality_fingerprint.is_some()
         || integrated_path(root).is_file()
+}
+
+fn unchanged_purpose_baseline(root: &Path, state: &RewriteState) -> bool {
+    let Some(origin) = state.regression.as_ref() else {
+        return false;
+    };
+    // Keep outstanding handoff and finding admission mandatory, including when
+    // the candidate has not yet been published to the canonical worktree.
+    if !state.source_review_rework.is_empty()
+        || worker::runtime::scopes(state)
+            .iter()
+            .any(|scope| worker::runtime::acceptance_ready(state, scope))
+    {
+        return false;
+    }
+    fingerprint::matches_revision(root, &origin.base_revision).unwrap_or(false)
+}
+
+/// An unchanged purpose baseline needs no source receipt. Modified delivery
+/// retains the ordinary exact-version receipt contract.
+pub(in crate::rewrite) fn admission_current(root: &Path, state: &RewriteState) -> bool {
+    unchanged_purpose_baseline(root, state) || terminal_current(root, state)
 }
 
 pub(in crate::rewrite) fn required_action(
@@ -76,24 +103,24 @@ pub(in crate::rewrite) fn required_action(
     let ready = worker::runtime::scopes(state)
         .iter()
         .any(|scope| worker::runtime::acceptance_ready(state, scope));
-    let history = has_review(root, state);
-    let comparison_ready = history
+    let review_required = requires_delivery_review(root, state);
+    let comparison_ready = review_required
         && state.phase == RewritePhase::ComparisonRecordingRequired
         && matches!(
             crate::rewrite::recording_action::status_action(root, state)?,
             Some(RewriteAction::AdvanceRequired { .. })
         )
         && crate::rewrite::artifacts::validate_comparison_recording(root, state).is_ok();
-    let process_output_ready = history
+    let process_output_ready = review_required
         && crate::rewrite::inventory::can_switch_api(state)
         && crate::rewrite::process_outputs::next_eligible_id(state).is_some();
-    let revalidation = history
+    let revalidation = review_required
         && (state.phase == RewritePhase::ApiPending || comparison_ready || process_output_ready);
     if !terminal && !ready && !revalidation && state.source_review_rework.is_empty() {
         return Ok(None);
     }
     let report = current(root, state)?;
-    if terminal_current(root, state) {
+    if admission_current(root, state) {
         return Ok(None);
     }
     if report.as_ref().is_some_and(|r| rework_pending(state, r)) {
@@ -116,7 +143,7 @@ pub(in crate::rewrite) fn gate(
     state: &RewriteState,
     _pr_base: &str,
 ) -> Result<Option<RewriteAction>> {
-    if terminal_current(root, state) {
+    if admission_current(root, state) {
         return Ok(None);
     }
     let report = current(root, state)?;

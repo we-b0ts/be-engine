@@ -2,6 +2,9 @@ use super::*;
 use crate::rewrite::{self, model::RewritePhase, worker::tests::configured_target};
 use std::{fs, process::Command};
 
+#[path = "review_tests.rs"]
+mod review_tests;
+
 fn git(root: &Path, args: &[&str]) {
     assert!(
         Command::new("git")

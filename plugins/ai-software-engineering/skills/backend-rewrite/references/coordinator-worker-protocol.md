@@ -285,6 +285,13 @@ Once bound, further replacement uses the normal explicit-approval or
 `runtime_api_confirmed_missing` transfer contract. Other APIs retain their own
 first-binding permission.
 
+The captured committed `pr_base` revision is the trusted review baseline. Old
+source-review files must not trigger startup review. If the purpose makes no
+source/configuration changes, complete after passing verification and publishing
+progress without creating an integrator solely for a review receipt. New changes
+require delegated integration review before verification; pending worker handoff
+and finding admission keep their existing contract.
+
 For `replay`, follow `next` into fresh verification of the selected recording.
 For `record`, the engine requests new external live traffic, then proceeds through
 publication/case preparation to Replay. It supersedes the old recording pin for

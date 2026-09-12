@@ -380,8 +380,14 @@ Worker and integration handoffs require passing reports from the same complete
 local quality suite. A `source_review_required` action requests candidate
 review, evidence or worker rework through
 [coordinator-review.md](coordinator-review.md). It is actionable work, not an execution
-failure. Return to global status after handling it. Final delivery requires a
-current accepted integration quality report even when no API remains in implementation.
+failure. Return to global status after handling it. A new purpose trusts the
+committed `pr_base` snapshot: run initial recording/Replay without source review.
+If no source/configuration changes were made, passing verification and committed
+progress can complete without a review receipt. Historical review files do not
+change this. Once the purpose has changes relative to that baseline, verification
+and final delivery require a current accepted integration quality report even
+when no API remains in implementation. Delegate those checks to the integrator;
+the coordinator consumes reports and does not run the quality suite itself.
 Once a finding has been routed, worker dispatch, status and integration take
 priority. With no such action ready, `wait_required` on `source_review_rework`
 waits for that repair; follow `commands.wait` and runtime events. Scoped status
