@@ -43,7 +43,7 @@ at zero. Close the parent service once, after its users stop, with
 ## Typed queries
 
 Import `Mysql` and accept `&M` with `M: Mysql` in repository query functions.
-Both `MysqlService` and `ShardedMysqlService` implement the trait. Select explicit
+`MysqlService` handles both ordinary and routed queries. Select explicit
 columns with stable names or aliases and derive directly on business types.
 The example schema is illustrative; substitute the source schema and operation.
 
@@ -122,43 +122,63 @@ initialization or prepared-statement behavior to accommodate recording/replay.
 
 ## Table routing
 
-Implement `MysqlRouting::resolve` using the source's key decoding and physical
-table selection. Return identifiers through `MysqlRoute`:
-
-| SQL template | Policy result |
-| --- | --- |
-| `records_{{table_suffix}}` | `MysqlRoute::new().with_table_suffix(&suffix)?` |
-| `{{records}}` | `MysqlRoute::new().with_table("records", physical_table)?` |
-
-Create and retain `mysql.with_route(policy)` at repository initialization. It
-returns an owned `ShardedMysqlService` sharing the base pool. Pass it to the same
-`M: Mysql` query functions. Routed service queries require table templates;
-ordinary service queries use the base handle.
+Use the 0.0.8+ unified service API; `MysqlRoute` maps are removed. Implement the source's
+key decoding and table selection for the template name supplied by the SQL:
 
 ```rust,ignore
-// routing_policy implements the application's actual MysqlRouting rules.
+fn resolve<'a>(
+    &'a self,
+    template: &'a str,
+    key: &'a dyn MysqlRouteKey,
+) -> MysqlResult<impl MysqlRouteOutput + 'a>;
+```
+
+Return a lightweight result implementing
+`write_to(&self, out: &mut dyn std::fmt::Write) -> std::fmt::Result`, or any
+`Display` type (`&str`, numbers, or a formatting struct). The SDK writes it
+directly into the final SQL buffer without boxing the result or requiring an
+intermediate `String`. A result may borrow the policy, template, or key.
+Each distinct template is resolved/written once per statement; repeats reuse
+the written value. `{{records}}` replaces a whole identifier;
+`records_{{slot}}` replaces a fragment. `table_suffix` is an ordinary template name.
+
+Retain `mysql.with_route(policy)` in the repository. Both `with_route` and `route`
+return `MysqlService`, sharing the base pool. Plain SQL also works on this handle
+and bypasses routing; only actual identifier templates invoke the policy.
+Since 0.0.9, `route` is also on the `Mysql` trait: repositories taking `&M` with
+`M: Mysql` can call `mysql.route(ByUserId(uid))` directly and get `M` back
+(`fn route<K: MysqlRouteKey>(&self, key: K) -> Self`).
+
+Explicit keys automatically implement the empty `MysqlRouteKey` marker when
+`Any + Send + Sync` (therefore `'static`); no `MysqlValue` or `Clone` implementation
+is needed. Use business newtypes and `key.downcast_ref::<T>()` when equal numeric
+values can mean different things, such as a legacy record ID versus a user ID.
+Decode and choose base/sharded tables according to the source, never guess from
+an untyped number alone.
+
+```rust,ignore
+struct ByRecordId(u64);
+struct ByUserId(u64);
 let records = mysql.with_route(routing_policy);
-
-// Without an explicit key, the first SQL argument selects the table AND binds to ?.
-let record: Option<Record> = records.fetch_optional(
-    "SELECT id, value, metadata_json, deleted_at FROM {{records}} WHERE routing_key = ? AND id = ?",
-    (routing_key, id),
+records.route(ByRecordId(id)).execute(
+    "UPDATE {{records}} SET value = ? WHERE id = ?", (value, id),
 ).await?;
-
-// An explicit key selects the table without becoming a SQL argument.
-records.route(routing_key).execute(
-    "UPDATE {{records}} SET value = ? WHERE id = ?",
-    (value, id),
+records.route(ByUserId(uid)).execute(
+    "DELETE FROM {{records}} WHERE user_id = ?", (uid,),
 ).await?;
 ```
 
-Explicit `.route(key)` takes precedence over the first SQL argument and creates
-an independent handle without mutating shared routing state. Retained policies
-and keys must be owned/static. Supply every table mapping used by a query,
-including joins. Place tokens only at identifier positions; return table names,
-not SQL fragments. Routing supports tables within one database, not database
-sharding or fanout. Preserve the source's SQL mode; template rendering assumes
-MySQL's default quoting/escaping, not `ANSI_QUOTES` or `NO_BACKSLASH_ESCAPES`.
+`.route(key)` overrides the first SQL argument without becoming a bound argument
+or mutating the original handle. Without it, the first argument remains both
+the implicit key and a SQL argument. Integer/string/byte helpers remain available;
+implicit borrowed strings/bytes are copied once per templated statement to meet
+the `Any` contract. Explicit keys retain their concrete type.
+
+The SDK validates identifier characters and the 64-character limit, then quotes
+the rendered identifier. Never return SQL fragments. Strings/comments are not
+routed; forgetting a template executes the literal table name. This supports
+one database, not database sharding or fanout. Preserve source SQL mode;
+rendering assumes default escaping, not `ANSI_QUOTES` or `NO_BACKSLASH_ESCAPES`.
 
 ## Transactions and row streams
 
