@@ -192,10 +192,15 @@ is unclear.
   Status projection and the traffic lease remain separate owners. Further
   splitting must follow a responsibility boundary rather than divide one
   transaction, action contract, or inventory transition.
-  `regression` owns explicit user-authorized round replacement on `pr_base`,
-  old-round archival through `store`, and the content-bound base Replay admission
-  consumed by `e2e_run/branch`. Runtime query validation stays with `worker`;
-  the coordinator attests cleanup and the engine never queries task runtimes.
+  `purpose` owns the read-only `pr_base` purpose boundary for status/next and
+  direct worker/traffic dispatch. `regression` owns authorized purpose entry,
+  automatic work-branch creation, old-round archival through `store`, and fresh
+  recording/Replay initialization. `initialization` owns construction of a new
+  recording workflow, shared by ordinary advance and purpose entry. Entry requires
+  an actual current-coordinator runtime query declaring zero active child sessions;
+  this is independent of engine bindings and historical sessions. Old-worker
+  cleanup is not an entry prerequisite. Each API can bind once in the new workflow;
+  subsequent worker transfer retains its separate authorization contract. `e2e_run/branch` requires a work branch.
   `regression_scope` owns selected recording adoption, reversible API exclusion and current Comparison
   requirement reconciliation at coordinator load/advance boundaries; its
   `comparison` child reuses valid Replay evidence when that requirement changes.
@@ -236,7 +241,10 @@ is unclear.
   validates AI-provided locations and lifecycle explanations without claiming
   call-graph proof. `candidate` owns cross-worktree candidate identity, frozen
   canonical check context, and publication receipt admission without check
-  execution. `integrated` owns freshness and action projection; `repair`
+  execution. `integrated` owns freshness, action projection and unchanged-purpose
+  baseline admission. Its baseline comparison uses `fingerprint::matches_revision`
+  to include tracked/untracked source and configuration changes while excluding
+  private runtime and progress publication. `repair`
   returns quality findings to existing API/process-output worker ownership,
   including fresh unpublished candidate reports without admitting failed code.
   Review does not create traffic failures or a second migration state machine.

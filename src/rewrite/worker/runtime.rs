@@ -22,6 +22,7 @@ pub struct RewriteWorkerReportOptions {
 }
 
 pub fn report(options: RewriteWorkerReportOptions) -> Result<RewriteActionEnvelope> {
+    crate::rewrite::purpose::require_work_branch(&options.target_root)?;
     let (target_root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
     super::validate_identity("subagent handle", &options.agent_handle, 4096)?;
     let store = RewriteStore::new(&target_root)?;

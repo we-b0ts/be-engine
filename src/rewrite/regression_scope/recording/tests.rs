@@ -41,6 +41,7 @@ fn target() -> tempfile::TempDir {
         vec!["config", "user.email", "test@example.com"],
         vec!["add", "."],
         vec!["commit", "-qm", "baseline"],
+        vec!["switch", "-qc", "fixture-work"],
     ] {
         let output = Command::new("git")
             .arg("-C")

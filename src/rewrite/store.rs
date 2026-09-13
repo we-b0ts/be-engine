@@ -34,11 +34,25 @@ impl RewriteStore {
         })
     }
 
+    pub(super) fn exists(&self) -> bool {
+        self.state_path.is_file()
+    }
+
     pub(super) fn load(&self) -> Result<Option<RewriteState>> {
+        let mut state = self.load_snapshot()?;
+        if let Some(state) = state.as_mut() {
+            super::regression_scope::apply(&self.target_root, state)?;
+        } else {
+            super::regression_scope::validate_uninitialized(&self.target_root)?;
+        }
+        Ok(state)
+    }
+
+    /// Load identity and feedback without adopting a possibly obsolete recording policy.
+    pub(super) fn load_snapshot(&self) -> Result<Option<RewriteState>> {
         let bytes = match fs::read(&self.state_path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                super::regression_scope::validate_uninitialized(&self.target_root)?;
                 return Ok(None);
             }
             Err(error) => {
@@ -60,7 +74,6 @@ impl RewriteStore {
         {
             super::inventory::initialize_legacy(&mut state);
         }
-        super::regression_scope::apply(&self.target_root, &mut state)?;
         Ok(Some(state))
     }
 
@@ -108,6 +121,20 @@ impl RewriteStore {
             let _ = fs::remove_file(temporary);
         }
         result
+    }
+
+    pub(super) fn restore_snapshot(
+        &self,
+        previous: Option<&RewriteState>,
+        feedback: &File,
+    ) -> Result<()> {
+        if let Some(previous) = previous {
+            self.save_snapshot(previous, feedback)
+        } else {
+            fs::remove_file(&self.state_path)?;
+            File::open(&self.root)?.sync_all()?;
+            Ok(())
+        }
     }
 
     pub(super) fn archive(&self, state: &RewriteState, next_id: &str) -> Result<PathBuf> {

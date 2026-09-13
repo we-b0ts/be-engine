@@ -58,6 +58,39 @@ fn repository_files_hash(target_root: &Path) -> Result<Fnv1a> {
     Ok(hash)
 }
 
+/// Compare a purpose's committed baseline with the current tracked and untracked
+/// files. Progress publication and private runtime are not code changes.
+pub(super) fn matches_revision(target_root: &Path, revision: &str) -> Result<bool> {
+    let mut diff = vec![
+        "diff",
+        "--no-ext-diff",
+        "--ignore-submodules=none",
+        "--name-only",
+        "-z",
+        revision,
+        "--",
+        ".",
+        crate::internal_runtime::LOCAL_GIT_PATHSPEC,
+        crate::config::regression::GIT_PATHSPEC,
+    ];
+    diff.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
+    if !git_bytes(target_root, &diff)?.is_empty() {
+        return Ok(false);
+    }
+    let mut untracked = vec![
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+        ".",
+        crate::internal_runtime::LOCAL_GIT_PATHSPEC,
+        crate::config::regression::GIT_PATHSPEC,
+    ];
+    untracked.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
+    Ok(git_bytes(target_root, &untracked)?.is_empty())
+}
+
 fn hash_repository_path(target_root: &Path, relative: &str, hash: &mut Fnv1a) -> Result<()> {
     let path = target_root.join(relative);
     let metadata = match fs::symlink_metadata(&path) {

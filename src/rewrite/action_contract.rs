@@ -34,6 +34,13 @@ impl Serialize for RewriteAction {
                 details: RewriteNoDetails {},
                 commands: serde_json::json!({"inventory": inventory, "status": status}),
             }.serialize(serializer),
+            Self::PurposeRequired { summary, pr_base, replay, record } => RewriteActionView {
+                kind: "purpose_required", summary,
+                details: serde_json::json!({"pr_base":pr_base, "user_approval_required":true,
+                    "runtime_query_scope":"current_coordinator_session", "required_active_agent_count":0,
+                    "choices":["replay_existing_recording", "record_new_traffic"]}),
+                commands: serde_json::json!({"replay":replay, "record":record}),
+            }.serialize(serializer),
             Self::InputRequired {
                 reason,
                 summary,

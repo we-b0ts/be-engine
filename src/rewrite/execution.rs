@@ -40,6 +40,9 @@ struct Execution {
 }
 
 pub fn start_next(mut options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
+    if let Some(envelope) = super::purpose::pending(&options.target_root)? {
+        return Ok(envelope);
+    }
     let target_root = fs::canonicalize(&options.target_root)?;
     let current = if let Some(api) = options.api.as_ref() {
         super::status_rewrite_for_api(

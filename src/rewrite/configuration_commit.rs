@@ -18,6 +18,9 @@ const CONFIGURATION_PATHS: &[&str] = &[
 
 pub async fn next_rewrite(mut options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
     let target_root = options.target_root.clone();
+    if let Some(envelope) = super::purpose::pending(&target_root)? {
+        return Ok(envelope);
+    }
     if let Some(envelope) = pending(&target_root)? {
         return Ok(envelope);
     }

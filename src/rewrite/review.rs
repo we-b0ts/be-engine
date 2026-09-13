@@ -17,7 +17,11 @@ mod repair;
 mod scan;
 pub use candidate::accept;
 pub(super) use candidate::accept_locked as accept_integration;
-pub(super) use integrated::{gate, has_review, is_rework_wait, required_action, terminal_current};
+#[cfg(test)]
+use integrated::terminal_current;
+pub(super) use integrated::{
+    admission_current, gate, is_rework_wait, required_action, requires_delivery_review,
+};
 pub use model::*;
 pub use repair::{rework, rework_with_report};
 

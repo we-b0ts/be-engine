@@ -48,6 +48,9 @@ enum ExistingRecordingDisposition {
 pub fn request_rewrite_recording(
     options: RewriteRecordingRequestOptions,
 ) -> Result<RewriteActionEnvelope> {
+    if let Some(envelope) = super::purpose::pending(&options.target_root)? {
+        return Ok(envelope);
+    }
     let (target_root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
     super::regression_scope::ensure_fresh_allowed(&target_root)?;
     let store = RewriteStore::new(&target_root)?;
@@ -192,6 +195,7 @@ pub fn start_rewrite_recording(
     target_root: PathBuf,
     requested_action_id: &str,
 ) -> Result<RewriteRecordingStartReport> {
+    super::purpose::require_work_branch(&target_root)?;
     let (target_root, _) = crate::e2e_run::resolve_project(&target_root)?;
     let store = RewriteStore::new(&target_root)?;
     let lock = store.try_lock()?;

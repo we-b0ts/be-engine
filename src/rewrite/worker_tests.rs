@@ -696,6 +696,7 @@ pub(in crate::rewrite) fn configured_target() -> tempfile::TempDir {
     git_ok(target.path(), &["config", "user.name", "Traffic E2E Test"]);
     git_ok(target.path(), &["add", "."]);
     git_ok(target.path(), &["commit", "-q", "-m", "baseline"]);
+    git_ok(target.path(), &["switch", "-q", "-c", "feature"]);
     target
 }
 

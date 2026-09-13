@@ -22,7 +22,7 @@ use crate::{
 };
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 31;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 32;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -684,6 +684,12 @@ pub enum RewriteAction {
         summary: String,
         inventory: RewriteCommandSpec,
         status: RewriteCommandSpec,
+    },
+    PurposeRequired {
+        summary: String,
+        pr_base: String,
+        replay: RewriteCommandSpec,
+        record: RewriteCommandSpec,
     },
     InputRequired {
         reason: RewriteInputRequiredReason,

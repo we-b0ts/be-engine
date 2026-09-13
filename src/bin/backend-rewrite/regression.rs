@@ -1,9 +1,7 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
-use traffic_e2e::{
-    RewriteRegressionBeginOptions, RewriteWorkerMissingQuery, begin_rewrite_regression,
-};
+use traffic_e2e::{RewriteRegressionBeginOptions, begin_rewrite_regression};
 
 #[derive(Debug, Args)]
 pub(super) struct RegressionArgs {
@@ -13,17 +11,16 @@ pub(super) struct RegressionArgs {
 
 #[derive(Debug, Subcommand)]
 enum RegressionCommand {
-    /// Archive the old round and review/replay the selected recording afresh.
+    /// Confirm a purpose, enter a new work branch, and begin fresh verification.
     Begin {
         /// Required attestation of explicit user authorization for this new round.
         #[arg(long, required = true)]
         approve_new_regression: bool,
-        /// Actual runtime query confirming all old workers/experts are stopped or absent.
-        #[arg(long, requires = "runtime_query_at")]
-        runtime_query_command: Option<String>,
-        /// RFC 3339 time with timezone when that query was executed.
-        #[arg(long, requires = "runtime_query_command")]
-        runtime_query_at: Option<String>,
+        /// Record new live traffic before Replay; otherwise reuse the selected recording.
+        #[arg(long)]
+        record_new_traffic: bool,
+        #[command(flatten)]
+        runtime: super::purpose::SessionRuntimeArgs,
     },
 }
 
@@ -31,18 +28,15 @@ pub(super) fn run(target_root: PathBuf, args: RegressionArgs, pretty: bool) -> R
     match args.command {
         RegressionCommand::Begin {
             approve_new_regression,
-            runtime_query_command,
-            runtime_query_at,
+            record_new_traffic,
+            runtime,
         } => super::print_json(
             &begin_rewrite_regression(RewriteRegressionBeginOptions {
                 target_root,
                 caller_approved: approve_new_regression,
-                runtime_query: runtime_query_command.zip(runtime_query_at).map(
-                    |(api_or_command, queried_at)| RewriteWorkerMissingQuery {
-                        api_or_command,
-                        queried_at,
-                    },
-                ),
+                record_new_traffic,
+                active_agent_count: runtime.active_agent_count,
+                runtime_query: runtime.query(),
             })?,
             pretty,
         ),
@@ -55,7 +49,7 @@ mod tests {
     use clap::Parser;
 
     #[test]
-    fn begin_requires_user_approval_even_with_runtime_evidence() {
+    fn both_purposes_require_explicit_user_approval() {
         assert!(Cli::try_parse_from(["backend-rewrite", "regression", "begin"]).is_err());
         assert!(
             Cli::try_parse_from([
@@ -74,7 +68,13 @@ mod tests {
                 "backend-rewrite",
                 "regression",
                 "begin",
-                "--approve-new-regression"
+                "--approve-new-regression",
+                "--active-agent-count",
+                "0",
+                "--runtime-query-command",
+                "ListAgents",
+                "--runtime-query-at",
+                "2026-09-12T09:00:00Z"
             ])
             .is_ok()
         );

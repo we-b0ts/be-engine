@@ -354,6 +354,7 @@ pub(super) fn counts(state: &RewriteState) -> (usize, usize, usize) {
 }
 
 pub fn prepare(options: RewriteExpertPrepareOptions) -> Result<RewriteActionEnvelope> {
+    crate::rewrite::purpose::require_work_branch(&options.target_root)?;
     let (root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
     let store = RewriteStore::new(&root)?;
     let lock = worker::events::lock(&root)?;
@@ -409,6 +410,7 @@ pub fn prepare(options: RewriteExpertPrepareOptions) -> Result<RewriteActionEnve
 }
 
 pub fn confirm(options: RewriteExpertOptions) -> Result<RewriteActionEnvelope> {
+    crate::rewrite::purpose::require_work_branch(&options.target_root)?;
     let (root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
     worker::validate_identity("expert handle", &options.agent_handle, 4096)?;
     let store = RewriteStore::new(&root)?;

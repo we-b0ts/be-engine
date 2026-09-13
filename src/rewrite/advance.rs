@@ -2,6 +2,9 @@
 use super::*;
 
 pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
+    if let Some(envelope) = purpose::pending(&options.target_root)? {
+        return Ok(envelope);
+    }
     let (target_root, project) = crate::e2e_run::resolve_project(&options.target_root)?;
     ensure!(
         options.api.is_none() || options.process_output.is_none(),
@@ -153,7 +156,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                     return Ok(action::envelope(&target_root, &state, action));
                 }
                 if (worker::runtime::acceptance_ready(&state, &scope)
-                    || review::has_review(&target_root, &state))
+                    || review::requires_delivery_review(&target_root, &state))
                     && let Some(review) = review::gate(&target_root, &state, &project.pr_base)?
                 {
                     return Ok(action::envelope(&target_root, &state, review));
@@ -236,60 +239,8 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
             if !source_route.is_empty() {
                 validate_single_line("source route", &source_route)?;
             }
-            let recording_run_id =
-                artifacts::allocate_run_id(&target_root, ManagedRecordingOperation::Record)?;
-            let mut state = RewriteState {
-                version: STATE_VERSION,
-                revision: 1,
-                workflow_id: format!("rewrite-{}", uuid::Uuid::new_v4().simple()),
-                regression: None,
-                recording_apis,
-                api_inventory: Vec::new(),
-                skipped_api_statuses: Default::default(),
-                source_route_bindings: std::collections::BTreeMap::new(),
-                current_api_index: None,
-                parked_slices: std::collections::BTreeMap::new(),
-                worker_bindings: std::collections::BTreeMap::new(),
-                source_review_rework: std::collections::BTreeMap::new(),
-                worker_event_revision: 0,
-                process_outputs: Default::default(),
-                api_catalog_initialized: false,
-                api_catalog: std::collections::BTreeSet::new(),
-                case_pattern_identification: None,
-                target_quality_fingerprint: None,
-                delivery_review_required: false,
-                recording_run_id,
-                require_comparison: crate::config::regression::RegressionScope::load(&target_root)?
-                    .require_comparison,
-                recording_rejection: None,
-                recording_settings: RewriteRecordingSettings::default(),
-                recording_request_reason: None,
-                recording_input_case_source: None,
-                recording_input_diagnosis: None,
-                recording_refresh: None,
-                active_slice: RewriteSliceState {
-                    phase: RewritePhase::RecordingRequired,
-                    api,
-                    source_route,
-                    comparison_run_id: None,
-                    comparison_rejection: None,
-                    case_source: None,
-                    case_inventory_id: None,
-                    source_revision: None,
-                    group_id: None,
-                    target_fingerprint: None,
-                    attempts: Vec::new(),
-                    attempt_delta: None,
-                    active_issue: None,
-                    rule_plan: None,
-                    dependency_rule_plan: None,
-                    recorder_capture_plan: None,
-                    route: None,
-                    system_repair_accepted: false,
-                    e2e_current: false,
-                    comparison_current: false,
-                },
-            };
+            let mut state =
+                initialization::new_state(&target_root, api, source_route, recording_apis)?;
             regression_scope::apply(&target_root, &mut state)?;
             if crate::config::regression::RegressionScope::load(&target_root)?
                 .recording_run_id
@@ -408,7 +359,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 store.save(&state)?;
                 return Ok(action::for_state(&target_root, &state));
             }
-            if review::has_review(&target_root, &state)
+            if review::requires_delivery_review(&target_root, &state)
                 && let Some(required) = review::gate(&target_root, &state, &project.pr_base)?
             {
                 // Recording validation and inventory installation remain available
@@ -466,7 +417,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
             Ok(action::for_state(&target_root, &state))
         }
         RewritePhase::ApiPending => {
-            if review::has_review(&target_root, &state)
+            if review::requires_delivery_review(&target_root, &state)
                 && let Some(required) = review::gate(&target_root, &state, &project.pr_base)?
             {
                 return Ok(action::envelope(&target_root, &state, required));
@@ -518,7 +469,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 return Ok(action::for_state(&target_root, &state));
             }
             state.comparison_rejection = None;
-            if review::has_review(&target_root, &state)
+            if review::requires_delivery_review(&target_root, &state)
                 && let Some(required) = review::gate(&target_root, &state, &project.pr_base)?
             {
                 return Ok(action::envelope(&target_root, &state, required));

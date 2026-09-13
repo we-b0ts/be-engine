@@ -286,7 +286,7 @@ pub(super) fn envelope(
         process_output_inventory: Some(process_outputs::view(state)),
         latest_focused_e2e: latest_focused_e2e(state),
         terminal_allowed: super::expert::counts(state).2 == 0
-            && super::review::terminal_current(target_root, state)
+            && super::review::admission_current(target_root, state)
             && progress_publication::state(target_root, state)
                 == Some(progress_publication::PublicationState::Published),
         action,

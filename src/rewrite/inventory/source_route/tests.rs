@@ -218,6 +218,7 @@ async fn next_rejects_invalid_source_route_without_persisting_it() {
     git(root.path(), &["config", "user.email", "test@example.com"]);
     git(root.path(), &["add", "."]);
     git(root.path(), &["commit", "-qm", "baseline"]);
+    git(root.path(), &["switch", "-qc", "fixture-work"]);
     let store = RewriteStore::new(root.path()).unwrap();
     for initialized in [false, true] {
         if initialized {
