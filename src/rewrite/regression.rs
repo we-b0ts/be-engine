@@ -5,8 +5,10 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    action, artifacts, execution, inventory,
-    model::{ACTION_SCHEMA_VERSION, RewriteActionEnvelope, RewriteState},
+    action, artifacts, case_patterns, execution, inventory,
+    model::{
+        ACTION_SCHEMA_VERSION, RewriteActionEnvelope, RewritePhase, RewriteSliceState, RewriteState,
+    },
     process_outputs, regression_scope, source_diff,
     store::RewriteStore,
     traffic_operation, worker,
@@ -106,8 +108,13 @@ pub fn begin(options: RewriteRegressionBeginOptions) -> Result<RewriteRegression
             "select a completed standard recording or choose --purpose record"
         );
         artifacts::validate_standard_recording(&target_root, &state)?;
-        let apis = artifacts::standard_recording_apis(&target_root, &state)?;
-        inventory::install(&mut state, apis)?;
+        inventory::reset_for_recording(&mut state);
+        state.active_slice = RewriteSliceState::pending(String::new(), String::new());
+        state.phase = RewritePhase::RecordingRequired;
+        if !case_patterns::identify_after_finalized_recording(&target_root, &mut state)? {
+            let apis = artifacts::standard_recording_apis(&target_root, &state)?;
+            inventory::install(&mut state, apis)?;
+        }
     } else {
         let run_id = artifacts::allocate_run_id_excluding(
             &target_root,
