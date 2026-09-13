@@ -81,9 +81,10 @@ impl ProgressReport {
             if !previous.finalized {
                 ensure!(
                     current.apis.iter().all(|(api, result)| {
-                        previous.apis.get(api).is_some_and(|recorded| {
-                            recorded.cases.executed == result.cases.executed
-                        })
+                        previous
+                            .apis
+                            .get(api)
+                            .is_none_or(|recorded| recorded.cases.executed == result.cases.executed)
                     }),
                     "logical progress run {:?} changed its recorded API case inventory",
                     current.key
@@ -94,7 +95,8 @@ impl ProgressReport {
                 for (api, result) in current.apis {
                     merged.apis.insert(api, result);
                 }
-                merged.finalized = merged.apis.values().all(|api| api.finalized);
+                merged.finalized =
+                    current.finalized && merged.apis.values().all(|api| api.finalized);
                 merged.passed = merged
                     .finalized
                     .then(|| merged.apis.values().all(|api| api.passed));
