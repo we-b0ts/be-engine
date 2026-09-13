@@ -5,6 +5,7 @@ mod action_contract;
 mod artifacts;
 mod background_reclassification;
 mod case_dependencies;
+mod case_group_rebuild;
 mod case_patterns;
 mod comparison_issue;
 mod configuration_commit;
@@ -99,6 +100,9 @@ pub use case_dependencies::{
     RewriteMemcachedOperationDetail, RewriteMysqlExchangeDetail, RewriteMysqlOperationDetail,
     RewriteMysqlParameterDetail, RewriteRedisExchangeDetail, RewriteRedisOperationDetail,
     query as query_rewrite_case_dependencies,
+};
+pub use case_group_rebuild::{
+    RewriteCaseGroupRebuildOptions, RewriteCaseGroupRebuildReport, rebuild_rewrite_case_groups,
 };
 pub use case_patterns::{RewriteCasePatternApplyOptions, apply as apply_rewrite_case_patterns};
 pub use dependency_rule::{

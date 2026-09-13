@@ -126,6 +126,23 @@ primary interface. Read-only inspection of `.traffic-e2e/local/runtime/**` is
 allowed for diagnosis, but never edit it or reconstruct recovery actions from
 its layout.
 
+If an older coordinator left concrete route owners in a recording run after
+the canonical inventory adopted case path patterns, Replay may reject the same
+case as already owned by another group. For that exact compatibility failure,
+an administrator may run:
+
+```bash
+backend-rewrite-admin --target-root <target> repair rebuild-case-groups \
+  <recording-run-id> --confirm-rebuild
+```
+
+The command accepts only the current workflow's recording run while all
+coordinator, traffic, full E2E, and focused E2E execution is idle. It backs up
+the derived group index, rebuilds complete coverage from the canonical API
+inventory, and rolls back automatically on failure. It never changes recording
+artifacts or rewrite progress. On success, execute only the failed operation's
+exact retry command from `backend-rewrite status`.
+
 If an administrator confirms that `traffic-e2e run-api` was mistakenly run
 outside an active rewrite workflow, use `backend-rewrite-admin repair
 retry-replay` with the exact failed engine attempt, newer passing
