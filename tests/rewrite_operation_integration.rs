@@ -129,8 +129,9 @@ fn detached_unscoped_next_activates_idle_revalidation_while_an_api_is_blocked() 
     let target = configured_target();
     let runtime = target.path().join(".traffic-e2e/local/runtime/rewrite");
     fs::create_dir_all(&runtime).unwrap();
-    // A versioned engine fixture: no network/traffic execution is needed because
-    // the selected dynamic route must first request its source registration.
+    // A versioned engine fixture with a recorded dynamic pattern but no legacy
+    // source-route binding. Activation must adopt the pattern and proceed until
+    // the deliberately absent recording fixture stops execution.
     let state = serde_json::json!({
         "version": 1, "revision": 1, "workflow_id": "rewrite-idle-fixture",
         "recording_run_id": "recording-fixture", "phase": "system_repair_required",
@@ -162,18 +163,17 @@ fn detached_unscoped_next_activates_idle_revalidation_while_an_api_is_blocked() 
         "GET /revalidate/*"
     );
     let launched = command(target.path(), &["next"]);
-    assert!(matches!(
-        launched["action"]["kind"].as_str(),
-        Some("wait_required" | "input_required")
-    ));
+    assert_eq!(launched["action"]["kind"], "wait_required");
     assert_eq!(launched["pending"], 1);
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let status = command(target.path(), &["status"]);
-        if status["action"]["kind"] == "input_required" {
-            assert_eq!(
-                status["action"]["details"]["reason"],
-                "source_route_required"
+        if status["action"]["kind"] == "execution_failed" {
+            assert!(
+                status["action"]["summary"]
+                    .as_str()
+                    .unwrap()
+                    .contains("recording-fixture")
             );
             break;
         }
@@ -181,13 +181,15 @@ fn detached_unscoped_next_activates_idle_revalidation_while_an_api_is_blocked() 
             Instant::now() < deadline,
             "idle revalidation did not advance: {status}"
         );
-        assert_ne!(status["action"]["kind"], "execution_failed", "{status}");
+        assert_ne!(status["action"]["kind"], "input_required", "{status}");
         std::thread::sleep(Duration::from_millis(50));
     }
     let saved: Value =
         serde_json::from_slice(&fs::read(runtime.join("state.json")).unwrap()).unwrap();
     assert_eq!(saved["api"], "GET /revalidate/*");
     assert_eq!(saved["phase"], "api_pending");
+    assert_eq!(saved["source_route"], "/revalidate/*");
+    assert_eq!(saved["api_inventory"][1]["source_route"], "/revalidate/*");
     assert_eq!(
         saved["parked_slices"]["GET /repair"]["route"],
         state["route"]

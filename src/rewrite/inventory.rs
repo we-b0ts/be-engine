@@ -40,6 +40,7 @@ pub(super) fn initialize_legacy(state: &mut RewriteState) -> bool {
         state.recording_apis.clear();
         changed = true;
     }
+    changed |= source_route::adopt_recorded_patterns(state);
     changed
 }
 
@@ -61,7 +62,10 @@ pub(super) fn recording_scope(state: &RewriteState) -> Vec<String> {
     }
 }
 
-pub(super) fn install(state: &mut RewriteState, apis: Vec<String>) -> Result<()> {
+/// Install a completed recording's canonical API inventory. The returned flag
+/// reports whether at least one dynamic API uses its confirmed recorded pattern
+/// because no more specific historical source route is available.
+pub(super) fn install(state: &mut RewriteState, apis: Vec<String>) -> Result<bool> {
     ensure!(
         !apis.is_empty(),
         "standard recording contains no API inventory"
@@ -93,6 +97,12 @@ pub(super) fn install(state: &mut RewriteState, apis: Vec<String>) -> Result<()>
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    source_route::adopt_recorded_patterns(state);
+    let uses_recorded_patterns = state.api_inventory.iter().any(|item| {
+        item.api.parse::<RecordingApi>().is_ok_and(|api| {
+            api.is_dynamic() && item.source_route.as_deref() == Some(api.path_pattern())
+        })
+    });
     let installed_apis = state
         .api_inventory
         .iter()
@@ -106,7 +116,7 @@ pub(super) fn install(state: &mut RewriteState, apis: Vec<String>) -> Result<()>
     state.parked_slices.clear();
     state.current_api_index = Some(0);
     load_pending(state, 0)?;
-    Ok(())
+    Ok(uses_recorded_patterns)
 }
 
 pub(super) fn scoped(

@@ -547,7 +547,7 @@ async fn finalized_refresh_installs_observed_apis_and_preserves_rare_history() {
 
     let result = next(target.path()).await;
     assert!(
-        matches!(result.action, RewriteAction::InputRequired { .. }),
+        matches!(result.action, RewriteAction::AdvanceRequired { .. }),
         "{:?}",
         result.action
     );
