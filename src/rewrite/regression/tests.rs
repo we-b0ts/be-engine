@@ -235,6 +235,86 @@ fn new_round_preserves_recording_scope_and_replays_before_workers() {
 }
 
 #[test]
+fn replay_purpose_identifies_uncovered_patterns_before_installing_inventory() {
+    let target = fixture();
+    let store = RewriteStore::new(target.path()).unwrap();
+    let mut previous = store.load().unwrap().unwrap();
+    previous.recording_apis.clear();
+    previous.api_catalog_initialized = true;
+    previous.api_catalog = ["GET /api", "GET /other"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    store.save(&previous).unwrap();
+
+    let run = artifacts::recording_run(target.path(), &previous.recording_run_id);
+    for (index, path) in [
+        "/api/knowledge-bases/304487/artifacts",
+        "/api/knowledge-bases/304541/artifacts",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let case = run.join("apis/cases").join(format!("new-case-{index}"));
+        fs::create_dir_all(&case).unwrap();
+        fs::write(
+            case.join("request.json"),
+            serde_json::to_vec(&serde_json::json!({"method":"GET", "uri":path})).unwrap(),
+        )
+        .unwrap();
+        fs::write(case.join("expected-response.json"), "{}\n").unwrap();
+    }
+    fs::write(
+        run.join("recording-run.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "status":"completed",
+            "recording_apis":[],
+            "published_cases":4
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let report = begin(options(target.path())).unwrap();
+    let value = serde_json::to_value(&report.next).unwrap();
+    assert_eq!(
+        value["action"]["kind"],
+        "case_pattern_identification_required"
+    );
+    assert_eq!(
+        value["action"]["details"]["candidates"],
+        serde_json::json!([
+            "GET /api/knowledge-bases/304487/artifacts",
+            "GET /api/knowledge-bases/304541/artifacts"
+        ])
+    );
+
+    let pending = store
+        .load()
+        .unwrap()
+        .unwrap()
+        .case_pattern_identification
+        .unwrap();
+    assert!(store.load().unwrap().unwrap().api_inventory.is_empty());
+    case_patterns::apply(case_patterns::RewriteCasePatternApplyOptions {
+        target_root: target.path().into(),
+        batch_id: pending.id,
+        patterns: vec!["/api/knowledge-bases/*/artifacts".into()],
+    })
+    .unwrap();
+
+    let state = store.load().unwrap().unwrap();
+    assert_eq!(
+        artifacts::standard_recording_apis(target.path(), &state).unwrap(),
+        [
+            "GET /api",
+            "GET /api/knowledge-bases/*/artifacts",
+            "GET /other"
+        ]
+    );
+}
+
+#[test]
 fn previous_workers_are_retired_without_query_and_late_feedback_is_rejected() {
     let target = fixture();
     let store = RewriteStore::new(target.path()).unwrap();

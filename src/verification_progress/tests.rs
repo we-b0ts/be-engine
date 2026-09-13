@@ -229,6 +229,42 @@ fn retrying_one_logical_run_revises_coverage_without_extending_the_streak() {
 }
 
 #[test]
+fn unfinished_logical_run_adds_new_api_coverage_without_changing_existing_cases() {
+    let mut report = ProgressReport::new(VerificationStage::Replay);
+    let mut first = observation("current", &[("GET /apps", 4, 4)]);
+    first.finalized = false;
+    report.upsert_logical_run(first, None).unwrap();
+
+    let mut second = observation("current", &[("GET /attachments/*", 1, 1)]);
+    second.evidence_fingerprint = "current-attachments".to_string();
+    second.finalized = false;
+    report.upsert_logical_run(second, None).unwrap();
+
+    let current = &report.counted_observations["current"].observation;
+    assert!(!current.finalized);
+    assert_eq!(current.apis.len(), 2);
+    assert_eq!(current.apis["GET /apps"].cases.executed, 4);
+    assert_eq!(current.apis["GET /attachments/*"].cases.executed, 1);
+}
+
+#[test]
+fn unfinished_logical_run_rejects_changed_case_count_for_existing_api() {
+    let mut report = ProgressReport::new(VerificationStage::Replay);
+    let mut first = observation("current", &[("GET /apps", 4, 4)]);
+    first.finalized = false;
+    report.upsert_logical_run(first, None).unwrap();
+
+    let mut changed = observation("current", &[("GET /apps", 5, 5)]);
+    changed.evidence_fingerprint = "current-changed".to_string();
+    changed.finalized = false;
+    assert!(report.upsert_logical_run(changed, None).is_err());
+
+    let current = &report.counted_observations["current"].observation;
+    assert_eq!(current.apis.len(), 1);
+    assert_eq!(current.apis["GET /apps"].cases.executed, 4);
+}
+
+#[test]
 fn recording_completion_counts_coverage_and_holds_streaks_until_the_result_is_final() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("progress.yaml");

@@ -95,7 +95,7 @@ fn temporarily_unrecorded_api_keeps_its_route_for_a_later_batch() {
 }
 
 #[test]
-fn new_method_or_pattern_requires_its_own_source_confirmation() {
+fn newly_recorded_patterns_use_the_pattern_without_another_source_confirmation() {
     for new_api in [
         "POST /api/tasks/*",
         "GET /api/tasks/*/details",
@@ -104,8 +104,11 @@ fn new_method_or_pattern_requires_its_own_source_confirmation() {
         let mut state = legacy_state();
         rerecord(&mut state, RewriteRecordingReason::UserRequested);
         inventory::install(&mut state, vec![new_api.into()]).unwrap();
-        assert!(inventory::current_requires_source_route(&state));
-        assert!(state.api_inventory[0].source_route.is_none());
+        assert!(!inventory::current_requires_source_route(&state));
+        assert_eq!(
+            state.api_inventory[0].source_route.as_deref(),
+            Some(new_api.split_once(' ').unwrap().1)
+        );
     }
 }
 
@@ -120,12 +123,11 @@ fn invalid_legacy_or_cached_routes_are_not_reused() {
         .insert(API.into(), "/wrong/{id}".into());
     rerecord(&mut state, RewriteRecordingReason::UserRequested);
     inventory::install(&mut state, vec![API.into(), SECOND_API.into()]).unwrap();
-    assert!(inventory::current_requires_source_route(&state));
-    assert!(
-        state
-            .api_inventory
-            .iter()
-            .all(|item| item.source_route.is_none())
+    assert!(!inventory::current_requires_source_route(&state));
+    assert_eq!(state.source_route, "/api/tasks/*");
+    assert_eq!(
+        state.api_inventory[1].source_route.as_deref(),
+        Some("/api/users/*")
     );
 }
 
@@ -137,8 +139,12 @@ fn source_baseline_change_discards_old_bindings_and_accepts_new_confirmation() {
     rerecord(&mut state, RewriteRecordingReason::SourceBaselineChanged);
     assert!(state.source_route_bindings.is_empty());
     inventory::install(&mut state, vec![API.into(), SECOND_API.into()]).unwrap();
-    assert!(inventory::current_requires_source_route(&state));
-    assert!(state.api_inventory[1].source_route.is_none());
+    assert!(!inventory::current_requires_source_route(&state));
+    assert_eq!(state.source_route, "/api/tasks/*");
+    assert_eq!(
+        state.api_inventory[1].source_route.as_deref(),
+        Some("/api/users/*")
+    );
     let updated_route = "/api/tasks/{new_id}";
     bind_options(&mut state, None, Some(updated_route)).unwrap();
     rerecord(&mut state, RewriteRecordingReason::UserRequested);

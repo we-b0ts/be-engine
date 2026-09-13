@@ -315,8 +315,10 @@ dispatch or verification, including when preparation creates a policy change.
 An active operation keeps its existing wait/recovery action. Routine generated
 `progress.yaml` updates retain the final-delivery commit flow below.
 
-When `details.reason=source_route_required`, the selected dynamic API lacks a
-proven source registration route. Assign
+When `details.reason=source_route_required`, a caller-selected dynamic API has
+not yet produced a standard recording with confirmed case-pattern coverage and
+lacks a proven source registration route. Recorded inventory APIs use their
+confirmed case pattern without interrupting Replay. Assign
 `api-implementer` a read-only `route_analysis` task with the exact API, source
 location, and a retained assignment ID. Retain its actual runtime handle and
 resume the same task for missing proof. Require that same identity and a

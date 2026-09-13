@@ -345,11 +345,17 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 chrono::Utc::now().to_rfc3339(),
                 recorded_cases,
             )?;
-            inventory::install(&mut state, apis)?;
+            let uses_recorded_patterns = inventory::install(&mut state, apis)?;
             process_outputs::install(&mut state, &project.process_outputs);
             state.recording_refresh = None;
             regression_scope::apply(&target_root, &mut state)?;
             if state.current_api_index.is_none() {
+                store.save(&state)?;
+                return Ok(action::for_state(&target_root, &state));
+            }
+            if uses_recorded_patterns {
+                state.phase = RewritePhase::ApiPending;
+                state.bump();
                 store.save(&state)?;
                 return Ok(action::for_state(&target_root, &state));
             }

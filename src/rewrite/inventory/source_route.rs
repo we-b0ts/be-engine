@@ -4,6 +4,61 @@ use anyhow::{Context, Result, ensure};
 use crate::RecordingApi;
 use crate::rewrite::model::{RewritePhase, RewriteState};
 
+/// Recorded dynamic APIs are already canonicalized by a confirmed case pattern.
+/// Use that pattern as the route specification when no more specific historical
+/// source-route binding exists, so verification does not ask for the same route
+/// analysis a second time.
+pub(super) fn adopt_recorded_patterns(state: &mut RewriteState) -> bool {
+    retain_bindings(state);
+    let bindings = state.source_route_bindings.clone();
+    let mut changed = false;
+    for item in &mut state.api_inventory {
+        if item.source_route.is_some() {
+            continue;
+        }
+        let Ok(api) = item.api.parse::<RecordingApi>() else {
+            continue;
+        };
+        if !api.is_dynamic() {
+            continue;
+        }
+        item.source_route = Some(
+            bindings
+                .get(&item.api)
+                .cloned()
+                .unwrap_or_else(|| api.path_pattern().to_string()),
+        );
+        changed = true;
+    }
+    if !changed {
+        return false;
+    }
+
+    let routes = state
+        .api_inventory
+        .iter()
+        .filter_map(|item| {
+            item.source_route
+                .as_ref()
+                .map(|route| (item.api.clone(), route.clone()))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    if state.source_route.is_empty()
+        && let Some(route) = routes.get(&state.api)
+    {
+        state.source_route = route.clone();
+    }
+    for slice in state.parked_slices.values_mut() {
+        if slice.source_route.is_empty()
+            && let Some(route) = routes.get(&slice.api)
+        {
+            slice.source_route = route.clone();
+        }
+    }
+    retain_bindings(state);
+    true
+}
+
 pub(in crate::rewrite) fn validate_source_route(api: &RecordingApi, route: &str) -> Result<()> {
     crate::rewrite::validate_single_line("source route", route)?;
     if api.is_dynamic() {
@@ -75,15 +130,18 @@ pub(in crate::rewrite) fn bind_options(
     );
     if !state.source_route.is_empty() {
         // Older engines persisted the binding before grouping validated it.
-        // Only an invalid route with no verification history can be corrected.
+        // A recorded-pattern fallback may be refined to the complete source
+        // registration route. Otherwise only an invalid route with no
+        // verification history can be corrected.
+        let pattern_fallback = state.source_route == api.path_pattern();
         ensure!(
-            validate_source_route(&api, &state.source_route).is_err()
+            (pattern_fallback || validate_source_route(&api, &state.source_route).is_err())
                 && state.phase == RewritePhase::ApiPending
                 && state.group_id.is_none()
                 && state.attempts.is_empty()
                 && !state.e2e_current
                 && !state.comparison_current,
-            "active rewrite source route is {:?}; refusing a different --source-route unless the existing binding is invalid and has no group or verification history",
+            "active rewrite source route is {:?}; refusing a different --source-route unless it is a recorded-pattern fallback or invalid binding with no group or verification history",
             state.source_route
         );
     }

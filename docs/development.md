@@ -259,25 +259,31 @@ Use the `backend-rewrite` binary and its `next`, `status`, `inventory`,
 `rewrite` subcommand; `backend-rewrite` invokes the shared crate directly and
 delegates only engine-owned detached work to its sibling executable.
 
-For a dynamic API, `next --source-route` requires the complete source route,
-including every router mount prefix. For example, `GET /api/attachments/task/*/all`
-requires `/api/attachments/task/{task_id}/all`, not the local decorator path
-`/task/{task_id}/all`. The engine validates the route before saving it, including
-at workflow initialization. If an older engine saved an invalid route, repeat
-`next --api 'GET /api/attachments/task/*/all' --source-route
+When explicitly selecting a dynamic API before its first standard recording,
+`next --source-route` requires the complete source route, including every router
+mount prefix. For example, `GET /api/attachments/task/*/all` requires
+`/api/attachments/task/{task_id}/all`, not the local decorator path
+`/task/{task_id}/all`. APIs installed from a completed recording already have a
+confirmed `case_path_pattern`; when no more specific source-route binding exists,
+the coordinator uses that pattern as the route specification instead of stopping
+Replay for duplicate route confirmation. If an older engine saved an invalid
+route, repeat `next --api 'GET /api/attachments/task/*/all' --source-route
 '/api/attachments/task/{task_id}/all'` with the corrected full route. Correction
 is allowed only while the API is pending, with no group or verification history;
 valid bindings remain fixed. Existing recording and workflow progress are retained.
 
-Confirmed dynamic source routes persist independently of recording batches.
+Confirmed dynamic source routes persist independently of recording batches and
+take precedence over the recorded-pattern fallback.
 Ordinary re-recording and recorder-contract refreshes reuse a valid binding for
 the exact API method/pattern, including APIs absent from an intermediate batch.
 Verification results still reset for the new recording. Existing workflow states
 retain their valid routes when their inventory is rebuilt; routes already lost
-by older resets cannot be recovered automatically. New methods/patterns and
-invalid bindings require confirmation. An explicit `source_baseline_changed`
-recording request discards the retained bindings so the new source is checked.
-Restarting the coordinator session does not clear bindings.
+by older resets fall back to their confirmed recorded patterns. New uncovered
+paths are handled by case-pattern identification before inventory installation;
+only an explicitly selected dynamic API without recorded pattern coverage needs
+source-route confirmation. An explicit `source_baseline_changed` recording request
+discards retained source routes while recorded patterns remain usable. Restarting
+the coordinator session does not clear bindings.
 
 ## Running Locally
 
