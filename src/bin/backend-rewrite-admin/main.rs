@@ -5,10 +5,10 @@ use std::process::ExitCode;
 use anyhow::{Result, ensure};
 use clap::{Args, Parser, Subcommand};
 use traffic_e2e::{
-    KubernetesSourceOptions, RewriteRepairCancelOptions, RewriteReplayRetryOptions,
-    SourceUpgradeOptions, StartupSnapshotRecaptureOptions, cancel_misrouted_rewrite_repair,
-    recapture_startup_snapshot, retry_rewrite_replay_after_out_of_band_run,
-    upgrade_source_snapshot,
+    KubernetesSourceOptions, RewriteCaseGroupRebuildOptions, RewriteRepairCancelOptions,
+    RewriteReplayRetryOptions, SourceUpgradeOptions, StartupSnapshotRecaptureOptions,
+    cancel_misrouted_rewrite_repair, rebuild_rewrite_case_groups, recapture_startup_snapshot,
+    retry_rewrite_replay_after_out_of_band_run, upgrade_source_snapshot,
 };
 
 #[derive(Debug, Parser)]
@@ -90,6 +90,8 @@ enum RepairCommand {
     Cancel(RepairCancelArgs),
     /// Re-arm coordinator Replay after a confirmed out-of-band focused run.
     RetryReplay(RepairRetryReplayArgs),
+    /// Rebuild a historical recording run's case groups from the canonical API inventory.
+    RebuildCaseGroups(RepairRebuildCaseGroupsArgs),
 }
 
 #[derive(Debug, Args)]
@@ -121,6 +123,15 @@ struct RepairRetryReplayArgs {
     /// Confirm that the newer focused attempt was run outside the coordinator.
     #[arg(long)]
     confirm_out_of_band_run: bool,
+}
+
+#[derive(Debug, Args)]
+struct RepairRebuildCaseGroupsArgs {
+    /// Exact recording run owned by the current rewrite workflow.
+    recording_run_id: String,
+    /// Confirm replacement of the derived case-group index after creating a backup.
+    #[arg(long)]
+    confirm_rebuild: bool,
 }
 
 #[derive(Debug, Args)]
@@ -232,6 +243,20 @@ fn run(cli: Cli) -> Result<()> {
                 println!();
                 Ok(())
             }
+            RepairCommand::RebuildCaseGroups(args) => {
+                let result = rebuild_rewrite_case_groups(RewriteCaseGroupRebuildOptions {
+                    target_root: cli.target_root,
+                    recording_run_id: args.recording_run_id,
+                    confirm_rebuild: args.confirm_rebuild,
+                })?;
+                if cli.pretty {
+                    serde_json::to_writer_pretty(std::io::stdout(), &result)?;
+                } else {
+                    serde_json::to_writer(std::io::stdout(), &result)?;
+                }
+                println!();
+                Ok(())
+            }
         },
     }
 }
@@ -304,5 +329,20 @@ mod tests {
         let error = run(cli).unwrap_err();
 
         assert!(error.to_string().contains("--confirm-out-of-band-run"));
+    }
+
+    #[test]
+    fn case_group_rebuild_requires_explicit_confirmation() {
+        let cli = Cli::try_parse_from([
+            "backend-rewrite-admin",
+            "repair",
+            "rebuild-case-groups",
+            "20260911083951",
+        ])
+        .unwrap();
+
+        let error = run(cli).unwrap_err();
+
+        assert!(error.to_string().contains("--confirm-rebuild"));
     }
 }

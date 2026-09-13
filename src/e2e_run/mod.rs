@@ -205,6 +205,24 @@ pub fn prepare_e2e_run(options: E2eRunPrepareOptions) -> Result<E2eRunPrepareRes
     })
 }
 
+pub(crate) fn prepare_case_group_index_rebuild(context: &E2eRunContext) -> Result<PathBuf> {
+    let (_, layout) = config::resolve_layout(
+        &context.target_root,
+        &context.case_source,
+        context.run_key.as_deref(),
+    )?;
+    ensure!(
+        !layout.active_dir.exists(),
+        "cannot rebuild case grouping while an E2E run is active"
+    );
+    ensure!(
+        store::focused_active_directories(&layout)?.is_empty(),
+        "cannot rebuild case grouping while a focused API attempt is active"
+    );
+    std::fs::create_dir_all(&layout.run_root)?;
+    Ok(layout.group_index_path)
+}
+
 pub(crate) fn focused_process_output_evidence(
     context: &E2eRunContext,
     api_key: &str,

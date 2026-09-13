@@ -2010,6 +2010,24 @@ restores the issue's target-code owner, and returns the coordinator-owned
 advance command. It does not cancel external-data repairs, delete evidence, or
 provide an ordinary AI workflow bypass.
 
+Recordings grouped by an older coordinator may retain concrete route ownership
+after the canonical API inventory adopts case path patterns. If Replay reports
+that a case directory is already owned by a concrete group, rebuild only the
+current workflow's exact recording run through the administrator interface:
+
+```bash
+backend-rewrite-admin --target-root <target> repair rebuild-case-groups \
+  <recording-run-id> --confirm-rebuild
+```
+
+The command requires an idle coordinator and traffic runtime, verifies that the
+run belongs to the current workflow, and rebuilds the complete derived index
+from its canonical API inventory. It preserves the recording and keeps the old
+index beside the replacement as `case-groups.before-rebuild-*.json`. If the
+replacement is incomplete or invalid, the old index is restored automatically.
+After a successful repair, execute only the exact operation retry returned by
+`backend-rewrite status`.
+
 Initialize a rewrite target once, before its first coordinator session:
 
 ```bash
