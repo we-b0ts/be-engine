@@ -278,6 +278,8 @@ pub struct RewriteResponseBodyRuleSpec {
     pub unordered_paths: Vec<crate::ResponseBodyUnorderedPath>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unordered_joined_string_paths: Vec<crate::ResponseBodyJoinedStringPath>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub docx_timestamps: Vec<crate::DocxTimestampRule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

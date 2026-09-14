@@ -192,6 +192,7 @@ fn protobuf_response_body_rule_reuses_comparison_bodies_for_offline_verification
         codec: ResponseBodyCodec::Protobuf,
         unordered_paths: Vec::new(),
         unordered_joined_string_paths: Vec::new(),
+        docx_timestamps: Vec::new(),
         evidence: ResponseBodyRuleEvidence::Comparison {
             comparison_report: report_path.clone(),
         },
@@ -221,6 +222,7 @@ fn protobuf_response_body_rule_reuses_comparison_bodies_for_offline_verification
             source_evidence: "src/rule.rs:white_list is a set".to_string(),
         })],
         unordered_joined_string_paths: Vec::new(),
+        docx_timestamps: Vec::new(),
         evidence: ResponseBodyRuleEvidence::Comparison {
             comparison_report: report_path.clone(),
         },
@@ -244,6 +246,7 @@ fn protobuf_response_body_rule_reuses_comparison_bodies_for_offline_verification
             source_evidence: "src/rule.rs:white_list is a set".to_string(),
         })],
         unordered_joined_string_paths: Vec::new(),
+        docx_timestamps: Vec::new(),
         evidence: ResponseBodyRuleEvidence::Comparison {
             comparison_report: report_path.clone(),
         },
@@ -335,6 +338,7 @@ fn protobuf_joined_string_rule_reuses_comparison_bodies_for_offline_verification
         codec: ResponseBodyCodec::Protobuf,
         unordered_paths: Vec::new(),
         unordered_joined_string_paths: Vec::new(),
+        docx_timestamps: Vec::new(),
         evidence: ResponseBodyRuleEvidence::Comparison {
             comparison_report: report_path.clone(),
         },
@@ -354,6 +358,7 @@ fn protobuf_joined_string_rule_reuses_comparison_bodies_for_offline_verification
             source_evidence: "src/service.rs:names is a set".to_string(),
         })],
         unordered_joined_string_paths: Vec::new(),
+        docx_timestamps: Vec::new(),
         evidence: ResponseBodyRuleEvidence::Comparison {
             comparison_report: report_path.clone(),
         },
@@ -383,6 +388,7 @@ fn protobuf_joined_string_rule_reuses_comparison_bodies_for_offline_verification
                 source_evidence: "src/service.rs:names is set-joined".to_string(),
             },
         )],
+        docx_timestamps: Vec::new(),
         evidence: ResponseBodyRuleEvidence::Comparison {
             comparison_report: report_path,
         },
@@ -437,6 +443,7 @@ fn protobuf_codec_configuration_rejects_non_protobuf_bodies() {
         codec: ResponseBodyCodec::Protobuf,
         unordered_paths: Vec::new(),
         unordered_joined_string_paths: Vec::new(),
+        docx_timestamps: Vec::new(),
         evidence: ResponseBodyRuleEvidence::Comparison {
             comparison_report: report_path,
         },
@@ -510,6 +517,7 @@ fn response_body_rule_reports_that_a_value_difference_has_no_ordering_rule() {
         codec: ResponseBodyCodec::Hessian2,
         unordered_paths: Vec::new(),
         unordered_joined_string_paths: Vec::new(),
+        docx_timestamps: Vec::new(),
         evidence: ResponseBodyRuleEvidence::Comparison {
             comparison_report: report_path.clone(),
         },
@@ -528,6 +536,7 @@ fn response_body_rule_reports_that_a_value_difference_has_no_ordering_rule() {
         codec: ResponseBodyCodec::Hessian2,
         unordered_paths: Vec::new(),
         unordered_joined_string_paths: Vec::new(),
+        docx_timestamps: Vec::new(),
         evidence: ResponseBodyRuleEvidence::Comparison {
             comparison_report: report_path,
         },
@@ -619,6 +628,7 @@ fn motan_gateway_hessian2_body_rule_accepts_a_raw_body_envelope() {
         codec: ResponseBodyCodec::Hessian2,
         unordered_paths: Vec::new(),
         unordered_joined_string_paths: Vec::new(),
+        docx_timestamps: Vec::new(),
         evidence: ResponseBodyRuleEvidence::Comparison {
             comparison_report: report_path.clone(),
         },
@@ -638,6 +648,7 @@ fn motan_gateway_hessian2_body_rule_accepts_a_raw_body_envelope() {
             source_evidence: "src/cache.rs:names is a set".to_string(),
         })],
         unordered_joined_string_paths: Vec::new(),
+        docx_timestamps: Vec::new(),
         evidence: ResponseBodyRuleEvidence::Comparison {
             comparison_report: report_path,
         },
@@ -756,6 +767,7 @@ fn response_body_rule_can_apply_one_reviewed_path_while_another_difference_remai
             source_evidence: "src/cache.rs:42-48 names is an unordered set".to_string(),
         })],
         unordered_joined_string_paths: Vec::new(),
+        docx_timestamps: Vec::new(),
         evidence: ResponseBodyRuleEvidence::Comparison {
             comparison_report: report_path.clone(),
         },
@@ -865,6 +877,7 @@ fn motan_gateway_hessian2_body_rule_reuses_comparison_bodies_offline() {
         codec: ResponseBodyCodec::Hessian2,
         unordered_paths: Vec::new(),
         unordered_joined_string_paths: Vec::new(),
+        docx_timestamps: Vec::new(),
         evidence: ResponseBodyRuleEvidence::Comparison {
             comparison_report: report_path.clone(),
         },
@@ -891,6 +904,7 @@ fn motan_gateway_hessian2_body_rule_reuses_comparison_bodies_offline() {
             source_evidence: "src/service.rs:names is a set".to_string(),
         })],
         unordered_joined_string_paths: Vec::new(),
+        docx_timestamps: Vec::new(),
         evidence: ResponseBodyRuleEvidence::Comparison {
             comparison_report: report_path,
         },
@@ -966,6 +980,7 @@ fn protobuf_response_body_rule_uses_reviewed_type_for_packed_integer_order() {
         codec: ResponseBodyCodec::Protobuf,
         unordered_paths: Vec::new(),
         unordered_joined_string_paths: Vec::new(),
+        docx_timestamps: Vec::new(),
         evidence: ResponseBodyRuleEvidence::Comparison {
             comparison_report: report_path.clone(),
         },
@@ -985,6 +1000,7 @@ fn protobuf_response_body_rule_uses_reviewed_type_for_packed_integer_order() {
             source_evidence: "src/config.rs:values is a set".to_string(),
         })],
         unordered_joined_string_paths: Vec::new(),
+        docx_timestamps: Vec::new(),
         evidence: ResponseBodyRuleEvidence::Comparison {
             comparison_report: report_path.clone(),
         },

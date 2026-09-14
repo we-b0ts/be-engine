@@ -188,10 +188,11 @@ pub use recording_control::{
 };
 pub use replay::{
     ComparisonResponseRuleFeedback, ComparisonSourceMatch, ComparisonVerificationPolicy,
-    DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS, Hessian2BodyDifference,
-    Hessian2BodyDifferenceKind, Hessian2JoinedStringCandidate, Hessian2JoinedStringPath,
-    Hessian2UnorderedPath, Hessian2ValuePath, Hessian2ValuePathCandidate, HttpCrossCaseFeedback,
-    HttpCrossCasePlan, HttpCrossCaseReport, HttpCrossCaseSelector, JsonJoinedStringCandidate,
+    DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS, DocxBodyDifference,
+    DocxBodyDifferenceKind, DocxTimestampRule, Hessian2BodyDifference, Hessian2BodyDifferenceKind,
+    Hessian2JoinedStringCandidate, Hessian2JoinedStringPath, Hessian2UnorderedPath,
+    Hessian2ValuePath, Hessian2ValuePathCandidate, HttpCrossCaseFeedback, HttpCrossCasePlan,
+    HttpCrossCaseReport, HttpCrossCaseSelector, JsonJoinedStringCandidate,
     MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MemcachedTimestampRuleReport,
     MysqlReplayConfig, MysqlReplayControlConfig, MysqlTimeRuleFeedback, MysqlTimeRulePlan,
     MysqlTimeRuleReport, MysqlTimeSelector, ProfileTargetMissingFeedback, ProfileTargetMissingPlan,

@@ -131,11 +131,11 @@ pub(crate) use assertion::{
     read_actual_response_body, read_comparison_response_observation, read_expected_response_body,
 };
 pub use assertion::{
-    Hessian2BodyDifference, Hessian2BodyDifferenceKind, Hessian2JoinedStringCandidate,
-    Hessian2ValuePathCandidate, JsonJoinedStringCandidate, ProtobufBodyDifference,
-    ProtobufBodyDifferenceKind, ProtobufFieldPathCandidate, ProtobufJoinedStringCandidate,
-    ResponseAssertionCaseReport, ResponseAssertionOptions, ResponseBodyAssertionReport,
-    ResponseBodyDifferenceDetail, ResponseBodyJoinedStringCandidate,
+    DocxBodyDifference, DocxBodyDifferenceKind, Hessian2BodyDifference, Hessian2BodyDifferenceKind,
+    Hessian2JoinedStringCandidate, Hessian2ValuePathCandidate, JsonJoinedStringCandidate,
+    ProtobufBodyDifference, ProtobufBodyDifferenceKind, ProtobufFieldPathCandidate,
+    ProtobufJoinedStringCandidate, ResponseAssertionCaseReport, ResponseAssertionOptions,
+    ResponseBodyAssertionReport, ResponseBodyDifferenceDetail, ResponseBodyJoinedStringCandidate,
     ResponseBodyUnorderedPathCandidate, ResponseDifference, ResponseDifferenceKind,
     ResponseGatewayProtocol, assert_recorded_response,
 };
@@ -143,8 +143,8 @@ pub(crate) use policy::render_validated_replay_policy;
 pub(crate) use policy::response_locations_overlap;
 pub use policy::{
     ComparisonResponseRuleFeedback, ComparisonSourceMatch, ComparisonVerificationPolicy,
-    Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath, HttpCrossCaseFeedback,
-    HttpCrossCasePlan, HttpCrossCaseReport, MemcachedTimestampRuleFeedback,
+    DocxTimestampRule, Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath,
+    HttpCrossCaseFeedback, HttpCrossCasePlan, HttpCrossCaseReport, MemcachedTimestampRuleFeedback,
     MemcachedTimestampRulePlan, MemcachedTimestampRuleReport, MysqlTimeRuleFeedback,
     MysqlTimeRulePlan, MysqlTimeRuleReport, MysqlTimeSelector, ProfileTargetMissingFeedback,
     ProfileTargetMissingPlan, ProfileTargetMissingReport, ProtobufFieldPath,

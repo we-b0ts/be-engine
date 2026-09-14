@@ -248,11 +248,16 @@ fn parse_response_body_joined_string_path(
     serde_json::from_str(value).map_err(|error| format!("invalid joined-string path JSON: {error}"))
 }
 
+fn parse_docx_timestamp(value: &str) -> Result<traffic_e2e::DocxTimestampRule, String> {
+    serde_json::from_str(value).map_err(|error| format!("invalid DOCX timestamp JSON: {error}"))
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum ResponseBodyCodecArg {
     Json,
     Protobuf,
     Hessian2,
+    Docx,
 }
 
 impl From<ResponseBodyCodecArg> for ResponseBodyCodec {
@@ -261,6 +266,7 @@ impl From<ResponseBodyCodecArg> for ResponseBodyCodec {
             ResponseBodyCodecArg::Json => Self::Json,
             ResponseBodyCodecArg::Protobuf => Self::Protobuf,
             ResponseBodyCodecArg::Hessian2 => Self::Hessian2,
+            ResponseBodyCodecArg::Docx => Self::Docx,
         }
     }
 }
@@ -271,7 +277,7 @@ struct RulePlanArgs {
     jwt: jwt_rule::JwtArgs,
     #[arg(long)]
     evidence_id: String,
-    /// Response body codec. JSON uses --kind and JSON arguments; typed codecs use typed path JSON.
+    /// Body codec. JSON uses --kind, protobuf/Hessian2 use typed paths, and DOCX uses --docx-timestamp.
     #[arg(long, value_enum, required_unless_present = "request_kind")]
     body_codec: Option<ResponseBodyCodecArg>,
     /// JSON response-rule kind. Omit for protobuf and Hessian2 typed-body rules.
@@ -325,6 +331,14 @@ struct RulePlanArgs {
         ]
     )]
     unordered_joined_string_paths: Vec<ResponseBodyJoinedStringPath>,
+    /// DOCX timestamp selector encoded as one JSON object.
+    #[arg(
+        long = "docx-timestamp",
+        value_name = "RULE_JSON",
+        value_parser = parse_docx_timestamp,
+        conflicts_with_all = ["kind", "json_pointer", "unordered_paths", "unordered_joined_string_paths"]
+    )]
+    docx_timestamps: Vec<traffic_e2e::DocxTimestampRule>,
 }
 
 #[derive(Debug, Args)]
@@ -703,6 +717,7 @@ async fn run(cli: Cli) -> Result<()> {
                         separator: args.separator,
                         unordered_paths: args.unordered_paths,
                         unordered_joined_string_paths: args.unordered_joined_string_paths,
+                        docx_timestamps: args.docx_timestamps,
                     },
                 )?,
                 pretty,

@@ -70,6 +70,7 @@ impl ProgressReport {
         &mut self,
         mut current: ProgressObservation,
         legacy_key_prefix: Option<&str>,
+        authoritative_scope: bool,
     ) -> Result<bool> {
         self.validate_observation(&current)?;
 
@@ -78,17 +79,17 @@ impl ProgressReport {
             .get(&current.key)
             .map(|counted| counted.observation.clone())
         {
-            if !previous.finalized {
-                ensure!(
-                    current.apis.iter().all(|(api, result)| {
-                        previous
-                            .apis
-                            .get(api)
-                            .is_none_or(|recorded| recorded.cases.executed == result.cases.executed)
-                    }),
-                    "logical progress run {:?} changed its recorded API case inventory",
-                    current.key
-                );
+            ensure!(
+                current.apis.iter().all(|(api, result)| {
+                    previous
+                        .apis
+                        .get(api)
+                        .is_none_or(|recorded| recorded.cases.executed == result.cases.executed)
+                }),
+                "logical progress run {:?} changed its recorded API case inventory",
+                current.key
+            );
+            if !previous.finalized && !authoritative_scope {
                 let mut merged = previous.clone();
                 merged.evidence_fingerprint = current.evidence_fingerprint.clone();
                 merged.finished_at.clone_from(&current.finished_at);
@@ -102,16 +103,17 @@ impl ProgressReport {
                     .then(|| merged.apis.values().all(|api| api.passed));
                 current = merged;
             }
-            ensure!(
-                previous.apis.iter().all(|(api, previous)| {
-                    current
-                        .apis
-                        .get(api)
-                        .is_some_and(|current| current.cases.executed == previous.cases.executed)
-                }),
-                "logical progress run {:?} changed its recorded API case inventory",
-                current.key
-            );
+            if !authoritative_scope {
+                ensure!(
+                    previous.apis.iter().all(|(api, previous)| {
+                        current.apis.get(api).is_some_and(|current| {
+                            current.cases.executed == previous.cases.executed
+                        })
+                    }),
+                    "logical progress run {:?} changed its recorded API case inventory",
+                    current.key
+                );
+            }
             if previous.evidence_fingerprint == current.evidence_fingerprint {
                 return Ok(false);
             }

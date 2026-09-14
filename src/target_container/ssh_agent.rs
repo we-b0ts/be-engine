@@ -195,7 +195,7 @@ fn bounded_command_error(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    use std::os::unix::fs::symlink;
 
     use super::*;
 

@@ -19,6 +19,7 @@ response_rules:
   json: {}
   protobuf: {}
   hessian2: {}
+  docx: {}
 "#;
 
 #[derive(Debug, Clone)]

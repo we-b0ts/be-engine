@@ -3,7 +3,7 @@ use clap::{Args, ValueEnum};
 use std::path::PathBuf;
 use traffic_e2e::{
     JwtRulePlanOptions,
-    request_rules::{JwtAlgorithm, keys::SigningKeySource},
+    request_rules::{JwtAlgorithm, JwtTokenLocation, keys::SigningKeySource},
 };
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -18,8 +18,11 @@ pub(super) struct JwtArgs {
     pub request_kind: Option<RequestKind>,
     #[arg(long, requires = "request_kind")]
     rule_id: Option<String>,
-    #[arg(long, requires = "request_kind")]
+    #[arg(long, requires = "request_kind", conflicts_with = "query_param")]
     header: Option<String>,
+    /// URL query parameter carrying the JWT without a bearer scheme.
+    #[arg(long, requires = "request_kind", conflicts_with = "header")]
+    query_param: Option<String>,
     #[arg(long, value_parser = ["HS256", "HS384", "HS512"], requires = "request_kind")]
     algorithm: Option<String>,
     #[arg(long, requires = "request_kind")]
@@ -56,10 +59,15 @@ impl JwtArgs {
         ensure!(leeway_seconds >= 0, "JWT leeway must be nonnegative");
         Ok(Some(JwtRulePlanOptions {
             id: self.rule_id.unwrap_or_else(|| "session-jwt".into()),
-            header: self
-                .header
-                .unwrap_or_else(|| "authorization".into())
-                .to_ascii_lowercase(),
+            location: match self.query_param {
+                Some(query_param) => JwtTokenLocation::QueryParameter { query_param },
+                None => JwtTokenLocation::BearerHeader {
+                    header: self
+                        .header
+                        .unwrap_or_else(|| "authorization".into())
+                        .to_ascii_lowercase(),
+                },
+            },
             algorithm: match self.algorithm.as_deref().unwrap_or("HS256") {
                 "HS384" => JwtAlgorithm::HS384,
                 "HS512" => JwtAlgorithm::HS512,

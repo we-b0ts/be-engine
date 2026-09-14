@@ -54,6 +54,48 @@ fn duration_growth_must_match_request_time_growth_with_five_second_tolerance() {
 }
 
 #[test]
+fn preserved_timestamps_compare_deltas_without_assuming_a_clock_offset() {
+    let source = json!(1_700_028_800);
+    for (target, valid) in [
+        (1_700_028_855, true),
+        (1_700_028_860, true),
+        (1_700_028_865, true),
+        (1_700_028_854, false),
+        (1_700_028_866, false),
+        (1_700_000_060, false),
+    ] {
+        assert_eq!(
+            compare_preserved_timestamp(
+                ResponseTimestampFormat::UnixSeconds,
+                &source,
+                &json!(target),
+                times(),
+            )
+            .is_ok(),
+            valid
+        );
+    }
+    assert_eq!(
+        compare_preserved_timestamp(
+            ResponseTimestampFormat::UnixSeconds,
+            &source,
+            &json!(1_700_028_860),
+            RequestTimes::default(),
+        ),
+        Err(ResponseDifferenceKind::TimeReferenceMissing)
+    );
+    assert_eq!(
+        compare_preserved_timestamp(
+            ResponseTimestampFormat::Rfc3339,
+            &json!("not-a-time"),
+            &json!("2024-01-02T04:04:05Z"),
+            times(),
+        ),
+        Err(ResponseDifferenceKind::TimeFieldInvalid)
+    );
+}
+
+#[test]
 fn time_rules_parse_milliseconds_rfc3339_and_numeric_strings() {
     for (rule, source, target) in [
         (

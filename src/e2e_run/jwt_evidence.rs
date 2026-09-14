@@ -6,12 +6,16 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::{E2eRunContext, evidence::finalized_focused_evidence};
-use crate::request_rules::jwt::{self, Algorithm, Token};
+use crate::request_rules::{
+    JwtTokenLocation,
+    jwt::{self, Algorithm, Token},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct JwtTimeCase {
     pub case_id: String,
-    pub header: String,
+    #[serde(flatten)]
+    pub location: JwtTokenLocation,
     pub algorithm: Algorithm,
     pub source_status: u64,
     pub target_status: u64,
@@ -65,11 +69,34 @@ pub(crate) fn query(context: E2eRunContext, api: &str) -> Result<JwtTimeEvidence
         let request_path = case.case_dir.join("request.json");
         let raw = crate::request_headers::load_request_file(&request_path)?;
         let request: Value = serde_json::from_slice(&raw)?;
-        let Some(headers) = request["headers"].as_object() else {
-            continue;
-        };
-        for header in headers.keys() {
-            let Some(token) = jwt::request_token(&request, header)? else {
+        let header_locations = request["headers"]
+            .as_object()
+            .into_iter()
+            .flat_map(|headers| headers.keys())
+            .map(|header| JwtTokenLocation::BearerHeader {
+                header: header.to_ascii_lowercase(),
+            });
+        let query_locations = request["uri"]
+            .as_str()
+            .and_then(|uri| uri.split_once('?').map(|(_, query)| query))
+            .map(|query| query.split('#').next().unwrap_or_default())
+            .into_iter()
+            .flat_map(|query| query.split('&'))
+            .filter_map(|component| {
+                url::form_urlencoded::parse(component.as_bytes())
+                    .next()
+                    .map(|(name, _)| name.into_owned())
+            })
+            .filter(|name| {
+                !name.is_empty()
+                    && name.len() <= 128
+                    && name.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
+                    })
+            })
+            .map(|query_param| JwtTokenLocation::QueryParameter { query_param });
+        for location in header_locations.chain(query_locations) {
+            let Some(token) = jwt::request_token(&request, &location)? else {
                 continue;
             };
             let Some(token) = Token::parse(&token)? else {
@@ -91,7 +118,7 @@ pub(crate) fn query(context: E2eRunContext, api: &str) -> Result<JwtTimeEvidence
             }
             candidates.push(JwtTimeCase {
                 case_id: case.case_id.clone(),
-                header: header.to_ascii_lowercase(),
+                location,
                 algorithm: token.algorithm,
                 source_status,
                 target_status: 401,
@@ -159,7 +186,8 @@ pub(crate) fn verify_candidate(
         case.replayed_at.timestamp().saturating_sub(case.exp) > leeway_seconds,
         "JWT was not expired beyond the configured validation leeway at replay"
     );
-    let raw = jwt::request_token(request, &case.header)?.context("JWT evidence token is absent")?;
+    let raw =
+        jwt::request_token(request, &case.location)?.context("JWT evidence token is absent")?;
     let token = Token::parse(&raw)?.context("JWT evidence is not a supported HMAC JWT")?;
     ensure!(
         token.algorithm == case.algorithm && token.verify(key),

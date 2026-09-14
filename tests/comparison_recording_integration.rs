@@ -415,7 +415,7 @@ async fn comparison_dispatch_order_is_pair_balanced_within_a_run() {
 
     let observed = observed.lock().unwrap().clone();
     assert_eq!(observed.len(), 4);
-    for pair in observed.chunks_exact(2) {
+    for pair in observed.as_chunks::<2>().0 {
         assert_ne!(pair[0], pair[1]);
     }
     assert_ne!(observed[0], observed[2]);

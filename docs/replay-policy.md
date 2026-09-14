@@ -41,11 +41,12 @@ response_rules:
   json: {}
   protobuf: {}
   hessian2: {}
+  docx: {}
 ```
 
 Rules are grouped by body codec, canonical API, and concrete rule kind.
 Standard replay loads JSON `timestamp`, `duration`, `uuid`, `random`, and
-`unordered` rules plus configured protobuf and Hessian2 rules. Comparison also
+`unordered` rules plus configured protobuf, Hessian2, and DOCX rules. Comparison also
 loads JSON `counter` rules. Rule kinds selecting JSON must use disjoint
 subtrees.
 
@@ -506,7 +507,7 @@ unordered collection or a joined string, but not both.
 Gateway protocol, response component, body envelope, and body codec are
 separate dimensions. Gateway protocol is currently `http`, `motan1`, or
 `motan2`; response comparison distinguishes status, gateway metadata, and
-body. A body can then use JSON, protobuf, Hessian2, or exact bytes. Protobuf
+body. A body can then use JSON, protobuf, Hessian2, DOCX, or exact bytes. Protobuf
 comparison currently accepts the simple byte-array envelope. Hessian2 accepts
 either `envelope: simple_byte_array` or `envelope: raw`. Both compared bodies
 must use the same envelope because an envelope change is a response-shape
@@ -533,9 +534,10 @@ current runner-owned focused E2E evidence or current comparison evidence
 contains the required body diagnosis; it is not gated on entering the
 Comparison phase. Except for protocol-defined Motan1 `value` responses, when
 no body codec is configured, evidence reports the syntactically valid
-`protobuf` and/or `hessian2` candidates. They are decoding candidates rather
-than schema claims, so application or schema context must select the codec.
-The same plan may configure the codec and add reviewed paths in one step.
+`protobuf`, `hessian2`, and/or `docx` candidates. They are decoding candidates
+rather than schema claims, so application or schema context must select the
+codec. The same plan may configure the codec and add reviewed selectors in one
+step.
 Planning and apply reuse immutable response artifacts and do not start source
 or target processes or record new traffic.
 
@@ -550,11 +552,12 @@ same field is reorder-only.
 
 The reported paths and successful offline multiset comparison are mechanical
 candidates, not authorization that order is absent from the product contract.
-Every selected protobuf path, Hessian2 list, and joined string must
-persist its own source citation. Codec-only selection is the sole
-evidence-light step because it enables decoding without ignoring a body value;
-it may remain nonpassing until a later source-proven selector accounts for the
-diagnosed differences.
+Every selected protobuf path, Hessian2 list, joined string, and DOCX timestamp
+must persist its own source citation. Codec-only selection is evidence-light:
+for DOCX it ignores only standard ZIP packaging metadata; for protobuf and
+Hessian2 it enables decoding without ignoring a body value. It may remain
+nonpassing until a later source-proven selector accounts for diagnosed content
+differences.
 
 Use the unified response-rule planner:
 
@@ -582,7 +585,25 @@ backend-rewrite rule plan \
   --evidence-id <current-evidence-id> \
   --body-codec hessian2 \
   --unordered-joined-string-path '{"value_path":["result","whiteList"],"display_path":"result.white_list","separator":",","source_evidence":"src/cache.rs:white_list joins a Set"}'
+
+backend-rewrite rule plan \
+  --evidence-id <current-evidence-id> \
+  --body-codec docx \
+  --docx-timestamp '{"part":"docProps/core.xml","element":"dcterms:created","format":"rfc3339","source_evidence":"src/docx.rs:generate sets core created from the current request clock","source_example":"2024-01-02T03:04:05Z","target_example":"2024-01-02T04:04:05Z"}'
 ```
+
+DOCX rules compare the exact set of OPC ZIP entries and each decompressed part.
+ZIP entry timestamps, compression bytes, entry order, offsets, and
+central-directory layout are packaging metadata and do not affect equality. A
+selected XML timestamp is accepted only when its source-to-target delta matches
+the elapsed time between the corresponding requests within the engine-owned
+five-second tolerance. This preserves equal source and target clock offsets
+without requiring a host-timezone or per-target policy.
+Every other byte in that XML part, and every unselected package part, remains
+exact. Invalid, duplicate-name, unsafe-path, oversized, or incomplete DOCX
+packages fail closed. The codec is explicit, so generic ZIP downloads are not
+normalized. The bounded package layer can support later XLSX/PPTX codecs
+without broadening the DOCX contract.
 
 Only selected repeated fields ignore element order. Element contents,
 duplicate multiplicity, status, undeclared fields, and all other business-body

@@ -8,9 +8,9 @@ const NANOS_PER_SECOND: i128 = 1_000_000_000;
 const TOLERANCE_NANOS: u128 = 5_000_000_000;
 
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) struct RequestTimes {
-    pub(super) source: Option<DateTime<Utc>>,
-    pub(super) target: Option<DateTime<Utc>>,
+pub(in crate::replay) struct RequestTimes {
+    pub(in crate::replay) source: Option<DateTime<Utc>>,
+    pub(in crate::replay) target: Option<DateTime<Utc>>,
 }
 
 pub(super) fn compare(
@@ -45,6 +45,29 @@ pub(super) fn compare(
                 return Err(ResponseDifferenceKind::DurationDeltaMismatch);
             }
         }
+    }
+    Ok(())
+}
+
+pub(super) fn compare_preserved_timestamp(
+    format: ResponseTimestampFormat,
+    expected: &Value,
+    actual: &Value,
+    times: RequestTimes,
+) -> Result<(), ResponseDifferenceKind> {
+    let invalid = ResponseDifferenceKind::TimeFieldInvalid;
+    if !(expected.is_number() && actual.is_number() || expected.is_string() && actual.is_string()) {
+        return Err(invalid);
+    }
+    let (Some(source_time), Some(target_time)) = (times.source, times.target) else {
+        return Err(ResponseDifferenceKind::TimeReferenceMissing);
+    };
+    let source = timestamp_nanos(expected, format).ok_or(invalid)?;
+    let target = timestamp_nanos(actual, format).ok_or(invalid)?;
+    let timestamp_delta = target.checked_sub(source).ok_or(invalid)?;
+    let request_delta = date_nanos(target_time) - date_nanos(source_time);
+    if timestamp_delta.abs_diff(request_delta) > TOLERANCE_NANOS {
+        return Err(ResponseDifferenceKind::DurationDeltaMismatch);
     }
     Ok(())
 }

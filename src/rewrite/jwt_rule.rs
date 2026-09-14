@@ -10,7 +10,7 @@ use super::{
 };
 use crate::e2e_run::jwt_evidence::{self, JwtTimeEvidence};
 use crate::request_rules::{
-    JwtAlgorithm, JwtRule, JwtTime,
+    JwtAlgorithm, JwtRule, JwtTime, JwtTokenLocation,
     keys::{self, KeyBinding, SigningKeySource},
     policy,
 };
@@ -26,7 +26,7 @@ pub(super) fn evidence_facts(root: &Path, state: &RewriteState) -> Result<Value>
 #[derive(Debug, Clone)]
 pub struct JwtRulePlanOptions {
     pub id: String,
-    pub header: String,
+    pub location: JwtTokenLocation,
     pub algorithm: JwtAlgorithm,
     pub signing_key_ref: String,
     pub key_source: Option<SigningKeySource>,
@@ -86,8 +86,16 @@ pub(super) fn plan(
     let spec = JwtPlanRecord {
         rule: JwtRule {
             id: options.id,
-            header: options.header,
-            scheme: "bearer".into(),
+            header: match &options.location {
+                JwtTokenLocation::BearerHeader { header } => Some(header.clone()),
+                JwtTokenLocation::QueryParameter { .. } => None,
+            },
+            scheme: matches!(options.location, JwtTokenLocation::BearerHeader { .. })
+                .then(|| "bearer".into()),
+            query_param: match &options.location {
+                JwtTokenLocation::QueryParameter { query_param } => Some(query_param.clone()),
+                JwtTokenLocation::BearerHeader { .. } => None,
+            },
             algorithm: options.algorithm,
             time: JwtTime::PreserveRelative,
             signing_key_ref: options.signing_key_ref,
@@ -164,7 +172,12 @@ fn build(
     let selected = facts
         .candidates
         .iter()
-        .filter(|c| c.header == spec.rule.header && c.algorithm == spec.rule.algorithm)
+        .filter(|c| {
+            spec.rule
+                .location()
+                .is_ok_and(|location| c.location == location)
+                && c.algorithm == spec.rule.algorithm
+        })
         .collect::<Vec<_>>();
     ensure!(
         !selected.is_empty(),
@@ -209,7 +222,8 @@ fn coverage(source: &Path, rule: &JwtRule, key: &[u8]) -> Result<Value> {
     for path in paths {
         let request: Value =
             serde_json::from_slice(&crate::request_headers::load_request_file(&path)?)?;
-        let Some(raw) = crate::request_rules::jwt::request_token(&request, &rule.header)? else {
+        let location = rule.location()?;
+        let Some(raw) = crate::request_rules::jwt::request_token(&request, &location)? else {
             continue;
         };
         let Some(token) = crate::request_rules::jwt::Token::parse(&raw)? else {
@@ -242,7 +256,7 @@ fn coverage(source: &Path, rule: &JwtRule, key: &[u8]) -> Result<Value> {
         ));
     }
     Ok(
-        json!({ "matching_cases": matched, "distinct_request_paths": apis.len(), "unverified_tokens_preserved": invalid, "scope": "all APIs with the matching header, algorithm and valid signature" }),
+        json!({ "matching_cases": matched, "distinct_request_paths": apis.len(), "unverified_tokens_preserved": invalid, "scope": "all APIs with the matching token location, algorithm and valid signature" }),
     )
 }
 

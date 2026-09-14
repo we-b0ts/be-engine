@@ -67,6 +67,33 @@ impl ResponseBodyJoinedStringCandidate {
 pub enum ResponseBodyDifferenceDetail {
     Protobuf(ProtobufBodyDifference),
     Hessian2(Hessian2BodyDifference),
+    Docx(DocxBodyDifference),
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum DocxBodyDifferenceKind {
+    EntrySetMismatch,
+    EntryValueMismatch,
+    TimestampMismatch,
+    TimestampInvalid,
+    TimestampOutsideRequestWindow,
+    TimestampDeltaMismatch,
+    TimeReferenceMissing,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DocxBodyDifference {
+    pub part: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element: Option<String>,
+    pub kind: DocxBodyDifferenceKind,
+}
+
+impl From<DocxBodyDifference> for ResponseBodyDifferenceDetail {
+    fn from(difference: DocxBodyDifference) -> Self {
+        Self::Docx(difference)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]

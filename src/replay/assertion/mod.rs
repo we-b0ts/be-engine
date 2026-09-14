@@ -1,11 +1,12 @@
 mod artifact;
 mod binary_body;
 mod compare;
+pub(in crate::replay) mod docx;
 pub(in crate::replay) mod hessian2;
 mod joined_string;
 mod model;
 mod time;
-use time::RequestTimes;
+pub(in crate::replay) use time::RequestTimes;
 mod motan;
 pub(in crate::replay) mod protobuf;
 
@@ -19,12 +20,13 @@ use self::artifact::{
 };
 use self::compare::compare_json;
 pub use self::model::{
-    Hessian2BodyDifference, Hessian2BodyDifferenceKind, Hessian2JoinedStringCandidate,
-    Hessian2ValuePathCandidate, JsonJoinedStringCandidate, ProtobufBodyDifference,
-    ProtobufBodyDifferenceKind, ProtobufFieldPathCandidate, ProtobufJoinedStringCandidate,
-    ResponseAssertionCaseReport, ResponseBodyAssertionReport, ResponseBodyDifferenceDetail,
-    ResponseBodyJoinedStringCandidate, ResponseBodyUnorderedPathCandidate, ResponseDifference,
-    ResponseDifferenceKind, ResponseGatewayProtocol,
+    DocxBodyDifference, DocxBodyDifferenceKind, Hessian2BodyDifference, Hessian2BodyDifferenceKind,
+    Hessian2JoinedStringCandidate, Hessian2ValuePathCandidate, JsonJoinedStringCandidate,
+    ProtobufBodyDifference, ProtobufBodyDifferenceKind, ProtobufFieldPathCandidate,
+    ProtobufJoinedStringCandidate, ResponseAssertionCaseReport, ResponseBodyAssertionReport,
+    ResponseBodyDifferenceDetail, ResponseBodyJoinedStringCandidate,
+    ResponseBodyUnorderedPathCandidate, ResponseDifference, ResponseDifferenceKind,
+    ResponseGatewayProtocol,
 };
 use super::policy::{ResponseBodyCodec, fingerprint, load_replay_policy, uri_path};
 use crate::config::DEFAULT_BODY_LIMIT_BYTES;
@@ -49,6 +51,7 @@ pub(crate) struct ComparisonResponseAssertionOptions {
 pub(crate) struct ComparisonResponseObservation {
     pub(crate) status: u16,
     pub(crate) body: Vec<u8>,
+    pub(crate) timestamp: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub(crate) fn read_expected_response_body(
@@ -77,6 +80,20 @@ pub(crate) fn read_actual_response_body(
         decode_body(&response.body, "actual response")?,
         gateway_protocol,
     )
+}
+
+pub(crate) fn read_replay_request_times(
+    request_path: &Path,
+    actual_path: &Path,
+) -> Result<RequestTimes> {
+    let request: RecordedRequest =
+        serde_json::from_slice(&read_regular(request_path, "recorded request")?)?;
+    let actual: ActualResponse =
+        serde_json::from_slice(&read_regular(actual_path, "actual response")?)?;
+    Ok(RequestTimes {
+        source: request.timestamp,
+        target: actual.request_sent_at,
+    })
 }
 
 fn response_body_for_gateway(
@@ -145,6 +162,7 @@ pub(in crate::replay) fn diagnose_response_body(
                 order_only: discovery.order_only,
             })
         }
+        ResponseBodyCodec::Docx => docx::diagnose_docx(expected, actual),
         codec => anyhow::bail!("unsupported structured response body codec {codec:?}"),
     }
 }
@@ -302,6 +320,7 @@ pub(crate) fn read_comparison_response_observation(
     Ok(ComparisonResponseObservation {
         status: captured_status(&response, label)?,
         body: body.body().to_vec(),
+        timestamp: response.timestamp,
     })
 }
 
@@ -658,6 +677,21 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                     },
                 )
             }
+            super::policy::ResponseBodyCodec::Docx => {
+                ensure!(
+                    rule.unordered_paths.is_empty()
+                        && rule.unordered_joined_string_paths.is_empty(),
+                    "DOCX response-body rule cannot contain typed collection paths"
+                );
+                report.body_codec = ResponseBodyCodec::Docx;
+                docx::evaluate_docx(
+                    expected_body.body(),
+                    actual_body.body(),
+                    &rule.docx_timestamps,
+                    times,
+                )
+                .context("failed to apply configured DOCX response-body rule")?
+            }
             codec => anyhow::bail!("unsupported configured response-body codec {codec:?}"),
         };
         report.applied_body_rule_ids.push(rule.id.clone());
@@ -776,6 +810,8 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                         && protobuf::is_protobuf_body(actual_body_value);
                     let hessian2_candidate = hessian2::is_hessian2_body(expected_body_value)
                         && hessian2::is_hessian2_body(actual_body_value);
+                    let docx_candidate = docx::is_docx_body(expected_body_value)
+                        && docx::is_docx_body(actual_body_value);
                     let mut codec_candidates = Vec::new();
                     if protobuf_candidate {
                         codec_candidates.push(crate::replay::policy::ResponseBodyCodec::Protobuf);
@@ -783,10 +819,15 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                     if hessian2_candidate {
                         codec_candidates.push(crate::replay::policy::ResponseBodyCodec::Hessian2);
                     }
+                    if docx_candidate {
+                        codec_candidates.push(crate::replay::policy::ResponseBodyCodec::Docx);
+                    }
                     let diagnostic_codec = if protobuf_candidate {
                         Some(ResponseBodyCodec::Protobuf)
                     } else if hessian2_candidate {
                         Some(ResponseBodyCodec::Hessian2)
+                    } else if docx_candidate {
+                        Some(ResponseBodyCodec::Docx)
                     } else {
                         None
                     };

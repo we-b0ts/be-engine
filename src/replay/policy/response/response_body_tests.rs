@@ -34,6 +34,33 @@ protobuf:
 }
 
 #[test]
+fn docx_timestamp_rules_require_a_safe_part_and_auditable_examples() {
+    let rules = serde_yaml::from_str::<ResponseRules>(
+        r#"
+docx:
+  "GET /api/tasks/*/export/docx":
+    timestamp:
+      - part: docProps/core.xml
+        element: dcterms:created
+        format: rfc3339
+        source_evidence: src/docx.rs:generator sets created from the current request clock
+        source_example: 2024-01-02T03:04:05Z
+        target_example: 2024-01-02T04:04:05Z
+"#,
+    )
+    .unwrap();
+    validate_response_rules(&rules).unwrap();
+
+    for part in ["../core.xml", "/docProps/core.xml"] {
+        let yaml = format!(
+            "docx:\n  'GET /export':\n    timestamp:\n      - part: {part}\n        element: dcterms:created\n        format: rfc3339\n        source_evidence: src/docx.rs:created\n        source_example: old\n        target_example: new\n"
+        );
+        let rules = serde_yaml::from_str::<ResponseRules>(&yaml).unwrap();
+        assert!(validate_response_rules(&rules).is_err());
+    }
+}
+
+#[test]
 fn unordered_response_body_selectors_require_source_evidence() {
     let rules = serde_yaml::from_str::<ResponseRules>(
         r#"

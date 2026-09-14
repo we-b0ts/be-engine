@@ -20,6 +20,7 @@ pub(super) fn rule_hints(
                     (true, "hessian2") => "The response body codec is Hessian2. Candidates identify lists or joined strings but do not authorize order-insensitive comparison. Apply only source-proven sets; joined strings also require the reviewed separator.",
                     (false, "protobuf") => "The exact response body is a protobuf candidate. The response rule planner can configure the codec and verify the existing focused-E2E or comparison artifacts offline without recording new traffic.",
                     (false, "hessian2") => "The exact response body is a Hessian2 candidate. The response rule planner can configure the codec and verify the existing focused-E2E or comparison artifacts offline without recording new traffic.",
+                    (_, "docx") => "Both response bodies are DOCX OPC packages. Review package-part differences and add only source-proven dynamic XML timestamps; ZIP entry timestamps and compression metadata are container metadata, while every decompressed part remains exact.",
                     _ => "The exact response body has a supported codec candidate. Review the body evidence before applying a response rule.",
                 };
                 RewriteRuleHint {
@@ -215,9 +216,14 @@ pub(super) fn applicable_rule_planners(
     if query_kind == QUERY_JWT_TIME_VALIDITY {
         let mut seen = std::collections::BTreeSet::new();
         for candidate in facts["candidates"].as_array().into_iter().flatten() {
-            let header = candidate["header"].as_str().unwrap_or_default();
+            let (selector_flag, selector) =
+                if let Some(query_param) = candidate["query_param"].as_str() {
+                    ("--query-param", query_param)
+                } else {
+                    ("--header", candidate["header"].as_str().unwrap_or_default())
+                };
             let algorithm = candidate["algorithm"].as_str().unwrap_or_default();
-            if !seen.insert((header, algorithm)) {
+            if !seen.insert((selector_flag, selector, algorithm)) {
                 continue;
             }
             planners.push(RewriteApplicableRulePlanner {
@@ -233,8 +239,8 @@ pub(super) fn applicable_rule_planners(
                         "jwt".into(),
                         "--evidence-id".into(),
                         evidence_id.into(),
-                        "--header".into(),
-                        header.into(),
+                        selector_flag.into(),
+                        selector.into(),
                         "--algorithm".into(),
                         algorithm.into(),
                         "--help".into(),
@@ -304,7 +310,7 @@ pub(super) fn applicable_rule_planners(
                         "--body-codec".to_string(),
                         codec.to_string(),
                     ];
-                    if configured {
+                    if configured || codec == "docx" {
                         arguments.push("--help".to_string());
                     }
                     RewriteApplicableRulePlanner {
@@ -408,6 +414,7 @@ pub(in crate::rewrite) fn supports_response_body_codec(
     let expected = match codec {
         ResponseBodyCodec::Protobuf => "protobuf",
         ResponseBodyCodec::Hessian2 => "hessian2",
+        ResponseBodyCodec::Docx => "docx",
         _ => return false,
     };
     response_body::codec_candidates(facts).contains(&expected)

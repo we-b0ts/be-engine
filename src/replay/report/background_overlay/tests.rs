@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
 
-use base64::Engine as _;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 

@@ -70,6 +70,8 @@ pub(in crate::replay) struct ResponseRules {
     pub(in crate::replay) protobuf: BTreeMap<String, ProtobufResponseRules>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(in crate::replay) hessian2: BTreeMap<String, Hessian2ResponseRules>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(in crate::replay) docx: BTreeMap<String, DocxResponseRules>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -170,9 +172,30 @@ pub(in crate::replay) struct Hessian2ResponseRules {
     pub(in crate::replay) unordered_joined_string: Vec<Hessian2JoinedStringPath>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::replay) struct DocxResponseRules {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) timestamp: Vec<DocxTimestampRule>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DocxTimestampRule {
+    pub part: String,
+    pub element: String,
+    pub format: ResponseTimestampFormat,
+    pub source_evidence: String,
+    pub source_example: String,
+    pub target_example: String,
+}
+
 impl ResponseRules {
     pub(in crate::replay) fn is_empty(&self) -> bool {
-        self.json.is_empty() && self.protobuf.is_empty() && self.hessian2.is_empty()
+        self.json.is_empty()
+            && self.protobuf.is_empty()
+            && self.hessian2.is_empty()
+            && self.docx.is_empty()
     }
 
     pub(in crate::replay) fn matching_replay_fields(
@@ -245,6 +268,7 @@ impl ResponseRules {
                     .cloned()
                     .map(ResponseBodyJoinedStringPath::Protobuf)
                     .collect(),
+                docx_timestamps: Vec::new(),
             })
             .chain(
                 matching_body_rules(&self.hessian2, method, path).map(|(api, rules)| {
@@ -264,6 +288,19 @@ impl ResponseRules {
                             .cloned()
                             .map(ResponseBodyJoinedStringPath::Hessian2)
                             .collect(),
+                        docx_timestamps: Vec::new(),
+                    }
+                }),
+            )
+            .chain(
+                matching_body_rules(&self.docx, method, path).map(|(api, rules)| {
+                    ResponseBodyRuleMatch {
+                        id: response_body_rule_id(api),
+                        api: api.clone(),
+                        codec: ResponseBodyCodec::Docx,
+                        unordered_paths: Vec::new(),
+                        unordered_joined_string_paths: Vec::new(),
+                        docx_timestamps: rules.timestamp.clone(),
                     }
                 }),
             )
@@ -292,6 +329,7 @@ impl ResponseRules {
                     .cloned()
                     .map(ResponseBodyJoinedStringPath::Protobuf)
                     .collect(),
+                docx_timestamps: Vec::new(),
             })
             .or_else(|| {
                 self.hessian2.get(api).map(|rules| ResponseBodyRuleMatch {
@@ -310,6 +348,17 @@ impl ResponseRules {
                         .cloned()
                         .map(ResponseBodyJoinedStringPath::Hessian2)
                         .collect(),
+                    docx_timestamps: Vec::new(),
+                })
+            })
+            .or_else(|| {
+                self.docx.get(api).map(|rules| ResponseBodyRuleMatch {
+                    id: response_body_rule_id(api),
+                    api: api.to_string(),
+                    codec: ResponseBodyCodec::Docx,
+                    unordered_paths: Vec::new(),
+                    unordered_joined_string_paths: Vec::new(),
+                    docx_timestamps: rules.timestamp.clone(),
                 })
             })
     }
@@ -323,6 +372,7 @@ pub enum ResponseBodyCodec {
     Json,
     Protobuf,
     Hessian2,
+    Docx,
     ExactBytes,
 }
 
@@ -456,6 +506,7 @@ pub(in crate::replay) struct ResponseBodyRuleMatch {
     pub(in crate::replay) codec: ResponseBodyCodec,
     pub(in crate::replay) unordered_paths: Vec<ResponseBodyUnorderedPath>,
     pub(in crate::replay) unordered_joined_string_paths: Vec<ResponseBodyJoinedStringPath>,
+    pub(in crate::replay) docx_timestamps: Vec<DocxTimestampRule>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -525,6 +576,7 @@ pub(in crate::replay) fn validate_response_rules(rules: &ResponseRules) -> Resul
     validate_json_rule_map(&rules.json, &mut locations)?;
     validate_protobuf_rule_map(&rules.protobuf)?;
     validate_hessian2_rule_map(&rules.hessian2)?;
+    validate_docx_rule_map(&rules.docx)?;
     validate_body_codec_routes(rules)?;
     for (index, left) in locations.iter().enumerate() {
         for right in locations.iter().skip(index + 1) {
@@ -572,6 +624,7 @@ pub(in crate::replay) fn response_rule_ids(rules: &ResponseRules) -> Vec<String>
                 .protobuf
                 .keys()
                 .chain(rules.hessian2.keys())
+                .chain(rules.docx.keys())
                 .map(|api| response_body_rule_id(api)),
         )
         .collect()
@@ -686,6 +739,7 @@ fn validate_body_codec_routes(rules: &ResponseRules) -> Result<()> {
         .map(|api| ("json", api))
         .chain(rules.protobuf.keys().map(|api| ("protobuf", api)))
         .chain(rules.hessian2.keys().map(|api| ("hessian2", api)))
+        .chain(rules.docx.keys().map(|api| ("docx", api)))
         .map(|(codec, api)| {
             let (method, path) = parse_api(api)?;
             Ok((codec, api.as_str(), method, path))
@@ -700,6 +754,48 @@ fn validate_body_codec_routes(rules: &ResponseRules) -> Result<()> {
                 !left_method.eq_ignore_ascii_case(right_method)
                     || !path_patterns_overlap(left_path, right_path),
                 "overlapping body codec response rules select the same API: {left_codec} {left_api:?} and {right_codec} {right_api:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_docx_rule_map(rules: &BTreeMap<String, DocxResponseRules>) -> Result<()> {
+    for (api, rules) in rules {
+        validate_rule_api(api)?;
+        let mut unique = BTreeSet::new();
+        for rule in &rules.timestamp {
+            ensure!(
+                !rule.part.is_empty()
+                    && rule.part.len() <= 256
+                    && !rule.part.starts_with('/')
+                    && !rule
+                        .part
+                        .split('/')
+                        .any(|segment| segment.is_empty() || segment == "." || segment == ".."),
+                "DOCX timestamp part must be a safe relative OPC part name"
+            );
+            ensure!(
+                !rule.element.is_empty()
+                    && rule.element.len() <= 128
+                    && rule.element.bytes().all(|byte| byte.is_ascii_alphanumeric()
+                        || matches!(byte, b':' | b'_' | b'-' | b'.')),
+                "DOCX timestamp element must be a qualified XML name"
+            );
+            ensure!(
+                unique.insert((&rule.part, &rule.element)),
+                "DOCX response rule API {api:?} repeats timestamp {} in {}",
+                rule.element,
+                rule.part
+            );
+            validate_audit_text(&rule.source_evidence, "source_evidence", 512)?;
+            validate_audit_text(&rule.source_example, "source_example", 1024)?;
+            validate_audit_text(&rule.target_example, "target_example", 1024)?;
+            ensure!(
+                rule.source_example != rule.target_example,
+                "DOCX timestamp rule {} in {} requires different source and target examples",
+                rule.element,
+                rule.part
             );
         }
     }
