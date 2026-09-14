@@ -235,7 +235,10 @@ is unclear.
   configured gate list does not disable it.
 - `rewrite/source_diff.rs` owns the Git source-diff boundary shared by Replay
   isolation and source review, including committed/worktree/untracked files and
-  rename handling. `rewrite/review` owns the complete worker/integrator review
+  rename handling. Its `layout` child maps a target project nested below the Git
+  repository root onto the corresponding directory in worker and integration
+  worktrees and owns conversion between project-relative and Git tree paths.
+  `rewrite/review` owns the complete worker/integrator review
   pipeline, spawn evidence, handoff admission, and quality rework routing. Its `scan`
   child owns Rust syntax findings and complete-file line limits; `evidence`
   validates AI-provided locations and lifecycle explanations without claiming

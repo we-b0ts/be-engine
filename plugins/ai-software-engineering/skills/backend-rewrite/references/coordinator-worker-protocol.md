@@ -65,6 +65,10 @@ For `implementation_required`:
    `--worktree` or `BACKEND_REWRITE_WORKER_WORKTREE`; repeat this on resume so the
    engine freezes the new dispatch's base. Confirm accepted queued work as well; report
    `queued` when the task runtime exposes that state.
+   If the canonical target is nested below its Git repository root, keep
+   `--target-root` on that nested project. The registered worktree may be the
+   outer Git worktree or its corresponding target-project child; the engine
+   normalizes both forms to the child and keeps review paths project-relative.
 4. Confirmation records the accepted binding only. Report `running` or `queued`
    explicitly using the owning action's `commands.report_worker` when that state
    is known, then continue with the returned global action. A confirmation with

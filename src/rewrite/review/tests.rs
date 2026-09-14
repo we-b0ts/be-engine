@@ -383,6 +383,118 @@ fn assigned_git_worktree_review_is_accepted_and_integrated_without_a_private_wor
 }
 
 #[test]
+fn nested_target_maps_repository_worktree_and_keeps_review_project_scoped() {
+    let repository = tempfile::tempdir().unwrap();
+    let target = repository.path().join("backend-rs-intra");
+    fs::create_dir_all(target.join("src")).unwrap();
+    fs::create_dir_all(repository.path().join("sibling/src")).unwrap();
+    crate::rewrite::test_support::install_project_config(
+        &target,
+        "master",
+        crate::rewrite::test_support::managed_test_recorder(),
+        Some(serde_json::json!([])),
+    );
+    fs::write(
+        target.join(".traffic-e2e/verification.yaml"),
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+    )
+    .unwrap();
+    fs::write(target.join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();
+    fs::write(target.join("src/lib.rs"), "pub fn value() -> u8 { 1 }\n").unwrap();
+    fs::write(
+        repository.path().join("sibling/src/lib.rs"),
+        "pub fn sibling() {}\n",
+    )
+    .unwrap();
+    git(repository.path(), &["init", "-q", "-b", "master"]);
+    git(
+        repository.path(),
+        &["config", "user.email", "test@example.com"],
+    );
+    git(
+        repository.path(),
+        &["config", "user.name", "Traffic E2E Test"],
+    );
+    git(repository.path(), &["add", "."]);
+    git(repository.path(), &["commit", "-qm", "baseline"]);
+    git(repository.path(), &["switch", "-qc", "coordinator"]);
+
+    let state = implementation_state_with_inventory(false);
+    let scope = RewriteWorkScope::Api {
+        api: state.api.clone(),
+    };
+    RewriteStore::new(&target).unwrap().save(&state).unwrap();
+
+    let worktrees = tempfile::tempdir().unwrap();
+    let repository_worktree = worktrees.path().join("worker");
+    git(
+        repository.path(),
+        &[
+            "worktree",
+            "add",
+            "-qb",
+            "worker-code",
+            repository_worktree.to_str().unwrap(),
+        ],
+    );
+    let target_worktree = repository_worktree.join("backend-rs-intra");
+    let envelope = worker::confirm(crate::rewrite::RewriteWorkerConfirmOptions {
+        target_root: target.clone(),
+        work_scope: scope.clone(),
+        worktree: Some(repository_worktree.clone()),
+        agent_handle: "nested-worker".into(),
+        agent_name: None,
+    })
+    .unwrap();
+    assert_eq!(envelope.schema_version, 32);
+    let stored = RewriteStore::new(&target).unwrap().load().unwrap().unwrap();
+    assert_eq!(
+        stored
+            .worker_bindings
+            .get(&scope.binding_key())
+            .unwrap()
+            .review_assignment
+            .as_ref()
+            .unwrap()
+            .worktree,
+        target_worktree
+    );
+
+    fs::write(
+        target_worktree.join("src/lib.rs"),
+        "pub fn start() { tokio::spawn(async {}); }\n",
+    )
+    .unwrap();
+    fs::write(
+        repository_worktree.join("sibling/src/lib.rs"),
+        "pub fn sibling() { tokio::spawn(async {}); }\n",
+    )
+    .unwrap();
+    git(&repository_worktree, &["add", "."]);
+    git(
+        &repository_worktree,
+        &["commit", "-qm", "nested target delivery"],
+    );
+
+    let report = check(RewriteReviewOptions {
+        target_root: target,
+        worktree: Some(repository_worktree),
+        scope: Some(scope),
+        evidence: None,
+        integration: false,
+        handoff_id: None,
+        hardcode_ai_verified: Vec::new(),
+    })
+    .unwrap();
+    assert_eq!(report.worktree, target_worktree);
+    assert_eq!(report.status, ReviewStatus::EvidenceRequired);
+    assert_eq!(report.files.len(), 1);
+    assert!(report.files.contains_key(Path::new("src/lib.rs")));
+    assert_eq!(report.findings.len(), 1);
+    assert_eq!(report.findings[0].file, Path::new("src/lib.rs"));
+}
+
+#[test]
 fn completed_api_quality_rework_reuses_worker_and_duplicate_route_is_idempotent() {
     let (target, scope) = setup();
     let store = RewriteStore::new(target.path()).unwrap();

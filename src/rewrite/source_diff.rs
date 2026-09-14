@@ -4,6 +4,10 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
+mod layout;
+
+pub(super) use layout::{git_object_path, project_root_in_worktree};
+
 const IGNORED_DIRECTORIES: &[&str] = &[".git", ".traffic-e2e", "node_modules", "target", "vendor"];
 const NON_PRODUCTION_DIRECTORIES: &[&str] =
     &["benches", "examples", "fixtures", "testdata", "tests"];
@@ -40,11 +44,13 @@ pub(super) fn changed_rust_lines(target_root: &Path, base: &str) -> Result<Added
             &[
                 "diff",
                 "--no-ext-diff",
+                "--relative",
                 "--name-only",
                 "-z",
                 "--diff-filter=ACMRT",
                 &merge_base,
                 "--",
+                ".",
             ],
         )?,
         &mut files,
@@ -53,7 +59,14 @@ pub(super) fn changed_rust_lines(target_root: &Path, base: &str) -> Result<Added
         target_root,
         &git_bytes(
             target_root,
-            &["ls-files", "--others", "--exclude-standard", "-z", "--"],
+            &[
+                "ls-files",
+                "--others",
+                "--exclude-standard",
+                "-z",
+                "--",
+                ".",
+            ],
         )?,
         &mut files,
     )?;
@@ -86,12 +99,14 @@ fn renamed_paths(target_root: &Path, merge_base: &str) -> Result<BTreeMap<PathBu
         &[
             "diff",
             "--no-ext-diff",
+            "--relative",
             "--name-status",
             "-z",
             "--find-renames",
             "--diff-filter=R",
             merge_base,
             "--",
+            ".",
         ],
     )?;
     let fields = raw

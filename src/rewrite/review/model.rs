@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::rewrite::{RewriteCommandSpec, RewriteWorkScope};
 
-pub const RULE_VERSION: &str = "target-source-review-v3";
+pub const RULE_VERSION: &str = "target-source-review-v4";
 
 #[derive(Debug, Clone)]
 pub struct RewriteReviewOptions {

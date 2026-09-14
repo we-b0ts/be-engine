@@ -41,7 +41,10 @@ fn check_candidate(
     state: &RewriteState,
     options: RewriteReviewOptions,
 ) -> Result<RewriteReviewReport> {
-    let root = fs::canonicalize(options.worktree.as_deref().unwrap_or(target_root))?;
+    let root = source_diff::project_root_in_worktree(
+        target_root,
+        options.worktree.as_deref().unwrap_or(target_root),
+    )?;
     candidate::same_repository(target_root, &root)?;
     let integration_mode = options.integration || options.worktree.is_none();
     let canonical_head = candidate::head(target_root)?;
@@ -236,7 +239,7 @@ pub(super) fn bind(
     }) else {
         return Ok(false);
     };
-    let worktree = fs::canonicalize(worktree)?;
+    let worktree = source_diff::project_root_in_worktree(root, worktree)?;
     let common = |path: &Path| -> Result<PathBuf> {
         Ok(fs::canonicalize(
             source_diff::git_text(

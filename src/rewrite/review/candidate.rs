@@ -252,7 +252,7 @@ pub(in crate::rewrite) fn accept_locked(
 
 fn committed_changes(root: &Path, base: &str, head: &str) -> Result<bool> {
     Ok(base != head
-        && !source_diff::git_text(root, &["diff", "--name-only", base, head, "--"])?
+        && !source_diff::git_text(root, &["diff", "--name-only", base, head, "--", "."])?
             .trim()
             .is_empty())
 }

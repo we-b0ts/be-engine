@@ -11,7 +11,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 pub(super) const GATE_NAME: &str = "replay-isolation";
-pub(super) const GATE_VERSION: &str = "replay-isolation-v4";
+pub(super) const GATE_VERSION: &str = "replay-isolation-v5";
 
 const MAX_REPORTED_VIOLATIONS: usize = 64;
 const SOURCE_EVIDENCE_TRAILER: &str = "Hardcode-Source-Evidence:";
@@ -489,7 +489,8 @@ fn is_safe_production_source_path(path: &Path) -> bool {
 }
 
 fn committed_hardcode_exists(target_root: &Path, location: &SourceLocation) -> Result<bool> {
-    let object = format!("HEAD:{}", location.file.display());
+    let object_path = crate::rewrite::source_diff::git_object_path(target_root, &location.file)?;
+    let object = format!("HEAD:{}", object_path.display());
     let output = Command::new("git")
         .arg("-C")
         .arg(target_root)

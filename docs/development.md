@@ -181,6 +181,12 @@ base. Use `--process-output ID` for a process-output worker. After the final
 edit and commit, supply the returned report through `worker report ...
 --activity handoff_ready --review-report /absolute/report.json`.
 
+When the configured target is a subdirectory of a larger Git repository, keep
+`--target-root` pointed at that project subdirectory. `--worktree` may point at
+either the outer Git worktree root or the corresponding project subdirectory;
+the engine normalizes it to the project subdirectory and scopes source diffs,
+review paths, fingerprints, and Replay-isolation checks to that project.
+
 Review runs the same complete quality implementation for worker and integration
 deliveries. It enforces complete changed production Rust files <=1000 lines.
 Added Tokio spawn paths

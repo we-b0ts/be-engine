@@ -262,6 +262,48 @@ fn accepts_exact_hardcode_approval_with_source_commit_evidence() {
 }
 
 #[test]
+fn nested_target_scopes_diff_and_committed_evidence_to_the_project() {
+    let repository = tempfile::tempdir().unwrap();
+    let target = repository.path().join("services/backend");
+    fs::create_dir_all(target.join("src")).unwrap();
+    fs::create_dir_all(repository.path().join("sibling/src")).unwrap();
+    fs::write(target.join("src/lib.rs"), "pub fn value() -> u8 { 1 }\n").unwrap();
+    fs::write(
+        repository.path().join("sibling/src/lib.rs"),
+        "pub fn sibling() {}\n",
+    )
+    .unwrap();
+    git(repository.path(), &["init", "-q", "-b", "integration"]);
+    git(repository.path(), &["add", "."]);
+    commit(repository.path(), "baseline", "");
+    git(repository.path(), &["switch", "-q", "-c", "feature"]);
+
+    let source = "pub const API: &str = \"https://api.sample.test/v1\";\n";
+    fs::write(target.join("src/lib.rs"), source).unwrap();
+    fs::write(
+        repository.path().join("sibling/src/lib.rs"),
+        "pub const CACHE: &str = \"cache.trp.test\";\n",
+    )
+    .unwrap();
+    let column = source.find("sample.test").unwrap() + 1;
+    let target_location = format!("src/lib.rs:1:{column}");
+    let source_evidence = "legacy-service@abcdef1:src/Client.java:96:27";
+    let approval = format!("{target_location}={source_evidence}");
+    git(repository.path(), &["add", "."]);
+    commit(
+        repository.path(),
+        "Add nested source-compatible endpoint",
+        &format!("Hardcode-Source-Evidence: {target_location} <= {source_evidence}"),
+    );
+
+    let report = inspect(&target, "integration", &[approval]).unwrap();
+
+    assert!(report.passed());
+    assert_eq!(report.scanned_files, 1);
+    assert_eq!(report.scanned_added_lines, 1);
+}
+
+#[test]
 fn rejects_legacy_target_only_hardcode_approval_format() {
     let target = target_with_source("pub fn value() -> u8 { 1 }\n");
 
