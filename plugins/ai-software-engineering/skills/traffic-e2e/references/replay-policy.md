@@ -507,9 +507,11 @@ backend-rewrite rule plan \
 DOCX comparison ignores only OPC ZIP packaging metadata: entry timestamps,
 compression representation, order, offsets, and central-directory layout. It
 compares the exact entry-name set and decompressed bytes, then permits a selected
-timestamp only when both values are within five seconds of their corresponding
-request times. Other content remains exact. Invalid, unsafe, duplicate, oversized,
-or incomplete packages fail closed. Generic ZIP files are not auto-normalized;
+timestamp only when its source-to-target delta matches the elapsed time between
+the corresponding requests within five seconds. Equal clock offsets therefore
+cancel without relying on host timezone state. Other content remains exact.
+Invalid, unsafe, duplicate, oversized, or incomplete packages fail closed.
+Generic ZIP files are not auto-normalized;
 XLSX/PPTX may reuse this package layer later but are not enabled now.
 
 For ordinary source files, `source_evidence` MUST identify a

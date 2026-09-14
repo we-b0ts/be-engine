@@ -49,6 +49,29 @@ pub(super) fn compare(
     Ok(())
 }
 
+pub(super) fn compare_preserved_timestamp(
+    format: ResponseTimestampFormat,
+    expected: &Value,
+    actual: &Value,
+    times: RequestTimes,
+) -> Result<(), ResponseDifferenceKind> {
+    let invalid = ResponseDifferenceKind::TimeFieldInvalid;
+    if !(expected.is_number() && actual.is_number() || expected.is_string() && actual.is_string()) {
+        return Err(invalid);
+    }
+    let (Some(source_time), Some(target_time)) = (times.source, times.target) else {
+        return Err(ResponseDifferenceKind::TimeReferenceMissing);
+    };
+    let source = timestamp_nanos(expected, format).ok_or(invalid)?;
+    let target = timestamp_nanos(actual, format).ok_or(invalid)?;
+    let timestamp_delta = target.checked_sub(source).ok_or(invalid)?;
+    let request_delta = date_nanos(target_time) - date_nanos(source_time);
+    if timestamp_delta.abs_diff(request_delta) > TOLERANCE_NANOS {
+        return Err(ResponseDifferenceKind::DurationDeltaMismatch);
+    }
+    Ok(())
+}
+
 fn date_nanos(time: DateTime<Utc>) -> i128 {
     i128::from(time.timestamp()) * NANOS_PER_SECOND + i128::from(time.timestamp_subsec_nanos())
 }

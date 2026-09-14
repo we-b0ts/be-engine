@@ -46,8 +46,8 @@ fn compares_decompressed_parts_and_accepts_request_relative_created_time() {
     let expected = docx("2024-01-02T03:04:05Z", "<document>same</document>", 6);
     let actual = docx("2024-01-02T04:04:05Z", "<document>same</document>", 8);
     let times = RequestTimes {
-        source: Some("2024-01-02T03:04:05Z".parse::<DateTime<Utc>>().unwrap()),
-        target: Some("2024-01-02T04:04:05Z".parse::<DateTime<Utc>>().unwrap()),
+        source: Some("2024-01-01T19:04:05Z".parse::<DateTime<Utc>>().unwrap()),
+        target: Some("2024-01-01T20:04:05Z".parse::<DateTime<Utc>>().unwrap()),
     };
     let (matches, report) = evaluate_docx(&expected, &actual, &[rule()], times).unwrap();
     assert!(matches);
@@ -77,14 +77,14 @@ fn rejects_real_part_changes_and_unanchored_timestamps() {
     let expected = docx("2024-01-02T03:04:05Z", "<document>source</document>", 6);
     let actual = docx("2024-01-02T05:04:05Z", "<document>target</document>", 8);
     let times = RequestTimes {
-        source: Some("2024-01-02T03:04:05Z".parse::<DateTime<Utc>>().unwrap()),
-        target: Some("2024-01-02T04:04:05Z".parse::<DateTime<Utc>>().unwrap()),
+        source: Some("2024-01-01T19:04:05Z".parse::<DateTime<Utc>>().unwrap()),
+        target: Some("2024-01-01T20:04:05Z".parse::<DateTime<Utc>>().unwrap()),
     };
     let (matches, report) = evaluate_docx(&expected, &actual, &[rule()], times).unwrap();
     assert!(!matches);
     let serialized = serde_json::to_string(&report).unwrap();
     assert!(serialized.contains("entry_value_mismatch"));
-    assert!(serialized.contains("timestamp_outside_request_window"));
+    assert!(serialized.contains("timestamp_delta_mismatch"));
 }
 
 #[test]

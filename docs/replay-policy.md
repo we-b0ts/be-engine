@@ -595,8 +595,10 @@ backend-rewrite rule plan \
 DOCX rules compare the exact set of OPC ZIP entries and each decompressed part.
 ZIP entry timestamps, compression bytes, entry order, offsets, and
 central-directory layout are packaging metadata and do not affect equality. A
-selected XML timestamp is accepted only when source and target values are each
-within the engine-owned five-second window around their own request time.
+selected XML timestamp is accepted only when its source-to-target delta matches
+the elapsed time between the corresponding requests within the engine-owned
+five-second tolerance. This preserves equal source and target clock offsets
+without requiring a host-timezone or per-target policy.
 Every other byte in that XML part, and every unselected package part, remains
 exact. Invalid, duplicate-name, unsafe-path, oversized, or incomplete DOCX
 packages fail closed. The codec is explicit, so generic ZIP downloads are not

@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::model::{DocxBodyDifference, DocxBodyDifferenceKind, ResponseBodyAssertionReport};
 use super::time::RequestTimes;
-use crate::replay::policy::{DocxTimestampRule, ResponseBodyCodec, ResponseTimeRule};
+use crate::replay::policy::{DocxTimestampRule, ResponseBodyCodec};
 
 const MAX_ENTRIES: usize = 4096;
 const MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
@@ -129,10 +129,8 @@ fn compare_packages(
                 ));
             }
             if let Some(times) = times {
-                let result = super::time::compare(
-                    ResponseTimeRule::Timestamp {
-                        format: rule.format,
-                    },
+                let result = super::time::compare_preserved_timestamp(
+                    rule.format,
                     &Value::String(expected_value),
                     &Value::String(actual_value),
                     times,
@@ -148,6 +146,9 @@ fn compare_packages(
                             }
                             super::model::ResponseDifferenceKind::TimestampOutsideRequestWindow => {
                                 DocxBodyDifferenceKind::TimestampOutsideRequestWindow
+                            }
+                            super::model::ResponseDifferenceKind::DurationDeltaMismatch => {
+                                DocxBodyDifferenceKind::TimestampDeltaMismatch
                             }
                             _ => DocxBodyDifferenceKind::TimestampInvalid,
                         },

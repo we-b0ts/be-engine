@@ -211,7 +211,7 @@ fn focused_e2e_evidence_plans_and_applies_docx_timestamp_rule() {
         serde_json::to_vec(&json!({
             "method": "GET",
             "uri": "/api/tasks/1/export/docx",
-            "timestamp": "2024-01-02T03:04:05Z"
+            "timestamp": "2024-01-01T19:04:05Z"
         }))
         .unwrap(),
     )
@@ -230,7 +230,7 @@ fn focused_e2e_evidence_plans_and_applies_docx_timestamp_rule() {
         serde_json::to_vec(&json!({
             "version": 1,
             "status": 200,
-            "request_sent_at": "2024-01-02T04:04:05Z",
+            "request_sent_at": "2024-01-01T20:04:05Z",
             "body": {"encoding":"base64","data":STANDARD.encode(docx_body("2024-01-02T04:04:05Z", 8)),"truncated":false}
         }))
         .unwrap(),

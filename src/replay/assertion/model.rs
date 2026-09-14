@@ -78,6 +78,7 @@ pub enum DocxBodyDifferenceKind {
     TimestampMismatch,
     TimestampInvalid,
     TimestampOutsideRequestWindow,
+    TimestampDeltaMismatch,
     TimeReferenceMissing,
 }
 
