@@ -69,11 +69,12 @@ pub(super) fn update_index(index: &mut RunIndex, state: &ActiveRunState) {
 
     let global_evidence_clean =
         state.replay_finalized && state.aggregate_complete && state.aggregate_clean;
-    index.current_run.api_keys = state
+    let api_keys = state
         .apis
         .iter()
         .map(|api| api.api_key.clone())
         .collect::<BTreeSet<_>>();
+    reconcile_api_scope(index, api_keys);
     for api in &state.apis {
         update_api_progress(index, api, global_evidence_clean);
     }
@@ -110,7 +111,7 @@ pub(super) fn update_focused_index(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    index.current_run.api_keys = current_apis.keys().cloned().collect();
+    reconcile_api_scope(index, current_apis.keys().cloned().collect());
     for (api_key, cases) in &current_apis {
         index.apis.entry(api_key.clone()).or_default().cases = *cases;
     }
@@ -477,6 +478,18 @@ fn reconcile_baseline(index: &mut RunIndex, state: &ActiveRunState) {
     }
     index.source_revision = state.source_revision.clone();
     index.case_inventory_id = state.case_inventory_id.clone();
+}
+
+fn reconcile_api_scope(index: &mut RunIndex, api_keys: BTreeSet<String>) {
+    index
+        .current_run
+        .apis
+        .retain(|api_key, _| api_keys.contains(api_key));
+    index.apis.retain(|api_key, _| api_keys.contains(api_key));
+    index
+        .latest_focused_sequences
+        .retain(|api_key, _| api_keys.contains(api_key));
+    index.current_run.api_keys = api_keys;
 }
 
 fn count_current_run(index: &mut RunIndex) {

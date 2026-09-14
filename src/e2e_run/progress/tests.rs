@@ -92,6 +92,17 @@ fn inventory() -> CaseGroupInventory {
     }
 }
 
+fn inventory_with_friends() -> CaseGroupInventory {
+    let mut inventory = inventory();
+    let mut friends = inventory.groups[0].clone();
+    friends.group_id = "GET /api/friends".to_string();
+    friends.source_route = "/api/friends".to_string();
+    friends.pattern = Some("/api/friends".to_string());
+    friends.cases.truncate(1);
+    inventory.groups.push(friends);
+    inventory
+}
+
 #[test]
 fn repeated_attempts_replace_the_current_logical_run_state() {
     let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
@@ -115,6 +126,50 @@ fn focused_attempt_updates_the_current_logical_run_state() {
     assert_eq!(index.executions, 1);
     assert_eq!(index.apis["GET /api/orders/*"].executions, 1);
     assert!(index.current_run.passed);
+}
+
+#[test]
+fn focused_attempt_drops_obsolete_api_contributions_after_inventory_regrouping() {
+    let directory = tempfile::tempdir().unwrap();
+    let progress_path = directory.path().join("progress.yaml");
+    let legacy_path = directory.path().join("e2e-progress.yaml");
+    let mut previous = state(3, 0, 1);
+    let mut obsolete = previous.apis[0].clone();
+    obsolete.api_key = "GET /api/orders/1".to_string();
+    obsolete.group_id = "GET /api/orders/1".to_string();
+    obsolete.api_pattern = "/api/orders/1".to_string();
+    obsolete.total = 1;
+    obsolete.passed = 0;
+    obsolete.failed = 1;
+    obsolete.complete_pass = false;
+    previous.apis.push(obsolete);
+    previous.status = RunStatus::Failed;
+
+    let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
+    update_index(&mut index, &previous);
+    assert_eq!(index.replayed_cases, 4);
+    assert!(!index.current_run.passed);
+
+    let mut focused = state(3, 0, 2);
+    focused.source_revision = "source-v2".to_string();
+    focused.case_inventory_id = "inventory-v2".to_string();
+    index.source_revision = focused.source_revision.clone();
+    index.case_inventory_id = focused.case_inventory_id.clone();
+    update_focused_index(&mut index, &focused, &inventory(), true);
+
+    assert!(!index.current_run.apis.contains_key("GET /api/orders/1"));
+    assert!(!index.apis.contains_key("GET /api/orders/1"));
+    assert_eq!(index.replayed_cases, 3);
+    assert_eq!(index.passed_cases, 3);
+    assert!(index.current_run.passed);
+    write_replay_progress(&progress_path, &legacy_path, &index, &focused).unwrap();
+
+    let report = load(&progress_path, VerificationStage::Progress)
+        .unwrap()
+        .unwrap();
+    let latest = report.latest_run.as_ref().unwrap();
+    assert!(latest.passed);
+    assert_eq!(latest.scope, ["GET /api/orders/*"]);
 }
 
 #[test]
@@ -212,15 +267,16 @@ fn revises_an_older_focused_attempt_after_another_api_advances() {
     later.apis[0].group_id = "GET /api/friends".to_string();
     later.apis[0].api_pattern = "/api/friends".to_string();
     let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
+    let inventory = inventory_with_friends();
 
-    update_focused_index(&mut index, &previous, &inventory(), true);
+    update_focused_index(&mut index, &previous, &inventory, true);
     write_replay_progress(&progress_path, &legacy_path, &index, &previous).unwrap();
-    update_focused_index(&mut index, &later, &inventory(), true);
+    update_focused_index(&mut index, &later, &inventory, true);
     write_replay_progress(&progress_path, &legacy_path, &index, &later).unwrap();
     ensure_replay_progress_revisable(&progress_path, &index, &previous).unwrap();
 
     let current = state(3, 0, 1);
-    update_focused_index(&mut index, &current, &inventory(), true);
+    update_focused_index(&mut index, &current, &inventory, true);
     revise_replay_progress(&progress_path, &index, &previous, &current).unwrap();
 
     let report = load(&progress_path, VerificationStage::Progress)
