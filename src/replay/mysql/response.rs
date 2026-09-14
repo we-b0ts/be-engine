@@ -217,7 +217,18 @@ pub(in crate::replay) async fn write_resultset(
             payload: eof_payload_with_status(status_flags),
         },
     )
-    .await
+    .await?;
+    // TLS may accept writes into its buffer without sending every packet.
+    // The sibling write_stmt_prepare_ok flushes for the same reason; without
+    // this flush, large resultsets (e.g. 316-column JOINs) stay buffered in
+    // the rustls layer and never reach the target, which then blocks waiting
+    // for the response until its request timeout. Small resultsets sometimes
+    // slipped through because a single TLS record auto-flushed, but any
+    // multi-record resultset reliably deadlocks.
+    stream
+        .flush()
+        .await
+        .context("failed to flush MySQL resultset")
 }
 
 pub(in crate::replay) async fn write_packet(
