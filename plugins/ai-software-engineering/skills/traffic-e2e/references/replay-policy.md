@@ -40,11 +40,12 @@ response_rules:
   json: {}
   protobuf: {}
   hessian2: {}
+  docx: {}
 ```
 
 Response field rules are grouped by body codec, canonical API, and then
 concrete rule kind. Standard replay loads JSON `timestamp`, `duration`, `uuid`,
-`random`, and `unordered` rules plus configured protobuf and Hessian2 rules.
+`random`, and `unordered` rules plus configured protobuf, Hessian2, and DOCX rules.
 Comparison also loads JSON `counter` rules. Replay and comparison-only rules
 must select disjoint JSON subtrees;
 overlapping strategies are rejected rather than ordered by precedence.
@@ -441,9 +442,9 @@ dependency replay matching, while `response_rules` changes response
 verification. The former generic `rules` key is intentionally unsupported.
 
 HTTP and Motan are gateway protocols, not response-rule kinds. JSON, protobuf,
-and Hessian2 are body codecs, and codec-aware comparison is independent of the
-gateway protocol. A codec-only entry enables typed diagnostics without
-relaxing a business value:
+Hessian2, and DOCX are body codecs, and codec-aware comparison is independent
+of the gateway protocol. A codec-only entry enables typed diagnostics or DOCX
+packaging semantics without relaxing a business value:
 
 ```yaml
 response_rules:
@@ -452,10 +453,11 @@ response_rules:
 ```
 
 Treat reported codec candidates as decoder candidates, not semantic proof.
-Select protobuf or Hessian2 from application/schema context, then use the
+Select protobuf, Hessian2, or DOCX from application/schema context, then use the
 unified response-rule planner to re-verify the same immutable evidence with
-that codec. Codec selection does not require source evidence because it does
-not ignore a value:
+that codec. Codec selection does not require source evidence: protobuf and
+Hessian2 do not ignore a value, while DOCX codec-only selection ignores only
+standard ZIP packaging metadata and still compares every decompressed part:
 
 ```bash
 backend-rewrite rule plan \
@@ -492,6 +494,23 @@ backend-rewrite rule plan \
 Typed protobuf/Hessian2 paths carry their source evidence inside the JSON
 object. Do not combine them with JSON-only `--kind`, `--json-pointer`,
 `--source-evidence`, examples, or the top-level separator argument.
+
+For DOCX, select every source-proven generated XML timestamp explicitly:
+
+```bash
+backend-rewrite rule plan \
+  --evidence-id <current-evidence-id> \
+  --body-codec docx \
+  --docx-timestamp '{"part":"docProps/core.xml","element":"dcterms:created","format":"rfc3339","source_evidence":"src/docx.rs:42 generator sets created from the request clock","source_example":"2024-01-02T03:04:05Z","target_example":"2024-01-02T04:04:05Z"}'
+```
+
+DOCX comparison ignores only OPC ZIP packaging metadata: entry timestamps,
+compression representation, order, offsets, and central-directory layout. It
+compares the exact entry-name set and decompressed bytes, then permits a selected
+timestamp only when both values are within five seconds of their corresponding
+request times. Other content remains exact. Invalid, unsafe, duplicate, oversized,
+or incomplete packages fail closed. Generic ZIP files are not auto-normalized;
+XLSX/PPTX may reuse this package layer later but are not enabled now.
 
 For ordinary source files, `source_evidence` MUST identify a
 repository-relative path, exact line or narrow line range, symbol, and the

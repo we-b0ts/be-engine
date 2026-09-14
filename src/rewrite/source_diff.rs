@@ -98,12 +98,13 @@ fn renamed_paths(target_root: &Path, merge_base: &str) -> Result<BTreeMap<PathBu
         .split(|byte| *byte == 0)
         .filter(|field| !field.is_empty())
         .collect::<Vec<_>>();
+    let (records, remainder) = fields.as_chunks::<3>();
     ensure!(
-        fields.len() % 3 == 0,
+        remainder.is_empty(),
         "Git returned an incomplete rename record"
     );
     let mut renames = BTreeMap::new();
-    for record in fields.chunks_exact(3) {
+    for record in records {
         let status = std::str::from_utf8(record[0]).context("Git rename status is not UTF-8")?;
         ensure!(
             status.starts_with('R'),

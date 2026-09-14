@@ -146,7 +146,9 @@ fn fixture() -> Fixture {
 fn options() -> JwtRulePlanOptions {
     JwtRulePlanOptions {
         id: "session-jwt".into(),
-        header: "authorization".into(),
+        location: JwtTokenLocation::BearerHeader {
+            header: "authorization".into(),
+        },
         algorithm: JwtAlgorithm::HS256,
         signing_key_ref: "session-jwt".into(),
         key_source: Some(SigningKeySource::TargetEnv {
@@ -354,6 +356,61 @@ fn plan_rejects_wrong_key_and_insufficient_expiration_evidence() {
         serde_json::from_slice(&crate::request_headers::load_request_file(&f.request).unwrap())
             .unwrap();
     assert!(jwt_evidence::verify_candidate(&candidate, &request, b"test-signing-key", 60).is_err());
+}
+
+#[test]
+fn query_parameter_evidence_guides_and_plans_the_matching_location() {
+    let mut f = fixture();
+    let recorded = 1_700_000_000;
+    let raw = crate::request_rules::tests::token(
+        json!({"sub":"test-user","exp":recorded+3600}),
+        "test-signing-key",
+    );
+    let mut request = crate::request_rules::tests::request(
+        json!({"sub":"unused","exp":recorded+3600}),
+        "test-signing-key",
+        recorded,
+    );
+    request["headers"] = json!({});
+    request["uri"] = json!(format!("/api?message_ids=1%2C2&download_token={raw}"));
+    fs::write(&f.request, serde_json::to_vec(&request).unwrap()).unwrap();
+
+    let query = evidence::commands(f.target.path(), &f.state)
+        .into_iter()
+        .find(|query| query.query_id.ends_with("jwt-time-validity"))
+        .unwrap();
+    let report = evidence::query(f.target.path(), &f.state, &query.query_id).unwrap();
+    assert_eq!(
+        report.facts["candidates"][0]["query_param"],
+        "download_token"
+    );
+    let planner = &report.applicable_rule_planners[0];
+    assert!(
+        planner
+            .command
+            .argv
+            .windows(2)
+            .any(|pair| pair == ["--query-param", "download_token"])
+    );
+    assert!(!planner.command.argv.iter().any(|arg| arg == "--header"));
+
+    let mut options = options();
+    options.location = JwtTokenLocation::QueryParameter {
+        query_param: "download_token".into(),
+    };
+    let planned = plan(
+        f.target.path(),
+        &mut f.state,
+        report.evidence_id,
+        Some("auth.rs validates download_token with SECRET_KEY and 60s leeway".into()),
+        options,
+    )
+    .unwrap();
+    assert_eq!(
+        planned.traffic_e2e_report["rule"]["query_param"],
+        "download_token"
+    );
+    assert!(planned.traffic_e2e_report["rule"].get("header").is_none());
 }
 
 #[test]

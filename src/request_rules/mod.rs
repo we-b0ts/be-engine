@@ -25,11 +25,70 @@ pub struct RequestRules {
 #[serde(deny_unknown_fields)]
 pub struct JwtRule {
     pub id: String,
-    pub header: String,
-    pub scheme: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_param: Option<String>,
     pub algorithm: jwt::Algorithm,
     pub time: JwtTime,
     pub signing_key_ref: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum JwtTokenLocation {
+    BearerHeader { header: String },
+    QueryParameter { query_param: String },
+}
+
+impl JwtTokenLocation {
+    fn selector_key(&self) -> (&'static str, &str) {
+        match self {
+            Self::BearerHeader { header } => ("header", header),
+            Self::QueryParameter { query_param } => ("query_param", query_param),
+        }
+    }
+}
+
+impl JwtRule {
+    pub(crate) fn location(&self) -> Result<JwtTokenLocation> {
+        match (&self.header, &self.scheme, &self.query_param) {
+            (Some(header), Some(scheme), None) => {
+                ensure!(
+                    scheme == "bearer",
+                    "JWT header rules currently support the bearer scheme"
+                );
+                ensure!(
+                    hyper::header::HeaderName::from_bytes(header.as_bytes()).is_ok(),
+                    "invalid JWT header name"
+                );
+                ensure!(
+                    header == &header.to_ascii_lowercase(),
+                    "JWT header must be lowercase"
+                );
+                Ok(JwtTokenLocation::BearerHeader {
+                    header: header.clone(),
+                })
+            }
+            (None, None, Some(query_param)) => {
+                ensure!(
+                    !query_param.is_empty()
+                        && query_param.len() <= 128
+                        && query_param.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric()
+                                || matches!(byte, b'-' | b'.' | b'_' | b'~')
+                        }),
+                    "JWT query parameter name must be 1-128 URL-unreserved ASCII bytes"
+                );
+                Ok(JwtTokenLocation::QueryParameter {
+                    query_param: query_param.clone(),
+                })
+            }
+            _ => anyhow::bail!("JWT rule must select exactly one bearer header or one query_param"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,24 +121,14 @@ impl RequestRules {
             keys::validate_reference(&rule.id)?;
             keys::validate_reference(&rule.signing_key_ref)?;
             ensure!(ids.insert(&rule.id), "duplicate JWT request rule id");
-            ensure!(
-                hyper::header::HeaderName::from_bytes(rule.header.as_bytes()).is_ok(),
-                "invalid JWT header name"
-            );
-            ensure!(
-                rule.header == rule.header.to_ascii_lowercase(),
-                "JWT header must be lowercase"
-            );
-            ensure!(
-                rule.scheme == "bearer",
-                "JWT rules currently support the bearer scheme"
-            );
+            let location = rule.location()?;
+            let (location_kind, location_name) = location.selector_key();
             ensure!(
                 selectors.insert((
-                    &rule.header,
-                    &rule.scheme,
+                    location_kind.to_string(),
+                    location_name.to_string(),
                     rule.algorithm,
-                    &rule.signing_key_ref
+                    rule.signing_key_ref.clone()
                 )),
                 "duplicate JWT request selector and key"
             );
@@ -111,10 +160,11 @@ impl RequestRuleRuntime {
         let mut observations = Vec::new();
         let mut transformed = BTreeSet::new();
         for (rule, key) in &self.rules {
-            if transformed.contains(&rule.header) {
+            let location = rule.location()?;
+            if transformed.contains(&location) {
                 continue;
             }
-            let Some(token) = jwt::request_token(request, &rule.header)? else {
+            let Some(token) = jwt::request_token(request, &location)? else {
                 continue;
             };
             let Some(token) = jwt::Token::parse(&token)? else {
@@ -140,8 +190,8 @@ impl RequestRuleRuntime {
                 .checked_sub(recorded.timestamp())
                 .ok_or_else(|| anyhow::anyhow!("JWT time offset overflow"))?;
             let shifted = token.shift(offset, key)?;
-            jwt::replace_request_token(request, &rule.header, shifted)?;
-            transformed.insert(rule.header.clone());
+            jwt::replace_request_token(request, &location, shifted)?;
+            transformed.insert(location);
             observations.push(RequestRuleObservation {
                 rule_id: rule.id.clone(),
                 outcome: "time_shifted_signature_verified".into(),

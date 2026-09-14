@@ -41,12 +41,12 @@ pub(in crate::replay) use report::ReplayPolicyReport;
 pub(crate) use response::response_locations_overlap;
 pub(in crate::replay) use response::select_json_pointers;
 pub use response::{
-    ComparisonSourceMatch, ComparisonVerificationPolicy, Hessian2JoinedStringPath,
-    Hessian2UnorderedPath, Hessian2ValuePath, ProtobufFieldPath, ProtobufJoinedStringFieldType,
-    ProtobufJoinedStringPath, ProtobufRepeatedElementType, ProtobufUnorderedPath,
-    ResponseBodyCodec, ResponseBodyJoinedStringPath, ResponseBodyUnorderedPath,
-    ResponseDurationUnit, ResponseField, ResponseRuleKind, ResponseTimeRule,
-    ResponseTimestampFormat,
+    ComparisonSourceMatch, ComparisonVerificationPolicy, DocxTimestampRule,
+    Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath, ProtobufFieldPath,
+    ProtobufJoinedStringFieldType, ProtobufJoinedStringPath, ProtobufRepeatedElementType,
+    ProtobufUnorderedPath, ResponseBodyCodec, ResponseBodyJoinedStringPath,
+    ResponseBodyUnorderedPath, ResponseDurationUnit, ResponseField, ResponseRuleKind,
+    ResponseTimeRule, ResponseTimestampFormat,
 };
 
 /// Read only explicit cross-case selectors before dependency preload.

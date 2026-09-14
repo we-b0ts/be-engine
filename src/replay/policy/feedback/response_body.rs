@@ -7,26 +7,26 @@ use serde::Serialize;
 
 use super::super::config::{fingerprint, load_replay_policy};
 use super::super::response::{
-    Hessian2ResponseRules, ProtobufResponseRules, ResponseBodyCodec, ResponseBodyJoinedStringPath,
-    ResponseBodyUnorderedPath, parse_api, response_body_rule_id, validate_response_rules,
+    DocxTimestampRule, Hessian2ResponseRules, ProtobufResponseRules, ResponseBodyCodec,
+    ResponseBodyJoinedStringPath, ResponseBodyUnorderedPath, parse_api, response_body_rule_id,
+    validate_response_rules,
 };
 use super::document::{render_response_rules, replace_response_rules};
 use super::evidence::{AggregateEvidence, AssertionEvidence};
 use crate::comparison_recording::{
-    ComparisonVerificationClassification, ComparisonVerificationOptions,
-    ComparisonVerificationReport, verify_comparison_recording,
+    ComparisonVerificationClassification, ComparisonVerificationReport,
 };
-use crate::config::edit::write_atomic;
-use crate::replay::assertion::diagnose_response_body;
+use crate::replay::assertion::{RequestTimes, diagnose_response_body, read_replay_request_times};
 use crate::replay::{
-    ComparisonSourceMatch, ResponseAssertionCaseReport, ResponseAssertionOptions,
-    ResponseBodyJoinedStringCandidate, ResponseBodyUnorderedPathCandidate, ResponseDifferenceKind,
-    assert_recorded_response, read_actual_response_body, read_comparison_response_observation,
-    read_expected_response_body,
+    ComparisonSourceMatch, ResponseAssertionCaseReport, ResponseBodyJoinedStringCandidate,
+    ResponseBodyUnorderedPathCandidate, ResponseDifferenceKind, read_actual_response_body,
+    read_comparison_response_observation, read_expected_response_body,
 };
 
 mod codec;
+mod docx_plan;
 mod path;
+mod plan_apply;
 
 use codec::{
     compare_response_body, selected_response_body_paths_match, validate_unreported_codec_candidate,
@@ -47,6 +47,7 @@ pub struct ResponseBodyRuleFeedback {
     pub codec: ResponseBodyCodec,
     pub unordered_paths: Vec<ResponseBodyUnorderedPath>,
     pub unordered_joined_string_paths: Vec<ResponseBodyJoinedStringPath>,
+    pub docx_timestamps: Vec<DocxTimestampRule>,
     pub evidence: ResponseBodyRuleEvidence,
 }
 
@@ -96,6 +97,10 @@ pub struct ResponseBodyRuleReport {
     pub effective_unordered_paths: Vec<ResponseBodyUnorderedPath>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effective_unordered_joined_string_paths: Vec<ResponseBodyJoinedStringPath>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub discovered_docx_timestamps: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effective_docx_timestamps: Vec<DocxTimestampRule>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offline_verification: Option<ResponseBodyRuleVerificationOutcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -144,6 +149,8 @@ struct ResponseBodyPlanningCase {
     expected_body: Vec<u8>,
     actual_body: Vec<u8>,
     source_after_body: Option<Vec<u8>>,
+    times: RequestTimes,
+    source_after_time: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 fn load_planning_evidence(
@@ -197,34 +204,44 @@ fn load_comparison_evidence(
     let mut cases = Vec::with_capacity(matching.len());
     for case in matching {
         let case_dir = Path::new(&case.case_dir);
-        let (expected_body, actual_body, source_after_body) = if case.passed {
-            (Vec::new(), Vec::new(), None)
-        } else {
-            let request = case_dir.join("request.json");
-            let expected = read_comparison_response_observation(
-                &request,
-                &case_dir.join("expected-response.json"),
-                "source-before response",
-            )?;
-            let actual = read_comparison_response_observation(
-                &request,
-                &case_dir.join("response.json"),
-                "candidate response",
-            )?;
-            let after = case
-                .response_after
-                .as_ref()
-                .map(|_| {
-                    read_comparison_response_observation(
-                        &request,
-                        &case_dir.join("expected-response-after.json"),
-                        "source-after response",
-                    )
-                    .map(|response| response.body)
-                })
-                .transpose()?;
-            (expected.body, actual.body, after)
-        };
+        let (expected_body, actual_body, source_after_body, times, source_after_time) =
+            if case.passed {
+                (Vec::new(), Vec::new(), None, RequestTimes::default(), None)
+            } else {
+                let request = case_dir.join("request.json");
+                let expected = read_comparison_response_observation(
+                    &request,
+                    &case_dir.join("expected-response.json"),
+                    "source-before response",
+                )?;
+                let actual = read_comparison_response_observation(
+                    &request,
+                    &case_dir.join("response.json"),
+                    "candidate response",
+                )?;
+                let after = case
+                    .response_after
+                    .as_ref()
+                    .map(|_| {
+                        read_comparison_response_observation(
+                            &request,
+                            &case_dir.join("expected-response-after.json"),
+                            "source-after response",
+                        )
+                    })
+                    .transpose()?;
+                let source_after_time = after.as_ref().and_then(|response| response.timestamp);
+                (
+                    expected.body,
+                    actual.body,
+                    after.map(|response| response.body),
+                    RequestTimes {
+                        source: expected.timestamp,
+                        target: actual.timestamp,
+                    },
+                    source_after_time,
+                )
+            };
         cases.push(ResponseBodyPlanningCase {
             case_id: case.case_id.clone(),
             passed: case.passed,
@@ -236,6 +253,8 @@ fn load_comparison_evidence(
             expected_body,
             actual_body,
             source_after_body,
+            times,
+            source_after_time,
         });
     }
     Ok(ResponseBodyPlanningEvidence {
@@ -360,6 +379,7 @@ fn load_focused_e2e_evidence(
                 read_actual_response_body(&actual_response, detail.gateway_protocol)?,
             )
         };
+        let times = read_replay_request_times(&request, &actual_response)?;
         let policy_mismatch_rule_ids = detail
             .unused_applicable_generated_rule_ids
             .iter()
@@ -385,6 +405,8 @@ fn load_focused_e2e_evidence(
             expected_body,
             actual_body,
             source_after_body: None,
+            times,
+            source_after_time: None,
         });
     }
     ensure!(
@@ -401,115 +423,6 @@ fn load_focused_e2e_evidence(
             cases: verification_cases,
         },
     })
-}
-
-impl ResponseBodyRulePlan {
-    pub fn report(&self) -> &ResponseBodyRuleReport {
-        &self.report
-    }
-
-    pub fn apply(self) -> Result<ResponseBodyRuleReport> {
-        let current = fs::read_to_string(&self.policy_path).with_context(|| {
-            format!(
-                "failed to reread replay policy {}",
-                self.policy_path.display()
-            )
-        })?;
-        ensure!(
-            current == self.original,
-            "replay policy changed after planning; rerun plan before applying"
-        );
-        if self.report.changed {
-            write_atomic(&self.policy_path, self.updated.as_bytes())?;
-        }
-        let mut report = self.report;
-        let (body_reports, outcome) = match self.verification {
-            ResponseBodyPlanVerification::Comparison { case_source } => {
-                let verification = verify_comparison_recording(ComparisonVerificationOptions {
-                    case_source,
-                    policy: self.policy_path.clone(),
-                    report: report.evidence_report.clone(),
-                })?;
-                let matching = verification
-                    .cases
-                    .iter()
-                    .filter(|case| case.api == report.api)
-                    .collect::<Vec<_>>();
-                ensure!(
-                    !matching.is_empty(),
-                    "offline response-body verification contains no cases for {}",
-                    report.api
-                );
-                let body_reports = matching
-                    .iter()
-                    .filter_map(|case| case.response.as_ref()?.body_diagnosis.clone())
-                    .collect::<Vec<_>>();
-                ensure!(
-                    body_reports.len() == matching.len(),
-                    "offline verification did not produce codec-aware body reports"
-                );
-                report.evidence_fingerprint = fingerprint(&read_regular(
-                    &report.evidence_report,
-                    "refreshed comparison report",
-                )?);
-                (
-                    body_reports,
-                    ResponseBodyRuleVerificationOutcome {
-                        kind: ResponseBodyRuleEvidenceKind::Comparison,
-                        complete: verification.complete,
-                        passed: verification.passed,
-                        cases: verification.counts.total,
-                        failed: verification.counts.failed,
-                    },
-                )
-            }
-            ResponseBodyPlanVerification::FocusedE2e { cases } => {
-                let mut body_reports = Vec::with_capacity(cases.len());
-                let mut failed = 0usize;
-                for case in &cases {
-                    let assertion = assert_recorded_response(ResponseAssertionOptions {
-                        case_id: case.case_id.clone(),
-                        request: case.request.clone(),
-                        expected_response: case.expected_response.clone(),
-                        actual_response: case.actual_response.clone(),
-                        policy: self.policy_path.clone(),
-                    })?;
-                    failed += usize::from(!assertion.passed);
-                    if let Some(body) = assertion.body_diagnosis {
-                        body_reports.push(body);
-                    }
-                }
-                (
-                    body_reports,
-                    ResponseBodyRuleVerificationOutcome {
-                        kind: ResponseBodyRuleEvidenceKind::FocusedE2e,
-                        complete: true,
-                        passed: failed == 0,
-                        cases: cases.len(),
-                        failed,
-                    },
-                )
-            }
-        };
-        report.discovered_unordered_paths = body_reports
-            .iter()
-            .flat_map(|body| body.unordered_path_candidates.iter().cloned())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        report.discovered_unordered_joined_string_paths = body_reports
-            .iter()
-            .flat_map(|body| body.unordered_joined_string_candidates.iter().cloned())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        report.order_only = Some(body_reports.iter().all(|body| body.order_only));
-        report.residual_difference_cases = outcome.failed;
-        report.offline_verification = Some(outcome);
-        report.policy_fingerprint = load_replay_policy(&self.policy_path)?.fingerprint;
-        report.applied = true;
-        Ok(report)
-    }
 }
 
 pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<ResponseBodyRulePlan> {
@@ -532,6 +445,13 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
             "response-body rule already uses a different codec"
         );
     }
+    if feedback.codec == ResponseBodyCodec::Docx {
+        return docx_plan::plan(feedback, original, loaded, evidence, existing);
+    }
+    ensure!(
+        feedback.docx_timestamps.is_empty(),
+        "protobuf and Hessian2 response-body rules cannot carry DOCX timestamps"
+    );
     let codec_configured = existing.is_some();
     ensure!(
         feedback
@@ -966,6 +886,8 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
                 .collect(),
             effective_unordered_paths: effective_paths,
             effective_unordered_joined_string_paths: effective_joined_string_paths,
+            discovered_docx_timestamps: Vec::new(),
+            effective_docx_timestamps: Vec::new(),
             offline_verification: None,
             order_only: None,
             changed,

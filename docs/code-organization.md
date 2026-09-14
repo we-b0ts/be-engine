@@ -339,8 +339,9 @@ explicit repository-wide audit.
   and invalidate validation without changing dependency ownership.
 
 - `request_rules` owns explicit inbound-request transformation policy and the
-  per-send runtime. Its `jwt` child owns compact HMAC JWT verification and
-  relative NumericDate translation; `keys` resolves private references to
+  per-send runtime. Its `jwt` child owns compact HMAC JWT verification,
+  Bearer-header or named-query selection, and relative NumericDate translation;
+  `keys` resolves private references to
   target startup inputs, and `policy` projects/edits only `request_rules`.
   `request_headers` remains encryption-only. `e2e_run/jwt_evidence` projects
   bounded historical request-time facts; `rewrite/jwt_rule` owns their
@@ -355,6 +356,13 @@ explicit repository-wide audit.
 - `replay/policy/response/time_rule` owns explicit timestamp-format and duration-unit
   contracts. `replay/assertion/time` owns numeric parsing and fixed five-second
   request-relative validation; artifact adapters supply captured request times.
+- `replay/assertion/docx` owns bounded OPC ZIP expansion and DOCX part comparison.
+  ZIP timestamps, compression choices, entry order, and offsets are container
+  metadata; configured XML timestamp elements reuse request-relative time
+  validation, while unselected decompressed parts remain exact.
+  `replay/policy/feedback/response_body/docx_plan` owns evidence-backed DOCX
+  plan construction, while the sibling `plan_apply` owns shared atomic apply
+  and offline re-verification for every structured response-body codec.
 
 - `replay/http/recording` owns bounded standard-run HTTP evidence traversal;
   `replay/http/selector` owns exact dependency endpoint selection, and

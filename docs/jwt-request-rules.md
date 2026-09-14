@@ -11,8 +11,9 @@ For a response issue, run the coordinator-issued `jwt-time-validity` evidence
 query. It checks the actual failed attempt, returns at most 20 candidate
 observations with an omitted count, and never returns tokens or identities.
 Candidates require actual HTTP 401, a different recorded status, a supported
-Bearer JWT, and `exp` after recording but before Replay. Missing keys or
-unverified signatures are not proof of expiry as the cause of the response.
+Bearer-header or named-query-parameter JWT, and `exp` after recording but
+before Replay. Missing keys or unverified signatures are not proof of expiry
+as the cause of the response.
 
 The same evidence includes `signing_key_discovery`: effective target variable
 names, captured startup mount paths with `writable` access modes, existing key
@@ -55,6 +56,11 @@ backend-rewrite --target-root /path/to/target rule apply <plan-id>
 backend-rewrite --target-root /path/to/target next --api 'GET /api/example'
 ```
 
+For a source contract that carries the token directly in a URL query parameter,
+replace `--header authorization` with `--query-param download_token`. The
+planner binds the evidence to that exact parameter name; header and query
+selectors are mutually exclusive.
+
 Use the leeway proven in the actual application, not the example value. Plan
 verifies the original evidence signatures using the selected key, checks
 expiration beyond that leeway, and scans the recording for global coverage.
@@ -73,6 +79,18 @@ request_rules:
       algorithm: HS256
       time: preserve_relative
       signing_key_ref: session-jwt
+```
+
+The equivalent query-token policy is:
+
+```yaml
+request_rules:
+  jwt:
+    - id: download-jwt
+      query_param: download_token
+      algorithm: HS256
+      time: preserve_relative
+      signing_key_ref: download-jwt
 ```
 
 Rules apply across all APIs; they do not require an API list or initialization
@@ -114,16 +132,21 @@ It preserves the JWT header, other claims, and the signing algorithm, then
 signs with the verified key. The original recording is immutable. Response
 and dependency values never drive the transformation.
 
-HS256, HS384, and HS512 Bearer JWS are supported. The initial implementation
-requires integer NumericDate claims. Encrypted JWT/JWE, asymmetric signing,
+HS256, HS384, and HS512 JWS are supported in either a Bearer header or one
+named query parameter. Query replacement changes only the selected raw value;
+parameter order, unrelated percent encoding, and the URI fragment remain
+byte-for-byte unchanged. Duplicate matching query parameters fail as
+ambiguous. The initial implementation requires integer NumericDate claims.
+Encrypted JWT/JWE, asymmetric signing,
 critical JWS extensions, cookies, and tokens derived inside the application
 are outside this rule. Duplicate header values are rejected as ambiguous.
 Malformed or unsupported tokens, unrelated Bearer credentials, and invalid
 signatures are left unchanged. Valid signatures with unsupported time claim
 representations produce an explicit diagnostic. Originally expired or
 not-yet-valid tokens retain their relative invalidity; missing time claims
-are never added. Multiple key-rotation rules may share a header/algorithm;
-the first verifying rule transforms the original token once.
+are never added. Multiple key-rotation rules may share a token
+location/algorithm; the first verifying rule transforms the original token
+once.
 
 Actual response artifacts record rule ids, outcomes and offsets, without
 tokens or claims. Finite recording-input Comparison transforms once before

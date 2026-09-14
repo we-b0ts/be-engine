@@ -8,9 +8,9 @@ const NANOS_PER_SECOND: i128 = 1_000_000_000;
 const TOLERANCE_NANOS: u128 = 5_000_000_000;
 
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) struct RequestTimes {
-    pub(super) source: Option<DateTime<Utc>>,
-    pub(super) target: Option<DateTime<Utc>>,
+pub(in crate::replay) struct RequestTimes {
+    pub(in crate::replay) source: Option<DateTime<Utc>>,
+    pub(in crate::replay) target: Option<DateTime<Utc>>,
 }
 
 pub(super) fn compare(

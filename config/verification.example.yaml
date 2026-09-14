@@ -118,3 +118,4 @@ response_rules:
   # then add reviewed protocol-specific rule kinds discovered by verification.
   protobuf: {}
   hessian2: {}
+  docx: {}

@@ -346,11 +346,12 @@ fn quoted(bytes: &[u8], start: usize, quote: u8) -> Option<(Vec<u8>, usize)> {
 }
 
 fn hex_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
-    if !bytes.len().is_multiple_of(2) {
+    let (pairs, remainder) = bytes.as_chunks::<2>();
+    if !remainder.is_empty() {
         return None;
     }
-    bytes
-        .chunks_exact(2)
+    pairs
+        .iter()
         .map(|p| Some((char::from(p[0]).to_digit(16)? * 16 + char::from(p[1]).to_digit(16)?) as u8))
         .collect()
 }

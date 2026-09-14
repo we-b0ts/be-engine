@@ -474,7 +474,7 @@ observation, source-before/source-after drift makes a case inconclusive, or a
 case cannot be evaluated. The comparison behavior and field rules under
 `response_rules` participate in this phase; dependency matching rules remain
 replay-only. Comparison applies JSON `timestamp`, `duration`, `uuid`, `random`,
-`unordered`, and `counter` rules plus configured protobuf and Hessian2 rules. A failed response report includes one
+`unordered`, and `counter` rules plus configured protobuf, Hessian2, and DOCX rules. A failed response report includes one
 top-level `representative_difference` with the API, case ID, Pointer,
 difference kind, and bounded source-before/candidate/source-after values. A
 response-rule applicability failure appears in
@@ -1920,7 +1920,7 @@ exact read-only `help` command. This list is separate from
 `applicable_rule_planners`, which contains planner entrypoints appropriate to
 the current evidence state; neither list proves that a rule applies. For a
 response body without a configured or protocol-defined codec, the planner
-offers each syntactically valid protobuf or Hessian2 codec candidate. Motan1
+offers each syntactically valid protobuf, Hessian2, or DOCX codec candidate. Motan1
 `value` responses are already defined as Hessian2 by the protocol, so their
 unwrapped bodies use Hessian2 semantic equality for the verdict without a
 codec rule. The observed body framing is reported separately as `envelope`,
@@ -1929,8 +1929,10 @@ determined the verdict. Once one codec is configured, the response rule hint
 instead directs the AI to the reported field/value differences and
 unordered-path candidates. These candidates identify mechanically explainable
 paths but do not prove that order is semantically irrelevant. Every selected
-protobuf/Hessian2 path must include one-line source evidence; codec-only
-selection is evidence-light because it does not relax body values. Memcached dirty-cluster
+protobuf/Hessian2 path and every DOCX timestamp selector must include one-line
+source evidence. Codec-only selection is evidence-light because it ignores only
+DOCX/ZIP packaging metadata or changes decoding without relaxing body values.
+Memcached dirty-cluster
 evidence currently exposes `protobuf-timestamp`, whose help command is:
 
 ```bash

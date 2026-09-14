@@ -302,7 +302,6 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
-    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio::net::TcpListener;
 
     use super::*;

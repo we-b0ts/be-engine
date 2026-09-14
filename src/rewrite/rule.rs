@@ -9,10 +9,10 @@ use super::model::{
 };
 use super::{action, evidence};
 use crate::{
-    ComparisonResponseRuleFeedback, E2eRunContext, ResponseBodyCodec, ResponseBodyJoinedStringPath,
-    ResponseBodyRuleEvidence, ResponseBodyRuleFeedback, ResponseBodyRulePlan,
-    ResponseBodyUnorderedPath, ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan,
-    plan_comparison_response_rule, plan_response_body_rule, plan_response_rule,
+    ComparisonResponseRuleFeedback, DocxTimestampRule, E2eRunContext, ResponseBodyCodec,
+    ResponseBodyJoinedStringPath, ResponseBodyRuleEvidence, ResponseBodyRuleFeedback,
+    ResponseBodyRulePlan, ResponseBodyUnorderedPath, ResponseRuleFeedback, ResponseRuleKind,
+    ResponseRulePlan, plan_comparison_response_rule, plan_response_body_rule, plan_response_rule,
     resolve_e2e_response_rule_evidence,
 };
 
@@ -30,6 +30,7 @@ pub struct RewriteRulePlanOptions {
     pub separator: Option<String>,
     pub unordered_paths: Vec<ResponseBodyUnorderedPath>,
     pub unordered_joined_string_paths: Vec<ResponseBodyJoinedStringPath>,
+    pub docx_timestamps: Vec<DocxTimestampRule>,
 }
 
 enum VerificationRulePlan {
@@ -68,7 +69,8 @@ pub(super) fn plan(
                 && options.separator.is_none()
                 && options.time.is_none()
                 && options.unordered_paths.is_empty()
-                && options.unordered_joined_string_paths.is_empty(),
+                && options.unordered_joined_string_paths.is_empty()
+                && options.docx_timestamps.is_empty(),
             "JWT request rules cannot carry response rule options"
         );
         return super::jwt_rule::plan(
@@ -81,7 +83,7 @@ pub(super) fn plan(
     }
     match options.body_codec {
         ResponseBodyCodec::Json => plan_json(target_root, state, options),
-        ResponseBodyCodec::Protobuf | ResponseBodyCodec::Hessian2 => {
+        ResponseBodyCodec::Protobuf | ResponseBodyCodec::Hessian2 | ResponseBodyCodec::Docx => {
             plan_response_body(target_root, state, options)
         }
         codec => anyhow::bail!("response rule cannot be planned for body codec {codec:?}"),
@@ -94,7 +96,9 @@ fn plan_json(
     options: RewriteRulePlanOptions,
 ) -> Result<RewriteRuleReport> {
     ensure!(
-        options.unordered_paths.is_empty() && options.unordered_joined_string_paths.is_empty(),
+        options.unordered_paths.is_empty()
+            && options.unordered_joined_string_paths.is_empty()
+            && options.docx_timestamps.is_empty(),
         "JSON response rules cannot carry typed response-body paths"
     );
     let kind = options
@@ -179,6 +183,17 @@ fn plan_response_body(
             && options.time.is_none(),
         "typed response-body rules cannot carry JSON rule arguments"
     );
+    match options.body_codec {
+        ResponseBodyCodec::Docx => ensure!(
+            options.unordered_paths.is_empty() && options.unordered_joined_string_paths.is_empty(),
+            "DOCX response-body rules use --docx-timestamp, not typed collection paths"
+        ),
+        ResponseBodyCodec::Protobuf | ResponseBodyCodec::Hessian2 => ensure!(
+            options.docx_timestamps.is_empty(),
+            "protobuf and Hessian2 response-body rules cannot carry DOCX timestamps"
+        ),
+        _ => {}
+    }
     validate_response_body_plan_evidence(
         target_root,
         state,
@@ -190,6 +205,7 @@ fn plan_response_body(
         codec: options.body_codec,
         unordered_paths: options.unordered_paths,
         unordered_joined_string_paths: options.unordered_joined_string_paths,
+        docx_timestamps: options.docx_timestamps,
     };
     let spec_json = serde_json::to_string(&spec)?;
     let record = RewriteRulePlanRecord {
@@ -302,6 +318,7 @@ fn build_plan(
                 codec: spec.codec,
                 unordered_paths: spec.unordered_paths.clone(),
                 unordered_joined_string_paths: spec.unordered_joined_string_paths.clone(),
+                docx_timestamps: spec.docx_timestamps.clone(),
                 evidence,
             })?,
         )));

@@ -120,7 +120,8 @@ their absence does not mean a documented capability is unavailable.
 
 | Proven scenario | Capability and next investigation |
 | --- | --- |
-| An inbound Bearer JWT expired between capture and Replay | JWT `preserve_relative`; inspect the returned `jwt-time-validity` query and prove the authentication path, expiry leeway, and signing-key source. |
+| An inbound JWT in a Bearer header or named URL query parameter expired between capture and Replay | JWT `preserve_relative`; inspect the returned `jwt-time-validity` query and prove the exact token location, authentication path, expiry leeway, and signing-key source. |
+| A DOCX download differs because OPC ZIP metadata and `docProps/core.xml` creation time are generated per request | DOCX response-body rule; prove the generated XML timestamp in source, select it explicitly, and keep every other decompressed package part exact. |
 | A recorded Redis response timestamp makes an otherwise correct cache expire during Replay, causing extra reads or an error branch | Redis `time-shift`; inspect earlier successfully matched GET/HGET responses, including previous cases, and prove their time semantics. |
 | Shared HTTP initialization was recorded in another case | HTTP `cross-case`; verify same-run request identity and source sharing semantics. |
 | An outbound HTTP array or Redis write collection differs only in order | Protocol-specific `unordered`; prove collection semantics and inspect exact order witnesses. |

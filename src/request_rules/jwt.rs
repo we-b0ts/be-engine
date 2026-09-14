@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Sha256, Sha384, Sha512};
 
+use super::JwtTokenLocation;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Algorithm {
     HS256,
@@ -137,7 +139,65 @@ pub(crate) fn request_timestamp(request: &Value) -> Result<DateTime<Utc>> {
         .context("invalid JWT request recording timestamp")
 }
 
-pub(crate) fn request_token(request: &Value, name: &str) -> Result<Option<String>> {
+pub(crate) fn request_token(
+    request: &Value,
+    location: &JwtTokenLocation,
+) -> Result<Option<String>> {
+    match location {
+        JwtTokenLocation::BearerHeader { header } => header_token(request, header),
+        JwtTokenLocation::QueryParameter { query_param } => {
+            let Some(uri) = request["uri"].as_str() else {
+                return Ok(None);
+            };
+            Ok(query_token_range(uri, query_param)?.map(|(_, token)| token))
+        }
+    }
+}
+
+pub(crate) fn replace_request_token(
+    request: &mut Value,
+    location: &JwtTokenLocation,
+    token: String,
+) -> Result<()> {
+    match location {
+        JwtTokenLocation::BearerHeader { header } => {
+            if let Some(headers) = request["headers"].as_object_mut() {
+                for (key, values) in headers {
+                    if key.eq_ignore_ascii_case(header) {
+                        let scheme = values[0]
+                            .as_str()
+                            .and_then(|v| v.split_once(' '))
+                            .map(|v| v.0)
+                            .context("JWT header changed during transformation")?
+                            .to_string();
+                        values[0] = Value::String(format!("{scheme} {token}"));
+                        return Ok(());
+                    }
+                }
+            }
+            bail!("JWT header disappeared during transformation")
+        }
+        JwtTokenLocation::QueryParameter { query_param } => {
+            let uri = request["uri"]
+                .as_str()
+                .context("JWT request URI disappeared during transformation")?;
+            let (range, original) = query_token_range(uri, query_param)?
+                .context("JWT query parameter disappeared during transformation")?;
+            ensure!(
+                !original.is_empty(),
+                "JWT query parameter changed during transformation"
+            );
+            let mut rewritten = String::with_capacity(uri.len() - range.len() + token.len());
+            rewritten.push_str(&uri[..range.start]);
+            rewritten.push_str(&token);
+            rewritten.push_str(&uri[range.end..]);
+            request["uri"] = Value::String(rewritten);
+            Ok(())
+        }
+    }
+}
+
+fn header_token(request: &Value, name: &str) -> Result<Option<String>> {
     let Some(headers) = request["headers"].as_object() else {
         return Ok(None);
     };
@@ -165,20 +225,35 @@ pub(crate) fn request_token(request: &Value, name: &str) -> Result<Option<String
         .then(|| token.trim().to_string()))
 }
 
-pub(crate) fn replace_request_token(request: &mut Value, name: &str, token: String) -> Result<()> {
-    if let Some(headers) = request["headers"].as_object_mut() {
-        for (key, values) in headers {
-            if key.eq_ignore_ascii_case(name) {
-                let scheme = values[0]
-                    .as_str()
-                    .and_then(|v| v.split_once(' '))
-                    .map(|v| v.0)
-                    .context("JWT header changed during transformation")?
-                    .to_string();
-                values[0] = Value::String(format!("{scheme} {token}"));
-                return Ok(());
-            }
+fn query_token_range(uri: &str, wanted: &str) -> Result<Option<(std::ops::Range<usize>, String)>> {
+    let Some(question) = uri.find('?') else {
+        return Ok(None);
+    };
+    let query_start = question + 1;
+    let query_end = uri[query_start..]
+        .find('#')
+        .map(|offset| query_start + offset)
+        .unwrap_or(uri.len());
+    let query = &uri[query_start..query_end];
+    let mut selected = None;
+    let mut offset = query_start;
+    for component in query.split('&') {
+        let (raw_name, raw_value) = component.split_once('=').unwrap_or((component, ""));
+        let decoded_name = url::form_urlencoded::parse(component.as_bytes())
+            .next()
+            .map(|(name, _)| name.into_owned())
+            .unwrap_or_default();
+        if decoded_name == wanted {
+            ensure!(selected.is_none(), "ambiguous JWT query parameter values");
+            let value_start = offset + raw_name.len() + usize::from(component.contains('='));
+            let value_end = value_start + raw_value.len();
+            let decoded_value = url::form_urlencoded::parse(component.as_bytes())
+                .next()
+                .map(|(_, value)| value.into_owned())
+                .unwrap_or_default();
+            selected = Some((value_start..value_end, decoded_value));
         }
+        offset += component.len() + 1;
     }
-    bail!("JWT header disappeared during transformation")
+    Ok(selected)
 }

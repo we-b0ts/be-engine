@@ -78,7 +78,7 @@ mod tests {
         let schedule = ComparisonDispatchSchedule::from_seed(7);
         let orders = (0..20).map(|_| schedule.next()).collect::<Vec<_>>();
 
-        for pair in orders.chunks_exact(2) {
+        for pair in orders.as_chunks::<2>().0 {
             assert_ne!(pair[0], pair[1]);
         }
     }
