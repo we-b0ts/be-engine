@@ -140,6 +140,7 @@ pub(super) fn write_replay_progress(
     let applied = report.upsert_logical_run(
         logical_observation(index, state)?,
         Some(&format!("{}|", state.run_key)),
+        index.inventory_complete,
     )?;
     if applied || migrated || requires_persistence {
         write(progress_path, &report)?;
@@ -193,6 +194,7 @@ pub(super) fn revise_replay_progress(
     if report.upsert_logical_run(
         logical_observation(index, current)?,
         Some(&format!("{}|", current.run_key)),
+        index.inventory_complete,
     )? || requires_persistence
     {
         write(progress_path, &report)?;

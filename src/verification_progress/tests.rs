@@ -196,6 +196,7 @@ fn retrying_one_logical_run_revises_coverage_without_extending_the_streak() {
         .upsert_logical_run(
             observation("current", &[("GET /users", 10, 9)]),
             Some("current|"),
+            false,
         )
         .unwrap();
 
@@ -206,7 +207,7 @@ fn retrying_one_logical_run_revises_coverage_without_extending_the_streak() {
     let mut passing = observation("current", &[("GET /users", 10, 10)]);
     passing.evidence_fingerprint = "current-passing".to_string();
     report
-        .upsert_logical_run(passing, Some("current|"))
+        .upsert_logical_run(passing, Some("current|"), false)
         .unwrap();
 
     assert_eq!(report.totals.runs.executed, 2);
@@ -219,7 +220,7 @@ fn retrying_one_logical_run_revises_coverage_without_extending_the_streak() {
     let mut repeated = observation("current", &[("GET /users", 10, 10)]);
     repeated.evidence_fingerprint = "current-passing-again".to_string();
     report
-        .upsert_logical_run(repeated, Some("current|"))
+        .upsert_logical_run(repeated, Some("current|"), false)
         .unwrap();
 
     assert_eq!(report.totals.runs.executed, 2);
@@ -233,12 +234,12 @@ fn unfinished_logical_run_adds_new_api_coverage_without_changing_existing_cases(
     let mut report = ProgressReport::new(VerificationStage::Replay);
     let mut first = observation("current", &[("GET /apps", 4, 4)]);
     first.finalized = false;
-    report.upsert_logical_run(first, None).unwrap();
+    report.upsert_logical_run(first, None, false).unwrap();
 
     let mut second = observation("current", &[("GET /attachments/*", 1, 1)]);
     second.evidence_fingerprint = "current-attachments".to_string();
     second.finalized = false;
-    report.upsert_logical_run(second, None).unwrap();
+    report.upsert_logical_run(second, None, false).unwrap();
 
     let current = &report.counted_observations["current"].observation;
     assert!(!current.finalized);
@@ -252,12 +253,12 @@ fn unfinished_logical_run_rejects_changed_case_count_for_existing_api() {
     let mut report = ProgressReport::new(VerificationStage::Replay);
     let mut first = observation("current", &[("GET /apps", 4, 4)]);
     first.finalized = false;
-    report.upsert_logical_run(first, None).unwrap();
+    report.upsert_logical_run(first, None, false).unwrap();
 
     let mut changed = observation("current", &[("GET /apps", 5, 5)]);
     changed.evidence_fingerprint = "current-changed".to_string();
     changed.finalized = false;
-    assert!(report.upsert_logical_run(changed, None).is_err());
+    assert!(report.upsert_logical_run(changed, None, false).is_err());
 
     let current = &report.counted_observations["current"].observation;
     assert_eq!(current.apis.len(), 1);
@@ -302,13 +303,15 @@ fn recording_completion_counts_coverage_and_holds_streaks_until_the_result_is_fi
     let mut failed = observation("current", &[("GET /users", 10, 9)]);
     failed.evidence_fingerprint = "current-failed".to_string();
     let mut report = pending;
-    report.upsert_logical_run(failed, Some("current|")).unwrap();
+    report
+        .upsert_logical_run(failed, Some("current|"), false)
+        .unwrap();
     write(&path, &report).unwrap();
 
     let mut passing = observation("current", &[("GET /users", 10, 10)]);
     passing.evidence_fingerprint = "current-passing".to_string();
     report
-        .upsert_logical_run(passing, Some("current|"))
+        .upsert_logical_run(passing, Some("current|"), false)
         .unwrap();
     assert_eq!(report.totals.runs.executed, 2);
     assert_eq!(report.totals.runs.passed, 2);

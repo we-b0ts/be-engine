@@ -149,6 +149,7 @@ fn focused_attempt_drops_obsolete_api_contributions_after_inventory_regrouping()
     update_index(&mut index, &previous);
     assert_eq!(index.replayed_cases, 4);
     assert!(!index.current_run.passed);
+    write_replay_progress(&progress_path, &legacy_path, &index, &previous).unwrap();
 
     let mut focused = state(3, 0, 2);
     focused.source_revision = "source-v2".to_string();
