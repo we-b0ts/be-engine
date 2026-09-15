@@ -63,17 +63,14 @@ pub(in crate::rewrite) fn install_project_config(
     target_root: &Path,
     pr_base: &str,
     recorder: crate::config::AppConfig,
-    quality_gates: Option<serde_json::Value>,
+    _quality_gates: Option<serde_json::Value>,
 ) {
-    let mut target = serde_json::json!({
+    let target = serde_json::json!({
         "dockerfile": ".traffic-e2e/Dockerfile.e2e",
         "startup": {},
     });
-    if let Some(quality_gates) = quality_gates {
-        target["quality_gates"] = quality_gates;
-    }
     let document = serde_json::json!({
-        "version": 17,
+        "version": 18,
         "project": {
             "source": { "snapshot": ".traffic-e2e/local/source" },
             "target": target,

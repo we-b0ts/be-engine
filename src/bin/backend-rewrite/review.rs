@@ -15,7 +15,7 @@ pub(super) struct ReviewArgs {
 
 #[derive(Debug, Subcommand)]
 enum ReviewCommand {
-    /// Run all source, isolation, and configured quality checks before delivery.
+    /// Run all source, isolation, and engine-standard quality checks before delivery.
     Check {
         #[arg(long, env = "BACKEND_REWRITE_REVIEW_WORKTREE")]
         worktree: PathBuf,

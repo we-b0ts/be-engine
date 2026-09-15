@@ -70,7 +70,7 @@ differ. traffic-e2e does not infer or special-case an application `PORT`
 variable.
 
 Initialization creates local `dev-migration` from the current `HEAD` when it is
-missing without switching branches. It writes schema-version-17 project,
+missing without switching branches. It writes schema-version-18 project,
 source-traffic-policy, and verification configuration; an empty startup mount
 snapshot; missing Dockerfile scaffolds; a target bootstrap when target files
 are absent; and required ignore rules. Existing complete target files and
@@ -97,6 +97,12 @@ the target as the default context. A string entry expands delivery and review
 scope only and is not a Docker build input. Do not use `COPY ../...`, change the
 default context to the outer Git repository, or infer sibling paths that the
 project configuration does not declare.
+
+Do not add project-configured quality commands. `review check` owns the standard
+format, test, Clippy, source-review, and Replay-isolation gates for the target
+and managed Rust directories. Additional repository-specific
+development requirements belong in `AGENTS.md` or `CLAUDE.md`; they do not
+replace or disable the engine standard.
 
 The generated target uses `http-server` with its `macros` feature and exports
 the readiness GET route with `#[api(auth = none)]` and

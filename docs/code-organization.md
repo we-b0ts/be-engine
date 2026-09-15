@@ -226,17 +226,17 @@ is unclear.
   boundary for `status` and `next`; it detects pending configuration before
   dispatch or verification without committing files or treating routine progress
   updates as configuration changes.
-- Within `rewrite`, `quality.rs` owns delivery-time isolation and configured
-  quality execution shared by worker and integration review. Its `commands`
-  child runs exact configured argv in the delivery worktree and retains result
+- Within `rewrite`, `quality.rs` owns delivery-time isolation and the standard
+  managed-project quality execution shared by worker and integration review. Its `commands`
+  child runs exact engine-owned argv in the delivery worktree and retains result
   logs. `target_quality.rs` is a compatibility boundary for validation of an
   already admitted receipt; it never executes repository checks. The
   `target_replay_isolation` module, owned by `quality`, owns the mandatory,
   deterministic scan that prevents production Rust source from consuming
   Replay-only hostnames, fake addresses, private runtime state, or recording
   artifacts. Keep this product-policy gate separate from the generic
-  code-organization checker. Configured repository gates extend it; an empty
-  configured gate list does not disable it.
+  code-organization checker. Repository instructions may add development checks
+  but cannot replace or disable this engine standard.
 - `rewrite/source_diff.rs` owns the Git source-diff boundary shared by Replay
   isolation and source review, including committed/worktree/untracked files and
   rename handling. Its `layout` child maps a target project nested below the Git

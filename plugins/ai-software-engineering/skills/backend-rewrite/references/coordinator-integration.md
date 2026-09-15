@@ -83,7 +83,7 @@ observed base. An unrelated workflow revision alone does not invalidate it.
   integration `--review-report` when the
   engine permits it, then resume that worker. For source findings from an
   unpublished candidate, use `review rework --report /absolute/failed-report.json`
-  with the exact finding and responsible work-item owner. Configured command
+  with the exact finding and responsible work-item owner. Standard command
   and isolation/domain failures use the accepted handoff's `rework_required`
   path with precise logs/locations; they need not have a source finding ID.
   Do not invent an integration-owner selector.
@@ -106,7 +106,7 @@ the integrator instead of resolving a source conflict yourself.
 
 The integrator must run `review check --integration` on the final candidate,
 using the original work-item selector and accepted `--handoff-id`. The report
-must cover every required source, isolation and configured quality check, and
+must cover every required source, isolation and engine-standard quality check, and
 the canonical inputs that will be used for acceptance. If applying required
 inputs changes that context, complete the supported input transition and send
 the candidate back for review before reporting integration. Do not rerun quality

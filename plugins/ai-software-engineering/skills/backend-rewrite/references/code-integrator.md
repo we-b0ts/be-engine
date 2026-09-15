@@ -50,7 +50,7 @@ integrator evidence endpoint or engine integration activity to invent.
    code or configuration in the canonical worktree or touch another worker tree.
 
 A worker's passing report covers its delivery. Integration review runs the same
-source, Replay-isolation, public-domain, and configured quality checks against
+source, Replay-isolation, public-domain, and engine-standard quality checks against
 the complete merged candidate. It binds the accepted handoff, canonical check
 configuration and runtime inputs, and exact candidate code. Never reuse a
 worker report for integration or a candidate report after subsequent changes.
@@ -101,7 +101,7 @@ Return one outcome:
   absolute passing integration `report_path` for every candidate being delivered.
 - `rework`: responsible work item, exact failure/conflict, evidence, and requested
   repair. Include the failed candidate's absolute `report_path` and source
-  finding IDs when available; for configured commands or isolation/domain
+  finding IDs when available; for standard commands or isolation/domain
   failures return their logs and exact locations instead of inventing finding
   IDs. Identify whether your own integration resolution introduced it.
 - `stale`: the changed base, handoff, dispatch, or inspected version.

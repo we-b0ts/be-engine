@@ -801,7 +801,7 @@ mod tests {
                 .exists()
         );
         let project = fs::read_to_string(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
-        assert!(project.contains("version: 17"));
+        assert!(project.contains("version: 18"));
         assert!(project.contains("dockerfile: .traffic-e2e/Dockerfile.e2e"));
         assert!(project.contains("success_status: 200"));
         assert!(!project.contains("http_host:"));

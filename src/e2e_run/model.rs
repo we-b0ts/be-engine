@@ -93,8 +93,6 @@ pub(super) struct TargetProjectConfig {
     pub startup: crate::startup::StartupConfig,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runtime_outputs: Vec<crate::runtime_output::RuntimeOutputConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quality_gates: Option<Vec<TargetQualityGateConfig>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

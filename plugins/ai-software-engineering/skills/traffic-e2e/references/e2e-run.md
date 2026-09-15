@@ -22,7 +22,7 @@ Recorder HTTP gateway listens on port `4080` by default; use
 `--http-gateway-port` only when that listener port is unavailable. The two
 ports must differ.
 
-The generated version-17 project configuration has separate `source`, `target`,
+The generated version-18 project configuration has separate `source`, `target`,
 `replay`, `recording`, `delivery`, and `state` settings plus an embedded static
 `recorder` section. `replay.case_dependency_post_response_window_ms`
 keeps the active Replay case open for dependencies admitted just after the
@@ -30,8 +30,8 @@ primary response and defaults to 10 ms. AI-managed source-traffic evidence
 acquisition and classification policy is kept in the separate
 `.traffic-e2e/source-traffic-policy.yaml` document.
 Relevant target fields are `.traffic-e2e/Dockerfile.e2e`, startup mount paths,
-`startup_timeout_seconds` (180 by default, at most 1800), and optional quality
-gates. The timeout bounds the interval from
+and `startup_timeout_seconds` (180 by default, at most 1800). Quality gates are
+an engine standard rather than project configuration. The timeout bounds the interval from
 target launch until every enabled endpoint passes readiness. Native HTTP port,
 readiness probes, and request policy come from the embedded recorder. Do not
 hand-write the generated project configuration.

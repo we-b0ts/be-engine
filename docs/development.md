@@ -1768,7 +1768,7 @@ create a source-review obligation. New committed, staged, working-tree or untrac
 source/configuration changes require a current accepted integration review before
 verification and final delivery. Pending handoff/finding admission retains its
 ordinary review contract; the exemption does not admit an unpublished candidate.
-Source review and configured quality commands belong to the delegated integrator,
+Source review and engine-standard quality commands belong to the delegated integrator,
 not the coordinator's startup path.
 
 An actual active/stale engine operation must finish or recover before replacement;
@@ -1854,16 +1854,15 @@ managed resources and allocates a replacement run. A pending rule plan produces
 the evidence validation performed at plan time, so its own workflow revision
 does not make apply stale. A corrected plan using the same evidence ID replaces
 the pending preview before apply; recorder configuration is still changed only
-by apply. Worker and integration `review check` run format, workspace tests,
-Clippy and the mandatory source/Replay-isolation suite before delivery. The
+by apply. Worker and integration `review check` run the engine-standard format,
+workspace tests, Clippy, and mandatory source/Replay-isolation suite before delivery. The
 coordinator admits the integration report for the exact published candidate;
 `advance_required` then starts Replay. Missing or stale proof returns
 `source_review_required` for the code integrator, including before revalidation
 when code or required inputs have changed. Initial diagnostic Replay can run
-before the workflow has a delivery report. Explicit `target.quality_gates`
-replace the inferred commands, and an
-explicit empty list disables only those configurable commands. Mandatory source
-review and Replay isolation remain enabled.
+before the workflow has a delivery report. Repository-specific development
+requirements belong in `AGENTS.md` or `CLAUDE.md`; project configuration cannot
+replace or disable the engine-standard quality checks.
 
 A failed focused E2E attempt reuses the same finalized standard cases after the
 target changes. A passing attempt advances to a newly allocated comparison
@@ -2102,7 +2101,7 @@ observed restart or configuration/state change during capture, but cannot
 freeze concurrent application or external-volume writes. Use a stopped,
 quiescent source when a consistent application checkpoint is required.
 
-The command generates version-17 `.traffic-e2e/project.yaml`,
+The command generates version-18 `.traffic-e2e/project.yaml`,
 `.traffic-e2e/source-traffic-policy.yaml`, and `.traffic-e2e/verification.yaml`.
 When the root `Cargo.toml`, `Cargo.lock`, and `src/main.rs` are all absent, it
 also generates a runnable readiness-only Rust target using `http-server`
@@ -2139,10 +2138,6 @@ target:
       container_path: /data1/weibo/logs
       mode: read_write
       retention: keep
-  # Optional override; omit to infer the standard Rust gates when Cargo.toml exists.
-  # quality_gates:
-  #   - name: project-check
-  #     argv: [make, check]
 ```
 
 The target itself is always managed. Add other code directories from the same
@@ -2160,7 +2155,7 @@ delivery:
 Paths are relative to the target, must use a normalized form with any `..`
 components first, and cannot select the repository root, a nested Git
 repository, or an overlapping directory. Omit `managed_paths` to retain the
-single-target behavior of existing version-17 configuration.
+single-target behavior of version-18 configuration.
 The string form, such as `- ../docs`, adds review and delivery scope only. The
 object form additionally exposes that exact directory to the target Docker
 build under its explicit `build_context` name. The target remains the default
@@ -2179,16 +2174,13 @@ timeout remains a coordinator-owned default. The target's native HTTP port is th
 `recorder.http_gateway.matched_upstream`; Replay uses it on loopback and Comparison uses
 it on the run-owned target bridge IP.
 
-Each quality gate is an exact argv executed without a shell by `review check`
-in the worker or integration worktree, using the canonical target's configuration.
-At most eight uniquely named commands may be configured, with at most 32
-arguments each. `quality_gates: []` explicitly disables inference; built-in
-source and Replay-isolation checks remain mandatory.
-
-Quality commands still start in the target directory. When a managed sibling
-owns tests or lints that the target command does not exercise, add explicit
-gates using its relative manifest, such as
-`[cargo, test, --manifest-path, ../backend-rs/Cargo.toml, --workspace]`.
+`review check` owns the quality standard; `project.yaml` has no configurable
+quality-command field. For each Rust target, it runs format, workspace tests,
+and Clippy. It applies the same checks to every managed directory that
+contains `Cargo.toml`, using the target-relative `--manifest-path` so that
+directory is tested independently instead of merely compiled as a dependency.
+Repository-specific development requirements belong in `AGENTS.md` or
+`CLAUDE.md` and do not replace the engine standard.
 
 Managed replay reads its target response limit from
 `recorder.recording.max_body_bytes` in `project.yaml`.

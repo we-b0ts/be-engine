@@ -1,4 +1,4 @@
-//! One delivery-time executor for replay isolation and configured quality gates.
+//! One delivery-time executor for replay isolation and engine-standard quality gates.
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, ensure};
