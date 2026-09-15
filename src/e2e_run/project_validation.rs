@@ -64,7 +64,9 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         "delivery.managed_paths must contain at most 7 additional directories"
     );
     let mut managed_paths = BTreeSet::new();
-    for path in &project.delivery.managed_paths {
+    let mut build_contexts = BTreeSet::new();
+    for entry in &project.delivery.managed_paths {
+        let path = entry.path();
         ensure!(
             super::delivery::validate_managed_path(path),
             "delivery.managed_paths entry must be a normalized target-relative path with any '..' components leading: {}",
@@ -75,6 +77,16 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
             "delivery.managed_paths contains duplicate entry: {}",
             path.display()
         );
+        if let Some(name) = entry.build_context() {
+            ensure!(
+                super::delivery::validate_build_context_name(name),
+                "delivery.managed_paths build_context must be a lowercase Docker context name of at most 64 ASCII characters: {name:?}"
+            );
+            ensure!(
+                build_contexts.insert(name),
+                "delivery.managed_paths contains duplicate build_context: {name:?}"
+            );
+        }
     }
     ensure!(
         project.state.runtime_root == Path::new(DEFAULT_RUNTIME_ROOT),

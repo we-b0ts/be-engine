@@ -2153,13 +2153,22 @@ repository root:
 delivery:
   pr_base: dev-migration
   managed_paths:
-    - ../backend-rs
+    - path: ../backend-rs
+      build_context: sibling-backend
 ```
 
 Paths are relative to the target, must use a normalized form with any `..`
 components first, and cannot select the repository root, a nested Git
 repository, or an overlapping directory. Omit `managed_paths` to retain the
 single-target behavior of existing version-17 configuration.
+The string form, such as `- ../docs`, adds review and delivery scope only. The
+object form additionally exposes that exact directory to the target Docker
+build under its explicit `build_context` name. The target remains the default
+Docker context; consume an additional context explicitly in `Dockerfile.e2e`,
+for example `COPY --from=sibling-backend src /build/backend-rs/src`. Context
+names must be unique lowercase Docker identifiers of at most 64 ASCII
+characters. The engine does not infer repository layout or copy an additional
+context into an image automatically.
 
 Target readiness path and status come from the project document's
 `recorder.http_gateway.ready` section. Target startup readiness uses

@@ -89,6 +89,15 @@ required by the source adaptor or target runtime contract. Both final processes 
 foreground as UID/GID `998:998`; neither image may contain credentials,
 recordings, generated trust, build cache, or `.traffic-e2e/local/` content.
 
+Before completing `Dockerfile.e2e`, inspect `project.delivery.managed_paths`.
+An object entry with `path` and `build_context` makes that managed directory
+available as a BuildKit named context. Consume only the required files with
+`COPY --from=<build_context>` or `RUN --mount=from=<build_context>` and preserve
+the target as the default context. A string entry expands delivery and review
+scope only and is not a Docker build input. Do not use `COPY ../...`, change the
+default context to the outer Git repository, or infer sibling paths that the
+project configuration does not declare.
+
 The generated target uses `http-server` with its `macros` feature and exports
 the readiness GET route with `#[api(auth = none)]` and
 `#[http_server::get(...)]`. The readiness path must be literal: no captures,

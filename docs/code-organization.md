@@ -113,7 +113,8 @@ is unclear.
   upgrade with the existing project declaration and derived startup snapshot;
   it does not rerun initialization or rewrite tracked configuration.
   `e2e_run/delivery.rs` resolves target-relative managed delivery directories
-  without moving runtime ownership away from the target.
+  and their opt-in named build contexts without moving runtime ownership away
+  from the target.
 - `internal_runtime` owns the canonical `.traffic-e2e/local/runtime` path used
   by engine-managed mutable state. The directory is inspectable but not a
   stable API; coordinator commands remain the primary interface and all state
@@ -124,7 +125,8 @@ is unclear.
   directories, while `platform/runtime_outputs.rs` projects the same validated
   contract into managed Record source and Comparison source/target runtimes.
   Runtime outputs are never startup inputs or image build inputs.
-- `target_container/build.rs` owns target Dockerfile validation, Docker build
+- `target_container/build.rs` owns target Dockerfile validation, projection of
+  configured managed directories into BuildKit named contexts, Docker build
   execution, immutable-image validation, and bounded build-failure diagnostics.
   Its `ssh_agent` child owns the repository-local target-build agent socket,
   stale-agent recovery, default-identity loading, and projection of that exact

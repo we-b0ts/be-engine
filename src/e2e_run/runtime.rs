@@ -528,6 +528,7 @@ mod tests {
     fn resolved_project(target_dockerfile: PathBuf) -> ResolvedProjectConfig {
         ResolvedProjectConfig {
             target_dockerfile,
+            target_build_contexts: Vec::new(),
             target_startup: crate::startup::StartupConfig::default(),
             target_runtime_outputs: Vec::new(),
             target_http_origin: "http://127.0.0.1:8081".to_string(),

@@ -6,11 +6,19 @@ use std::process::Command;
 
 use anyhow::{Context, Result, ensure};
 
+use super::model::{ManagedPathProjectConfig, TargetBuildContext};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ManagedDirectory {
     pub(crate) root: PathBuf,
     pub(crate) target_relative: PathBuf,
     pub(crate) repository_relative: PathBuf,
+}
+
+pub(super) struct ResolvedManagedPaths {
+    pub(super) paths: Vec<PathBuf>,
+    pub(super) build_contexts: Vec<TargetBuildContext>,
+    directories: Vec<ManagedDirectory>,
 }
 
 pub(crate) fn resolve_managed_directories(target_root: &Path) -> Result<Vec<ManagedDirectory>> {
@@ -27,7 +35,33 @@ pub(crate) fn resolve_managed_directories(target_root: &Path) -> Result<Vec<Mana
     } else {
         Vec::new()
     };
-    managed_directories(&target_root, &managed_paths)
+    Ok(resolve_project_managed_paths(&target_root, &managed_paths)?.directories)
+}
+
+pub(super) fn resolve_project_managed_paths(
+    target_root: &Path,
+    configured: &[ManagedPathProjectConfig],
+) -> Result<ResolvedManagedPaths> {
+    let paths = configured
+        .iter()
+        .map(|entry| entry.path().to_path_buf())
+        .collect::<Vec<_>>();
+    let directories = managed_directories(target_root, &paths)?;
+    let build_contexts = configured
+        .iter()
+        .zip(directories.iter().skip(1))
+        .filter_map(|(entry, directory)| {
+            entry.build_context().map(|name| TargetBuildContext {
+                name: name.to_string(),
+                root: directory.root.clone(),
+            })
+        })
+        .collect();
+    Ok(ResolvedManagedPaths {
+        paths,
+        build_contexts,
+        directories,
+    })
 }
 
 /// Resolve the target plus its configured, disjoint delivery directories.
@@ -104,6 +138,20 @@ pub(super) fn validate_managed_path(path: &Path) -> bool {
     normal_seen
 }
 
+pub(super) fn validate_build_context_name(name: &str) -> bool {
+    let mut characters = name.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    name.len() <= 64
+        && (first.is_ascii_lowercase() || first.is_ascii_digit())
+        && characters.all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '.' | '_' | '-')
+        })
+}
+
 fn managed_directory(
     target_root: &Path,
     repository_root: &Path,
@@ -162,6 +210,29 @@ mod tests {
     }
 
     #[test]
+    fn resolves_opt_in_build_contexts_without_changing_path_scope() {
+        let repository = tempfile::tempdir().unwrap();
+        let target = repository.path().join("service");
+        let sibling = repository.path().join("shared");
+        fs::create_dir_all(&target).unwrap();
+        fs::create_dir_all(&sibling).unwrap();
+        git(repository.path(), &["init", "-q"]);
+        let configured = vec![ManagedPathProjectConfig::BuildContext(
+            super::super::model::ManagedBuildContextProjectConfig {
+                path: PathBuf::from("../shared"),
+                build_context: "shared-source".to_string(),
+            },
+        )];
+
+        let resolved = resolve_project_managed_paths(&target, &configured).unwrap();
+
+        assert_eq!(resolved.paths, vec![PathBuf::from("../shared")]);
+        assert_eq!(resolved.build_contexts.len(), 1);
+        assert_eq!(resolved.build_contexts[0].name, "shared-source");
+        assert_eq!(resolved.build_contexts[0].root, sibling);
+    }
+
+    #[test]
     fn rejects_overlapping_or_external_managed_directories() {
         let repository = tempfile::tempdir().unwrap();
         let target = repository.path().join("backend-rs-intra");
@@ -182,6 +253,16 @@ mod tests {
         assert!(!validate_managed_path(Path::new(".")));
         assert!(!validate_managed_path(Path::new("backend/../sibling")));
         assert!(!validate_managed_path(Path::new("/tmp/backend")));
+    }
+
+    #[test]
+    fn build_context_names_are_stable_docker_identifiers() {
+        assert!(validate_build_context_name("shared-source"));
+        assert!(validate_build_context_name("dependency_2.0"));
+        assert!(!validate_build_context_name(""));
+        assert!(!validate_build_context_name("Shared"));
+        assert!(!validate_build_context_name("../shared"));
+        assert!(!validate_build_context_name(&"a".repeat(65)));
     }
 
     fn git(root: &Path, arguments: &[&str]) {

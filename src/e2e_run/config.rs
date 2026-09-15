@@ -209,7 +209,10 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         .join(crate::repository::TRAFFIC_E2E_ROOT)
         .join(PROJECT_CONFIG_FILE);
     let config = load_project_config(&target_root, &config_path)?;
-    super::delivery::managed_directories(&target_root, &config.project.delivery.managed_paths)?;
+    let managed = super::delivery::resolve_project_managed_paths(
+        &target_root,
+        &config.project.delivery.managed_paths,
+    )?;
     let policy_path = resolve_under(&target_root, &config.project.replay.policy);
     let policy = validate_replay_policy(&policy_path).context("invalid replay policy")?;
     ensure!(
@@ -278,6 +281,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         target_root.clone(),
         ResolvedProjectConfig {
             target_dockerfile: resolve_under(&target_root, &config.project.target.dockerfile),
+            target_build_contexts: managed.build_contexts,
             target_startup: config.project.target.startup,
             target_runtime_outputs: config.project.target.runtime_outputs,
             target_http_origin: format!("http://127.0.0.1:{target_port}"),
@@ -309,7 +313,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
                 super::model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
             ),
             pr_base: config.project.delivery.pr_base,
-            managed_paths: config.project.delivery.managed_paths,
+            managed_paths: managed.paths,
             recorder_config,
             source_traffic_policy,
             runner_owned_response_assertions: policy.runner_owned_response_assertions,

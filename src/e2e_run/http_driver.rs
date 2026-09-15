@@ -340,6 +340,7 @@ mod tests {
         });
         let config = ResolvedProjectConfig {
             target_dockerfile: PathBuf::from("Dockerfile.e2e"),
+            target_build_contexts: Vec::new(),
             target_startup: crate::startup::StartupConfig::default(),
             target_runtime_outputs: Vec::new(),
             target_http_origin: "http://127.0.0.1:1".to_string(),

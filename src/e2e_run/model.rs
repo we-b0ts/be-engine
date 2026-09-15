@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -125,7 +125,43 @@ pub(super) struct RecordingProjectConfig {
 pub(super) struct DeliveryProjectConfig {
     pub pr_base: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub managed_paths: Vec<PathBuf>,
+    pub managed_paths: Vec<ManagedPathProjectConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(super) enum ManagedPathProjectConfig {
+    Path(PathBuf),
+    BuildContext(ManagedBuildContextProjectConfig),
+}
+
+impl ManagedPathProjectConfig {
+    pub(super) fn path(&self) -> &Path {
+        match self {
+            Self::Path(path) => path,
+            Self::BuildContext(config) => &config.path,
+        }
+    }
+
+    pub(super) fn build_context(&self) -> Option<&str> {
+        match self {
+            Self::Path(_) => None,
+            Self::BuildContext(config) => Some(&config.build_context),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ManagedBuildContextProjectConfig {
+    pub path: PathBuf,
+    pub build_context: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TargetBuildContext {
+    pub(crate) name: String,
+    pub(crate) root: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,6 +178,7 @@ fn default_runtime_root() -> PathBuf {
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedProjectConfig {
     pub(crate) target_dockerfile: PathBuf,
+    pub(crate) target_build_contexts: Vec<TargetBuildContext>,
     pub(crate) target_startup: crate::startup::StartupConfig,
     pub(crate) target_runtime_outputs: Vec<crate::runtime_output::RuntimeOutputConfig>,
     pub(crate) target_http_origin: String,
@@ -515,6 +552,25 @@ impl RunIndex {
 mod tests {
     use super::*;
     use crate::case_group::{CanonicalCase, CanonicalCaseGroup};
+
+    #[test]
+    fn managed_paths_support_review_only_and_build_context_entries() {
+        let delivery: DeliveryProjectConfig = serde_yaml::from_str(
+            "pr_base: dev-migration\nmanaged_paths:\n  - ../docs\n  - path: ../backend-rs\n    build_context: sibling-backend\n",
+        )
+        .unwrap();
+
+        assert_eq!(delivery.managed_paths[0].path(), Path::new("../docs"));
+        assert_eq!(delivery.managed_paths[0].build_context(), None);
+        assert_eq!(delivery.managed_paths[1].path(), Path::new("../backend-rs"));
+        assert_eq!(
+            delivery.managed_paths[1].build_context(),
+            Some("sibling-backend")
+        );
+        let rendered = serde_yaml::to_string(&delivery).unwrap();
+        assert!(rendered.contains("- ../docs"));
+        assert!(rendered.contains("build_context: sibling-backend"));
+    }
 
     #[test]
     fn active_run_orders_cases_globally_by_recording_timestamp() {

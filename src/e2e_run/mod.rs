@@ -56,7 +56,7 @@ pub(crate) use execute::recover_focused_e2e_api;
 pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};
 pub(crate) use http_driver::wait_until_ready;
 use model::RunStatus;
-pub(crate) use model::{ResolvedProjectConfig, TargetQualityGateConfig};
+pub(crate) use model::{ResolvedProjectConfig, TargetBuildContext, TargetQualityGateConfig};
 pub(crate) use reclassify::{
     FocusedBackgroundReclassification, ensure_focused_background_reclassification_revisable,
     focused_background_reclassification_recovery_required, latest_focused_api,
