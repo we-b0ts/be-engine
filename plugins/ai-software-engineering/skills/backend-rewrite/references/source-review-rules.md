@@ -19,8 +19,8 @@ modules/functions. The full-file line limit still includes their lines. It does
 not prove a call graph or discover every macro/wrapper. When changing callers of
 an existing task launcher, inspect its ownership even if no new spawn is found.
 
-The same command also checks Replay isolation and runs all canonical project
-quality gates, with their exact argv, in the reviewed worktree. Source-sensitive
+The same command also checks Replay isolation and runs the engine-standard
+quality gates for every managed project in the reviewed worktree. Source-sensitive
 `demo.test` and `sample.test` values are checked in test code too. `.trp.test`
 is prohibited in all added Rust lines; other private Replay hostnames, fake
 addresses, private state and recording artifacts cannot enter production paths.
@@ -61,3 +61,5 @@ location must exist and every factual explanation must come from inspected code.
 Use `request` or `unknown` when that is the conclusion; do not relabel a finding
 to obtain a passing result. The engine checks coverage, locations and freshness;
 the AI is responsible for the semantic ownership judgment.
+For a managed sibling, copy the exact target-relative finding path
+into evidence, including leading components such as `../backend-rs/`.

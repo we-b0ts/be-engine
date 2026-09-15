@@ -1,104 +1,111 @@
-use std::collections::BTreeSet;
 use std::path::Path;
-
-use anyhow::{Result, ensure};
 
 use super::TargetQualityGateConfig;
 
-pub(super) fn inferred_target_quality_gates(target_root: &Path) -> Vec<TargetQualityGateConfig> {
-    if !target_root.join("Cargo.toml").is_file() {
-        return Vec::new();
-    }
-    vec![
-        TargetQualityGateConfig {
-            name: "rust-format".to_string(),
-            argv: ["cargo", "fmt", "--all", "--check"]
-                .map(str::to_string)
-                .to_vec(),
-        },
-        TargetQualityGateConfig {
-            name: "rust-test".to_string(),
-            argv: ["cargo", "test", "--workspace"]
-                .map(str::to_string)
-                .to_vec(),
-        },
-        TargetQualityGateConfig {
-            name: "rust-clippy".to_string(),
-            argv: [
-                "cargo",
-                "clippy",
-                "--workspace",
-                "--all-targets",
-                "--",
-                "-D",
-                "warnings",
-            ]
-            .map(str::to_string)
-            .to_vec(),
-        },
-    ]
+pub(super) fn inferred_target_quality_gates(
+    target_root: &Path,
+    managed_paths: &[std::path::PathBuf],
+) -> Vec<TargetQualityGateConfig> {
+    std::iter::once(std::path::PathBuf::new())
+        .chain(managed_paths.iter().cloned())
+        .enumerate()
+        .filter(|(_, path)| target_root.join(path).join("Cargo.toml").is_file())
+        .flat_map(|(index, path)| {
+            let manifest = path.join("Cargo.toml");
+            if index == 0 {
+                rust_quality_gates(None, None)
+            } else {
+                rust_quality_gates(Some(index), Some(&manifest))
+            }
+        })
+        .collect()
 }
 
-pub(super) fn validate_target_quality_gates(gates: &[TargetQualityGateConfig]) -> Result<()> {
-    ensure!(
-        gates.len() <= 8,
-        "target.quality_gates must contain at most 8 commands"
-    );
-    let mut names = BTreeSet::new();
-    for gate in gates {
-        ensure!(
-            gate.name == gate.name.trim()
-                && !gate.name.is_empty()
-                && gate.name.len() <= 128
-                && !gate.name.contains(['\r', '\n']),
-            "target quality gate names must be unique non-empty single lines of at most 128 bytes"
-        );
-        ensure!(
-            names.insert(gate.name.as_str()),
-            "target quality gate name {:?} is duplicated",
-            gate.name
-        );
-        ensure!(
-            !gate.argv.is_empty() && gate.argv.len() <= 32,
-            "target quality gate {:?} argv must contain between 1 and 32 arguments",
-            gate.name
-        );
-        ensure!(
-            gate.argv[0] == gate.argv[0].trim(),
-            "target quality gate {:?} executable must not have surrounding whitespace",
-            gate.name
-        );
-        for argument in &gate.argv {
-            ensure!(
-                !argument.is_empty()
-                    && argument.len() <= 4_096
-                    && !argument.contains('\0')
-                    && !argument.contains(['\r', '\n']),
-                "target quality gate {:?} argv must contain non-empty single-line arguments of at most 4096 bytes",
-                gate.name
-            );
-        }
-    }
-    Ok(())
+fn rust_quality_gates(
+    managed_index: Option<usize>,
+    manifest: Option<&Path>,
+) -> Vec<TargetQualityGateConfig> {
+    let name = |suffix: &str| match managed_index {
+        Some(index) => format!("managed-{index}-rust-{suffix}"),
+        None => format!("rust-{suffix}"),
+    };
+    let manifest_arguments = || {
+        manifest.map_or_else(Vec::new, |path| {
+            vec![
+                "--manifest-path".to_string(),
+                path.to_string_lossy().into_owned(),
+            ]
+        })
+    };
+    vec![
+        TargetQualityGateConfig {
+            name: name("format"),
+            argv: ["cargo", "fmt"]
+                .map(str::to_string)
+                .into_iter()
+                .chain(manifest_arguments())
+                .chain(["--all".to_string(), "--check".to_string()])
+                .collect(),
+        },
+        TargetQualityGateConfig {
+            name: name("test"),
+            argv: ["cargo", "test"]
+                .map(str::to_string)
+                .into_iter()
+                .chain(manifest_arguments())
+                .chain(["--workspace".to_string()])
+                .collect(),
+        },
+        TargetQualityGateConfig {
+            name: name("clippy"),
+            argv: ["cargo", "clippy"]
+                .map(str::to_string)
+                .into_iter()
+                .chain(manifest_arguments())
+                .chain(["--workspace", "--all-targets", "--", "-D", "warnings"].map(str::to_string))
+                .collect(),
+        },
+    ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
-    fn rejects_duplicate_names_and_empty_executables() {
-        let duplicate = TargetQualityGateConfig {
-            name: "check".to_string(),
-            argv: vec!["true".to_string()],
-        };
-        assert!(validate_target_quality_gates(&[duplicate.clone(), duplicate]).is_err());
-        assert!(
-            validate_target_quality_gates(&[TargetQualityGateConfig {
-                name: "check".to_string(),
-                argv: vec![" ".to_string()],
-            }])
-            .is_err()
+    fn infers_manifest_scoped_gates_for_managed_rust_projects() {
+        let repository = tempfile::tempdir().unwrap();
+        let target = repository.path().join("backend-rs-intra");
+        let sibling = repository.path().join("backend-rs");
+        fs::create_dir_all(&target).unwrap();
+        fs::create_dir_all(&sibling).unwrap();
+        fs::write(sibling.join("Cargo.toml"), "[workspace]\n").unwrap();
+
+        let inferred =
+            inferred_target_quality_gates(&target, &[std::path::PathBuf::from("../backend-rs")]);
+
+        assert_eq!(inferred.len(), 3);
+        assert_eq!(
+            inferred
+                .iter()
+                .map(|gate| gate.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "managed-1-rust-format",
+                "managed-1-rust-test",
+                "managed-1-rust-clippy"
+            ]
+        );
+        assert_eq!(
+            inferred[1].argv,
+            [
+                "cargo",
+                "test",
+                "--manifest-path",
+                "../backend-rs/Cargo.toml",
+                "--workspace"
+            ]
         );
     }
 }

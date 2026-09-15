@@ -256,11 +256,34 @@ pub(super) fn select_group_cases(
 }
 
 pub(super) fn inventory_id(cases: &[PublishedCase]) -> String {
+    inventory_id_with_paths(cases.iter().map(|case| case.dir.as_path()), cases)
+}
+
+pub(super) fn portable_inventory_id(case_source: &Path, cases: &[PublishedCase]) -> Result<String> {
+    let relative_paths = cases
+        .iter()
+        .map(|case| {
+            case.dir.strip_prefix(case_source).with_context(|| {
+                format!(
+                    "published case {} is outside case source {}",
+                    case.dir.display(),
+                    case_source.display()
+                )
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(inventory_id_with_paths(relative_paths, cases))
+}
+
+fn inventory_id_with_paths<'a>(
+    paths: impl IntoIterator<Item = &'a Path>,
+    cases: &[PublishedCase],
+) -> String {
     let mut hash = 0xcbf29ce484222325_u64;
-    for case in cases {
+    for (case, path) in cases.iter().zip(paths) {
         for value in [
             case.id.as_bytes(),
-            case.dir.as_os_str().as_encoded_bytes(),
+            path.as_os_str().as_encoded_bytes(),
             case.method.as_bytes(),
             case.path.as_bytes(),
         ] {

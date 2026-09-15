@@ -20,7 +20,7 @@ pub(super) fn scan(
         .iter()
         .filter(|path| source_diff::is_production_rust_path(path))
     {
-        let source = std::fs::read_to_string(root.join(file))?;
+        let source = std::fs::read_to_string(source_diff::managed_file_path(root, file)?)?;
         files.insert(file.clone(), fingerprint::id(&[&source]));
         let lines = source.lines().count();
         if lines > 1000 {
@@ -211,7 +211,7 @@ pub(super) fn finding(
 }
 
 pub(super) fn file_hash(root: &Path, file: &Path) -> Result<String> {
-    let text = std::fs::read_to_string(root.join(file))
+    let text = std::fs::read_to_string(source_diff::managed_file_path(root, file)?)
         .with_context(|| format!("cannot read review evidence {}", file.display()))?;
     Ok(fingerprint::id(&[&text]))
 }

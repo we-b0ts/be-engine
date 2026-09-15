@@ -1,4 +1,7 @@
+use std::ffi::OsString;
 use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -57,8 +60,10 @@ pub(crate) fn image_tag(target_root: &Path) -> Result<String> {
 }
 
 pub(crate) async fn build_image(config: &TargetContainerConfig) -> Result<TargetImage> {
-    validate_build_contract(config)?;
-    let ssh_agent = super::ssh_agent::ManagedSshAgent::prepare(&config.target_root)?;
+    let uses_ssh_forwarding = validate_build_contract(config)?;
+    let ssh_agent = uses_ssh_forwarding
+        .then(|| super::ssh_agent::ManagedSshAgent::prepare(&config.target_root))
+        .transpose()?;
     let tag = image_tag(&config.target_root)?;
     let control_root =
         crate::internal_runtime::root(&config.target_root).join("target-container/build");
@@ -75,7 +80,14 @@ pub(crate) async fn build_image(config: &TargetContainerConfig) -> Result<Target
         .args(["--build-arg", "HTTPS_PROXY"])
         .args(["--build-arg", "ALL_PROXY"])
         .args(["--build-arg", "NO_PROXY"]);
-    ssh_agent.apply_to(&mut command);
+    for context in &config.build_contexts {
+        command
+            .arg("--build-context")
+            .arg(build_context_argument(context));
+    }
+    if let Some(ssh_agent) = ssh_agent {
+        ssh_agent.apply_to(&mut command);
+    }
     command
         .arg("--iidfile")
         .arg(&iid_path)
@@ -143,6 +155,13 @@ pub(crate) async fn build_image(config: &TargetContainerConfig) -> Result<Target
     );
     validate_image_contract(&inspection)?;
     Ok(TargetImage { tag, id: iid })
+}
+
+fn build_context_argument(context: &crate::e2e_run::TargetBuildContext) -> OsString {
+    let mut argument = OsString::from(&context.name);
+    argument.push("=");
+    argument.push(&context.root);
+    argument
 }
 
 async fn tee_bounded_tail<R, W>(mut reader: R, mut writer: W) -> std::io::Result<Vec<u8>>
@@ -269,7 +288,7 @@ fn strip_terminal_control(line: &str) -> String {
     cleaned
 }
 
-fn validate_build_contract(config: &TargetContainerConfig) -> Result<()> {
+fn validate_build_contract(config: &TargetContainerConfig) -> Result<bool> {
     require_regular_file(&config.dockerfile, "target Dockerfile")?;
     ensure!(
         config.dockerfile == config.target_root.join(super::TARGET_DOCKERFILE_RELATIVE),
@@ -291,7 +310,7 @@ fn validate_build_contract(config: &TargetContainerConfig) -> Result<()> {
             ".dockerignore must exclude {required}/ from the target build context"
         );
     }
-    Ok(())
+    Ok(dockerfile_uses_ssh_forwarding(&dockerfile))
 }
 
 fn validate_dockerfile_contract(config: &TargetContainerConfig, dockerfile: &str) -> Result<()> {
@@ -312,11 +331,7 @@ fn validate_dockerfile_contract(config: &TargetContainerConfig, dockerfile: &str
         "target Dockerfile must be a multi-stage build"
     );
     for required in [
-        "--mount=type=ssh,required=true",
-        "ssh-keyscan -p 2222 git.intra.demo.test",
-        "git ls-remote --exit-code ssh://git@git.intra.demo.test:2222/platform/breeze/logs.git refs/tags/v0.0.1",
         "id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked",
-        "id=traffic-e2e-cargo-git,target=/opt/rust/cargo/git,sharing=locked",
         "cargo build --locked --release",
     ] {
         ensure!(
@@ -335,7 +350,42 @@ fn validate_dockerfile_contract(config: &TargetContainerConfig, dockerfile: &str
         dockerfile.contains(&target_cache),
         "target Dockerfile must use project-specific BuildKit target cache {target_cache:?}"
     );
+    for context in &config.build_contexts {
+        ensure!(
+            dockerfile_uses_build_context(dockerfile, &context.name),
+            "target Dockerfile must consume managed build context {:?} with COPY --from, RUN --mount=from, or FROM",
+            context.name
+        );
+    }
     Ok(())
+}
+
+fn dockerfile_uses_ssh_forwarding(dockerfile: &str) -> bool {
+    dockerfile.lines().any(|line| {
+        let line = line.trim();
+        !line.starts_with('#') && line.contains("--mount=type=ssh")
+    })
+}
+
+fn dockerfile_uses_build_context(dockerfile: &str, name: &str) -> bool {
+    let copy_from = format!("--from={name}");
+    let mount_from = format!("from={name}");
+    dockerfile.lines().any(|line| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return false;
+        }
+        let mut fields = line.split_ascii_whitespace();
+        if fields.next() == Some("FROM") && fields.next() == Some(name) {
+            return true;
+        }
+        line.split_ascii_whitespace().any(|field| {
+            field == copy_from.as_str()
+                || field.strip_prefix("--mount=").is_some_and(|mount| {
+                    mount.split(',').any(|option| option == mount_from.as_str())
+                })
+        })
+    })
 }
 
 fn dockerignore_covers(line: &str, required: &str) -> bool {
@@ -478,28 +528,79 @@ mod tests {
         let config = TargetContainerConfig {
             target_root: Path::new("/tmp/service").to_path_buf(),
             dockerfile: Path::new("/tmp/service/.traffic-e2e/Dockerfile.e2e").to_path_buf(),
+            build_contexts: Vec::new(),
             startup: crate::startup::StartupConfig::default(),
             port: 8081,
             breeze_enabled: false,
         };
         let dockerfile = format!(
-            "FROM {} AS builder\nRUN ssh-keyscan -p 2222 git.intra.demo.test\nRUN --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked --mount=type=cache,id=traffic-e2e-cargo-git,target=/opt/rust/cargo/git,sharing=locked --mount=type=cache,id=traffic-e2e-service-target,target=/build/target,sharing=locked git ls-remote --exit-code ssh://git@git.intra.demo.test:2222/platform/breeze/logs.git refs/tags/v0.0.1 && cargo build --locked --release\nFROM {}\nENTRYPOINT [\"/app/bin/service\"]\n",
+            "FROM {} AS builder\nRUN --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked --mount=type=cache,id=traffic-e2e-service-target,target=/build/target,sharing=locked cargo build --locked --release\nFROM {}\nENTRYPOINT [\"/app/bin/service\"]\n",
+            super::super::TARGET_BUILDER_IMAGE,
+            super::super::TARGET_RUNTIME_IMAGE,
+        );
+        validate_dockerfile_contract(&config, &dockerfile).unwrap();
+        assert!(!dockerfile_uses_ssh_forwarding(&dockerfile));
+
+        let ssh_dockerfile = dockerfile.replace(
+            "RUN --mount=type=cache",
+            "RUN --mount=type=ssh,required=true --mount=type=cache",
+        );
+        validate_dockerfile_contract(&config, &ssh_dockerfile).unwrap();
+        assert!(dockerfile_uses_ssh_forwarding(&ssh_dockerfile));
+    }
+
+    #[test]
+    fn dockerfile_contract_requires_declared_build_contexts_to_be_consumed() {
+        let mut config = TargetContainerConfig {
+            target_root: Path::new("/tmp/service").to_path_buf(),
+            dockerfile: Path::new("/tmp/service/.traffic-e2e/Dockerfile.e2e").to_path_buf(),
+            build_contexts: vec![crate::e2e_run::TargetBuildContext {
+                name: "shared-source".to_string(),
+                root: PathBuf::from("/tmp/shared"),
+            }],
+            startup: crate::startup::StartupConfig::default(),
+            port: 8081,
+            breeze_enabled: false,
+        };
+        let base = format!(
+            "FROM {} AS builder\nRUN --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked --mount=type=cache,id=traffic-e2e-service-target,target=/build/target,sharing=locked cargo build --locked --release\nFROM {}\nENTRYPOINT [\"/app/bin/service\"]\n",
             super::super::TARGET_BUILDER_IMAGE,
             super::super::TARGET_RUNTIME_IMAGE,
         );
 
         assert!(
-            validate_dockerfile_contract(&config, &dockerfile)
+            validate_dockerfile_contract(&config, &base)
                 .unwrap_err()
                 .to_string()
-                .contains("--mount=type=ssh,required=true")
+                .contains("shared-source")
         );
+        validate_dockerfile_contract(
+            &config,
+            &base.replace(
+                "FROM registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime",
+                "COPY --from=shared-source src /build/shared/src\nFROM registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime",
+            ),
+        )
+        .unwrap();
 
-        let dockerfile = dockerfile.replace(
-            "RUN --mount=type=cache",
-            "RUN --mount=type=ssh,required=true --mount=type=cache",
+        config.build_contexts[0].name = "mounted-source".to_string();
+        assert!(dockerfile_uses_build_context(
+            "RUN --mount=type=bind,from=mounted-source,target=/src make",
+            "mounted-source"
+        ));
+    }
+
+    #[test]
+    fn build_context_argument_preserves_name_and_path() {
+        let context = crate::e2e_run::TargetBuildContext {
+            name: "shared-source".to_string(),
+            root: PathBuf::from("/tmp/repository/shared"),
+        };
+
+        assert_eq!(
+            build_context_argument(&context),
+            OsString::from("shared-source=/tmp/repository/shared")
         );
-        validate_dockerfile_contract(&config, &dockerfile).unwrap();
     }
 
     #[test]

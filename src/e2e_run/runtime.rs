@@ -528,6 +528,7 @@ mod tests {
     fn resolved_project(target_dockerfile: PathBuf) -> ResolvedProjectConfig {
         ResolvedProjectConfig {
             target_dockerfile,
+            target_build_contexts: Vec::new(),
             target_startup: crate::startup::StartupConfig::default(),
             target_runtime_outputs: Vec::new(),
             target_http_origin: "http://127.0.0.1:8081".to_string(),
@@ -550,6 +551,7 @@ mod tests {
             replay_case_dependency_post_response_window: Duration::from_millis(10),
             replay_startup_timeout: Duration::from_secs(1),
             pr_base: "dev-migration".to_string(),
+            managed_paths: Vec::new(),
             recorder_config: "project.yaml".into(),
             source_traffic_policy: "source-traffic-policy.yaml".into(),
             runner_owned_response_assertions: true,

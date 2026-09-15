@@ -112,6 +112,9 @@ is unclear.
   `e2e_run/admin_source.rs` coordinates an administrator-confirmed source image
   upgrade with the existing project declaration and derived startup snapshot;
   it does not rerun initialization or rewrite tracked configuration.
+  `e2e_run/delivery.rs` resolves target-relative managed delivery directories
+  and their opt-in named build contexts without moving runtime ownership away
+  from the target.
 - `internal_runtime` owns the canonical `.traffic-e2e/local/runtime` path used
   by engine-managed mutable state. The directory is inspectable but not a
   stable API; coordinator commands remain the primary interface and all state
@@ -122,7 +125,8 @@ is unclear.
   directories, while `platform/runtime_outputs.rs` projects the same validated
   contract into managed Record source and Comparison source/target runtimes.
   Runtime outputs are never startup inputs or image build inputs.
-- `target_container/build.rs` owns target Dockerfile validation, Docker build
+- `target_container/build.rs` owns target Dockerfile validation, projection of
+  configured managed directories into BuildKit named contexts, Docker build
   execution, immutable-image validation, and bounded build-failure diagnostics.
   Its `ssh_agent` child owns the repository-local target-build agent socket,
   stale-agent recovery, default-identity loading, and projection of that exact
@@ -222,20 +226,26 @@ is unclear.
   boundary for `status` and `next`; it detects pending configuration before
   dispatch or verification without committing files or treating routine progress
   updates as configuration changes.
-- Within `rewrite`, `quality.rs` owns delivery-time isolation and configured
-  quality execution shared by worker and integration review. Its `commands`
-  child runs exact configured argv in the delivery worktree and retains result
+- Within `rewrite`, `quality.rs` owns delivery-time isolation and the standard
+  managed-project quality execution shared by worker and integration review. Its `commands`
+  child runs exact engine-owned argv in the delivery worktree and retains result
   logs. `target_quality.rs` is a compatibility boundary for validation of an
   already admitted receipt; it never executes repository checks. The
   `target_replay_isolation` module, owned by `quality`, owns the mandatory,
   deterministic scan that prevents production Rust source from consuming
   Replay-only hostnames, fake addresses, private runtime state, or recording
   artifacts. Keep this product-policy gate separate from the generic
-  code-organization checker. Configured repository gates extend it; an empty
-  configured gate list does not disable it.
+  code-organization checker. Repository instructions may add development checks
+  but cannot replace or disable this engine standard.
 - `rewrite/source_diff.rs` owns the Git source-diff boundary shared by Replay
   isolation and source review, including committed/worktree/untracked files and
-  rename handling. `rewrite/review` owns the complete worker/integrator review
+  rename handling. Its `layout` child maps a target project nested below the Git
+  repository root onto the corresponding directory in worker and integration
+  worktrees, validates managed-file access, and owns conversion between
+  target-relative and Git tree paths. Source diff expands over the target plus
+  configured same-repository managed directories and rejects tracked candidate
+  changes outside that delivery scope.
+  `rewrite/review` owns the complete worker/integrator review
   pipeline, spawn evidence, handoff admission, and quality rework routing. Its `scan`
   child owns Rust syntax findings and complete-file line limits; `evidence`
   validates AI-provided locations and lifecycle explanations without claiming

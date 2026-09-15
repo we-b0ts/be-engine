@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -93,8 +94,6 @@ pub(super) struct TargetProjectConfig {
     pub startup: crate::startup::StartupConfig,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runtime_outputs: Vec<crate::runtime_output::RuntimeOutputConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quality_gates: Option<Vec<TargetQualityGateConfig>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,6 +123,44 @@ pub(super) struct RecordingProjectConfig {
 #[serde(deny_unknown_fields)]
 pub(super) struct DeliveryProjectConfig {
     pub pr_base: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub managed_paths: Vec<ManagedPathProjectConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(super) enum ManagedPathProjectConfig {
+    Path(PathBuf),
+    BuildContext(ManagedBuildContextProjectConfig),
+}
+
+impl ManagedPathProjectConfig {
+    pub(super) fn path(&self) -> &Path {
+        match self {
+            Self::Path(path) => path,
+            Self::BuildContext(config) => &config.path,
+        }
+    }
+
+    pub(super) fn build_context(&self) -> Option<&str> {
+        match self {
+            Self::Path(_) => None,
+            Self::BuildContext(config) => Some(&config.build_context),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ManagedBuildContextProjectConfig {
+    pub path: PathBuf,
+    pub build_context: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TargetBuildContext {
+    pub(crate) name: String,
+    pub(crate) root: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,6 +177,7 @@ fn default_runtime_root() -> PathBuf {
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedProjectConfig {
     pub(crate) target_dockerfile: PathBuf,
+    pub(crate) target_build_contexts: Vec<TargetBuildContext>,
     pub(crate) target_startup: crate::startup::StartupConfig,
     pub(crate) target_runtime_outputs: Vec<crate::runtime_output::RuntimeOutputConfig>,
     pub(crate) target_http_origin: String,
@@ -162,6 +200,7 @@ pub(crate) struct ResolvedProjectConfig {
     pub(crate) replay_case_dependency_post_response_window: Duration,
     pub(crate) replay_startup_timeout: Duration,
     pub(crate) pr_base: String,
+    pub(crate) managed_paths: Vec<PathBuf>,
     pub(crate) recorder_config: PathBuf,
     pub(crate) source_traffic_policy: PathBuf,
     pub(crate) runner_owned_response_assertions: bool,
@@ -458,6 +497,8 @@ pub(super) struct RunContribution {
 pub(super) struct RunIndex {
     pub version: u32,
     pub run_key: String,
+    #[serde(default)]
+    pub path_anchor: RunIndexPathAnchor,
     pub case_source: PathBuf,
     #[serde(default)]
     pub source_revision: String,
@@ -483,11 +524,20 @@ pub(super) struct RunIndex {
     pub latest_status: Option<RunStatus>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RunIndexPathAnchor {
+    #[default]
+    Absolute,
+    TargetRoot,
+}
+
 impl RunIndex {
     pub(super) fn empty(run_key: String, case_source: PathBuf) -> Self {
         Self {
             version: STATE_VERSION,
             run_key,
+            path_anchor: RunIndexPathAnchor::Absolute,
             case_source,
             source_revision: String::new(),
             case_inventory_id: String::new(),
@@ -506,12 +556,49 @@ impl RunIndex {
             latest_status: None,
         }
     }
+
+    pub(super) fn empty_managed(
+        run_key: String,
+        case_source: PathBuf,
+        target_root: &Path,
+    ) -> Result<Self> {
+        let case_source = case_source
+            .strip_prefix(target_root)
+            .context("managed E2E case source is outside the target root")?
+            .to_path_buf();
+        ensure!(
+            !case_source.as_os_str().is_empty(),
+            "managed E2E case source must be below the target root"
+        );
+        let mut index = Self::empty(run_key, case_source);
+        index.path_anchor = RunIndexPathAnchor::TargetRoot;
+        Ok(index)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::case_group::{CanonicalCase, CanonicalCaseGroup};
+
+    #[test]
+    fn managed_paths_support_review_only_and_build_context_entries() {
+        let delivery: DeliveryProjectConfig = serde_yaml::from_str(
+            "pr_base: dev-migration\nmanaged_paths:\n  - ../docs\n  - path: ../backend-rs\n    build_context: sibling-backend\n",
+        )
+        .unwrap();
+
+        assert_eq!(delivery.managed_paths[0].path(), Path::new("../docs"));
+        assert_eq!(delivery.managed_paths[0].build_context(), None);
+        assert_eq!(delivery.managed_paths[1].path(), Path::new("../backend-rs"));
+        assert_eq!(
+            delivery.managed_paths[1].build_context(),
+            Some("sibling-backend")
+        );
+        let rendered = serde_yaml::to_string(&delivery).unwrap();
+        assert!(rendered.contains("- ../docs"));
+        assert!(rendered.contains("build_context: sibling-backend"));
+    }
 
     #[test]
     fn active_run_orders_cases_globally_by_recording_timestamp() {

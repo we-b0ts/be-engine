@@ -6,6 +6,7 @@ use serde::Serialize;
 pub(crate) struct TargetContainerConfig {
     pub(crate) target_root: PathBuf,
     pub(crate) dockerfile: PathBuf,
+    pub(crate) build_contexts: Vec<crate::e2e_run::TargetBuildContext>,
     pub(crate) startup: crate::startup::StartupConfig,
     pub(crate) port: u16,
     pub(crate) breeze_enabled: bool,
@@ -19,6 +20,7 @@ impl TargetContainerConfig {
         Self {
             target_root,
             dockerfile: project.target_dockerfile.clone(),
+            build_contexts: project.target_build_contexts.clone(),
             startup: project.target_startup.clone(),
             port: project.target_port,
             breeze_enabled: project.breeze_container.is_some(),

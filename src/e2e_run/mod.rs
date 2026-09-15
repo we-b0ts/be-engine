@@ -3,6 +3,7 @@ mod admin_startup;
 mod branch;
 mod case_progress;
 mod config;
+mod delivery;
 mod dirty_evidence;
 mod evidence;
 mod execute;
@@ -27,7 +28,7 @@ use anyhow::{Result, ensure};
 use serde::Serialize;
 
 use crate::case_group::{
-    CaseGroupOptions, ensure_case_group, load_case_group_inventory,
+    CaseGroupOptions, ensure_case_group_with_target_root, load_case_group_inventory,
     load_complete_case_group_inventory,
 };
 
@@ -38,6 +39,7 @@ pub use admin_startup::{
 
 pub(crate) use config::render_project_config;
 pub(crate) use config::resolve_project;
+pub(crate) use delivery::resolve_managed_directories;
 pub use dirty_evidence::{
     E2eDependencyDifference, E2eDependencyEndpoint, E2eDependencyObservation,
     E2eDependencyRepresentative, E2eDirtyCluster, E2eDirtyCounts, E2eSourcePreReadiness,
@@ -54,7 +56,7 @@ pub(crate) use execute::recover_focused_e2e_api;
 pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};
 pub(crate) use http_driver::wait_until_ready;
 use model::RunStatus;
-pub(crate) use model::{ResolvedProjectConfig, TargetQualityGateConfig};
+pub(crate) use model::{ResolvedProjectConfig, TargetBuildContext, TargetQualityGateConfig};
 pub(crate) use reclassify::{
     FocusedBackgroundReclassification, ensure_focused_background_reclassification_revisable,
     focused_background_reclassification_recovery_required, latest_focused_api,
@@ -175,16 +177,19 @@ pub fn prepare_e2e_run(options: E2eRunPrepareOptions) -> Result<E2eRunPrepareRes
         "cannot change case grouping while a focused API attempt is active"
     );
     std::fs::create_dir_all(&layout.run_root)?;
-    let group = ensure_case_group(CaseGroupOptions {
-        case_source: options.context.case_source,
-        case_dir: options.case_dir,
-        method: options.method,
-        source_route: options.source_route,
-        pattern: options.pattern,
-        source_revision: options.source_revision,
-        output: layout.group_index_path.clone(),
-        recorder_config: Some(config.recorder_config),
-    })?;
+    let group = ensure_case_group_with_target_root(
+        CaseGroupOptions {
+            case_source: options.context.case_source,
+            case_dir: options.case_dir,
+            method: options.method,
+            source_route: options.source_route,
+            pattern: options.pattern,
+            source_revision: options.source_revision,
+            output: layout.group_index_path.clone(),
+            recorder_config: Some(config.recorder_config),
+        },
+        &layout.target_root,
+    )?;
     let group_cases = group.case_ids.len();
     let complete =
         load_complete_case_group_inventory(&layout.group_index_path, &layout.case_source).ok();
@@ -221,6 +226,19 @@ pub(crate) fn prepare_case_group_index_rebuild(context: &E2eRunContext) -> Resul
     );
     std::fs::create_dir_all(&layout.run_root)?;
     Ok(layout.group_index_path)
+}
+
+pub(crate) fn reanchor_case_group_run_index(
+    context: &E2eRunContext,
+    source_revision: &str,
+    case_inventory_id: &str,
+) -> Result<Option<PathBuf>> {
+    let (_, layout) = config::resolve_layout(
+        &context.target_root,
+        &context.case_source,
+        context.run_key.as_deref(),
+    )?;
+    store::reanchor_index_case_source(&layout, source_revision, case_inventory_id)
 }
 
 pub(crate) fn focused_process_output_evidence(

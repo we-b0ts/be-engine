@@ -15,7 +15,7 @@ use super::{E2eRunInitOptions, E2eRunInitResult, branch};
 use crate::replay::validate_replay_policy;
 use anyhow::{Context, Result, bail, ensure};
 
-pub(super) const CONFIG_VERSION: u32 = 17;
+pub(super) const CONFIG_VERSION: u32 = 18;
 pub(super) const DEFAULT_RUNTIME_ROOT: &str = crate::internal_runtime::PROJECT_RELATIVE_ROOT;
 pub(crate) const PROJECT_CONFIG_FILE: &str = "project.yaml";
 
@@ -129,7 +129,6 @@ pub(crate) fn render_project_config(
                 startup_timeout_seconds: DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS,
                 startup: crate::startup::normalized_config(options.target_startup.clone())?,
                 runtime_outputs: Vec::new(),
-                quality_gates: None,
             },
             replay: ReplayProjectConfig {
                 policy: options.replay_policy.clone(),
@@ -142,6 +141,7 @@ pub(crate) fn render_project_config(
             },
             delivery: DeliveryProjectConfig {
                 pr_base: options.pr_base.clone(),
+                managed_paths: Vec::new(),
             },
             state: StateProjectConfig {
                 runtime_root: PathBuf::from(DEFAULT_RUNTIME_ROOT),
@@ -208,6 +208,10 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         .join(crate::repository::TRAFFIC_E2E_ROOT)
         .join(PROJECT_CONFIG_FILE);
     let config = load_project_config(&target_root, &config_path)?;
+    let managed = super::delivery::resolve_project_managed_paths(
+        &target_root,
+        &config.project.delivery.managed_paths,
+    )?;
     let policy_path = resolve_under(&target_root, &config.project.replay.policy);
     let policy = validate_replay_policy(&policy_path).context("invalid replay policy")?;
     ensure!(
@@ -254,11 +258,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
             Ok::<String, anyhow::Error>(format!("127.0.0.1:{port}"))
         })
         .transpose()?;
-    let target_quality_gates = config
-        .project
-        .target
-        .quality_gates
-        .unwrap_or_else(|| inferred_target_quality_gates(&target_root));
+    let target_quality_gates = inferred_target_quality_gates(&target_root, &managed.paths);
     let process_outputs = config
         .project
         .process_outputs
@@ -276,6 +276,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         target_root.clone(),
         ResolvedProjectConfig {
             target_dockerfile: resolve_under(&target_root, &config.project.target.dockerfile),
+            target_build_contexts: managed.build_contexts,
             target_startup: config.project.target.startup,
             target_runtime_outputs: config.project.target.runtime_outputs,
             target_http_origin: format!("http://127.0.0.1:{target_port}"),
@@ -307,6 +308,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
                 super::model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
             ),
             pr_base: config.project.delivery.pr_base,
+            managed_paths: managed.paths,
             recorder_config,
             source_traffic_policy,
             runner_owned_response_assertions: policy.runner_owned_response_assertions,
@@ -605,6 +607,7 @@ mod tests {
         }
         assert!(!raw.lines().any(|line| line.trim_start() == "port: 8081"));
         assert_eq!(config.project.delivery.pr_base, "integration");
+        assert!(config.project.delivery.managed_paths.is_empty());
         assert_eq!(result.pr_base, "integration");
         assert_eq!(
             config.project.state.runtime_root,
@@ -857,23 +860,18 @@ mod tests {
     }
 
     #[test]
-    fn explicit_empty_quality_gates_disable_inference() {
+    fn project_quality_gates_are_not_user_configurable() {
         let target = target();
-        fs::write(
-            target.path().join("Cargo.toml"),
-            "[workspace]\nresolver = \"2\"\n",
-        )
-        .unwrap();
         initialize(options(target.path())).unwrap();
         let config_path = target.path().join(".traffic-e2e/project.yaml");
-        let mut project: ProjectConfig =
+        let mut project: serde_yaml::Value =
             serde_yaml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
-        project.project.target.quality_gates = Some(Vec::new());
+        project["project"]["target"]["quality_gates"] = serde_yaml::Value::Sequence(Vec::new());
         fs::write(config_path, serde_yaml::to_string(&project).unwrap()).unwrap();
 
-        let (_, config) = resolve_project(target.path()).unwrap();
+        let error = resolve_project(target.path()).unwrap_err();
 
-        assert!(config.target_quality_gates.is_empty());
+        assert!(format!("{error:#}").contains("quality_gates"));
     }
 
     #[test]

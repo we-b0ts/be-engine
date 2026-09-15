@@ -750,19 +750,19 @@ mod tests {
         assert!(target.path().join(RECORDING_DOCKERFILE_PATH).is_file());
         assert!(target.path().join(TARGET_DOCKERFILE_PATH).is_file());
         let cargo = fs::read_to_string(target.path().join(TARGET_CARGO_PATH)).unwrap();
-        assert!(cargo.contains("tag = \"v0.0.1\""));
+        assert!(cargo.contains("brz-logs = { version = \"=0.0.6\""));
         assert!(cargo.contains("features = [\"metrics\"]"));
-        assert!(cargo.contains("tag = \"v0.0.2\", features = [\"macros\"]"));
+        assert!(
+            cargo.contains("http-server = { package = \"brz-http-server\", version = \"=0.0.13\"")
+        );
         let lock = fs::read_to_string(target.path().join(TARGET_CARGO_LOCK_PATH)).unwrap();
-        assert!(lock.contains(
-            "git+ssh://git@git.intra.demo.test:2222/platform/breeze/logs.git?tag=v0.0.1"
-        ));
-        assert!(lock.contains(
-            "git+ssh://git@git.intra.demo.test:2222/platform/breeze/http-server.git?tag=v0.0.2"
-        ));
+        assert!(lock.contains("name = \"brz-logs\""));
+        assert!(lock.contains("name = \"brz-http-server\""));
+        assert!(!lock.contains("git+ssh://git@git.intra.demo.test"));
         let main = fs::read_to_string(target.path().join(TARGET_MAIN_PATH)).unwrap();
         assert!(!main.contains("TARGET_PORT_ENV"));
-        assert!(main.contains("#[http_server::get(\"/healthz\")]"));
+        assert!(main.contains("#[http_server::get(\"/healthz\", group = readiness_apis)]"));
+        assert!(main.contains("http_server::handlers!(; group = readiness_apis)"));
         assert!(main.contains("StatusCode::OK"));
         assert!(main.contains("Delete this module declaration"));
         assert!(main.contains("startup_probe::run().await?;"));
@@ -779,8 +779,9 @@ mod tests {
         assert!(dockerfile.contains("COPY Cargo.toml Cargo.lock ./"));
         assert!(dockerfile.contains("COPY src ./src"));
         assert!(!dockerfile.contains("COPY . ."));
-        assert!(dockerfile.contains("--mount=type=ssh,required=true"));
-        assert!(dockerfile.contains("git ls-remote --exit-code"));
+        assert!(!dockerfile.contains("--mount=type=ssh"));
+        assert!(!dockerfile.contains("git ls-remote"));
+        assert!(!dockerfile.contains("git.intra.demo.test"));
         assert!(!dockerfile.contains("__TARGET_"));
         for rule in TARGET_DOCKERIGNORE_RULES {
             assert!(
@@ -801,7 +802,7 @@ mod tests {
                 .exists()
         );
         let project = fs::read_to_string(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
-        assert!(project.contains("version: 17"));
+        assert!(project.contains("version: 18"));
         assert!(project.contains("dockerfile: .traffic-e2e/Dockerfile.e2e"));
         assert!(project.contains("success_status: 200"));
         assert!(!project.contains("http_host:"));
@@ -913,7 +914,7 @@ mod tests {
             .unwrap();
         assert!(!main.contains("TARGET_PORT_ENV"));
         assert!(main.contains("const DEFAULT_PORT: u16 = 8181;"));
-        assert!(main.contains("#[http_server::get(\"/ready\")]"));
+        assert!(main.contains("#[http_server::get(\"/ready\", group = readiness_apis)]"));
         assert!(main.contains("StatusCode::OK"));
     }
 

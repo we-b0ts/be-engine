@@ -35,6 +35,10 @@ listener, lifecycle, startup, or configuration contract. Load only affected SDKs
 - `.traffic-e2e/Dockerfile.recording` and `.traffic-e2e/Dockerfile.e2e` remain
   target-owned build contracts. Change either when the current work scope
   requires source-adaptor or target-runtime integration; the assigned code author owns their contents.
+- A `project.delivery.managed_paths` object with `build_context` exposes its
+  declared directory as a BuildKit named context. Use that exact name through
+  `COPY --from` or `RUN --mount=from`; never use `COPY ../...` or assume that an
+  undeclared sibling is visible to the target build.
 - Product behavior must not depend on tests, fixtures, debug branches, or
   developer-only defaults.
 

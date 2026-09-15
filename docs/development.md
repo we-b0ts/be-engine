@@ -59,7 +59,7 @@ Published Linux/amd64 references:
 ```text
 registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1@sha256:095f39e3b242e744ec8f7d85e732bb663af8a4a02bdef0d7a216d2e66e365a62
 registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev@sha256:c71fa374b229bc6fbf7ad34c5bb5cede1c27b2314a7b274b62ce2d44d3213107
-registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-builder:1.97.1@sha256:99663c03c7da6d638f9bef5d84d923840e2069e3f32067851b43ea7abf3f0004
+registry.api.demo.test/weibo_rd_if/rust-builder:1.98.1@sha256:99fe1fa7319ef65993c61ca9aa9f3e58a10573a2701a19109adabca46007a670
 registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.2@sha256:d322b050229334c2fec00cdce366a066697a7bafaf9b6842d77793eb1e4f10d2
 ```
 
@@ -141,12 +141,16 @@ docker buildx build \
   --build-arg NO_PROXY \
   --load \
   --file docker/builder/Dockerfile \
-  --tag registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-builder:1.97.1 \
+  --tag registry.api.demo.test/weibo_rd_if/rust-builder:1.98.1 \
   .
 ```
 
 The builder source pins that upstream by digest. Proxies are one-time build
 inputs only; do not persist them in the image or expose them to target builds.
+The builder intentionally leaves `CARGO_BUILD_TARGET` unset. Its Rust toolchain
+uses the native `x86_64-unknown-linux-gnu` host target and therefore preserves
+Cargo's standard `target/release` artifact layout. A project that explicitly
+cross-compiles owns its target selection and artifact path.
 
 Build the Linux/amd64 target runtime through the host network:
 
@@ -180,6 +184,19 @@ performs the mandatory worker handoff review. Register the worktree during
 base. Use `--process-output ID` for a process-output worker. After the final
 edit and commit, supply the returned report through `worker report ...
 --activity handoff_ready --review-report /absolute/report.json`.
+
+When the configured target is a subdirectory of a larger Git repository, keep
+`--target-root` pointed at that project subdirectory. `--worktree` may point at
+either the outer Git worktree root or the corresponding project subdirectory;
+the engine normalizes it to the project subdirectory. By default source diffs,
+review paths, fingerprints, and Replay-isolation checks remain scoped to that
+project. Add target-relative sibling directories to
+`project.delivery.managed_paths` when the target and a rapidly changing local
+dependency must be delivered together. Every managed directory must exist,
+belong to the same Git repository, and be disjoint from the target and the
+other managed directories. Managed sibling files are reported relative to the
+target, for example `../backend-rs/src/lib.rs`. Once managed paths are present,
+a candidate with tracked changes outside the target and those paths is rejected.
 
 Review runs the same complete quality implementation for worker and integration
 deliveries. It enforces complete changed production Rust files <=1000 lines.
@@ -1755,7 +1772,7 @@ create a source-review obligation. New committed, staged, working-tree or untrac
 source/configuration changes require a current accepted integration review before
 verification and final delivery. Pending handoff/finding admission retains its
 ordinary review contract; the exemption does not admit an unpublished candidate.
-Source review and configured quality commands belong to the delegated integrator,
+Source review and engine-standard quality commands belong to the delegated integrator,
 not the coordinator's startup path.
 
 An actual active/stale engine operation must finish or recover before replacement;
@@ -1841,16 +1858,15 @@ managed resources and allocates a replacement run. A pending rule plan produces
 the evidence validation performed at plan time, so its own workflow revision
 does not make apply stale. A corrected plan using the same evidence ID replaces
 the pending preview before apply; recorder configuration is still changed only
-by apply. Worker and integration `review check` run format, workspace tests,
-Clippy and the mandatory source/Replay-isolation suite before delivery. The
+by apply. Worker and integration `review check` run the engine-standard format,
+workspace tests, Clippy, and mandatory source/Replay-isolation suite before delivery. The
 coordinator admits the integration report for the exact published candidate;
 `advance_required` then starts Replay. Missing or stale proof returns
 `source_review_required` for the code integrator, including before revalidation
 when code or required inputs have changed. Initial diagnostic Replay can run
-before the workflow has a delivery report. Explicit `target.quality_gates`
-replace the inferred commands, and an
-explicit empty list disables only those configurable commands. Mandatory source
-review and Replay isolation remain enabled.
+before the workflow has a delivery report. Repository-specific development
+requirements belong in `AGENTS.md` or `CLAUDE.md`; project configuration cannot
+replace or disable the engine-standard quality checks.
 
 A failed focused E2E attempt reuses the same finalized standard cases after the
 target changes. A passing attempt advances to a newly allocated comparison
@@ -2024,11 +2040,16 @@ backend-rewrite-admin --target-root <target> repair rebuild-case-groups \
 
 The command requires an idle coordinator and traffic runtime, verifies that the
 run belongs to the current workflow, and rebuilds the complete derived index
-from its canonical API inventory. It preserves the recording and keeps the old
-index beside the replacement as `case-groups.before-rebuild-*.json`. If the
-replacement is incomplete or invalid, the old index is restored automatically.
-After a successful repair, execute only the exact operation retry returned by
-`backend-rewrite status`.
+from its canonical API inventory. Managed indexes store their case source and
+member paths relative to the target root, so they remain valid when the complete
+target directory is moved. When migrating a copied legacy absolute-path index,
+the command also requires the original index and case source to remain readable,
+verifies the run ID, source revision, and location-independent case inventory,
+and migrates the E2E run index in the same operation. It preserves the recording
+and keeps backups beside both replacements. If the replacement is incomplete or
+invalid, the old case-group index is restored automatically. After a successful
+repair, execute only the exact operation retry returned by `backend-rewrite
+status`.
 
 Initialize a rewrite target once, before its first coordinator session:
 
@@ -2089,7 +2110,7 @@ observed restart or configuration/state change during capture, but cannot
 freeze concurrent application or external-volume writes. Use a stopped,
 quiescent source when a consistent application checkpoint is required.
 
-The command generates version-17 `.traffic-e2e/project.yaml`,
+The command generates version-18 `.traffic-e2e/project.yaml`,
 `.traffic-e2e/source-traffic-policy.yaml`, and `.traffic-e2e/verification.yaml`.
 When the root `Cargo.toml`, `Cargo.lock`, and `src/main.rs` are all absent, it
 also generates a runnable readiness-only Rust target using `http-server`
@@ -2126,11 +2147,32 @@ target:
       container_path: /data1/weibo/logs
       mode: read_write
       retention: keep
-  # Optional override; omit to infer the standard Rust gates when Cargo.toml exists.
-  # quality_gates:
-  #   - name: project-check
-  #     argv: [make, check]
 ```
+
+The target itself is always managed. Add other code directories from the same
+Git repository under delivery without moving the E2E configuration to the
+repository root:
+
+```yaml
+delivery:
+  pr_base: dev-migration
+  managed_paths:
+    - path: ../backend-rs
+      build_context: sibling-backend
+```
+
+Paths are relative to the target, must use a normalized form with any `..`
+components first, and cannot select the repository root, a nested Git
+repository, or an overlapping directory. Omit `managed_paths` to retain the
+single-target behavior of version-18 configuration.
+The string form, such as `- ../docs`, adds review and delivery scope only. The
+object form additionally exposes that exact directory to the target Docker
+build under its explicit `build_context` name. The target remains the default
+Docker context; consume an additional context explicitly in `Dockerfile.e2e`,
+for example `COPY --from=sibling-backend src /build/backend-rs/src`. Context
+names must be unique lowercase Docker identifiers of at most 64 ASCII
+characters. The engine does not infer repository layout or copy an additional
+context into an image automatically.
 
 Target readiness path and status come from the project document's
 `recorder.http_gateway.ready` section. Target startup readiness uses
@@ -2141,11 +2183,13 @@ timeout remains a coordinator-owned default. The target's native HTTP port is th
 `recorder.http_gateway.matched_upstream`; Replay uses it on loopback and Comparison uses
 it on the run-owned target bridge IP.
 
-Each quality gate is an exact argv executed without a shell by `review check`
-in the worker or integration worktree, using the canonical target's configuration.
-At most eight uniquely named commands may be configured, with at most 32
-arguments each. `quality_gates: []` explicitly disables inference; built-in
-source and Replay-isolation checks remain mandatory.
+`review check` owns the quality standard; `project.yaml` has no configurable
+quality-command field. For each Rust target, it runs format, workspace tests,
+and Clippy. It applies the same checks to every managed directory that
+contains `Cargo.toml`, using the target-relative `--manifest-path` so that
+directory is tested independently instead of merely compiled as a dependency.
+Repository-specific development requirements belong in `AGENTS.md` or
+`CLAUDE.md` and do not replace the engine standard.
 
 Managed replay reads its target response limit from
 `recorder.recording.max_body_bytes` in `project.yaml`.

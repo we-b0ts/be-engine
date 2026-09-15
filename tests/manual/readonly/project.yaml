@@ -1,4 +1,4 @@
-version: 17
+version: 18
 project:
   source:
     snapshot: .traffic-e2e/local/source

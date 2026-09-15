@@ -41,8 +41,16 @@ fn check_candidate(
     state: &RewriteState,
     options: RewriteReviewOptions,
 ) -> Result<RewriteReviewReport> {
-    let root = fs::canonicalize(options.worktree.as_deref().unwrap_or(target_root))?;
+    let root = source_diff::project_root_in_worktree(
+        target_root,
+        options.worktree.as_deref().unwrap_or(target_root),
+    )?;
     candidate::same_repository(target_root, &root)?;
+    let (_, candidate_project) = crate::e2e_run::resolve_project(&root)?;
+    ensure!(
+        candidate_project.managed_paths == project.managed_paths,
+        "delivery.managed_paths differs from the canonical target; publish configuration changes before reviewing code"
+    );
     let integration_mode = options.integration || options.worktree.is_none();
     let canonical_head = candidate::head(target_root)?;
     let canonical_fingerprint = fingerprint::repository_fingerprint(target_root)?;
@@ -95,6 +103,7 @@ fn check_candidate(
         context_fingerprint: candidate::context(target_root, project)?,
         scan_base_revision: candidate::scan_base(&root, &project.pr_base)?,
     };
+    source_diff::ensure_changed_paths_managed(&root, &validation.scan_base_revision)?;
     // Scan the whole PR in both modes, including code inherited before dispatch.
     let (files, findings) = scan::scan(&root, &validation.scan_base_revision)?;
     let mut evidence = if let Some(path) = &options.evidence {
@@ -236,7 +245,7 @@ pub(super) fn bind(
     }) else {
         return Ok(false);
     };
-    let worktree = fs::canonicalize(worktree)?;
+    let worktree = source_diff::project_root_in_worktree(root, worktree)?;
     let common = |path: &Path| -> Result<PathBuf> {
         Ok(fs::canonicalize(
             source_diff::git_text(

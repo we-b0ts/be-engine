@@ -557,3 +557,73 @@ fn complete_inventory_requires_every_published_case_grouped_once() {
         2
     );
 }
+
+#[test]
+fn target_root_relative_index_survives_moving_the_target() {
+    let temporary = tempdir().unwrap();
+    let original_root = temporary.path().join("original-target");
+    let moved_root = temporary.path().join("moved-target");
+    let source = original_root.join("recordings/run");
+    let member = source.join("health");
+    write_case(&source, "health", "case-health", "GET", "/health");
+    let output = original_root.join("runtime/run/case-groups.json");
+
+    super::ensure_case_group_with_target_root(
+        options(&source, &member, &output, "/health", None),
+        &original_root,
+    )
+    .unwrap();
+
+    let persisted: serde_json::Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+    assert_eq!(persisted["version"], 2);
+    assert_eq!(persisted["path_anchor"], "target_root");
+    assert_eq!(persisted["case_source"], "recordings/run");
+    assert_eq!(
+        persisted["groups"][0]["member_dirs"][0],
+        "recordings/run/health"
+    );
+    assert_eq!(
+        persisted["groups"][0]["manifest"],
+        "runtime/run/case-groups.json"
+    );
+
+    fs::rename(&original_root, &moved_root).unwrap();
+    let inventory = load_complete_case_group_inventory(
+        &moved_root.join("runtime/run/case-groups.json"),
+        &moved_root.join("recordings/run"),
+    )
+    .unwrap();
+
+    assert_eq!(inventory.groups.len(), 1);
+    assert_eq!(inventory.groups[0].cases.len(), 1);
+    assert_eq!(
+        inventory.groups[0].cases[0].case_dir,
+        moved_root.join("recordings/run/health/case-health")
+    );
+}
+
+#[test]
+fn absolute_index_is_not_silently_rebased_to_another_case_source() {
+    let temporary = tempdir().unwrap();
+    let original_source = temporary.path().join("original-cases");
+    let original_member = original_source.join("health");
+    write_case(&original_source, "health", "case-health", "GET", "/health");
+    let original_output = temporary.path().join("original-index/case-groups.json");
+    ensure_case_group(options(
+        &original_source,
+        &original_member,
+        &original_output,
+        "/health",
+        None,
+    ))
+    .unwrap();
+
+    let copied_source = temporary.path().join("copied-cases");
+    write_case(&copied_source, "health", "case-health", "GET", "/health");
+    let copied_output = temporary.path().join("copied-index/case-groups.json");
+    fs::create_dir_all(copied_output.parent().unwrap()).unwrap();
+    fs::copy(original_output, &copied_output).unwrap();
+
+    let error = load_complete_case_group_inventory(&copied_output, &copied_source).unwrap_err();
+    assert!(error.to_string().contains("different case source"));
+}

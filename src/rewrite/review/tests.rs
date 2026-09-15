@@ -383,6 +383,279 @@ fn assigned_git_worktree_review_is_accepted_and_integrated_without_a_private_wor
 }
 
 #[test]
+fn nested_target_maps_repository_worktree_and_reviews_managed_sibling() {
+    let repository = tempfile::tempdir().unwrap();
+    let target = repository.path().join("backend-rs-intra");
+    fs::create_dir_all(target.join("src")).unwrap();
+    fs::create_dir_all(repository.path().join("sibling/src")).unwrap();
+    crate::rewrite::test_support::install_project_config(
+        &target,
+        "master",
+        crate::rewrite::test_support::managed_test_recorder(),
+        Some(serde_json::json!([])),
+    );
+    crate::rewrite::test_support::set_managed_paths(&target, &["../sibling"]);
+    fs::write(
+        target.join(".traffic-e2e/verification.yaml"),
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+    )
+    .unwrap();
+    fs::write(target.join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();
+    fs::write(target.join("src/lib.rs"), "pub fn value() -> u8 { 1 }\n").unwrap();
+    fs::write(
+        repository.path().join("sibling/src/lib.rs"),
+        "pub fn sibling() {}\n",
+    )
+    .unwrap();
+    git(repository.path(), &["init", "-q", "-b", "master"]);
+    git(
+        repository.path(),
+        &["config", "user.email", "test@example.com"],
+    );
+    git(
+        repository.path(),
+        &["config", "user.name", "Traffic E2E Test"],
+    );
+    git(repository.path(), &["add", "."]);
+    git(repository.path(), &["commit", "-qm", "baseline"]);
+    git(repository.path(), &["switch", "-qc", "coordinator"]);
+
+    let state = implementation_state_with_inventory(false);
+    let scope = RewriteWorkScope::Api {
+        api: state.api.clone(),
+    };
+    RewriteStore::new(&target).unwrap().save(&state).unwrap();
+
+    let worktrees = tempfile::tempdir().unwrap();
+    let repository_worktree = worktrees.path().join("worker");
+    git(
+        repository.path(),
+        &[
+            "worktree",
+            "add",
+            "-qb",
+            "worker-code",
+            repository_worktree.to_str().unwrap(),
+        ],
+    );
+    let target_worktree = repository_worktree.join("backend-rs-intra");
+    let envelope = worker::confirm(crate::rewrite::RewriteWorkerConfirmOptions {
+        target_root: target.clone(),
+        work_scope: scope.clone(),
+        worktree: Some(repository_worktree.clone()),
+        agent_handle: "nested-worker".into(),
+        agent_name: None,
+    })
+    .unwrap();
+    assert_eq!(envelope.schema_version, 32);
+    let stored = RewriteStore::new(&target).unwrap().load().unwrap().unwrap();
+    assert_eq!(
+        stored
+            .worker_bindings
+            .get(&scope.binding_key())
+            .unwrap()
+            .review_assignment
+            .as_ref()
+            .unwrap()
+            .worktree,
+        target_worktree
+    );
+
+    fs::write(
+        target_worktree.join("src/lib.rs"),
+        "pub fn start() { tokio::spawn(async {}); }\n",
+    )
+    .unwrap();
+    fs::write(
+        repository_worktree.join("sibling/src/lib.rs"),
+        "pub fn sibling() { tokio::spawn(async {}); }\n",
+    )
+    .unwrap();
+    git(&repository_worktree, &["add", "."]);
+    git(
+        &repository_worktree,
+        &["commit", "-qm", "nested target delivery"],
+    );
+
+    let mut options = RewriteReviewOptions {
+        target_root: target,
+        worktree: Some(repository_worktree),
+        scope: Some(scope),
+        evidence: None,
+        integration: false,
+        handoff_id: None,
+        hardcode_ai_verified: Vec::new(),
+    };
+    let report = check(options.clone()).unwrap();
+    assert_eq!(report.worktree, target_worktree);
+    assert_eq!(report.status, ReviewStatus::EvidenceRequired);
+    assert_eq!(report.files.len(), 2);
+    assert!(report.files.contains_key(Path::new("src/lib.rs")));
+    assert!(
+        report
+            .files
+            .contains_key(Path::new("../sibling/src/lib.rs"))
+    );
+    assert_eq!(report.findings.len(), 2);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.file == Path::new("src/lib.rs"))
+    );
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.file == Path::new("../sibling/src/lib.rs"))
+    );
+    let proof = ReviewEvidence {
+        spawns: report
+            .findings
+            .iter()
+            .map(|finding| SpawnEvidence {
+                finding_id: finding.id.clone(),
+                ownership: SpawnOwnership::Startup,
+                startup_entry: Some(ReviewCodeEvidence {
+                    file: finding.file.clone(),
+                    line: finding.line,
+                    fact: "startup entry owns the task".into(),
+                }),
+                call_chain: vec![ReviewCodeEvidence {
+                    file: finding.file.clone(),
+                    line: finding.line,
+                    fact: "startup invokes this task".into(),
+                }],
+                request_path_review: "all callers are startup-owned".into(),
+                task_lifecycle: "the application owns shutdown and task completion".into(),
+            })
+            .collect(),
+    };
+    let evidence = target_worktree.join(".traffic-e2e/local/managed-proof.json");
+    write_json(&evidence, &proof).unwrap();
+    options.evidence = Some(evidence);
+    assert_eq!(check(options.clone()).unwrap().status, ReviewStatus::Passed);
+
+    fs::create_dir_all(target_worktree.join("../unmanaged")).unwrap();
+    fs::write(
+        target_worktree.join("../unmanaged/file.txt"),
+        "not reviewed\n",
+    )
+    .unwrap();
+    git(&target_worktree, &["add", "../unmanaged/file.txt"]);
+    git(&target_worktree, &["commit", "-qm", "unmanaged change"]);
+    assert!(
+        check(options)
+            .unwrap_err()
+            .to_string()
+            .contains("outside the target and delivery.managed_paths")
+    );
+}
+
+#[test]
+fn review_applies_the_same_rust_gates_to_a_managed_sibling() {
+    let repository = tempfile::tempdir().unwrap();
+    let target = repository.path().join("service");
+    let sibling = repository.path().join("shared");
+    fs::create_dir_all(&target).unwrap();
+    fs::create_dir_all(sibling.join("src")).unwrap();
+    crate::rewrite::test_support::install_project_config(
+        &target,
+        "master",
+        crate::rewrite::test_support::managed_test_recorder(),
+        None,
+    );
+    crate::rewrite::test_support::set_managed_paths(&target, &["../shared"]);
+    fs::write(
+        target.join(".traffic-e2e/verification.yaml"),
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+    )
+    .unwrap();
+    fs::write(target.join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();
+    fs::write(
+        sibling.join("Cargo.toml"),
+        "[package]\nname = \"shared\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::write(
+        sibling.join("Cargo.lock"),
+        "# This file is automatically @generated by Cargo.\n# It is not intended for manual editing.\nversion = 4\n\n[[package]]\nname = \"shared\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(sibling.join(".gitignore"), "/target/\n").unwrap();
+    fs::write(sibling.join("src/lib.rs"), "pub fn shared() {}\n").unwrap();
+    git(repository.path(), &["init", "-q", "-b", "master"]);
+    git(
+        repository.path(),
+        &["config", "user.email", "test@example.com"],
+    );
+    git(
+        repository.path(),
+        &["config", "user.name", "Traffic E2E Test"],
+    );
+    git(repository.path(), &["add", "."]);
+    git(repository.path(), &["commit", "-qm", "baseline"]);
+    git(repository.path(), &["switch", "-qc", "coordinator"]);
+    RewriteStore::new(&target)
+        .unwrap()
+        .save(&crate::rewrite::test_support::test_state())
+        .unwrap();
+
+    let unchanged = check(RewriteReviewOptions {
+        target_root: target.clone(),
+        worktree: None,
+        scope: None,
+        evidence: None,
+        integration: false,
+        handoff_id: None,
+        hardcode_ai_verified: Vec::new(),
+    })
+    .unwrap();
+    assert_eq!(
+        unchanged.required_gates,
+        [
+            "source-review",
+            "replay-isolation",
+            "managed-1-rust-format",
+            "managed-1-rust-test",
+            "managed-1-rust-clippy"
+        ]
+    );
+    assert_eq!(unchanged.quality.unwrap().commands.len(), 3);
+
+    fs::write(
+        sibling.join("src/lib.rs"),
+        "pub fn shared() -> u8 {\n    1\n}\n",
+    )
+    .unwrap();
+    git(repository.path(), &["add", "shared/src/lib.rs"]);
+    git(repository.path(), &["commit", "-qm", "change shared crate"]);
+    let changed = check(RewriteReviewOptions {
+        target_root: target,
+        worktree: None,
+        scope: None,
+        evidence: None,
+        integration: false,
+        handoff_id: None,
+        hardcode_ai_verified: Vec::new(),
+    })
+    .unwrap();
+
+    assert_eq!(changed.status, ReviewStatus::Passed);
+    assert_eq!(
+        changed.required_gates,
+        [
+            "source-review",
+            "replay-isolation",
+            "managed-1-rust-format",
+            "managed-1-rust-test",
+            "managed-1-rust-clippy"
+        ]
+    );
+    assert_eq!(changed.quality.unwrap().commands.len(), 3);
+}
+
+#[test]
 fn completed_api_quality_rework_reuses_worker_and_duplicate_route_is_idempotent() {
     let (target, scope) = setup();
     let store = RewriteStore::new(target.path()).unwrap();

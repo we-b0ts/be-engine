@@ -63,17 +63,14 @@ pub(in crate::rewrite) fn install_project_config(
     target_root: &Path,
     pr_base: &str,
     recorder: crate::config::AppConfig,
-    quality_gates: Option<serde_json::Value>,
+    _quality_gates: Option<serde_json::Value>,
 ) {
-    let mut target = serde_json::json!({
+    let target = serde_json::json!({
         "dockerfile": ".traffic-e2e/Dockerfile.e2e",
         "startup": {},
     });
-    if let Some(quality_gates) = quality_gates {
-        target["quality_gates"] = quality_gates;
-    }
     let document = serde_json::json!({
-        "version": 17,
+        "version": 18,
         "project": {
             "source": { "snapshot": ".traffic-e2e/local/source" },
             "target": target,
@@ -101,6 +98,14 @@ pub(in crate::rewrite) fn install_project_config(
             .unwrap(),
     )
     .unwrap();
+}
+
+pub(in crate::rewrite) fn set_managed_paths(target_root: &Path, paths: &[&str]) {
+    let path = target_root.join(".traffic-e2e/project.yaml");
+    let mut document: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    document["project"]["delivery"]["managed_paths"] = serde_yaml::to_value(paths).unwrap();
+    fs::write(path, serde_yaml::to_string(&document).unwrap()).unwrap();
 }
 
 pub(in crate::rewrite) fn managed_test_recorder() -> crate::config::AppConfig {
