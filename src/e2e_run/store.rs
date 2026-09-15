@@ -1,6 +1,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
@@ -8,7 +8,8 @@ use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
 use super::model::{
-    ActiveRunState, AssertionReport, CurrentPointer, RunIndex, RunLayout, STATE_VERSION,
+    ActiveRunState, AssertionReport, CurrentPointer, RunIndex, RunIndexPathAnchor, RunLayout,
+    STATE_VERSION,
 };
 
 pub(super) fn begin_active(layout: &RunLayout, state: &ActiveRunState) -> Result<()> {
@@ -89,15 +90,131 @@ pub(super) fn load_or_create_index(
             "E2E run index belongs to another run"
         );
         ensure!(
-            index.case_source == case_source,
+            resolve_index_case_source(layout, &index)? == case_source,
             "E2E run index belongs to another case source"
         );
         return Ok(index);
     }
-    Ok(RunIndex::empty(
+    RunIndex::empty_managed(
         run_key.to_string(),
         case_source.to_path_buf(),
-    ))
+        &layout.target_root,
+    )
+}
+
+pub(super) fn reanchor_index_case_source(
+    layout: &RunLayout,
+    source_revision: &str,
+    current_case_inventory_id: &str,
+) -> Result<Option<PathBuf>> {
+    if !layout.index_path.is_file() {
+        return Ok(None);
+    }
+    let mut index: RunIndex = read_yaml(&layout.index_path)?;
+    ensure!(
+        index.version == STATE_VERSION,
+        "unsupported E2E run index version {}",
+        index.version
+    );
+    ensure!(
+        index.run_key == layout.run_key,
+        "E2E run index belongs to another run"
+    );
+    let current_case_source = fs::canonicalize(&layout.case_source)?;
+    if index.path_anchor == RunIndexPathAnchor::TargetRoot {
+        ensure!(
+            resolve_index_case_source(layout, &index)? == current_case_source,
+            "E2E run index belongs to another case source"
+        );
+        ensure!(
+            index.source_revision == source_revision
+                && index.case_inventory_id == current_case_inventory_id,
+            "target-root-relative E2E run index does not match the rebuilt case inventory"
+        );
+        return Ok(None);
+    }
+
+    let previous_case_source = fs::canonicalize(&index.case_source).with_context(|| {
+        format!(
+            "failed to resolve legacy E2E run case source {}",
+            index.case_source.display()
+        )
+    })?;
+    ensure!(
+        previous_case_source
+            .file_name()
+            .and_then(|value| value.to_str())
+            == Some(layout.run_key.as_str()),
+        "legacy E2E run index does not belong to recording run {}",
+        layout.run_key
+    );
+    ensure!(
+        index.source_revision == source_revision,
+        "legacy E2E run source revision does not match the rebuilt case groups"
+    );
+    let previous_portable_inventory_id =
+        crate::case_group::portable_case_inventory_id(&previous_case_source)?;
+    ensure!(
+        previous_portable_inventory_id
+            == crate::case_group::portable_case_inventory_id(&current_case_source)?,
+        "legacy and current E2E run case sources contain different case inventories"
+    );
+    let previous_legacy_inventory_id =
+        crate::case_group::legacy_case_inventory_id(&previous_case_source)?;
+    ensure!(
+        index.case_inventory_id.is_empty()
+            || index.case_inventory_id == previous_legacy_inventory_id
+            || index.case_inventory_id == previous_portable_inventory_id,
+        "legacy E2E run index case inventory does not match its case source"
+    );
+
+    index.path_anchor = RunIndexPathAnchor::TargetRoot;
+    index.case_source = current_case_source
+        .strip_prefix(&layout.target_root)
+        .context("current E2E run case source is outside the target root")?
+        .to_path_buf();
+    index.case_inventory_id = current_case_inventory_id.to_string();
+    let backup = layout.run_root.join(format!(
+        "state.before-case-group-rebuild-{}.yaml",
+        Uuid::new_v4().simple()
+    ));
+    fs::copy(&layout.index_path, &backup).with_context(|| {
+        format!(
+            "failed to back up E2E run index {} to {}",
+            layout.index_path.display(),
+            backup.display()
+        )
+    })?;
+    write_yaml(&layout.index_path, &index)?;
+    Ok(Some(backup))
+}
+
+fn resolve_index_case_source(layout: &RunLayout, index: &RunIndex) -> Result<PathBuf> {
+    match index.path_anchor {
+        RunIndexPathAnchor::Absolute => fs::canonicalize(&index.case_source).with_context(|| {
+            format!(
+                "failed to resolve E2E run case source {}",
+                index.case_source.display()
+            )
+        }),
+        RunIndexPathAnchor::TargetRoot => {
+            ensure!(
+                !index.case_source.as_os_str().is_empty()
+                    && !index.case_source.is_absolute()
+                    && index
+                        .case_source
+                        .components()
+                        .all(|component| matches!(component, Component::Normal(_))),
+                "target-root-relative E2E run case source must be a normalized relative path"
+            );
+            let resolved = fs::canonicalize(layout.target_root.join(&index.case_source))?;
+            ensure!(
+                resolved.starts_with(&layout.target_root),
+                "target-root-relative E2E run case source escapes the target root"
+            );
+            Ok(resolved)
+        }
+    }
 }
 
 pub(super) fn publish_terminal(

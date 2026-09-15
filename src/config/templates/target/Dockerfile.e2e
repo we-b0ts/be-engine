@@ -1,16 +1,11 @@
-FROM registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-builder:1.97.1@sha256:99663c03c7da6d638f9bef5d84d923840e2069e3f32067851b43ea7abf3f0004 AS builder
+FROM registry.api.demo.test/weibo_rd_if/rust-builder:1.98.1@sha256:99fe1fa7319ef65993c61ca9aa9f3e58a10573a2701a19109adabca46007a670 AS builder
 
 WORKDIR /build
-RUN install --directory --mode 0700 /root/.ssh \
-    && ssh-keyscan -p 2222 git.intra.demo.test >> /root/.ssh/known_hosts
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-RUN --mount=type=ssh,required=true \
-    --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked \
-    --mount=type=cache,id=traffic-e2e-cargo-git,target=/opt/rust/cargo/git,sharing=locked \
+RUN --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked \
     --mount=type=cache,id=traffic-e2e-template-target,target=/build/target,sharing=locked \
-    git ls-remote --exit-code ssh://git@git.intra.demo.test:2222/platform/breeze/logs.git refs/tags/v0.0.1 >/dev/null \
-    && cargo build --locked --release --bin traffic-e2e-target-template \
+    cargo build --locked --release --bin traffic-e2e-target-template \
     && binary="$(find /build/target -type f -path '*/release/traffic-e2e-target-template' -print -quit)" \
     && test -n "${binary}" \
     && install --directory /out \

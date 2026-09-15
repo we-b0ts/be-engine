@@ -8,17 +8,145 @@ use serde::{Deserialize, Serialize};
 
 use crate::path_pattern::path_patterns_overlap;
 
-use super::discovery::{PublishedCase, inventory_id, select_group_cases};
+use super::discovery::{PublishedCase, inventory_id, portable_inventory_id, select_group_cases};
 use super::{CaseGroupStatus, PatternOutcome};
 
-const INDEX_VERSION: u32 = 1;
+const LEGACY_INDEX_VERSION: u32 = 1;
+const INDEX_VERSION: u32 = 2;
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum CaseGroupPathAnchor {
+    #[default]
+    Absolute,
+    TargetRoot,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct CaseGroupIndex {
     pub(super) version: u32,
+    #[serde(default)]
+    pub(super) path_anchor: CaseGroupPathAnchor,
     pub(super) case_source: PathBuf,
     pub(super) source_revision: String,
     pub(super) groups: Vec<CaseGroupRecord>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct IndexPathStorage {
+    anchor: CaseGroupPathAnchor,
+    target_root: Option<PathBuf>,
+}
+
+impl IndexPathStorage {
+    fn for_new_index(
+        case_source: &Path,
+        output: &Path,
+        target_root: Option<&Path>,
+    ) -> Result<Self> {
+        let Some(target_root) = target_root else {
+            return Ok(Self::absolute());
+        };
+        let target_root = fs::canonicalize(target_root)
+            .with_context(|| format!("failed to resolve target root {}", target_root.display()))?;
+        if case_source.starts_with(&target_root) && output.starts_with(&target_root) {
+            Ok(Self {
+                anchor: CaseGroupPathAnchor::TargetRoot,
+                target_root: Some(target_root),
+            })
+        } else {
+            Ok(Self::absolute())
+        }
+    }
+
+    pub(super) fn for_index(index: &CaseGroupIndex, case_source: &Path) -> Result<Self> {
+        match index.path_anchor {
+            CaseGroupPathAnchor::Absolute => Ok(Self::absolute()),
+            CaseGroupPathAnchor::TargetRoot => {
+                validate_relative_path(&index.case_source)?;
+                ensure!(
+                    case_source.ends_with(&index.case_source),
+                    "group index target-root-relative case source does not match the requested case source"
+                );
+                let mut target_root = case_source.to_path_buf();
+                for _ in index.case_source.components() {
+                    ensure!(
+                        target_root.pop(),
+                        "group index target-root-relative case source has no target root"
+                    );
+                }
+                ensure!(
+                    !target_root.as_os_str().is_empty(),
+                    "group index target-root-relative case source has an empty target root"
+                );
+                Ok(Self {
+                    anchor: CaseGroupPathAnchor::TargetRoot,
+                    target_root: Some(target_root),
+                })
+            }
+        }
+    }
+
+    fn absolute() -> Self {
+        Self {
+            anchor: CaseGroupPathAnchor::Absolute,
+            target_root: None,
+        }
+    }
+
+    pub(super) fn anchor(&self) -> CaseGroupPathAnchor {
+        self.anchor
+    }
+
+    pub(super) fn persist(&self, path: &Path) -> Result<PathBuf> {
+        match &self.target_root {
+            Some(target_root) => path
+                .strip_prefix(target_root)
+                .map(Path::to_path_buf)
+                .with_context(|| {
+                    format!(
+                        "path {} is outside target root {}",
+                        path.display(),
+                        target_root.display()
+                    )
+                }),
+            None => Ok(path.to_path_buf()),
+        }
+    }
+
+    pub(super) fn resolve(&self, path: &Path) -> Result<PathBuf> {
+        match &self.target_root {
+            Some(target_root) => {
+                validate_relative_path(path)?;
+                let resolved = fs::canonicalize(target_root.join(path)).with_context(|| {
+                    format!(
+                        "failed to resolve target-root-relative group index path {}",
+                        path.display()
+                    )
+                })?;
+                ensure!(
+                    resolved.starts_with(target_root),
+                    "target-root-relative group index path escapes the target root"
+                );
+                Ok(resolved)
+            }
+            None => fs::canonicalize(path)
+                .with_context(|| format!("failed to resolve group index path {}", path.display())),
+        }
+    }
+}
+
+fn validate_relative_path(path: &Path) -> Result<()> {
+    ensure!(
+        !path.as_os_str().is_empty() && !path.is_absolute(),
+        "target-root-relative group index path must be a non-empty relative path"
+    );
+    ensure!(
+        path.components()
+            .all(|component| matches!(component, Component::Normal(_))),
+        "target-root-relative group index path must not contain '.' or '..'"
+    );
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,13 +169,16 @@ pub(super) fn load_or_create_index(
     output: &Path,
     case_source: &Path,
     source_revision: &str,
+    target_root: Option<&Path>,
 ) -> Result<CaseGroupIndex> {
     let metadata = match fs::symlink_metadata(output) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let storage = IndexPathStorage::for_new_index(case_source, output, target_root)?;
             return Ok(CaseGroupIndex {
                 version: INDEX_VERSION,
-                case_source: case_source.to_path_buf(),
+                path_anchor: storage.anchor(),
+                case_source: storage.persist(case_source)?,
                 source_revision: source_revision.to_string(),
                 groups: Vec::new(),
             });
@@ -62,18 +193,15 @@ pub(super) fn load_or_create_index(
         !metadata.file_type().is_symlink(),
         "refusing to read a symlinked group index"
     );
-    let index: CaseGroupIndex = serde_json::from_slice(
-        &fs::read(output)
-            .with_context(|| format!("failed to read group index {}", output.display()))?,
-    )
-    .with_context(|| format!("failed to parse group index {}", output.display()))?;
+    let index = read_index(output)?;
     ensure!(
-        index.version == INDEX_VERSION,
+        matches!(index.version, LEGACY_INDEX_VERSION | INDEX_VERSION),
         "unsupported group index version {}",
         index.version
     );
+    let storage = IndexPathStorage::for_index(&index, case_source)?;
     ensure!(
-        index.case_source == case_source,
+        storage.resolve(&index.case_source)? == case_source,
         "group index belongs to a different case source"
     );
     ensure!(
@@ -84,7 +212,8 @@ pub(super) fn load_or_create_index(
     );
     for group in &index.groups {
         ensure!(
-            group.manifest == output && group.report_path == output,
+            storage.resolve(&group.manifest)? == output
+                && storage.resolve(&group.report_path)? == output,
             "group {} references a different manifest or report path",
             group.group_id
         );
@@ -92,7 +221,55 @@ pub(super) fn load_or_create_index(
     Ok(index)
 }
 
-pub(super) fn validate_index(index: &CaseGroupIndex, cases: &[PublishedCase]) -> Result<()> {
+pub(super) fn read_index(output: &Path) -> Result<CaseGroupIndex> {
+    let metadata = fs::symlink_metadata(output)
+        .with_context(|| format!("failed to inspect group index {}", output.display()))?;
+    ensure!(metadata.is_file(), "group index must be a regular file");
+    ensure!(
+        !metadata.file_type().is_symlink(),
+        "refusing to read a symlinked group index"
+    );
+    serde_json::from_slice(
+        &fs::read(output)
+            .with_context(|| format!("failed to read group index {}", output.display()))?,
+    )
+    .with_context(|| format!("failed to parse group index {}", output.display()))
+}
+
+pub(super) fn legacy_index_locations(index: &CaseGroupIndex) -> Result<(PathBuf, PathBuf)> {
+    ensure!(
+        index.version == LEGACY_INDEX_VERSION && index.path_anchor == CaseGroupPathAnchor::Absolute,
+        "group index is not a legacy absolute-path index"
+    );
+    ensure!(
+        index.case_source.is_absolute(),
+        "legacy group index case source must be absolute"
+    );
+    let output = index
+        .groups
+        .first()
+        .map(|group| group.manifest.clone())
+        .context("legacy group index contains no case groups")?;
+    ensure!(
+        output.is_absolute(),
+        "legacy group index output must be absolute"
+    );
+    ensure!(
+        index
+            .groups
+            .iter()
+            .all(|group| group.manifest == output && group.report_path == output),
+        "legacy group index contains inconsistent manifest or report paths"
+    );
+    Ok((index.case_source.clone(), output))
+}
+
+pub(super) fn validate_index(
+    index: &CaseGroupIndex,
+    storage: &IndexPathStorage,
+    case_source: &Path,
+    cases: &[PublishedCase],
+) -> Result<()> {
     let mut ids = BTreeSet::new();
     let mut members = BTreeSet::new();
     let mut group_ids = BTreeSet::new();
@@ -112,14 +289,15 @@ pub(super) fn validate_index(index: &CaseGroupIndex, cases: &[PublishedCase]) ->
             "duplicate group id {}",
             group.group_id
         );
-        let current_dir = group
+        let stored_current_dir = group
             .group_dir
             .as_deref()
             .or_else(|| group.member_dirs.first().map(PathBuf::as_path))
             .context("group has no member directories")?;
+        let current_dir = storage.resolve(stored_current_dir)?;
         let selected = select_group_cases(
             cases,
-            current_dir,
+            &current_dir,
             &group.method,
             &group.source_route,
             group.pattern.as_deref(),
@@ -134,10 +312,15 @@ pub(super) fn validate_index(index: &CaseGroupIndex, cases: &[PublishedCase]) ->
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
+        let persisted_members = group
+            .member_dirs
+            .iter()
+            .map(|member| storage.resolve(member))
+            .collect::<Result<Vec<_>>>()?;
         ensure!(
             selected_ids == group.case_ids
-                && selected_members == group.member_dirs
-                && inventory_id(&selected) == group.case_inventory_id,
+                && selected_members == persisted_members
+                && case_inventory_id(index, case_source, &selected)? == group.case_inventory_id,
             "case inventory for group {} is stale",
             group.group_id
         );
@@ -172,30 +355,45 @@ pub(super) fn validate_index(index: &CaseGroupIndex, cases: &[PublishedCase]) ->
 
 pub(super) fn validate_loaded_index(
     index: &CaseGroupIndex,
+    storage: &IndexPathStorage,
     output: &Path,
     case_source: &Path,
     cases: &[PublishedCase],
 ) -> Result<()> {
     ensure!(
-        index.version == INDEX_VERSION,
+        matches!(index.version, LEGACY_INDEX_VERSION | INDEX_VERSION),
         "unsupported group index version {}",
         index.version
     );
     ensure!(
-        index.case_source == case_source,
+        storage.resolve(&index.case_source)? == case_source,
         "group index belongs to a different case source"
     );
     for group in &index.groups {
         ensure!(
-            group.manifest == output && group.report_path == output,
+            storage.resolve(&group.manifest)? == output
+                && storage.resolve(&group.report_path)? == output,
             "group {} references a different manifest or report path",
             group.group_id
         );
     }
-    validate_index(index, cases)
+    validate_index(index, storage, case_source, cases)
+}
+
+pub(super) fn case_inventory_id(
+    index: &CaseGroupIndex,
+    case_source: &Path,
+    cases: &[PublishedCase],
+) -> Result<String> {
+    if index.version == LEGACY_INDEX_VERSION {
+        Ok(inventory_id(cases))
+    } else {
+        portable_inventory_id(case_source, cases)
+    }
 }
 
 pub(super) fn reject_membership_overlap(
+    storage: &IndexPathStorage,
     groups: &[CaseGroupRecord],
     case_ids: &[String],
     member_dirs: &[PathBuf],
@@ -206,10 +404,15 @@ pub(super) fn reject_membership_overlap(
             "new group overlaps case ids owned by {}",
             group.group_id
         );
+        let existing_members = group
+            .member_dirs
+            .iter()
+            .map(|member| storage.resolve(member))
+            .collect::<Result<Vec<_>>>()?;
         ensure!(
             !member_dirs
                 .iter()
-                .any(|member| group.member_dirs.contains(member)),
+                .any(|member| existing_members.contains(member)),
             "new group overlaps member directories owned by {}",
             group.group_id
         );

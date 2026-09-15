@@ -1,11 +1,10 @@
-ARG RUST_IMAGE=registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-builder:1.97.1
+ARG RUST_IMAGE=registry.api.demo.test/weibo_rd_if/rust-builder:1.98.1@sha256:99fe1fa7319ef65993c61ca9aa9f3e58a10573a2701a19109adabca46007a670
 ARG RUNTIME_IMAGE=registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev@sha256:c71fa374b229bc6fbf7ad34c5bb5cede1c27b2314a7b274b62ce2d44d3213107
 
 FROM ${RUST_IMAGE} AS builder
 
 ENV CARGO_HOME=/opt/rust/cargo \
-    CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu \
-    RUSTUP_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=1.98.1
 
 WORKDIR /build/traffic-record
 

@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -496,6 +497,8 @@ pub(super) struct RunContribution {
 pub(super) struct RunIndex {
     pub version: u32,
     pub run_key: String,
+    #[serde(default)]
+    pub path_anchor: RunIndexPathAnchor,
     pub case_source: PathBuf,
     #[serde(default)]
     pub source_revision: String,
@@ -521,11 +524,20 @@ pub(super) struct RunIndex {
     pub latest_status: Option<RunStatus>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RunIndexPathAnchor {
+    #[default]
+    Absolute,
+    TargetRoot,
+}
+
 impl RunIndex {
     pub(super) fn empty(run_key: String, case_source: PathBuf) -> Self {
         Self {
             version: STATE_VERSION,
             run_key,
+            path_anchor: RunIndexPathAnchor::Absolute,
             case_source,
             source_revision: String::new(),
             case_inventory_id: String::new(),
@@ -543,6 +555,24 @@ impl RunIndex {
             latest_sequence: None,
             latest_status: None,
         }
+    }
+
+    pub(super) fn empty_managed(
+        run_key: String,
+        case_source: PathBuf,
+        target_root: &Path,
+    ) -> Result<Self> {
+        let case_source = case_source
+            .strip_prefix(target_root)
+            .context("managed E2E case source is outside the target root")?
+            .to_path_buf();
+        ensure!(
+            !case_source.as_os_str().is_empty(),
+            "managed E2E case source must be below the target root"
+        );
+        let mut index = Self::empty(run_key, case_source);
+        index.path_anchor = RunIndexPathAnchor::TargetRoot;
+        Ok(index)
     }
 }
 

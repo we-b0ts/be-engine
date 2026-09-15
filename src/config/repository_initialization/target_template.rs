@@ -19,8 +19,8 @@ pub(super) fn render_target_main(readiness_path: &str, http_backend_port: u16) -
             &format!("const DEFAULT_PORT: u16 = {http_backend_port};"),
         )
         .replace(
-            "#[http_server::get(\"/healthz\")]",
-            &format!("#[http_server::get({readiness_path:?})]"),
+            "#[http_server::get(\"/healthz\", group = readiness_apis)]",
+            &format!("#[http_server::get({readiness_path:?}, group = readiness_apis)]"),
         ))
 }
 

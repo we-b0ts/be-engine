@@ -90,7 +90,7 @@ enum RepairCommand {
     Cancel(RepairCancelArgs),
     /// Re-arm coordinator Replay after a confirmed out-of-band focused run.
     RetryReplay(RepairRetryReplayArgs),
-    /// Rebuild a historical recording run's case groups from the canonical API inventory.
+    /// Rebuild or relocate a historical run's derived indexes from the canonical API inventory.
     RebuildCaseGroups(RepairRebuildCaseGroupsArgs),
 }
 
@@ -129,7 +129,7 @@ struct RepairRetryReplayArgs {
 struct RepairRebuildCaseGroupsArgs {
     /// Exact recording run owned by the current rewrite workflow.
     recording_run_id: String,
-    /// Confirm replacement of the derived case-group index after creating a backup.
+    /// Confirm replacement of the derived indexes after creating backups.
     #[arg(long)]
     confirm_rebuild: bool,
 }

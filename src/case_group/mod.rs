@@ -12,12 +12,13 @@ use serde::{Deserialize, Serialize};
 use crate::{CasePathPatternAuthority, CasePathPatternFeedback, plan_case_path_pattern_feedback};
 
 use self::discovery::{
-    discover_published_cases, inventory_id, reject_duplicate_case_ids, resolve_member_dir,
+    discover_published_cases, portable_inventory_id, reject_duplicate_case_ids, resolve_member_dir,
     select_group_cases,
 };
 use self::index::{
-    CaseGroupRecord, load_or_create_index, prepare_output_path, reject_membership_overlap,
-    reject_route_overlap, validate_index, validate_loaded_index, write_index,
+    CaseGroupRecord, IndexPathStorage, case_inventory_id, legacy_index_locations,
+    load_or_create_index, prepare_output_path, reject_membership_overlap, reject_route_overlap,
+    validate_index, validate_loaded_index, write_index,
 };
 
 #[derive(Debug, Clone)]
@@ -224,6 +225,20 @@ pub(crate) fn published_case_dependency_paths(case_source: &Path) -> Result<Vec<
 }
 
 pub fn ensure_case_group(options: CaseGroupOptions) -> Result<CaseGroupEnsureResult> {
+    ensure_case_group_impl(options, None)
+}
+
+pub(crate) fn ensure_case_group_with_target_root(
+    options: CaseGroupOptions,
+    target_root: &Path,
+) -> Result<CaseGroupEnsureResult> {
+    ensure_case_group_impl(options, Some(target_root))
+}
+
+fn ensure_case_group_impl(
+    options: CaseGroupOptions,
+    target_root: Option<&Path>,
+) -> Result<CaseGroupEnsureResult> {
     validate_options(&options)?;
     let case_source = fs::canonicalize(&options.case_source).with_context(|| {
         format!(
@@ -261,14 +276,18 @@ pub fn ensure_case_group(options: CaseGroupOptions) -> Result<CaseGroupEnsureRes
     }
     let group_id = format!("{} {}", method, pattern.as_deref().unwrap_or(&source_route));
 
-    let mut index = load_or_create_index(&output, &case_source, &options.source_revision)?;
-    validate_index(&index, &cases)?;
+    let mut index =
+        load_or_create_index(&output, &case_source, &options.source_revision, target_root)?;
+    let storage = IndexPathStorage::for_index(&index, &case_source)?;
+    validate_index(&index, &storage, &case_source, &cases)?;
 
-    if let Some(existing) = index
-        .groups
-        .iter()
-        .find(|group| group.member_dirs.contains(&current_dir))
-    {
+    if let Some(existing) = index.groups.iter().find(|group| {
+        group.member_dirs.iter().any(|member| {
+            storage
+                .resolve(member)
+                .is_ok_and(|path| path == current_dir)
+        })
+    }) {
         ensure!(
             existing.method == method
                 && existing.source_route == source_route
@@ -282,7 +301,7 @@ pub fn ensure_case_group(options: CaseGroupOptions) -> Result<CaseGroupEnsureRes
         } else {
             CaseGroupStatus::AlreadyCanonical
         };
-        return Ok(result_from_record(existing, status, &index.source_revision));
+        return result_from_record(existing, status, &index.source_revision, &storage, &output);
     }
 
     ensure!(
@@ -308,15 +327,18 @@ pub fn ensure_case_group(options: CaseGroupOptions) -> Result<CaseGroupEnsureRes
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    reject_membership_overlap(&index.groups, &case_ids, &member_dirs)?;
-    let case_inventory_id = inventory_id(&selected);
+    reject_membership_overlap(&storage, &index.groups, &case_ids, &member_dirs)?;
+    let case_inventory_id = case_inventory_id(&index, &case_source, &selected)?;
     let pattern_outcome = apply_pattern_feedback(
         pattern.as_deref(),
         &case_source,
         &options.source_revision,
         options.recorder_config.as_deref(),
     )?;
-    let group_dir = pattern.is_none().then_some(current_dir);
+    let group_dir = pattern
+        .is_none()
+        .then(|| storage.persist(&current_dir))
+        .transpose()?;
     let status = if pattern.is_some() {
         CaseGroupStatus::Created
     } else {
@@ -331,10 +353,13 @@ pub fn ensure_case_group(options: CaseGroupOptions) -> Result<CaseGroupEnsureRes
         pattern_outcome,
         group_dir,
         case_ids,
-        member_dirs,
+        member_dirs: member_dirs
+            .iter()
+            .map(|member| storage.persist(member))
+            .collect::<Result<Vec<_>>>()?,
         case_inventory_id,
-        manifest: output.clone(),
-        report_path: output.clone(),
+        manifest: storage.persist(&output)?,
+        report_path: storage.persist(&output)?,
     };
     index.groups.push(record);
     index
@@ -346,11 +371,7 @@ pub fn ensure_case_group(options: CaseGroupOptions) -> Result<CaseGroupEnsureRes
         .iter()
         .find(|group| group.group_id == group_id)
         .context("persisted case group disappeared from index")?;
-    Ok(result_from_record(
-        persisted,
-        status,
-        &index.source_revision,
-    ))
+    result_from_record(persisted, status, &index.source_revision, &storage, &output)
 }
 
 pub fn load_complete_case_group_inventory(
@@ -362,6 +383,49 @@ pub fn load_complete_case_group_inventory(
 
 pub fn load_case_group_inventory(output: &Path, case_source: &Path) -> Result<CaseGroupInventory> {
     load_case_group_inventory_impl(output, case_source, false)
+}
+
+pub(crate) fn load_legacy_complete_case_group_inventory(
+    copied_output: &Path,
+) -> Result<CaseGroupInventory> {
+    let copied_output = fs::canonicalize(copied_output).with_context(|| {
+        format!(
+            "failed to resolve copied group index {}",
+            copied_output.display()
+        )
+    })?;
+    let copied_index = index::read_index(&copied_output)?;
+    let (case_source, original_output) = legacy_index_locations(&copied_index)?;
+    validate_single_line("source revision", &copied_index.source_revision)?;
+    let original_output = fs::canonicalize(&original_output).with_context(|| {
+        format!(
+            "failed to resolve original legacy group index {}",
+            original_output.display()
+        )
+    })?;
+    ensure!(
+        fs::read(&copied_output)? == fs::read(&original_output)?,
+        "copied legacy group index differs from its original index"
+    );
+    load_case_group_inventory_impl(&original_output, &case_source, true)
+}
+
+pub(crate) fn portable_case_inventory_id(case_source: &Path) -> Result<String> {
+    let case_source = fs::canonicalize(case_source)
+        .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
+    let cases = discover_published_cases(&case_source)?;
+    ensure!(!cases.is_empty(), "case source contains no published cases");
+    reject_duplicate_case_ids(&cases)?;
+    portable_inventory_id(&case_source, &cases)
+}
+
+pub(crate) fn legacy_case_inventory_id(case_source: &Path) -> Result<String> {
+    let case_source = fs::canonicalize(case_source)
+        .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
+    let cases = discover_published_cases(&case_source)?;
+    ensure!(!cases.is_empty(), "case source contains no published cases");
+    reject_duplicate_case_ids(&cases)?;
+    Ok(discovery::inventory_id(&cases))
 }
 
 fn load_case_group_inventory_impl(
@@ -377,11 +441,9 @@ fn load_case_group_inventory_impl(
 
     let output = fs::canonicalize(output)
         .with_context(|| format!("failed to resolve group index {}", output.display()))?;
-    let payload = fs::read(&output)
-        .with_context(|| format!("failed to read group index {}", output.display()))?;
-    let index: index::CaseGroupIndex = serde_json::from_slice(&payload)
-        .with_context(|| format!("failed to parse group index {}", output.display()))?;
-    validate_loaded_index(&index, &output, &case_source, &cases)?;
+    let index = index::read_index(&output)?;
+    let storage = IndexPathStorage::for_index(&index, &case_source)?;
+    validate_loaded_index(&index, &storage, &output, &case_source, &cases)?;
 
     let cases_by_id = cases
         .iter()
@@ -431,10 +493,11 @@ fn load_case_group_inventory_impl(
         );
     }
 
+    let case_inventory_id = case_inventory_id(&index, &case_source, &cases)?;
     Ok(CaseGroupInventory {
         case_source,
         source_revision: index.source_revision,
-        case_inventory_id: inventory_id(&cases),
+        case_inventory_id,
         groups,
     })
 }
@@ -589,22 +652,32 @@ fn result_from_record(
     record: &CaseGroupRecord,
     status: CaseGroupStatus,
     source_revision: &str,
-) -> CaseGroupEnsureResult {
-    CaseGroupEnsureResult {
+    storage: &IndexPathStorage,
+    output: &Path,
+) -> Result<CaseGroupEnsureResult> {
+    Ok(CaseGroupEnsureResult {
         status,
         group_id: record.group_id.clone(),
         method: record.method.clone(),
         source_route: record.source_route.clone(),
         pattern: record.pattern.clone(),
         pattern_outcome: record.pattern_outcome.clone(),
-        group_dir: record.group_dir.clone(),
-        manifest: record.manifest.clone(),
+        group_dir: record
+            .group_dir
+            .as_deref()
+            .map(|path| storage.resolve(path))
+            .transpose()?,
+        manifest: output.to_path_buf(),
         case_ids: record.case_ids.clone(),
-        member_dirs: record.member_dirs.clone(),
+        member_dirs: record
+            .member_dirs
+            .iter()
+            .map(|path| storage.resolve(path))
+            .collect::<Result<Vec<_>>>()?,
         source_revision: source_revision.to_string(),
         case_inventory_id: record.case_inventory_id.clone(),
-        report_path: record.report_path.clone(),
-    }
+        report_path: output.to_path_buf(),
+    })
 }
 
 #[cfg(test)]

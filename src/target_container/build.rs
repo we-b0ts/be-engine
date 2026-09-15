@@ -60,8 +60,10 @@ pub(crate) fn image_tag(target_root: &Path) -> Result<String> {
 }
 
 pub(crate) async fn build_image(config: &TargetContainerConfig) -> Result<TargetImage> {
-    validate_build_contract(config)?;
-    let ssh_agent = super::ssh_agent::ManagedSshAgent::prepare(&config.target_root)?;
+    let uses_ssh_forwarding = validate_build_contract(config)?;
+    let ssh_agent = uses_ssh_forwarding
+        .then(|| super::ssh_agent::ManagedSshAgent::prepare(&config.target_root))
+        .transpose()?;
     let tag = image_tag(&config.target_root)?;
     let control_root =
         crate::internal_runtime::root(&config.target_root).join("target-container/build");
@@ -83,7 +85,9 @@ pub(crate) async fn build_image(config: &TargetContainerConfig) -> Result<Target
             .arg("--build-context")
             .arg(build_context_argument(context));
     }
-    ssh_agent.apply_to(&mut command);
+    if let Some(ssh_agent) = ssh_agent {
+        ssh_agent.apply_to(&mut command);
+    }
     command
         .arg("--iidfile")
         .arg(&iid_path)
@@ -284,7 +288,7 @@ fn strip_terminal_control(line: &str) -> String {
     cleaned
 }
 
-fn validate_build_contract(config: &TargetContainerConfig) -> Result<()> {
+fn validate_build_contract(config: &TargetContainerConfig) -> Result<bool> {
     require_regular_file(&config.dockerfile, "target Dockerfile")?;
     ensure!(
         config.dockerfile == config.target_root.join(super::TARGET_DOCKERFILE_RELATIVE),
@@ -306,7 +310,7 @@ fn validate_build_contract(config: &TargetContainerConfig) -> Result<()> {
             ".dockerignore must exclude {required}/ from the target build context"
         );
     }
-    Ok(())
+    Ok(dockerfile_uses_ssh_forwarding(&dockerfile))
 }
 
 fn validate_dockerfile_contract(config: &TargetContainerConfig, dockerfile: &str) -> Result<()> {
@@ -327,11 +331,7 @@ fn validate_dockerfile_contract(config: &TargetContainerConfig, dockerfile: &str
         "target Dockerfile must be a multi-stage build"
     );
     for required in [
-        "--mount=type=ssh,required=true",
-        "ssh-keyscan -p 2222 git.intra.demo.test",
-        "git ls-remote --exit-code ssh://git@git.intra.demo.test:2222/platform/breeze/logs.git refs/tags/v0.0.1",
         "id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked",
-        "id=traffic-e2e-cargo-git,target=/opt/rust/cargo/git,sharing=locked",
         "cargo build --locked --release",
     ] {
         ensure!(
@@ -358,6 +358,13 @@ fn validate_dockerfile_contract(config: &TargetContainerConfig, dockerfile: &str
         );
     }
     Ok(())
+}
+
+fn dockerfile_uses_ssh_forwarding(dockerfile: &str) -> bool {
+    dockerfile.lines().any(|line| {
+        let line = line.trim();
+        !line.starts_with('#') && line.contains("--mount=type=ssh")
+    })
 }
 
 fn dockerfile_uses_build_context(dockerfile: &str, name: &str) -> bool {
@@ -527,23 +534,19 @@ mod tests {
             breeze_enabled: false,
         };
         let dockerfile = format!(
-            "FROM {} AS builder\nRUN ssh-keyscan -p 2222 git.intra.demo.test\nRUN --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked --mount=type=cache,id=traffic-e2e-cargo-git,target=/opt/rust/cargo/git,sharing=locked --mount=type=cache,id=traffic-e2e-service-target,target=/build/target,sharing=locked git ls-remote --exit-code ssh://git@git.intra.demo.test:2222/platform/breeze/logs.git refs/tags/v0.0.1 && cargo build --locked --release\nFROM {}\nENTRYPOINT [\"/app/bin/service\"]\n",
+            "FROM {} AS builder\nRUN --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked --mount=type=cache,id=traffic-e2e-service-target,target=/build/target,sharing=locked cargo build --locked --release\nFROM {}\nENTRYPOINT [\"/app/bin/service\"]\n",
             super::super::TARGET_BUILDER_IMAGE,
             super::super::TARGET_RUNTIME_IMAGE,
         );
+        validate_dockerfile_contract(&config, &dockerfile).unwrap();
+        assert!(!dockerfile_uses_ssh_forwarding(&dockerfile));
 
-        assert!(
-            validate_dockerfile_contract(&config, &dockerfile)
-                .unwrap_err()
-                .to_string()
-                .contains("--mount=type=ssh,required=true")
-        );
-
-        let dockerfile = dockerfile.replace(
+        let ssh_dockerfile = dockerfile.replace(
             "RUN --mount=type=cache",
             "RUN --mount=type=ssh,required=true --mount=type=cache",
         );
-        validate_dockerfile_contract(&config, &dockerfile).unwrap();
+        validate_dockerfile_contract(&config, &ssh_dockerfile).unwrap();
+        assert!(dockerfile_uses_ssh_forwarding(&ssh_dockerfile));
     }
 
     #[test]
@@ -560,7 +563,7 @@ mod tests {
             breeze_enabled: false,
         };
         let base = format!(
-            "FROM {} AS builder\nRUN ssh-keyscan -p 2222 git.intra.demo.test\nRUN --mount=type=ssh,required=true --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked --mount=type=cache,id=traffic-e2e-cargo-git,target=/opt/rust/cargo/git,sharing=locked --mount=type=cache,id=traffic-e2e-service-target,target=/build/target,sharing=locked git ls-remote --exit-code ssh://git@git.intra.demo.test:2222/platform/breeze/logs.git refs/tags/v0.0.1 && cargo build --locked --release\nFROM {}\nENTRYPOINT [\"/app/bin/service\"]\n",
+            "FROM {} AS builder\nRUN --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked --mount=type=cache,id=traffic-e2e-service-target,target=/build/target,sharing=locked cargo build --locked --release\nFROM {}\nENTRYPOINT [\"/app/bin/service\"]\n",
             super::super::TARGET_BUILDER_IMAGE,
             super::super::TARGET_RUNTIME_IMAGE,
         );

@@ -6,8 +6,8 @@ publish = false
 
 [dependencies]
 anyhow = "1"
-brz-logs = { package = "logs", git = "ssh://git@git.intra.demo.test:2222/platform/breeze/logs.git", tag = "v0.0.1", features = ["metrics"] }
-http-server = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/http-server.git", tag = "v0.0.2", features = ["macros"] }
+brz-logs = { version = "=0.0.6", features = ["metrics"] }
+http-server = { package = "brz-http-server", version = "=0.0.13", features = ["macros"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
 tracing = "0.1"

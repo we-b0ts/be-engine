@@ -59,7 +59,7 @@ Published Linux/amd64 references:
 ```text
 registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1@sha256:095f39e3b242e744ec8f7d85e732bb663af8a4a02bdef0d7a216d2e66e365a62
 registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev@sha256:c71fa374b229bc6fbf7ad34c5bb5cede1c27b2314a7b274b62ce2d44d3213107
-registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-builder:1.97.1@sha256:99663c03c7da6d638f9bef5d84d923840e2069e3f32067851b43ea7abf3f0004
+registry.api.demo.test/weibo_rd_if/rust-builder:1.98.1@sha256:99fe1fa7319ef65993c61ca9aa9f3e58a10573a2701a19109adabca46007a670
 registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.2@sha256:d322b050229334c2fec00cdce366a066697a7bafaf9b6842d77793eb1e4f10d2
 ```
 
@@ -141,12 +141,16 @@ docker buildx build \
   --build-arg NO_PROXY \
   --load \
   --file docker/builder/Dockerfile \
-  --tag registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-builder:1.97.1 \
+  --tag registry.api.demo.test/weibo_rd_if/rust-builder:1.98.1 \
   .
 ```
 
 The builder source pins that upstream by digest. Proxies are one-time build
 inputs only; do not persist them in the image or expose them to target builds.
+The builder intentionally leaves `CARGO_BUILD_TARGET` unset. Its Rust toolchain
+uses the native `x86_64-unknown-linux-gnu` host target and therefore preserves
+Cargo's standard `target/release` artifact layout. A project that explicitly
+cross-compiles owns its target selection and artifact path.
 
 Build the Linux/amd64 target runtime through the host network:
 
@@ -2036,11 +2040,16 @@ backend-rewrite-admin --target-root <target> repair rebuild-case-groups \
 
 The command requires an idle coordinator and traffic runtime, verifies that the
 run belongs to the current workflow, and rebuilds the complete derived index
-from its canonical API inventory. It preserves the recording and keeps the old
-index beside the replacement as `case-groups.before-rebuild-*.json`. If the
-replacement is incomplete or invalid, the old index is restored automatically.
-After a successful repair, execute only the exact operation retry returned by
-`backend-rewrite status`.
+from its canonical API inventory. Managed indexes store their case source and
+member paths relative to the target root, so they remain valid when the complete
+target directory is moved. When migrating a copied legacy absolute-path index,
+the command also requires the original index and case source to remain readable,
+verifies the run ID, source revision, and location-independent case inventory,
+and migrates the E2E run index in the same operation. It preserves the recording
+and keeps backups beside both replacements. If the replacement is incomplete or
+invalid, the old case-group index is restored automatically. After a successful
+repair, execute only the exact operation retry returned by `backend-rewrite
+status`.
 
 Initialize a rewrite target once, before its first coordinator session:
 

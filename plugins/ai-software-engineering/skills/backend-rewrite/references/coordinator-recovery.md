@@ -139,9 +139,14 @@ backend-rewrite-admin --target-root <target> repair rebuild-case-groups \
 The command accepts only the current workflow's recording run while all
 coordinator, traffic, full E2E, and focused E2E execution is idle. It backs up
 the derived group index, rebuilds complete coverage from the canonical API
-inventory, and rolls back automatically on failure. It never changes recording
-artifacts or rewrite progress. On success, execute only the failed operation's
-exact retry command from `backend-rewrite status`.
+inventory, and rolls back automatically on failure. Managed indexes persist
+case paths relative to the target root. For a copied legacy absolute-path index,
+the command verifies the original index, recording run, source revision, and
+location-independent case inventory before migrating both the case-group and
+E2E run indexes; the original paths must remain readable during this one-time
+migration. It never changes recording artifacts or rewrite progress. On success,
+execute only the failed operation's exact retry command from `backend-rewrite
+status`.
 
 If an administrator confirms that `traffic-e2e run-api` was mistakenly run
 outside an active rewrite workflow, use `backend-rewrite-admin repair
