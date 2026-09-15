@@ -103,6 +103,14 @@ pub(in crate::rewrite) fn install_project_config(
     .unwrap();
 }
 
+pub(in crate::rewrite) fn set_managed_paths(target_root: &Path, paths: &[&str]) {
+    let path = target_root.join(".traffic-e2e/project.yaml");
+    let mut document: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    document["project"]["delivery"]["managed_paths"] = serde_yaml::to_value(paths).unwrap();
+    fs::write(path, serde_yaml::to_string(&document).unwrap()).unwrap();
+}
+
 pub(in crate::rewrite) fn managed_test_recorder() -> crate::config::AppConfig {
     let mut recorder = crate::config::AppConfig::default();
     recorder.http_gateway.ready.enabled = true;

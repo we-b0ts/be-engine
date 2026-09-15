@@ -112,6 +112,8 @@ is unclear.
   `e2e_run/admin_source.rs` coordinates an administrator-confirmed source image
   upgrade with the existing project declaration and derived startup snapshot;
   it does not rerun initialization or rewrite tracked configuration.
+  `e2e_run/delivery.rs` resolves target-relative managed delivery directories
+  without moving runtime ownership away from the target.
 - `internal_runtime` owns the canonical `.traffic-e2e/local/runtime` path used
   by engine-managed mutable state. The directory is inspectable but not a
   stable API; coordinator commands remain the primary interface and all state
@@ -237,7 +239,10 @@ is unclear.
   isolation and source review, including committed/worktree/untracked files and
   rename handling. Its `layout` child maps a target project nested below the Git
   repository root onto the corresponding directory in worker and integration
-  worktrees and owns conversion between project-relative and Git tree paths.
+  worktrees, validates managed-file access, and owns conversion between
+  target-relative and Git tree paths. Source diff expands over the target plus
+  configured same-repository managed directories and rejects tracked candidate
+  changes outside that delivery scope.
   `rewrite/review` owns the complete worker/integrator review
   pipeline, spawn evidence, handoff admission, and quality rework routing. Its `scan`
   child owns Rust syntax findings and complete-file line limits; `evidence`

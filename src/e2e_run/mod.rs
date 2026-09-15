@@ -3,6 +3,7 @@ mod admin_startup;
 mod branch;
 mod case_progress;
 mod config;
+mod delivery;
 mod dirty_evidence;
 mod evidence;
 mod execute;
@@ -38,6 +39,7 @@ pub use admin_startup::{
 
 pub(crate) use config::render_project_config;
 pub(crate) use config::resolve_project;
+pub(crate) use delivery::resolve_managed_directories;
 pub use dirty_evidence::{
     E2eDependencyDifference, E2eDependencyEndpoint, E2eDependencyObservation,
     E2eDependencyRepresentative, E2eDirtyCluster, E2eDirtyCounts, E2eSourcePreReadiness,

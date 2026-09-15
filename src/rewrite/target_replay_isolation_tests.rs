@@ -267,6 +267,12 @@ fn nested_target_scopes_diff_and_committed_evidence_to_the_project() {
     let target = repository.path().join("services/backend");
     fs::create_dir_all(target.join("src")).unwrap();
     fs::create_dir_all(repository.path().join("sibling/src")).unwrap();
+    crate::rewrite::test_support::install_project_config(
+        &target,
+        "integration",
+        crate::rewrite::test_support::managed_test_recorder(),
+        Some(serde_json::json!([])),
+    );
     fs::write(target.join("src/lib.rs"), "pub fn value() -> u8 { 1 }\n").unwrap();
     fs::write(
         repository.path().join("sibling/src/lib.rs"),
@@ -296,11 +302,50 @@ fn nested_target_scopes_diff_and_committed_evidence_to_the_project() {
         &format!("Hardcode-Source-Evidence: {target_location} <= {source_evidence}"),
     );
 
-    let report = inspect(&target, "integration", &[approval]).unwrap();
+    let report = inspect(&target, "integration", std::slice::from_ref(&approval)).unwrap();
 
     assert!(report.passed());
     assert_eq!(report.scanned_files, 1);
     assert_eq!(report.scanned_added_lines, 1);
+
+    crate::rewrite::test_support::set_managed_paths(&target, &["../../sibling"]);
+    let sibling_source = "pub const CACHE: &str = \"https://cache.sample.test/v1\";\n";
+    fs::write(repository.path().join("sibling/src/lib.rs"), sibling_source).unwrap();
+    let sibling_column = sibling_source.find("sample.test").unwrap() + 1;
+    let sibling_location = format!("../../sibling/src/lib.rs:1:{sibling_column}");
+    let sibling_approval = format!("{sibling_location}={source_evidence}");
+    git(repository.path(), &["add", "."]);
+    commit(
+        repository.path(),
+        "Manage sibling source-compatible endpoint",
+        &format!("Hardcode-Source-Evidence: {sibling_location} <= {source_evidence}"),
+    );
+    let managed_pass = inspect(
+        &target,
+        "integration",
+        &[approval.clone(), sibling_approval],
+    )
+    .unwrap();
+
+    assert!(managed_pass.passed());
+    assert_eq!(managed_pass.scanned_files, 2);
+
+    fs::write(
+        repository.path().join("sibling/src/lib.rs"),
+        "pub const CACHE: &str = \"cache.trp.test\";\n",
+    )
+    .unwrap();
+    let managed_report = inspect(&target, "integration", std::slice::from_ref(&approval)).unwrap();
+
+    assert!(!managed_report.passed());
+    assert_eq!(managed_report.scanned_files, 2);
+    assert_eq!(managed_report.scanned_added_lines, 2);
+    assert!(
+        managed_report
+            .violations
+            .iter()
+            .any(|violation| violation.file == Path::new("../../sibling/src/lib.rs"))
+    );
 }
 
 #[test]

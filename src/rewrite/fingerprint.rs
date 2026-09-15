@@ -31,6 +31,22 @@ pub(super) fn code_fingerprint(target_root: &Path) -> Result<String> {
 }
 
 fn repository_files_hash(target_root: &Path) -> Result<Fnv1a> {
+    let managed = crate::e2e_run::resolve_managed_directories(target_root)?;
+    if managed.len() == 1 {
+        return directory_files_hash(&managed[0].root);
+    }
+    let mut hash = Fnv1a::default();
+    for directory in managed {
+        hash.update(b"managed-directory");
+        hash.update(directory.target_relative.as_os_str().as_encoded_bytes());
+        hash.update(&[0]);
+        hash.update(directory_files_hash(&directory.root)?.finish().as_bytes());
+        hash.update(&[0]);
+    }
+    Ok(hash)
+}
+
+fn directory_files_hash(target_root: &Path) -> Result<Fnv1a> {
     let mut paths_args = vec![
         "ls-files",
         "--cached",
@@ -61,6 +77,15 @@ fn repository_files_hash(target_root: &Path) -> Result<Fnv1a> {
 /// Compare a purpose's committed baseline with the current tracked and untracked
 /// files. Progress publication and private runtime are not code changes.
 pub(super) fn matches_revision(target_root: &Path, revision: &str) -> Result<bool> {
+    for directory in crate::e2e_run::resolve_managed_directories(target_root)? {
+        if !directory_matches_revision(&directory.root, revision)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn directory_matches_revision(target_root: &Path, revision: &str) -> Result<bool> {
     let mut diff = vec![
         "diff",
         "--no-ext-diff",
@@ -370,6 +395,44 @@ mod tests {
             repository_fingerprint(repository.path()).unwrap(),
             dirty_deletion
         );
+    }
+
+    #[test]
+    fn code_fingerprint_tracks_configured_managed_sibling() {
+        let repository = tempfile::tempdir().unwrap();
+        let target = repository.path().join("backend-rs-intra");
+        let sibling = repository.path().join("backend-rs");
+        fs::create_dir_all(target.join("src")).unwrap();
+        fs::create_dir_all(sibling.join("src")).unwrap();
+        crate::rewrite::test_support::install_project_config(
+            &target,
+            "integration",
+            crate::rewrite::test_support::managed_test_recorder(),
+            Some(serde_json::json!([])),
+        );
+        crate::rewrite::test_support::set_managed_paths(&target, &["../backend-rs"]);
+        fs::write(target.join("src/lib.rs"), "pub fn private() {}\n").unwrap();
+        fs::write(sibling.join("src/lib.rs"), "pub fn public() {}\n").unwrap();
+        git_ok(repository.path(), &["init", "-q", "-b", "integration"]);
+        git_ok(
+            repository.path(),
+            &["config", "user.email", "test@example.com"],
+        );
+        git_ok(
+            repository.path(),
+            &["config", "user.name", "Traffic E2E Test"],
+        );
+        git_ok(repository.path(), &["add", "."]);
+        git_ok(repository.path(), &["commit", "-m", "baseline"]);
+
+        let baseline = code_fingerprint(&target).unwrap();
+        fs::write(
+            sibling.join("src/lib.rs"),
+            "pub fn public() { println!(\"changed\"); }\n",
+        )
+        .unwrap();
+
+        assert_ne!(code_fingerprint(&target).unwrap(), baseline);
     }
 
     fn git_ok(repository: &Path, args: &[&str]) {

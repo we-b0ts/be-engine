@@ -38,6 +38,7 @@ pub(super) fn context(root: &Path, project: &ResolvedProjectConfig) -> Result<St
         "review-validation-context-v1",
         &crate::rewrite::quality::policy_fingerprint(&project.target_quality_gates)?,
         &project.pr_base,
+        &serde_json::to_string(&project.managed_paths)?,
         &crate::startup::startup_snapshot_revision(root)?,
         &crate::startup::startup_environment_revision(root)?,
     ]))

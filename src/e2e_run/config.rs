@@ -142,6 +142,7 @@ pub(crate) fn render_project_config(
             },
             delivery: DeliveryProjectConfig {
                 pr_base: options.pr_base.clone(),
+                managed_paths: Vec::new(),
             },
             state: StateProjectConfig {
                 runtime_root: PathBuf::from(DEFAULT_RUNTIME_ROOT),
@@ -208,6 +209,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         .join(crate::repository::TRAFFIC_E2E_ROOT)
         .join(PROJECT_CONFIG_FILE);
     let config = load_project_config(&target_root, &config_path)?;
+    super::delivery::managed_directories(&target_root, &config.project.delivery.managed_paths)?;
     let policy_path = resolve_under(&target_root, &config.project.replay.policy);
     let policy = validate_replay_policy(&policy_path).context("invalid replay policy")?;
     ensure!(
@@ -307,6 +309,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
                 super::model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
             ),
             pr_base: config.project.delivery.pr_base,
+            managed_paths: config.project.delivery.managed_paths,
             recorder_config,
             source_traffic_policy,
             runner_owned_response_assertions: policy.runner_owned_response_assertions,
@@ -605,6 +608,7 @@ mod tests {
         }
         assert!(!raw.lines().any(|line| line.trim_start() == "port: 8081"));
         assert_eq!(config.project.delivery.pr_base, "integration");
+        assert!(config.project.delivery.managed_paths.is_empty());
         assert_eq!(result.pr_base, "integration");
         assert_eq!(
             config.project.state.runtime_root,

@@ -19,6 +19,11 @@ It reads engine state and writes a local report; it may run while another API's
 traffic verification is active. Review uses the canonical project's complete PR
 diff and checks ancestry against the frozen dispatch base. It covers committed,
 staged, unstaged, and untracked changes. Do not narrow the diff to a moving HEAD.
+For a nested target, this includes every canonical `delivery.managed_paths`
+directory in the same Git worktree. Findings for siblings use target-relative
+paths such as `../backend-rs/src/lib.rs`; use those exact paths in review
+evidence. Tracked candidate changes outside the target and managed paths are
+rejected rather than silently omitted.
 
 The command runs the same complete quality implementation for worker and
 integration deliveries: source rules, Replay isolation, source-sensitive public

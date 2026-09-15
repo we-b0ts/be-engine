@@ -1,4 +1,6 @@
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{Context, Result, ensure};
 
@@ -30,4 +32,20 @@ pub(crate) fn directory_name(target_root: &Path) -> Result<String> {
         "target repository directory name must contain a letter or digit"
     );
     Ok(name.to_string())
+}
+
+pub(crate) fn git_root(path: &Path) -> Result<PathBuf> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .context("failed to resolve Git repository root")?;
+    ensure!(
+        output.status.success(),
+        "failed to resolve Git repository root: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    let root = String::from_utf8(output.stdout).context("Git repository root is not UTF-8")?;
+    fs::canonicalize(root.trim()).context("failed to canonicalize Git repository root")
 }

@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 
 mod layout;
 
-pub(super) use layout::{git_object_path, project_root_in_worktree};
+pub(super) use layout::{git_object_path, managed_file_path, project_root_in_worktree};
 
 const IGNORED_DIRECTORIES: &[&str] = &[".git", ".traffic-e2e", "node_modules", "target", "vendor"];
 const NON_PRODUCTION_DIRECTORIES: &[&str] =
@@ -35,6 +35,84 @@ pub(super) fn added_rust_lines(target_root: &Path, pr_base: &str) -> Result<Adde
 }
 
 pub(super) fn changed_rust_lines(target_root: &Path, base: &str) -> Result<AddedRustLines> {
+    let managed = crate::e2e_run::resolve_managed_directories(target_root)?;
+    let mut aggregate = AddedRustLines {
+        merge_base: base.to_string(),
+        scanned_files: 0,
+        files: Vec::new(),
+        lines: Vec::new(),
+    };
+    for directory in managed {
+        let changed = changed_rust_lines_in_directory(&directory.root, base)?;
+        aggregate.scanned_files += changed.scanned_files;
+        aggregate.files.extend(
+            changed
+                .files
+                .into_iter()
+                .map(|path| directory.target_relative.join(path)),
+        );
+        aggregate
+            .lines
+            .extend(changed.lines.into_iter().map(|line| AddedLine {
+                file: directory.target_relative.join(line.file),
+                line: line.line,
+                text: line.text,
+            }));
+    }
+    aggregate.files.sort();
+    aggregate.lines.sort_by(|left, right| {
+        (&left.file, left.line, &left.text).cmp(&(&right.file, right.line, &right.text))
+    });
+    Ok(aggregate)
+}
+
+pub(super) fn ensure_changed_paths_managed(target_root: &Path, base: &str) -> Result<()> {
+    let managed = crate::e2e_run::resolve_managed_directories(target_root)?;
+    if managed.len() == 1 {
+        return Ok(());
+    }
+    let repository_root = crate::repository::git_root(target_root)?;
+    let changed = git_bytes(
+        &repository_root,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--name-only",
+            "-z",
+            base,
+            "--",
+            ".",
+        ],
+    )?;
+    let mut outside = Vec::new();
+    for raw in changed
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+    {
+        let path = PathBuf::from(
+            std::str::from_utf8(raw).context("changed repository path is not UTF-8")?,
+        );
+        if !managed
+            .iter()
+            .any(|directory| path.starts_with(&directory.repository_relative))
+        {
+            outside.push(path);
+        }
+    }
+    ensure!(
+        outside.is_empty(),
+        "delivery candidate changes files outside the target and delivery.managed_paths: {}",
+        outside
+            .iter()
+            .take(16)
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    Ok(())
+}
+
+fn changed_rust_lines_in_directory(target_root: &Path, base: &str) -> Result<AddedRustLines> {
     let merge_base = base.to_string();
     let mut files = BTreeSet::new();
     collect_changed_paths(
@@ -187,6 +265,24 @@ pub(super) fn is_safe_relative_rust_path(path: &Path) -> bool {
         && path
             .components()
             .all(|component| matches!(component, Component::Normal(_)))
+}
+
+pub(super) fn is_safe_target_relative_rust_path(path: &Path) -> bool {
+    if !path.extension().is_some_and(|extension| extension == "rs")
+        || path.as_os_str().is_empty()
+        || path.is_absolute()
+    {
+        return false;
+    }
+    let mut normal_seen = false;
+    for component in path.components() {
+        match component {
+            Component::ParentDir if !normal_seen => {}
+            Component::Normal(_) => normal_seen = true,
+            _ => return false,
+        }
+    }
+    normal_seen
 }
 
 fn is_tracked(target_root: &Path, relative: &Path) -> Result<bool> {

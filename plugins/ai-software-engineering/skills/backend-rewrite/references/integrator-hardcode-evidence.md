@@ -24,8 +24,10 @@ Hardcode-Source-Evidence: TARGET_FILE:LINE:COLUMN <= SOURCE_REPOSITORY@SOURCE_RE
 
 `SOURCE_REVISION` is the inspected 7-64 hexadecimal commit ID. Preserve product
 content while preparing a missing evidence trailer on the assigned base; keep
-already committed target positions valid. Return the candidate commit and the
-exact corresponding mappings:
+already committed target positions valid. `TARGET_FILE` is relative to the
+target and may begin with a configured managed
+sibling path such as `../backend-rs/`; use the exact path reported by the gate.
+Return the candidate commit and the exact corresponding mappings:
 
 ```text
 TARGET_FILE:LINE:COLUMN=SOURCE_REPOSITORY@SOURCE_REVISION:SOURCE_FILE:LINE:COLUMN

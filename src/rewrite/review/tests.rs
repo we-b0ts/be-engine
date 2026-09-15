@@ -383,7 +383,7 @@ fn assigned_git_worktree_review_is_accepted_and_integrated_without_a_private_wor
 }
 
 #[test]
-fn nested_target_maps_repository_worktree_and_keeps_review_project_scoped() {
+fn nested_target_maps_repository_worktree_and_reviews_managed_sibling() {
     let repository = tempfile::tempdir().unwrap();
     let target = repository.path().join("backend-rs-intra");
     fs::create_dir_all(target.join("src")).unwrap();
@@ -394,6 +394,7 @@ fn nested_target_maps_repository_worktree_and_keeps_review_project_scoped() {
         crate::rewrite::test_support::managed_test_recorder(),
         Some(serde_json::json!([])),
     );
+    crate::rewrite::test_support::set_managed_paths(&target, &["../sibling"]);
     fs::write(
         target.join(".traffic-e2e/verification.yaml"),
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
@@ -476,7 +477,7 @@ fn nested_target_maps_repository_worktree_and_keeps_review_project_scoped() {
         &["commit", "-qm", "nested target delivery"],
     );
 
-    let report = check(RewriteReviewOptions {
+    let mut options = RewriteReviewOptions {
         target_root: target,
         worktree: Some(repository_worktree),
         scope: Some(scope),
@@ -484,14 +485,71 @@ fn nested_target_maps_repository_worktree_and_keeps_review_project_scoped() {
         integration: false,
         handoff_id: None,
         hardcode_ai_verified: Vec::new(),
-    })
-    .unwrap();
+    };
+    let report = check(options.clone()).unwrap();
     assert_eq!(report.worktree, target_worktree);
     assert_eq!(report.status, ReviewStatus::EvidenceRequired);
-    assert_eq!(report.files.len(), 1);
+    assert_eq!(report.files.len(), 2);
     assert!(report.files.contains_key(Path::new("src/lib.rs")));
-    assert_eq!(report.findings.len(), 1);
-    assert_eq!(report.findings[0].file, Path::new("src/lib.rs"));
+    assert!(
+        report
+            .files
+            .contains_key(Path::new("../sibling/src/lib.rs"))
+    );
+    assert_eq!(report.findings.len(), 2);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.file == Path::new("src/lib.rs"))
+    );
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.file == Path::new("../sibling/src/lib.rs"))
+    );
+    let proof = ReviewEvidence {
+        spawns: report
+            .findings
+            .iter()
+            .map(|finding| SpawnEvidence {
+                finding_id: finding.id.clone(),
+                ownership: SpawnOwnership::Startup,
+                startup_entry: Some(ReviewCodeEvidence {
+                    file: finding.file.clone(),
+                    line: finding.line,
+                    fact: "startup entry owns the task".into(),
+                }),
+                call_chain: vec![ReviewCodeEvidence {
+                    file: finding.file.clone(),
+                    line: finding.line,
+                    fact: "startup invokes this task".into(),
+                }],
+                request_path_review: "all callers are startup-owned".into(),
+                task_lifecycle: "the application owns shutdown and task completion".into(),
+            })
+            .collect(),
+    };
+    let evidence = target_worktree.join(".traffic-e2e/local/managed-proof.json");
+    write_json(&evidence, &proof).unwrap();
+    options.evidence = Some(evidence);
+    assert_eq!(check(options.clone()).unwrap().status, ReviewStatus::Passed);
+
+    fs::create_dir_all(target_worktree.join("../unmanaged")).unwrap();
+    fs::write(
+        target_worktree.join("../unmanaged/file.txt"),
+        "not reviewed\n",
+    )
+    .unwrap();
+    git(&target_worktree, &["add", "../unmanaged/file.txt"]);
+    git(&target_worktree, &["commit", "-qm", "unmanaged change"]);
+    assert!(
+        check(options)
+            .unwrap_err()
+            .to_string()
+            .contains("outside the target and delivery.managed_paths")
+    );
 }
 
 #[test]

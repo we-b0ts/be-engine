@@ -1,6 +1,6 @@
 use crate::rewrite::source_diff::{
     AddedLine, AddedRustLines, changed_rust_lines, git_text, is_production_rust_path,
-    is_safe_relative_rust_path,
+    is_safe_target_relative_rust_path,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -11,7 +11,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 pub(super) const GATE_NAME: &str = "replay-isolation";
-pub(super) const GATE_VERSION: &str = "replay-isolation-v5";
+pub(super) const GATE_VERSION: &str = "replay-isolation-v6";
 
 const MAX_REPORTED_VIOLATIONS: usize = 64;
 const SOURCE_EVIDENCE_TRAILER: &str = "Hardcode-Source-Evidence:";
@@ -382,7 +382,7 @@ fn parse_location(raw: &str) -> Result<SourceLocation> {
         .context("expected FILE:LINE:COLUMN")?;
     let file = PathBuf::from(file);
     ensure!(
-        is_safe_relative_rust_path(&file),
+        is_safe_target_relative_rust_path(&file),
         "file must be a relative Rust source path"
     );
     let line = line.parse::<usize>().context("line is not a number")?;

@@ -1,6 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 
@@ -17,7 +16,7 @@ pub(in crate::rewrite) fn project_root_in_worktree(
             supplied_worktree.display()
         )
     })?;
-    let worktree_repository = repository_root(&supplied_worktree)?;
+    let worktree_repository = crate::repository::git_root(&supplied_worktree)?;
     let supplied_prefix = supplied_worktree
         .strip_prefix(&worktree_repository)
         .context("review worktree is outside its Git repository")?;
@@ -50,12 +49,55 @@ pub(in crate::rewrite) fn git_object_path(
     target_root: &Path,
     project_relative: &Path,
 ) -> Result<PathBuf> {
-    let layout = Layout::resolve(target_root)?;
     ensure!(
-        !project_relative.is_absolute(),
-        "target source path must be relative"
+        !project_relative.as_os_str().is_empty() && !project_relative.is_absolute(),
+        "managed source path must be target-relative"
     );
-    Ok(layout.prefix.join(project_relative))
+    let managed = crate::e2e_run::resolve_managed_directories(target_root)?;
+    let directory = managed
+        .iter()
+        .filter(|directory| project_relative.starts_with(&directory.target_relative))
+        .max_by_key(|directory| directory.target_relative.components().count())
+        .context("source path is outside delivery.managed_paths")?;
+    let relative = project_relative
+        .strip_prefix(&directory.target_relative)
+        .context("failed to map managed source path")?;
+    ensure!(
+        !relative.as_os_str().is_empty()
+            && relative
+                .components()
+                .all(|component| matches!(component, Component::Normal(_))),
+        "source path is outside delivery.managed_paths: {}",
+        project_relative.display()
+    );
+    Ok(directory.repository_relative.join(relative))
+}
+
+pub(in crate::rewrite) fn managed_file_path(
+    target_root: &Path,
+    target_relative: &Path,
+) -> Result<PathBuf> {
+    ensure!(
+        !target_relative.as_os_str().is_empty() && !target_relative.is_absolute(),
+        "managed source path must be target-relative"
+    );
+    let target_root = fs::canonicalize(target_root)
+        .with_context(|| format!("failed to resolve target root {}", target_root.display()))?;
+    let path = fs::canonicalize(target_root.join(target_relative)).with_context(|| {
+        format!(
+            "failed to resolve managed source path {}",
+            target_relative.display()
+        )
+    })?;
+    let managed = crate::e2e_run::resolve_managed_directories(&target_root)?;
+    ensure!(
+        managed
+            .iter()
+            .any(|directory| path.starts_with(&directory.root)),
+        "source path is outside delivery.managed_paths: {}",
+        target_relative.display()
+    );
+    Ok(path)
 }
 
 struct Layout {
@@ -66,7 +108,7 @@ impl Layout {
     fn resolve(target_root: &Path) -> Result<Self> {
         let target_root = fs::canonicalize(target_root)
             .with_context(|| format!("failed to resolve target root {}", target_root.display()))?;
-        let repository_root = repository_root(&target_root)?;
+        let repository_root = crate::repository::git_root(&target_root)?;
         let prefix = target_root
             .strip_prefix(&repository_root)
             .context("target root is outside its Git repository")?
@@ -75,32 +117,18 @@ impl Layout {
     }
 }
 
-fn repository_root(path: &Path) -> Result<PathBuf> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .context("failed to resolve Git repository root")?;
-    ensure!(
-        output.status.success(),
-        "failed to resolve Git repository root: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
-    let root = String::from_utf8(output.stdout).context("Git repository root is not UTF-8")?;
-    fs::canonicalize(root.trim()).context("failed to canonicalize Git repository root")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     #[test]
     fn maps_repository_worktree_to_the_nested_target_project() {
         let repository = tempfile::tempdir().unwrap();
         let target = repository.path().join("services/backend");
-        fs::create_dir_all(&target).unwrap();
+        fs::create_dir_all(target.join("src")).unwrap();
         fs::write(target.join("tracked"), "baseline\n").unwrap();
+        fs::write(target.join("src/main.rs"), "fn main() {}\n").unwrap();
         git(repository.path(), &["init", "-q", "-b", "main"]);
         git(repository.path(), &["add", "."]);
         commit(repository.path());
@@ -135,7 +163,9 @@ mod tests {
     #[test]
     fn preserves_an_independent_repository_worktree_root() {
         let repository = tempfile::tempdir().unwrap();
+        fs::create_dir(repository.path().join("src")).unwrap();
         fs::write(repository.path().join("tracked"), "baseline\n").unwrap();
+        fs::write(repository.path().join("src/main.rs"), "fn main() {}\n").unwrap();
         git(repository.path(), &["init", "-q", "-b", "main"]);
         git(repository.path(), &["add", "."]);
         commit(repository.path());

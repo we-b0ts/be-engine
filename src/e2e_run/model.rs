@@ -124,6 +124,8 @@ pub(super) struct RecordingProjectConfig {
 #[serde(deny_unknown_fields)]
 pub(super) struct DeliveryProjectConfig {
     pub pr_base: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub managed_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +164,7 @@ pub(crate) struct ResolvedProjectConfig {
     pub(crate) replay_case_dependency_post_response_window: Duration,
     pub(crate) replay_startup_timeout: Duration,
     pub(crate) pr_base: String,
+    pub(crate) managed_paths: Vec<PathBuf>,
     pub(crate) recorder_config: PathBuf,
     pub(crate) source_traffic_policy: PathBuf,
     pub(crate) runner_owned_response_assertions: bool,

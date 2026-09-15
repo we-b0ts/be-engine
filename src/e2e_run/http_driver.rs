@@ -362,6 +362,7 @@ mod tests {
             replay_case_dependency_post_response_window: Duration::from_millis(10),
             replay_startup_timeout: Duration::from_secs(1),
             pr_base: "main".to_string(),
+            managed_paths: Vec::new(),
             recorder_config: PathBuf::from("project.yaml"),
             source_traffic_policy: PathBuf::from("source-traffic-policy.yaml"),
             runner_owned_response_assertions: true,

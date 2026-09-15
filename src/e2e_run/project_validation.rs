@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{Result, ensure};
@@ -58,6 +59,23 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         !project.delivery.pr_base.trim().is_empty(),
         "delivery.pr_base must not be empty"
     );
+    ensure!(
+        project.delivery.managed_paths.len() <= 7,
+        "delivery.managed_paths must contain at most 7 additional directories"
+    );
+    let mut managed_paths = BTreeSet::new();
+    for path in &project.delivery.managed_paths {
+        ensure!(
+            super::delivery::validate_managed_path(path),
+            "delivery.managed_paths entry must be a normalized target-relative path with any '..' components leading: {}",
+            path.display()
+        );
+        ensure!(
+            managed_paths.insert(path),
+            "delivery.managed_paths contains duplicate entry: {}",
+            path.display()
+        );
+    }
     ensure!(
         project.state.runtime_root == Path::new(DEFAULT_RUNTIME_ROOT),
         "state.runtime_root must be {DEFAULT_RUNTIME_ROOT:?}"

@@ -46,6 +46,11 @@ fn check_candidate(
         options.worktree.as_deref().unwrap_or(target_root),
     )?;
     candidate::same_repository(target_root, &root)?;
+    let (_, candidate_project) = crate::e2e_run::resolve_project(&root)?;
+    ensure!(
+        candidate_project.managed_paths == project.managed_paths,
+        "delivery.managed_paths differs from the canonical target; publish configuration changes before reviewing code"
+    );
     let integration_mode = options.integration || options.worktree.is_none();
     let canonical_head = candidate::head(target_root)?;
     let canonical_fingerprint = fingerprint::repository_fingerprint(target_root)?;
@@ -98,6 +103,7 @@ fn check_candidate(
         context_fingerprint: candidate::context(target_root, project)?,
         scan_base_revision: candidate::scan_base(&root, &project.pr_base)?,
     };
+    source_diff::ensure_changed_paths_managed(&root, &validation.scan_base_revision)?;
     // Scan the whole PR in both modes, including code inherited before dispatch.
     let (files, findings) = scan::scan(&root, &validation.scan_base_revision)?;
     let mut evidence = if let Some(path) = &options.evidence {

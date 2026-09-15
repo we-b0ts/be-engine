@@ -61,3 +61,5 @@ location must exist and every factual explanation must come from inspected code.
 Use `request` or `unknown` when that is the conclusion; do not relabel a finding
 to obtain a passing result. The engine checks coverage, locations and freshness;
 the AI is responsible for the semantic ownership judgment.
+For a configured managed sibling, copy the exact target-relative finding path
+into evidence, including leading components such as `../backend-rs/`.

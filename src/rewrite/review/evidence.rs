@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 
@@ -60,12 +60,12 @@ pub(super) fn evaluate(
                 );
                 for location in std::iter::once(entry).chain(&item.call_chain) {
                     ensure!(
-                        safe_path(&location.file)
-                            && location.line > 0
-                            && !location.fact.trim().is_empty(),
+                        location.line > 0 && !location.fact.trim().is_empty(),
                         "invalid code evidence location or empty fact"
                     );
-                    let source = std::fs::read_to_string(root.join(&location.file))?;
+                    let source = std::fs::read_to_string(
+                        crate::rewrite::source_diff::managed_file_path(root, &location.file)?,
+                    )?;
                     ensure!(
                         source.lines().nth(location.line - 1).is_some(),
                         "evidence line is absent: {}:{}",
@@ -90,13 +90,6 @@ pub(super) fn evaluate(
         },
         files,
     ))
-}
-
-pub(super) fn safe_path(path: &Path) -> bool {
-    !path.as_os_str().is_empty()
-        && path
-            .components()
-            .all(|part| matches!(part, Component::Normal(_)))
 }
 
 pub(super) fn reusable(root: &Path, report: &RewriteReviewReport) -> bool {

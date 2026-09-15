@@ -184,8 +184,15 @@ edit and commit, supply the returned report through `worker report ...
 When the configured target is a subdirectory of a larger Git repository, keep
 `--target-root` pointed at that project subdirectory. `--worktree` may point at
 either the outer Git worktree root or the corresponding project subdirectory;
-the engine normalizes it to the project subdirectory and scopes source diffs,
-review paths, fingerprints, and Replay-isolation checks to that project.
+the engine normalizes it to the project subdirectory. By default source diffs,
+review paths, fingerprints, and Replay-isolation checks remain scoped to that
+project. Add target-relative sibling directories to
+`project.delivery.managed_paths` when the target and a rapidly changing local
+dependency must be delivered together. Every managed directory must exist,
+belong to the same Git repository, and be disjoint from the target and the
+other managed directories. Managed sibling files are reported relative to the
+target, for example `../backend-rs/src/lib.rs`. Once managed paths are present,
+a candidate with tracked changes outside the target and those paths is rejected.
 
 Review runs the same complete quality implementation for worker and integration
 deliveries. It enforces complete changed production Rust files <=1000 lines.
@@ -2138,6 +2145,22 @@ target:
   #     argv: [make, check]
 ```
 
+The target itself is always managed. Add other code directories from the same
+Git repository under delivery without moving the E2E configuration to the
+repository root:
+
+```yaml
+delivery:
+  pr_base: dev-migration
+  managed_paths:
+    - ../backend-rs
+```
+
+Paths are relative to the target, must use a normalized form with any `..`
+components first, and cannot select the repository root, a nested Git
+repository, or an overlapping directory. Omit `managed_paths` to retain the
+single-target behavior of existing version-17 configuration.
+
 Target readiness path and status come from the project document's
 `recorder.http_gateway.ready` section. Target startup readiness uses
 `project.target.startup_timeout_seconds`, which defaults to 180 seconds when
@@ -2152,6 +2175,11 @@ in the worker or integration worktree, using the canonical target's configuratio
 At most eight uniquely named commands may be configured, with at most 32
 arguments each. `quality_gates: []` explicitly disables inference; built-in
 source and Replay-isolation checks remain mandatory.
+
+Quality commands still start in the target directory. When a managed sibling
+owns tests or lints that the target command does not exercise, add explicit
+gates using its relative manifest, such as
+`[cargo, test, --manifest-path, ../backend-rs/Cargo.toml, --workspace]`.
 
 Managed replay reads its target response limit from
 `recorder.recording.max_body_bytes` in `project.yaml`.
