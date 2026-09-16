@@ -187,6 +187,8 @@ pub struct HttpGatewayConfig {
     pub enabled: bool,
     pub listen: SocketAddr,
     pub matched_upstream: String,
+    /// Upper bound for one HTTP gateway upstream request, including its response body.
+    pub request_timeout_ms: u64,
     pub fallback_upstream: String,
     pub fallback_mode: HttpGatewayFallbackMode,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -498,6 +500,7 @@ impl Default for HttpGatewayConfig {
                 .parse()
                 .expect("valid default HTTP gateway listen address"),
             matched_upstream: "http://127.0.0.1:8081".to_string(),
+            request_timeout_ms: 15_000,
             fallback_upstream: "http://127.0.0.1:8082".to_string(),
             fallback_mode: HttpGatewayFallbackMode::Upstream,
             fixed_response: None,

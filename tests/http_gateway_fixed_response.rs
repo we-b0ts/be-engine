@@ -110,6 +110,43 @@ async fn fixed_response_handles_concurrent_case_rejection_without_fallback_upstr
     gateway.abort();
 }
 
+#[tokio::test]
+async fn matched_request_timeout_returns_gateway_timeout_and_releases_case_slot() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let temp = tempdir().unwrap();
+    let matched_upstream =
+        spawn_http_upstream("too late", "200 OK", Duration::from_millis(200), None).await;
+    let gateway_addr = free_addr();
+    let mut config = fixed_response_config(
+        &temp,
+        gateway_addr,
+        matched_upstream,
+        201,
+        r#"{\"code\":\"fallback\"}"#,
+    );
+    config.http_gateway.request_timeout_ms = 20;
+    config.http_gateway.per_api_case_limits.default = 1;
+    config.http_gateway.rules = vec![HttpGatewayRuleConfig {
+        name: Some("http-rule".to_string()),
+        methods: vec!["GET".to_string()],
+        path_prefixes: vec!["/record/".to_string()],
+        ..Default::default()
+    }];
+
+    let state = AppState::new(config).await.unwrap();
+    let gateway = tokio::spawn(async move { state.run().await });
+    wait_for_port(gateway_addr).await;
+
+    for path in ["/record/first", "/record/second"] {
+        let response = raw_http_get(gateway_addr, path).await;
+        assert!(response.contains("504 Gateway Timeout"), "{response}");
+        assert!(response.contains("timed out after 20 ms"), "{response}");
+    }
+
+    gateway.abort();
+}
+
 fn fixed_response_config(
     temp: &tempfile::TempDir,
     gateway_addr: SocketAddr,

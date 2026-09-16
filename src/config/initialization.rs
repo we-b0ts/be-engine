@@ -236,6 +236,7 @@ http_gateway:
 # recording traffic and is distinct from the recorder-owned native HTTP port.
   listen: 0.0.0.0:__HTTP_GATEWAY_PORT__
   matched_upstream: http://127.0.0.1:__SOURCE_HTTP_PORT__
+  request_timeout_ms: 15000
   fallback_mode: fixed_response
   preserve_host: true
   fixed_response:

@@ -1,5 +1,5 @@
 use std::convert::Infallible;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use bytes::Bytes;
@@ -326,154 +326,27 @@ async fn handle_gateway_request(
             }
         };
 
-        match send_upstream(state.client(), outbound).await {
-            Ok(upstream_response) => {
-                let status = upstream_response.status();
-                let mut response_headers = upstream_response.headers().clone();
-                let mut body_bytes = match upstream_response.into_body().collect().await {
-                    Ok(collected) => collected.to_bytes(),
-                    Err(err) => {
-                        return record_gateway_error(GatewayErrorContext {
-                            state,
-                            id,
-                            client_addr,
-                            method,
-                            original_uri,
-                            authority,
-                            request_headers: request_headers_for_record,
-                            request_body,
-                            started,
-                            matched_rule: matched_rule_name.clone(),
-                            case,
-                            should_record,
-                            target: Some(upstream_base.clone()),
-                            err: anyhow!("failed to read gateway upstream response body: {err}"),
-                        })
-                        .await;
-                    }
-                };
-                let mut discovered_tcp_targets = Vec::new();
-                match rewrite::apply(
-                    &state.config().http_response_rewrite,
-                    state.dns_registry(),
-                    state.kubectl_proxy_manager(),
-                    state.ca().ca_cert_pem_ref(),
-                    state.config().recording.decoded_body_limit(),
-                    RewriteInput {
-                        method: &method,
-                        uri: &original_uri,
-                        authority: authority.as_deref(),
-                        status,
-                        headers: &response_headers,
-                        body: &body_bytes,
-                    },
-                )
+        let request_timeout = Duration::from_millis(config.request_timeout_ms);
+        let upstream_response = tokio::time::timeout(request_timeout, async {
+            let response = send_upstream(state.client(), outbound)
                 .await
-                {
-                    Ok(Some(rewritten)) => {
-                        response_headers = rewritten.headers;
-                        body_bytes = rewritten.body;
-                        discovered_tcp_targets = rewritten.discovered_tcp_targets;
-                    }
-                    Ok(None) => {}
-                    Err(err) => {
-                        return record_gateway_error(GatewayErrorContext {
-                            state,
-                            id,
-                            client_addr,
-                            method,
-                            original_uri,
-                            authority,
-                            request_headers: request_headers_for_record,
-                            request_body,
-                            started,
-                            matched_rule: matched_rule_name.clone(),
-                            case,
-                            should_record,
-                            target: Some(upstream_base.clone()),
-                            err,
-                        })
-                        .await;
-                    }
-                }
-                let response_headers_for_record =
-                    redact_headers(&response_headers, &state.config().recording.redact_headers);
+                .context("gateway upstream request failed")?;
+            let status = response.status();
+            let headers = response.headers().clone();
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .context("failed to read gateway upstream response body")?
+                .to_bytes();
+            Ok::<_, anyhow::Error>((status, headers, body))
+        })
+        .await;
 
-                if should_record {
-                    let event = HttpExchangeEvent {
-                        id,
-                        timestamp: Utc::now(),
-                        client_addr: client_addr.clone(),
-                        scheme: "http_gateway".to_string(),
-                        method: method.to_string(),
-                        uri: original_uri.to_string(),
-                        authority: authority.clone(),
-                        request_headers: with_gateway_headers(
-                            request_headers_for_record.clone(),
-                            matched_rule_name.as_deref(),
-                            &upstream_base,
-                        ),
-                        request_body: capture_body(
-                            &request_body,
-                            state.config().recording.max_body_bytes,
-                        ),
-                        response_status: Some(status.as_u16()),
-                        response_headers: Some(response_headers_for_record.clone()),
-                        response_body: Some(capture_body(
-                            &body_bytes,
-                            state.config().recording.max_body_bytes,
-                        )),
-                        discovered_tcp_targets,
-                        duration_ms: started.elapsed().as_millis(),
-                        error: None,
-                    };
-                    if let Err(err) = state
-                        .recorder()
-                        .record(RecorderEvent::HttpExchange(event))
-                        .await
-                    {
-                        warn!(error = %err, "failed to record HTTP gateway exchange");
-                    }
-                }
-
-                let drain_invalidation = if let Some(case) = &case {
-                    state.drain_active_case_dependencies(case.id).await
-                } else {
-                    None
-                };
-                if let (Some(case), Some(request_record)) = (&case, case_request_record)
-                    && let Err(err) = finalize_http_case(
-                        state.recorder(),
-                        case,
-                        request_record,
-                        CaseResponseRecord {
-                            timestamp: Utc::now(),
-                            matched_rule: matched_rule_name.clone(),
-                            upstream: upstream_base.clone(),
-                            status: Some(status.as_u16()),
-                            headers: Some(response_headers_for_record.clone()),
-                            body: Some(capture_case_body(
-                                &body_bytes,
-                                state.config().recording.max_body_bytes,
-                                state.config().recording.decoded_body_limit(),
-                                Some(&response_headers),
-                            )),
-                            duration_ms: started.elapsed().as_millis(),
-                            error: None,
-                        },
-                        state
-                            .active_case_invalidation(case.id)
-                            .or(drain_invalidation),
-                    )
-                    .await
-                {
-                    warn!(error = %err, case_id = %case.id, "failed to finalize HTTP gateway case");
-                }
-
-                build_downstream_response(status, &response_headers, body_bytes)
-            }
-            Err(err) => {
-                record_gateway_error(GatewayErrorContext {
+        let (status, mut response_headers, mut body_bytes) = match upstream_response {
+            Ok(Ok(response)) => response,
+            Ok(Err(err)) => {
+                return record_gateway_error(GatewayErrorContext {
                     state,
                     id,
                     client_addr,
@@ -487,11 +360,153 @@ async fn handle_gateway_request(
                     case,
                     should_record,
                     target: Some(upstream_base.clone()),
-                    err: anyhow!("gateway upstream request failed: {err}"),
+                    err,
                 })
-                .await
+                .await;
+            }
+            Err(_) => {
+                return record_gateway_error_with_status(
+                    GatewayErrorContext {
+                        state,
+                        id,
+                        client_addr,
+                        method,
+                        original_uri,
+                        authority,
+                        request_headers: request_headers_for_record,
+                        request_body,
+                        started,
+                        matched_rule: matched_rule_name.clone(),
+                        case,
+                        should_record,
+                        target: Some(upstream_base.clone()),
+                        err: anyhow!(
+                            "gateway upstream request timed out after {} ms",
+                            config.request_timeout_ms
+                        ),
+                    },
+                    StatusCode::GATEWAY_TIMEOUT,
+                )
+                .await;
+            }
+        };
+
+        let mut discovered_tcp_targets = Vec::new();
+        match rewrite::apply(
+            &state.config().http_response_rewrite,
+            state.dns_registry(),
+            state.kubectl_proxy_manager(),
+            state.ca().ca_cert_pem_ref(),
+            state.config().recording.decoded_body_limit(),
+            RewriteInput {
+                method: &method,
+                uri: &original_uri,
+                authority: authority.as_deref(),
+                status,
+                headers: &response_headers,
+                body: &body_bytes,
+            },
+        )
+        .await
+        {
+            Ok(Some(rewritten)) => {
+                response_headers = rewritten.headers;
+                body_bytes = rewritten.body;
+                discovered_tcp_targets = rewritten.discovered_tcp_targets;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                return record_gateway_error(GatewayErrorContext {
+                    state,
+                    id,
+                    client_addr,
+                    method,
+                    original_uri,
+                    authority,
+                    request_headers: request_headers_for_record,
+                    request_body,
+                    started,
+                    matched_rule: matched_rule_name.clone(),
+                    case,
+                    should_record,
+                    target: Some(upstream_base.clone()),
+                    err,
+                })
+                .await;
             }
         }
+        let response_headers_for_record =
+            redact_headers(&response_headers, &state.config().recording.redact_headers);
+
+        if should_record {
+            let event = HttpExchangeEvent {
+                id,
+                timestamp: Utc::now(),
+                client_addr: client_addr.clone(),
+                scheme: "http_gateway".to_string(),
+                method: method.to_string(),
+                uri: original_uri.to_string(),
+                authority: authority.clone(),
+                request_headers: with_gateway_headers(
+                    request_headers_for_record.clone(),
+                    matched_rule_name.as_deref(),
+                    &upstream_base,
+                ),
+                request_body: capture_body(&request_body, state.config().recording.max_body_bytes),
+                response_status: Some(status.as_u16()),
+                response_headers: Some(response_headers_for_record.clone()),
+                response_body: Some(capture_body(
+                    &body_bytes,
+                    state.config().recording.max_body_bytes,
+                )),
+                discovered_tcp_targets,
+                duration_ms: started.elapsed().as_millis(),
+                error: None,
+            };
+            if let Err(err) = state
+                .recorder()
+                .record(RecorderEvent::HttpExchange(event))
+                .await
+            {
+                warn!(error = %err, "failed to record HTTP gateway exchange");
+            }
+        }
+
+        let drain_invalidation = if let Some(case) = &case {
+            state.drain_active_case_dependencies(case.id).await
+        } else {
+            None
+        };
+        if let (Some(case), Some(request_record)) = (&case, case_request_record)
+            && let Err(err) = finalize_http_case(
+                state.recorder(),
+                case,
+                request_record,
+                CaseResponseRecord {
+                    timestamp: Utc::now(),
+                    matched_rule: matched_rule_name.clone(),
+                    upstream: upstream_base.clone(),
+                    status: Some(status.as_u16()),
+                    headers: Some(response_headers_for_record.clone()),
+                    body: Some(capture_case_body(
+                        &body_bytes,
+                        state.config().recording.max_body_bytes,
+                        state.config().recording.decoded_body_limit(),
+                        Some(&response_headers),
+                    )),
+                    duration_ms: started.elapsed().as_millis(),
+                    error: None,
+                },
+                state
+                    .active_case_invalidation(case.id)
+                    .or(drain_invalidation),
+            )
+            .await
+        {
+            warn!(error = %err, case_id = %case.id, "failed to finalize HTTP gateway case");
+        }
+
+        build_downstream_response(status, &response_headers, body_bytes)
     };
 
     match (case_guard, active_case_id) {
@@ -521,6 +536,13 @@ struct GatewayErrorContext {
 }
 
 async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody> {
+    record_gateway_error_with_status(ctx, StatusCode::BAD_GATEWAY).await
+}
+
+async fn record_gateway_error_with_status(
+    ctx: GatewayErrorContext,
+    response_status: StatusCode,
+) -> Response<GatewayBody> {
     let error = format!("{:#}", ctx.err);
     let drain_invalidation = if let Some(case) = &ctx.case {
         ctx.state.drain_active_case_dependencies(case.id).await
@@ -619,7 +641,7 @@ async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody>
         warn!(error = %record_err, "failed to record HTTP gateway proxy error");
     }
 
-    simple_response(StatusCode::BAD_GATEWAY, &error)
+    simple_response(response_status, &error)
 }
 
 fn with_gateway_headers(
