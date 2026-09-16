@@ -25,6 +25,10 @@ pub struct HttpGatewayFixedResponseConfig {
 }
 
 pub(super) fn validate_config(config: &HttpGatewayConfig) -> Result<()> {
+    ensure!(
+        config.request_timeout_ms > 0,
+        "http_gateway.request_timeout_ms must be greater than zero"
+    );
     match config.fallback_mode {
         HttpGatewayFallbackMode::Upstream => {
             ensure!(
@@ -141,6 +145,10 @@ mod tests {
 
         config.fallback_mode = HttpGatewayFallbackMode::Upstream;
         assert!(validate_config(&config).is_err());
+
+        config.fixed_response = None;
+        config.request_timeout_ms = 0;
+        assert!(validate_config(&config).is_err());
     }
 
     #[test]
@@ -164,5 +172,6 @@ mod tests {
             HttpGatewayFallbackMode::FixedResponse
         );
         assert_eq!(config.http_gateway.fixed_response.unwrap().status, 200);
+        assert_eq!(config.http_gateway.request_timeout_ms, 15_000);
     }
 }
