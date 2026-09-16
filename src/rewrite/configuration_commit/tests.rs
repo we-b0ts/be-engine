@@ -143,6 +143,41 @@ fn includes_new_deleted_staged_and_unstaged_configuration_but_excludes_progress_
 }
 
 #[test]
+fn reports_configuration_paths_relative_to_a_nested_target() {
+    let repository = tempfile::tempdir().unwrap();
+    let target_root = repository.path().join("backend-rs-intra");
+    test_support::install_project_config(
+        &target_root,
+        "master",
+        test_support::managed_test_recorder(),
+        None,
+    );
+    fs::write(
+        target_root.join(".traffic-e2e/verification.yaml"),
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+    )
+    .unwrap();
+    fs::write(target_root.join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();
+    git(repository.path(), &["init", "-q", "-b", "master"]);
+    git(repository.path(), &["config", "user.name", "Test"]);
+    git(
+        repository.path(),
+        &["config", "user.email", "test@example.com"],
+    );
+    git(repository.path(), &["add", "."]);
+    git(repository.path(), &["commit", "-qm", "baseline"]);
+
+    fs::write(
+        target_root.join(CONFIGURATION_PATHS[1]),
+        "nested target policy change\n",
+    )
+    .unwrap();
+
+    let envelope = pending(&target_root).unwrap().unwrap();
+    assert_eq!(required(&envelope.action), &[CONFIGURATION_PATHS[1]]);
+}
+
+#[test]
 fn checks_uninitialized_workflow_and_does_not_create_runtime_state() {
     let root = target();
     fs::write(

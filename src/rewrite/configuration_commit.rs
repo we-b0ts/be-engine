@@ -85,6 +85,7 @@ fn pending(target_root: &Path) -> Result<Option<RewriteActionEnvelope>> {
 /// Also checked by `next` after acquiring its coordinator lock and before execution.
 pub(super) fn pending_locked(target_root: &Path) -> Result<Option<RewriteActionEnvelope>> {
     let target_root = std::fs::canonicalize(target_root)?;
+    let target_prefix = git_target_prefix(&target_root)?;
     let output = Command::new("git")
         .arg("--no-optional-locks")
         .arg("-C")
@@ -95,6 +96,7 @@ pub(super) fn pending_locked(target_root: &Path) -> Result<Option<RewriteActionE
             "--untracked-files=all",
             "--ignored=matching",
             "--no-renames",
+            "-z",
             "--",
         ])
         .args(CONFIGURATION_PATHS)
@@ -105,12 +107,18 @@ pub(super) fn pending_locked(target_root: &Path) -> Result<Option<RewriteActionE
         "cannot inspect managed configuration changes: {}",
         String::from_utf8_lossy(&output.stderr).trim()
     );
-    let changes = String::from_utf8(output.stdout)?;
     let mut required = Vec::new();
     let mut summary = Vec::new();
-    for line in changes.lines() {
+    for record in output.stdout.split(|byte| *byte == 0) {
+        if record.is_empty() {
+            continue;
+        }
+        let line = std::str::from_utf8(record)?;
         let Some(path) = line.get(3..) else {
             anyhow::bail!("invalid Git configuration status");
+        };
+        let Some(path) = path.strip_prefix(&target_prefix) else {
+            anyhow::bail!("unexpected configuration path {path:?}");
         };
         ensure!(
             CONFIGURATION_PATHS.contains(&path),
@@ -149,6 +157,25 @@ pub(super) fn pending_locked(target_root: &Path) -> Result<Option<RewriteActionE
     envelope.pending = 1;
     envelope.terminal_allowed = false;
     Ok(Some(envelope))
+}
+
+fn git_target_prefix(target_root: &Path) -> Result<String> {
+    let output = Command::new("git")
+        .arg("--no-optional-locks")
+        .arg("-C")
+        .arg(target_root)
+        .args(["rev-parse", "--show-prefix"])
+        .output()
+        .context("failed to resolve managed configuration Git prefix")?;
+    ensure!(
+        output.status.success(),
+        "cannot resolve managed configuration Git prefix: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    let prefix = String::from_utf8(output.stdout)?;
+    let prefix = prefix.strip_suffix('\n').unwrap_or(&prefix);
+    let prefix = prefix.strip_suffix('\r').unwrap_or(prefix);
+    Ok(prefix.to_owned())
 }
 
 #[cfg(test)]
