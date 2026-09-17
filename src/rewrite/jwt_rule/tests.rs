@@ -291,7 +291,7 @@ fn source_401_does_not_offer_a_refresh_rule_and_rotated_runtime_key_is_rejected(
         "SECRET_KEY=rotated\n",
     )
     .unwrap();
-    let error = keys::resolve_binding(f.target.path(), "session-jwt").unwrap_err();
+    let error = keys::resolve_profile_binding(f.target.path(), "session-jwt", None).unwrap_err();
     assert!(error.to_string().contains("changed since rule apply"));
 }
 
@@ -520,7 +520,7 @@ fn jwt_evidence_discovers_mounts_and_file_binding_without_exposing_values() {
     let record = f.state.rule_plan.clone().unwrap();
     apply(root, &mut f.state, record).unwrap();
     assert_eq!(
-        keys::resolve_binding(root, "session-jwt").unwrap(),
+        keys::resolve_profile_binding(root, "session-jwt", None).unwrap(),
         b"test-signing-key"
     );
     let discovery = discovery::query(root);
