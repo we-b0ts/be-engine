@@ -73,24 +73,40 @@ Apply writes this policy section:
 ```yaml
 request_rules:
   jwt:
-    - id: session-jwt
+    profiles:
+      session:
+        signing_key_ref: session-jwt
+        signing_key_source:
+          kind: target_env
+          name: SECRET_KEY
+        algorithm: HS256
+        time: preserve_relative
+    rules:
+    - id: session-bearer-header
       header: authorization
       scheme: bearer
-      algorithm: HS256
-      time: preserve_relative
-      signing_key_ref: session-jwt
+      profile: session
 ```
 
-The equivalent query-token policy is:
+Header and query selectors can share the same profile. For example, the same
+session key can also transform a download token without duplicating the key
+reference, source, algorithm, or time policy:
 
 ```yaml
 request_rules:
   jwt:
+    profiles:
+      session:
+        signing_key_ref: session-jwt
+        signing_key_source:
+          kind: target_env
+          name: SECRET_KEY
+        algorithm: HS256
+        time: preserve_relative
+    rules:
     - id: download-jwt
       query_param: download_token
-      algorithm: HS256
-      time: preserve_relative
-      signing_key_ref: download-jwt
+      profile: session
 ```
 
 Rules apply across all APIs; they do not require an API list or initialization
@@ -117,12 +133,15 @@ implicit fallback from an environment variable to a dotenv field: the source
 must agree with the application's configuration precedence. Imports performed
 by application startup scripts are not automatically inferred.
 
-The alias/source binding and a key-change verifier are stored in
+The profile's `signing_key_source` is a reviewed pointer to the target startup
+input; it does not contain the key value. The local binding stores that source
+alongside a key-change verifier in
 `.traffic-e2e/local/secrets/jwt-signing-keys.json` (0600, parent 0700). The key
 value stays in its existing target startup source; it is never copied into
-verification YAML, plans, output, or CLI arguments. The recording AES key and
-the application's JWT signing key are separate keys. A changed key requires
-fresh plan/apply before request transformation.
+verification YAML, plans, output, or CLI arguments. The key-change verifier is
+also local because it can validate a guessed key. The recording AES key and the
+application's JWT signing key are separate keys. A changed key or source
+requires fresh plan/apply before request transformation.
 
 ## Replay semantics and bounds
 

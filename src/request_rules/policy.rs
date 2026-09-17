@@ -1,5 +1,5 @@
 //! Request-rule projection and section-preserving policy edits.
-use super::{JwtRule, RequestRules};
+use super::{JwtProfile, JwtRule, RequestRules};
 use anyhow::{Context, Result};
 use std::path::Path;
 
@@ -20,17 +20,12 @@ pub(crate) fn parse(value: &serde_yaml::Value) -> Result<RequestRules> {
     Ok(rules)
 }
 
-pub(crate) fn add(original: &str, rule: &JwtRule) -> Result<String> {
+pub(crate) fn add(original: &str, profile: &JwtProfile, rule: &JwtRule) -> Result<String> {
     let value: serde_yaml::Value = serde_yaml::from_str(original)?;
     let mut rules = parse(&value)?;
-    if let Some(existing) = rules.jwt.iter().find(|r| r.id == rule.id) {
-        anyhow::ensure!(
-            existing == rule,
-            "JWT rule id already exists with different settings"
-        );
+    if !rules.jwt.add(profile.clone(), rule.clone())? {
         return Ok(original.to_string());
     }
-    rules.jwt.push(rule.clone());
     rules.validate()?;
     let section = serde_yaml::to_string(&std::collections::BTreeMap::from([(
         "request_rules",

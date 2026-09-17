@@ -35,14 +35,23 @@ pub(crate) fn validate_reference(reference: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn validate_source(source: &SigningKeySource) -> Result<()> {
+    match source {
+        SigningKeySource::TargetEnv { name } => validate_reference(name),
+        SigningKeySource::TargetFile { path, field } => {
+            ensure!(path.is_absolute(), "JWT key file path must be absolute");
+            validate_reference(field)
+        }
+    }
+}
+
 pub(crate) fn resolve_source(root: &Path, source: &SigningKeySource) -> Result<Vec<u8>> {
+    validate_source(source)?;
     let value = match source {
         SigningKeySource::TargetEnv { name } => {
-            validate_reference(name)?;
             crate::startup::startup_environment_value(root, name).map_err(|_| anyhow::anyhow!("cannot resolve JWT signing key from target startup environment"))?.context("JWT signing key is absent from the effective target environment; explicitly select a mounted file if the application loads dotenv itself")?
         }
         SigningKeySource::TargetFile { path, field } => {
-            validate_reference(field)?;
             let (_, config) = crate::e2e_run::resolve_project(root)?;
             let snapshot = crate::startup::load_startup_snapshot(root, &config.target_startup)?;
             ensure!(
@@ -116,11 +125,21 @@ pub(crate) fn prepare_binding(
     ))
 }
 
-pub(crate) fn resolve_binding(root: &Path, reference: &str) -> Result<Vec<u8>> {
+pub(crate) fn resolve_profile_binding(
+    root: &Path,
+    reference: &str,
+    configured_source: Option<&SigningKeySource>,
+) -> Result<Vec<u8>> {
     validate_reference(reference)?;
     let binding = bindings(root)?
         .remove(reference)
         .context("JWT signing key reference is not bound; run rule plan/apply")?;
+    if let Some(configured_source) = configured_source {
+        ensure!(
+            &binding.source == configured_source,
+            "JWT signing key source changed since rule apply; rerun plan/apply"
+        );
+    }
     let key = resolve_source(root, &binding.source)?;
     ensure!(
         revision(&key, &binding.challenge) == binding.revision,

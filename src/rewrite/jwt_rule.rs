@@ -10,10 +10,11 @@ use super::{
 };
 use crate::e2e_run::jwt_evidence::{self, JwtTimeEvidence};
 use crate::request_rules::{
-    JwtAlgorithm, JwtRule, JwtTime, JwtTokenLocation,
+    JwtAlgorithm, JwtProfile, JwtRule, JwtRules, JwtTime, JwtTokenLocation,
     keys::{self, KeyBinding, SigningKeySource},
     policy,
 };
+use std::collections::BTreeMap;
 
 mod discovery;
 
@@ -36,6 +37,7 @@ pub struct JwtRulePlanOptions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JwtPlanRecord {
     rule: JwtRule,
+    profile: JwtProfile,
     binding: KeyBinding,
     policy_revision: String,
     bindings_revision: String,
@@ -96,9 +98,13 @@ pub(super) fn plan(
                 JwtTokenLocation::QueryParameter { query_param } => Some(query_param.clone()),
                 JwtTokenLocation::BearerHeader { .. } => None,
             },
+            profile: options.signing_key_ref.clone(),
+        },
+        profile: JwtProfile {
+            signing_key_ref: options.signing_key_ref,
+            signing_key_source: Some(binding.source.clone()),
             algorithm: options.algorithm,
             time: JwtTime::PreserveRelative,
-            signing_key_ref: options.signing_key_ref,
         },
         binding,
         policy_revision: jwt_evidence::digest(&std::fs::read(&config.replay_policy)?),
@@ -176,7 +182,7 @@ fn build(
             spec.rule
                 .location()
                 .is_ok_and(|location| c.location == location)
-                && c.algorithm == spec.rule.algorithm
+                && c.algorithm == spec.profile.algorithm
         })
         .collect::<Vec<_>>();
     ensure!(
@@ -193,13 +199,16 @@ fn build(
         let request = serde_json::from_slice(&crate::request_headers::load_request_file(&path)?)?;
         jwt_evidence::verify_candidate(case, &request, &key, spec.leeway_seconds)?;
     }
-    let coverage = coverage(&case_source, &spec.rule, &key)?;
-    let updated = policy::add(&original, &spec.rule)?;
+    let coverage = coverage(&case_source, &spec.rule, &spec.profile, &key)?;
+    let updated = policy::add(&original, &spec.profile, &spec.rule)?;
     let rendered = serde_yaml::to_string(&crate::request_rules::RequestRules {
-        jwt: vec![spec.rule.clone()],
+        jwt: JwtRules {
+            profiles: BTreeMap::from([(spec.rule.profile.clone(), spec.profile.clone())]),
+            rules: vec![spec.rule.clone()],
+        },
     })?;
     let report = json!({
-        "kind": "jwt", "policy": config.replay_policy, "rule": spec.rule,
+        "kind": "jwt", "policy": config.replay_policy, "rule": spec.rule, "profile": spec.profile,
         "signing_key_source": spec.binding.source, "signature_verified": true,
         "evidence_cases": selected.len(), "coverage": coverage,
         "changed": original != updated, "applied": false,
@@ -210,7 +219,7 @@ fn build(
     Ok((config.replay_policy, updated, report))
 }
 
-fn coverage(source: &Path, rule: &JwtRule, key: &[u8]) -> Result<Value> {
+fn coverage(source: &Path, rule: &JwtRule, profile: &JwtProfile, key: &[u8]) -> Result<Value> {
     let mut matched = 0;
     let mut invalid = 0;
     let mut apis = std::collections::BTreeSet::new();
@@ -229,7 +238,7 @@ fn coverage(source: &Path, rule: &JwtRule, key: &[u8]) -> Result<Value> {
         let Some(token) = crate::request_rules::jwt::Token::parse(&raw)? else {
             continue;
         };
-        if token.algorithm != rule.algorithm {
+        if token.algorithm != profile.algorithm {
             continue;
         }
         if !token.verify(key) {
@@ -276,7 +285,7 @@ pub(super) fn apply(
     let (path, updated, mut report) = build(root, state, spec)?;
     let previous = keys::bindings(root)?;
     let mut bindings = previous.clone();
-    bindings.insert(spec.rule.signing_key_ref.clone(), spec.binding.clone());
+    bindings.insert(spec.profile.signing_key_ref.clone(), spec.binding.clone());
     keys::write_bindings(root, &bindings)?;
     if let Err(error) = crate::config::edit::write_atomic(&path, updated.as_bytes()) {
         keys::write_bindings(root, &previous)

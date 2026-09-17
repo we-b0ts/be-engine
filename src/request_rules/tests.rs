@@ -8,9 +8,16 @@ fn rule() -> JwtRule {
         header: Some("authorization".into()),
         scheme: Some("bearer".into()),
         query_param: None,
+        profile: "session".into(),
+    }
+}
+
+fn profile() -> JwtProfile {
+    JwtProfile {
+        signing_key_ref: "session-jwt".into(),
+        signing_key_source: None,
         algorithm: JwtAlgorithm::HS256,
         time: JwtTime::PreserveRelative,
-        signing_key_ref: "session-jwt".into(),
     }
 }
 
@@ -20,9 +27,7 @@ fn query_rule() -> JwtRule {
         header: None,
         scheme: None,
         query_param: Some("download_token".into()),
-        algorithm: JwtAlgorithm::HS256,
-        time: JwtTime::PreserveRelative,
-        signing_key_ref: "download-jwt".into(),
+        profile: "session".into(),
     }
 }
 
@@ -49,9 +54,8 @@ fn preserves_time_relationships_and_identity_with_independent_verification() {
         "test-key",
         recorded,
     );
-    let runtime = RequestRuleRuntime {
-        rules: vec![(rule(), b"test-key".to_vec())],
-    };
+    let runtime =
+        RequestRuleRuntime::with_test_keys(vec![(rule(), profile(), b"test-key".to_vec())]);
     let observations = runtime.apply(&mut value, now).unwrap();
     let raw = jwt::request_token(&value, &rule().location().unwrap())
         .unwrap()
@@ -71,9 +75,8 @@ fn preserves_time_relationships_and_identity_with_independent_verification() {
 #[test]
 fn recorded_expired_and_not_yet_valid_tokens_still_fail() {
     let now = Utc::now();
-    let runtime = RequestRuleRuntime {
-        rules: vec![(rule(), b"test-key".to_vec())],
-    };
+    let runtime =
+        RequestRuleRuntime::with_test_keys(vec![(rule(), profile(), b"test-key".to_vec())]);
     for claims in [
         json!({"exp":900,"sub":"user"}),
         json!({"exp":2000,"nbf":1500,"sub":"user"}),
@@ -94,9 +97,8 @@ fn recorded_expired_and_not_yet_valid_tokens_still_fail() {
 
 #[test]
 fn invalid_signatures_and_non_jwt_credentials_are_not_reissued() {
-    let runtime = RequestRuleRuntime {
-        rules: vec![(rule(), b"test-key".to_vec())],
-    };
+    let runtime =
+        RequestRuleRuntime::with_test_keys(vec![(rule(), profile(), b"test-key".to_vec())]);
     let mut value = request(json!({"exp":2000}), "wrong-key", 1000);
     let before = value.clone();
     assert_eq!(
@@ -120,10 +122,17 @@ fn invalid_signatures_and_non_jwt_credentials_are_not_reissued() {
 fn key_rotation_applies_only_one_matching_rule_and_preserves_absent_claims() {
     let mut old = rule();
     old.id = "old".into();
-    old.signing_key_ref = "old".into();
-    let runtime = RequestRuleRuntime {
-        rules: vec![(rule(), b"new-key".to_vec()), (old, b"old-key".to_vec())],
+    old.profile = "old".into();
+    let old_profile = JwtProfile {
+        signing_key_ref: "old".into(),
+        signing_key_source: None,
+        algorithm: JwtAlgorithm::HS256,
+        time: JwtTime::PreserveRelative,
     };
+    let runtime = RequestRuleRuntime::with_test_keys(vec![
+        (rule(), profile(), b"new-key".to_vec()),
+        (old, old_profile, b"old-key".to_vec()),
+    ]);
     let mut value = request(json!({"exp":2000,"sub":"user"}), "old-key", 1000);
     runtime
         .apply(&mut value, DateTime::from_timestamp(3000, 0).unwrap())
@@ -156,9 +165,8 @@ fn shifts_query_jwt_without_reencoding_the_rest_of_the_uri() {
     value["uri"] = json!(format!(
         "/api/export?message_ids=1%2C2&download_token={token}&name=a+b&empty=#fragment"
     ));
-    let runtime = RequestRuleRuntime {
-        rules: vec![(query_rule(), b"test-key".to_vec())],
-    };
+    let runtime =
+        RequestRuleRuntime::with_test_keys(vec![(query_rule(), profile(), b"test-key".to_vec())]);
     let now = DateTime::from_timestamp(recorded + 3600, 0).unwrap();
     runtime.apply(&mut value, now).unwrap();
     let uri = value["uri"].as_str().unwrap();
@@ -201,14 +209,63 @@ fn rejects_unsupported_rule_shapes_and_keeps_other_policy_sections() {
         assert!(serde_yaml::from_str::<RequestRules>(input).is_err());
     }
     let original = "version: 3\nexpected_response: assertions_only\n# keep this comment\ndependency_rules: []\nresponse_rules: {}\n";
-    let updated = policy::add(original, &rule()).unwrap();
+    let updated = policy::add(original, &profile(), &rule()).unwrap();
     assert!(updated.starts_with(original));
-    assert_eq!(policy::add(&updated, &rule()).unwrap(), updated);
+    assert_eq!(policy::add(&updated, &profile(), &rule()).unwrap(), updated);
     assert!(
         policy::add(
             "version: 1\nexpected_response: assertions_only\ndependency_rules: []\n",
+            &profile(),
             &rule()
         )
         .is_err()
     );
+}
+
+#[test]
+fn shared_profile_owns_key_algorithm_and_time_policy() {
+    let rules: RequestRules = serde_yaml::from_str(
+        "jwt:\n  profiles:\n    session:\n      signing_key_ref: session-jwt\n      signing_key_source:\n        kind: target_env\n        name: SECRET_KEY\n      algorithm: HS256\n      time: preserve_relative\n  rules:\n  - id: session-bearer-header\n    header: authorization\n    scheme: bearer\n    profile: session\n  - id: download-token\n    query_param: download_token\n    profile: session\n",
+    )
+    .unwrap();
+    rules.validate().unwrap();
+    assert_eq!(rules.jwt.profiles.len(), 1);
+    assert_eq!(rules.jwt.rules.len(), 2);
+    let rendered = serde_yaml::to_string(&rules).unwrap();
+    assert!(rendered.contains("profiles:"));
+    assert!(rendered.contains("rules:"));
+    assert!(!rendered.contains("challenge"));
+}
+
+#[test]
+fn legacy_list_remains_readable_but_uses_independent_profiles() {
+    let rules: RequestRules = serde_yaml::from_str(
+        "jwt:\n- id: legacy\n  header: authorization\n  scheme: bearer\n  algorithm: HS256\n  time: preserve_relative\n  signing_key_ref: session-jwt\n",
+    )
+    .unwrap();
+    rules.validate().unwrap();
+    assert_eq!(rules.jwt.rules[0].profile, "legacy");
+    assert_eq!(rules.jwt.profiles["legacy"].signing_key_ref, "session-jwt");
+}
+
+#[test]
+fn absent_or_unparseable_tokens_do_not_require_a_local_binding() {
+    let root = tempfile::tempdir().unwrap();
+    let policy_path = root.path().join("verification.yaml");
+    std::fs::write(
+        &policy_path,
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\nrequest_rules:\n  jwt:\n    profiles:\n      session:\n        signing_key_ref: session-jwt\n        signing_key_source:\n          kind: target_env\n          name: SECRET_KEY\n        algorithm: HS256\n        time: preserve_relative\n    rules:\n    - id: bearer\n      header: authorization\n      scheme: bearer\n      profile: session\n",
+    )
+    .unwrap();
+    let runtime = RequestRuleRuntime::load(root.path(), &policy_path).unwrap();
+    let mut no_token = json!({"headers": {}});
+    assert!(runtime.apply(&mut no_token, Utc::now()).unwrap().is_empty());
+    let mut opaque = json!({"headers": {"authorization": ["Bearer api-key"]}});
+    assert!(runtime.apply(&mut opaque, Utc::now()).unwrap().is_empty());
+
+    let mut matching = request(json!({"exp": 2_000}), "unused", 1_000);
+    let error = runtime.apply(&mut matching, Utc::now()).unwrap_err();
+    assert!(error.to_string().contains("bearer"));
+    assert!(error.to_string().contains("session-jwt"));
+    assert!(error.to_string().contains("rule plan/apply"));
 }
