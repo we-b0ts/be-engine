@@ -64,9 +64,9 @@ selectors are mutually exclusive.
 Use the leeway proven in the actual application, not the example value. Plan
 verifies the original evidence signatures using the selected key, checks
 expiration beyond that leeway, and scans the recording for global coverage.
-Apply repeats those checks and rejects changes to the policy, evidence, key
-bindings, or key value. The plan previews the policy section and key source;
-it stores no raw secret. Reusing an existing binding needs no key-source flag.
+Apply repeats those checks and rejects changes to the policy, evidence, or key
+value. The plan previews the policy section and key source; it stores no raw
+secret.
 
 Apply writes this policy section:
 
@@ -134,14 +134,12 @@ must agree with the application's configuration precedence. Imports performed
 by application startup scripts are not automatically inferred.
 
 The profile's `signing_key_source` is a reviewed pointer to the target startup
-input; it does not contain the key value. The local binding stores that source
-alongside a key-change verifier in
-`.traffic-e2e/local/secrets/jwt-signing-keys.json` (0600, parent 0700). The key
-value stays in its existing target startup source; it is never copied into
-verification YAML, plans, output, or CLI arguments. The key-change verifier is
-also local because it can validate a guessed key. The recording AES key and the
-application's JWT signing key are separate keys. A changed key or source
-requires fresh plan/apply before request transformation.
+input; it does not contain the key value. It is persisted in
+`verification.yaml`, which is the sole configuration the request runtime uses
+to locate the key. The key value stays in its existing target startup source;
+it is never copied into verification YAML, plans, output, or CLI arguments. The
+recording AES key and the application's JWT signing key are separate keys. A
+changed key or source requires fresh plan/apply before request transformation.
 
 ## Replay semantics and bounds
 

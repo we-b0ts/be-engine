@@ -287,7 +287,7 @@ struct RuntimeJwtRule {
 }
 
 enum RuntimeKey {
-    Binding(PathBuf),
+    TargetStartup(PathBuf),
     #[cfg(test)]
     Fixed(Vec<u8>),
 }
@@ -311,7 +311,7 @@ impl RequestRuleRuntime {
             rules.push(RuntimeJwtRule {
                 rule,
                 profile,
-                key: RuntimeKey::Binding(target_root.to_path_buf()),
+                key: RuntimeKey::TargetStartup(target_root.to_path_buf()),
             });
         }
         Ok(Self { rules })
@@ -358,17 +358,20 @@ impl RequestRuleRuntime {
                 continue;
             }
             let key = match &configured.key {
-                RuntimeKey::Binding(root) => Cow::Owned(
-                    keys::resolve_profile_binding(
-                        root,
-                        &profile.signing_key_ref,
-                        profile.signing_key_source.as_ref(),
-                    )
-                    .with_context(|| format!(
-                        "JWT request rule {:?} matched a parseable JWT requiring time translation, but signing key reference {:?} cannot be resolved; run rule plan/apply to create or refresh its local binding",
-                        rule.id, profile.signing_key_ref
-                    ))?,
-                ),
+                RuntimeKey::TargetStartup(root) => {
+                    let source = profile.signing_key_source.as_ref().with_context(|| {
+                        format!(
+                            "JWT request rule {:?} matched a parseable JWT requiring time translation, but profile {:?} has no signing_key_source in verification.yaml",
+                            rule.id, rule.profile
+                        )
+                    })?;
+                    Cow::Owned(keys::resolve_source(root, source).with_context(|| {
+                        format!(
+                            "JWT request rule {:?} cannot resolve its signing_key_source from target startup inputs",
+                            rule.id
+                        )
+                    })?)
+                }
                 #[cfg(test)]
                 RuntimeKey::Fixed(key) => Cow::Borrowed(key.as_slice()),
             };

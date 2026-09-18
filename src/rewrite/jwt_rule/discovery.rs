@@ -20,18 +20,22 @@ pub(super) fn query(root: &Path) -> Value {
         Err(_) => json!({"status": "unavailable"}),
     };
     mounts["inspect_command"] = inspect_command(root, "mount");
-    let bindings = match keys::bindings(root) {
-        Ok(bindings) => json!({
+    let profiles = match crate::e2e_run::resolve_project(root)
+        .and_then(|(_, config)| policy::load(&config.replay_policy))
+    {
+        Ok(rules) => json!({
             "status": "available",
-            "references": bindings.into_iter().map(|(reference, binding)| json!({
-                "signing_key_ref": reference, "source": binding.source,
+            "profiles": rules.jwt.profiles.into_iter().map(|(profile, settings)| json!({
+                "profile": profile,
+                "signing_key_ref": settings.signing_key_ref,
+                "signing_key_source": settings.signing_key_source,
             })).collect::<Vec<_>>(),
         }),
         Err(_) => json!({"status": "unavailable"}),
     };
     json!({
-        "environment": environment, "startup_mounts": mounts, "existing_bindings": bindings,
-        "selection": "Trace the JWT key name, dotenv file path and configuration precedence in source/target code. Use --target-env NAME for an effective startup variable, or --target-key-file CONTAINER_PATH --target-key-field NAME for a dotenv file within a mount with writable=false. A directory mount may contain the file. These are available inputs, not proof of the signing-key source; plan/apply verifies the original signature. Existing bindings may be reused by --signing-key-ref. No target process or secret disclosure is required."
+        "environment": environment, "startup_mounts": mounts, "configured_profiles": profiles,
+        "selection": "Trace the JWT key name, dotenv file path and configuration precedence in source/target code. Use --target-env NAME for an effective startup variable, or --target-key-file CONTAINER_PATH --target-key-field NAME for a dotenv file within a mount with writable=false. A directory mount may contain the file. These are available inputs, not proof of the signing-key source; plan/apply verifies the original signature. The configured profile source is persisted in verification.yaml. No target process or secret disclosure is required."
     })
 }
 
