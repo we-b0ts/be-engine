@@ -589,3 +589,81 @@ fn scard_and_hgetall_plan_from_exact_key_unused_case_evidence() {
         )));
     }
 }
+
+#[test]
+fn hscan_plan_from_unused_case_evidence_requires_its_numeric_key_pattern() {
+    let fixture = Fixture::new("unrelated-case-key");
+    fs::write(
+        &fixture.config,
+        SourceTrafficPolicyConfig::empty().render().unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        &fixture.dependencies,
+        format!(
+            "{}\n",
+            json!({
+                "event_type": "redis_exchange",
+                "target_host": "cache.service",
+                "target_port": 6379,
+                "command": "HSCAN",
+                "args": [capture("dingtalk:card_inbox:257968"), capture("0")],
+                "response_kind": "array",
+                "response": capture("*2\\r\\n$1\\r\\n0\\r\\n*0\\r\\n"),
+                "replay_safe": true,
+            })
+        ),
+    )
+    .unwrap();
+    let mut replay = report(&fixture.dependencies);
+    replay["redis"]["unused_case"] = json!([{
+        "index": 0,
+        "case_id": "case-a",
+        "target": { "host": "cache.service", "port": 6379 },
+        "command": "HSCAN",
+    }]);
+    fs::write(
+        &fixture.replay_report,
+        serde_json::to_vec_pretty(&replay).unwrap(),
+    )
+    .unwrap();
+
+    let mut feedback = fixture.feedback();
+    feedback.name = "dingtalk-card-inbox-recovery".to_string();
+    feedback.ports = vec![6379];
+    feedback.command = "HSCAN".to_string();
+    feedback.keys.clear();
+    feedback.key_patterns = vec![RedisKeyPatternConfig {
+        prefix: "dingtalk:card_inbox:".to_string(),
+        suffix: String::new(),
+        numeric_middle: true,
+    }];
+    feedback.key_prefix.clear();
+    feedback.key_suffix.clear();
+    feedback.initial_load_timeout_ms = None;
+    feedback.fields.clear();
+
+    let plan = plan_redis_background_dependency(feedback).unwrap();
+    assert_eq!(plan.report().command, "HSCAN");
+    assert_eq!(plan.report().matched_unused_exchanges, 1);
+    assert_eq!(plan.report().matched_case_ids, ["case-a"]);
+    plan.apply().unwrap();
+
+    let rules = SourceTrafficPolicyConfig::load(&fixture.config).unwrap();
+    assert!(matches!(
+        &rules.process_owned_dependencies[0],
+        BackgroundDependencyRuleConfig::Redis {
+            command,
+            key_patterns,
+            initial_load_timeout_ms: None,
+            fields,
+            ..
+        } if command == "HSCAN"
+            && key_patterns == &[RedisKeyPatternConfig {
+                prefix: "dingtalk:card_inbox:".to_string(),
+                suffix: String::new(),
+                numeric_middle: true,
+            }]
+            && fields.is_empty()
+    ));
+}

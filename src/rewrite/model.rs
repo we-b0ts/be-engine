@@ -349,6 +349,11 @@ pub(super) enum RewriteDependencyRuleSpec {
         keys: Vec<String>,
         initial_load_timeout_ms: u64,
     },
+    RedisHscan {
+        ports: Vec<u16>,
+        keys: Vec<String>,
+        key_patterns: Vec<RedisKeyPatternConfig>,
+    },
     RedisHashRead {
         command: String,
         ports: Vec<u16>,

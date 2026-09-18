@@ -57,12 +57,12 @@ pub(super) fn covers(
         (
             BackgroundDependencyRuleConfig::Redis { command, .. },
             BackgroundDependencyRuleConfig::Redis { .. },
-        ) if is_hash_read(command) => redis_hash_rule_covers(existing, requested),
+        ) if supports_key_selectors(command) => redis_key_selector_rule_covers(existing, requested),
         _ => compatible(existing, requested, true),
     }
 }
 
-pub(super) fn merge_compatible_redis_hash_rule(
+pub(super) fn merge_compatible_redis_key_selector_rule(
     rules: &mut [BackgroundDependencyRuleConfig],
     requested: &BackgroundDependencyRuleConfig,
 ) -> Result<Option<String>> {
@@ -79,7 +79,7 @@ pub(super) fn merge_compatible_redis_hash_rule(
     else {
         return Ok(None);
     };
-    if !is_hash_read(requested_command) {
+    if !supports_key_selectors(requested_command) {
         return Ok(None);
     }
 
@@ -87,7 +87,7 @@ pub(super) fn merge_compatible_redis_hash_rule(
         .iter()
         .enumerate()
         .filter_map(|(index, rule)| {
-            redis_hash_wire_shape_matches(
+            redis_key_selector_wire_shape_matches(
                 rule,
                 requested_ports,
                 requested_command,
@@ -128,7 +128,7 @@ pub(super) fn merge_compatible_redis_hash_rule(
     Ok(Some(name.clone()))
 }
 
-fn redis_hash_wire_shape_matches(
+fn redis_key_selector_wire_shape_matches(
     existing: &BackgroundDependencyRuleConfig,
     requested_ports: &[u16],
     requested_command: &str,
@@ -143,13 +143,13 @@ fn redis_hash_wire_shape_matches(
     else {
         return false;
     };
-    is_hash_read(command)
+    supports_key_selectors(command)
         && same_set(ports, requested_ports)
         && command.eq_ignore_ascii_case(requested_command)
         && fields == requested_fields
 }
 
-fn redis_hash_rule_covers(
+fn redis_key_selector_rule_covers(
     existing: &BackgroundDependencyRuleConfig,
     requested: &BackgroundDependencyRuleConfig,
 ) -> bool {
@@ -353,8 +353,11 @@ fn pattern_matches(pattern: &RedisKeyPatternConfig, key: &str) -> bool {
     pattern.numeric_middle && !middle.is_empty() && middle.bytes().all(|byte| byte.is_ascii_digit())
 }
 
-fn is_hash_read(command: &str) -> bool {
-    command.eq_ignore_ascii_case("HGET") || command.eq_ignore_ascii_case("HMGET")
+fn supports_key_selectors(command: &str) -> bool {
+    matches!(
+        command.to_ascii_uppercase().as_str(),
+        "HGET" | "HMGET" | "HSCAN"
+    )
 }
 
 #[cfg(test)]
@@ -417,7 +420,8 @@ mod tests {
         };
         *source_evidence = "scheduled refresh".to_string();
 
-        let effective_name = merge_compatible_redis_hash_rule(&mut rules, &requested).unwrap();
+        let effective_name =
+            merge_compatible_redis_key_selector_rule(&mut rules, &requested).unwrap();
 
         assert_eq!(effective_name.as_deref(), Some("bootstrap"));
         let BackgroundDependencyRuleConfig::Redis {
@@ -481,7 +485,7 @@ mod tests {
         ] {
             let mut rules = vec![base.clone()];
             assert_eq!(
-                merge_compatible_redis_hash_rule(&mut rules, &requested).unwrap(),
+                merge_compatible_redis_key_selector_rule(&mut rules, &requested).unwrap(),
                 None
             );
             assert_eq!(rules.as_slice(), std::slice::from_ref(&base));
@@ -517,7 +521,7 @@ mod tests {
             &["version"],
         );
 
-        let error = merge_compatible_redis_hash_rule(&mut rules, &requested).unwrap_err();
+        let error = merge_compatible_redis_key_selector_rule(&mut rules, &requested).unwrap_err();
 
         assert!(
             error
@@ -555,7 +559,7 @@ mod tests {
             &["version"],
         );
 
-        let error = merge_compatible_redis_hash_rule(&mut rules, &requested).unwrap_err();
+        let error = merge_compatible_redis_key_selector_rule(&mut rules, &requested).unwrap_err();
 
         assert!(
             error

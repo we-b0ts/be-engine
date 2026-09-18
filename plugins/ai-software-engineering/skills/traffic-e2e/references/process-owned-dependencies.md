@@ -68,6 +68,9 @@ The current narrow rule types are:
   an initial-load observation timeout;
 - Redis bootstrap `HGET`/`HMGET` with a stable service port set, optional exact
   keys, bounded numeric-middle key patterns, and the exact field sequence;
+- Redis process-owned `HSCAN` with a stable service port set and exact keys or
+  bounded numeric-middle key patterns. Cursor and scan options are not part of
+  the selector;
 - Breeze-backed Memcached `get` with one exact
   resolved resource identity, and a bounded numeric key series
   `<start..end><separator><suffix>` whose numeric bounds are unsigned 64-bit.
@@ -241,6 +244,27 @@ Different ports, commands, or fields remain separate rules; if more than one
 existing rule is otherwise compatible, use an existing rule name to select the
 merge target.
 
+For source-proven process-owned Redis hash scans, scope the command and hash
+key rather than the cursor returned by Redis:
+
+```bash
+backend-rewrite --target-root <target> dependency-rule plan redis hscan \
+  --evidence-id <source-process-traffic-evidence-id> \
+  --ownership process-owned \
+  --name dingtalk-card-inbox-recovery \
+  --source-evidence 'card_inbox.py:CardActionInbox.list_pending is called by the process recovery task' \
+  --port 6379 \
+  --numeric-key-pattern 'dingtalk:card_inbox:<id>'
+```
+
+Planning requires replay-safe unused Case evidence for every exact key and key
+pattern and rejects matching target `HSCAN` traffic that is unmatched,
+unsupported, or unsafe. HSCAN has no initial-load timeout or field selector.
+Its rule reclassifies future source recordings as Global `background_rule`, so
+the recorded source connection cannot block later target Redis commands. An
+old Case-only HSCAN is not promoted in place: apply the plan and create the
+scheduled fresh recording to establish its Global evidence.
+
 Every configured Redis process-owned rule also participates in the shared
 post-ready cache quiet window, including HGET/HMGET rules without an
 initial-load completion count. Case admission waits at least 15 seconds after
@@ -275,8 +299,10 @@ ready probe succeeds. Recorder logs incomplete progress as a warning and
 continues case admission when the window elapses.
 
 After a Redis ownership-rule change, let the rewrite coordinator attempt the
-read-only old-Global snapshot overlay first. If it reports
+read-only old-Global snapshot overlay first when the command has compatible
+Global seed evidence. If it reports
 `reused_old_global_evidence`, continue with the same recording. If strict
 derivation fails, the coordinator consolidates the rule with other pending
 recording-contract changes and schedules one fresh recording after runnable API
-work drains. Do not modify old recording JSONL to manufacture a seed.
+work drains. In particular, do not modify old Case-only HSCAN JSONL to
+manufacture a Global seed.

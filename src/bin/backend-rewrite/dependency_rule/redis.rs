@@ -25,6 +25,8 @@ enum RedisDependencyRuleModeArgs {
     Hget(RedisHashReadDependencyRuleArgs),
     /// Bootstrap Redis HMGET traffic selected by compact key shapes and exact fields.
     Hmget(RedisHashReadDependencyRuleArgs),
+    /// Process-owned Redis HSCAN traffic selected by exact keys or compact key shapes.
+    Hscan(RedisScanDependencyRuleArgs),
 }
 
 #[derive(Debug, Args)]
@@ -68,6 +70,20 @@ struct RedisHashReadDependencyRuleArgs {
     fields: Vec<String>,
 }
 
+#[derive(Debug, Args)]
+struct RedisScanDependencyRuleArgs {
+    #[command(flatten)]
+    common: DependencyRuleCommonArgs,
+    #[arg(long = "port", required = true)]
+    ports: Vec<u16>,
+    /// Optional exact Redis key; repeat for each exceptional key.
+    #[arg(long = "key")]
+    keys: Vec<String>,
+    /// Key shape containing one `<id>` numeric segment, for example `dingtalk:card_inbox:<id>`.
+    #[arg(long = "numeric-key-pattern")]
+    key_patterns: Vec<String>,
+}
+
 pub(super) fn options(args: RedisDependencyRuleArgs) -> Result<RewriteDependencyRulePlanOptions> {
     Ok(match args.mode {
         RedisDependencyRuleModeArgs::TimeShift(args) => return time_shift::options(args),
@@ -106,7 +122,30 @@ pub(super) fn options(args: RedisDependencyRuleArgs) -> Result<RewriteDependency
         ),
         RedisDependencyRuleModeArgs::Hget(args) => redis_hash_options("HGET", args)?,
         RedisDependencyRuleModeArgs::Hmget(args) => redis_hash_options("HMGET", args)?,
+        RedisDependencyRuleModeArgs::Hscan(args) => redis_hscan_options(args)?,
     })
+}
+
+fn redis_hscan_options(
+    args: RedisScanDependencyRuleArgs,
+) -> Result<RewriteDependencyRulePlanOptions> {
+    ensure!(
+        !args.keys.is_empty() || !args.key_patterns.is_empty(),
+        "Redis HSCAN requires at least one --key or --numeric-key-pattern"
+    );
+    let patterns = args
+        .key_patterns
+        .into_iter()
+        .map(|pattern| parse_numeric_key_pattern("HSCAN", &pattern))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(dependency_rule_options(
+        args.common,
+        RewriteDependencyRuleSelector::RedisHscan {
+            ports: args.ports,
+            keys: args.keys,
+            key_patterns: patterns,
+        },
+    ))
 }
 fn redis_hash_options(
     command: &str,
@@ -153,6 +192,81 @@ pub(super) fn parse_numeric_key_pattern(
         suffix: suffix.to_string(),
         numeric_middle: true,
     })
+}
+
+#[cfg(test)]
+mod hscan_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(flatten)]
+        args: RedisDependencyRuleArgs,
+    }
+
+    #[test]
+    fn hscan_uses_a_key_or_numeric_key_pattern_without_fields_or_timeout() {
+        let cli = Cli::try_parse_from([
+            "test",
+            "hscan",
+            "--evidence-id",
+            "evidence-source-process-traffic",
+            "--ownership",
+            "process-owned",
+            "--name",
+            "dingtalk-card-inbox-recovery",
+            "--source-evidence",
+            "card_inbox.py:list_pending runs in the process recovery task",
+            "--port",
+            "6379",
+            "--numeric-key-pattern",
+            "dingtalk:card_inbox:<id>",
+        ])
+        .unwrap();
+
+        let options = options(cli.args).unwrap();
+        assert!(matches!(
+            options.selector,
+            RewriteDependencyRuleSelector::RedisHscan {
+                ports,
+                keys,
+                key_patterns,
+            } if ports == [6379]
+                && keys.is_empty()
+                && key_patterns == [RedisKeyPatternConfig {
+                    prefix: "dingtalk:card_inbox:".to_string(),
+                    suffix: String::new(),
+                    numeric_middle: true,
+                }]
+        ));
+    }
+
+    #[test]
+    fn hscan_requires_a_key_selector() {
+        let cli = Cli::try_parse_from([
+            "test",
+            "hscan",
+            "--evidence-id",
+            "evidence-source-process-traffic",
+            "--ownership",
+            "process-owned",
+            "--name",
+            "dingtalk-card-inbox-recovery",
+            "--source-evidence",
+            "card_inbox.py:list_pending runs in the process recovery task",
+            "--port",
+            "6379",
+        ])
+        .unwrap();
+
+        assert!(
+            options(cli.args)
+                .unwrap_err()
+                .to_string()
+                .contains("requires at least one --key or --numeric-key-pattern")
+        );
+    }
 }
 
 #[derive(Debug, Args)]

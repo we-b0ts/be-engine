@@ -219,6 +219,15 @@ pub(super) fn spec_from_selector(
             keys,
             initial_load_timeout_ms,
         },
+        RewriteDependencyRuleSelector::RedisHscan {
+            ports,
+            keys,
+            key_patterns,
+        } => RewriteDependencyRuleSpec::RedisHscan {
+            ports,
+            keys,
+            key_patterns,
+        },
         RewriteDependencyRuleSelector::RedisHashRead {
             command,
             ports,
@@ -484,6 +493,27 @@ pub(super) fn build_plan(
             source_revision,
             command: "HGETALL",
         }),
+        RewriteDependencyRuleSpec::RedisHscan {
+            ports,
+            keys,
+            key_patterns,
+        } => Ok(DependencyRulePlan::Redis(plan_redis_background_dependency(
+            RedisBackgroundDependencyFeedback {
+                rules_path,
+                replay_report_path,
+                name: record.name.clone(),
+                ports: ports.clone(),
+                command: "HSCAN".to_string(),
+                keys: keys.clone(),
+                key_patterns: key_patterns.clone(),
+                key_prefix: String::new(),
+                key_suffix: String::new(),
+                initial_load_timeout_ms: None,
+                fields: Vec::new(),
+                source_revision,
+                source_evidence: record.source_evidence.clone(),
+            },
+        )?)),
         RewriteDependencyRuleSpec::RedisHashRead {
             command,
             ports,

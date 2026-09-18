@@ -299,7 +299,7 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                             );
                         }
                     }
-                    "HGET" | "HMGET" => {
+                    "HGET" | "HMGET" | "HSCAN" => {
                         if !key_prefix.is_empty() || !key_suffix.is_empty() {
                             bail!(
                                 "Redis {command} process-owned dependency rule {name:?} must use keys/key_patterns instead of key_prefix/key_suffix"
@@ -310,11 +310,19 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                                 "Redis {command} process-owned dependency rule {name:?} must not use initial_load_timeout_ms"
                             );
                         }
-                        validate_redis_hash_keys(name, command, keys, key_patterns)?;
-                        validate_redis_hash_fields(name, command, fields)?;
+                        validate_redis_key_selectors(name, command, keys, key_patterns)?;
+                        if command == "HSCAN" {
+                            if !fields.is_empty() {
+                                bail!(
+                                    "Redis HSCAN process-owned dependency rule {name:?} must not use fields"
+                                );
+                            }
+                        } else {
+                            validate_redis_hash_fields(name, command, fields)?;
+                        }
                     }
                     _ => bail!(
-                        "Redis process-owned dependency rule {name:?} currently supports only commands \"ZCOUNT\", \"GET\", \"SCARD\", \"HGETALL\", \"HGET\", and \"HMGET\""
+                        "Redis process-owned dependency rule {name:?} currently supports only commands \"ZCOUNT\", \"GET\", \"SCARD\", \"HGETALL\", \"HGET\", \"HMGET\", and \"HSCAN\""
                     ),
                 }
                 if !source_revision.is_empty() {
@@ -560,7 +568,7 @@ fn validate_exact_redis_keys(rule_name: &str, command: &str, keys: &[String]) ->
     Ok(())
 }
 
-fn validate_redis_hash_keys(
+fn validate_redis_key_selectors(
     rule_name: &str,
     command: &str,
     keys: &[String],

@@ -160,7 +160,7 @@ pub(super) fn plan_rule_config(
         .map(|rule| rule.name().to_string());
     let mut merged = None;
     if reused.is_none() {
-        merged = selector::merge_compatible_redis_hash_rule(&mut rules, &requested)?;
+        merged = selector::merge_compatible_redis_key_selector_rule(&mut rules, &requested)?;
         if merged.is_none()
             && let Some(existing) = rules
                 .iter_mut()
