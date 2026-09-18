@@ -183,7 +183,12 @@ async fn discovery_plan_apply_and_real_http_replay_use_the_original_recording() 
     let original = fs::read(&f.request).unwrap();
     let preview = plan_fixture(&mut f);
     assert_eq!(preview.traffic_e2e_report["signature_verified"], true);
-    assert!(!keys::binding_path(f.target.path()).exists());
+    assert!(
+        !f.target
+            .path()
+            .join(".traffic-e2e/local/secrets/jwt-signing-keys.json")
+            .exists()
+    );
     assert!(
         !fs::read_to_string(f.target.path().join(".traffic-e2e/verification.yaml"))
             .unwrap()
@@ -270,7 +275,7 @@ async fn discovery_plan_apply_and_real_http_replay_use_the_original_recording() 
 }
 
 #[test]
-fn source_401_does_not_offer_a_refresh_rule_and_rotated_runtime_key_is_rejected() {
+fn source_401_does_not_offer_a_refresh_rule_and_apply_writes_no_binding() {
     let mut f = fixture();
     plan_fixture(&mut f);
     let record = f.state.rule_plan.clone().unwrap();
@@ -286,13 +291,16 @@ fn source_401_does_not_offer_a_refresh_rule_and_rotated_runtime_key_is_rejected(
             .candidates
             .is_empty()
     );
-    fs::write(
-        f.target.path().join(".traffic-e2e/local/target.env"),
-        "SECRET_KEY=rotated\n",
-    )
-    .unwrap();
-    let error = keys::resolve_profile_binding(f.target.path(), "session-jwt", None).unwrap_err();
-    assert!(error.to_string().contains("changed since rule apply"));
+    assert!(
+        !f.target
+            .path()
+            .join(".traffic-e2e/local/secrets/jwt-signing-keys.json")
+            .exists()
+    );
+    let policy =
+        fs::read_to_string(f.target.path().join(".traffic-e2e/verification.yaml")).unwrap();
+    assert!(policy.contains("signing_key_source:"));
+    assert!(policy.contains("name: SECRET_KEY"));
 }
 
 #[test]
@@ -320,7 +328,12 @@ fn apply_rejects_key_policy_and_evidence_changes_without_writing_rules() {
             }
         }
         assert!(apply(f.target.path(), &mut f.state, record).is_err());
-        assert!(!keys::binding_path(f.target.path()).exists());
+        assert!(
+            !f.target
+                .path()
+                .join(".traffic-e2e/local/secrets/jwt-signing-keys.json")
+                .exists()
+        );
     }
 }
 
@@ -446,7 +459,7 @@ fn global_apply_invalidates_other_completed_api_without_new_recording() {
 }
 
 #[test]
-fn jwt_evidence_discovers_mounts_and_file_binding_without_exposing_values() {
+fn jwt_evidence_discovers_mounts_and_configured_file_source_without_exposing_values() {
     let mut f = fixture();
     let root = f.target.path();
     let config_path = root.join(".traffic-e2e/project.yaml");
@@ -519,14 +532,15 @@ fn jwt_evidence_discovers_mounts_and_file_binding_without_exposing_values() {
     .unwrap();
     let record = f.state.rule_plan.clone().unwrap();
     apply(root, &mut f.state, record).unwrap();
-    assert_eq!(
-        keys::resolve_profile_binding(root, "session-jwt", None).unwrap(),
-        b"test-signing-key"
+    assert!(
+        !root
+            .join(".traffic-e2e/local/secrets/jwt-signing-keys.json")
+            .exists()
     );
     let discovery = discovery::query(root);
     assert_eq!(
-        discovery["existing_bindings"]["references"][0],
-        json!({"signing_key_ref":"session-jwt", "source":{
+        discovery["configured_profiles"]["profiles"][0],
+        json!({"profile":"session-jwt", "signing_key_ref":"session-jwt", "signing_key_source":{
             "kind":"target_file", "path":"/app/.env", "field":"SECRET_KEY"
         }})
     );

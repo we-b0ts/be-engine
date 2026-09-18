@@ -2909,6 +2909,14 @@ combine optional exact keys with compact `prefix<digits>suffix` patterns and
 require the exact field sequence. Applying one through the rewrite coordinator
 still queues a fresh standard recording so its first-value seed is explicit.
 
+Process-owned Redis `HSCAN` rules likewise use exact keys or compact
+`prefix<digits>suffix` patterns, but have no field selector or initial-load
+wait because cursor and scan options are response-driven. They require unused
+Case evidence and a fresh recording: Recorder then writes matching HSCAN
+traffic as connection-independent Global `background_rule` evidence, so it
+cannot block later target commands in the source connection lane. Existing
+Case-only recordings are not rewritten to fabricate that Global evidence.
+
 An applied rule with `initial_load_timeout_ms` delays source case admission
 while Recorder observes its initial load. Redis exact-key `GET`, `SCARD`, and
 `HGETALL` rules count each configured exact key once;

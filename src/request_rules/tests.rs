@@ -249,8 +249,11 @@ fn legacy_list_remains_readable_but_uses_independent_profiles() {
 }
 
 #[test]
-fn absent_or_unparseable_tokens_do_not_require_a_local_binding() {
+fn configured_source_does_not_require_a_local_binding() {
     let root = tempfile::tempdir().unwrap();
+    let local = root.path().join(".traffic-e2e/local");
+    std::fs::create_dir_all(&local).unwrap();
+    std::fs::write(local.join("target.env"), "SECRET_KEY=test-key\n").unwrap();
     let policy_path = root.path().join("verification.yaml");
     std::fs::write(
         &policy_path,
@@ -263,9 +266,13 @@ fn absent_or_unparseable_tokens_do_not_require_a_local_binding() {
     let mut opaque = json!({"headers": {"authorization": ["Bearer api-key"]}});
     assert!(runtime.apply(&mut opaque, Utc::now()).unwrap().is_empty());
 
-    let mut matching = request(json!({"exp": 2_000}), "unused", 1_000);
-    let error = runtime.apply(&mut matching, Utc::now()).unwrap_err();
-    assert!(error.to_string().contains("bearer"));
-    assert!(error.to_string().contains("session-jwt"));
-    assert!(error.to_string().contains("rule plan/apply"));
+    let mut matching = request(json!({"exp": 2_000}), "test-key", 1_000);
+    let observations = runtime.apply(&mut matching, Utc::now()).unwrap();
+    assert_eq!(observations[0].outcome, "time_shifted_signature_verified");
+    assert!(
+        !root
+            .path()
+            .join(".traffic-e2e/local/secrets/jwt-signing-keys.json")
+            .exists()
+    );
 }

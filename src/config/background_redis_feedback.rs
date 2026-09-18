@@ -12,7 +12,7 @@ use super::background_feedback::{RuleConfigPlan, plan_rule_config};
 use super::edit::write_atomic;
 use super::process_owned_dependencies::{
     self, BackgroundDependencyRuleConfig, RedisKeyPatternConfig, matches_exact_redis_key,
-    matches_redis_key, matches_redis_numeric_key_pattern, redis_rule_matches,
+    matches_redis_numeric_key_pattern, redis_rule_matches,
 };
 
 #[derive(Debug, Clone)]
@@ -251,8 +251,7 @@ fn parse_replay_evidence(
         ports,
         command,
         keys,
-        key_prefix,
-        key_suffix,
+        key_patterns,
         ..
     } = requested
     else {
@@ -314,9 +313,7 @@ fn parse_replay_evidence(
             &empty_unused,
             None,
             &mut exchange_index,
-            keys,
-            key_prefix.as_bytes(),
-            key_suffix.as_bytes(),
+            requested,
             &mut evidence,
         )?;
         files.push(snapshot_bytes(path, contents.as_bytes()));
@@ -330,9 +327,7 @@ fn parse_replay_evidence(
             &unused_case,
             Some(&case.case_id),
             &mut exchange_index,
-            keys,
-            key_prefix.as_bytes(),
-            key_suffix.as_bytes(),
+            requested,
             &mut evidence,
         )?;
         files.push(snapshot_bytes(path, contents.as_bytes()));
@@ -351,6 +346,10 @@ fn parse_replay_evidence(
             "Redis {command} background selector must match every configured exact key in immutable case dependency evidence"
         );
     }
+    ensure!(
+        evidence.matched_patterns.len() == key_patterns.len(),
+        "Redis {command} background selector must match every configured numeric key pattern in immutable case dependency evidence"
+    );
     Ok(EvidenceMatch {
         count: evidence.count,
         case_ids: evidence.case_ids.into_iter().collect(),
@@ -477,18 +476,16 @@ struct EvidenceAccumulator {
     case_ids: BTreeSet<String>,
     observed_ports: BTreeSet<u16>,
     matched_keys: BTreeSet<Vec<u8>>,
+    matched_patterns: BTreeSet<usize>,
 }
 
-#[allow(clippy::too_many_arguments)]
 fn scan_redis_dependency_file(
     contents: &str,
     path: &Path,
     unused: &BTreeMap<usize, &CommandUnusedEvidence>,
     expected_case_id: Option<&str>,
     exchange_index: &mut usize,
-    keys: &[String],
-    key_prefix: &[u8],
-    key_suffix: &[u8],
+    requested: &BackgroundDependencyRuleConfig,
     evidence: &mut EvidenceAccumulator,
 ) -> Result<()> {
     for (line_index, line) in contents.lines().enumerate() {
@@ -520,15 +517,8 @@ fn scan_redis_dependency_file(
                     .is_some_and(|value| value.eq_ignore_ascii_case(&recorded.command)),
             "replay report Redis exchange index {current_index} does not match its recorded target or command"
         );
-        let Some(key) = decode_first_arg(&value)? else {
-            continue;
-        };
-        let key_matches = if keys.is_empty() {
-            matches_redis_key(&key, key_prefix, key_suffix)
-        } else {
-            matches_exact_redis_key(&key, keys)
-        };
-        if !key_matches {
+        let args = decode_args(&value)?;
+        if !redis_rule_matches(requested, recorded.target.port, &recorded.command, &args) {
             continue;
         }
         ensure!(
@@ -543,40 +533,26 @@ fn scan_redis_dependency_file(
             evidence.case_ids.insert(case_id.to_string());
         }
         evidence.observed_ports.insert(recorded.target.port);
-        evidence.matched_keys.insert(key);
+        let key = &args[0];
+        if let BackgroundDependencyRuleConfig::Redis {
+            keys, key_patterns, ..
+        } = requested
+        {
+            if matches_exact_redis_key(key, keys) {
+                evidence.matched_keys.insert(key.clone());
+            }
+            for (index, pattern) in key_patterns.iter().enumerate() {
+                if matches_redis_numeric_key_pattern(
+                    key,
+                    pattern.prefix.as_bytes(),
+                    pattern.suffix.as_bytes(),
+                ) {
+                    evidence.matched_patterns.insert(index);
+                }
+            }
+        }
     }
     Ok(())
-}
-
-fn decode_first_arg(value: &serde_json::Value) -> Result<Option<Vec<u8>>> {
-    let Some(arg) = value
-        .get("args")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|args| args.first())
-        .and_then(serde_json::Value::as_object)
-    else {
-        return Ok(None);
-    };
-    ensure!(
-        arg.get("truncated").and_then(serde_json::Value::as_bool) == Some(false),
-        "Redis background selector cannot use a truncated recorded key"
-    );
-    let encoding = arg
-        .get("encoding")
-        .and_then(serde_json::Value::as_str)
-        .context("recorded Redis key is missing its encoding")?;
-    let data = arg
-        .get("data")
-        .and_then(serde_json::Value::as_str)
-        .context("recorded Redis key is missing its data")?;
-    match encoding {
-        "utf8" => Ok(Some(data.as_bytes().to_vec())),
-        "base64" => STANDARD
-            .decode(data.as_bytes())
-            .map(Some)
-            .context("recorded Redis key contains invalid base64"),
-        other => anyhow::bail!("recorded Redis key has unsupported encoding {other:?}"),
-    }
 }
 
 fn decode_args(value: &serde_json::Value) -> Result<Vec<Vec<u8>>> {

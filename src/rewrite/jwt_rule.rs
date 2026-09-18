@@ -11,7 +11,7 @@ use super::{
 use crate::e2e_run::jwt_evidence::{self, JwtTimeEvidence};
 use crate::request_rules::{
     JwtAlgorithm, JwtProfile, JwtRule, JwtRules, JwtTime, JwtTokenLocation,
-    keys::{self, KeyBinding, SigningKeySource},
+    keys::{self, SigningKeySource},
     policy,
 };
 use std::collections::BTreeMap;
@@ -38,9 +38,7 @@ pub struct JwtRulePlanOptions {
 pub struct JwtPlanRecord {
     rule: JwtRule,
     profile: JwtProfile,
-    binding: KeyBinding,
     policy_revision: String,
-    bindings_revision: String,
     evidence_revision: String,
     leeway_seconds: i64,
 }
@@ -84,7 +82,9 @@ pub(super) fn plan(
     );
     let facts = facts(root, state)?;
     let (_, config) = crate::e2e_run::resolve_project(root)?;
-    let (binding, _) = keys::prepare_binding(root, &options.signing_key_ref, options.key_source)?;
+    let key_source = options.key_source.context(
+        "JWT rule requires --target-env or --target-key-file with --target-key-field; the selected source is stored in verification.yaml",
+    )?;
     let spec = JwtPlanRecord {
         rule: JwtRule {
             id: options.id,
@@ -102,13 +102,11 @@ pub(super) fn plan(
         },
         profile: JwtProfile {
             signing_key_ref: options.signing_key_ref,
-            signing_key_source: Some(binding.source.clone()),
+            signing_key_source: Some(key_source),
             algorithm: options.algorithm,
             time: JwtTime::PreserveRelative,
         },
-        binding,
         policy_revision: jwt_evidence::digest(&std::fs::read(&config.replay_policy)?),
-        bindings_revision: bindings_revision(root)?,
         evidence_revision: jwt_evidence::digest(&serde_json::to_vec(&facts)?),
         leeway_seconds: options.leeway_seconds,
     };
@@ -143,12 +141,6 @@ pub(super) fn plan(
     })
 }
 
-fn bindings_revision(root: &Path) -> Result<String> {
-    Ok(jwt_evidence::digest(&serde_json::to_vec(&keys::bindings(
-        root,
-    )?)?))
-}
-
 fn build(
     root: &Path,
     state: &RewriteState,
@@ -160,15 +152,10 @@ fn build(
         jwt_evidence::digest(original.as_bytes()) == spec.policy_revision,
         "verification policy changed after JWT planning; rerun plan"
     );
-    ensure!(
-        bindings_revision(root)? == spec.bindings_revision,
-        "JWT key bindings changed after planning; rerun plan"
-    );
-    let key = keys::resolve_source(root, &spec.binding.source)?;
-    ensure!(
-        keys::revision(&key, &spec.binding.challenge) == spec.binding.revision,
-        "JWT signing key changed after planning; rerun plan"
-    );
+    let key_source = spec.profile.signing_key_source.as_ref().context(
+        "JWT plan has no signing_key_source; rerun plan with --target-env or --target-key-file",
+    )?;
+    let key = keys::resolve_source(root, key_source)?;
     let facts = facts(root, state)?;
     ensure!(
         jwt_evidence::digest(&serde_json::to_vec(&facts)?) == spec.evidence_revision,
@@ -209,7 +196,7 @@ fn build(
     })?;
     let report = json!({
         "kind": "jwt", "policy": config.replay_policy, "rule": spec.rule, "profile": spec.profile,
-        "signing_key_source": spec.binding.source, "signature_verified": true,
+        "signing_key_source": spec.profile.signing_key_source, "signature_verified": true,
         "evidence_cases": selected.len(), "coverage": coverage,
         "changed": original != updated, "applied": false,
         "requires_rerecording": false, "requires_request_execution": true,
@@ -283,15 +270,7 @@ pub(super) fn apply(
     );
     let spec = record.jwt.as_ref().context("JWT plan payload missing")?;
     let (path, updated, mut report) = build(root, state, spec)?;
-    let previous = keys::bindings(root)?;
-    let mut bindings = previous.clone();
-    bindings.insert(spec.profile.signing_key_ref.clone(), spec.binding.clone());
-    keys::write_bindings(root, &bindings)?;
-    if let Err(error) = crate::config::edit::write_atomic(&path, updated.as_bytes()) {
-        keys::write_bindings(root, &previous)
-            .context("JWT policy write failed and binding rollback failed")?;
-        return Err(error);
-    }
+    crate::config::edit::write_atomic(&path, updated.as_bytes())?;
     report["applied"] = json!(true);
     state.rule_plan = None;
     state.e2e_current = false;

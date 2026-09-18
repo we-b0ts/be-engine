@@ -132,6 +132,11 @@ pub enum RewriteDependencyRuleSelector {
         keys: Vec<String>,
         initial_load_timeout_ms: u64,
     },
+    RedisHscan {
+        ports: Vec<u16>,
+        keys: Vec<String>,
+        key_patterns: Vec<RedisKeyPatternConfig>,
+    },
     RedisHashRead {
         command: String,
         ports: Vec<u16>,
@@ -453,7 +458,11 @@ fn dependency_issue(
             RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
         )) || issue.kind == RewriteIssueKind::Dependency
             || (issue.kind == RewriteIssueKind::Response
-                && matches!(spec, RewriteDependencyRuleSpec::RedisHashRead { .. })),
+                && matches!(
+                    spec,
+                    RewriteDependencyRuleSpec::RedisHashRead { .. }
+                        | RewriteDependencyRuleSpec::RedisHscan { .. }
+                )),
         "dependency rule is not applicable to the active issue"
     );
     Ok(issue)
@@ -500,11 +509,14 @@ fn validate_plan_evidence(
         return Ok(());
     }
 
-    let expected_query = if matches!(spec, RewriteDependencyRuleSpec::RedisHashRead { .. })
-        && state
-            .active_issue
-            .as_ref()
-            .is_some_and(|issue| issue.kind == RewriteIssueKind::Response)
+    let expected_query = if matches!(
+        spec,
+        RewriteDependencyRuleSpec::RedisHashRead { .. }
+            | RewriteDependencyRuleSpec::RedisHscan { .. }
+    ) && state
+        .active_issue
+        .as_ref()
+        .is_some_and(|issue| issue.kind == RewriteIssueKind::Response)
     {
         "source_process_traffic"
     } else {
@@ -588,6 +600,7 @@ pub(super) fn pending_cache_snapshot_refresh(
             | RewriteDependencyRuleSpec::RedisGet { .. }
             | RewriteDependencyRuleSpec::RedisScard { .. }
             | RewriteDependencyRuleSpec::RedisHgetall { .. }
+            | RewriteDependencyRuleSpec::RedisHscan { .. }
             | RewriteDependencyRuleSpec::RedisHashRead { .. }
     ) {
         return Ok(None);

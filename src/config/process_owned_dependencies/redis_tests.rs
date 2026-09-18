@@ -174,6 +174,7 @@ fn rejects_unlisted_exact_key_redis_commands() {
     assert!(error.contains("ZCOUNT"));
     assert!(error.contains("SCARD"));
     assert!(error.contains("HGETALL"));
+    assert!(error.contains("HSCAN"));
 }
 
 #[test]
@@ -228,6 +229,82 @@ fn matches_bootstrap_hash_reads_by_numeric_key_shape_and_exact_fields() {
         "HMGET",
         &[b"traffic-result".to_vec(), b"hash".to_vec()],
     ));
+}
+
+#[test]
+fn matches_process_owned_hscan_by_numeric_key_shape_without_fields() {
+    let rule = BackgroundDependencyRuleConfig::Redis {
+        name: "dingtalk-card-inbox-recovery".to_string(),
+        ports: vec![6379],
+        command: "HSCAN".to_string(),
+        keys: Vec::new(),
+        key_patterns: vec![RedisKeyPatternConfig {
+            prefix: "dingtalk:card_inbox:".to_string(),
+            suffix: String::new(),
+            numeric_middle: true,
+        }],
+        key_prefix: String::new(),
+        key_suffix: String::new(),
+        initial_load_timeout_ms: None,
+        fields: Vec::new(),
+        source_revision: String::new(),
+        source_evidence: "CardActionInbox.list_pending scans process-owned recovery work"
+            .to_string(),
+    };
+    validate(std::slice::from_ref(&rule)).unwrap();
+    assert!(redis_rule_matches(
+        &rule,
+        6379,
+        "HSCAN",
+        &[b"dingtalk:card_inbox:257968".to_vec(), b"0".to_vec()],
+    ));
+    assert!(!redis_rule_matches(
+        &rule,
+        6379,
+        "HSCAN",
+        &[b"dingtalk:card_inbox:unknown".to_vec(), b"0".to_vec()],
+    ));
+    assert!(!redis_rule_matches(
+        &rule,
+        6379,
+        "HGETALL",
+        &[b"dingtalk:card_inbox:257968".to_vec()],
+    ));
+}
+
+#[test]
+fn hscan_rejects_initial_load_timeout_and_fields() {
+    let mut rule = BackgroundDependencyRuleConfig::Redis {
+        name: "dingtalk-card-inbox-recovery".to_string(),
+        ports: vec![6379],
+        command: "HSCAN".to_string(),
+        keys: vec!["dingtalk:card_inbox:257968".to_string()],
+        key_patterns: Vec::new(),
+        key_prefix: String::new(),
+        key_suffix: String::new(),
+        initial_load_timeout_ms: Some(60_000),
+        fields: Vec::new(),
+        source_revision: String::new(),
+        source_evidence: "CardActionInbox.list_pending scans process-owned recovery work"
+            .to_string(),
+    };
+    let error = validate(std::slice::from_ref(&rule))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("must not use initial_load_timeout_ms"));
+
+    let BackgroundDependencyRuleConfig::Redis {
+        initial_load_timeout_ms,
+        fields,
+        ..
+    } = &mut rule
+    else {
+        panic!("expected Redis background rule");
+    };
+    *initial_load_timeout_ms = None;
+    fields.push("unrelated".to_string());
+    let error = validate(&[rule]).unwrap_err().to_string();
+    assert!(error.contains("must not use fields"));
 }
 
 #[test]
