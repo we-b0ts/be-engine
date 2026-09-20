@@ -18,6 +18,99 @@ fn many_issues(count: usize) -> RewriteState {
     state
 }
 
+fn ready_handoff_with_pending_api() -> RewriteState {
+    let mut state = implementation_state_with_inventory(true);
+    worker::confirm_current_for_test(&mut state);
+    let scope = RewriteWorkScope::Api {
+        api: state.api.clone(),
+    };
+    let observation = state
+        .worker_bindings
+        .get_mut(&scope.binding_key())
+        .unwrap()
+        .observation
+        .as_mut()
+        .unwrap();
+    observation.activity = worker::model::RewriteWorkerActivity::HandoffReady;
+    observation.handoff_id = Some("ready-handoff".into());
+    state
+}
+
+#[test]
+fn first_pass_api_verification_preempts_ready_handoff_integration() {
+    let target = configured_target();
+    let store = RewriteStore::new(target.path()).unwrap();
+    store.save(&ready_handoff_with_pending_api()).unwrap();
+
+    let status = rewrite::status_rewrite(RewriteContext {
+        target_root: target.path().into(),
+    })
+    .unwrap();
+    let RewriteAction::AdvanceRequired { command, .. } = status.action else {
+        panic!("unattempted API should be verified before integrating a ready handoff")
+    };
+    assert_eq!(command.argv.last().unwrap(), "POST /other");
+
+    let inventory = rewrite::inventory_rewrite(RewriteContext {
+        target_root: target.path().into(),
+    })
+    .unwrap();
+    assert_eq!(inventory.pending, 1);
+    assert_eq!(inventory.details.ready["verify_api"], 1);
+    assert_eq!(inventory.details.waiting["integration_resource"], 1);
+    assert!(!inventory.details.ready.contains_key("integrate_handoff"));
+}
+
+#[test]
+fn ready_handoff_integration_resumes_after_first_pass_discovery() {
+    let target = configured_target();
+    let mut state = ready_handoff_with_pending_api();
+    state.api_inventory.truncate(1);
+    RewriteStore::new(target.path())
+        .unwrap()
+        .save(&state)
+        .unwrap();
+
+    let status = rewrite::status_rewrite(RewriteContext {
+        target_root: target.path().into(),
+    })
+    .unwrap();
+    assert!(
+        matches!(status.action, RewriteAction::IntegrationRequired { .. }),
+        "ready handoff should resume after first-pass discovery: {:?}",
+        status.action
+    );
+}
+
+#[test]
+fn worker_dispatch_still_preempts_first_pass_verification() {
+    let target = configured_target();
+    let mut state = ready_handoff_with_pending_api();
+    let api = "GET /needs-worker";
+    let mut item = state.api_inventory[0].clone();
+    item.api = api.into();
+    item.source_route = Some("/needs-worker".into());
+    item.status = rewrite::model::RewriteApiStatus::ImplementationRequired;
+    item.attempts = 1;
+    state.api_inventory.push(item);
+    let mut slice = state.active_slice.clone();
+    slice.api = api.into();
+    state.parked_slices.insert(api.into(), slice);
+    RewriteStore::new(target.path())
+        .unwrap()
+        .save(&state)
+        .unwrap();
+
+    let status = rewrite::status_rewrite(RewriteContext {
+        target_root: target.path().into(),
+    })
+    .unwrap();
+    let RewriteAction::ImplementationRequired { worker, .. } = status.action else {
+        panic!("worker dispatch must remain ahead of first-pass verification")
+    };
+    assert_eq!(worker.work_scope.label(), "API GET /needs-worker");
+}
+
 #[test]
 fn all_implementation_items_dispatch_even_with_zero_unverified_and_more_than_32_workers() {
     let target = configured_target();

@@ -45,7 +45,8 @@ pub(in crate::rewrite) fn inventory(
 }
 
 /// Reconcile every unresolved scope, including parked APIs, before idle waiting.
-/// Delivery and runtime checks precede integration; neither mutates active selection.
+/// Runtime dispatch and status checks stay immediate. Ready handoffs wait until
+/// every API has had a first verification attempt so implementation can fan out.
 pub(in crate::rewrite) fn global_action(
     target_root: &Path,
     state: &RewriteState,
@@ -54,15 +55,18 @@ pub(in crate::rewrite) fn global_action(
     if state.case_pattern_identification.is_some() {
         return None;
     }
+    let first_pass_ready =
+        inventory::can_switch_api(state) && inventory::has_unattempted_api(state);
     let scope = runtime::scopes(state)
         .into_iter()
         .filter_map(|scope| {
             let priority = match runtime::coverage(state, &scope) {
                 Coverage::DispatchRequired | Coverage::ResumeRequired => 0,
                 Coverage::StatusRequired => 1,
-                Coverage::IntegrationRequired if !busy => 2,
+                Coverage::IntegrationRequired if !busy && !first_pass_ready => 2,
                 Coverage::VerificationRequired
                     if !busy
+                        && !first_pass_ready
                         && (matches!(scope, RewriteWorkScope::ProcessOutput { .. })
                             || inventory::can_switch_api(state)) =>
                 {

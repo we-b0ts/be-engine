@@ -132,8 +132,11 @@ This wait guard does not apply to worker confirmation, status checks, or feedbac
 execute those engine actions even when the implementation worker is running.
 
 Check for arrived events after every action, even while `pending` stays positive;
-do not hold handoffs until the queue drains or a sixty-minute activity report
-expires. Dispatch experts only through engine-issued
+report handoffs immediately instead of holding their runtime events until the queue
+drains or a sixty-minute activity report expires. The engine may keep a reported
+handoff's integration waiting while it completes the first verification attempt for
+every recorded API, allowing all independent implementation work to be dispatched
+before ordinary integration begins. Dispatch experts only through engine-issued
 [API expert assistance](coordinator-worker-protocol.md#api-expert-assistance);
 do not initiate it yourself. Forward arrived expert reports on the same loop.
 Report responses replace the previous scheduling action. Preserve each
@@ -452,6 +455,13 @@ the task runtime; the coordinator does not impose a limit. The engine may park
 implementation and system-repair issues while it serializes the selected API's Replay or
 comparison. Expensive worker diagnosis, coding, and
 tests may overlap; only one traffic operation may be live.
+
+While any recorded API has no focused verification attempt, the engine gives that
+first-pass Replay priority over ready worker handoff integration and integrated
+handoff acceptance. Worker dispatch, resume, status reconciliation, and feedback
+remain immediately actionable. Once every API has an attempt, ordinary integration
+and acceptance resume; final fingerprint revalidation still proves the combined
+target.
 
 Use the [coordinator loop](#coordinator-loop) for advancing ready work,
 resuming from status, and waiting for handoffs.
