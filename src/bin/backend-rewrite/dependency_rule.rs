@@ -67,19 +67,31 @@ struct MysqlTimeArgs {
     #[arg(long)]
     sql: String,
     /// Zero-based ? slot in the SQL template, independent of wire parameter positions.
+    #[arg(long, required_unless_present = "time_values")]
+    value_index: Option<usize>,
+    /// Optional exact JSON Pointer when the legacy value slot contains a JSON document.
+    #[arg(long, requires = "value_index")]
+    json_pointer: Option<String>,
     #[arg(long)]
-    value_index: usize,
-    #[arg(long, default_value = "5s")]
-    tolerance: String,
-    #[arg(long, default_value = "0s")]
-    offset: String,
-    #[arg(long, default_value = "%Y-%m-%d %H:%M:%S%.f")]
-    format: String,
-    #[arg(long, default_value = "+00:00")]
-    timezone: String,
+    tolerance: Option<String>,
+    #[arg(long)]
+    offset: Option<String>,
+    #[arg(long)]
+    format: Option<String>,
+    #[arg(long)]
+    timezone: Option<String>,
+    /// Repeatable JSON time location with value_index, optional json_pointer and time options.
+    #[arg(long = "time-value", value_name = "JSON", value_parser = parse_mysql_time_value)]
+    time_values: Vec<traffic_e2e::MysqlTimeValueSelector>,
     /// Source file/symbol proving how this field obtains the current time.
     #[arg(long)]
     source_evidence: String,
+}
+
+fn parse_mysql_time_value(
+    value: &str,
+) -> std::result::Result<traffic_e2e::MysqlTimeValueSelector, String> {
+    serde_json::from_str(value).map_err(|error| format!("invalid MySQL time value JSON: {error}"))
 }
 
 #[derive(Debug, Args)]
@@ -427,11 +439,31 @@ impl TryFrom<DependencyRuleProtocolArgs> for DependencyPlan {
                         database: args.database,
                         username: args.username,
                         sql: args.sql,
-                        value_index: args.value_index,
-                        tolerance: args.tolerance,
-                        offset: args.offset,
-                        format: args.format,
-                        timezone: args.timezone,
+                        time_values: if args.time_values.is_empty() {
+                            vec![traffic_e2e::MysqlTimeValueSelector {
+                                value_index: args
+                                    .value_index
+                                    .expect("clap requires value-index or time-value"),
+                                json_pointer: args.json_pointer,
+                                tolerance: args.tolerance.unwrap_or_else(|| "5s".into()),
+                                offset: args.offset.unwrap_or_else(|| "0s".into()),
+                                format: args
+                                    .format
+                                    .unwrap_or_else(|| "%Y-%m-%d %H:%M:%S%.f".into()),
+                                timezone: args.timezone.unwrap_or_else(|| "+00:00".into()),
+                            }]
+                        } else {
+                            ensure!(
+                                args.value_index.is_none()
+                                    && args.json_pointer.is_none()
+                                    && args.tolerance.is_none()
+                                    && args.offset.is_none()
+                                    && args.format.is_none()
+                                    && args.timezone.is_none(),
+                                "--time-value cannot be combined with legacy single-value options"
+                            );
+                            args.time_values
+                        },
                     },
                 },
             },
@@ -622,9 +654,49 @@ mod tests {
         };
         assert!(selector.target_host.is_empty());
         assert!(selector.username.is_empty());
-        assert_eq!(selector.value_index, 0);
-        assert_eq!(selector.tolerance, "5s");
-        assert_eq!(selector.timezone, "+00:00");
+        assert_eq!(selector.time_values[0].value_index, 0);
+        assert_eq!(selector.time_values[0].tolerance, "5s");
+        assert_eq!(selector.time_values[0].timezone, "+00:00");
+    }
+
+    #[test]
+    fn mysql_time_cli_accepts_atomic_scalar_and_json_locations() {
+        let parsed = TestCli::try_parse_from([
+            "test",
+            "plan",
+            "mysql-time",
+            "--evidence-id",
+            "current",
+            "--rule-id",
+            "kind-times",
+            "--database",
+            "app",
+            "--sql",
+            "UPDATE kinds SET json=?, updated_at=? WHERE id=?",
+            "--time-value",
+            r#"{"value_index":0,"json_pointer":"/spec/observedAt","format":"%+"}"#,
+            "--time-value",
+            r#"{"value_index":1}"#,
+            "--source-evidence",
+            "kind.py:updated_at and service.py:observedAt use current time",
+        ])
+        .unwrap();
+        let DependencyRuleCommand::Plan(plan) = parsed.dependency_rule.command else {
+            panic!("expected plan")
+        };
+        let DependencyPlan::Ownership(options) = plan.protocol.try_into().unwrap() else {
+            panic!("expected value plan")
+        };
+        let RewriteDependencyRuleSelector::MysqlSqlTime { selector } = options.selector else {
+            panic!("expected MySQL time")
+        };
+        assert_eq!(selector.time_values.len(), 2);
+        assert_eq!(
+            selector.time_values[0].json_pointer.as_deref(),
+            Some("/spec/observedAt")
+        );
+        assert_eq!(selector.time_values[0].format, "%+");
+        assert_eq!(selector.time_values[1].value_index, 1);
     }
 
     #[test]

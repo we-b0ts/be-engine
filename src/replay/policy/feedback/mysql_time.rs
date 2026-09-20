@@ -3,26 +3,191 @@ mod evidence;
 use super::document::{render_dependency_rules, replace_dependency_rules};
 use crate::config::edit::write_atomic;
 use crate::replay::policy::config::{
-    DependencyProtocol, MysqlSelector, MysqlTimeValueRule, ReplayDependencyRule, TargetSelector,
-    TimeReference, TimeRule, load_replay_policy,
+    DependencyProtocol, MysqlSelector, MysqlTimeFieldRule, MysqlTimeValueRule,
+    ReplayDependencyRule, TargetSelector, TimeReference, TimeRule, load_replay_policy,
 };
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{
+    collections::{BTreeMap, btree_map::Entry},
+    fs,
+    path::PathBuf,
+};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+fn default_tolerance() -> String {
+    "5s".into()
+}
+
+fn default_offset() -> String {
+    "0s".into()
+}
+
+fn default_format() -> String {
+    "%Y-%m-%d %H:%M:%S%.f".into()
+}
+
+fn default_timezone() -> String {
+    "+00:00".into()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct MysqlTimeValueSelector {
+    pub value_index: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub json_pointer: Option<String>,
+    #[serde(default = "default_tolerance")]
+    pub tolerance: String,
+    #[serde(default = "default_offset")]
+    pub offset: String,
+    #[serde(default = "default_format")]
+    pub format: String,
+    #[serde(default = "default_timezone")]
+    pub timezone: String,
+}
+
+impl MysqlTimeValueSelector {
+    fn time_rule(&self) -> TimeRule {
+        TimeRule {
+            relative_to: TimeReference::ReplayNow,
+            offset: self.offset.clone(),
+            tolerance: self.tolerance.clone(),
+            format: Some(self.format.clone()),
+            timezone: Some(self.timezone.clone()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "MysqlTimeSelectorConfig", into = "MysqlTimeSelectorOutput")]
 pub struct MysqlTimeSelector {
     pub target_host: String,
     pub target_port: u16,
     pub database: String,
     pub username: String,
     pub sql: String,
-    pub value_index: usize,
-    pub tolerance: String,
-    pub offset: String,
-    pub format: String,
-    pub timezone: String,
+    pub time_values: Vec<MysqlTimeValueSelector>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum MysqlTimeSelectorOutput {
+    Legacy {
+        target_host: String,
+        target_port: u16,
+        database: String,
+        username: String,
+        sql: String,
+        value_index: usize,
+        tolerance: String,
+        offset: String,
+        format: String,
+        timezone: String,
+    },
+    Multiple {
+        target_host: String,
+        target_port: u16,
+        database: String,
+        username: String,
+        sql: String,
+        time_values: Vec<MysqlTimeValueSelector>,
+    },
+}
+
+impl From<MysqlTimeSelector> for MysqlTimeSelectorOutput {
+    fn from(selector: MysqlTimeSelector) -> Self {
+        let MysqlTimeSelector {
+            target_host,
+            target_port,
+            database,
+            username,
+            sql,
+            mut time_values,
+        } = selector;
+        if time_values.len() == 1 && time_values[0].json_pointer.is_none() {
+            let selected = time_values.pop().expect("one selected MySQL time value");
+            Self::Legacy {
+                target_host,
+                target_port,
+                database,
+                username,
+                sql,
+                value_index: selected.value_index,
+                tolerance: selected.tolerance,
+                offset: selected.offset,
+                format: selected.format,
+                timezone: selected.timezone,
+            }
+        } else {
+            Self::Multiple {
+                target_host,
+                target_port,
+                database,
+                username,
+                sql,
+                time_values,
+            }
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MysqlTimeSelectorConfig {
+    target_host: String,
+    target_port: u16,
+    database: String,
+    username: String,
+    sql: String,
+    #[serde(default)]
+    time_values: Vec<MysqlTimeValueSelector>,
+    #[serde(default)]
+    value_index: Option<usize>,
+    #[serde(default)]
+    tolerance: Option<String>,
+    #[serde(default)]
+    offset: Option<String>,
+    #[serde(default)]
+    format: Option<String>,
+    #[serde(default)]
+    timezone: Option<String>,
+}
+
+impl TryFrom<MysqlTimeSelectorConfig> for MysqlTimeSelector {
+    type Error = anyhow::Error;
+
+    fn try_from(config: MysqlTimeSelectorConfig) -> Result<Self> {
+        let legacy_options_present = config.tolerance.is_some()
+            || config.offset.is_some()
+            || config.format.is_some()
+            || config.timezone.is_some();
+        let time_values = if config.time_values.is_empty() {
+            vec![MysqlTimeValueSelector {
+                value_index: config
+                    .value_index
+                    .context("MySQL time selector requires at least one time value")?,
+                json_pointer: None,
+                tolerance: config.tolerance.unwrap_or_else(default_tolerance),
+                offset: config.offset.unwrap_or_else(default_offset),
+                format: config.format.unwrap_or_else(default_format),
+                timezone: config.timezone.unwrap_or_else(default_timezone),
+            }]
+        } else {
+            ensure!(
+                config.value_index.is_none() && !legacy_options_present,
+                "MySQL time selector cannot combine time_values with legacy value options"
+            );
+            config.time_values
+        };
+        Ok(Self {
+            target_host: config.target_host,
+            target_port: config.target_port,
+            database: config.database,
+            username: config.username,
+            sql: config.sql,
+            time_values,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +221,54 @@ pub struct MysqlTimeRulePlan {
     report: MysqlTimeRuleReport,
 }
 
+fn configured_sql_values(
+    selector: &MysqlTimeSelector,
+) -> Result<BTreeMap<usize, MysqlTimeValueRule>> {
+    ensure!(
+        !selector.time_values.is_empty(),
+        "SQL time rule requires at least one selected time value"
+    );
+    let mut configured = BTreeMap::new();
+    for selected in &selector.time_values {
+        let field = MysqlTimeFieldRule {
+            source_evidence: String::new(),
+            time: selected.time_rule(),
+        };
+        match (
+            configured.entry(selected.value_index),
+            &selected.json_pointer,
+        ) {
+            (Entry::Vacant(entry), None) => {
+                entry.insert(MysqlTimeValueRule::Scalar(field));
+            }
+            (Entry::Vacant(entry), Some(pointer)) => {
+                entry.insert(MysqlTimeValueRule::Json(BTreeMap::from([(
+                    pointer.clone(),
+                    field,
+                )])));
+            }
+            (Entry::Occupied(_), None) => anyhow::bail!(
+                "SQL time slot {} cannot select multiple scalar or JSON time values",
+                selected.value_index
+            ),
+            (Entry::Occupied(mut entry), Some(pointer)) => {
+                let MysqlTimeValueRule::Json(fields) = entry.get_mut() else {
+                    anyhow::bail!(
+                        "SQL time slot {} cannot combine scalar and JSON time values",
+                        selected.value_index
+                    );
+                };
+                ensure!(
+                    fields.insert(pointer.clone(), field).is_none(),
+                    "SQL time slot {} repeats JSON Pointer {pointer:?}",
+                    selected.value_index
+                );
+            }
+        }
+    }
+    Ok(configured)
+}
+
 impl MysqlTimeRulePlan {
     pub fn report(&self) -> &MysqlTimeRuleReport {
         &self.report
@@ -84,13 +297,7 @@ pub fn plan_mysql_time_rule(feedback: MysqlTimeRuleFeedback) -> Result<MysqlTime
         "SQL time rule requires a database and a valid evidence endpoint port"
     );
     crate::config::process_owned_dependencies::validate_source_evidence(&feedback.source_evidence)?;
-    let time = TimeRule {
-        relative_to: TimeReference::ReplayNow,
-        offset: s.offset.clone(),
-        tolerance: s.tolerance.clone(),
-        format: Some(s.format.clone()),
-        timezone: Some(s.timezone.clone()),
-    };
+    let sql_values = configured_sql_values(s)?;
     let proposed = ReplayDependencyRule {
         id: feedback.rule_id.clone(),
         replay_scope: Default::default(),
@@ -105,13 +312,7 @@ pub fn plan_mysql_time_rule(feedback: MysqlTimeRuleFeedback) -> Result<MysqlTime
             database: Some(s.database.clone()),
             username: None,
             params: BTreeMap::new(),
-            sql_values: BTreeMap::from([(
-                s.value_index,
-                MysqlTimeValueRule {
-                    source_evidence: String::new(),
-                    time: time.clone(),
-                },
-            )]),
+            sql_values: sql_values.clone(),
         }),
         http: None,
         memcached: None,
@@ -120,7 +321,7 @@ pub fn plan_mysql_time_rule(feedback: MysqlTimeRuleFeedback) -> Result<MysqlTime
     let mut document = loaded.document.clone();
     document.dependency_rules = vec![proposed.clone()];
     super::super::config::validate_document(&document)?;
-    let evidence_case_id = evidence::validate(&feedback, &time)?;
+    let evidence_case_id = evidence::validate(&feedback, &sql_values)?;
     let mut shape = serde_json::to_value(&proposed)?;
     shape.as_object_mut().unwrap().remove("id");
     let reusable = loaded.document.dependency_rules.iter().find_map(|rule| {

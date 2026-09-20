@@ -2,6 +2,7 @@ use super::*;
 use sqlx::Executor;
 
 const TEMPLATE: &str = "UPDATE api_keys SET last_used_at=?, updated_at=now() WHERE api_keys.id=?";
+const JSON_TIME_TEMPLATE: &str = "UPDATE kinds SET json=?, updated_at=? WHERE id=?";
 
 fn policy(template: &str) -> String {
     format!(
@@ -73,4 +74,76 @@ async fn dynamic_sql_time_preserves_recorded_errors_and_stable_sql() {
         assert_eq!(state.mysql.events.unmatched_queries.len(),3);
         task.abort();
     }).await.unwrap();
+}
+
+#[tokio::test]
+async fn dynamic_sql_time_matches_scalar_and_nested_json_fields_atomically() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let recorded_json = r#"{"name":"stable","spec":{"cloudConfig":{"nevisIpObservedAt":"2020-01-01T00:00:00+00:00"}}}"#;
+        let mut write = exchange(
+            JSON_TIME_TEMPLATE,
+            json!({"status":"ok","affected_rows":1}),
+        );
+        write["command"] = json!("COM_STMT_EXECUTE");
+        write["params"] = json!([
+            {"kind":"string","value":recorded_json},
+            {"kind":"datetime","value":"2020-01-01 00:00:00.000000"},
+            {"kind":"integer","value":7}
+        ]);
+        let policy = format!(
+            "version: 3\nexpected_response: assertions_only\ndependency_rules:\n  - id: kind-times\n    protocol: mysql\n    mysql:\n      database: appdb\n      sql: {JSON_TIME_TEMPLATE:?}\n      sql_values:\n        0:\n          json:\n            /spec/cloudConfig/nevisIpObservedAt: {{time: replay_now, tolerance: 5s, format: \"%+\"}}\n        1: {{time: replay_now, tolerance: 5s}}\n"
+        );
+        let (temp, addr, runtime, task) =
+            fixture_with_policy(&[write], Some(&policy)).await;
+        let path = temp.path().join("case-id/dependencies.jsonl");
+        let original = std::fs::read(&path).unwrap();
+        let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+        let now = chrono::Utc::now();
+        let observed_at = now.to_rfc3339();
+        let updated_at = now.naive_utc();
+
+        let changed = json!({
+            "name":"changed",
+            "spec":{"cloudConfig":{"nevisIpObservedAt":observed_at.clone()}}
+        })
+        .to_string();
+        assert!(
+            sqlx::query(JSON_TIME_TEMPLATE)
+                .bind(changed)
+                .bind(updated_at)
+                .bind(7_i64)
+                .execute(&mut client)
+                .await
+                .is_err()
+        );
+
+        let matching = json!({
+            "spec":{"cloudConfig":{"nevisIpObservedAt":observed_at}},
+            "name":"stable"
+        })
+        .to_string();
+        assert_eq!(
+            sqlx::query(JSON_TIME_TEMPLATE)
+                .bind(matching)
+                .bind(updated_at)
+                .bind(7_i64)
+                .execute(&mut client)
+                .await
+                .unwrap()
+                .rows_affected(),
+            1
+        );
+        client.close().await.unwrap();
+
+        let state = runtime.state.lock().await;
+        assert_eq!(state.mysql.events.matched_query_count, 1);
+        assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
+        let report = state.replay_policy.as_ref().unwrap().report();
+        assert_eq!(report.dependency_rules[0].time_validations, 2);
+        assert_eq!(report.dependency_rules[0].matches, 1);
+        assert_eq!(std::fs::read(path).unwrap(), original);
+        task.abort();
+    })
+    .await
+    .unwrap();
 }

@@ -1,9 +1,11 @@
 //! Explicit time-valued SQL slots, independent of text/prepared wire encoding.
-//! A template placeholder selects one scalar; all other tokens and unselected
-//! values must agree. Matching never rewrites SQL or recorded evidence.
+//! A template placeholder selects either one scalar or exact JSON Pointer time
+//! fields; all other tokens and unselected values must agree. Matching never
+//! rewrites SQL or recorded evidence.
 use super::*;
 use crate::mysql::sql::Token;
 use crate::replay::mysql::sql_match::materialize;
+use crate::replay::policy::config::{MysqlTimeValueRule, TimeRule};
 use crate::replay::policy::sql_template::{bounded_tokens, extract};
 use crate::replay::policy::value::parse_time;
 
@@ -38,6 +40,76 @@ pub(in crate::replay::policy) fn values(
     let template = bounded_tokens(template).ok_or("invalid SQL template")?;
     extract(&template, &materialized(sql, params)?)
         .ok_or_else(|| "SQL differs from template".into())
+}
+
+pub(in crate::replay::policy) struct SelectedMysqlTime {
+    pub(in crate::replay::policy) source: Value,
+    pub(in crate::replay::policy) target: Value,
+    pub(in crate::replay::policy) rule: TimeRule,
+}
+
+fn ensure_same_scalar_type(source: &Value, target: &Value) -> Result<(), String> {
+    if std::mem::discriminant(source) != std::mem::discriminant(target) {
+        return Err("SQL time changed scalar type".into());
+    }
+    Ok(())
+}
+
+fn json_value(token: &Token) -> Result<Value, String> {
+    let Token::Bytes(bytes) = token else {
+        return Err("SQL JSON time container must be a UTF-8 JSON string".into());
+    };
+    serde_json::from_slice(bytes).map_err(|error| format!("SQL JSON value is invalid: {error}"))
+}
+
+pub(in crate::replay::policy) fn selected_times(
+    source: &Token,
+    target: &Token,
+    selected: &MysqlTimeValueRule,
+) -> Result<Vec<SelectedMysqlTime>, String> {
+    match selected {
+        MysqlTimeValueRule::Scalar(field) => {
+            let source = time_value(source)?;
+            let target = time_value(target)?;
+            ensure_same_scalar_type(&source, &target)?;
+            Ok(vec![SelectedMysqlTime {
+                source,
+                target,
+                rule: field.time.clone(),
+            }])
+        }
+        MysqlTimeValueRule::Json(fields) => {
+            let mut source_json = json_value(source)?;
+            let mut target_json = json_value(target)?;
+            let mut selected_times = Vec::with_capacity(fields.len());
+            for (pointer, field) in fields {
+                let source = source_json
+                    .pointer(pointer)
+                    .cloned()
+                    .ok_or_else(|| format!("recorded SQL JSON has no value at {pointer:?}"))?;
+                let target = target_json
+                    .pointer(pointer)
+                    .cloned()
+                    .ok_or_else(|| format!("target SQL JSON has no value at {pointer:?}"))?;
+                ensure_same_scalar_type(&source, &target)?;
+                selected_times.push(SelectedMysqlTime {
+                    source,
+                    target,
+                    rule: field.time.clone(),
+                });
+                *source_json
+                    .pointer_mut(pointer)
+                    .expect("selected recorded JSON pointer remains present") = Value::Null;
+                *target_json
+                    .pointer_mut(pointer)
+                    .expect("selected target JSON pointer remains present") = Value::Null;
+            }
+            if source_json != target_json {
+                return Err("stable MySQL JSON fields differ".into());
+            }
+            Ok(selected_times)
+        }
+    }
 }
 
 impl ReplayPolicyRuntime {
@@ -99,18 +171,17 @@ impl ReplayPolicyRuntime {
                                 "overlapping MySQL sql_values at token {position}"
                             ));
                         }
-                        let source = time_value(&recorded[position])?;
-                        let target = time_value(&actual[position])?;
-                        if std::mem::discriminant(&source) != std::mem::discriminant(&target) {
-                            return Err("SQL time changed scalar type".into());
+                        let times = selected_times(&recorded[position], &actual[position], field)?;
+                        for selected in &times {
+                            parse_time(&selected.source, &selected.rule)
+                                .map_err(|e| e.to_string())?;
+                            validate_time(&selected.target, &selected.rule, now)?;
                         }
-                        parse_time(&source, &field.time).map_err(|e| e.to_string())?;
-                        validate_time(&target, &field.time, now)?;
                         decision
                             .usage
                             .entry(rule.id.clone())
                             .or_default()
-                            .time_validations += 1;
+                            .time_validations += times.len();
                     }
                     slot += 1;
                 }

@@ -337,8 +337,9 @@ explicit repository-wide audit.
   facts for diagnosis; it does not infer process ownership or implement rule
   planning. The shared summary/detail command flow also serves Redis and Memcached.
 
-- `replay/policy/matcher/mysql_values` owns explicit SQL time-slot validation
-  across text and prepared calls. It reuses `replay/mysql/sql_match` value
+- `replay/policy/matcher/mysql_values` owns explicit scalar and exact nested-JSON
+  SQL time-location validation across text and prepared calls. It reuses
+  `replay/mysql/sql_match` value
   materialization; the MySQL matcher retains identity and finite consumption.
   `replay/policy/sql_template` owns pure bounded template extraction, and
   `replay/policy/config/mysql` owns rule-schema validation. Its sibling

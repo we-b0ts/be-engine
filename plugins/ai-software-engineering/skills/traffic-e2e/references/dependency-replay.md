@@ -79,9 +79,11 @@ wildcards and other expressions retain strict matching. See
 boundary and actual-client acceptance tests.
 
 Generated MySQL write timestamps can use explicit `mysql.sql_values` time rules
-across text and prepared protocols. Rules select database and SQL, independently
-of inbound API paths; `sql_values: {0: {time: replay_now, tolerance: 5s}}` uses
-UTC MySQL datetime defaults. The coordinator exposes
+across text and prepared protocols. A rule may atomically select multiple scalar
+slots and exact JSON Pointer fields inside string slots, with independent time
+formats. Rules select database and SQL, independently of inbound API paths;
+`sql_values: {0: {time: replay_now, tolerance: 5s}}` uses UTC MySQL datetime
+defaults. The coordinator exposes
 `dependency-rule plan mysql-time`; it requires source proof and matching immutable
 write evidence, then reruns Replay without new recording or write omission.
 See [SQL time rules](../../../../../docs/mysql-time-rules.md). Preserve database

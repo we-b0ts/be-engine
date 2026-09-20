@@ -28,11 +28,14 @@ fn fixture() -> (tempfile::TempDir, MysqlTimeRuleFeedback) {
             database: "app".into(),
             username: "user".into(),
             sql: "UPDATE api_keys SET last_used_at=? WHERE id=?".into(),
-            value_index: 0,
-            tolerance: "5s".into(),
-            offset: "0s".into(),
-            format: "%Y-%m-%d %H:%M:%S%.f".into(),
-            timezone: "+00:00".into(),
+            time_values: vec![MysqlTimeValueSelector {
+                value_index: 0,
+                json_pointer: None,
+                tolerance: "5s".into(),
+                offset: "0s".into(),
+                format: "%Y-%m-%d %H:%M:%S%.f".into(),
+                timezone: "+00:00".into(),
+            }],
         },
         source_evidence: "security.py:auth assigns datetime.utcnow() before commit".into(),
     };
@@ -146,7 +149,7 @@ fn sql_time_plan_rejects_stale_policy_and_unsupported_evidence() {
                 report["unmatched_queries"][0]["params"][0]["value"] = json!("2026-09-07 11:00:00")
             }
             "wrong_api" => feedback.api = "GET /other/*".into(),
-            "invalid_slot" => feedback.selector.value_index = 2,
+            "invalid_slot" => feedback.selector.time_values[0].value_index = 2,
             "missing_proof" => feedback.source_evidence.clear(),
             "invalid_source" | "warnings" => {
                 let p = temp.path().join("case/dependencies.jsonl");
@@ -163,4 +166,106 @@ fn sql_time_plan_rejects_stale_policy_and_unsupported_evidence() {
         fs::write(&feedback.replay_report_path, report.to_string()).unwrap();
         assert!(plan_mysql_time_rule(feedback).is_err(), "{mutation}");
     }
+}
+
+#[test]
+fn sql_time_plan_correlates_scalar_and_nested_json_locations_atomically() {
+    let (temp, mut feedback) = fixture();
+    let source = json!({
+        "event_type":"mysql_exchange",
+        "target_host":"db.internal",
+        "target_port":3306,
+        "database":"app",
+        "username":"user",
+        "command":"COM_QUERY",
+        "sql":r#"UPDATE kinds SET json='{"name":"stable","spec":{"observedAt":"2020-01-01T00:00:00+00:00"}}', updated_at='2020-01-01 00:00:00.000000' WHERE id=7"#,
+        "parse_warnings":[],
+        "response":{"status":"ok","affected_rows":1}
+    });
+    fs::write(
+        temp.path().join("case/dependencies.jsonl"),
+        source.to_string(),
+    )
+    .unwrap();
+    let report = json!({
+        "finalized":true,
+        "started_at":"2026-09-07T12:00:00Z",
+        "finalized_at":"2026-09-07T12:00:02Z",
+        "cases":[{"case_id":"case-1","case_dir":temp.path().join("case")}],
+        "unmatched_queries":[{
+            "case_id":"case-1",
+            "command":"COM_STMT_EXECUTE",
+            "target":{"host":"db.internal","port":3306},
+            "database":"app",
+            "username":"user",
+            "sql":"UPDATE kinds SET json=?, updated_at=? WHERE id=?",
+            "params":[
+                {"kind":"string","value":r#"{"spec":{"observedAt":"2026-09-07T12:00:01+00:00"},"name":"stable"}"#},
+                {"kind":"datetime","value":"2026-09-07 12:00:01.000000"},
+                {"kind":"integer","value":7}
+            ]
+        }]
+    });
+    fs::write(&feedback.replay_report_path, report.to_string()).unwrap();
+    feedback.rule_id = "kind-times".into();
+    feedback.selector.sql = "UPDATE kinds SET json=?, updated_at=? WHERE id=?".into();
+    feedback.selector.time_values = vec![
+        MysqlTimeValueSelector {
+            value_index: 0,
+            json_pointer: Some("/spec/observedAt".into()),
+            tolerance: "5s".into(),
+            offset: "0s".into(),
+            format: "%+".into(),
+            timezone: "+00:00".into(),
+        },
+        MysqlTimeValueSelector {
+            value_index: 1,
+            json_pointer: None,
+            tolerance: "5s".into(),
+            offset: "0s".into(),
+            format: "%Y-%m-%d %H:%M:%S%.f".into(),
+            timezone: "+00:00".into(),
+        },
+    ];
+    feedback.source_evidence =
+        "kind.py:updated_at and service.py:observedAt use current time".into();
+
+    let path = feedback.policy_path.clone();
+    plan_mysql_time_rule(feedback.clone())
+        .unwrap()
+        .apply()
+        .unwrap();
+    let updated = fs::read_to_string(path).unwrap();
+    assert!(updated.contains("/spec/observedAt"));
+    assert!(updated.contains("1: {\"time\":\"replay_now\",\"tolerance\":\"5s\"}"));
+
+    let mut changed: Value =
+        serde_json::from_slice(&fs::read(&feedback.replay_report_path).unwrap()).unwrap();
+    changed["unmatched_queries"][0]["params"][0]["value"] =
+        json!(r#"{"spec":{"observedAt":"2026-09-07T12:00:01+00:00"},"name":"changed"}"#);
+    fs::write(&feedback.replay_report_path, changed.to_string()).unwrap();
+    assert!(plan_mysql_time_rule(feedback).is_err());
+}
+
+#[test]
+fn mysql_time_selector_reads_legacy_single_slot_state() {
+    let selector: MysqlTimeSelector = serde_json::from_value(json!({
+        "target_host":"db.internal",
+        "target_port":3306,
+        "database":"app",
+        "username":"user",
+        "sql":"UPDATE keys SET stamp=? WHERE id=?",
+        "value_index":0,
+        "tolerance":"5s",
+        "offset":"0s",
+        "format":"%Y-%m-%d %H:%M:%S%.f",
+        "timezone":"+00:00"
+    }))
+    .unwrap();
+    assert_eq!(selector.time_values.len(), 1);
+    assert_eq!(selector.time_values[0].value_index, 0);
+    assert!(selector.time_values[0].json_pointer.is_none());
+    let encoded = serde_json::to_value(selector).unwrap();
+    assert_eq!(encoded["value_index"], 0);
+    assert!(encoded.get("time_values").is_none());
 }

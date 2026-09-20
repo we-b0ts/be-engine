@@ -131,7 +131,13 @@ pub(super) struct MysqlSelector {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(try_from = "mysql_time::Config", into = "mysql_time::Config")]
-pub(super) struct MysqlTimeValueRule {
+pub(super) enum MysqlTimeValueRule {
+    Scalar(MysqlTimeFieldRule),
+    Json(BTreeMap<String, MysqlTimeFieldRule>),
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct MysqlTimeFieldRule {
     pub(super) source_evidence: String,
     pub(super) time: TimeRule,
 }

@@ -1,16 +1,20 @@
 # MySQL SQL time rules
 
 Runtime-generated timestamps in INSERT, UPDATE and DELETE can be validated with
-explicit `dependency_rules.mysql.sql_values` rules. These cover text literals,
-bound parameters and prepared statements with inline values and no parameters,
-in either source/target protocol direction. Existing captures remain usable;
-targets retain normal clocks, writes and database error handling.
+explicit `dependency_rules.mysql.sql_values` rules. One rule can atomically
+select multiple scalar SQL slots and exact JSON Pointer fields inside a string
+slot. These cover text literals, bound parameters and prepared statements with
+inline values and no parameters, in either source/target protocol direction.
+Existing captures remain usable; targets retain normal clocks, writes and
+database error handling.
 
-The selector is a tokenized SQL template. Each `?` represents one scalar value.
+The selector is a tokenized SQL template. Each `?` represents one SQL value.
 `sql_values` indexes template slots from zero, independently of wire parameter
-positions. Unselected slots must retain the recorded value. All other SQL
-tokens and finite consumption stay exact; database/SQL scope is independent of
-inbound request paths.
+positions. A slot can select the whole scalar with `time`, or selected fields
+inside a JSON string with `json`. Unselected slots must retain the recorded
+value. JSON values outside selected pointers must remain structurally equal.
+All other SQL tokens and finite consumption stay exact; database/SQL scope is
+independent of inbound request paths.
 
 ```yaml
 dependency_rules:
@@ -18,8 +22,14 @@ dependency_rules:
     protocol: mysql
     mysql:
       database: app
-      sql: UPDATE api_keys SET last_used_at=?, updated_at=now() WHERE api_keys.id=?
-      sql_values: {0: {time: replay_now, tolerance: 5s}}
+      sql: UPDATE kinds SET json=?, updated_at=? WHERE id=?
+      sql_values:
+        0:
+          json:
+            /spec/cloudConfig/nevisIpObservedAt:
+              time: replay_now
+              format: "%+"
+        1: {time: replay_now, tolerance: 5s}
 ```
 
 Add this section to the existing verification policy. The rule applies to the
@@ -32,9 +42,11 @@ it is not a SQL rewrite from one side to the other.
 `time: replay_now` defaults to zero offset, 5 seconds tolerance, UTC and MySQL
 `%Y-%m-%d %H:%M:%S%.f` datetime strings (including microseconds). Integer Unix
 seconds are also accepted. Override `tolerance`, `offset`, `format` or `timezone`
-beside `time` only when necessary. The source value must parse; the target value
-must satisfy the offset/tolerance around Replay's current time. Both values must
-share the same scalar category. The key id and `updated_at=now()` stay exact.
+beside each selected time only when necessary; `%+` accepts RFC 3339 values such
+as Python `datetime.isoformat()` output. Every source value must parse, and every
+target value must satisfy its own offset/tolerance around Replay's current time.
+Each source/target pair must share the same scalar category. JSON pointers must
+be exact, non-root, non-overlapping pointers; wildcards are not supported.
 Recorded database errors are still returned as errors.
 
 In `sql_values` mode, both `COM_QUERY` and `COM_STMT_EXECUTE` are covered.
@@ -58,24 +70,32 @@ Response, Replay and Dependency issues with MySQL dirty evidence expose the
 
 ```sh
 backend-rewrite --target-root /path/to/target dependency-rule plan mysql-time \
-  --evidence-id evidence-current --rule-id api-key-last-used-at \
+  --evidence-id evidence-current --rule-id kind-write-times \
   --database app \
-  --sql 'UPDATE api_keys SET last_used_at=?, updated_at=now() WHERE api_keys.id=?' \
-  --value-index 0 --tolerance 5s \
-  --source-evidence 'security.py:get_auth_context assigns datetime.utcnow() before commit'
+  --sql 'UPDATE kinds SET json=?, updated_at=? WHERE id=?' \
+  --time-value '{"value_index":0,"json_pointer":"/spec/cloudConfig/nevisIpObservedAt","format":"%+"}' \
+  --time-value '{"value_index":1}' \
+  --source-evidence 'kind.py:updated_at and cloud_device_ip_index.py:nevisIpObservedAt use current time'
 
 backend-rewrite --target-root /path/to/target dependency-rule apply <plan-id>
 ```
+
+Repeat `--time-value` with a JSON object for an atomic multi-location plan. Each
+object requires `value_index` and may set `json_pointer`, `tolerance`, `offset`,
+`format` and `timezone`. The original `--value-index` plus optional time flags
+remains supported for one scalar slot; it cannot be combined with
+`--time-value`.
 
 Plan requires source-code proof and uses current active API evidence for the
 correlation, without adding an API selector to the generated rule. Optional
 `--target-host`/`--target-port` and `--username` filter the evidence lookup only.
 Source and target evidence must still have the same endpoint, database and user.
 It correlates an unmatched target write with an immutable recorded write in the
-same case. Only the selected value may differ, and the target time must fall in the captured
-replay interval plus the configured offset/tolerance. Wrong keys, malformed
-source times, parse warnings, unfinished replay and unrelated APIs cannot
-authorize the plan. The preview includes the policy diff and a case id.
+same case. Every selected time must differ, parse and fall in the captured replay
+interval plus its configured offset/tolerance, while all unselected SQL and JSON
+values remain equal. Wrong keys, malformed source times, parse warnings,
+unfinished replay and unrelated APIs cannot authorize the plan. The preview
+includes the policy diff and a case id.
 
 Apply edits only `dependency_rules` in `.traffic-e2e/verification.yaml`. It does
 not reclassify writes as background, clean failed reports or start recording.

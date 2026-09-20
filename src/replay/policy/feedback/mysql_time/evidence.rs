@@ -1,6 +1,7 @@
 //! Correlate SQL time slots with finalized replay and immutable write evidence.
 use super::*;
-use crate::replay::policy::matcher::mysql_values::{time_value, values};
+use crate::replay::policy::config::MysqlTimeValueRule;
+use crate::replay::policy::matcher::mysql_values::{selected_times, values};
 use crate::replay::policy::value::parse_time;
 use serde_json::Value;
 
@@ -32,7 +33,10 @@ fn event_values(s: &MysqlTimeSelector, event: &Value) -> Option<Vec<crate::mysql
     values(&s.sql, event["sql"].as_str(), params.as_deref()).ok()
 }
 
-pub(super) fn validate(feedback: &MysqlTimeRuleFeedback, time: &TimeRule) -> Result<String> {
+pub(super) fn validate(
+    feedback: &MysqlTimeRuleFeedback,
+    sql_values: &BTreeMap<usize, MysqlTimeValueRule>,
+) -> Result<String> {
     let report: Value = serde_json::from_slice(&super::super::read_published_report(
         &feedback.replay_report_path,
         "MySQL time replay report",
@@ -50,8 +54,6 @@ pub(super) fn validate(feedback: &MysqlTimeRuleFeedback, time: &TimeRule) -> Res
         .as_str()
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .context("replay evidence has no finalization time")?;
-    let offset = crate::replay::policy::config::parse_duration(&time.offset)?;
-    let tolerance = crate::replay::policy::config::parse_duration(&time.tolerance)?;
     ensure!(
         finish >= start,
         "replay evidence finalization precedes its start"
@@ -119,7 +121,7 @@ pub(super) fn validate(feedback: &MysqlTimeRuleFeedback, time: &TimeRule) -> Res
                     .iter()
                     .zip(&actual_values)
                     .enumerate()
-                    .any(|(i, (a, b))| i != s.value_index && a != b)
+                    .any(|(i, (a, b))| !sql_values.contains_key(&i) && a != b)
             {
                 continue;
             }
@@ -130,33 +132,57 @@ pub(super) fn validate(feedback: &MysqlTimeRuleFeedback, time: &TimeRule) -> Res
             {
                 continue;
             }
-            let Ok(source_time) = time_value(&source[s.value_index]) else {
-                continue;
-            };
-            let Ok(actual_time) = time_value(&actual_values[s.value_index]) else {
-                continue;
-            };
-            if source_time == actual_time
-                || std::mem::discriminant(&source_time) != std::mem::discriminant(&actual_time)
-                || parse_time(&source_time, time).is_err()
-            {
-                continue;
+            let mut validated = 0;
+            for (index, selected) in sql_values {
+                let Ok(times) = selected_times(&source[*index], &actual_values[*index], selected)
+                else {
+                    validated = 0;
+                    break;
+                };
+                for selected in times {
+                    if selected.source == selected.target
+                        || parse_time(&selected.source, &selected.rule).is_err()
+                    {
+                        validated = 0;
+                        break;
+                    }
+                    let Ok(actual_time) = parse_time(&selected.target, &selected.rule) else {
+                        validated = 0;
+                        break;
+                    };
+                    let offset =
+                        crate::replay::policy::config::parse_duration(&selected.rule.offset)?;
+                    let tolerance =
+                        crate::replay::policy::config::parse_duration(&selected.rule.tolerance)?;
+                    let actual_millis = actual_time.timestamp_millis();
+                    if actual_millis
+                        < start
+                            .timestamp_millis()
+                            .saturating_add(offset)
+                            .saturating_sub(tolerance)
+                        || actual_millis
+                            > finish
+                                .timestamp_millis()
+                                .saturating_add(offset)
+                                .saturating_add(tolerance)
+                    {
+                        validated = 0;
+                        break;
+                    }
+                    validated += 1;
+                }
+                if validated == 0 {
+                    break;
+                }
             }
-            let Ok(actual_time) = parse_time(&actual_time, time) else {
-                continue;
-            };
-            let actual_millis = actual_time.timestamp_millis();
-            if actual_millis
-                < start
-                    .timestamp_millis()
-                    .saturating_add(offset)
-                    .saturating_sub(tolerance)
-                || actual_millis
-                    > finish
-                        .timestamp_millis()
-                        .saturating_add(offset)
-                        .saturating_add(tolerance)
-            {
+            let expected = sql_values
+                .values()
+                .map(|selected| match selected {
+                    MysqlTimeValueRule::Scalar(_) => 1,
+                    MysqlTimeValueRule::Json(fields) => fields.len(),
+                })
+                .sum::<usize>();
+            if validated != expected {
                 continue;
             }
             return actual["case_id"]
@@ -166,6 +192,6 @@ pub(super) fn validate(feedback: &MysqlTimeRuleFeedback, time: &TimeRule) -> Res
         }
     }
     anyhow::bail!(
-        "SQL time rule requires a matching recorded write and unmatched target write differing only in the selected current-time slot"
+        "SQL time rule requires a matching recorded write and unmatched target write differing only in all selected current-time locations"
     )
 }
