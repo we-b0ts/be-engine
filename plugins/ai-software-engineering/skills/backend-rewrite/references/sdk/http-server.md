@@ -49,23 +49,20 @@ Declare only the dependencies that the function needs:
 
 ```rust,ignore
 // user_api.rs
-use brz_http_server::{ApiResult, Authenticated};
+use brz_http_server::ApiResult;
 use crate::{auth::Actor, users::{UpdateUser, UserService, UserView}};
 
-#[brz_http_server::put(
-    "/v1/users/:id",
-    auth = required,
-)]
+#[brz_http_server::put("/v1/users/:id")]
 async fn update(
     #[inject(users)] service: &UserService,
     id: u64,
     verbose: Option<bool>,
     input: UpdateUser,
     #[header("x-trace-id")] trace_id: Option<&str>,
-    actor: Authenticated<Actor>,
+    #[auth] actor: Actor,
 ) -> ApiResult<UserView> {
     // Use the actual source-backed operation and authorization rules.
-    service.update(id, input, verbose, trace_id, actor.principal()).await
+    service.update(id, input, verbose, trace_id, &actor).await
 }
 ```
 
@@ -122,17 +119,18 @@ strings and JSON fields can borrow across `await` and response serialization;
 use owned values for work that outlives the request. Exported functions may have lifetime parameters, but
 not type or const generics.
 
-Set authentication on each route to match the source:
+Declare authentication on each handler to match the source:
 
-| Policy | Route option | Identity parameter |
-| --- | --- | --- |
-| Required | `auth = required` | `Authenticated<Actor>` |
-| Optional | `auth = optional` | `Option<Authenticated<Actor>>` |
-| Public | `auth = none` (default) | None |
+| Policy | Identity parameter |
+| --- | --- |
+| Required | `#[auth] actor: Actor` |
+| Optional | `#[auth] actor: Option<Actor>` |
+| Public | None |
 
-The group's authenticator supplies `Actor`. Required auth is enforced even when
-the function does not need an identity parameter. Optional auth permits absent
-credentials but rejects invalid ones. Preserve business authorization separately.
+The group's authenticator must implement `Authenticator<Actor>`. Optional auth
+permits absent credentials but rejects invalid ones. For required authentication
+without later identity use, declare `#[auth] _actor: Actor`. Preserve business
+authorization separately.
 
 ## Responses and downloads
 
@@ -165,8 +163,8 @@ brz_http_server::registry!(
 );
 
 // On each function in admin_api.rs:
-// #[brz_http_server::get("/admin/status", group = admin, auth = required)]
-// Inject state and AdminAuth's principal as required by that endpoint.
+// #[brz_http_server::get("/admin/status", group = admin)]
+// Declare `#[auth] actor: AdminActor` and inject state as required.
 
 // Startup; clone shared dependencies before moving them into other listeners.
 let handler = brz_http_server::handlers!(state = Arc::clone(&app_state); group = admin)?;
