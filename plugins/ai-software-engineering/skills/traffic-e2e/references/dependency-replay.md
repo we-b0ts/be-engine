@@ -103,6 +103,13 @@ within the SQL/work limits. Boolean tests `IS [NOT] TRUE/FALSE/UNKNOWN` retain
 their semantics and can compose with tuple IN reordering. Neither support
 requires target to change its normal SQL parameter binding.
 
+A narrow complex-predicate fallback permits the same scalar/flat-tuple list
+reordering inside correlated `EXISTS` subqueries that participate in an `OR`
+branch of a single-table SELECT. Every query scope must remain a single-table
+SELECT. The complete AST outside eligible lists stays exact, including
+functions, JSON paths, projections, tables, correlations, operators, boolean
+structure and non-list values; joins and other subquery forms remain strict.
+
 Flat tuple IN/NOT IN also permits whole-row reordering, including
 `(user_id,namespace,name) IN ((?,?,?),(?,?,?))` versus source text literals.
 Column order, tuple width, component values/types, NULL positions, value pairing

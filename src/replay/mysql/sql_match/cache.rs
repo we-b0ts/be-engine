@@ -1,7 +1,7 @@
 //! Replay-local SQL compilation cache. Only immutable parsing/normalization is
 //! cached; identity, policy, runtime parameters and exchange availability are not.
 use super::{
-    bound_value,
+    bound_value, nested_in,
     predicate::{Key, Template},
 };
 use crate::mysql::sql::{Token, projection::DirectSelect, tokens};
@@ -28,6 +28,7 @@ pub(in crate::replay::mysql) struct SqlCache {
 pub(in crate::replay::mysql) struct CompiledSql {
     tokens: Vec<Token>,
     predicate: Option<Template>,
+    nested_in: Option<nested_in::Template>,
     projection: Option<DirectSelect>,
     projection_predicate: Option<Template>,
     param_count: usize,
@@ -37,9 +38,15 @@ pub(in crate::replay::mysql) struct CompiledSql {
 
 #[derive(Debug)]
 pub(in crate::replay::mysql) struct BoundSql {
-    key: Key,
+    key: SemanticKey,
     pub(in crate::replay::mysql) projection: Option<DirectSelect>,
     projection_key: Option<Key>,
+}
+
+#[derive(Debug)]
+enum SemanticKey {
+    Predicate(Key),
+    NestedIn(nested_in::Key),
 }
 
 impl SqlCache {
@@ -77,6 +84,10 @@ impl CompiledSql {
             .filter(|tokens| tokens.len() <= 4096)
             .unwrap_or_default();
         let mut predicate = Template::parse(&tokens, true);
+        let nested_in = predicate
+            .is_none()
+            .then(|| nested_in::Template::parse(&tokens))
+            .flatten();
         let projection = predicate
             .as_ref()
             .and_then(|_| DirectSelect::parse(sql, &tokens));
@@ -108,6 +119,7 @@ impl CompiledSql {
             param_count: tokens.iter().filter(|t| **t == Token::Placeholder).count(),
             tokens,
             predicate,
+            nested_in,
             projection,
             projection_predicate,
             constants: OnceLock::new(),
@@ -165,7 +177,11 @@ impl CompiledSql {
             params.next().is_none().then_some(bound)
         }
         let bound = bind(&self.tokens, params)?;
-        let key = self.predicate.as_ref()?.bind(&bound)?;
+        let key = if let Some(template) = &self.predicate {
+            SemanticKey::Predicate(template.bind(&bound)?)
+        } else {
+            SemanticKey::NestedIn(self.nested_in.as_ref()?.bind(&bound)?)
+        };
         let mut projection = self.projection.clone();
         let projection_key = if let Some(select) = &mut projection {
             select.body = bind(&select.body, params)?;
@@ -185,7 +201,15 @@ impl CompiledSql {
 
 impl BoundSql {
     pub(in crate::replay::mysql) fn matches(&self, recorded: &Self, metadata: bool) -> bool {
-        self.key == recorded.key || metadata && self.key.metadata_matches(&recorded.key)
+        match (&self.key, &recorded.key) {
+            (SemanticKey::Predicate(actual), SemanticKey::Predicate(recorded)) => {
+                actual == recorded || metadata && actual.metadata_matches(recorded)
+            }
+            (SemanticKey::NestedIn(actual), SemanticKey::NestedIn(recorded)) => {
+                actual == recorded || metadata && actual.metadata_matches(recorded)
+            }
+            _ => false,
+        }
     }
 
     pub(in crate::replay::mysql) fn projection_matches(

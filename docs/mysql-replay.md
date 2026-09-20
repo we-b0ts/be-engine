@@ -275,9 +275,17 @@ binding, without dropping duplicate conditions. Mixed AND/OR nesting and each
 branch's column/value pairing remain exact. For example, `(a=1 AND b=2) OR
 (a=3 AND b=4)` matches `(b=4 AND a=3) OR (b=2 AND a=1)`, but not `(a=1 AND b=4)
 OR (a=3 AND b=2)`. No distribution, absorption or logical expansion is performed.
-The grammar distinguishes BETWEEN's internal AND. Function/arithmetic predicates,
-subqueries, tuple comparisons outside IN, joins, grouping, locks, writes and computed sorting
-retain their existing strict matching behavior. Wildcard SELECTs can match
+The grammar distinguishes BETWEEN's internal AND. A narrow fallback also supports
+scalar and flat-tuple `IN` / `NOT IN` list reordering inside correlated `EXISTS`
+subqueries when the outer query and every subquery are single-table SELECTs and
+the `EXISTS` participates in an `OR` branch. The complete parsed query remains
+strict: projections, functions, JSON paths, tables, correlations, boolean
+structure, operators and every non-list value must be identical. This covers
+source collections whose order changes inside access-control `EXISTS` checks
+without treating the surrounding complex predicate as generally equivalent.
+Other function/arithmetic predicate changes, subquery forms, tuple comparisons
+outside IN, joins, grouping, locks, writes and computed sorting retain their
+existing strict matching behavior. Wildcard SELECTs can match
 when their projection remains the same; supported direct-column projections
 can also use the column compatibility above.
 
