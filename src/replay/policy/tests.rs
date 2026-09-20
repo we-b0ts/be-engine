@@ -56,6 +56,83 @@ fn compact_sql_time_rule_matches_across_api_paths_but_not_databases() {
 }
 
 #[test]
+fn sql_time_rule_validates_scalar_and_nested_json_locations_atomically() {
+    let fixture = policy_fixture(
+        r#"
+version: 3
+expected_response: assertions_only
+dependency_rules:
+- id: kind-times
+  protocol: mysql
+  mysql:
+    database: pluto_audit
+    sql: UPDATE kinds SET json=?, updated_at=? WHERE id=?
+    sql_values:
+      0:
+        json:
+          /spec/observedAt: {time: replay_now, tolerance: 5s, format: "%+"}
+      1: {time: replay_now, tolerance: 5s}
+"#,
+    );
+    let mut runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
+    let identity = mysql_identity();
+    let sql = "UPDATE kinds SET json=?, updated_at=? WHERE id=?";
+    let recorded = values(&[
+        json!(r#"{"name":"stable","spec":{"observedAt":"2020-01-01T00:00:00+00:00"}}"#),
+        json!("2020-01-01 00:00:00.000000"),
+        json!(7),
+    ]);
+    let actual = values(&[
+        json!(r#"{"spec":{"observedAt":"2026-09-07T12:00:01+00:00"},"name":"stable"}"#),
+        json!("2026-09-07 12:00:01.000000"),
+        json!(7),
+    ]);
+    let now = Utc.with_ymd_and_hms(2026, 9, 7, 12, 0, 1).unwrap();
+    let context = |actual| MysqlPolicyContext {
+        case_id: Some(CASE_ID),
+        identity: &identity,
+        command: "COM_STMT_EXECUTE",
+        recorded_sql: Some(sql),
+        sql: Some(sql),
+        recorded: Some(&recorded),
+        actual: Some(actual),
+    };
+
+    let decision = runtime
+        .preview_mysql_sql_values(&context(&actual), now)
+        .unwrap()
+        .unwrap();
+    runtime.commit(Some(CASE_ID), decision);
+    assert_eq!(runtime.report().dependency_rules[0].time_validations, 2);
+
+    let changed_stable_json = values(&[
+        json!(r#"{"name":"changed","spec":{"observedAt":"2026-09-07T12:00:01+00:00"}}"#),
+        json!("2026-09-07 12:00:01.000000"),
+        json!(7),
+    ]);
+    assert!(
+        runtime
+            .preview_mysql_sql_values(&context(&changed_stable_json), now)
+            .unwrap()
+            .unwrap_err()
+            .contains("stable MySQL JSON fields differ")
+    );
+
+    let stale_scalar = values(&[
+        json!(r#"{"name":"stable","spec":{"observedAt":"2026-09-07T12:00:01+00:00"}}"#),
+        json!("2020-01-01 00:00:00.000000"),
+        json!(7),
+    ]);
+    assert!(
+        runtime
+            .preview_mysql_sql_values(&context(&stale_scalar), now)
+            .unwrap()
+            .unwrap_err()
+            .contains("exceeding tolerance")
+    );
+}
+
+#[test]
 fn validates_verification_policy_example() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("config")

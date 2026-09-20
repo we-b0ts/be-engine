@@ -92,6 +92,8 @@ pub(super) fn details(
     busy: bool,
 ) -> RewriteCoordinationDetails {
     let mut result = RewriteCoordinationDetails::default();
+    let first_pass_ready =
+        super::inventory::can_switch_api(state) && super::inventory::has_unattempted_api(state);
     let (dispatch, reports, close) = super::expert::counts(state);
     add(&mut result.ready, "dispatch_expert", dispatch);
     add(&mut result.waiting, "expert_report", reports);
@@ -102,12 +104,13 @@ pub(super) fn details(
             Coverage::ResumeRequired => add(&mut result.ready, "resume_worker", 1),
             Coverage::StatusRequired => add(&mut result.ready, "check_worker_status", 1),
             Coverage::Running => add(&mut result.waiting, "worker_handoff", 1),
-            Coverage::IntegrationRequired if !busy => {
+            Coverage::IntegrationRequired if !busy && !first_pass_ready => {
                 add(&mut result.ready, "integrate_handoff", 1)
             }
             Coverage::IntegrationRequired => add(&mut result.waiting, "integration_resource", 1),
             Coverage::VerificationRequired
                 if !busy
+                    && !first_pass_ready
                     && (matches!(scope, super::RewriteWorkScope::ProcessOutput { .. })
                         || super::inventory::can_switch_api(state)) =>
             {

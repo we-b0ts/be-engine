@@ -324,11 +324,14 @@ fn mysql_time_plan_survives_response_issue_persistence_without_background_reclas
             database: "app".into(),
             username: "user".into(),
             sql: "UPDATE keys SET stamp=? WHERE id=?".into(),
-            value_index: 0,
-            tolerance: "5s".into(),
-            offset: "0s".into(),
-            format: "%Y-%m-%d %H:%M:%S%.f".into(),
-            timezone: "+00:00".into(),
+            time_values: vec![crate::MysqlTimeValueSelector {
+                value_index: 0,
+                json_pointer: None,
+                tolerance: "5s".into(),
+                offset: "0s".into(),
+                format: "%Y-%m-%d %H:%M:%S%.f".into(),
+                timezone: "+00:00".into(),
+            }],
         },
     };
     let state: RewriteState =

@@ -1,7 +1,8 @@
 //! Compact SQL time configuration; retain the original nested syntax on input.
-use super::{MysqlTimeValueRule, TimeReference, TimeRule};
+use super::{MysqlTimeFieldRule, MysqlTimeValueRule, TimeReference, TimeRule};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 const FORMAT: &str = "%Y-%m-%d %H:%M:%S%.f";
 const TIMEZONE: &str = "+00:00";
@@ -15,7 +16,7 @@ enum TimeConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Config {
+pub(super) struct TimeFieldConfig {
     time: TimeConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tolerance: Option<String>,
@@ -29,10 +30,23 @@ pub(super) struct Config {
     source_evidence: String,
 }
 
-impl TryFrom<Config> for MysqlTimeValueRule {
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct JsonConfig {
+    json: BTreeMap<String, TimeFieldConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub(super) enum Config {
+    Scalar(TimeFieldConfig),
+    Json(JsonConfig),
+}
+
+impl TryFrom<TimeFieldConfig> for MysqlTimeFieldRule {
     type Error = anyhow::Error;
 
-    fn try_from(config: Config) -> Result<Self> {
+    fn try_from(config: TimeFieldConfig) -> Result<Self> {
         let time = match config.time {
             TimeConfig::Reference(relative_to) => TimeRule {
                 relative_to,
@@ -59,13 +73,13 @@ impl TryFrom<Config> for MysqlTimeValueRule {
     }
 }
 
-impl From<MysqlTimeValueRule> for Config {
-    fn from(rule: MysqlTimeValueRule) -> Self {
+impl From<MysqlTimeFieldRule> for TimeFieldConfig {
+    fn from(rule: MysqlTimeFieldRule) -> Self {
         // Missing format/timezone in the original syntax has different parsing
         // semantics; retain that syntax rather than assigning compact defaults.
         let compact = rule.time.format.is_some() && rule.time.timezone.is_some();
         if compact {
-            Self {
+            TimeFieldConfig {
                 time: TimeConfig::Reference(rule.time.relative_to),
                 tolerance: Some(rule.time.tolerance),
                 offset: (rule.time.offset != "0s").then_some(rule.time.offset),
@@ -74,7 +88,7 @@ impl From<MysqlTimeValueRule> for Config {
                 source_evidence: rule.source_evidence,
             }
         } else {
-            Self {
+            TimeFieldConfig {
                 time: TimeConfig::Detailed(rule.time),
                 tolerance: None,
                 offset: None,
@@ -82,6 +96,43 @@ impl From<MysqlTimeValueRule> for Config {
                 timezone: None,
                 source_evidence: rule.source_evidence,
             }
+        }
+    }
+}
+
+impl TryFrom<Config> for MysqlTimeValueRule {
+    type Error = anyhow::Error;
+
+    fn try_from(config: Config) -> Result<Self> {
+        match config {
+            Config::Scalar(field) => Ok(Self::Scalar(field.try_into()?)),
+            Config::Json(config) => {
+                ensure!(
+                    !config.json.is_empty(),
+                    "MySQL JSON time rule must select at least one JSON Pointer"
+                );
+                Ok(Self::Json(
+                    config
+                        .json
+                        .into_iter()
+                        .map(|(pointer, field)| Ok((pointer, field.try_into()?)))
+                        .collect::<Result<_>>()?,
+                ))
+            }
+        }
+    }
+}
+
+impl From<MysqlTimeValueRule> for Config {
+    fn from(rule: MysqlTimeValueRule) -> Self {
+        match rule {
+            MysqlTimeValueRule::Scalar(field) => Self::Scalar(field.into()),
+            MysqlTimeValueRule::Json(fields) => Self::Json(JsonConfig {
+                json: fields
+                    .into_iter()
+                    .map(|(pointer, field)| (pointer, field.into()))
+                    .collect(),
+            }),
         }
     }
 }
@@ -104,11 +155,14 @@ mod tests {
             let encoded = serde_yaml::to_string(&rule).unwrap();
             let decoded: MysqlTimeValueRule = serde_yaml::from_str(&encoded).unwrap();
             assert_eq!(
-                serde_json::to_value(&rule.time).unwrap(),
-                serde_json::to_value(&decoded.time).unwrap()
+                serde_json::to_value(&rule).unwrap(),
+                serde_json::to_value(&decoded).unwrap()
             );
         }
         let rule: MysqlTimeValueRule = serde_yaml::from_str("time: replay_now").unwrap();
+        let MysqlTimeValueRule::Scalar(rule) = rule else {
+            panic!("expected scalar rule")
+        };
         assert_eq!(rule.time.tolerance, "5s");
         assert!(parse_time(&json!("2026-09-07 13:38:18.474219"), &rule.time).is_ok());
         assert!(
@@ -118,5 +172,26 @@ mod tests {
             .is_err()
         );
         assert!(serde_yaml::from_str::<MysqlTimeValueRule>("time: anything").is_err());
+    }
+
+    #[test]
+    fn json_sql_time_fields_round_trip_with_independent_formats() {
+        let yaml = r#"
+json:
+  /spec/observedAt:
+    time: replay_now
+    format: "%+"
+  /updatedAt:
+    time: replay_now
+    tolerance: 2s
+"#;
+        let rule: MysqlTimeValueRule = serde_yaml::from_str(yaml).unwrap();
+        let encoded = serde_yaml::to_string(&rule).unwrap();
+        let decoded: MysqlTimeValueRule = serde_yaml::from_str(&encoded).unwrap();
+        assert_eq!(
+            serde_json::to_value(rule).unwrap(),
+            serde_json::to_value(decoded).unwrap()
+        );
+        assert!(serde_yaml::from_str::<MysqlTimeValueRule>("json: {}").is_err());
     }
 }

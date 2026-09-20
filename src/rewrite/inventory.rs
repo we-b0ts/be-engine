@@ -539,6 +539,14 @@ pub(super) fn next_pending_api_for_concurrent_work(state: &RewriteState) -> Opti
         .map(|item| item.api.as_str())
 }
 
+pub(super) fn has_unattempted_api(state: &RewriteState) -> bool {
+    (state.phase == RewritePhase::ApiPending && state.attempts.is_empty())
+        || state
+            .api_inventory
+            .iter()
+            .any(|item| item.status == RewriteApiStatus::Pending && item.attempts == 0)
+}
+
 pub(super) fn details(state: &RewriteState) -> RewriteApiInventoryDetails {
     let mut items = state.api_inventory.clone();
     if let Some(index) = state.current_api_index

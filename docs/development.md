@@ -1543,6 +1543,13 @@ handoff via `rework_required` with its handoff ID and original worker or integra
 the same worker and rejects callbacks for the superseded dispatch. Integration
 is acknowledged only while the verification resource is free.
 
+When any recorded API still has zero focused verification attempts, its first-pass
+Replay is scheduled before ready handoff integration or integrated-handoff
+acceptance. This discovery barrier exposes independent API failures early so their
+workers can run in parallel. Dispatch, resume, runtime-status, and feedback actions
+remain immediate. After every API has an attempt, integration and acceptance resume,
+followed by the existing unified target-fingerprint revalidation.
+
 Source quality rework preserves assigned findings in `context.review.rework`
 alongside any behavioral issue. Repeated routing to the same owner and target
 revision extends the current repair. Worker dispatch/status/integration remain
