@@ -63,3 +63,61 @@ async fn sqlx_or_groups_match_all_protocol_pairs_with_aliases_tuples_and_cached_
         }
     }).await.expect("OR protocol compatibility timed out");
 }
+
+#[tokio::test]
+async fn sqlx_nested_exists_in_lists_match_text_recording_with_prepared_target() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let source = "SELECT kinds.id AS kinds_id FROM kinds \
+            WHERE kinds.id IN (3,1,2) AND (\
+              coalesce(json_unquote(json_extract(kinds.json, '$.spec.directAccessRequirement')), '') = '' \
+              OR EXISTS (SELECT 1 FROM resource_members \
+                WHERE resource_members.resource_id = kinds.id \
+                  AND resource_members.entity_id IN ('dept-b','dept-a') \
+                  AND resource_members.role IN ('Owner','Maintainer','Developer'))\
+            )";
+        let record = exchange(
+            source,
+            result(
+                json!([{"name":"kinds_id","table":"kinds","column":"id","family":"integer","sql_type":"BIGINT"}]),
+                json!([[{"kind":"integer","value":77}]]),
+            ),
+        );
+        let (temp, addr, runtime, task) = fixture(&[record], false).await;
+        let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+        let target = "SELECT kinds.id AS kinds_id FROM kinds \
+            WHERE kinds.id IN (?,?,?) AND (\
+              coalesce(json_unquote(json_extract(kinds.json, '$.spec.directAccessRequirement')), '') = '' \
+              OR EXISTS (SELECT 1 FROM resource_members \
+                WHERE resource_members.resource_id = kinds.id \
+                  AND resource_members.entity_id IN (?,?) \
+                  AND resource_members.role IN ('Developer','Owner','Maintainer'))\
+            )";
+        let wrong = sqlx::query(target)
+            .bind(2_i64)
+            .bind(3_i64)
+            .bind(1_i64)
+            .bind("dept-a")
+            .bind("dept-c")
+            .fetch_all(&mut client)
+            .await;
+        assert!(wrong.is_err());
+        let rows = sqlx::query(target)
+            .bind(2_i64)
+            .bind(3_i64)
+            .bind(1_i64)
+            .bind("dept-a")
+            .bind("dept-b")
+            .fetch_all(&mut client)
+            .await
+            .unwrap();
+        assert_eq!(rows[0].get::<i64, _>("kinds_id"), 77);
+        client.close().await.unwrap();
+        let state = runtime.state.lock().await;
+        assert_eq!(state.mysql.events.matched_query_count, 1);
+        assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
+        assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
+        task.abort();
+    })
+    .await
+    .expect("nested EXISTS IN replay timed out");
+}

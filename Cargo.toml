@@ -36,7 +36,7 @@ serde_json = "1"
 serde_yaml = "0.9"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 syn = { version = "2", features = ["full", "visit"] }
-sqlparser = { version = "0.62.0", default-features = false, features = ["std"] }
+sqlparser = { version = "0.62.0", default-features = false, features = ["std", "visitor"] }
 tokio = { version = "1", features = ["full"] }
 tokio-rustls = "0.26"
 toml = "0.9"
