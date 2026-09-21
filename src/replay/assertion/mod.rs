@@ -208,6 +208,7 @@ pub fn assert_recorded_response(
     };
     let actual_body = decode_body(&actual.body, "actual response")?;
     let actual_status = actual.status;
+    let expected_request_headers = request.headers.clone();
     let (expected_body, actual_body, expected_status, actual_status) = if request.has_motan_frame()
         && !oneway
     {
@@ -238,6 +239,8 @@ pub fn assert_recorded_response(
         case_id: options.case_id,
         request,
         request_path: options.request,
+        expected_request_headers,
+        actual_request_headers: actual.request_headers,
         expected_status,
         expected_headers: expected.headers,
         expected_body,
@@ -283,6 +286,8 @@ pub(crate) fn assert_comparison_response(
     let expected_body = comparison_assertion_body(&request, &expected, "expected response")?;
     let actual_status = captured_status(&response, "response")?;
     let actual_body = comparison_assertion_body(&request, &response, "response")?;
+    let expected_request_headers = request.headers.clone();
+    let actual_request_headers = request.headers.clone();
     evaluate_response(AssertionInputs {
         mode: AssertionMode::Comparison,
         times: RequestTimes {
@@ -292,6 +297,8 @@ pub(crate) fn assert_comparison_response(
         case_id: options.case_id,
         request,
         request_path: options.request,
+        expected_request_headers,
+        actual_request_headers,
         expected_status,
         expected_headers: expected.headers,
         expected_body,
@@ -420,6 +427,8 @@ struct AssertionInputs {
     case_id: String,
     request: RecordedRequest,
     request_path: PathBuf,
+    expected_request_headers: Option<crate::recorder::HeaderMapSnapshot>,
+    actual_request_headers: Option<crate::recorder::HeaderMapSnapshot>,
     expected_status: u16,
     expected_headers: Option<crate::recorder::HeaderMapSnapshot>,
     expected_body: AssertionBody,
@@ -501,6 +510,8 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
         case_id,
         request,
         request_path,
+        expected_request_headers,
+        actual_request_headers,
         expected_status,
         expected_headers,
         expected_body,
@@ -562,6 +573,8 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
         headers::compare_standard_headers(
             expected_headers.as_ref(),
             actual_headers.as_ref(),
+            expected_request_headers.as_ref(),
+            actual_request_headers.as_ref(),
             &mut report,
         )?;
     }

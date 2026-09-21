@@ -249,6 +249,7 @@ content-type
 location
 vary
 www-authenticate
+x-request-id
 ```
 
 Names are case-insensitive. Comma-separated header-name and HTTP-method fields
@@ -257,18 +258,27 @@ compare their primary value and unordered parameters. `cache-control` compares
 unordered directives, `access-control-max-age` compares delta-seconds, and
 `www-authenticate` compares unordered challenges and authentication parameters.
 The remaining scalar fields compare trimmed values. Both sides absent is equal;
-one-sided presence or a semantic value difference fails the response assertion.
+one-sided presence or a semantic value difference fails the response assertion,
+except for the source-positive `x-request-id` contract. A missing source
+response `x-request-id` imposes no target requirement. A present source value
+requires target presence. When the source response echoes the source request,
+the target response must echo the request actually sent to the target; otherwise
+the trimmed source and target response values must have equal byte length.
+Comparison uses the request forwarded symmetrically to source and candidate.
 For `comparison.source_match: before_or_after`, headers, status, and body must
 all match the same complete source observation.
 
 An older artifact with no `headers` member has unavailable header evidence and
 retains its existing status/body verdict. Do not treat a missing snapshot as an
 empty map. New HTTP Replay actual-response artifacts retain only these standard
-headers, not unselected sensitive headers such as `set-cookie`. A selected
-standard header whose recorded value is `<redacted>` is
-unevaluable rather than equal. Other response headers remain outside the
+headers, not unselected sensitive headers such as `set-cookie`, plus only the
+target request's `x-request-id` as request-correlation context. A selected
+standard header whose recorded value is `<redacted>` is unevaluable rather than
+equal. Missing legacy request context skips only the value relationship after
+enforcing target response presence. Other response headers remain outside the
 verdict. In particular, compression, content length, cookies, timestamps,
-infrastructure identity, and tracing headers are not implicitly compared.
+infrastructure identity, and tracing headers other than `x-request-id` are not
+implicitly compared.
 
 ## Generated Scalar Response Fields
 

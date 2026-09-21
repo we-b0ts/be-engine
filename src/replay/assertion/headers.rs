@@ -3,12 +3,14 @@ use std::collections::BTreeSet;
 use anyhow::{Result, ensure};
 
 use super::model::{ResponseAssertionCaseReport, ResponseDifference, ResponseDifferenceKind};
-use crate::http::response_headers::STANDARD_RESPONSE_HEADERS;
+use crate::http::response_headers::{STANDARD_RESPONSE_HEADERS, X_REQUEST_ID};
 use crate::recorder::HeaderMapSnapshot;
 
 pub(super) fn compare_standard_headers(
     expected: Option<&HeaderMapSnapshot>,
     actual: Option<&HeaderMapSnapshot>,
+    expected_request: Option<&HeaderMapSnapshot>,
+    actual_request: Option<&HeaderMapSnapshot>,
     report: &mut ResponseAssertionCaseReport,
 ) -> Result<()> {
     let (Some(expected), Some(actual)) = (expected, actual) else {
@@ -18,6 +20,10 @@ pub(super) fn compare_standard_headers(
         return Ok(());
     };
     for name in STANDARD_RESPONSE_HEADERS {
+        if name == X_REQUEST_ID {
+            compare_x_request_id(expected, actual, expected_request, actual_request, report)?;
+            continue;
+        }
         let expected_values = expected.get(name);
         let actual_values = actual.get(name);
         match (expected_values, actual_values) {
@@ -51,12 +57,79 @@ pub(super) fn compare_standard_headers(
     Ok(())
 }
 
+fn compare_x_request_id(
+    expected: &HeaderMapSnapshot,
+    actual: &HeaderMapSnapshot,
+    expected_request: Option<&HeaderMapSnapshot>,
+    actual_request: Option<&HeaderMapSnapshot>,
+    report: &mut ResponseAssertionCaseReport,
+) -> Result<()> {
+    let Some(expected_response_values) = expected.get(X_REQUEST_ID) else {
+        // A target may introduce its own request ID even when the source does
+        // not expose one. This contract is intentionally source-positive.
+        return Ok(());
+    };
+    ensure_values_available(X_REQUEST_ID, expected_response_values, "expected")?;
+    let Some(actual_response_values) = actual.get(X_REQUEST_ID) else {
+        report.differences.push(ResponseDifference::header(
+            X_REQUEST_ID,
+            ResponseDifferenceKind::HeaderMissingActual,
+        ));
+        return Ok(());
+    };
+    ensure_values_available(X_REQUEST_ID, actual_response_values, "actual")?;
+
+    let Some(expected_request) = expected_request else {
+        return Ok(());
+    };
+    let source_echoes_request = match expected_request.get(X_REQUEST_ID) {
+        Some(values) if request_values_available(values) => {
+            canonical_scalar(expected_response_values) == canonical_scalar(values)
+        }
+        Some(_) => return Ok(()),
+        None => false,
+    };
+    let matches = if source_echoes_request {
+        let Some(actual_request) = actual_request else {
+            return Ok(());
+        };
+        actual_request.get(X_REQUEST_ID).is_some_and(|values| {
+            request_values_available(values)
+                && canonical_scalar(actual_response_values) == canonical_scalar(values)
+        })
+    } else {
+        canonical_lengths(expected_response_values) == canonical_lengths(actual_response_values)
+    };
+    if !matches {
+        report.differences.push(ResponseDifference::header(
+            X_REQUEST_ID,
+            ResponseDifferenceKind::HeaderValueMismatch,
+        ));
+    }
+    Ok(())
+}
+
 fn ensure_values_available(name: &str, values: &[String], side: &str) -> Result<()> {
     ensure!(
         !values.iter().any(|value| value == "<redacted>"),
         "{side} response header {name:?} is redacted and unavailable for standard comparison"
     );
     Ok(())
+}
+
+fn request_values_available(values: &[String]) -> bool {
+    values
+        .iter()
+        .all(|value| value != "<redacted>" && !value.starts_with("traffic-e2e:enc:"))
+}
+
+fn canonical_lengths(values: &[String]) -> Vec<usize> {
+    let mut lengths = values
+        .iter()
+        .map(|value| value.trim().len())
+        .collect::<Vec<_>>();
+    lengths.sort_unstable();
+    lengths
 }
 
 fn canonical_values(name: &str, values: &[String]) -> Vec<String> {
@@ -296,7 +369,7 @@ mod tests {
 
     #[test]
     fn standard_header_set_is_stable() {
-        assert_eq!(STANDARD_RESPONSE_HEADERS.len(), 13);
+        assert_eq!(STANDARD_RESPONSE_HEADERS.len(), 14);
         assert!(STANDARD_RESPONSE_HEADERS.is_sorted());
     }
 
@@ -362,7 +435,7 @@ mod tests {
             "actual-fingerprint".into(),
         );
 
-        compare_standard_headers(Some(&expected), Some(&actual), &mut report).unwrap();
+        compare_standard_headers(Some(&expected), Some(&actual), None, None, &mut report).unwrap();
 
         assert_eq!(report.differences.len(), 3);
         assert_eq!(
@@ -397,7 +470,14 @@ mod tests {
             "actual".into(),
             "actual-fingerprint".into(),
         );
-        compare_standard_headers(None, Some(&HeaderMapSnapshot::new()), &mut report).unwrap();
+        compare_standard_headers(
+            None,
+            Some(&HeaderMapSnapshot::new()),
+            None,
+            None,
+            &mut report,
+        )
+        .unwrap();
         assert!(report.differences.is_empty());
 
         let expected =
@@ -406,11 +486,121 @@ mod tests {
             compare_standard_headers(
                 Some(&expected),
                 Some(&HeaderMapSnapshot::new()),
+                None,
+                None,
                 &mut report
             )
             .unwrap_err()
             .to_string()
             .contains("redacted")
         );
+    }
+
+    #[test]
+    fn x_request_id_is_source_positive_and_preserves_echo_behavior() {
+        let expected_response = HeaderMapSnapshot::new();
+        let actual_response =
+            HeaderMapSnapshot::from([(X_REQUEST_ID.into(), vec!["target-generated".into()])]);
+        let mut report = new_report();
+        compare_standard_headers(
+            Some(&expected_response),
+            Some(&actual_response),
+            Some(&HeaderMapSnapshot::new()),
+            Some(&HeaderMapSnapshot::new()),
+            &mut report,
+        )
+        .unwrap();
+        assert!(report.differences.is_empty());
+
+        let expected_response = x_request_id("source-request-id");
+        let expected_request = x_request_id("source-request-id");
+        let actual_response = x_request_id("target-request-id");
+        let actual_request = x_request_id("target-request-id");
+        compare_standard_headers(
+            Some(&expected_response),
+            Some(&actual_response),
+            Some(&expected_request),
+            Some(&actual_request),
+            &mut report,
+        )
+        .unwrap();
+        assert!(report.differences.is_empty());
+
+        let wrong_actual_response = x_request_id("not-the-target-id");
+        compare_standard_headers(
+            Some(&expected_response),
+            Some(&wrong_actual_response),
+            Some(&expected_request),
+            Some(&actual_request),
+            &mut report,
+        )
+        .unwrap();
+        assert_eq!(
+            report.differences.last().unwrap().kind,
+            ResponseDifferenceKind::HeaderValueMismatch
+        );
+    }
+
+    #[test]
+    fn x_request_id_generated_values_compare_trimmed_byte_lengths() {
+        let expected_response = x_request_id("source-generated-01");
+        let expected_request = x_request_id("incoming-id");
+        let mut report = new_report();
+        compare_standard_headers(
+            Some(&expected_response),
+            Some(&x_request_id("target-generated-99")),
+            Some(&expected_request),
+            Some(&x_request_id("another-incoming-id")),
+            &mut report,
+        )
+        .unwrap();
+        assert!(report.differences.is_empty());
+
+        compare_standard_headers(
+            Some(&expected_response),
+            Some(&x_request_id("short")),
+            Some(&expected_request),
+            Some(&x_request_id("another-incoming-id")),
+            &mut report,
+        )
+        .unwrap();
+        assert_eq!(
+            report.differences.last().unwrap().kind,
+            ResponseDifferenceKind::HeaderValueMismatch
+        );
+
+        let mut missing_report = new_report();
+        compare_standard_headers(
+            Some(&expected_response),
+            Some(&HeaderMapSnapshot::new()),
+            Some(&expected_request),
+            Some(&HeaderMapSnapshot::new()),
+            &mut missing_report,
+        )
+        .unwrap();
+        assert_eq!(
+            missing_report.differences[0].kind,
+            ResponseDifferenceKind::HeaderMissingActual
+        );
+    }
+
+    fn x_request_id(value: &str) -> HeaderMapSnapshot {
+        HeaderMapSnapshot::from([(X_REQUEST_ID.into(), vec![value.into()])])
+    }
+
+    fn new_report() -> ResponseAssertionCaseReport {
+        ResponseAssertionCaseReport::new(
+            "case".into(),
+            "GET".into(),
+            "/".into(),
+            super::super::model::ResponseGatewayProtocol::Http,
+            "request".into(),
+            "policy".into(),
+            "policy-fingerprint".into(),
+            "expected".into(),
+            "expected-fingerprint".into(),
+            "actual".into(),
+            "actual-fingerprint".into(),
+        )
     }
 }

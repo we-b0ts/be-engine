@@ -47,6 +47,7 @@ pub(crate) struct RecordedHttpClient {
 pub(crate) struct RecordedHttpResponse {
     pub(crate) request_sent_at: chrono::DateTime<chrono::Utc>,
     pub(crate) request_rules: Vec<crate::request_rules::RequestRuleObservation>,
+    pub(crate) request_headers: HeaderMapSnapshot,
     pub(crate) status: StatusCode,
     pub(crate) headers: HeaderMapSnapshot,
     pub(crate) body: Bytes,
@@ -108,6 +109,7 @@ impl RecordedHttpClient {
         let recorded: RecordedRequest =
             serde_json::from_value(value).context("invalid recorded request shape")?;
         let request = build_request(&self.origin, &recorded, self.preserve_host)?;
+        let request_headers = response_headers::snapshot_request_context(request.headers());
         tokio::time::timeout(self.request_timeout, async {
             let response = self
                 .client
@@ -120,6 +122,7 @@ impl RecordedHttpClient {
             Ok::<_, anyhow::Error>(RecordedHttpResponse {
                 request_sent_at,
                 request_rules,
+                request_headers,
                 status,
                 headers,
                 body,

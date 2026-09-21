@@ -29,6 +29,8 @@ struct ActualResponse {
     request_sent_at: chrono::DateTime<chrono::Utc>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     request_rules: Vec<crate::request_rules::RequestRuleObservation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_headers: Option<HeaderMapSnapshot>,
     status: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     headers: Option<HeaderMapSnapshot>,
@@ -153,6 +155,7 @@ pub(super) async fn capture_case(
             version: 1,
             request_sent_at: response.request_sent_at,
             request_rules: response.request_rules,
+            request_headers: Some(response.request_headers),
             status: response.status.as_u16(),
             headers: Some(response.headers),
             body: CapturedBody {
@@ -285,6 +288,7 @@ async fn capture_motan_case(
             version: 1,
             request_sent_at,
             request_rules: Vec::new(),
+            request_headers: None,
             status,
             headers: None,
             body: CapturedBody {

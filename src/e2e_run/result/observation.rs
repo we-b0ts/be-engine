@@ -70,6 +70,59 @@ pub(in crate::e2e_run) fn response_observation_with_status(
     }
 }
 
+pub(in crate::e2e_run) fn request_correlated_header_observation(
+    response_path: &Path,
+    request_context_path: &Path,
+    request_headers_field: &str,
+    name: &str,
+) -> E2eValueObservation {
+    let pointer = format!("$headers/{name}");
+    let mut response = response_observation(response_path, &pointer);
+    if response.presence != E2eValuePresence::Present {
+        return response;
+    }
+    let request = header_observation(request_context_path, request_headers_field, name, &pointer);
+    response.value = Some(serde_json::json!({
+        "response": response.value,
+        "request": request,
+    }));
+    response
+}
+
+fn header_observation(
+    path: &Path,
+    headers_field: &str,
+    name: &str,
+    pointer: &str,
+) -> E2eValueObservation {
+    let Ok(bytes) = std::fs::read(path) else {
+        return observation(E2eValuePresence::Unavailable, None);
+    };
+    let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+        return observation(E2eValuePresence::Unavailable, None);
+    };
+    let Some(headers) = value.get(headers_field).and_then(Value::as_object) else {
+        return observation(E2eValuePresence::Unavailable, None);
+    };
+    match headers.get(name) {
+        Some(value) if protected_header_value(value) => {
+            observation(E2eValuePresence::Unavailable, None)
+        }
+        Some(value) => observation(E2eValuePresence::Present, Some(bounded(value, pointer))),
+        None => observation(E2eValuePresence::Missing, None),
+    }
+}
+
+fn protected_header_value(value: &Value) -> bool {
+    value.as_array().is_some_and(|values| {
+        values.iter().any(|value| {
+            value
+                .as_str()
+                .is_some_and(|value| value == "<redacted>" || value.starts_with("traffic-e2e:enc:"))
+        })
+    })
+}
+
 fn observation(presence: E2eValuePresence, value: Option<Value>) -> E2eValueObservation {
     E2eValueObservation { presence, value }
 }
@@ -148,5 +201,40 @@ mod tests {
         let missing = response_observation(&response, "$headers/location");
         assert_eq!(missing.presence, E2eValuePresence::Missing);
         assert_eq!(missing.value, None);
+    }
+
+    #[test]
+    fn projects_request_context_with_x_request_id_response_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let request = temp.path().join("request.json");
+        let response = temp.path().join("response.json");
+        std::fs::write(
+            &request,
+            serde_json::to_vec(&serde_json::json!({
+                "headers": {"x-request-id": ["incoming-id"]}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            &response,
+            serde_json::to_vec(&serde_json::json!({
+                "headers": {"x-request-id": ["response-id"]}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let observation =
+            request_correlated_header_observation(&response, &request, "headers", "x-request-id");
+
+        assert_eq!(observation.presence, E2eValuePresence::Present);
+        assert_eq!(
+            observation.value,
+            Some(serde_json::json!({
+                "response": ["response-id"],
+                "request": {"presence": "present", "value": ["incoming-id"]}
+            }))
+        );
     }
 }

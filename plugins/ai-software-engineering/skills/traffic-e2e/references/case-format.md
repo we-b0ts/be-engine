@@ -127,12 +127,16 @@ The standard headers are `access-control-allow-credentials`,
 `access-control-allow-headers`, `access-control-allow-methods`,
 `access-control-allow-origin`, `access-control-expose-headers`,
 `access-control-max-age`, `allow`, `cache-control`, `content-disposition`,
-`content-type`, `location`, `vary`, and `www-authenticate`. They are built-in
-response contract, not policy rules. Older artifacts with no header snapshot
+`content-type`, `location`, `vary`, `www-authenticate`, and `x-request-id`.
+They are built-in response contract, not policy rules. `x-request-id` is
+source-positive: source absence is ignored, source presence requires target
+presence, source request echo must remain a target request echo, and generated
+values compare by trimmed byte length. Older artifacts with no header snapshot
 retain their existing status/body verdict because their header evidence is
 unavailable; new HTTP Replay actual-response artifacts capture the standard
 headers only and do not persist unselected sensitive headers such as
-`set-cookie`.
+`set-cookie`. They additionally retain only the actual target request's
+`x-request-id` under `request_headers` for echo evidence.
 
 `expected-response.json` is assertion-only evidence. MUST NOT read its status,
 headers, body, or derived values to produce the target's actual response,

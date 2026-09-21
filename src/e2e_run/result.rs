@@ -19,6 +19,7 @@ mod observation;
 
 #[cfg(test)]
 use observation::bounded;
+use observation::request_correlated_header_observation;
 pub(super) use observation::{response_observation, response_observation_with_status};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -271,6 +272,36 @@ fn diagnosis(layout: &RunLayout, state: &ActiveRunState) -> E2eDiagnosis {
             })
         } else {
             let assertion = case.response_assertion.as_ref()?;
+            let actual_response = published_path(layout, &assertion.actual_response);
+            let (expected, actual) = if cluster.representative_pointer == "$headers/x-request-id" {
+                (
+                    request_correlated_header_observation(
+                        &assertion.expected_response,
+                        &assertion.request,
+                        "headers",
+                        "x-request-id",
+                    ),
+                    request_correlated_header_observation(
+                        &actual_response,
+                        &actual_response,
+                        "request_headers",
+                        "x-request-id",
+                    ),
+                )
+            } else {
+                (
+                    response_observation_with_status(
+                        &assertion.expected_response,
+                        &cluster.representative_pointer,
+                        representative_status(assertion, cluster, true),
+                    ),
+                    response_observation_with_status(
+                        &actual_response,
+                        &cluster.representative_pointer,
+                        representative_status(assertion, cluster, false),
+                    ),
+                )
+            };
             Some(E2eRepresentativeDifference {
                 case_id: cluster.representative_case_id.clone(),
                 pointer: cluster.representative_pointer.clone(),
@@ -279,16 +310,8 @@ fn diagnosis(layout: &RunLayout, state: &ActiveRunState) -> E2eDiagnosis {
                 body_codec: Some(assertion.body_codec),
                 body_diagnosis: assertion.body_diagnosis.clone(),
                 unavailable_reason: None,
-                expected: response_observation_with_status(
-                    &assertion.expected_response,
-                    &cluster.representative_pointer,
-                    representative_status(assertion, cluster, true),
-                ),
-                actual: response_observation_with_status(
-                    &published_path(layout, &assertion.actual_response),
-                    &cluster.representative_pointer,
-                    representative_status(assertion, cluster, false),
-                ),
+                expected,
+                actual,
             })
         }
     });
