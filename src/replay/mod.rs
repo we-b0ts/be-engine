@@ -481,10 +481,7 @@ impl ReplayRuntime {
 
     async fn run_tcp(&self, listener: TcpListener) -> Result<()> {
         loop {
-            let (stream, peer_addr) = listener
-                .accept()
-                .await
-                .context("failed to accept dependency replay gateway client")?;
+            let (stream, peer_addr) = accept_replay_tcp_connection(&listener).await?;
             let state = self.state.clone();
             let ca = self.ca.clone();
             let report_writer = self.report_writer.clone();
@@ -686,6 +683,17 @@ impl ReplayState {
             })
             .collect()
     }
+}
+
+async fn accept_replay_tcp_connection(listener: &TcpListener) -> Result<(TcpStream, SocketAddr)> {
+    let (stream, peer_addr) = listener
+        .accept()
+        .await
+        .context("failed to accept dependency replay gateway client")?;
+    stream
+        .set_nodelay(true)
+        .context("failed to enable TCP_NODELAY for dependency replay gateway client")?;
+    Ok((stream, peer_addr))
 }
 
 async fn handle_gateway_connection(

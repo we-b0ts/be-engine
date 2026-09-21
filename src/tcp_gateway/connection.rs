@@ -404,6 +404,10 @@ async fn proxy_raw_tcp(
             "TLS-looking connection was not eligible for HTTPS MITM on port {}",
             fake_addr.port()
         )),
+        DetectedProtocol::Http if state.config().tcp_gateway.record_http => {
+            drop(upstream);
+            serve_http_connection(client, fake_addr, entry, client_addr, state).await
+        }
         DetectedProtocol::Http | DetectedProtocol::Raw => {
             let operation_class = OperationClass::Unknown;
             if state.access_decision(operation_class) == AccessDecision::Reject {

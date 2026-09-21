@@ -66,6 +66,109 @@ async fn fragmented_sniff_waits_for_a_complete_command_without_consuming_it() {
 }
 
 #[tokio::test]
+async fn delayed_http_client_is_still_routed_to_http_recorder() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = crate::AppConfig::default();
+    config.recording.output_dir = temp.path().join("recordings");
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+    config.tcp_gateway.record_http = true;
+    config.tcp_gateway.protocol_detection.enabled = true;
+    let state = crate::AppState::new(config).await.unwrap();
+
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_addr = upstream_listener.local_addr().unwrap();
+    let upstream = tokio::spawn(async move {
+        let (mut preconnected, _) = upstream_listener.accept().await.unwrap();
+        let mut eof = [0_u8; 1];
+        assert_eq!(preconnected.read(&mut eof).await.unwrap(), 0);
+
+        let (stream, _) = upstream_listener.accept().await.unwrap();
+        let service = service_fn(|_req| async {
+            Ok::<_, Infallible>(
+                Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .header(hyper::header::CONNECTION, "close")
+                    .body(Full::new(Bytes::from_static(b"missing")))
+                    .unwrap(),
+            )
+        });
+        hyper::server::conn::http1::Builder::new()
+            .serve_connection(TokioIo::new(stream), service)
+            .await
+            .unwrap();
+    });
+
+    let gateway_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway_addr = gateway_listener.local_addr().unwrap();
+    let client = TcpStream::connect(gateway_addr).await.unwrap();
+    let (proxy_client, peer_addr) = gateway_listener.accept().await.unwrap();
+    let entry = FakeDnsEntry {
+        domain: "example.test".to_string(),
+        fake_ip: Ipv4Addr::new(198, 19, 0, 22),
+        real_ips: vec![Ipv4Addr::LOCALHOST],
+        response_alias: false,
+        upstream_authority: None,
+        upstream_protocol: None,
+        first_seen: chrono::Utc::now(),
+        last_seen: chrono::Utc::now(),
+    };
+    let fake_addr = SocketAddr::new(IpAddr::V4(entry.fake_ip), upstream_addr.port());
+    let state_for_proxy = state.clone();
+    let proxy = tokio::spawn(proxy_raw_tcp(
+        proxy_client,
+        fake_addr,
+        entry,
+        Some(peer_addr.to_string()),
+        state_for_proxy,
+        RawTcpOptions {
+            record_connection: true,
+            sniff_server_first_protocols: true,
+            detected_protocol: None,
+        },
+    ));
+
+    sleep(INITIAL_PEEK_TIMEOUT + Duration::from_millis(50)).await;
+    let (mut sender, connection) = http1::handshake(TokioIo::new(client)).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    let response = sender
+        .send_request(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/delayed")
+                .header(HOST, "example.test")
+                .body(Full::new(Bytes::new()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        Bytes::from_static(b"missing")
+    );
+    drop(sender);
+
+    tokio::time::timeout(Duration::from_secs(1), proxy)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    upstream.await.unwrap();
+
+    state.recorder().flush_traffic().await.unwrap();
+    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+        .await
+        .unwrap();
+    assert!(traffic.contains(r#""event_type":"http_exchange""#));
+    assert!(traffic.contains(r#""uri":"/delayed""#));
+    assert!(!traffic.contains(r#""event_type":"tcp_gateway_connection""#));
+}
+
+#[tokio::test]
 async fn delayed_tls_client_is_still_routed_to_https_mitm() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let temp = tempfile::tempdir().unwrap();
