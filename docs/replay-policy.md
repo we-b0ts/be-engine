@@ -76,6 +76,51 @@ candidate differences remain target differences. Replay dependency rules are
 ignored during this file-only operation, and no interception or isolation is
 enabled.
 
+## Standard HTTP Response Headers
+
+Version 3 Replay and Comparison compare the following HTTP response headers by
+default, without response rules:
+
+```text
+access-control-allow-credentials
+access-control-allow-headers
+access-control-allow-methods
+access-control-allow-origin
+access-control-expose-headers
+access-control-max-age
+allow
+cache-control
+content-disposition
+content-type
+location
+vary
+www-authenticate
+x-request-id
+```
+
+Header names are case-insensitive. Header-name and HTTP-method lists compare as
+sets; parameterized and directive headers compare structurally; scalar headers
+compare trimmed values. Both sides absent is equal, while one-sided presence or
+a semantic value difference fails, except for the source-positive
+`x-request-id` contract. When the source response omits `x-request-id`, the
+target may omit or add it. When the source response contains it, the target
+response must also contain it. If the source response echoes the source request
+value, the target response must echo the request value actually sent to the
+target. Otherwise, the trimmed target response value must have the same byte
+length as the trimmed source response value. In `before_or_after` mode the
+candidate's status, headers, and body must match one complete source
+observation.
+
+Legacy response artifacts without a header snapshot retain their status/body
+verdict because header evidence is unavailable. New HTTP Replay artifacts
+capture only the standard response headers above, avoiding persistence of
+unselected sensitive headers such as `set-cookie`; they also retain only the
+target request's `x-request-id` as request-correlation context. A standard
+header recorded as `<redacted>` is unevaluable. Other headers, including
+`set-cookie`, `content-length`, `content-encoding`, dates, infrastructure
+identity, and tracing fields other than `x-request-id`, remain outside the
+default verdict.
+
 Do not put recorded values, response bodies, secrets, absolute case paths, or
 case-id exceptions in the policy. Use selectors and semantic validation only.
 In particular, ordinary mutable business data observed at different times is

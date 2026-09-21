@@ -235,6 +235,61 @@ fn unavailable_response_evidence_omits_value_and_policy_queries() {
 }
 
 #[test]
+fn standard_header_evidence_uses_response_flow_without_body_rule_queries() {
+    let mut state = crate::rewrite::test_state();
+    state.phase = RewritePhase::ImplementationRequired;
+    state.active_issue = Some(RewriteIssue {
+        id: "issue-response-header".to_string(),
+        kind: RewriteIssueKind::Response,
+        owner: RewriteIssueOwner::TargetCode,
+        summary: "response header mismatch".to_string(),
+        pointer_pattern: Some("$headers/vary".to_string()),
+        representative: Some(E2eRepresentativeDifference {
+            case_id: "case-1".to_string(),
+            pointer: "$headers/vary".to_string(),
+            difference_kind: ResponseDifferenceKind::HeaderValueMismatch,
+            gateway_protocol: Some(crate::ResponseGatewayProtocol::Http),
+            body_codec: Some(crate::ResponseBodyCodec::Json),
+            body_diagnosis: None,
+            unavailable_reason: None,
+            expected: E2eValueObservation {
+                presence: E2eValuePresence::Present,
+                value: Some(serde_json::json!(["Origin"])),
+            },
+            actual: E2eValueObservation {
+                presence: E2eValuePresence::Present,
+                value: Some(serde_json::json!(["Accept-Encoding"])),
+            },
+        }),
+        egress_rejections: None,
+        recorder_capture_diagnosis: None,
+        response_diagnosis: None,
+        possible_causes: Vec::new(),
+        observed_target_fingerprint: "target".to_string(),
+        attempt: 2,
+        comparison_observation: None,
+    });
+
+    let queries = query_kinds(&state, state.active_issue.as_ref().unwrap())
+        .into_iter()
+        .map(|(query, _)| query)
+        .collect::<Vec<_>>();
+
+    assert!(queries.contains(&QUERY_CASE_RESPONSE_DIFFERENCES));
+    assert!(queries.contains(&QUERY_REPRESENTATIVES));
+    assert!(queries.contains(&QUERY_DEPENDENCY_CORRELATION));
+    assert!(!queries.contains(&QUERY_SOURCE_VARIATION));
+    assert!(!queries.contains(&QUERY_COLLECTION_EQUIVALENCE));
+    assert!(!queries.contains(&QUERY_POLICY_APPLICABILITY));
+    assert!(
+        policy_applicability(state.active_issue.as_ref().unwrap())["eligible_kinds"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn response_source_process_evidence_exposes_bootstrap_redis_planner() {
     let planners = applicable_rule_planners(
         Path::new("/target"),

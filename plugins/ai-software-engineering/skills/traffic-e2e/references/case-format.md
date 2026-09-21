@@ -121,9 +121,22 @@ dependency association.
 - `duration_ms`: observed upstream duration
 - `error`: recorder/upstream error, or null
 
-Use `method`, `uri`, headers, and body to drive the request. Use `status` and
-the response body for assertions. Assert headers only when they are
-business-relevant or the target project's existing E2E style already does so.
+Use `method`, `uri`, headers, and body to drive the request. Use `status`, the
+response body, and the engine's standard HTTP response headers for assertions.
+The standard headers are `access-control-allow-credentials`,
+`access-control-allow-headers`, `access-control-allow-methods`,
+`access-control-allow-origin`, `access-control-expose-headers`,
+`access-control-max-age`, `allow`, `cache-control`, `content-disposition`,
+`content-type`, `location`, `vary`, `www-authenticate`, and `x-request-id`.
+They are built-in response contract, not policy rules. `x-request-id` is
+source-positive: source absence is ignored, source presence requires target
+presence, source request echo must remain a target request echo, and generated
+values compare by trimmed byte length. Older artifacts with no header snapshot
+retain their existing status/body verdict because their header evidence is
+unavailable; new HTTP Replay actual-response artifacts capture the standard
+headers only and do not persist unselected sensitive headers such as
+`set-cookie`. They additionally retain only the actual target request's
+`x-request-id` under `request_headers` for echo evidence.
 
 `expected-response.json` is assertion-only evidence. MUST NOT read its status,
 headers, body, or derived values to produce the target's actual response,

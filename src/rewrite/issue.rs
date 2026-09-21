@@ -136,6 +136,16 @@ pub(super) fn response_possible_causes(kind: Option<ResponseDifferenceKind>) -> 
             "source_compatible_boot_or_request_context",
             "dependency_or_runtime_branch_result",
         ],
+        Some(
+            ResponseDifferenceKind::HeaderMissingActual
+            | ResponseDifferenceKind::HeaderUnexpectedActual
+            | ResponseDifferenceKind::HeaderValueMismatch,
+        ) => &[
+            "target_response_header_behavior",
+            "target_framework_or_middleware_configuration",
+            "source_compatible_cors_or_cache_policy",
+            "gateway_or_application_header_ownership",
+        ],
         Some(ResponseDifferenceKind::ArrayOrderMismatch) => &[
             "target_collection_ordering",
             "map_or_set_iteration_order",

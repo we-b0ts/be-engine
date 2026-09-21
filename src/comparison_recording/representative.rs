@@ -136,6 +136,24 @@ pub(super) fn policy_mismatch(
 
 fn value(request_path: &Path, path: &Path, label: &str, pointer: &str) -> Result<Value> {
     let observation = read_comparison_response_observation(request_path, path, label)?;
+    if let Some(name) = pointer.strip_prefix("$headers/") {
+        let response = match observation.headers {
+            Some(headers) => headers
+                .get(name)
+                .cloned()
+                .map(serde_json::to_value)
+                .transpose()?
+                .unwrap_or_else(|| Value::String("<missing>".to_string())),
+            None => Value::String("<unavailable>".to_string()),
+        };
+        if name != "x-request-id" {
+            return Ok(response);
+        }
+        return Ok(json!({
+            "response": response,
+            "request": request_header_value(request_path, name)?,
+        }));
+    }
     match pointer {
         "$status" => Ok(Value::from(observation.status)),
         "$body" => Ok(bounded_body(observation)),
@@ -149,6 +167,29 @@ fn value(request_path: &Path, path: &Path, label: &str, pointer: &str) -> Result
                 .unwrap_or_else(|| Value::String("<missing>".to_string())))
         }
     }
+}
+
+fn request_header_value(path: &Path, name: &str) -> Result<Value> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("failed to read comparison request {}", path.display()))?;
+    let request: Value = serde_json::from_slice(&bytes)
+        .with_context(|| format!("invalid comparison request {}", path.display()))?;
+    let Some(headers) = request.get("headers").and_then(Value::as_object) else {
+        return Ok(Value::String("<unavailable>".to_string()));
+    };
+    let Some(value) = headers.get(name) else {
+        return Ok(Value::String("<missing>".to_string()));
+    };
+    if value.as_array().is_some_and(|values| {
+        values.iter().any(|value| {
+            value
+                .as_str()
+                .is_some_and(|value| value == "<redacted>" || value.starts_with("traffic-e2e:enc:"))
+        })
+    }) {
+        return Ok(Value::String("<unavailable>".to_string()));
+    }
+    Ok(value.clone())
 }
 
 fn bounded_body(observation: ComparisonResponseObservation) -> Value {

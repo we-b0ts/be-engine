@@ -238,6 +238,9 @@ impl From<Hessian2BodyDifference> for ResponseBodyDifferenceDetail {
 pub enum ResponseDifferenceKind {
     ResponseUnavailable,
     StatusMismatch,
+    HeaderMissingActual,
+    HeaderUnexpectedActual,
+    HeaderValueMismatch,
     GatewayMetadataMismatch,
     ValueMismatch,
     TypeMismatch,
@@ -288,6 +291,23 @@ impl ResponseDifference {
         Self {
             pointer: "$body".to_string(),
             kind: ResponseDifferenceKind::ExactBodyMismatch,
+            expected_type: None,
+            actual_type: None,
+            expected_status: None,
+            actual_status: None,
+        }
+    }
+
+    pub(super) fn header(name: &str, kind: ResponseDifferenceKind) -> Self {
+        debug_assert!(matches!(
+            kind,
+            ResponseDifferenceKind::HeaderMissingActual
+                | ResponseDifferenceKind::HeaderUnexpectedActual
+                | ResponseDifferenceKind::HeaderValueMismatch
+        ));
+        Self {
+            pointer: format!("$headers/{name}"),
+            kind,
             expected_type: None,
             actual_type: None,
             expected_status: None,

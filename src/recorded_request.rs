@@ -15,6 +15,9 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use serde::Deserialize;
 
+use crate::http::response_headers;
+use crate::recorder::HeaderMapSnapshot;
+
 type HttpClient = Client<HttpConnector, Full<Bytes>>;
 
 #[derive(Debug, Deserialize)]
@@ -44,7 +47,9 @@ pub(crate) struct RecordedHttpClient {
 pub(crate) struct RecordedHttpResponse {
     pub(crate) request_sent_at: chrono::DateTime<chrono::Utc>,
     pub(crate) request_rules: Vec<crate::request_rules::RequestRuleObservation>,
+    pub(crate) request_headers: HeaderMapSnapshot,
     pub(crate) status: StatusCode,
+    pub(crate) headers: HeaderMapSnapshot,
     pub(crate) body: Bytes,
 }
 
@@ -104,6 +109,7 @@ impl RecordedHttpClient {
         let recorded: RecordedRequest =
             serde_json::from_value(value).context("invalid recorded request shape")?;
         let request = build_request(&self.origin, &recorded, self.preserve_host)?;
+        let request_headers = response_headers::snapshot_request_context(request.headers());
         tokio::time::timeout(self.request_timeout, async {
             let response = self
                 .client
@@ -111,11 +117,14 @@ impl RecordedHttpClient {
                 .await
                 .context("recorded HTTP request failed")?;
             let status = response.status();
+            let headers = response_headers::snapshot_standard(response.headers());
             let body = collect_limited(response.into_body(), self.max_response_bytes).await?;
             Ok::<_, anyhow::Error>(RecordedHttpResponse {
                 request_sent_at,
                 request_rules,
+                request_headers,
                 status,
+                headers,
                 body,
             })
         })

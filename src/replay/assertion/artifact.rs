@@ -12,6 +12,8 @@ pub(super) struct RecordedRequest {
     pub(super) timestamp: Option<chrono::DateTime<chrono::Utc>>,
     pub(super) method: String,
     pub(super) uri: String,
+    #[serde(default)]
+    pub(super) headers: Option<HeaderMapSnapshot>,
     pub(super) protocol_version: Option<String>,
     pub(super) body: Option<ResponseBody>,
 }
@@ -37,6 +39,8 @@ impl RecordedRequest {
 #[derive(Debug, Deserialize)]
 pub(super) struct ExpectedResponse {
     pub(super) status: Option<RecordedStatus>,
+    #[serde(default)]
+    pub(super) headers: Option<HeaderMapSnapshot>,
     pub(super) body: Option<ResponseBody>,
     pub(super) frame: Option<ResponseBody>,
     pub(super) response_expected: Option<bool>,
@@ -86,8 +90,12 @@ pub(super) struct ActualResponse {
     pub(super) request_sent_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default, rename = "request_rules")]
     _request_rules: Vec<crate::request_rules::RequestRuleObservation>,
+    #[serde(default)]
+    pub(super) request_headers: Option<HeaderMapSnapshot>,
     pub(super) version: u8,
     pub(super) status: u16,
+    #[serde(default)]
+    pub(super) headers: Option<HeaderMapSnapshot>,
     pub(super) body: ResponseBody,
 }
 

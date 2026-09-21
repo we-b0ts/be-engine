@@ -594,6 +594,10 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
     let response_unavailable = issue.representative.as_ref().is_some_and(|representative| {
         representative.difference_kind == ResponseDifferenceKind::ResponseUnavailable
     });
+    let standard_header_difference = issue
+        .representative
+        .as_ref()
+        .is_some_and(|representative| representative.pointer.starts_with("$headers/"));
     if issue.kind == RewriteIssueKind::Response && issue.representative.is_some() {
         queries.push((
             QUERY_CASE_RESPONSE_DIFFERENCES,
@@ -625,7 +629,7 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
         ));
     }
     if issue.representative.is_some() {
-        if !response_unavailable && !typed_body_candidate {
+        if !response_unavailable && !typed_body_candidate && !standard_header_difference {
             queries.extend([
                 (
                     QUERY_SOURCE_VARIATION,
@@ -641,7 +645,7 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
             QUERY_DEPENDENCY_CORRELATION,
             "Correlate response outcomes with dependency cleanliness",
         ));
-        if !response_unavailable && !typed_body_candidate {
+        if !response_unavailable && !typed_body_candidate && !standard_header_difference {
             queries.push((
                 QUERY_POLICY_APPLICABILITY,
                 "Check structural rule applicability without authorizing a rule",
@@ -842,6 +846,14 @@ fn policy_applicability(issue: &RewriteIssue) -> Value {
     let Some(representative) = &issue.representative else {
         return json!({"eligible_kinds": [], "reason": "no response representative"});
     };
+    if representative.pointer.starts_with("$headers/") {
+        return json!({
+            "pointer": representative.pointer,
+            "difference_kind": representative.difference_kind,
+            "eligible_kinds": [],
+            "reason": "standard response headers are built-in exact assertions, not response rules",
+        });
+    }
     let mut eligible = Vec::new();
     if representative.expected.presence == E2eValuePresence::Present
         && representative.actual.presence == E2eValuePresence::Present

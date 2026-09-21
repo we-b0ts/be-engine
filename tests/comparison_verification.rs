@@ -78,6 +78,95 @@ response_rules:
 }
 
 #[test]
+fn standard_header_difference_flows_through_comparison_api_evidence() {
+    let temp = tempdir().unwrap();
+    let body = json!({"ok": true});
+    let run = create_run(temp.path(), body.clone(), body);
+    let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");
+    write_headers(
+        &case.join("expected-response.json"),
+        json!({"vary": ["Origin"]}),
+    );
+    write_headers(
+        &case.join("response.json"),
+        json!({"vary": ["Accept-Encoding"]}),
+    );
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+    )
+    .unwrap();
+
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run.clone(),
+        policy,
+        report: run.join("comparison-report.json"),
+    })
+    .unwrap();
+
+    assert!(!report.passed);
+    assert_eq!(report.counts.failed, 1);
+    assert_eq!(report.apis["GET /api/token"].counts.failed, 1);
+    assert_eq!(
+        report.cases[0].classification,
+        ComparisonVerificationClassification::CandidateDifference
+    );
+    let difference = &report.cases[0].response.as_ref().unwrap().differences[0];
+    assert_eq!(difference.kind, ResponseDifferenceKind::HeaderValueMismatch);
+    assert_eq!(difference.pointer, "$headers/vary");
+    let representative = report.representative_difference.unwrap();
+    assert_eq!(representative.pointer, "$headers/vary");
+    assert_eq!(representative.source_before, json!(["Origin"]));
+    assert_eq!(representative.candidate, json!(["Accept-Encoding"]));
+}
+
+#[test]
+fn x_request_id_echo_difference_includes_request_context_in_evidence() {
+    let temp = tempdir().unwrap();
+    let body = json!({"ok": true});
+    let run = create_run(temp.path(), body.clone(), body);
+    let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");
+    write_request_headers(
+        &case.join("request.json"),
+        json!({"x-request-id": ["incoming-id"]}),
+    );
+    write_headers(
+        &case.join("expected-response.json"),
+        json!({"x-request-id": ["incoming-id"]}),
+    );
+    write_headers(
+        &case.join("response.json"),
+        json!({"x-request-id": ["candidate-id"]}),
+    );
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+    )
+    .unwrap();
+
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run.clone(),
+        policy,
+        report: run.join("comparison-report.json"),
+    })
+    .unwrap();
+
+    assert!(!report.passed);
+    let representative = report.representative_difference.unwrap();
+    assert_eq!(representative.pointer, "$headers/x-request-id");
+    assert_eq!(
+        representative.source_before,
+        json!({"response": ["incoming-id"], "request": ["incoming-id"]})
+    );
+    assert_eq!(
+        representative.candidate,
+        json!({"response": ["candidate-id"], "request": ["incoming-id"]})
+    );
+}
+
+#[test]
 fn verifies_motan_payloads_through_the_common_api_report() {
     let temp = tempdir().unwrap();
     let run = create_run(temp.path(), json!("unused"), json!("unused"));
@@ -1765,6 +1854,18 @@ fn write_response(path: &Path, body: serde_json::Value) {
         .unwrap(),
     )
     .unwrap();
+}
+
+fn write_headers(path: &Path, headers: serde_json::Value) {
+    let mut response: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    response["headers"] = headers;
+    fs::write(path, serde_json::to_vec(&response).unwrap()).unwrap();
+}
+
+fn write_request_headers(path: &Path, headers: serde_json::Value) {
+    let mut request: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    request["headers"] = headers;
+    fs::write(path, serde_json::to_vec(&request).unwrap()).unwrap();
 }
 
 fn write_binary_response(path: &Path, status: u16, body: &[u8]) {
