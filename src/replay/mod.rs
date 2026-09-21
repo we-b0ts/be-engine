@@ -636,6 +636,7 @@ impl ReplayState {
             targets: self.targets.clone(),
             unrecorded_targets: self.unrecorded_targets.clone(),
             success_detail_limit: SUCCESS_DETAIL_LIMIT,
+            success_detail_scope: SUCCESS_DETAIL_SCOPE,
             connections: self.mysql.events.connections,
             connection_events: self.mysql.events.connection_events.clone(),
             builtin_query_count: self.mysql.events.builtin_query_count,

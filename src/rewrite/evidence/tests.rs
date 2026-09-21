@@ -514,6 +514,8 @@ fn dependency_representative_returns_case_entrypoint_and_bounded_difference() {
                     signature: None,
                 },
             },
+            target_matches: Vec::new(),
+            target_matches_may_be_truncated: false,
         }),
     };
 

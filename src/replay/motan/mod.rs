@@ -25,8 +25,8 @@ use super::report::command::{
 };
 use super::{
     ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplayReportWriter, ReplaySource,
-    ReplayState, ReplayTarget, TargetKey, is_connection_termination, normalize_host,
-    push_success_detail, register_replay_target_at,
+    ReplayState, ReplayTarget, SuccessDetailBudget, TargetKey, is_connection_termination,
+    normalize_host, push_success_detail, register_replay_target_at,
 };
 
 mod auth;
@@ -156,6 +156,7 @@ pub(super) struct MotanReplayEvents {
     connections: usize,
     matched_count: usize,
     matched: Vec<CommandMatchedReport>,
+    matched_details: SuccessDetailBudget,
     unmatched: Vec<CommandRequestReport>,
     unsupported: Vec<CommandRequestReport>,
     unsafe_events: Vec<CommandRequestReport>,
@@ -373,23 +374,31 @@ impl MotanReplayState {
             response: exchange.response.clone(),
             timing: exchange.timing,
             report: CommandMatchedReport {
-                case_id: exchange.case_id.clone(),
+                case_id: active_case_id.map(ToOwned::to_owned),
                 source: exchange.source,
                 index,
                 target: target.clone(),
                 connection_id: exchange.record.connection_id,
                 sequence: exchange.record.sequence,
                 command: exchange.record.command.clone(),
+                target_event_index: None,
             },
         })
     }
 
     fn complete(&mut self, matched: &MatchedExchange) {
         self.exchanges[matched.index].status = ReplayExchangeStatus::Consumed;
+        let case_id = matched.report.case_id.clone();
         push_success_detail(
             &mut self.events.matched_count,
             &mut self.events.matched,
-            matched.report.clone(),
+            &mut self.events.matched_details,
+            case_id.as_deref(),
+            |target_event_index| {
+                let mut report = matched.report.clone();
+                report.target_event_index = Some(target_event_index);
+                report
+            },
         );
         self.lane_progress
             .send_modify(|progress| *progress = (*progress).wrapping_add(1));

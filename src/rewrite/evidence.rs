@@ -480,6 +480,9 @@ fn dependency_representative(target_root: &Path, cluster: &E2eDirtyCluster) -> V
             super::case_dependencies::summary_command(target_root, &value.case_dir)
         }),
         "dependency_difference": representative.map(|value| &value.difference),
+        "target_matches": representative.map(|value| &value.target_matches),
+        "target_matches_may_be_truncated": representative
+            .map(|value| value.target_matches_may_be_truncated),
     })
 }
 

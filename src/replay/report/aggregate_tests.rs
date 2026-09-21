@@ -395,6 +395,32 @@ fn version_six_uses_total_success_counts_beyond_retained_details() {
 }
 
 #[test]
+fn version_six_accepts_success_details_bounded_per_case() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    let mut report = report_value_v6(
+        &source.join("api"),
+        &[("case-a", "ended"), ("case-b", "ended")],
+        "00000000-0000-4000-8000-000000000052",
+        true,
+    );
+    report["success_detail_scope"] = json!("case");
+    report["matched_queries"] = Value::Array(
+        (0..100)
+            .map(|index| json!({"case_id":"case-a","index":index}))
+            .chain((0..75).map(|index| json!({"case_id":"case-b","index":index})))
+            .collect(),
+    );
+    report["matched_query_count"] = json!(225);
+    write_session_report(&source, "api", "per-case", report);
+
+    let aggregate = aggregate_replay_reports(&source).unwrap();
+
+    assert!(aggregate.complete);
+    assert_eq!(aggregate.counts.events.mysql.matched_queries, 225);
+}
+
+#[test]
 fn selected_session_must_cover_the_selected_cases() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");

@@ -111,6 +111,7 @@ async fn high_volume_successes_keep_report_bounded_and_exactly_counted() {
     let payload = tokio::fs::read(report_path).await.unwrap();
     let report: Value = serde_json::from_slice(&payload).unwrap();
     assert_eq!(report["builtin_query_count"], 10_000);
+    assert_eq!(report["success_detail_scope"], "case");
     assert_eq!(
         report["builtin_queries"].as_array().unwrap().len(),
         SUCCESS_DETAIL_LIMIT

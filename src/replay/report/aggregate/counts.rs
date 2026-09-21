@@ -5,6 +5,12 @@ use serde_json::Value;
 
 use super::{CommandProtocolCounts, HttpEventCounts, MysqlEventCounts, ReplayEventCounts};
 
+#[derive(Clone, Copy)]
+enum SuccessDetailScope {
+    Report,
+    Case,
+}
+
 pub(super) fn read(report: &Value, path: &Path) -> Result<ReplayEventCounts> {
     let success_detail_limit = required_usize(report, "success_detail_limit", path)?;
     if success_detail_limit == 0 {
@@ -13,6 +19,14 @@ pub(super) fn read(report: &Value, path: &Path) -> Result<ReplayEventCounts> {
             path.display()
         );
     }
+    let success_detail_scope = match report.get("success_detail_scope") {
+        None => SuccessDetailScope::Report,
+        Some(Value::String(scope)) if scope == "case" => SuccessDetailScope::Case,
+        Some(_) => bail!(
+            "replay report {} success_detail_scope must be case when present",
+            path.display()
+        ),
+    };
     Ok(ReplayEventCounts {
         network: super::NetworkEventCounts {
             unrecorded_targets: optional_len(report, "unrecorded_targets", path)?,
@@ -24,6 +38,7 @@ pub(super) fn read(report: &Value, path: &Path) -> Result<ReplayEventCounts> {
                 "builtin_queries",
                 "builtin_query_count",
                 Some(success_detail_limit),
+                success_detail_scope,
                 path,
             )?,
             matched_queries: success_count(
@@ -31,6 +46,7 @@ pub(super) fn read(report: &Value, path: &Path) -> Result<ReplayEventCounts> {
                 "matched_queries",
                 "matched_query_count",
                 Some(success_detail_limit),
+                success_detail_scope,
                 path,
             )?,
             unmatched_queries: required_len(report, "unmatched_queries", path)?,
@@ -45,6 +61,7 @@ pub(super) fn read(report: &Value, path: &Path) -> Result<ReplayEventCounts> {
                 "matched_http_exchanges",
                 "matched_http_exchange_count",
                 Some(success_detail_limit),
+                success_detail_scope,
                 path,
             )?,
             unmatched_requests: required_len(report, "unmatched_http_requests", path)?,
@@ -57,10 +74,34 @@ pub(super) fn read(report: &Value, path: &Path) -> Result<ReplayEventCounts> {
             )?,
             unused_global_exchanges: required_len(report, "unused_global_http_exchanges", path)?,
         },
-        redis: protocol_counts(report, "redis", success_detail_limit, path)?,
-        memcached: protocol_counts(report, "memcached", success_detail_limit, path)?,
-        kafka: protocol_counts(report, "kafka", success_detail_limit, path)?,
-        motan: protocol_counts(report, "motan", success_detail_limit, path)?,
+        redis: protocol_counts(
+            report,
+            "redis",
+            success_detail_limit,
+            success_detail_scope,
+            path,
+        )?,
+        memcached: protocol_counts(
+            report,
+            "memcached",
+            success_detail_limit,
+            success_detail_scope,
+            path,
+        )?,
+        kafka: protocol_counts(
+            report,
+            "kafka",
+            success_detail_limit,
+            success_detail_scope,
+            path,
+        )?,
+        motan: protocol_counts(
+            report,
+            "motan",
+            success_detail_limit,
+            success_detail_scope,
+            path,
+        )?,
     })
 }
 
@@ -68,6 +109,7 @@ fn protocol_counts(
     report: &Value,
     protocol: &str,
     success_detail_limit: usize,
+    success_detail_scope: SuccessDetailScope,
     path: &Path,
 ) -> Result<CommandProtocolCounts> {
     let Some(value) = report.get(protocol) else {
@@ -86,6 +128,7 @@ fn protocol_counts(
             "matched",
             "matched_count",
             Some(success_detail_limit),
+            success_detail_scope,
             path,
         )?,
         unmatched: required_len(value, "unmatched", path)?,
@@ -102,33 +145,53 @@ fn success_count(
     details_field: &str,
     count_field: &str,
     detail_limit: Option<usize>,
+    detail_scope: SuccessDetailScope,
     path: &Path,
 ) -> Result<usize> {
-    let retained = required_len(value, details_field, path)?;
+    let details = required_array(value, details_field, path)?;
+    let retained = details.len();
     let Some(detail_limit) = detail_limit else {
         return Ok(retained);
     };
     let total = required_usize(value, count_field, path)?;
-    if retained > detail_limit || retained > total {
+    let exceeds_limit = match detail_scope {
+        SuccessDetailScope::Report => retained > detail_limit,
+        SuccessDetailScope::Case => {
+            let mut retained_by_case = std::collections::BTreeMap::new();
+            for detail in details {
+                let case_id = detail
+                    .get("case_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("<unscoped>");
+                *retained_by_case.entry(case_id).or_insert(0usize) += 1;
+            }
+            retained_by_case.values().any(|count| *count > detail_limit)
+        }
+    };
+    if exceeds_limit || retained > total {
         bail!(
-            "replay report {} field {details_field} retains {retained} entries but limit/count are {detail_limit}/{total}",
-            path.display()
+            "replay report {} field {details_field} retains entries beyond its declared {:?} limit/count {detail_limit}/{total}",
+            path.display(),
+            match detail_scope {
+                SuccessDetailScope::Report => "report",
+                SuccessDetailScope::Case => "case",
+            },
         );
     }
     Ok(total)
 }
 
 fn required_len(value: &Value, field: &str, path: &Path) -> Result<usize> {
-    value
-        .get(field)
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .ok_or_else(|| {
-            anyhow!(
-                "replay report {} field {field} must be an array",
-                path.display()
-            )
-        })
+    Ok(required_array(value, field, path)?.len())
+}
+
+fn required_array<'a>(value: &'a Value, field: &str, path: &Path) -> Result<&'a Vec<Value>> {
+    value.get(field).and_then(Value::as_array).ok_or_else(|| {
+        anyhow!(
+            "replay report {} field {field} must be an array",
+            path.display()
+        )
+    })
 }
 
 fn optional_len(value: &Value, field: &str, path: &Path) -> Result<usize> {

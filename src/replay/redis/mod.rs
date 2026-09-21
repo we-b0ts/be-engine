@@ -20,7 +20,7 @@ use crate::redis::{
 
 use super::{
     ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplayReportWriter, ReplaySource,
-    ReplayState, ReplayTarget, TargetKey, normalize_host, push_success_detail,
+    ReplayState, ReplayTarget, SuccessDetailBudget, TargetKey, normalize_host, push_success_detail,
     register_replay_target,
 };
 
@@ -129,6 +129,7 @@ pub(super) struct RedisReplayEvents {
     pub(super) connections: usize,
     matched_count: usize,
     matched: Vec<CommandMatchedReport>,
+    matched_details: SuccessDetailBudget,
     pub(super) unmatched: Vec<CommandRequestReport>,
     pub(super) unsupported: Vec<CommandRequestReport>,
     pub(super) unsafe_events: Vec<CommandRequestReport>,
@@ -260,10 +261,17 @@ impl RedisReplayState {
                 exchange.status = ReplayExchangeStatus::Consumed;
             }
         }
+        let case_id = matched.report.case_id.clone();
         push_success_detail(
             &mut self.events.matched_count,
             &mut self.events.matched,
-            matched.report.clone(),
+            &mut self.events.matched_details,
+            case_id.as_deref(),
+            |target_event_index| {
+                let mut report = matched.report.clone();
+                report.target_event_index = Some(target_event_index);
+                report
+            },
         );
     }
 

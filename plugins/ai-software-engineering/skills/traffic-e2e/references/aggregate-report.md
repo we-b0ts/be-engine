@@ -67,8 +67,10 @@ report dirty. Target-specific noise policies or test-runner results remain
 outside this report and must not be silently folded into its numbers.
 
 Version six replay reports retain only a bounded prefix of successful event
-details. The aggregate MUST use their explicit success counters, not the
-retained array lengths. Dirty and unused arrays remain complete evidence,
+details per executed case and category. The aggregate MUST use their explicit
+success counters, not the retained array lengths. Reports without
+`success_detail_scope: case` use the legacy report-wide bound. Dirty and unused
+arrays remain complete evidence,
 including non-blocking unused-Global diagnostics. Older replay report versions
 are rejected; there is no bootstrap-to-Global compatibility mapping.
 
