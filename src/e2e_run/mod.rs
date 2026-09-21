@@ -42,8 +42,8 @@ pub(crate) use config::resolve_project;
 pub(crate) use delivery::resolve_managed_directories;
 pub use dirty_evidence::{
     E2eDependencyDifference, E2eDependencyEndpoint, E2eDependencyObservation,
-    E2eDependencyRepresentative, E2eDirtyCluster, E2eDirtyCounts, E2eSourcePreReadiness,
-    E2eSourcePreReadinessEndpoint,
+    E2eDependencyRepresentative, E2eDependencyTargetMatch, E2eDirtyCluster, E2eDirtyCounts,
+    E2eSourcePreReadiness, E2eSourcePreReadinessEndpoint,
 };
 pub(crate) use evidence::finalized_focused_attempt_summary;
 pub use evidence::{

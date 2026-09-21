@@ -34,11 +34,15 @@ impl ReplayState {
         reason: &str,
     ) {
         let recorded_match = self.consume_builtin_exchange(identity, command, sql);
+        let case_id = self.active_case_id.clone();
+        let budget_case_id = case_id.clone();
         push_success_detail(
             &mut self.mysql.events.builtin_query_count,
             &mut self.mysql.events.builtin_queries,
-            QueryReport {
-                case_id: self.active_case_id.clone(),
+            &mut self.mysql.events.builtin_query_details,
+            budget_case_id.as_deref(),
+            |target_event_index| QueryReport {
+                case_id,
                 target: identity.target.clone(),
                 database: identity.database.clone(),
                 username: identity.username.clone(),
@@ -48,6 +52,7 @@ impl ReplayState {
                 reason: reason.to_string(),
                 recorded_source: recorded_match.map(|(source, _)| source),
                 recorded_index: recorded_match.map(|(_, index)| index),
+                target_event_index: Some(target_event_index),
             },
         );
     }
@@ -71,6 +76,7 @@ impl ReplayState {
             reason: reason.to_string(),
             recorded_source: None,
             recorded_index: None,
+            target_event_index: None,
         });
     }
 
@@ -93,6 +99,7 @@ impl ReplayState {
             reason: reason.to_string(),
             recorded_source: None,
             recorded_index: None,
+            target_event_index: None,
         });
     }
 
@@ -295,7 +302,7 @@ impl ReplayState {
                         policy.commit(active_case_id.as_deref(), policy_decision);
                     }
                     let matched = MatchedQueryReport {
-                        case_id: exchange.case_id.clone(),
+                        case_id: active_case_id.clone(),
                         target: Some(exchange.identity.target.clone()),
                         database: exchange.identity.database.clone(),
                         username: exchange.identity.username.clone(),
@@ -305,6 +312,7 @@ impl ReplayState {
                         sql: sql.map(ToOwned::to_owned),
                         params: params.map(ToOwned::to_owned),
                         status: exchange.record.response.status.clone(),
+                        target_event_index: None,
                     };
                     return Some(MatchedExchange {
                         source: exchange.source,
@@ -498,10 +506,17 @@ impl ReplayState {
             return;
         };
         exchange.status = ReplayExchangeStatus::Consumed;
+        let case_id = matched.report.case_id.clone();
         push_success_detail(
             &mut self.mysql.events.matched_query_count,
             &mut self.mysql.events.matched_queries,
-            matched.report.clone(),
+            &mut self.mysql.events.matched_query_details,
+            case_id.as_deref(),
+            |target_event_index| {
+                let mut report = matched.report.clone();
+                report.target_event_index = Some(target_event_index);
+                report
+            },
         );
     }
 

@@ -27,8 +27,8 @@ use url::form_urlencoded;
 
 use super::{
     DependencyRuleDecision, HttpPolicyContext, MitmCa, ReplayPolicyRuntime, ReplayProtocol,
-    ReplayReportWriter, ReplaySource, ReplayState, ReplayTarget, TargetKey, push_success_detail,
-    register_replay_target, register_replay_target_at,
+    ReplayReportWriter, ReplaySource, ReplayState, ReplayTarget, SuccessDetailBudget, TargetKey,
+    push_success_detail, register_replay_target, register_replay_target_at,
 };
 use crate::DiscoveredTcpTarget;
 
@@ -120,6 +120,7 @@ enum HttpReplayMatchError {
 pub(super) struct HttpReplayEvents {
     pub(super) matched_count: usize,
     pub(super) matched: Vec<MatchedHttpExchangeReport>,
+    pub(super) matched_details: SuccessDetailBudget,
     pub(super) unmatched: Vec<HttpRequestReport>,
     pub(super) unsupported: Vec<HttpRequestReport>,
 }
@@ -136,6 +137,7 @@ pub(super) struct MatchedHttpExchangeReport {
     method: String,
     uri: String,
     status: u16,
+    target_event_index: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -597,15 +599,15 @@ impl ReplayState {
         if let Some(policy) = &mut self.replay_policy {
             policy.commit(active_case_id.as_deref(), matching_policy_decision);
         }
+        let report_case_id = active_case_id.clone();
+        let budget_case_id = report_case_id.clone();
         push_success_detail(
             &mut self.http_events.matched_count,
             &mut self.http_events.matched,
-            MatchedHttpExchangeReport {
-                case_id: if exchange.shared_origin.is_some() {
-                    active_case_id
-                } else {
-                    exchange.case_id
-                },
+            &mut self.http_events.matched_details,
+            budget_case_id.as_deref(),
+            |target_event_index| MatchedHttpExchangeReport {
+                case_id: report_case_id,
                 shared_origin: exchange.shared_origin,
                 source: exchange.source,
                 index,
@@ -614,6 +616,7 @@ impl ReplayState {
                 method: method.to_string(),
                 uri: uri_path_only(&uri.to_string()),
                 status: exchange.record.response_status.unwrap_or_default(),
+                target_event_index,
             },
         );
         Ok(exchange.record)

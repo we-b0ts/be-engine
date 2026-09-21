@@ -1082,8 +1082,10 @@ reports are retained under a unique
 Protocol traffic requests live snapshots through one coalescing writer, which
 writes at most once per second; lifecycle commands and finalization force an
 immediate snapshot. Version six keeps exact success counters while retaining
-at most `success_detail_limit` successful event details per category. Dirty
-event details remain complete, and unused MySQL entries reference bounded SQL
+at most `success_detail_limit` successful event details per category and
+executed case; unscoped startup traffic has its own bounded scope. Successful
+details carry a zero-based `target_event_index` within that case and category.
+Dirty event details remain complete, and unused MySQL entries reference bounded SQL
 previews plus fingerprints instead of copying arbitrarily large SQL strings.
 The report's `unrecorded_targets` field contains exact `host:port` targets to
 which the target sent payload even though they were not accessed during

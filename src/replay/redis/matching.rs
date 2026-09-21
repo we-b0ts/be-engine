@@ -128,13 +128,14 @@ impl RedisReplayState {
             timing,
             requires_binding,
             report: CommandMatchedReport {
-                case_id: exchange.case_id.clone(),
+                case_id: active_case_id.map(ToOwned::to_owned),
                 source: exchange.source,
                 index,
                 target: target.clone(),
                 connection_id: exchange.record.connection_id,
                 sequence: exchange.record.sequence,
                 command: exchange.record.command.clone(),
+                target_event_index: None,
             },
         })
     }
@@ -190,13 +191,14 @@ impl RedisReplayState {
             timing: exchange.timing,
             requires_binding,
             report: CommandMatchedReport {
-                case_id: exchange.case_id.clone(),
+                case_id: active_case_id.map(ToOwned::to_owned),
                 source: exchange.source,
                 index,
                 target: target.clone(),
                 connection_id: exchange.record.connection_id,
                 sequence: exchange.record.sequence,
                 command: exchange.record.command.clone(),
+                target_event_index: None,
             },
         })
     }

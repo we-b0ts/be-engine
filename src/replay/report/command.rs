@@ -12,6 +12,8 @@ pub(in crate::replay) struct CommandMatchedReport {
     pub(in crate::replay) connection_id: Uuid,
     pub(in crate::replay) sequence: u64,
     pub(in crate::replay) command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) target_event_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]

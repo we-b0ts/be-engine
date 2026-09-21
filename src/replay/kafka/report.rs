@@ -10,6 +10,8 @@ pub(in crate::replay) struct KafkaMatchedReport {
     pub(in crate::replay) target: TargetKey,
     pub(in crate::replay) operation: String,
     pub(in crate::replay) topic: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) target_event_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]

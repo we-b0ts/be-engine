@@ -9,7 +9,8 @@ use super::model::ActiveRunState;
 use crate::recorder::load_pre_readiness_traffic_summary;
 use crate::replay::report::{
     ReplayDependencyCluster, ReplayDependencyDifference, ReplayDependencyEndpoint,
-    ReplayDependencyObservation, ReplayDependencyRepresentative, read_dependency_evidence,
+    ReplayDependencyObservation, ReplayDependencyRepresentative, ReplayDependencyTargetMatch,
+    read_dependency_evidence,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +54,25 @@ pub struct E2eDependencyRepresentative {
     pub case_id: String,
     pub case_dir: PathBuf,
     pub difference: E2eDependencyDifference,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_matches: Vec<E2eDependencyTargetMatch>,
+    #[serde(default)]
+    pub target_matches_may_be_truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct E2eDependencyTargetMatch {
+    pub target_event_index: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<E2eDependencyEndpoint>,
+    pub operation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recorded_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recorded_index: Option<usize>,
+    pub result: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sql_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,7 +223,25 @@ fn representative_from_replay(
         case_id: representative.case_id,
         case_dir,
         difference: difference_from_replay(representative.difference),
+        target_matches: representative
+            .target_matches
+            .into_iter()
+            .map(target_match_from_replay)
+            .collect(),
+        target_matches_may_be_truncated: representative.target_matches_may_be_truncated,
     })
+}
+
+fn target_match_from_replay(value: ReplayDependencyTargetMatch) -> E2eDependencyTargetMatch {
+    E2eDependencyTargetMatch {
+        target_event_index: value.target_event_index,
+        endpoint: value.endpoint.map(endpoint_from_replay),
+        operation: value.operation,
+        recorded_source: value.recorded_source,
+        recorded_index: value.recorded_index,
+        result: value.result,
+        sql_fingerprint: value.sql_fingerprint,
+    }
 }
 
 fn endpoint_from_replay(endpoint: ReplayDependencyEndpoint) -> E2eDependencyEndpoint {
@@ -286,6 +324,8 @@ mod tests {
                         signature: None,
                     },
                 },
+                target_matches: Vec::new(),
+                target_matches_may_be_truncated: false,
             }),
         };
         let case_dirs =

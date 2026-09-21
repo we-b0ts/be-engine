@@ -14,7 +14,8 @@ use uuid::Uuid;
 use super::{
     DependencyRuleDecision, MemcachedPolicyContext, ReplayExchangeStatus, ReplayExchangeTiming,
     ReplayPolicyRuntime, ReplayProtocol, ReplayReportWriter, ReplaySource, ReplayState,
-    ReplayTarget, TargetKey, normalize_host, push_success_detail, register_replay_target,
+    ReplayTarget, SuccessDetailBudget, TargetKey, normalize_host, push_success_detail,
+    register_replay_target,
 };
 use crate::DependencyExchangeOutcome;
 use crate::memcached::{
@@ -131,6 +132,7 @@ pub(super) struct MemcachedReplayEvents {
     pub(super) connections: usize,
     matched_count: usize,
     matched: Vec<CommandMatchedReport>,
+    matched_details: SuccessDetailBudget,
     pub(super) unmatched: Vec<CommandRequestReport>,
     pub(super) unsupported: Vec<CommandRequestReport>,
     pub(super) unsafe_events: Vec<CommandRequestReport>,
@@ -344,13 +346,14 @@ impl MemcachedReplayState {
             timing: exchange.timing,
             policy_decision,
             report: CommandMatchedReport {
-                case_id: exchange.case_id.clone(),
+                case_id: active_case_id.map(ToOwned::to_owned),
                 source: exchange.source,
                 index,
                 target: target.clone(),
                 connection_id: exchange.record.connection_id,
                 sequence: exchange.record.sequence,
                 command: exchange.record.command.clone(),
+                target_event_index: None,
             },
         })
     }
@@ -359,10 +362,17 @@ impl MemcachedReplayState {
         if let Some(exchange) = self.exchanges.get_mut(matched.index) {
             exchange.status = ReplayExchangeStatus::Consumed;
         }
+        let case_id = matched.report.case_id.clone();
         push_success_detail(
             &mut self.events.matched_count,
             &mut self.events.matched,
-            matched.report.clone(),
+            &mut self.events.matched_details,
+            case_id.as_deref(),
+            |target_event_index| {
+                let mut report = matched.report.clone();
+                report.target_event_index = Some(target_event_index);
+                report
+            },
         );
     }
 

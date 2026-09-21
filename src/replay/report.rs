@@ -17,8 +17,11 @@ pub(crate) use background_overlay::{
 };
 pub(crate) use dependency_evidence::{
     ReplayDependencyCluster, ReplayDependencyDifference, ReplayDependencyEndpoint,
-    ReplayDependencyObservation, ReplayDependencyRepresentative, read_dependency_evidence,
+    ReplayDependencyObservation, ReplayDependencyRepresentative, ReplayDependencyTargetMatch,
+    read_dependency_evidence,
 };
 pub(super) use model::*;
-pub(super) use success::{SUCCESS_DETAIL_LIMIT, push_success_detail};
+pub(super) use success::{
+    SUCCESS_DETAIL_LIMIT, SUCCESS_DETAIL_SCOPE, SuccessDetailBudget, push_success_detail,
+};
 pub(super) use writer::{ReplayReportWriter, write_final_report_value, write_report_snapshot};

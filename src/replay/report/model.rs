@@ -25,6 +25,7 @@ pub(in crate::replay) struct ReplayReport {
     pub(in crate::replay) targets: Vec<ReplayTarget>,
     pub(in crate::replay) unrecorded_targets: Vec<UnrecordedTargetReport>,
     pub(in crate::replay) success_detail_limit: usize,
+    pub(in crate::replay) success_detail_scope: &'static str,
     pub(in crate::replay) connections: usize,
     pub(in crate::replay) connection_events: Vec<ConnectionReport>,
     pub(in crate::replay) builtin_query_count: usize,
@@ -186,6 +187,8 @@ pub(in crate::replay) struct QueryReport {
     pub(in crate::replay) recorded_source: Option<ReplaySource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) recorded_index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) target_event_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -206,6 +209,8 @@ pub(in crate::replay) struct MatchedQueryReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) params: Option<Vec<RecordedMysqlValue>>,
     pub(in crate::replay) status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) target_event_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -247,7 +252,7 @@ impl SqlSummary {
     }
 }
 
-fn fnv1a64(bytes: &[u8]) -> String {
+pub(super) fn fnv1a64(bytes: &[u8]) -> String {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in bytes {
         hash ^= u64::from(*byte);

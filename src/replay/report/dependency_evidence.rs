@@ -12,6 +12,7 @@ const MAX_CLUSTERS: usize = 24;
 const MAX_CASE_IDS: usize = 8;
 const MAX_OPERATIONS: usize = 8;
 const MAX_TEXT_CHARS: usize = 256;
+const MAX_TARGET_MATCHES: usize = 100;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ReplayDependencyEvidence {
@@ -51,6 +52,25 @@ pub(crate) struct ReplayDependencyEndpoint {
 pub(crate) struct ReplayDependencyRepresentative {
     pub(crate) case_id: String,
     pub(crate) difference: ReplayDependencyDifference,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) target_matches: Vec<ReplayDependencyTargetMatch>,
+    #[serde(default)]
+    pub(crate) target_matches_may_be_truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ReplayDependencyTargetMatch {
+    pub(crate) target_event_index: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) endpoint: Option<ReplayDependencyEndpoint>,
+    pub(crate) operation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) recorded_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) recorded_index: Option<usize>,
+    pub(crate) result: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) sql_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,7 +249,7 @@ pub(super) fn build_dependency_evidence(report: &Value) -> ReplayDependencyEvide
                 .or_default()
                 .entry(key.reason.clone())
                 .or_default() += builder.count;
-            finish_cluster(key, builder)
+            finish_cluster(report, key, builder)
         })
         .collect::<Vec<_>>();
     clusters.sort_by(|left, right| {
@@ -343,13 +363,25 @@ fn collect_arrays(
                     .get_or_insert(ReplayDependencyRepresentative {
                         case_id,
                         difference: difference(array.direction, signature(event)),
+                        target_matches: Vec::new(),
+                        target_matches_may_be_truncated: false,
                     });
             }
         }
     }
 }
 
-fn finish_cluster(key: ClusterKey, builder: ClusterBuilder) -> ReplayDependencyCluster {
+fn finish_cluster(
+    report: &Value,
+    key: ClusterKey,
+    mut builder: ClusterBuilder,
+) -> ReplayDependencyCluster {
+    if let Some(representative) = &mut builder.representative {
+        let (matches, may_be_truncated) =
+            target_matches(report, &key.protocol, &representative.case_id);
+        representative.target_matches = matches;
+        representative.target_matches_may_be_truncated = may_be_truncated;
+    }
     let case_count = builder.case_ids.len();
     let omitted_case_ids = case_count.saturating_sub(MAX_CASE_IDS);
     let case_ids = builder
@@ -373,6 +405,72 @@ fn finish_cluster(key: ClusterKey, builder: ClusterBuilder) -> ReplayDependencyC
         omitted_operations: operation_count.saturating_sub(MAX_OPERATIONS),
         representative: builder.representative,
     }
+}
+
+fn target_matches(
+    report: &Value,
+    protocol: &str,
+    case_id: &str,
+) -> (Vec<ReplayDependencyTargetMatch>, bool) {
+    let events = match protocol {
+        "mysql" => report.get("matched_queries"),
+        "http" => report.get("matched_http_exchanges"),
+        "redis" | "memcached" | "kafka" | "motan" => {
+            report.get(protocol).and_then(|value| value.get("matched"))
+        }
+        _ => None,
+    }
+    .and_then(Value::as_array);
+    let Some(events) = events else {
+        return (Vec::new(), false);
+    };
+    let mut matches = events
+        .iter()
+        .filter(|event| event.get("case_id").and_then(Value::as_str) == Some(case_id))
+        .enumerate()
+        .map(|(fallback_index, event)| {
+            let target_event_index = event
+                .get("target_event_index")
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or(fallback_index);
+            ReplayDependencyTargetMatch {
+                target_event_index,
+                endpoint: dependency_endpoint(event.get("target")),
+                operation: operation_label(event),
+                recorded_source: event
+                    .get("source")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                recorded_index: event
+                    .get("index")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok()),
+                result: event
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("matched")
+                    .to_string(),
+                sql_fingerprint: event
+                    .get("sql")
+                    .and_then(Value::as_str)
+                    .map(|sql| super::model::fnv1a64(sql.as_bytes())),
+            }
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by_key(|event| event.target_event_index);
+    let configured_limit = report
+        .get("success_detail_limit")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(MAX_TARGET_MATCHES);
+    let report_wide_limit_reached =
+        report.get("success_detail_scope").is_none() && events.len() >= configured_limit;
+    let may_be_truncated = matches.len() >= configured_limit
+        || matches.len() > MAX_TARGET_MATCHES
+        || report_wide_limit_reached;
+    matches.truncate(MAX_TARGET_MATCHES);
+    (matches, may_be_truncated)
 }
 
 fn dependency_endpoint(value: Option<&Value>) -> Option<ReplayDependencyEndpoint> {
@@ -531,6 +629,64 @@ mod tests {
 
         assert!(!report_has_case_dirty_events(&report));
         assert!(build_dependency_evidence(&report).clusters.is_empty());
+    }
+
+    #[test]
+    fn representative_includes_bounded_sanitized_target_match_trace() {
+        let report = json!({
+            "success_detail_limit": 2,
+            "success_detail_scope": "case",
+            "matched_queries": [
+                {
+                    "case_id":"case-a",
+                    "target_event_index":0,
+                    "target":{"host":"mysql.internal","port":3306},
+                    "source":"case",
+                    "index":7,
+                    "command":"COM_QUERY",
+                    "sql":"SELECT secret FROM memberships WHERE user_id = 42",
+                    "params":[{"kind":"string","value":"must-not-leak"}],
+                    "status":"resultset"
+                },
+                {
+                    "case_id":"case-a",
+                    "target_event_index":1,
+                    "target":{"host":"mysql.internal","port":3306},
+                    "source":"case",
+                    "index":8,
+                    "command":"COM_QUERY",
+                    "sql":"SELECT role FROM memberships WHERE user_id = 42",
+                    "status":"resultset"
+                }
+            ],
+            "unused_case_exchanges": [
+                {
+                    "case_id":"case-a",
+                    "target":{"host":"mysql.internal","port":3306},
+                    "command":"COM_QUERY",
+                    "sql_summary":{"fingerprint":"fnv1a64:recorded"}
+                }
+            ]
+        });
+
+        let representative = build_dependency_evidence(&report).clusters[0]
+            .representative
+            .clone()
+            .unwrap();
+
+        assert_eq!(representative.target_matches.len(), 2);
+        assert_eq!(representative.target_matches[0].target_event_index, 0);
+        assert_eq!(representative.target_matches[0].recorded_index, Some(7));
+        assert!(
+            representative.target_matches[0]
+                .sql_fingerprint
+                .as_deref()
+                .is_some_and(|value| value.starts_with("fnv1a64:"))
+        );
+        assert!(representative.target_matches_may_be_truncated);
+        let serialized = serde_json::to_string(&representative.target_matches).unwrap();
+        assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("must-not-leak"));
     }
 
     #[test]

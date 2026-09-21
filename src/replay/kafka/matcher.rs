@@ -12,7 +12,7 @@ use crate::kafka::{KafkaHeader, KafkaRecord};
 
 use super::super::{
     ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplaySource, ReplayTarget,
-    TargetKey, push_success_detail, register_replay_target,
+    SuccessDetailBudget, TargetKey, push_success_detail, register_replay_target,
 };
 use super::report::{
     KafkaMatchedReport, KafkaProtocolReport, KafkaRequestReport, KafkaUnusedReport,
@@ -136,6 +136,7 @@ struct ReplayKafkaDelivery {
 #[derive(Debug)]
 pub(super) struct KafkaProduceReservation {
     indices: Vec<usize>,
+    case_id: Option<String>,
     pub(super) timing: ReplayExchangeTiming,
 }
 
@@ -143,6 +144,7 @@ pub(super) struct KafkaProduceReservation {
 pub(super) struct KafkaFetchReservation {
     fetch_index: usize,
     delivery_indices: Vec<usize>,
+    case_id: Option<String>,
     pub(super) records: Vec<KafkaRecord>,
     pub(super) timing: ReplayExchangeTiming,
 }
@@ -160,6 +162,7 @@ pub(super) struct KafkaReplayEvents {
     pub(super) connections: usize,
     matched_count: usize,
     matched: Vec<KafkaMatchedReport>,
+    matched_details: SuccessDetailBudget,
     unmatched: Vec<KafkaRequestReport>,
     unsupported: Vec<KafkaRequestReport>,
     unsafe_events: Vec<KafkaRequestReport>,
@@ -369,6 +372,7 @@ impl KafkaReplayState {
             }
             return Some(KafkaProduceReservation {
                 indices: selected,
+                case_id: active_case_id.map(ToOwned::to_owned),
                 timing,
             });
         }
@@ -383,19 +387,23 @@ impl KafkaReplayState {
     }
 
     pub(super) fn commit_produce(&mut self, reservation: KafkaProduceReservation) {
+        let case_id = reservation.case_id;
         for index in reservation.indices {
             let exchange = &mut self.produces[index];
             exchange.status = ReplayExchangeStatus::Consumed;
             push_success_detail(
                 &mut self.events.matched_count,
                 &mut self.events.matched,
-                KafkaMatchedReport {
-                    case_id: exchange.case_id.clone(),
+                &mut self.events.matched_details,
+                case_id.as_deref(),
+                |target_event_index| KafkaMatchedReport {
+                    case_id: case_id.clone(),
                     source: exchange.source,
                     index,
                     target: exchange.target.clone(),
                     operation: "produce".to_string(),
                     topic: exchange.record.topic.clone(),
+                    target_event_index: Some(target_event_index),
                 },
             );
         }
@@ -453,24 +461,29 @@ impl KafkaReplayState {
         Some(KafkaFetchReservation {
             fetch_index,
             delivery_indices,
+            case_id: active_case_id.map(ToOwned::to_owned),
             records,
             timing,
         })
     }
 
     pub(super) fn commit_fetch(&mut self, reservation: KafkaFetchReservation) {
+        let case_id = reservation.case_id;
         let fetch = &mut self.fetches[reservation.fetch_index];
         fetch.status = ReplayExchangeStatus::Consumed;
         push_success_detail(
             &mut self.events.matched_count,
             &mut self.events.matched,
-            KafkaMatchedReport {
-                case_id: fetch.case_id.clone(),
+            &mut self.events.matched_details,
+            case_id.as_deref(),
+            |target_event_index| KafkaMatchedReport {
+                case_id: case_id.clone(),
                 source: fetch.source,
                 index: reservation.fetch_index,
                 target: fetch.target.clone(),
                 operation: "fetch".to_string(),
                 topic: fetch.topics.iter().cloned().collect::<Vec<_>>().join(","),
+                target_event_index: Some(target_event_index),
             },
         );
         for index in reservation.delivery_indices {
@@ -479,13 +492,16 @@ impl KafkaReplayState {
             push_success_detail(
                 &mut self.events.matched_count,
                 &mut self.events.matched,
-                KafkaMatchedReport {
-                    case_id: delivery.case_id.clone(),
+                &mut self.events.matched_details,
+                case_id.as_deref(),
+                |target_event_index| KafkaMatchedReport {
+                    case_id: case_id.clone(),
                     source: delivery.source,
                     index,
                     target: delivery.target.clone(),
                     operation: "delivery".to_string(),
                     topic: delivery.record.topic.clone(),
+                    target_event_index: Some(target_event_index),
                 },
             );
         }
