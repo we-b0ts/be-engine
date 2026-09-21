@@ -2,6 +2,7 @@ mod artifact;
 mod binary_body;
 mod compare;
 pub(in crate::replay) mod docx;
+mod headers;
 pub(in crate::replay) mod hessian2;
 mod joined_string;
 mod model;
@@ -50,6 +51,7 @@ pub(crate) struct ComparisonResponseAssertionOptions {
 
 pub(crate) struct ComparisonResponseObservation {
     pub(crate) status: u16,
+    pub(crate) headers: Option<crate::recorder::HeaderMapSnapshot>,
     pub(crate) body: Vec<u8>,
     pub(crate) timestamp: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -237,10 +239,12 @@ pub fn assert_recorded_response(
         request,
         request_path: options.request,
         expected_status,
+        expected_headers: expected.headers,
         expected_body,
         expected_path: options.expected_response,
         expected_bytes,
         actual_status,
+        actual_headers: actual.headers,
         actual_body,
         actual_path: options.actual_response,
         actual_bytes,
@@ -289,10 +293,12 @@ pub(crate) fn assert_comparison_response(
         request,
         request_path: options.request,
         expected_status,
+        expected_headers: expected.headers,
         expected_body,
         expected_path: options.expected_response,
         expected_bytes,
         actual_status,
+        actual_headers: response.headers,
         actual_body,
         actual_path: options.response,
         actual_bytes: response_bytes,
@@ -319,6 +325,7 @@ pub(crate) fn read_comparison_response_observation(
     let body = comparison_assertion_body(&request, &response, label)?;
     Ok(ComparisonResponseObservation {
         status: captured_status(&response, label)?,
+        headers: response.headers,
         body: body.body().to_vec(),
         timestamp: response.timestamp,
     })
@@ -414,10 +421,12 @@ struct AssertionInputs {
     request: RecordedRequest,
     request_path: PathBuf,
     expected_status: u16,
+    expected_headers: Option<crate::recorder::HeaderMapSnapshot>,
     expected_body: AssertionBody,
     expected_path: PathBuf,
     expected_bytes: Vec<u8>,
     actual_status: u16,
+    actual_headers: Option<crate::recorder::HeaderMapSnapshot>,
     actual_body: AssertionBody,
     actual_path: PathBuf,
     actual_bytes: Vec<u8>,
@@ -493,10 +502,12 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
         request,
         request_path,
         expected_status,
+        expected_headers,
         expected_body,
         expected_path,
         expected_bytes,
         actual_status,
+        actual_headers,
         actual_body,
         actual_path,
         actual_bytes,
@@ -546,6 +557,13 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
         report
             .differences
             .push(ResponseDifference::status(expected_status, actual_status));
+    }
+    if gateway_protocol == ResponseGatewayProtocol::Http {
+        headers::compare_standard_headers(
+            expected_headers.as_ref(),
+            actual_headers.as_ref(),
+            &mut report,
+        )?;
     }
     if let Some(rule) = body_rules.first() {
         ensure!(

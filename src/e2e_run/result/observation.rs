@@ -30,6 +30,15 @@ pub(in crate::e2e_run) fn response_observation_with_status(
             None => observation(E2eValuePresence::Missing, None),
         };
     }
+    if let Some(name) = pointer.strip_prefix("$headers/") {
+        let Some(headers) = response.get("headers").and_then(Value::as_object) else {
+            return observation(E2eValuePresence::Unavailable, None);
+        };
+        return match headers.get(name) {
+            Some(value) => observation(E2eValuePresence::Present, Some(bounded(value, pointer))),
+            None => observation(E2eValuePresence::Missing, None),
+        };
+    }
     let Some(body) = response.get("body").or_else(|| response.get("frame")) else {
         return observation(E2eValuePresence::Missing, None);
     };
@@ -112,4 +121,32 @@ fn sensitive_pointer(pointer: &str) -> bool {
         .iter()
         .any(|sensitive| token.contains(sensitive))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn projects_response_header_presence_and_values_for_api_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let response = temp.path().join("response.json");
+        std::fs::write(
+            &response,
+            serde_json::to_vec(&serde_json::json!({
+                "status": 200,
+                "headers": {"vary": ["Origin"]},
+                "body": {"encoding": "utf8", "data": "{}", "truncated": false}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let present = response_observation(&response, "$headers/vary");
+        assert_eq!(present.presence, E2eValuePresence::Present);
+        assert_eq!(present.value, Some(serde_json::json!(["Origin"])));
+        let missing = response_observation(&response, "$headers/location");
+        assert_eq!(missing.presence, E2eValuePresence::Missing);
+        assert_eq!(missing.value, None);
+    }
 }

@@ -136,6 +136,17 @@ pub(super) fn policy_mismatch(
 
 fn value(request_path: &Path, path: &Path, label: &str, pointer: &str) -> Result<Value> {
     let observation = read_comparison_response_observation(request_path, path, label)?;
+    if let Some(name) = pointer.strip_prefix("$headers/") {
+        return Ok(match observation.headers {
+            Some(headers) => headers
+                .get(name)
+                .cloned()
+                .map(serde_json::to_value)
+                .transpose()?
+                .unwrap_or_else(|| Value::String("<missing>".to_string())),
+            None => Value::String("<unavailable>".to_string()),
+        });
+    }
     match pointer {
         "$status" => Ok(Value::from(observation.status)),
         "$body" => Ok(bounded_body(observation)),

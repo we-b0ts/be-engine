@@ -96,6 +96,62 @@ fn write_raw_case(
     (temp, options)
 }
 
+fn write_response_headers(path: &std::path::Path, headers: serde_json::Value) {
+    let mut response: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    response["headers"] = headers;
+    fs::write(path, serde_json::to_vec(&response).unwrap()).unwrap();
+}
+
+#[test]
+fn standard_http_response_headers_are_automatic_assertions() {
+    let (_temp, options) = write_raw_case("", r#"{"ok":true}"#, r#"{"ok":true}"#);
+    write_response_headers(
+        &options.expected_response,
+        json!({
+            "content-type": ["Application/JSON; Charset=UTF-8"],
+            "vary": ["Origin, Accept-Encoding"]
+        }),
+    );
+    write_response_headers(
+        &options.actual_response,
+        json!({
+            "content-type": ["application/json;charset=utf-8"],
+            "vary": ["accept-encoding", "origin"]
+        }),
+    );
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(report.passed);
+    assert!(report.differences.is_empty());
+}
+
+#[test]
+fn standard_http_response_header_difference_fails_the_case() {
+    let (_temp, options) = write_raw_case("", r#"{"ok":true}"#, r#"{"ok":true}"#);
+    write_response_headers(
+        &options.expected_response,
+        json!({"access-control-allow-origin": ["https://source.example"]}),
+    );
+    write_response_headers(
+        &options.actual_response,
+        json!({"access-control-allow-origin": ["https://target.example"]}),
+    );
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(!report.passed);
+    assert_eq!(report.differences.len(), 1);
+    assert_eq!(
+        report.differences[0].kind,
+        ResponseDifferenceKind::HeaderValueMismatch
+    );
+    assert_eq!(
+        report.differences[0].pointer,
+        "$headers/access-control-allow-origin"
+    );
+}
+
 fn write_motan2_case(
     expected_process_time: Option<&str>,
     actual_process_time: Option<&str>,

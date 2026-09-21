@@ -417,6 +417,9 @@ fn representative_status(
 }
 
 pub(crate) fn response_pointer_scope(pointer: &str) -> &'static str {
+    if pointer.starts_with("$headers/") {
+        return "response_header";
+    }
     match pointer {
         RESPONSE_AVAILABILITY_POINTER => "response_availability",
         "$status" => "response_status",
@@ -488,6 +491,10 @@ mod tests {
             "response_gateway_metadata"
         );
         assert_eq!(response_pointer_scope("$body"), "response_body_bytes");
+        assert_eq!(
+            response_pointer_scope("$headers/content-type"),
+            "response_header"
+        );
         assert_eq!(
             response_pointer_scope("/users/0/id"),
             "decoded_response_body_json"

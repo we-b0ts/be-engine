@@ -76,6 +76,41 @@ candidate differences remain target differences. Replay dependency rules are
 ignored during this file-only operation, and no interception or isolation is
 enabled.
 
+## Standard HTTP Response Headers
+
+Version 3 Replay and Comparison compare the following HTTP response headers by
+default, without response rules:
+
+```text
+access-control-allow-credentials
+access-control-allow-headers
+access-control-allow-methods
+access-control-allow-origin
+access-control-expose-headers
+access-control-max-age
+allow
+cache-control
+content-disposition
+content-type
+location
+vary
+www-authenticate
+```
+
+Header names are case-insensitive. Header-name and HTTP-method lists compare as
+sets; parameterized and directive headers compare structurally; scalar headers
+compare trimmed values. Both sides absent is equal, while one-sided presence or
+a semantic value difference fails. In `before_or_after` mode the candidate's
+status, headers, and body must match one complete source observation.
+
+Legacy response artifacts without a header snapshot retain their status/body
+verdict because header evidence is unavailable. New HTTP Replay artifacts
+capture only the standard response headers above, avoiding persistence of
+unselected sensitive headers such as `set-cookie`. A standard header recorded
+as `<redacted>` is unevaluable. Other headers, including `set-cookie`,
+`content-length`, `content-encoding`, dates, infrastructure identity, and
+tracing fields, remain outside the default verdict.
+
 Do not put recorded values, response bodies, secrets, absolute case paths, or
 case-id exceptions in the policy. Use selectors and semantic validation only.
 In particular, ordinary mutable business data observed at different times is

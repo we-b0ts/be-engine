@@ -37,6 +37,8 @@ impl RecordedRequest {
 #[derive(Debug, Deserialize)]
 pub(super) struct ExpectedResponse {
     pub(super) status: Option<RecordedStatus>,
+    #[serde(default)]
+    pub(super) headers: Option<HeaderMapSnapshot>,
     pub(super) body: Option<ResponseBody>,
     pub(super) frame: Option<ResponseBody>,
     pub(super) response_expected: Option<bool>,
@@ -88,6 +90,8 @@ pub(super) struct ActualResponse {
     _request_rules: Vec<crate::request_rules::RequestRuleObservation>,
     pub(super) version: u8,
     pub(super) status: u16,
+    #[serde(default)]
+    pub(super) headers: Option<HeaderMapSnapshot>,
     pub(super) body: ResponseBody,
 }
 

@@ -8,6 +8,7 @@ response rules.
 - Ownership
 - Assertion and dependency boundaries
 - Dependency dynamic rules
+- Standard HTTP response headers
 - Generated scalar response fields
 - Unordered response arrays
 - Structured response-body rules
@@ -224,12 +225,52 @@ Only `kind: cache_service` is currently supported. Reject `kind: breeze`
 instead of guessing its namespace and dynamic-port semantics; add that kind
 only after a concrete recorded case supplies the required evidence.
 
-## Generated Scalar Response Fields
+## Standard HTTP Response Headers
 
 Version three makes the runner compare expected and actual responses. The runner
 reads `request.json`, sends the genuine request to the managed target HTTP
 endpoint, and writes the actual-response artifact. The target MUST NOT read
 `request.json` or `expected-response.json`.
+
+Replay and Comparison always compare these end-to-end HTTP response headers;
+they do not require or accept response rules:
+
+```text
+access-control-allow-credentials
+access-control-allow-headers
+access-control-allow-methods
+access-control-allow-origin
+access-control-expose-headers
+access-control-max-age
+allow
+cache-control
+content-disposition
+content-type
+location
+vary
+www-authenticate
+```
+
+Names are case-insensitive. Comma-separated header-name and HTTP-method fields
+compare as case-insensitive sets. `content-type` and `content-disposition`
+compare their primary value and unordered parameters. `cache-control` compares
+unordered directives, `access-control-max-age` compares delta-seconds, and
+`www-authenticate` compares unordered challenges and authentication parameters.
+The remaining scalar fields compare trimmed values. Both sides absent is equal;
+one-sided presence or a semantic value difference fails the response assertion.
+For `comparison.source_match: before_or_after`, headers, status, and body must
+all match the same complete source observation.
+
+An older artifact with no `headers` member has unavailable header evidence and
+retains its existing status/body verdict. Do not treat a missing snapshot as an
+empty map. New HTTP Replay actual-response artifacts retain only these standard
+headers, not unselected sensitive headers such as `set-cookie`. A selected
+standard header whose recorded value is `<redacted>` is
+unevaluable rather than equal. Other response headers remain outside the
+verdict. In particular, compression, content length, cookies, timestamps,
+infrastructure identity, and tracing headers are not implicitly compared.
+
+## Generated Scalar Response Fields
 
 `response_rules.json.<API>.<rule-kind>` selects an exact scalar JSON value by
 JSON Pointer. Use the concrete source-proven mechanism as the key:
