@@ -8,6 +8,18 @@ mod tests {
     use super::*;
     use tokio::io::AsyncWriteExt;
 
+    #[tokio::test]
+    async fn accepted_replay_tcp_connections_disable_nagle() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = tokio::spawn(TcpStream::connect(address));
+
+        let (server, _) = accept_replay_tcp_connection(&listener).await.unwrap();
+        let _client = client.await.unwrap().unwrap();
+
+        assert!(server.nodelay().unwrap());
+    }
+
     #[test]
     fn replay_target_requires_the_recorded_port_when_multiple_targets_are_loaded() {
         let targets = vec![
