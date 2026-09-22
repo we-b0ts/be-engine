@@ -4,6 +4,7 @@ use std::{fs, io::Read as _};
 
 use anyhow::{Context, Result, ensure};
 
+mod cache;
 mod engine;
 
 const RUNTIME_PROGRESS_PATHSPECS: &[&str] = &[
@@ -14,6 +15,9 @@ const RUNTIME_PROGRESS_PATHSPECS: &[&str] = &[
 ];
 
 pub(super) fn repository_fingerprint(target_root: &Path) -> Result<String> {
+    if let Some(fingerprint) = cache::repository(target_root) {
+        return Ok(fingerprint);
+    }
     let mut hash = repository_files_hash(target_root)?;
     hash.update(b"startup-snapshot");
     hash.update(crate::startup::startup_snapshot_revision(target_root)?.as_bytes());
@@ -21,7 +25,9 @@ pub(super) fn repository_fingerprint(target_root: &Path) -> Result<String> {
     hash.update(b"target-environment");
     hash.update(crate::startup::startup_environment_revision(target_root)?.as_bytes());
     hash.update(&[0]);
-    Ok(hash.finish())
+    let fingerprint = hash.finish();
+    cache::insert_repository(target_root.to_path_buf(), fingerprint.clone());
+    Ok(fingerprint)
 }
 
 /// Portable delivery identity; private startup inputs belong to the canonical
@@ -31,9 +37,14 @@ pub(super) fn code_fingerprint(target_root: &Path) -> Result<String> {
 }
 
 fn repository_files_hash(target_root: &Path) -> Result<Fnv1a> {
+    if let Some(hash) = cache::repository_files(target_root) {
+        return Ok(hash);
+    }
     let managed = crate::e2e_run::resolve_managed_directories(target_root)?;
     if managed.len() == 1 {
-        return directory_files_hash(&managed[0].root);
+        let hash = directory_files_hash(&managed[0].root)?;
+        cache::insert_repository_files(target_root.to_path_buf(), hash);
+        return Ok(hash);
     }
     let mut hash = Fnv1a::default();
     for directory in managed {
@@ -43,7 +54,12 @@ fn repository_files_hash(target_root: &Path) -> Result<Fnv1a> {
         hash.update(directory_files_hash(&directory.root)?.finish().as_bytes());
         hash.update(&[0]);
     }
+    cache::insert_repository_files(target_root.to_path_buf(), hash);
     Ok(hash)
+}
+
+pub(super) fn with_repository_cache<T>(operation: impl FnOnce() -> T) -> T {
+    cache::scope(operation)
 }
 
 fn directory_files_hash(target_root: &Path) -> Result<Fnv1a> {
@@ -238,6 +254,7 @@ fn git_bytes(target_root: &Path, args: &[&str]) -> Result<Vec<u8>> {
     Ok(output.stdout)
 }
 
+#[derive(Clone, Copy)]
 struct Fnv1a(u64);
 
 impl Default for Fnv1a {
@@ -433,6 +450,51 @@ mod tests {
         .unwrap();
 
         assert_ne!(code_fingerprint(&target).unwrap(), baseline);
+    }
+
+    #[test]
+    fn repository_cache_is_stable_only_inside_its_read_scope() {
+        let repository = tempfile::tempdir().unwrap();
+        fs::create_dir_all(repository.path().join("src")).unwrap();
+        fs::write(
+            repository.path().join("src/lib.rs"),
+            "pub fn value() -> u8 { 1 }\n",
+        )
+        .unwrap();
+        git_ok(repository.path(), &["init", "-q"]);
+        git_ok(
+            repository.path(),
+            &["config", "user.email", "test@example.com"],
+        );
+        git_ok(
+            repository.path(),
+            &["config", "user.name", "Traffic E2E Test"],
+        );
+        git_ok(repository.path(), &["add", "."]);
+        git_ok(repository.path(), &["commit", "-m", "baseline"]);
+
+        let (repository_before, code_before) = with_repository_cache(|| {
+            let repository_before = repository_fingerprint(repository.path()).unwrap();
+            let code_before = code_fingerprint(repository.path()).unwrap();
+            fs::write(
+                repository.path().join("src/lib.rs"),
+                "pub fn value() -> u8 { 2 }\n",
+            )
+            .unwrap();
+
+            assert_eq!(
+                repository_fingerprint(repository.path()).unwrap(),
+                repository_before
+            );
+            assert_eq!(code_fingerprint(repository.path()).unwrap(), code_before);
+            (repository_before, code_before)
+        });
+
+        assert_ne!(
+            repository_fingerprint(repository.path()).unwrap(),
+            repository_before
+        );
+        assert_ne!(code_fingerprint(repository.path()).unwrap(), code_before);
     }
 
     fn git_ok(repository: &Path, args: &[&str]) {

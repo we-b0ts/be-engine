@@ -4,6 +4,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result, ensure};
 
+mod cache;
+
 pub(crate) const TRAFFIC_E2E_ROOT: &str = ".traffic-e2e";
 pub(crate) const LOCAL_ROOT: &str = ".traffic-e2e/local";
 pub(crate) const LOCAL_GITIGNORE_RULE: &str = "/.traffic-e2e/local/";
@@ -35,6 +37,9 @@ pub(crate) fn directory_name(target_root: &Path) -> Result<String> {
 }
 
 pub(crate) fn git_root(path: &Path) -> Result<PathBuf> {
+    if let Some(root) = cache::get(path) {
+        return Ok(root);
+    }
     let output = Command::new("git")
         .arg("-C")
         .arg(path)
@@ -47,5 +52,12 @@ pub(crate) fn git_root(path: &Path) -> Result<PathBuf> {
         String::from_utf8_lossy(&output.stderr).trim()
     );
     let root = String::from_utf8(output.stdout).context("Git repository root is not UTF-8")?;
-    fs::canonicalize(root.trim()).context("failed to canonicalize Git repository root")
+    let root =
+        fs::canonicalize(root.trim()).context("failed to canonicalize Git repository root")?;
+    cache::insert(path.to_path_buf(), root.clone());
+    Ok(root)
+}
+
+pub(crate) fn with_git_root_cache<T>(operation: impl FnOnce() -> T) -> T {
+    cache::scope(operation)
 }

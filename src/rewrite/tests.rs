@@ -200,6 +200,38 @@ fn stale_workflow_returns_only_a_public_recovery_command() {
     assert!(value.pointer("/action/commands/advance").is_none());
 }
 
+#[test]
+fn project_resolution_cache_is_stable_only_inside_its_read_scope() {
+    let target = tempfile::tempdir().unwrap();
+    test_support::install_project_config(
+        target.path(),
+        "integration",
+        test_support::managed_test_recorder(),
+        Some(serde_json::json!([])),
+    );
+    fs::write(
+        target.path().join(".traffic-e2e/verification.yaml"),
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+    )
+    .unwrap();
+    git_ok(target.path(), &["init", "-q", "-b", "integration"]);
+    git_ok(target.path(), &["config", "user.email", "test@example.com"]);
+    git_ok(target.path(), &["config", "user.name", "Traffic E2E Test"]);
+    git_ok(target.path(), &["add", "."]);
+    git_ok(target.path(), &["commit", "-m", "baseline"]);
+    git_ok(target.path(), &["switch", "-q", "-c", "feature"]);
+
+    crate::e2e_run::with_project_resolution_cache(|| {
+        crate::e2e_run::resolve_project(target.path()).unwrap();
+        git_ok(target.path(), &["branch", "-D", "integration"]);
+        crate::e2e_run::resolve_project(target.path()).unwrap();
+    });
+
+    let error = crate::e2e_run::resolve_project(target.path()).unwrap_err();
+    assert!(error.to_string().contains("pr_base"));
+    assert!(error.to_string().contains("does not exist"));
+}
+
 fn git_ok(repository: &Path, args: &[&str]) {
     let status = Command::new("git")
         .arg("-C")
