@@ -317,7 +317,7 @@ async fn wait_wakes_for_reported_worker_interruption_before_its_deadline() {
         })
         .unwrap();
     };
-    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(8), async {
         tokio::join!(wait, report)
     })
     .await

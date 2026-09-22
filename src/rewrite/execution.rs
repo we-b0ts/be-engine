@@ -398,7 +398,10 @@ fn traffic_summary(
 }
 
 fn replay_progress(target_root: &Path) -> Option<crate::e2e_run::E2eActiveProgress> {
-    let state = RewriteStore::new(target_root).ok()?.load_snapshot().ok()??;
+    let state = RewriteStore::new(target_root)
+        .ok()?
+        .load_snapshot()
+        .ok()??;
     let case_source = state.case_source.as_ref()?.clone();
     let api_key = state.group_id.as_deref()?;
     crate::e2e_run::focused_active_progress(

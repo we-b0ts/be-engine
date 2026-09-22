@@ -8,6 +8,8 @@ use anyhow::{Result, ensure};
 use super::model::{RewriteAction, RewriteActionEnvelope, RewriteCommandSpec};
 use super::{RewriteContext, action, execution, status_rewrite};
 
+const STATUS_POLL_INTERVAL: Duration = Duration::from_secs(6);
+
 #[derive(Debug, Clone)]
 pub struct RewriteWaitOptions {
     pub target_root: PathBuf,
@@ -35,7 +37,7 @@ pub async fn wait(options: RewriteWaitOptions) -> Result<RewriteActionEnvelope> 
         target_root: options.target_root.clone(),
     };
     let mut status = status_rewrite(context())?;
-    let initial = serde_json::to_value(&status)?;
+    let initial = wake_snapshot(&status)?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(options.seconds);
     while matches!(
         status.action,
@@ -44,11 +46,11 @@ pub async fn wait(options: RewriteWaitOptions) -> Result<RewriteActionEnvelope> 
             | RewriteAction::RecordingRefreshPending { .. }
     ) {
         tokio::time::sleep_until(
-            (tokio::time::Instant::now() + Duration::from_secs(1)).min(deadline),
+            (tokio::time::Instant::now() + STATUS_POLL_INTERVAL).min(deadline),
         )
         .await;
         status = status_rewrite(context())?;
-        if tokio::time::Instant::now() >= deadline || serde_json::to_value(&status)? != initial {
+        if tokio::time::Instant::now() >= deadline || wake_snapshot(&status)? != initial {
             break;
         }
     }
@@ -69,4 +71,49 @@ pub async fn wait(options: RewriteWaitOptions) -> Result<RewriteActionEnvelope> 
     };
     envelope.pending = envelope.pending.max(1);
     Ok(envelope)
+}
+
+fn wake_snapshot(status: &super::model::RewriteStatusReport) -> Result<serde_json::Value> {
+    Ok(normalize_wake_snapshot(serde_json::to_value(status)?))
+}
+
+fn normalize_wake_snapshot(mut snapshot: serde_json::Value) -> serde_json::Value {
+    if let Some(action) = snapshot
+        .get_mut("action")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        action.remove("summary");
+    }
+    snapshot
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_text_does_not_wake_wait_but_actionable_state_does() {
+        assert_eq!(STATUS_POLL_INTERVAL, Duration::from_secs(6));
+        let initial = serde_json::json!({
+            "workflow": {"revision": 4},
+            "action": {
+                "kind": "wait_required",
+                "summary": "replaying GET /api/teams (932/941)",
+                "details": {"resource": "coordinator_operation"}
+            }
+        });
+        let mut progress = initial.clone();
+        progress["action"]["summary"] = "replaying GET /api/teams (933/941)".into();
+        assert_eq!(
+            normalize_wake_snapshot(initial.clone()),
+            normalize_wake_snapshot(progress)
+        );
+
+        let mut actionable = initial.clone();
+        actionable["action"]["details"]["resource"] = "worker_handoff".into();
+        assert_ne!(
+            normalize_wake_snapshot(initial),
+            normalize_wake_snapshot(actionable)
+        );
+    }
 }
