@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::str::FromStr as _;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -41,7 +42,7 @@ pub(crate) struct RecordedHttpClient {
     request_timeout: Duration,
     max_response_bytes: usize,
     preserve_host: bool,
-    request_rules: Option<crate::request_rules::RequestRuleRuntime>,
+    request_rules: Option<Arc<crate::request_rules::RequestRuleRuntime>>,
 }
 
 pub(crate) struct RecordedHttpResponse {
@@ -83,10 +84,18 @@ impl RecordedHttpClient {
     }
 
     pub(crate) fn with_request_rules(mut self, root: &Path, policy: &Path) -> Result<Self> {
-        self.request_rules = Some(crate::request_rules::RequestRuleRuntime::load(
+        self.request_rules = Some(Arc::new(crate::request_rules::RequestRuleRuntime::load(
             root, policy,
-        )?);
+        )?));
         Ok(self)
+    }
+
+    pub(crate) fn with_request_rule_runtime(
+        mut self,
+        request_rules: Arc<crate::request_rules::RequestRuleRuntime>,
+    ) -> Self {
+        self.request_rules = Some(request_rules);
+        self
     }
 
     pub(crate) async fn send(&self, request_path: &Path) -> Result<RecordedHttpResponse> {
@@ -97,7 +106,15 @@ impl RecordedHttpClient {
         })
         .await
         .context("recorded request loader task failed")??;
-        let mut value: serde_json::Value = serde_json::from_slice(&bytes)
+        self.send_bytes(&bytes, &request_label).await
+    }
+
+    pub(crate) async fn send_bytes(
+        &self,
+        bytes: &[u8],
+        request_label: &str,
+    ) -> Result<RecordedHttpResponse> {
+        let mut value: serde_json::Value = serde_json::from_slice(bytes)
             .with_context(|| format!("invalid recorded request {request_label}"))?;
         let request_sent_at = chrono::Utc::now();
         let request_rules = self

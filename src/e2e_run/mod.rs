@@ -1,3 +1,4 @@
+mod active_artifact;
 mod active_progress;
 mod admin_source;
 mod admin_startup;

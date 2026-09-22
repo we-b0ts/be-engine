@@ -80,18 +80,21 @@ impl RequestHeaderCapture {
 }
 
 pub(crate) fn decrypt_request_file(path: &Path) -> Result<Option<Vec<u8>>> {
-    let raw = std::fs::read(path)
-        .with_context(|| format!("failed to read recorded request {}", path.display()))?;
-    decrypt_request_payload(&raw, Some(path))
-        .with_context(|| format!("failed to decrypt recorded request {}", path.display()))
+    let (_, decrypted) = read_request_file_parts(path)?;
+    Ok(decrypted)
 }
 
 pub(crate) fn load_request_file(path: &Path) -> Result<Vec<u8>> {
+    let (raw, decrypted) = read_request_file_parts(path)?;
+    Ok(decrypted.unwrap_or(raw))
+}
+
+pub(crate) fn read_request_file_parts(path: &Path) -> Result<(Vec<u8>, Option<Vec<u8>>)> {
     let raw = std::fs::read(path)
         .with_context(|| format!("failed to read recorded request {}", path.display()))?;
-    Ok(decrypt_request_payload(&raw, Some(path))
-        .with_context(|| format!("failed to decrypt recorded request {}", path.display()))?
-        .unwrap_or(raw))
+    let decrypted = decrypt_request_payload(&raw, Some(path))
+        .with_context(|| format!("failed to decrypt recorded request {}", path.display()))?;
+    Ok((raw, decrypted))
 }
 
 pub(crate) fn validate_request_file(path: &Path) -> Result<()> {

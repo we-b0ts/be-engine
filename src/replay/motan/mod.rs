@@ -428,6 +428,20 @@ impl MotanReplayState {
             ..Default::default()
         }
     }
+
+    pub(super) fn case_is_dirty(&self, case_id: &str) -> bool {
+        self.events
+            .unmatched
+            .iter()
+            .chain(&self.events.unsupported)
+            .chain(&self.events.unsafe_events)
+            .any(|request| request.case_id.as_deref() == Some(case_id))
+            || self.exchanges.iter().any(|exchange| {
+                exchange.source == ReplaySource::Case
+                    && exchange.case_id.as_deref() == Some(case_id)
+                    && !exchange.status.is_consumed()
+            })
+    }
 }
 
 pub(super) async fn handle_connection(

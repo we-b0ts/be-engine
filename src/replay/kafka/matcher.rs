@@ -549,6 +549,30 @@ impl KafkaReplayState {
         }
     }
 
+    pub(in crate::replay) fn case_is_dirty(&self, case_id: &str) -> bool {
+        self.events
+            .unmatched
+            .iter()
+            .chain(&self.events.unsupported)
+            .chain(&self.events.unsafe_events)
+            .any(|request| request.case_id.as_deref() == Some(case_id))
+            || self.produces.iter().any(|exchange| {
+                exchange.source == ReplaySource::Case
+                    && exchange.case_id.as_deref() == Some(case_id)
+                    && !exchange.status.is_consumed()
+            })
+            || self.fetches.iter().any(|exchange| {
+                exchange.source == ReplaySource::Case
+                    && exchange.case_id.as_deref() == Some(case_id)
+                    && !exchange.status.is_consumed()
+            })
+            || self.deliveries.iter().any(|exchange| {
+                exchange.source == ReplaySource::Case
+                    && exchange.case_id.as_deref() == Some(case_id)
+                    && !exchange.status.is_consumed()
+            })
+    }
+
     fn record_unsafe(&mut self, target: &TargetKey, operation: &str, reason: String) {
         self.events.unsafe_events.push(KafkaRequestReport {
             case_id: None,

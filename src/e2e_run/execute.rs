@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail, ensure};
 use chrono::Utc;
@@ -26,7 +27,12 @@ use super::{branch, config};
 use crate::case_group::{
     CaseGroupInventory, load_case_group_inventory, load_complete_case_group_inventory,
 };
-use crate::replay::{ResponseAssertionOptions, assert_recorded_response, validate_replay_policy};
+use crate::replay::{ResponseAssertionOptions, ResponseAssertionRuntime, validate_replay_policy};
+
+struct CaseExecutionRuntime {
+    request_rules: Arc<crate::request_rules::RequestRuleRuntime>,
+    response_assertions: Option<ResponseAssertionRuntime>,
+}
 
 pub async fn run_e2e_round(context: E2eRunContext) -> Result<E2eRunResult> {
     let (config, layout) = resolve_for_execution(&context)?;
@@ -419,6 +425,17 @@ async fn run_active_with_replay(
         .await
         .context("target Replay runtime contract failed")?;
 
+    let case_runtime = CaseExecutionRuntime {
+        request_rules: Arc::new(crate::request_rules::RequestRuleRuntime::load(
+            &layout.target_root,
+            &config.replay_policy,
+        )?),
+        response_assertions: config
+            .runner_owned_response_assertions
+            .then(|| ResponseAssertionRuntime::load(&config.replay_policy))
+            .transpose()?,
+    };
+
     let total_cases = state.cases.len();
     let mut failure_limit =
         super::failure_limit::ApiFailureLimit::new(config.max_failed_cases_per_api);
@@ -434,6 +451,7 @@ async fn run_active_with_replay(
             position,
             &case.case_id,
             &case.case_dir,
+            &case_runtime,
         )
         .await;
         case_progress::log_completion(position + 1, total_cases);
@@ -518,6 +536,7 @@ async fn execute_case(
     position: usize,
     case_id: &str,
     case_dir: &Path,
+    runtime: &CaseExecutionRuntime,
 ) {
     let Some(case_index) = state.cases.iter().position(|case| case.case_id == case_id) else {
         state.push_error(format!("case {case_id} disappeared from run state"));
@@ -537,14 +556,15 @@ async fn execute_case(
         .active_dir
         .join("reports")
         .join(format!("actual-response-{:04}.json", position + 1));
-    let case_view = RequestCaseView::prepare(case_dir, &layout.active_dir.join("tmp"));
+    let case_view = RequestCaseView::prepare(case_dir);
     let assertion_command = match &case_view {
         Ok(case_view) => {
             super::http_driver::capture_case(
-                &layout.target_root,
                 config,
-                &case_view.case_dir().join("request.json"),
+                case_view.request_path(),
+                case_view.replay_request(),
                 &actual_response,
+                runtime.request_rules.clone(),
             )
             .await
         }
@@ -552,30 +572,47 @@ async fn execute_case(
             "failed to prepare replay request for case {case_id}: {error:#}"
         )),
     };
-    let response_assertion =
-        if config.runner_owned_response_assertions && assertion_command.as_ref().is_ok() {
+    let response_assertion = if let Some(response_assertions) = &runtime.response_assertions {
+        if let (Ok(actual_bytes), Ok(case_view)) = (&assertion_command, &case_view) {
             let expected_response = if case_dir.join("expected-response.json").is_file() {
                 case_dir.join("expected-response.json")
             } else {
                 case_dir.join("expected_response.json")
             };
-            assert_recorded_response(ResponseAssertionOptions {
-                case_id: case_id.to_string(),
-                request: case_dir.join("request.json"),
-                expected_response,
-                actual_response,
-                policy: config.replay_policy.clone(),
-            })
-            .map_err(|error| anyhow::anyhow!("runner-owned response assertion failed: {error:#}"))
-        } else if config.runner_owned_response_assertions {
+            std::fs::read(&expected_response)
+                .with_context(|| {
+                    format!(
+                        "failed to read expected response {}",
+                        expected_response.display()
+                    )
+                })
+                .and_then(|expected_bytes| {
+                    response_assertions.assert_recorded_response(
+                        ResponseAssertionOptions {
+                            case_id: case_id.to_string(),
+                            request: case_view.request_path().to_path_buf(),
+                            expected_response,
+                            actual_response,
+                            policy: config.replay_policy.clone(),
+                        },
+                        case_view.request(),
+                        &expected_bytes,
+                        actual_bytes,
+                    )
+                })
+                .map_err(|error| {
+                    anyhow::anyhow!("runner-owned response assertion failed: {error:#}")
+                })
+        } else {
             Err(anyhow::anyhow!(
                 "traffic-e2e HTTP driver did not produce a usable actual response"
             ))
-        } else {
-            Err(anyhow::anyhow!(
-                "legacy target-owned assertion has no response report"
-            ))
-        };
+        }
+    } else {
+        Err(anyhow::anyhow!(
+            "legacy target-owned assertion has no response report"
+        ))
+    };
     state.cases[case_index].response_unavailable_reason = assertion_command
         .as_ref()
         .err()
@@ -593,47 +630,37 @@ async fn execute_case(
                 .active_dir
                 .join("reports")
                 .join(format!("assertion-detail-{:04}.json", position + 1));
-            if let Err(error) = store::write_json(&detail_report, &report) {
-                assertion_passed = false;
-                state.push_error(format!(
-                    "case {case_id} assertion detail could not be persisted: {error:#}"
-                ));
-            } else {
-                match std::fs::read(&detail_report) {
-                    Ok(bytes) => {
-                        state.cases[case_index].response_assertion =
-                            Some(ResponseAssertionSummary {
-                                passed: report.passed,
-                                method: report.method.clone(),
-                                path: report.path.clone(),
-                                gateway_protocol: report.gateway_protocol,
-                                body_codec: report.body_codec,
-                                body_diagnosis: report.body_diagnosis.clone(),
-                                difference_count: report.differences.len(),
-                                difference_index: report
-                                    .differences
-                                    .iter()
-                                    .take(MAX_RESPONSE_DIFFERENCE_INDEX)
-                                    .cloned()
-                                    .collect(),
-                                representative_difference: report.differences.first().cloned(),
-                                detail_report,
-                                detail_fingerprint: crate::verification_progress::fingerprint(
-                                    &bytes,
-                                ),
-                                request: PathBuf::from(report.request_path),
-                                expected_response: PathBuf::from(report.expected_response_path),
-                                actual_response: PathBuf::from(report.actual_response_path),
-                                policy_path: report.policy_path,
-                                policy_fingerprint: report.policy_fingerprint,
-                            });
-                    }
-                    Err(error) => {
-                        assertion_passed = false;
-                        state.push_error(format!(
-                            "case {case_id} assertion detail could not be fingerprinted: {error}"
-                        ));
-                    }
+            match super::active_artifact::write_json(&detail_report, &report) {
+                Ok(bytes) => {
+                    state.cases[case_index].response_assertion = Some(ResponseAssertionSummary {
+                        passed: report.passed,
+                        method: report.method.clone(),
+                        path: report.path.clone(),
+                        gateway_protocol: report.gateway_protocol,
+                        body_codec: report.body_codec,
+                        body_diagnosis: report.body_diagnosis.clone(),
+                        difference_count: report.differences.len(),
+                        difference_index: report
+                            .differences
+                            .iter()
+                            .take(MAX_RESPONSE_DIFFERENCE_INDEX)
+                            .cloned()
+                            .collect(),
+                        representative_difference: report.differences.first().cloned(),
+                        detail_report,
+                        detail_fingerprint: crate::verification_progress::fingerprint(&bytes),
+                        request: PathBuf::from(report.request_path),
+                        expected_response: PathBuf::from(report.expected_response_path),
+                        actual_response: PathBuf::from(report.actual_response_path),
+                        policy_path: report.policy_path,
+                        policy_fingerprint: report.policy_fingerprint,
+                    });
+                }
+                Err(error) => {
+                    assertion_passed = false;
+                    state.push_error(format!(
+                        "case {case_id} assertion detail could not be persisted: {error:#}"
+                    ));
                 }
             }
         }

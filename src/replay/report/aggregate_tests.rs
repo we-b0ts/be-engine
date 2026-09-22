@@ -6,7 +6,8 @@ use serde_json::{Map, Value, json};
 use tempfile::TempDir;
 
 use super::aggregate::{
-    ReplayAggregateOptions, aggregate_replay_reports, aggregate_replay_reports_with_options,
+    ReplayAggregateOptions, aggregate_replay_report_with_options, aggregate_replay_reports,
+    aggregate_replay_reports_with_options,
 };
 
 #[test]
@@ -306,6 +307,37 @@ fn selects_exact_cases_and_final_sessions() {
     assert_eq!(aggregate.selected_case_ids, vec!["case-b"]);
     assert_eq!(aggregate.selected_session_ids, vec![session_b]);
     assert_eq!(aggregate.reports[0].session_id.as_deref(), Some(session_b));
+}
+
+#[test]
+fn exact_report_aggregation_ignores_unrelated_historical_reports() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    let session = "00000000-0000-4000-8000-000000000003";
+    let selected = write_session_report(
+        &source,
+        "api",
+        "selected",
+        report_value_v6(&source.join("api"), &[("case-a", "ended")], session, true),
+    );
+    let unrelated = source
+        .join("api")
+        .join(".replay")
+        .join("sessions")
+        .join("historical")
+        .join("replay-report.json");
+    fs::create_dir_all(unrelated.parent().unwrap()).unwrap();
+    fs::write(&unrelated, b"not json").unwrap();
+    let options = ReplayAggregateOptions {
+        case_ids: BTreeSet::from(["case-a".to_string()]),
+        session_ids: BTreeSet::from([session.to_string()]),
+    };
+
+    let aggregate = aggregate_replay_report_with_options(&source, &selected, &options).unwrap();
+
+    assert!(aggregate.complete);
+    assert_eq!(aggregate.counts.reports, 1);
+    assert_eq!(aggregate.reports[0].path, selected.display().to_string());
 }
 
 #[test]

@@ -637,15 +637,12 @@ mod tests {
         assert_eq!(report["dirty"], false);
         assert_eq!(report["complete"], true);
         assert_eq!(report["finalized"], true);
-        assert_eq!(report["report"]["version"], 6);
-        assert_eq!(report["report"]["finalized"], true);
-        assert_eq!(
-            report["report"]["matched_queries"]
-                .as_array()
-                .unwrap()
-                .len(),
-            2
-        );
+        assert!(report.get("report").is_none());
+        let persisted: Value =
+            serde_json::from_slice(&tokio::fs::read(&report_path).await.unwrap()).unwrap();
+        assert_eq!(persisted["version"], 6);
+        assert_eq!(persisted["finalized"], true);
+        assert_eq!(persisted["matched_queries"].as_array().unwrap().len(), 2);
         assert!(report_path.is_file());
         abort_tasks(tasks);
     }
@@ -735,7 +732,8 @@ mod tests {
         let finalized = run_control_with_gates(&session_path, "finalize", None, true, true)
             .await
             .unwrap();
-        assert_eq!(finalized["report"]["finalized"], true);
+        assert_eq!(finalized["finalized"], true);
+        assert!(finalized.get("report").is_none());
         abort_tasks(tasks);
     }
 

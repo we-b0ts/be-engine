@@ -263,6 +263,7 @@ pub(super) async fn handle_control_request(
     control_socket_path: Option<PathBuf>,
 ) -> (Value, bool) {
     let command = request.command.as_str();
+    let mut final_report = None;
     let response = match command {
         "wait_ready" | "status" => {
             let state = state.lock().await;
@@ -315,7 +316,11 @@ pub(super) async fn handle_control_request(
                 })
             }
         }
-        "finalize" => finalize_replay(&request, state.clone()).await,
+        "finalize" => {
+            let (response, report) = finalize_replay(&request, state.clone()).await;
+            final_report = report;
+            response
+        }
         "stop" => {
             let state = state.lock().await;
             serde_json::json!({
@@ -350,7 +355,9 @@ pub(super) async fn handle_control_request(
         && should_stop
         && let Err(error) = write_final_report_value(
             report_path.expect("finalize report path checked"),
-            &response["report"],
+            final_report
+                .as_ref()
+                .expect("successful finalize must produce a report"),
         )
         .await
     {
@@ -366,38 +373,49 @@ pub(super) async fn handle_control_request(
     (response, should_stop)
 }
 
-async fn finalize_replay(request: &ReplayControlRequest, state: Arc<Mutex<ReplayState>>) -> Value {
+async fn finalize_replay(
+    request: &ReplayControlRequest,
+    state: Arc<Mutex<ReplayState>>,
+) -> (Value, Option<Value>) {
     let mut state = state.lock().await;
     let mut report = state.snapshot_report();
     let complete = report_is_complete(&report);
     let dirty = report_is_dirty(&report);
     if request.fail_on_incomplete && !complete {
-        return serde_json::json!({
-            "ok": false,
-            "complete": false,
-            "dirty": dirty,
-            "error": "cannot finalize replay with pending or active cases",
-        });
+        return (
+            serde_json::json!({
+                "ok": false,
+                "complete": false,
+                "dirty": dirty,
+                "error": "cannot finalize replay with pending or active cases",
+            }),
+            None,
+        );
     }
     if request.fail_on_dirty && dirty {
-        return serde_json::json!({
-            "ok": false,
-            "complete": complete,
-            "dirty": true,
-            "error": "cannot finalize replay with unmatched, unused, or unsupported exchanges",
-        });
+        return (
+            serde_json::json!({
+                "ok": false,
+                "complete": complete,
+                "dirty": true,
+                "error": "cannot finalize replay with unmatched, unused, or unsupported exchanges",
+            }),
+            None,
+        );
     }
     let finalized_at = Utc::now();
     state.finalized_at = Some(finalized_at);
     report.finalized_at = Some(finalized_at);
     report.finalized = true;
-    serde_json::json!({
-        "ok": true,
-        "complete": complete,
-        "dirty": dirty,
-        "finalized": true,
-        "report": report,
-    })
+    (
+        serde_json::json!({
+            "ok": true,
+            "complete": complete,
+            "dirty": dirty,
+            "finalized": true,
+        }),
+        Some(serde_json::to_value(report).expect("replay report must serialize")),
+    )
 }
 
 pub(super) async fn begin_case(
@@ -407,13 +425,31 @@ pub(super) async fn begin_case(
     let Some(case_id) = request.case_id.as_deref() else {
         return serde_json::json!({"ok": false, "error": "begin requires case_id"});
     };
+    let counter_reader = {
+        let state = state.lock().await;
+        if !state.cases.contains_key(case_id) {
+            return serde_json::json!({
+                "ok": false,
+                "error": format!("unknown replay case {case_id}")
+            });
+        }
+        if let Some(active_case_id) = state.active_case_id.as_deref()
+            && active_case_id != case_id
+        {
+            return serde_json::json!({
+                "ok": false,
+                "error": format!("replay case {active_case_id} is already active")
+            });
+        }
+        (!state.egress_counter_starts.contains_key(case_id))
+            .then(|| state.egress_counter_reader.clone())
+            .flatten()
+    };
+    let counter_start = match counter_reader {
+        Some(reader) => Some(reader.sample().await),
+        None => None,
+    };
     let mut state = state.lock().await;
-    if !state.cases.contains_key(case_id) {
-        return serde_json::json!({
-            "ok": false,
-            "error": format!("unknown replay case {case_id}")
-        });
-    }
     if let Some(active_case_id) = state.active_case_id.as_deref()
         && active_case_id != case_id
     {
@@ -422,13 +458,11 @@ pub(super) async fn begin_case(
             "error": format!("replay case {active_case_id} is already active")
         });
     }
-    if !state.egress_counter_starts.contains_key(case_id)
-        && let Some(reader) = &state.egress_counter_reader
-    {
-        let sample = reader.sample().await;
+    if let Some(sample) = counter_start {
         state
             .egress_counter_starts
-            .insert(case_id.to_string(), sample);
+            .entry(case_id.to_string())
+            .or_insert(sample);
     }
     state.active_case_id = Some(case_id.to_string());
     if let Some(policy) = &mut state.replay_policy {
@@ -476,26 +510,32 @@ pub(super) async fn end_case(
         tokio::time::sleep(post_response_window).await;
     }
 
-    let mut state = state.lock().await;
-    if state.active_case_id.as_deref() != Some(case_id) {
-        return serde_json::json!({
-            "ok": false,
-            "error": format!("replay case {case_id} is no longer active")
-        });
-    }
-    if let Some(before) = state.egress_counter_starts.remove(case_id)
-        && let Some(reader) = &state.egress_counter_reader
-    {
+    let counter_sample = {
+        let mut state = state.lock().await;
+        if state.active_case_id.as_deref() != Some(case_id) {
+            return serde_json::json!({
+                "ok": false,
+                "error": format!("replay case {case_id} is no longer active")
+            });
+        }
+        let sample = state
+            .egress_counter_starts
+            .remove(case_id)
+            .zip(state.egress_counter_reader.clone());
+        state.active_case_id = None;
+        if let Some(case) = state.cases.get_mut(case_id) {
+            case.status = ReplayCaseStatus::Ended;
+        }
+        sample
+    };
+    if let Some((before, reader)) = counter_sample {
         let after = reader.sample().await;
-        state.egress_rejections.insert(
+        state.lock().await.egress_rejections.insert(
             case_id.to_string(),
             egress_counter::difference(case_id, before, after),
         );
     }
-    state.active_case_id = None;
-    if let Some(case) = state.cases.get_mut(case_id) {
-        case.status = ReplayCaseStatus::Ended;
-    }
+    let state = state.lock().await;
     let dirty = state.case_is_dirty(case_id);
     if request.fail_on_dirty && dirty {
         serde_json::json!({
@@ -607,7 +647,8 @@ pub(super) fn report_is_complete(report: &ReplayReport) -> bool {
 
 impl ReplayState {
     fn case_is_dirty(&self, case_id: &str) -> bool {
-        self.unrecorded_targets
+        let dirty = self
+            .unrecorded_targets
             .iter()
             .any(|target| target.case_id.as_deref() == Some(case_id))
             || self
@@ -634,10 +675,30 @@ impl ReplayState {
                     && optional.is_none()
             })
             || self.http_case_is_dirty(case_id)
-            || self.redis.snapshot().case_is_dirty(case_id)
-            || self.memcached.snapshot().case_is_dirty(case_id)
-            || self.kafka.snapshot().case_is_dirty(case_id)
-            || self.motan.snapshot().case_is_dirty(case_id)
+            || self.redis.case_is_dirty(case_id)
+            || self.memcached.case_is_dirty(case_id)
+            || self.kafka.case_is_dirty(case_id)
+            || self.motan.case_is_dirty(case_id);
+        #[cfg(test)]
+        {
+            debug_assert_eq!(
+                self.redis.case_is_dirty(case_id),
+                self.redis.snapshot().case_is_dirty(case_id)
+            );
+            debug_assert_eq!(
+                self.memcached.case_is_dirty(case_id),
+                self.memcached.snapshot().case_is_dirty(case_id)
+            );
+            debug_assert_eq!(
+                self.kafka.case_is_dirty(case_id),
+                self.kafka.snapshot().case_is_dirty(case_id)
+            );
+            debug_assert_eq!(
+                self.motan.case_is_dirty(case_id),
+                self.motan.snapshot().case_is_dirty(case_id)
+            );
+        }
+        dirty
     }
 }
 

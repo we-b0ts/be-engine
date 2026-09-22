@@ -29,7 +29,9 @@ pub use self::model::{
     ResponseBodyUnorderedPathCandidate, ResponseDifference, ResponseDifferenceKind,
     ResponseGatewayProtocol,
 };
-use super::policy::{ResponseBodyCodec, fingerprint, load_replay_policy, uri_path};
+use super::policy::{
+    LoadedReplayPolicy, ResponseBodyCodec, fingerprint, load_replay_policy, uri_path,
+};
 use crate::config::DEFAULT_BODY_LIMIT_BYTES;
 use crate::http::content_encoding;
 
@@ -39,6 +41,34 @@ pub struct ResponseAssertionOptions {
     pub expected_response: PathBuf,
     pub actual_response: PathBuf,
     pub policy: PathBuf,
+}
+
+pub(crate) struct ResponseAssertionRuntime {
+    policy: LoadedReplayPolicy,
+}
+
+impl ResponseAssertionRuntime {
+    pub(crate) fn load(policy: &Path) -> Result<Self> {
+        Ok(Self {
+            policy: load_replay_policy(policy)?,
+        })
+    }
+
+    pub(crate) fn assert_recorded_response(
+        &self,
+        options: ResponseAssertionOptions,
+        request_bytes: &[u8],
+        expected_bytes: &[u8],
+        actual_bytes: &[u8],
+    ) -> Result<ResponseAssertionCaseReport> {
+        assert_recorded_response_with_policy(
+            options,
+            request_bytes,
+            expected_bytes,
+            actual_bytes,
+            &self.policy,
+        )
+    }
 }
 
 pub(crate) struct ComparisonResponseAssertionOptions {
@@ -175,16 +205,32 @@ pub fn assert_recorded_response(
     let request_bytes = read_regular(&options.request, "recorded request")?;
     let expected_bytes = read_regular(&options.expected_response, "expected response")?;
     let actual_bytes = read_regular(&options.actual_response, "actual response")?;
-    let request: RecordedRequest = serde_json::from_slice(&request_bytes)
+    let policy = load_replay_policy(&options.policy)?;
+    assert_recorded_response_with_policy(
+        options,
+        &request_bytes,
+        &expected_bytes,
+        &actual_bytes,
+        &policy,
+    )
+}
+
+fn assert_recorded_response_with_policy(
+    options: ResponseAssertionOptions,
+    request_bytes: &[u8],
+    expected_bytes: &[u8],
+    actual_bytes: &[u8],
+    policy: &LoadedReplayPolicy,
+) -> Result<ResponseAssertionCaseReport> {
+    let request: RecordedRequest = serde_json::from_slice(request_bytes)
         .with_context(|| format!("invalid recorded request {}", options.request.display()))?;
-    let expected: ExpectedResponse =
-        serde_json::from_slice(&expected_bytes).with_context(|| {
-            format!(
-                "invalid expected response {}",
-                options.expected_response.display()
-            )
-        })?;
-    let actual: ActualResponse = serde_json::from_slice(&actual_bytes).with_context(|| {
+    let expected: ExpectedResponse = serde_json::from_slice(expected_bytes).with_context(|| {
+        format!(
+            "invalid expected response {}",
+            options.expected_response.display()
+        )
+    })?;
+    let actual: ActualResponse = serde_json::from_slice(actual_bytes).with_context(|| {
         format!(
             "invalid actual response {}",
             options.actual_response.display()
@@ -230,29 +276,31 @@ pub fn assert_recorded_response(
             actual_status,
         )
     };
-    evaluate_response(AssertionInputs {
-        mode: AssertionMode::Replay,
-        times: RequestTimes {
-            source: request.timestamp,
-            target: actual.request_sent_at,
+    evaluate_response(
+        AssertionInputs {
+            mode: AssertionMode::Replay,
+            times: RequestTimes {
+                source: request.timestamp,
+                target: actual.request_sent_at,
+            },
+            case_id: options.case_id,
+            request,
+            request_path: options.request,
+            expected_request_headers,
+            actual_request_headers: actual.request_headers,
+            expected_status,
+            expected_headers: expected.headers,
+            expected_body,
+            expected_path: options.expected_response,
+            expected_fingerprint: fingerprint(expected_bytes),
+            actual_status,
+            actual_headers: actual.headers,
+            actual_body,
+            actual_path: options.actual_response,
+            actual_fingerprint: fingerprint(actual_bytes),
         },
-        case_id: options.case_id,
-        request,
-        request_path: options.request,
-        expected_request_headers,
-        actual_request_headers: actual.request_headers,
-        expected_status,
-        expected_headers: expected.headers,
-        expected_body,
-        expected_path: options.expected_response,
-        expected_bytes,
-        actual_status,
-        actual_headers: actual.headers,
-        actual_body,
-        actual_path: options.actual_response,
-        actual_bytes,
-        policy: options.policy,
-    })
+        policy,
+    )
 }
 
 pub(crate) fn assert_comparison_response(
@@ -288,29 +336,32 @@ pub(crate) fn assert_comparison_response(
     let actual_body = comparison_assertion_body(&request, &response, "response")?;
     let expected_request_headers = request.headers.clone();
     let actual_request_headers = request.headers.clone();
-    evaluate_response(AssertionInputs {
-        mode: AssertionMode::Comparison,
-        times: RequestTimes {
-            source: expected.timestamp,
-            target: response.timestamp,
+    let policy = load_replay_policy(&options.policy)?;
+    evaluate_response(
+        AssertionInputs {
+            mode: AssertionMode::Comparison,
+            times: RequestTimes {
+                source: expected.timestamp,
+                target: response.timestamp,
+            },
+            case_id: options.case_id,
+            request,
+            request_path: options.request,
+            expected_request_headers,
+            actual_request_headers,
+            expected_status,
+            expected_headers: expected.headers,
+            expected_body,
+            expected_path: options.expected_response,
+            expected_fingerprint: fingerprint(&expected_bytes),
+            actual_status,
+            actual_headers: response.headers,
+            actual_body,
+            actual_path: options.response,
+            actual_fingerprint: fingerprint(&response_bytes),
         },
-        case_id: options.case_id,
-        request,
-        request_path: options.request,
-        expected_request_headers,
-        actual_request_headers,
-        expected_status,
-        expected_headers: expected.headers,
-        expected_body,
-        expected_path: options.expected_response,
-        expected_bytes,
-        actual_status,
-        actual_headers: response.headers,
-        actual_body,
-        actual_path: options.response,
-        actual_bytes: response_bytes,
-        policy: options.policy,
-    })
+        &policy,
+    )
 }
 
 pub(crate) fn read_comparison_response_observation(
@@ -433,13 +484,12 @@ struct AssertionInputs {
     expected_headers: Option<crate::recorder::HeaderMapSnapshot>,
     expected_body: AssertionBody,
     expected_path: PathBuf,
-    expected_bytes: Vec<u8>,
+    expected_fingerprint: String,
     actual_status: u16,
     actual_headers: Option<crate::recorder::HeaderMapSnapshot>,
     actual_body: AssertionBody,
     actual_path: PathBuf,
-    actual_bytes: Vec<u8>,
-    policy: PathBuf,
+    actual_fingerprint: String,
 }
 
 enum AssertionBody {
@@ -503,7 +553,10 @@ enum AssertionMode {
     Comparison,
 }
 
-fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseReport> {
+fn evaluate_response(
+    inputs: AssertionInputs,
+    loaded: &LoadedReplayPolicy,
+) -> Result<ResponseAssertionCaseReport> {
     let AssertionInputs {
         times,
         mode,
@@ -516,15 +569,13 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
         expected_headers,
         expected_body,
         expected_path,
-        expected_bytes,
+        expected_fingerprint,
         actual_status,
         actual_headers,
         actual_body,
         actual_path,
-        actual_bytes,
-        policy,
+        actual_fingerprint,
     } = inputs;
-    let loaded = load_replay_policy(&policy)?;
     ensure!(
         loaded.document.version >= 3,
         "runner-owned response assertions require replay policy version 3"
@@ -558,11 +609,11 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
         gateway_protocol,
         request_path.display().to_string(),
         loaded.path.display().to_string(),
-        loaded.fingerprint,
+        loaded.fingerprint.clone(),
         expected_path.display().to_string(),
-        fingerprint(&expected_bytes),
+        expected_fingerprint,
         actual_path.display().to_string(),
-        fingerprint(&actual_bytes),
+        actual_fingerprint,
     );
     if expected_status != actual_status {
         report
