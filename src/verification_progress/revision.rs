@@ -26,7 +26,7 @@ impl ProgressReport {
             .observation
             .clone();
         let mut changed = false;
-        for (api, result) in results {
+        for (api, mut result) in results {
             ensure!(
                 result.finalized && result.success_streak.is_none(),
                 "progress settlement for API {api:?} must contain one terminal result"
@@ -35,9 +35,14 @@ impl ProgressReport {
                 format!("recorded progress batch {key:?} does not contain API {api:?}")
             })?;
             ensure!(
-                recorded.cases.executed == result.cases.executed,
-                "comparison result for API {api:?} changed the standard recording case inventory"
+                result.cases.executed <= recorded.cases.executed,
+                "comparison result for API {api:?} exceeds the standard recording case inventory"
             );
+            ensure!(
+                !result.passed || result.cases.executed == recorded.cases.executed,
+                "passing comparison result for API {api:?} does not cover the standard recording case inventory"
+            );
+            result.cases.executed = recorded.cases.executed;
             if *recorded != result {
                 *recorded = result;
                 changed = true;

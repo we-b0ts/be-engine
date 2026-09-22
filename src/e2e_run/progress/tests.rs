@@ -63,7 +63,11 @@ fn case(case_id: String, status: CaseStatus) -> CaseExecution {
         case_dir: PathBuf::from("/cases"),
         group_id: "GET /api/orders/*".to_string(),
         status,
-        assertion_passed: Some(status == CaseStatus::Passed),
+        assertion_passed: match status {
+            CaseStatus::Pending | CaseStatus::Running => None,
+            CaseStatus::Passed => Some(true),
+            CaseStatus::Failed | CaseStatus::Incomplete => Some(false),
+        },
         replay_clean: Some(true),
         response_assertion: None,
         response_unavailable_reason: None,
@@ -101,6 +105,35 @@ fn inventory_with_friends() -> CaseGroupInventory {
     friends.cases.truncate(1);
     inventory.groups.push(friends);
     inventory
+}
+
+fn inventory_with_case_count(case_count: usize) -> CaseGroupInventory {
+    let mut inventory = inventory();
+    inventory.groups[0].cases = (0..case_count)
+        .map(|index| CanonicalCase {
+            case_id: format!("case-{index}"),
+            case_dir: PathBuf::from("/cases"),
+            recorded_at: None,
+        })
+        .collect();
+    inventory
+}
+
+fn state_with_incomplete_cases(
+    api_passed: u32,
+    api_failed: u32,
+    api_incomplete: u32,
+    sequence: u64,
+) -> ActiveRunState {
+    let mut state = state(api_passed, api_failed, sequence);
+    state.cases.extend(
+        (0..api_incomplete).map(|index| case(format!("pending-{index}"), CaseStatus::Pending)),
+    );
+    state.apis[0].total = api_passed + api_failed + api_incomplete;
+    state.apis[0].incomplete = api_incomplete;
+    state.apis[0].complete_pass = false;
+    state.status = RunStatus::Failed;
+    state
 }
 
 #[test]
@@ -195,6 +228,31 @@ fn replay_progress_replaces_retries_of_one_recording_batch() {
     assert_eq!(report.totals.cases.executed, 3);
     assert_eq!(report.success_streak.runs, 1);
     assert_eq!(report.success_streak.cases, 3);
+}
+
+#[test]
+fn failure_limited_replay_preserves_the_recorded_case_inventory() {
+    let directory = tempfile::tempdir().unwrap();
+    let progress_path = directory.path().join("progress.yaml");
+    let legacy_path = directory.path().join("e2e-progress.yaml");
+    let inventory = inventory_with_case_count(5);
+    let complete_failure = state(0, 5, 1);
+    let limited_failure = state_with_incomplete_cases(1, 2, 2, 2);
+    let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
+
+    update_focused_index(&mut index, &complete_failure, &inventory, true);
+    write_replay_progress(&progress_path, &legacy_path, &index, &complete_failure).unwrap();
+    update_focused_index(&mut index, &limited_failure, &inventory, true);
+    write_replay_progress(&progress_path, &legacy_path, &index, &limited_failure).unwrap();
+
+    assert_eq!(index.current_run.executed_cases, 3);
+    let report = load(&progress_path, VerificationStage::Progress)
+        .unwrap()
+        .unwrap();
+    let observation = &report.counted_observations["run"].observation;
+    assert_eq!(observation.apis["GET /api/orders/*"].cases.executed, 5);
+    assert_eq!(observation.apis["GET /api/orders/*"].cases.passed, 1);
+    assert!(!observation.apis["GET /api/orders/*"].passed);
 }
 
 #[test]

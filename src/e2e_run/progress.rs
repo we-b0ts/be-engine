@@ -223,15 +223,12 @@ fn logical_observation(index: &RunIndex, state: &ActiveRunState) -> Result<Progr
         .map(|api| {
             let contribution = index.current_run.apis.get(api);
             let finalized = contribution.is_some_and(|value| value.counted);
-            let executed = contribution.filter(|value| value.counted).map_or_else(
-                || u64::from(index.apis.get(api).map_or(0, |value| value.cases)),
-                |value| value.executed_cases,
-            );
+            let inventory_cases = u64::from(index.apis.get(api).map_or(0, |value| value.cases));
             (
                 api.clone(),
                 ApiObservation {
                     cases: LatestCounts {
-                        executed,
+                        executed: inventory_cases,
                         passed: contribution
                             .filter(|value| value.counted)
                             .map_or(0, |value| value.passed_cases),
