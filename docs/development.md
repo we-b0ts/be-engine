@@ -551,6 +551,22 @@ traffic-e2e record --target-root /path/to/target \
   --api 'GET /api/widgets/*'
 ```
 
+For a Docker-free recording in an existing host or container environment, let
+traffic-e2e start Source in the current network namespace:
+
+```bash
+traffic-e2e record-source --target-root /path/to/target \
+  --duration-seconds 60 -- ./source --port 7171
+```
+
+The command starts Recorder listeners before Source, runs Source as `998:998`,
+projects the generated CA to common SDK trust variables (and a Java truststore
+when `keytool` is present), waits for configured Source readiness, and starts
+the duration only then. Recorder finalizes before Source receives SIGTERM. It
+does not keep Source alive or install passthrough after recording. Omit
+`--api` for the configured full scope. The canonical output is
+`.traffic-e2e/local/artifacts/recordings/<run-id>` under `--target-root`.
+
 The managed runtime publishes Recorder lifecycle state on a Unix socket and
 waits through its internal process contract:
 

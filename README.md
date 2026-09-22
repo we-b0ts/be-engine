@@ -172,6 +172,22 @@ traffic-e2e record --target-root /path/to/target \
   --api 'GET /api/widgets/*'
 ```
 
+To run Recorder and a locally installed Source in the current host or
+container network namespace without Docker:
+
+```bash
+traffic-e2e record-source --target-root /path/to/target \
+  --duration-seconds 60 -- ./source --port 7171
+```
+
+Source runs as numeric UID/GID `998:998`, starts only after Recorder listeners
+are ready, and is stopped after Recorder finalizes. Its configured port must
+match `recorder.http_gateway.matched_upstream` and differ from the gateway
+listen port. Omit `--api` to record the configured full scope for the complete
+duration. Output is written to
+`<target>/.traffic-e2e/local/artifacts/recordings/<run-id>`; no Docker daemon is
+used by this command.
+
 Automation can reserve the recording directory name with an explicit UTC run
 identifier: `traffic-e2e record --target-root ... --run-id YYYYMMDDHHMMSS`.
 Repeat `--api 'METHOD /path-or-pattern'` to restrict only that run; omission

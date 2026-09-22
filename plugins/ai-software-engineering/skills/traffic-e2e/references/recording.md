@@ -12,6 +12,30 @@ traffic-e2e record --target-root <target> \
   --api '<METHOD path>'
 ```
 
+For a short-lived recording performed directly in an existing host or
+container environment, without Docker lifecycle management, start Source
+through traffic-e2e:
+
+```bash
+traffic-e2e record-source --target-root <target> \
+  --run-id <YYYYMMDDHHMMSS> --duration-seconds 60 \
+  --api '<METHOD path>' -- <source-command> [args...]
+```
+
+`record-source` starts Recorder listeners first, then launches Source as the
+fixed numeric identity `998:998` in the current network namespace. Source must
+listen on the configured `http_gateway.matched_upstream` port, which must be
+different from the recording gateway listen port. The command projects the
+Recorder CA through common SDK trust variables and a Java truststore when
+`keytool` is available. It stops Source after Recorder finalization and does
+not provide post-recording passthrough. Omit `--api` to retain the configured
+full recording scope for the complete duration.
+
+This mode requires root or non-interactive sudo, `setpriv`, and the same
+network capabilities required by local interception. It writes only to
+`<target>/.traffic-e2e/local/artifacts/recordings/<run-id>` and rejects legacy
+or custom artifact roots so backend-rewrite can consume the run directly.
+
 Project config supplies the ignored initialization-owned source snapshot and
 the optional Breeze container. traffic-e2e selects the runtime internally and
 owns the adapted source, Recorder, optional Breeze, readiness, finalization,

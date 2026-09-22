@@ -17,7 +17,7 @@ mod asset_contract_tests;
 mod assets;
 #[cfg(test)]
 mod container_runtime_tests;
-mod encryption_key;
+pub(crate) mod encryption_key;
 mod listen_preflight;
 #[cfg(test)]
 mod manager_tests;

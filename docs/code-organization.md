@@ -97,6 +97,11 @@ is unclear.
   `environment` owns shared target-environment name filtering. Container
   capture normalizes effective image launch configuration into its committed
   image, so downstream runtimes do not branch on provider type.
+- `source_recording` owns Docker-free co-located Source and Recorder process
+  orchestration, fixed-identity Source startup, source trust projection,
+  readiness ordering, signals, finalization ordering, and cleanup. Recorder
+  listeners, interception, protocol capture, and persistence remain in their
+  existing owners.
 - `startup` owns the source-compatible target startup declaration,
   initialization-owned target-mount snapshot lifecycle, and merged source plus
   override Docker environment projection. Its `snapshot` child copies declared

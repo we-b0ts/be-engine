@@ -38,6 +38,7 @@ mod request_headers;
 pub mod request_rules;
 mod rewrite;
 mod runtime_output;
+mod source_recording;
 mod source_snapshot;
 mod startup;
 mod target_container;
@@ -276,6 +277,7 @@ pub use rewrite::{
     transfer_rewrite_worker, verify_rewrite_repair, wait_rewrite,
 };
 pub use runtime_output::RuntimeOutputLocation;
+pub use source_recording::{SourceRecordingOptions, SourceRecordingResult, run_source_recording};
 pub use source_snapshot::{
     ContainerSourceOptions, KubernetesSourceOptions, SourceIgnoredMount, SourceImage,
     SourceOptions, SourceProviderEvidence, SourceSnapshotReport,

@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail, ensure};
 
-pub(super) fn load_or_create(target_root: &Path) -> Result<String> {
+pub(crate) fn load_or_create(target_root: &Path) -> Result<String> {
     let supplied = match std::env::var(crate::request_headers::ENCRYPTION_KEY_ENV) {
         Ok(value) => Some(value),
         Err(std::env::VarError::NotPresent) => None,
