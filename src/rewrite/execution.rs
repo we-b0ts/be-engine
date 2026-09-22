@@ -306,9 +306,7 @@ pub(super) fn status_action(target_root: &Path) -> Result<Option<RewriteAction>>
         return Ok(Some(action::recovery_required(target_root).action));
     }
     Ok(Some(RewriteAction::WaitRequired {
-        summary:
-            "a coordinator operation is running; other worker dispatch and feedback may proceed"
-                .into(),
+        summary: running_summary(target_root),
         resource: "coordinator_operation".into(),
         requested_api: None,
         blocking_api: None,
@@ -357,6 +355,62 @@ pub(super) fn worker_action_while_busy(
 fn alive(pid: u32) -> bool {
     i32::try_from(pid).is_ok_and(|pid| unsafe { libc::kill(pid, 0) } == 0
         || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
+}
+
+fn running_summary(target_root: &Path) -> String {
+    let Ok(super::traffic_operation::TrafficOperationState::Live(active)) =
+        super::traffic_operation::state(target_root)
+    else {
+        return "running coordinator operation".into();
+    };
+    traffic_summary(&active, replay_progress(target_root))
+}
+
+fn traffic_summary(
+    active: &super::traffic_operation::TrafficOperationMarker,
+    replay_progress: Option<crate::e2e_run::E2eActiveProgress>,
+) -> String {
+    let api = active.api.as_deref().unwrap_or("the workflow");
+    match active.kind {
+        super::traffic_operation::TrafficOperationKind::Recording => {
+            if active.api.is_some() {
+                format!("recording {api}")
+            } else {
+                "recording traffic".into()
+            }
+        }
+        super::traffic_operation::TrafficOperationKind::Comparison => {
+            format!("comparing {api}")
+        }
+        super::traffic_operation::TrafficOperationKind::Replay => match replay_progress {
+            Some(crate::e2e_run::E2eActiveProgress::Building) => {
+                format!("building target for {api}")
+            }
+            Some(crate::e2e_run::E2eActiveProgress::Replaying { completed, total }) => {
+                format!("replaying {api} ({completed}/{total})")
+            }
+            Some(crate::e2e_run::E2eActiveProgress::Finalizing) => {
+                format!("finalizing replay for {api}")
+            }
+            None => format!("replaying {api}"),
+        },
+    }
+}
+
+fn replay_progress(target_root: &Path) -> Option<crate::e2e_run::E2eActiveProgress> {
+    let state = RewriteStore::new(target_root).ok()?.load_snapshot().ok()??;
+    let case_source = state.case_source.as_ref()?.clone();
+    let api_key = state.group_id.as_deref()?;
+    crate::e2e_run::focused_active_progress(
+        &crate::E2eRunContext {
+            target_root: target_root.to_path_buf(),
+            case_source,
+            run_key: None,
+        },
+        api_key,
+    )
+    .ok()
+    .flatten()
 }
 
 fn root(target_root: &Path) -> PathBuf {

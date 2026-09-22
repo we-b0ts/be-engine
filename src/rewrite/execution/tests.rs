@@ -24,6 +24,35 @@ fn marker(target: &Path, pid: u32, finished: bool, error: Option<String>) {
 }
 
 #[test]
+fn busy_summary_reports_the_current_traffic_phase_concisely() {
+    let active = super::super::traffic_operation::TrafficOperationMarker {
+        operation_id: "traffic-test".into(),
+        kind: super::super::traffic_operation::TrafficOperationKind::Replay,
+        api: Some("GET /api/teams".into()),
+        started_at: "2026-09-22T00:00:00Z".into(),
+        pid: std::process::id(),
+    };
+    assert_eq!(
+        traffic_summary(&active, Some(crate::e2e_run::E2eActiveProgress::Building)),
+        "building target for GET /api/teams"
+    );
+    assert_eq!(
+        traffic_summary(
+            &active,
+            Some(crate::e2e_run::E2eActiveProgress::Replaying {
+                completed: 932,
+                total: 941,
+            })
+        ),
+        "replaying GET /api/teams (932/941)"
+    );
+    assert_eq!(
+        traffic_summary(&active, Some(crate::e2e_run::E2eActiveProgress::Finalizing)),
+        "finalizing replay for GET /api/teams"
+    );
+}
+
+#[test]
 fn stopped_executor_requires_recovery_and_never_silently_retries() {
     let target = configured_target();
     marker(target.path(), u32::MAX, false, None);
