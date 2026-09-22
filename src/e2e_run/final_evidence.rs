@@ -9,7 +9,7 @@ use super::store;
 use crate::case_group::CaseGroupInventory;
 use crate::replay::{
     BackgroundReclassification, ReplayAggregateCounts, ReplayAggregateOptions,
-    ReplayAggregateReport, aggregate_replay_reports_with_options,
+    ReplayAggregateReport, aggregate_replay_report_with_options,
     reclassify_background_dependencies,
 };
 
@@ -134,8 +134,9 @@ pub(super) fn build_final_evidence_from_current_report(
         .iter()
         .flat_map(|group| group.cases.iter().map(|case| case.case_id.clone()))
         .collect::<BTreeSet<_>>();
-    let aggregate = aggregate_replay_reports_with_options(
+    let aggregate = aggregate_replay_report_with_options(
         &layout.case_source,
+        &state.replay_report,
         &ReplayAggregateOptions {
             case_ids: all_case_ids,
             session_ids: BTreeSet::from([session_id.clone()]),

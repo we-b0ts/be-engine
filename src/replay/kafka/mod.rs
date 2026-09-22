@@ -19,20 +19,18 @@ pub(super) use matcher::{
 };
 pub(super) use report::KafkaProtocolReport;
 
-use super::{ReplayReportWriter, ReplayState, ReplayTarget, TargetKey};
+use super::{ReplayState, ReplayTarget, TargetKey};
 
 pub(super) async fn handle_connection(
     mut stream: TcpStream,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
-    report_writer: ReplayReportWriter,
 ) -> Result<()> {
     let target_key = TargetKey {
         host: target.host,
         port: target.port,
     };
     state.lock().await.kafka.events.connections += 1;
-    report_writer.request();
 
     while let Some(payload) = read_frame(&mut stream, 64 * 1024 * 1024).await? {
         let decoded = decode_request(&payload)?;
@@ -48,7 +46,6 @@ pub(super) async fn handle_connection(
                 format!("{:?}", decoded.api_key),
                 reason.clone(),
             );
-            report_writer.request();
             anyhow::bail!(reason);
         }
         let plan = broker::response_for(&decoded, &target_key, state.clone())
@@ -65,20 +62,17 @@ pub(super) async fn handle_connection(
                     match timing.await_client_termination(&mut stream).await {
                         Ok(_) => {
                             plan.commit(&state).await;
-                            report_writer.request();
                             return Ok(());
                         }
                         Err(error) => {
                             let reason = error.to_string();
                             plan.fail(&state, &target_key, reason).await;
-                            report_writer.request();
                             return Err(error);
                         }
                     }
                 }
                 DependencyExchangeOutcome::NoResponse => {
                     plan.commit(&state).await;
-                    report_writer.request();
                     continue;
                 }
                 DependencyExchangeOutcome::Response => timing.delay_response().await,
@@ -96,11 +90,9 @@ pub(super) async fn handle_connection(
         if let Err(error) = write_frame(&mut stream, &payload).await {
             let reason = format!("failed to deliver Kafka replay response: {error}");
             plan.fail(&state, &target_key, reason).await;
-            report_writer.request();
             return Err(error);
         }
         plan.commit(&state).await;
-        report_writer.request();
     }
     Ok(())
 }

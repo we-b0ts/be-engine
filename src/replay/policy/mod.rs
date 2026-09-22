@@ -16,8 +16,8 @@ mod value;
 #[cfg(test)]
 mod tests;
 
+pub(in crate::replay) use config::{LoadedReplayPolicy, fingerprint, load_replay_policy};
 pub use config::{ReplayPolicyValidationReport, validate_replay_policy};
-pub(in crate::replay) use config::{fingerprint, load_replay_policy};
 pub use feedback::{
     ComparisonResponseRuleFeedback, MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan,
     MemcachedTimestampRuleReport, MysqlTimeRuleFeedback, MysqlTimeRulePlan, MysqlTimeRuleReport,

@@ -1,8 +1,11 @@
+use std::collections::BTreeSet;
+
 use super::*;
 use crate::DependencyExchangeOutcome;
 
 #[derive(Debug, Default)]
 pub(in crate::replay) struct ReplayEvents {
+    pub(in crate::replay) dirty_case_ids: BTreeSet<String>,
     pub(in crate::replay) connections: usize,
     pub(in crate::replay) connection_events: Vec<ConnectionReport>,
     pub(in crate::replay) builtin_query_count: usize,

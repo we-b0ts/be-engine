@@ -5,7 +5,6 @@ pub(in crate::replay) async fn handle_connection(
     peer_addr: SocketAddr,
     target: Option<TargetKey>,
     state: Arc<Mutex<ReplayState>>,
-    report_writer: ReplayReportWriter,
     ca: Arc<MitmCa>,
 ) -> Result<()> {
     write_packet(&mut tcp_stream, handshake_packet(1)).await?;
@@ -51,8 +50,6 @@ pub(in crate::replay) async fn handle_connection(
         },
     )
     .await?;
-    report_writer.request();
-
     let mut session = ReplaySession {
         target,
         database: login.database,
@@ -160,7 +157,6 @@ pub(in crate::replay) async fn handle_connection(
                 .await?;
             }
         }
-        report_writer.request();
     }
     Ok(())
 }

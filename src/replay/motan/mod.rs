@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
@@ -24,7 +24,7 @@ use super::report::command::{
     CommandUnusedReport,
 };
 use super::{
-    ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplayReportWriter, ReplaySource,
+    CaseExchangeIndex, ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplaySource,
     ReplayState, ReplayTarget, SuccessDetailBudget, TargetKey, is_connection_termination,
     normalize_host, push_success_detail, register_replay_target_at,
 };
@@ -146,6 +146,7 @@ struct MatchedExchange {
 #[derive(Debug)]
 pub(super) struct MotanReplayState {
     exchanges: Vec<ReplayExchange>,
+    case_exchange_index: CaseExchangeIndex,
     heartbeats: Vec<HeartbeatTemplate>,
     lane_progress: watch::Sender<u64>,
     pub(super) events: MotanReplayEvents,
@@ -153,6 +154,7 @@ pub(super) struct MotanReplayState {
 
 #[derive(Debug, Default)]
 pub(super) struct MotanReplayEvents {
+    dirty_case_ids: BTreeSet<String>,
     connections: usize,
     matched_count: usize,
     matched: Vec<CommandMatchedReport>,
@@ -167,6 +169,7 @@ impl Default for MotanReplayState {
         let (lane_progress, _) = watch::channel(0);
         Self {
             exchanges: Vec::new(),
+            case_exchange_index: CaseExchangeIndex::default(),
             heartbeats: Vec::new(),
             lane_progress,
             events: MotanReplayEvents::default(),
@@ -253,6 +256,9 @@ impl MotanReplayState {
             record.response.decode()?
         };
         let timing = ReplayExchangeTiming::from_recorded(record.duration_ms, record.outcome);
+        let exchange_index = self.exchanges.len();
+        self.case_exchange_index
+            .register(source, case_id, exchange_index);
         self.exchanges.push(ReplayExchange {
             source,
             case_id: case_id.map(ToOwned::to_owned),
@@ -406,6 +412,9 @@ impl MotanReplayState {
 
     fn fail(&mut self, matched: &MatchedExchange, reason: String) {
         self.exchanges[matched.index].status = ReplayExchangeStatus::Failed;
+        if let Some(case_id) = &matched.report.case_id {
+            self.events.dirty_case_ids.insert(case_id.clone());
+        }
         self.events.unsafe_events.push(CommandRequestReport {
             case_id: matched.report.case_id.clone(),
             target: matched.report.target.clone(),
@@ -428,20 +437,27 @@ impl MotanReplayState {
             ..Default::default()
         }
     }
+
+    pub(super) fn case_is_dirty(&self, case_id: &str) -> bool {
+        self.events.dirty_case_ids.contains(case_id)
+            || self.case_exchange_index.any(case_id, |index| {
+                self.exchanges
+                    .get(index)
+                    .is_some_and(|exchange| !exchange.status.is_consumed())
+            })
+    }
 }
 
 pub(super) async fn handle_connection(
     stream: TcpStream,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
-    report_writer: ReplayReportWriter,
 ) -> Result<()> {
     let target_key = TargetKey {
         host: target.host,
         port: target.port,
     };
     state.lock().await.motan.events.connections += 1;
-    report_writer.request();
     let (reader, mut writer) = stream.into_split();
     let (incoming_sender, mut incoming) = mpsc::channel(INCOMING_FRAME_QUEUE_CAPACITY);
     let reader_task = tokio::spawn(async move {
@@ -464,14 +480,7 @@ pub(super) async fn handle_connection(
         let _ = incoming_sender.send(IncomingEvent::Closed(closed)).await;
     });
 
-    let result = drive_connection(
-        &mut writer,
-        &target_key,
-        &state,
-        &report_writer,
-        &mut incoming,
-    )
-    .await;
+    let result = drive_connection(&mut writer, &target_key, &state, &mut incoming).await;
     reader_task.abort();
     result
 }
@@ -480,7 +489,6 @@ async fn drive_connection(
     writer: &mut OwnedWriteHalf,
     target: &TargetKey,
     state: &Arc<Mutex<ReplayState>>,
-    report_writer: &ReplayReportWriter,
     incoming: &mut mpsc::Receiver<IncomingEvent>,
 ) -> Result<()> {
     let mut connection_binding = CaseConnectionBinding::default();
@@ -493,7 +501,7 @@ async fn drive_connection(
                 read_closed = true;
                 continue;
             };
-            enqueue_request(writer, target, state, report_writer, &mut pending, frame).await?;
+            enqueue_request(writer, target, state, &mut pending, frame).await?;
             continue;
         }
 
@@ -541,7 +549,6 @@ async fn drive_connection(
                 .expect("unmatched Motan pending-request index disappeared");
             record_unmatched_request(state, active_case_id, target, &request.identity, diagnostic)
                 .await;
-            report_writer.request();
             return Err(anyhow!("no recorded Motan dependency matched"));
         }
 
@@ -555,7 +562,6 @@ async fn drive_connection(
                         "client sent another dependency request instead of terminating the connection"
                     );
                     state.lock().await.motan.fail(&matched, error.to_string());
-                    report_writer.request();
                     return Err(error);
                 }
                 match matched
@@ -565,12 +571,10 @@ async fn drive_connection(
                 {
                     Ok(_) => {
                         state.lock().await.motan.complete(&matched);
-                        report_writer.request();
                         return Ok(());
                     }
                     Err(error) => {
                         state.lock().await.motan.fail(&matched, error.to_string());
-                        report_writer.request();
                         return Err(error);
                     }
                 }
@@ -582,12 +586,10 @@ async fn drive_connection(
                     &matched,
                     format!("failed to deliver recorded Motan response: {error}"),
                 );
-                report_writer.request();
                 return Err(error.into());
             }
             state.lock().await.motan.complete(&matched);
             refresh_lane_wait_deadlines(&mut pending);
-            report_writer.request();
             continue;
         }
 
@@ -607,7 +609,7 @@ async fn drive_connection(
             frame = receive_frame(incoming) => {
                 match frame? {
                     Some(frame) => {
-                        enqueue_request(writer, target, state, report_writer, &mut pending, frame).await?;
+                        enqueue_request(writer, target, state, &mut pending, frame).await?;
                     }
                     None => read_closed = true,
                 }
@@ -626,7 +628,6 @@ async fn enqueue_request(
     writer: &mut OwnedWriteHalf,
     target: &TargetKey,
     state: &Arc<Mutex<ReplayState>>,
-    report_writer: &ReplayReportWriter,
     pending: &mut VecDeque<PendingRequest>,
     frame: Frame,
 ) -> Result<()> {
@@ -645,6 +646,9 @@ async fn enqueue_request(
         let Some(mut template) = template else {
             let mut replay = state.lock().await;
             let case_id = replay.active_case_id.clone();
+            if let Some(case_id) = &case_id {
+                replay.motan.events.dirty_case_ids.insert(case_id.clone());
+            }
             replay.motan.events.unsupported.push(CommandRequestReport {
                 case_id,
                 target: target.clone(),
@@ -652,7 +656,6 @@ async fn enqueue_request(
                 reason: "no recorded Motan heartbeat response template".to_string(),
                 diagnostic: None,
             });
-            report_writer.request();
             return Err(anyhow!("no recorded Motan heartbeat response template"));
         };
         template.timing.delay_response().await;
@@ -716,19 +719,17 @@ async fn record_unmatched_request(
     diagnostic: CommandMatchDiagnostic,
 ) {
     let reason = motan_unmatched_reason(&diagnostic);
-    state
-        .lock()
-        .await
-        .motan
-        .events
-        .unmatched
-        .push(CommandRequestReport {
-            case_id: active_case_id,
-            target: target.clone(),
-            command: identity.command(),
-            reason,
-            diagnostic: Some(diagnostic),
-        });
+    let mut state = state.lock().await;
+    if let Some(case_id) = &active_case_id {
+        state.motan.events.dirty_case_ids.insert(case_id.clone());
+    }
+    state.motan.events.unmatched.push(CommandRequestReport {
+        case_id: active_case_id,
+        target: target.clone(),
+        command: identity.command(),
+        reason,
+        diagnostic: Some(diagnostic),
+    });
 }
 
 impl RecordedCapture {

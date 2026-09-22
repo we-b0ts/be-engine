@@ -1,3 +1,5 @@
+mod active_artifact;
+mod active_progress;
 mod admin_source;
 mod admin_startup;
 mod branch;
@@ -355,6 +357,12 @@ pub(crate) fn focused_active_progress(
         .join(".active/state.yaml");
     if !state_path.is_file() {
         return Ok(None);
+    }
+    let progress_path = state_path.with_file_name("progress.json");
+    if progress_path.is_file()
+        && let Ok(progress) = active_progress::read(&progress_path)
+    {
+        return Ok(Some(progress));
     }
     let state: model::ActiveRunState = store::read_yaml(&state_path)?;
     Ok(Some(match state.status {

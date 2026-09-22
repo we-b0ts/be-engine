@@ -157,12 +157,31 @@ pub fn aggregate_replay_reports_with_options(
     options: &ReplayAggregateOptions,
 ) -> Result<ReplayAggregateReport> {
     let case_source = canonical_dir(case_source, "case source")?;
+    let canonical_reports = discover_replay_reports(&case_source)?;
+    aggregate_canonical_reports(case_source, canonical_reports, options)
+}
+
+pub(crate) fn aggregate_replay_report_with_options(
+    case_source: &Path,
+    report_path: &Path,
+    options: &ReplayAggregateOptions,
+) -> Result<ReplayAggregateReport> {
+    let case_source = canonical_dir(case_source, "case source")?;
+    let report_path = canonical_file(report_path, "replay report")?;
+    ensure_within(&report_path, &case_source, "replay report")?;
+    aggregate_canonical_reports(case_source, vec![report_path], options)
+}
+
+fn aggregate_canonical_reports(
+    case_source: PathBuf,
+    canonical_reports: Vec<PathBuf>,
+    options: &ReplayAggregateOptions,
+) -> Result<ReplayAggregateReport> {
     let mut published_cases = discover_published_cases(&case_source)?;
     validate_case_selection(&case_source, &published_cases, &options.case_ids)?;
     if !options.case_ids.is_empty() {
         published_cases.retain(|case_id, _| options.case_ids.contains(case_id));
     }
-    let canonical_reports = discover_replay_reports(&case_source)?;
 
     let mut summaries = Vec::with_capacity(canonical_reports.len());
     let mut cases = Vec::new();

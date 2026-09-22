@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, ensure};
@@ -19,7 +19,7 @@ use crate::redis::{
 };
 
 use super::{
-    ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplayReportWriter, ReplaySource,
+    CaseExchangeIndex, ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplaySource,
     ReplayState, ReplayTarget, SuccessDetailBudget, TargetKey, normalize_host, push_success_detail,
     register_replay_target,
 };
@@ -119,6 +119,7 @@ pub(super) struct RedisReplayState {
     pub(super) value_rules: Vec<value::ValueRule>,
     unordered_value: value::evidence::OrderEvidence,
     exchanges: Vec<ReplayExchange>,
+    case_exchange_index: CaseExchangeIndex,
     pub(super) events: RedisReplayEvents,
     snapshot_overlays: Vec<super::report::command::CommandSnapshotOverlayReport>,
     snapshot_overlay_warnings: Vec<String>,
@@ -126,6 +127,7 @@ pub(super) struct RedisReplayState {
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayEvents {
+    dirty_case_ids: BTreeSet<String>,
     pub(super) connections: usize,
     matched_count: usize,
     matched: Vec<CommandMatchedReport>,
@@ -238,6 +240,9 @@ impl RedisReplayState {
             return Ok(());
         }
         self.connection_scopes.register(&record, &args);
+        let exchange_index = self.exchanges.len();
+        self.case_exchange_index
+            .register(source, case_id, exchange_index);
         self.exchanges.push(ReplayExchange {
             response_time_shift: None,
             source,
@@ -279,6 +284,9 @@ impl RedisReplayState {
         if let Some(exchange) = self.exchanges.get_mut(matched.index) {
             exchange.status = ReplayExchangeStatus::Failed;
         }
+        if let Some(case_id) = &matched.report.case_id {
+            self.events.dirty_case_ids.insert(case_id.clone());
+        }
         self.events.unsafe_events.push(CommandRequestReport {
             case_id: matched.report.case_id.clone(),
             target: matched.report.target.clone(),
@@ -304,20 +312,31 @@ impl RedisReplayState {
             warnings: self.snapshot_overlay_warnings.clone(),
         }
     }
+
+    pub(super) fn case_is_dirty(&self, case_id: &str) -> bool {
+        self.events.dirty_case_ids.contains(case_id)
+            || self.case_exchange_index.any(case_id, |index| {
+                self.exchanges.get(index).is_some_and(|exchange| {
+                    if exchange.reusable_snapshot {
+                        !exchange.matched_once
+                    } else {
+                        !exchange.status.is_consumed()
+                    }
+                })
+            })
+    }
 }
 
 pub(super) async fn handle_connection(
     mut stream: TcpStream,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
-    report_writer: ReplayReportWriter,
 ) -> Result<()> {
     let target_key = TargetKey {
         host: target.host,
         port: target.port,
     };
     state.lock().await.redis.events.connections += 1;
-    report_writer.request();
     let mut reader = RedisBufferedReader::new(&mut stream, 64 * 1024 * 1024);
     let mut resp_version = 2_u8;
     let mut database = 0_i64;
@@ -337,7 +356,6 @@ pub(super) async fn handle_connection(
                     error.to_string(),
                 )
                 .await;
-                report_writer.request();
                 return Err(error);
             }
         };
@@ -352,7 +370,6 @@ pub(super) async fn handle_connection(
                     error.to_string(),
                 )
                 .await;
-                report_writer.request();
                 return Err(error);
             }
         };
@@ -375,7 +392,6 @@ pub(super) async fn handle_connection(
                 .inner
                 .write_all(b"-ERR Redis command mode is unsupported for replay\r\n")
                 .await?;
-            report_writer.request();
             continue;
         }
         let (recorded_failure_case_id, recorded_failure) = if redis_is_builtin(&command.name) {
@@ -403,17 +419,14 @@ pub(super) async fn handle_connection(
                 connection_binding.bind(recorded_failure_case_id.as_deref(), matched.connection_id);
             }
             if deliver_redis_exchange(&mut reader, &state, &matched).await? {
-                report_writer.request();
                 break;
             }
-            report_writer.request();
             continue;
         }
         if let Some(response) =
             redis_builtin(&command, &mut resp_version, &mut database, &mut username)
         {
             reader.inner.write_all(&response).await?;
-            report_writer.request();
             if command.name == "QUIT" {
                 break;
             }
@@ -447,6 +460,9 @@ pub(super) async fn handle_connection(
                 }
                 Err(diagnostic) => {
                     let authentication_hint = redis_authentication_hint(&diagnostic);
+                    if let Some(case_id) = &active_case_id {
+                        state.redis.events.dirty_case_ids.insert(case_id.clone());
+                    }
                     state.redis.events.unmatched.push(CommandRequestReport {
                         case_id: active_case_id,
                         target: target_key.clone(),
@@ -465,7 +481,6 @@ pub(super) async fn handle_connection(
         match response {
             Ok(matched) => {
                 if deliver_redis_exchange(&mut reader, &state, &matched).await? {
-                    report_writer.request();
                     break;
                 }
             }
@@ -476,7 +491,6 @@ pub(super) async fn handle_connection(
                     .await?;
             }
         }
-        report_writer.request();
     }
     Ok(())
 }
@@ -582,6 +596,9 @@ async fn record_runtime_unsafe(
         reason,
         diagnostic: None,
     };
+    if let Some(case_id) = &request.case_id {
+        state.redis.events.dirty_case_ids.insert(case_id.clone());
+    }
     state.redis.events.unsafe_events.push(request);
 }
 

@@ -226,6 +226,7 @@ pub(super) fn publish_terminal(
         state.status.is_terminal(),
         "cannot publish a non-terminal run"
     );
+    let _ = fs::remove_file(layout.active_dir.join("progress.json"));
     remove_decrypted_request_views(&layout.active_dir)?;
     let published_state =
         state_for_published_directory(state, &layout.active_dir, &layout.latest_dir)?;
@@ -272,6 +273,7 @@ pub(super) fn publish_snapshot(
         state.status.is_terminal(),
         "cannot publish a non-terminal run"
     );
+    let _ = fs::remove_file(active_dir.join("progress.json"));
     remove_decrypted_request_views(active_dir)?;
     let published_state = state_for_published_directory(state, active_dir, latest_dir)?;
     write_yaml(&active_dir.join("state.yaml"), &published_state)?;

@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -14,12 +15,13 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+use super::active_artifact;
 use super::model::ResolvedProjectConfig;
 use super::result::E2eResponseUnavailableReason;
-use super::store;
 use crate::motan::response_kind_status_code;
 use crate::recorded_request::{RecordedHttpClient, target_uri};
 use crate::recorder::HeaderMapSnapshot;
+use crate::request_rules::RequestRuleRuntime;
 
 type HttpClient = Client<HttpConnector, Full<Bytes>>;
 
@@ -127,13 +129,13 @@ pub(crate) async fn wait_until_ready(config: &ResolvedProjectConfig) -> Result<(
 }
 
 pub(super) async fn capture_case(
-    target_root: &Path,
     config: &ResolvedProjectConfig,
     request_path: &Path,
+    request_bytes: &[u8],
     actual_response_path: &Path,
-) -> Result<()> {
-    let request_bytes = tokio::fs::read(request_path).await?;
-    let kind: RequestKind = serde_json::from_slice(&request_bytes)?;
+    request_rules: Arc<RequestRuleRuntime>,
+) -> Result<Vec<u8>> {
+    let kind: RequestKind = serde_json::from_slice(request_bytes)?;
     if kind.protocol_version.is_some() {
         return capture_motan_case(config, kind, actual_response_path).await;
     }
@@ -142,14 +144,14 @@ pub(super) async fn capture_case(
         config.target_request_timeout,
         config.target_max_response_bytes,
     )
-    .with_request_rules(target_root, &config.replay_policy)?
-    .send(request_path)
+    .with_request_rule_runtime(request_rules)
+    .send_bytes(request_bytes, &request_path.display().to_string())
     .await?;
     let (encoding, data) = match std::str::from_utf8(&response.body) {
         Ok(text) => ("utf8", text.to_owned()),
         Err(_) => ("base64", STANDARD.encode(&response.body)),
     };
-    store::write_json(
+    active_artifact::write_json(
         actual_response_path,
         &ActualResponse {
             version: 1,
@@ -230,7 +232,7 @@ async fn capture_motan_case(
     config: &ResolvedProjectConfig,
     request: RequestKind,
     actual_response_path: &Path,
-) -> Result<()> {
+) -> Result<Vec<u8>> {
     let upstream = config
         .target_motan_upstream
         .as_deref()
@@ -282,7 +284,7 @@ async fn capture_motan_case(
         Ok(text) => ("utf8", text.to_owned()),
         Err(_) => ("base64", STANDARD.encode(&body)),
     };
-    store::write_json(
+    active_artifact::write_json(
         actual_response_path,
         &ActualResponse {
             version: 1,

@@ -61,6 +61,7 @@ impl KafkaProtocolReport {
             || !self.unused_case.is_empty()
     }
 
+    #[cfg(test)]
     pub(in crate::replay) fn case_is_dirty(&self, case_id: &str) -> bool {
         self.unmatched
             .iter()

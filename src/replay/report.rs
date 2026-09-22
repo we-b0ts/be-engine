@@ -24,4 +24,6 @@ pub(super) use model::*;
 pub(super) use success::{
     SUCCESS_DETAIL_LIMIT, SUCCESS_DETAIL_SCOPE, SuccessDetailBudget, push_success_detail,
 };
-pub(super) use writer::{ReplayReportWriter, write_final_report_value, write_report_snapshot};
+#[cfg(test)]
+pub(super) use writer::write_report_snapshot;
+pub(super) use writer::{clear_report_artifacts, write_final_report_value};

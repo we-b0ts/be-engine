@@ -11,8 +11,8 @@ use crate::dependency::DependencyExchangeOutcome;
 use crate::kafka::{KafkaHeader, KafkaRecord};
 
 use super::super::{
-    ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplaySource, ReplayTarget,
-    SuccessDetailBudget, TargetKey, push_success_detail, register_replay_target,
+    CaseExchangeIndex, ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplaySource,
+    ReplayTarget, SuccessDetailBudget, TargetKey, push_success_detail, register_replay_target,
 };
 use super::report::{
     KafkaMatchedReport, KafkaProtocolReport, KafkaRequestReport, KafkaUnusedReport,
@@ -152,13 +152,17 @@ pub(super) struct KafkaFetchReservation {
 #[derive(Debug, Default)]
 pub(in crate::replay) struct KafkaReplayState {
     produces: Vec<ReplayKafkaProduce>,
+    produce_case_index: CaseExchangeIndex,
     fetches: Vec<ReplayKafkaFetch>,
+    fetch_case_index: CaseExchangeIndex,
     deliveries: Vec<ReplayKafkaDelivery>,
+    delivery_case_index: CaseExchangeIndex,
     pub(super) events: KafkaReplayEvents,
 }
 
 #[derive(Debug, Default)]
 pub(super) struct KafkaReplayEvents {
+    dirty_case_ids: BTreeSet<String>,
     pub(super) connections: usize,
     matched_count: usize,
     matched: Vec<KafkaMatchedReport>,
@@ -213,6 +217,9 @@ impl KafkaReplayState {
         };
         register_replay_target(targets, &target, ReplayProtocol::Kafka)?;
         let semantic = decode_record(record.topic, record.key, record.headers, record.value, 0)?;
+        let exchange_index = self.produces.len();
+        self.produce_case_index
+            .register(source, case_id, exchange_index);
         self.produces.push(ReplayKafkaProduce {
             source,
             case_id: case_id.map(ToOwned::to_owned),
@@ -241,6 +248,9 @@ impl KafkaReplayState {
             port: record.target_port,
         };
         register_replay_target(targets, &target, ReplayProtocol::Kafka)?;
+        let exchange_index = self.fetches.len();
+        self.fetch_case_index
+            .register(source, case_id, exchange_index);
         self.fetches.push(ReplayKafkaFetch {
             source,
             case_id: case_id.map(ToOwned::to_owned),
@@ -279,6 +289,9 @@ impl KafkaReplayState {
             record.value,
             record.message_timestamp_ms,
         )?;
+        let exchange_index = self.deliveries.len();
+        self.delivery_case_index
+            .register(source, case_id, exchange_index);
         self.deliveries.push(ReplayKafkaDelivery {
             source,
             case_id: case_id.map(ToOwned::to_owned),
@@ -375,6 +388,9 @@ impl KafkaReplayState {
                 case_id: active_case_id.map(ToOwned::to_owned),
                 timing,
             });
+        }
+        if let Some(case_id) = active_case_id {
+            self.events.dirty_case_ids.insert(case_id.to_string());
         }
         self.events.unmatched.push(KafkaRequestReport {
             case_id: active_case_id.map(ToOwned::to_owned),
@@ -527,6 +543,9 @@ impl KafkaReplayState {
         operation: String,
         reason: String,
     ) {
+        if let Some(case_id) = active_case_id {
+            self.events.dirty_case_ids.insert(case_id.to_string());
+        }
         self.events.unsupported.push(KafkaRequestReport {
             case_id: active_case_id.map(ToOwned::to_owned),
             target: target.clone(),
@@ -547,6 +566,25 @@ impl KafkaReplayState {
             unused_case: self.unused(ReplaySource::Case),
             unused_global: self.unused(ReplaySource::Global),
         }
+    }
+
+    pub(in crate::replay) fn case_is_dirty(&self, case_id: &str) -> bool {
+        self.events.dirty_case_ids.contains(case_id)
+            || self.produce_case_index.any(case_id, |index| {
+                self.produces
+                    .get(index)
+                    .is_some_and(|exchange| !exchange.status.is_consumed())
+            })
+            || self.fetch_case_index.any(case_id, |index| {
+                self.fetches
+                    .get(index)
+                    .is_some_and(|exchange| !exchange.status.is_consumed())
+            })
+            || self.delivery_case_index.any(case_id, |index| {
+                self.deliveries
+                    .get(index)
+                    .is_some_and(|exchange| !exchange.status.is_consumed())
+            })
     }
 
     fn record_unsafe(&mut self, target: &TargetKey, operation: &str, reason: String) {

@@ -98,40 +98,6 @@ impl ReplayReport {
                 .as_ref()
                 .is_some_and(|policy| !policy.unused_applicable_dependency_rule_ids.is_empty())
     }
-
-    pub(in crate::replay) fn case_is_dirty(&self, case_id: &str) -> bool {
-        self.unrecorded_targets
-            .iter()
-            .any(|target| target.case_id.as_deref() == Some(case_id))
-            || self
-                .unmatched_queries
-                .iter()
-                .any(|query| query.case_id.as_deref() == Some(case_id))
-            || self
-                .unsupported_commands
-                .iter()
-                .any(|query| query.case_id.as_deref() == Some(case_id))
-            || self
-                .unused_case_exchanges
-                .iter()
-                .any(|exchange| exchange.case_id.as_deref() == Some(case_id))
-            || self
-                .unmatched_http_requests
-                .iter()
-                .any(|request| request.case_id.as_deref() == Some(case_id))
-            || self
-                .unsupported_http_exchanges
-                .iter()
-                .any(|request| request.case_id.as_deref() == Some(case_id))
-            || self
-                .unused_case_http_exchanges
-                .iter()
-                .any(|exchange| exchange.case_id.as_deref() == Some(case_id))
-            || self.protocols.redis.case_is_dirty(case_id)
-            || self.protocols.memcached.case_is_dirty(case_id)
-            || self.protocols.kafka.case_is_dirty(case_id)
-            || self.protocols.motan.case_is_dirty(case_id)
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
