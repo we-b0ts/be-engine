@@ -13,9 +13,8 @@ use uuid::Uuid;
 
 use super::{
     DependencyRuleDecision, MemcachedPolicyContext, ReplayExchangeStatus, ReplayExchangeTiming,
-    ReplayPolicyRuntime, ReplayProtocol, ReplayReportWriter, ReplaySource, ReplayState,
-    ReplayTarget, SuccessDetailBudget, TargetKey, normalize_host, push_success_detail,
-    register_replay_target,
+    ReplayPolicyRuntime, ReplayProtocol, ReplaySource, ReplayState, ReplayTarget,
+    SuccessDetailBudget, TargetKey, normalize_host, push_success_detail, register_replay_target,
 };
 use crate::DependencyExchangeOutcome;
 use crate::memcached::{
@@ -408,14 +407,12 @@ pub(super) async fn handle_connection(
     mut stream: TcpStream,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
-    report_writer: ReplayReportWriter,
 ) -> Result<()> {
     let target_key = TargetKey {
         host: target.host,
         port: target.port,
     };
     state.lock().await.memcached.events.connections += 1;
-    report_writer.request();
     let mut prefix = [0_u8; 1];
     let len = stream.peek(&mut prefix).await?;
     if len == 0 {
@@ -442,7 +439,6 @@ pub(super) async fn handle_connection(
                             error.to_string(),
                         )
                         .await;
-                        report_writer.request();
                         return Err(error);
                     }
                 };
@@ -450,7 +446,6 @@ pub(super) async fn handle_connection(
                 match matched {
                     Some(matched) => {
                         if deliver_memcached_exchange(&mut reader, &state, &matched).await? {
-                            report_writer.request();
                             break;
                         }
                     }
@@ -465,7 +460,6 @@ pub(super) async fn handle_connection(
                         }
                     }
                 }
-                report_writer.request();
             }
         }
         MemcachedWireProtocol::Binary => {
@@ -483,7 +477,6 @@ pub(super) async fn handle_connection(
                             error.to_string(),
                         )
                         .await;
-                        report_writer.request();
                         return Err(error);
                     }
                 };
@@ -498,7 +491,6 @@ pub(super) async fn handle_connection(
                             error.to_string(),
                         )
                         .await;
-                        report_writer.request();
                         return Err(error);
                     }
                 };
@@ -520,7 +512,6 @@ pub(super) async fn handle_connection(
                             return Err(anyhow!(reason));
                         }
                         if deliver_memcached_exchange(&mut reader, &state, &matched).await? {
-                            report_writer.request();
                             break;
                         }
                     }
@@ -531,7 +522,6 @@ pub(super) async fn handle_connection(
                             .await?;
                     }
                 }
-                report_writer.request();
             }
         }
     }

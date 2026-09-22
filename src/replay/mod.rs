@@ -220,7 +220,6 @@ pub async fn run_replay_with_counters(
     let runtime =
         ReplayRuntime::load_with_lifecycle(config, dns_listen, tcp_listen, lifecycle).await?;
     runtime.state.lock().await.egress_counter_reader = counter_reader;
-    runtime.write_report().await?;
     info!(
         dns_listen = %dns_listen,
         tcp_listen = %tcp_listen,
@@ -230,7 +229,6 @@ pub async fn run_replay_with_counters(
         result = runtime.run_dns(dns_socket) => result,
         result = runtime.run_tcp(tcp_listener) => result,
         result = runtime.run_control() => result,
-        result = runtime.run_report_writer() => result,
     }
 }
 
@@ -244,7 +242,6 @@ struct ReplayRuntime {
     state: Arc<Mutex<ReplayState>>,
     ca: Arc<MitmCa>,
     report_path: Option<PathBuf>,
-    report_writer: ReplayReportWriter,
     session_path: Option<PathBuf>,
     control_socket_path: Option<PathBuf>,
 }
@@ -271,6 +268,7 @@ impl ReplayRuntime {
         tcp_listen: SocketAddr,
         lifecycle: ReplayLifecycleConfig,
     ) -> Result<Self> {
+        clear_report_artifacts(config.report_path.as_deref()).await?;
         let root_dir = config.case_dir;
         let process_owned_dependencies = &config.process_owned_dependencies;
         let replay_artifact_dir = config
@@ -455,7 +453,6 @@ impl ReplayRuntime {
             kafka,
             motan,
             http_events: http::HttpReplayEvents::default(),
-            report_write_lock: Arc::new(Mutex::new(())),
             ca_cert_path,
             replay_policy,
             http_ignore_query_params,
@@ -468,12 +465,10 @@ impl ReplayRuntime {
             next_unrecorded_fake_offset: 1,
             unrecorded_targets: Vec::new(),
         };
-        let report_writer = ReplayReportWriter::new(config.report_path.clone());
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
             ca,
             report_path: config.report_path,
-            report_writer,
             session_path: config.session_path,
             control_socket_path: config.control_socket_path,
         })
@@ -484,11 +479,8 @@ impl ReplayRuntime {
             let (stream, peer_addr) = accept_replay_tcp_connection(&listener).await?;
             let state = self.state.clone();
             let ca = self.ca.clone();
-            let report_writer = self.report_writer.clone();
             tokio::spawn(async move {
-                if let Err(err) =
-                    handle_gateway_connection(stream, peer_addr, state, report_writer, ca).await
-                {
+                if let Err(err) = handle_gateway_connection(stream, peer_addr, state, ca).await {
                     warn!(error = %err, "dependency replay connection failed");
                 }
             });
@@ -514,12 +506,17 @@ impl ReplayRuntime {
         }
     }
 
+    #[cfg(test)]
     async fn write_report(&self) -> Result<()> {
-        self.report_writer.flush(self.state.clone()).await
+        write_report_snapshot(self.state.clone(), self.report_path.clone()).await
     }
 
+    #[cfg(test)]
     async fn run_report_writer(&self) -> Result<()> {
-        self.report_writer.run(self.state.clone()).await
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            self.write_report().await?;
+        }
     }
 
     async fn run_control(&self) -> Result<()> {
@@ -583,7 +580,6 @@ struct ReplayState {
     kafka: kafka::KafkaReplayState,
     motan: motan::MotanReplayState,
     http_events: http::HttpReplayEvents,
-    report_write_lock: Arc<Mutex<()>>,
     ca_cert_path: PathBuf,
     replay_policy: Option<ReplayPolicyRuntime>,
     http_ignore_query_params: Vec<String>,
@@ -700,7 +696,6 @@ async fn handle_gateway_connection(
     stream: TcpStream,
     peer_addr: SocketAddr,
     state: Arc<Mutex<ReplayState>>,
-    report_writer: ReplayReportWriter,
     ca: Arc<MitmCa>,
 ) -> Result<()> {
     let target = match replay_destination_for_stream(&stream, &state).await {
@@ -715,7 +710,6 @@ async fn handle_gateway_connection(
             let mut replay = state.lock().await;
             replay.record_unrecorded_target(target.clone());
             drop(replay);
-            report_writer.flush(state.clone()).await?;
             let action = if active_case {
                 "connected to"
             } else {
@@ -734,23 +728,15 @@ async fn handle_gateway_connection(
             let target = target.context("auto replay connection has no target")?;
             match auto_protocol::detect(&stream).await? {
                 Some(ReplayProtocol::Redis) => {
-                    redis::handle_connection(stream, target, state, report_writer).await
+                    redis::handle_connection(stream, target, state).await
                 }
                 Some(ReplayProtocol::Memcached) => {
-                    memcached::handle_connection(stream, target, state, report_writer).await
+                    memcached::handle_connection(stream, target, state).await
                 }
                 Some(protocol @ (ReplayProtocol::Http | ReplayProtocol::Https)) => {
                     let mut target = target.clone();
                     target.protocol = protocol;
-                    http::handle_http_replay_connection(
-                        stream,
-                        peer_addr,
-                        target,
-                        state,
-                        report_writer,
-                        ca,
-                    )
-                    .await
+                    http::handle_http_replay_connection(stream, peer_addr, target, state, ca).await
                 }
                 Some(protocol) => Err(anyhow!(
                     "auto replay target resolved to unsupported protocol {protocol:?}"
@@ -764,7 +750,6 @@ async fn handle_gateway_connection(
                 peer_addr,
                 target.context("HTTP replay connection has no target")?,
                 state,
-                report_writer,
                 ca,
             )
             .await
@@ -774,7 +759,6 @@ async fn handle_gateway_connection(
                 stream,
                 target.context("Redis replay connection has no target")?,
                 state,
-                report_writer,
             )
             .await
         }
@@ -783,7 +767,6 @@ async fn handle_gateway_connection(
                 stream,
                 target.context("Memcached replay connection has no target")?,
                 state,
-                report_writer,
             )
             .await
         }
@@ -792,7 +775,6 @@ async fn handle_gateway_connection(
                 stream,
                 target.context("Kafka replay connection has no target")?,
                 state,
-                report_writer,
             )
             .await
         }
@@ -801,7 +783,6 @@ async fn handle_gateway_connection(
                 stream,
                 target.context("Motan replay connection has no target")?,
                 state,
-                report_writer,
             )
             .await
         }
@@ -810,14 +791,13 @@ async fn handle_gateway_connection(
                 host: target.host,
                 port: target.port,
             });
-            mysql::handle_connection(stream, peer_addr, target, state, report_writer, ca).await
+            mysql::handle_connection(stream, peer_addr, target, state, ca).await
         }
         None => {
             let registered_targets = state.lock().await.targets.len();
             #[cfg(test)]
             if registered_targets == 0 {
-                return mysql::handle_connection(stream, peer_addr, None, state, report_writer, ca)
-                    .await;
+                return mysql::handle_connection(stream, peer_addr, None, state, ca).await;
             }
             let original = original_dst(&stream)
                 .map(|addr| addr.to_string())

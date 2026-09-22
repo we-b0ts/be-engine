@@ -27,8 +27,8 @@ use url::form_urlencoded;
 
 use super::{
     DependencyRuleDecision, HttpPolicyContext, MitmCa, ReplayPolicyRuntime, ReplayProtocol,
-    ReplayReportWriter, ReplaySource, ReplayState, ReplayTarget, SuccessDetailBudget, TargetKey,
-    push_success_detail, register_replay_target, register_replay_target_at,
+    ReplaySource, ReplayState, ReplayTarget, SuccessDetailBudget, TargetKey, push_success_detail,
+    register_replay_target, register_replay_target_at,
 };
 use crate::DiscoveredTcpTarget;
 
@@ -322,11 +322,10 @@ pub(super) async fn handle_http_replay_connection(
     _peer_addr: std::net::SocketAddr,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
-    report_writer: ReplayReportWriter,
     ca: Arc<MitmCa>,
 ) -> Result<()> {
     match target.protocol {
-        ReplayProtocol::Http => serve_http_io(stream, target, state, report_writer).await,
+        ReplayProtocol::Http => serve_http_io(stream, target, state).await,
         ReplayProtocol::Https => {
             let server_config = ca.server_config_for_host(&target.host)?;
             let tls = TlsAcceptor::from(server_config)
@@ -335,7 +334,7 @@ pub(super) async fn handle_http_replay_connection(
                 .with_context(|| {
                     format!("HTTPS replay TLS handshake failed for {}", target.host)
                 })?;
-            serve_http_io(tls, target, state, report_writer).await
+            serve_http_io(tls, target, state).await
         }
         ReplayProtocol::Auto
         | ReplayProtocol::Mysql
@@ -346,23 +345,12 @@ pub(super) async fn handle_http_replay_connection(
     }
 }
 
-async fn serve_http_io<T>(
-    io: T,
-    target: ReplayTarget,
-    state: Arc<Mutex<ReplayState>>,
-    report_writer: ReplayReportWriter,
-) -> Result<()>
+async fn serve_http_io<T>(io: T, target: ReplayTarget, state: Arc<Mutex<ReplayState>>) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let service = service_fn(move |request| {
-        handle_http_request(
-            request,
-            target.clone(),
-            state.clone(),
-            report_writer.clone(),
-        )
-    });
+    let service =
+        service_fn(move |request| handle_http_request(request, target.clone(), state.clone()));
     hyper::server::conn::http1::Builder::new()
         .serve_connection(TokioIo::new(io), service)
         .await
@@ -373,7 +361,6 @@ async fn handle_http_request(
     request: Request<Incoming>,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
-    report_writer: ReplayReportWriter,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     let method = request.method().clone();
     let uri = request.uri().clone();
@@ -436,21 +423,40 @@ async fn handle_http_request(
     let record = match matched {
         Ok(record) => record,
         Err(HttpReplayMatchError::Blackhole) => {
-            report_writer.request();
             return pending::<Result<Response<Full<Bytes>>, Infallible>>().await;
         }
         Err(HttpReplayMatchError::BadGateway(reason)) => {
-            report_writer.request();
             return Ok(error_response(StatusCode::BAD_GATEWAY, &reason));
         }
     };
     let response = response_from_record(record)
         .unwrap_or_else(|error| error_response(StatusCode::BAD_GATEWAY, &error.to_string()));
-    report_writer.request();
     Ok(response)
 }
 
 impl ReplayState {
+    pub(super) fn http_case_is_dirty(&self, case_id: &str) -> bool {
+        self.http_events
+            .unmatched
+            .iter()
+            .any(|request| request.case_id.as_deref() == Some(case_id))
+            || self
+                .http_events
+                .unsupported
+                .iter()
+                .any(|request| request.case_id.as_deref() == Some(case_id))
+            || self.http_exchanges.iter().any(|exchange| {
+                let allowed = self
+                    .allowed_unused_http
+                    .as_ref()
+                    .is_some_and(|config| config.hosts.contains(&exchange.identity.target.host));
+                exchange.source == ReplaySource::Case
+                    && exchange.case_id.as_deref() == Some(case_id)
+                    && !exchange.consumed
+                    && !allowed
+            })
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn match_http_request(
         &mut self,

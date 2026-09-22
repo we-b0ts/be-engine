@@ -1,12 +1,10 @@
-use std::sync::Arc;
-use std::time::Duration;
-
 use serde_json::{Value, json};
 
 use super::super::*;
+use super::dependency_evidence::dependency_evidence_path;
 
 #[tokio::test]
-async fn coalesces_bursts_into_one_periodic_snapshot() {
+async fn loading_runtime_does_not_publish_report() {
     let temp = tempfile::tempdir().unwrap();
     let case_dir = temp.path().join("case-a");
     tokio::fs::create_dir_all(&case_dir).await.unwrap();
@@ -15,46 +13,35 @@ async fn coalesces_bursts_into_one_periodic_snapshot() {
         .unwrap();
     write_test_recording_network_manifest(&case_dir);
     let report_path = temp.path().join("replay-report.json");
-    let runtime = Arc::new(
-        ReplayRuntime::load(
-            ReplayConfig {
-                case_dir,
-                selected_case_ids: Vec::new(),
-                dns_listen: "127.0.0.1:0".parse().unwrap(),
-                tcp_listen: "127.0.0.1:0".parse().unwrap(),
-                fake_cidr: "198.18.0.0/15".to_string(),
-                report_path: Some(report_path.clone()),
-                session_path: None,
-                control_socket_path: None,
-                ca_cert_path: Some(temp.path().join("ca.pem")),
-                ca_key_path: Some(temp.path().join("ca-key.pem")),
-                policy_path: None,
-                http_ignore_query_params: Vec::new(),
-                process_owned_dependencies: Vec::new(),
-                allowed_unused_http: None,
-            },
-            "127.0.0.1:0".parse().unwrap(),
-            "127.0.0.1:0".parse().unwrap(),
-        )
-        .await
-        .unwrap(),
-    );
-    let writer = runtime.report_writer.clone();
-    let task_runtime = runtime.clone();
-    let task = tokio::spawn(async move {
-        let _ = task_runtime.run_report_writer().await;
-    });
+    let runtime = ReplayRuntime::load(
+        ReplayConfig {
+            case_dir,
+            selected_case_ids: Vec::new(),
+            dns_listen: "127.0.0.1:0".parse().unwrap(),
+            tcp_listen: "127.0.0.1:0".parse().unwrap(),
+            fake_cidr: "198.18.0.0/15".to_string(),
+            report_path: Some(report_path.clone()),
+            session_path: None,
+            control_socket_path: None,
+            ca_cert_path: Some(temp.path().join("ca.pem")),
+            ca_key_path: Some(temp.path().join("ca-key.pem")),
+            policy_path: None,
+            http_ignore_query_params: Vec::new(),
+            process_owned_dependencies: Vec::new(),
+            allowed_unused_http: None,
+        },
+        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1:0".parse().unwrap(),
+    )
+    .await
+    .unwrap();
 
-    for _ in 0..1_000 {
-        writer.request();
-    }
-    tokio::time::sleep(Duration::from_millis(1_200)).await;
+    assert!(!report_path.exists());
+    runtime.write_report().await.unwrap();
 
-    assert_eq!(writer.completed_writes(), 1);
     let report: Value =
         serde_json::from_slice(&tokio::fs::read(report_path).await.unwrap()).unwrap();
     assert_eq!(report["version"], 6);
-    task.abort();
 }
 
 #[tokio::test]
@@ -133,28 +120,6 @@ async fn final_report_publishes_bounded_case_dependency_evidence() {
         .unwrap();
     write_test_recording_network_manifest(&case_dir);
     let report_path = temp.path().join("replay-report.json");
-    let runtime = ReplayRuntime::load(
-        ReplayConfig {
-            case_dir,
-            selected_case_ids: Vec::new(),
-            dns_listen: "127.0.0.1:0".parse().unwrap(),
-            tcp_listen: "127.0.0.1:0".parse().unwrap(),
-            fake_cidr: "198.18.0.0/15".to_string(),
-            report_path: Some(report_path.clone()),
-            session_path: None,
-            control_socket_path: None,
-            ca_cert_path: Some(temp.path().join("ca.pem")),
-            ca_key_path: Some(temp.path().join("ca-key.pem")),
-            policy_path: None,
-            http_ignore_query_params: Vec::new(),
-            process_owned_dependencies: Vec::new(),
-            allowed_unused_http: None,
-        },
-        "127.0.0.1:0".parse().unwrap(),
-        "127.0.0.1:0".parse().unwrap(),
-    )
-    .await
-    .unwrap();
     let report = json!({
         "unrecorded_targets": [
             {"case_id":"case-a","target":{"host":"breeze.recording","port":9301},"reason":"访问了录制时没有访问过的域名:port"}
@@ -173,7 +138,7 @@ async fn final_report_publishes_bounded_case_dependency_evidence() {
         }
     });
 
-    write_final_report_value(runtime.state.clone(), report_path.clone(), &report)
+    write_final_report_value(report_path.clone(), &report)
         .await
         .unwrap();
 
@@ -200,4 +165,23 @@ async fn final_report_publishes_bounded_case_dependency_evidence() {
         .unwrap();
     assert_eq!(network.endpoint.as_ref().unwrap().host, "breeze.recording");
     assert_eq!(network.endpoint.as_ref().unwrap().port, 9301);
+}
+
+#[tokio::test]
+async fn final_report_is_removed_when_dependency_evidence_cannot_be_published() {
+    let temp = tempfile::tempdir().unwrap();
+    let report_path = temp.path().join("replay-report.json");
+    let evidence_path = dependency_evidence_path(&report_path);
+    tokio::fs::create_dir(&evidence_path).await.unwrap();
+
+    let error = write_final_report_value(report_path.clone(), &json!({}))
+        .await
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("failed to publish replay report")
+    );
+    assert!(!report_path.exists());
 }

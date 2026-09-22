@@ -19,8 +19,8 @@ use crate::redis::{
 };
 
 use super::{
-    ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplayReportWriter, ReplaySource,
-    ReplayState, ReplayTarget, SuccessDetailBudget, TargetKey, normalize_host, push_success_detail,
+    ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplaySource, ReplayState,
+    ReplayTarget, SuccessDetailBudget, TargetKey, normalize_host, push_success_detail,
     register_replay_target,
 };
 
@@ -310,14 +310,12 @@ pub(super) async fn handle_connection(
     mut stream: TcpStream,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
-    report_writer: ReplayReportWriter,
 ) -> Result<()> {
     let target_key = TargetKey {
         host: target.host,
         port: target.port,
     };
     state.lock().await.redis.events.connections += 1;
-    report_writer.request();
     let mut reader = RedisBufferedReader::new(&mut stream, 64 * 1024 * 1024);
     let mut resp_version = 2_u8;
     let mut database = 0_i64;
@@ -337,7 +335,6 @@ pub(super) async fn handle_connection(
                     error.to_string(),
                 )
                 .await;
-                report_writer.request();
                 return Err(error);
             }
         };
@@ -352,7 +349,6 @@ pub(super) async fn handle_connection(
                     error.to_string(),
                 )
                 .await;
-                report_writer.request();
                 return Err(error);
             }
         };
@@ -375,7 +371,6 @@ pub(super) async fn handle_connection(
                 .inner
                 .write_all(b"-ERR Redis command mode is unsupported for replay\r\n")
                 .await?;
-            report_writer.request();
             continue;
         }
         let (recorded_failure_case_id, recorded_failure) = if redis_is_builtin(&command.name) {
@@ -403,17 +398,14 @@ pub(super) async fn handle_connection(
                 connection_binding.bind(recorded_failure_case_id.as_deref(), matched.connection_id);
             }
             if deliver_redis_exchange(&mut reader, &state, &matched).await? {
-                report_writer.request();
                 break;
             }
-            report_writer.request();
             continue;
         }
         if let Some(response) =
             redis_builtin(&command, &mut resp_version, &mut database, &mut username)
         {
             reader.inner.write_all(&response).await?;
-            report_writer.request();
             if command.name == "QUIT" {
                 break;
             }
@@ -465,7 +457,6 @@ pub(super) async fn handle_connection(
         match response {
             Ok(matched) => {
                 if deliver_redis_exchange(&mut reader, &state, &matched).await? {
-                    report_writer.request();
                     break;
                 }
             }
@@ -476,7 +467,6 @@ pub(super) async fn handle_connection(
                     .await?;
             }
         }
-        report_writer.request();
     }
     Ok(())
 }

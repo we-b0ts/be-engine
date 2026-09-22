@@ -190,7 +190,6 @@ pub(super) async fn run_control_socket(
             stream,
             state.clone(),
             report_path.clone(),
-            session_path.clone(),
             Some(control_socket_path.clone()),
         )
         .await?
@@ -222,7 +221,6 @@ pub(super) async fn handle_control_stream(
     stream: UnixStream,
     state: Arc<Mutex<ReplayState>>,
     report_path: Option<PathBuf>,
-    session_path: Option<PathBuf>,
     control_socket_path: Option<PathBuf>,
 ) -> Result<bool> {
     let mut reader = BufReader::new(stream);
@@ -254,14 +252,6 @@ pub(super) async fn handle_control_stream(
         control_socket_path.clone(),
     )
     .await;
-    write_session_snapshot(
-        state,
-        session_path,
-        control_socket_path,
-        report_path.clone(),
-        !should_stop,
-    )
-    .await?;
     write_control_response(&mut stream, response).await?;
     Ok(should_stop)
 }
@@ -356,22 +346,15 @@ pub(super) async fn handle_control_request(
             false,
         );
     }
-    let write_result = if command == "finalize" && should_stop {
-        write_final_report_value(
-            state.clone(),
-            report_path.clone().expect("finalize report path checked"),
+    if command == "finalize"
+        && should_stop
+        && let Err(error) = write_final_report_value(
+            report_path.expect("finalize report path checked"),
             &response["report"],
         )
         .await
-    } else {
-        write_report_snapshot(state.clone(), report_path.clone()).await
-    };
-    if let Err(error) = write_result
-        && command == "finalize"
-        && should_stop
     {
         state.lock().await.finalized_at = None;
-        let _ = write_report_snapshot(state, report_path).await;
         return (
             serde_json::json!({
                 "ok": false,
@@ -385,7 +368,7 @@ pub(super) async fn handle_control_request(
 
 async fn finalize_replay(request: &ReplayControlRequest, state: Arc<Mutex<ReplayState>>) -> Value {
     let mut state = state.lock().await;
-    let report = state.snapshot_report();
+    let mut report = state.snapshot_report();
     let complete = report_is_complete(&report);
     let dirty = report_is_dirty(&report);
     if request.fail_on_incomplete && !complete {
@@ -404,13 +387,16 @@ async fn finalize_replay(request: &ReplayControlRequest, state: Arc<Mutex<Replay
             "error": "cannot finalize replay with unmatched, unused, or unsupported exchanges",
         });
     }
-    state.finalized_at = Some(Utc::now());
+    let finalized_at = Utc::now();
+    state.finalized_at = Some(finalized_at);
+    report.finalized_at = Some(finalized_at);
+    report.finalized = true;
     serde_json::json!({
         "ok": true,
         "complete": complete,
         "dirty": dirty,
         "finalized": true,
-        "report": state.snapshot_report(),
+        "report": report,
     })
 }
 
@@ -510,8 +496,7 @@ pub(super) async fn end_case(
     if let Some(case) = state.cases.get_mut(case_id) {
         case.status = ReplayCaseStatus::Ended;
     }
-    let report = state.snapshot_report();
-    let dirty = case_is_dirty(&report, case_id);
+    let dirty = state.case_is_dirty(case_id);
     if request.fail_on_dirty && dirty {
         serde_json::json!({
             "ok": false,
@@ -522,7 +507,6 @@ pub(super) async fn end_case(
         serde_json::json!({
             "ok": true,
             "dirty": dirty,
-            "report": report,
         })
     }
 }
@@ -549,7 +533,7 @@ pub(super) async fn write_session_snapshot(
     };
     let snapshot = {
         let state = state.lock().await;
-        session_snapshot(
+        session_discovery_snapshot(
             &state,
             control_socket_path.as_ref(),
             report_path.as_ref(),
@@ -567,6 +551,22 @@ pub(super) async fn write_session_snapshot(
     tokio::fs::write(&session_path, payload)
         .await
         .with_context(|| format!("failed to write replay session {}", session_path.display()))
+}
+
+fn session_discovery_snapshot(
+    state: &ReplayState,
+    control_socket_path: Option<&PathBuf>,
+    report_path: Option<&PathBuf>,
+    ready: bool,
+) -> Value {
+    serde_json::json!({
+        "version": 3,
+        "session_id": state.session_id.to_string(),
+        "control_socket": control_socket_path.map(|path| path.display().to_string()),
+        "report_path": report_path.map(|path| path.display().to_string()),
+        "pid": std::process::id(),
+        "ready": ready,
+    })
 }
 
 pub(super) fn session_snapshot(
@@ -605,8 +605,40 @@ pub(super) fn report_is_complete(report: &ReplayReport) -> bool {
     report.is_complete()
 }
 
-pub(super) fn case_is_dirty(report: &ReplayReport, case_id: &str) -> bool {
-    report.case_is_dirty(case_id)
+impl ReplayState {
+    fn case_is_dirty(&self, case_id: &str) -> bool {
+        self.unrecorded_targets
+            .iter()
+            .any(|target| target.case_id.as_deref() == Some(case_id))
+            || self
+                .mysql
+                .events
+                .unmatched_queries
+                .iter()
+                .any(|query| query.case_id.as_deref() == Some(case_id))
+            || self
+                .mysql
+                .events
+                .unsupported_commands
+                .iter()
+                .any(|query| query.case_id.as_deref() == Some(case_id))
+            || self.mysql.exchanges.iter().any(|exchange| {
+                let optional = exchange.optional_session.filter(|kind| {
+                    exchange.status.is_available()
+                        || *kind == OptionalSessionExchange::Rollback
+                            && exchange.status == ReplayExchangeStatus::Responding
+                });
+                exchange.source == ReplaySource::Case
+                    && exchange.case_id.as_deref() == Some(case_id)
+                    && !exchange.status.is_consumed()
+                    && optional.is_none()
+            })
+            || self.http_case_is_dirty(case_id)
+            || self.redis.snapshot().case_is_dirty(case_id)
+            || self.memcached.snapshot().case_is_dirty(case_id)
+            || self.kafka.snapshot().case_is_dirty(case_id)
+            || self.motan.snapshot().case_is_dirty(case_id)
+    }
 }
 
 #[cfg(test)]

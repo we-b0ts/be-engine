@@ -5,6 +5,7 @@ use chrono::Utc;
 use tokio::process::Child;
 
 use super::E2eRunContext;
+use super::active_progress::{self, ActiveProgressPhase};
 use super::case_progress;
 use super::final_evidence::{build_final_evidence, summarize_apis_without_aggregate};
 use super::model::{
@@ -51,6 +52,7 @@ pub async fn run_e2e_round(context: E2eRunContext) -> Result<E2eRunResult> {
         &format!("round-{sequence:06}"),
     )?;
     store::begin_active(&layout, &state)?;
+    let _ = active_progress::write(&layout, &state, ActiveProgressPhase::Building);
 
     if let Err(error) = run_active(&config, &layout, &inventory, &mut state).await {
         state.push_error(format!("{error:#}"));
@@ -189,6 +191,7 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
         &format!("focused-{}-{attempt:06}", api_directory(api_key)),
     )?;
     store::begin_active(&layout, &state)?;
+    let _ = active_progress::write(&layout, &state, ActiveProgressPhase::Building);
     if let Err(error) = run_active(&config, &layout, &focused_inventory, &mut state).await {
         state.push_error(format!("{error:#}"));
         state.status = RunStatus::Interrupted;
@@ -372,6 +375,7 @@ async fn run_active(
     let mut replay = spawn_replay(config, layout, inventory, state)?;
     state.replay_pid = replay.id();
     store::write_active(layout, state)?;
+    let _ = active_progress::write(layout, state, ActiveProgressPhase::Replaying);
     let outcome =
         run_active_with_replay(config, layout, inventory, state, &target_image, &mut replay).await;
     if outcome.is_err() {
@@ -438,7 +442,6 @@ async fn run_active_with_replay(
                 "API {:?} stopped after reaching the configured failure limit of {} case(s)",
                 case.group_id, config.max_failed_cases_per_api
             ));
-            let _ = store::write_active(layout, state);
         }
     }
 
@@ -451,6 +454,7 @@ async fn run_active_with_replay(
     stop_target_runtime(layout, state).await?;
     state.status = RunStatus::Finalizing;
     store::write_active(layout, state)?;
+    let _ = active_progress::write(layout, state, ActiveProgressPhase::Finalizing);
 
     finalize_replay(state, intentionally_incomplete).await?;
     wait_for_replay(replay).await?;
@@ -520,13 +524,12 @@ async fn execute_case(
         return;
     };
     state.cases[case_index].status = CaseStatus::Running;
-    let _ = store::write_active(layout, state);
 
     let begin = control(state, "begin", Some(case_id), false, false).await;
     if let Err(error) = begin {
         state.cases[case_index].status = CaseStatus::Incomplete;
         state.push_error(format!("case {case_id} begin failed: {error:#}"));
-        let _ = store::write_active(layout, state);
+        let _ = active_progress::write(layout, state, ActiveProgressPhase::Replaying);
         return;
     }
 
@@ -657,7 +660,7 @@ async fn execute_case(
             "case {case_id} replay evidence is dirty: {error:#}"
         ));
     }
-    let _ = store::write_active(layout, state);
+    let _ = active_progress::write(layout, state, ActiveProgressPhase::Replaying);
 }
 
 fn mark_unfinished_cases(state: &mut ActiveRunState) {

@@ -1101,12 +1101,15 @@ fails, preserve the diagnostic report and use
 `traffic-e2e diagnose replay-control stop` only for cleanup. Default replay
 reports are retained under a unique
 `.replay/sessions/<attempt>/replay-report.json` directory.
-Protocol traffic requests live snapshots through one coalescing writer, which
-writes at most once per second; lifecycle commands and finalization force an
-immediate snapshot. Version six keeps exact success counters while retaining
-at most `success_detail_limit` successful event details per category and
-executed case; unscoped startup traffic has its own bounded scope. Successful
-details carry a zero-based `target_event_index` within that case and category.
+Replay keeps protocol evidence in memory and publishes `replay-report.json`
+only during successful finalization. The diagnostic `report` control command
+can build the current report on demand without publishing an intermediate
+artifact. The session file is a small process-discovery document; detailed
+case status remains available through the control socket. Version six keeps
+exact success counters while retaining at most `success_detail_limit`
+successful event details per category and executed case; unscoped startup
+traffic has its own bounded scope. Successful details carry a zero-based
+`target_event_index` within that case and category.
 Dirty event details remain complete, and unused MySQL entries reference bounded SQL
 previews plus fingerprints instead of copying arbitrarily large SQL strings.
 The report's `unrecorded_targets` field contains exact `host:port` targets to
@@ -2513,6 +2516,13 @@ Replay. The terminal JSON reports independent `responses`, `replay`, and
 Pointer/kind differences, and one representative expected/actual observation.
 Value presence explicitly distinguishes JSON null, missing, unavailable, and
 not-applicable evidence.
+
+During an active attempt, the complete internal `state.yaml` is persisted only
+at lifecycle checkpoints needed for recovery and once more for terminal
+publication. Per-case status uses a small replace-only `progress.json` without
+durability syncs, so status can report build, replay progress, and finalization
+without repeatedly serializing the full case inventory. Recovery treats that
+progress file as informational and never resumes partial case results.
 
 Normal AI operation starts with the bounded terminal result. Representative
 evidence links directly to an immutable recorded case for request, expected
