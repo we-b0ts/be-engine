@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::future::pending;
 use std::net::SocketAddr;
@@ -26,9 +26,9 @@ use tracing::info;
 use url::form_urlencoded;
 
 use super::{
-    DependencyRuleDecision, HttpPolicyContext, MitmCa, ReplayPolicyRuntime, ReplayProtocol,
-    ReplaySource, ReplayState, ReplayTarget, SuccessDetailBudget, TargetKey, push_success_detail,
-    register_replay_target, register_replay_target_at,
+    CaseExchangeIndex, DependencyRuleDecision, HttpPolicyContext, MitmCa, ReplayPolicyRuntime,
+    ReplayProtocol, ReplaySource, ReplayState, ReplayTarget, SuccessDetailBudget, TargetKey,
+    push_success_detail, register_replay_target, register_replay_target_at,
 };
 use crate::DiscoveredTcpTarget;
 
@@ -118,11 +118,20 @@ enum HttpReplayMatchError {
 
 #[derive(Debug, Default)]
 pub(super) struct HttpReplayEvents {
+    pub(super) dirty_case_ids: BTreeSet<String>,
     pub(super) matched_count: usize,
     pub(super) matched: Vec<MatchedHttpExchangeReport>,
     pub(super) matched_details: SuccessDetailBudget,
     pub(super) unmatched: Vec<HttpRequestReport>,
     pub(super) unsupported: Vec<HttpRequestReport>,
+}
+
+pub(super) fn case_exchange_index(exchanges: &[ReplayHttpExchange]) -> CaseExchangeIndex {
+    let mut index = CaseExchangeIndex::default();
+    for (position, exchange) in exchanges.iter().enumerate() {
+        index.register(exchange.source, exchange.case_id.as_deref(), position);
+    }
+    index
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -436,24 +445,14 @@ async fn handle_http_request(
 
 impl ReplayState {
     pub(super) fn http_case_is_dirty(&self, case_id: &str) -> bool {
-        self.http_events
-            .unmatched
-            .iter()
-            .any(|request| request.case_id.as_deref() == Some(case_id))
-            || self
-                .http_events
-                .unsupported
-                .iter()
-                .any(|request| request.case_id.as_deref() == Some(case_id))
-            || self.http_exchanges.iter().any(|exchange| {
-                let allowed = self
-                    .allowed_unused_http
-                    .as_ref()
-                    .is_some_and(|config| config.hosts.contains(&exchange.identity.target.host));
-                exchange.source == ReplaySource::Case
-                    && exchange.case_id.as_deref() == Some(case_id)
-                    && !exchange.consumed
-                    && !allowed
+        self.http_events.dirty_case_ids.contains(case_id)
+            || self.http_case_exchange_index.any(case_id, |index| {
+                self.http_exchanges.get(index).is_some_and(|exchange| {
+                    let allowed = self.allowed_unused_http.as_ref().is_some_and(|config| {
+                        config.hosts.contains(&exchange.identity.target.host)
+                    });
+                    !exchange.consumed && !allowed
+                })
             })
     }
 
@@ -588,6 +587,9 @@ impl ReplayState {
             self.http_exchanges[index].consumed = true;
             let reason = "recorded HTTP exchange contains an upstream error that replay v1 cannot synthesize"
                 .to_string();
+            if let Some(case_id) = &exchange.case_id {
+                self.http_events.dirty_case_ids.insert(case_id.clone());
+            }
             self.http_events.unsupported.push(HttpRequestReport {
                 case_id: exchange.case_id,
                 scheme,
@@ -659,6 +661,9 @@ impl ReplayState {
         uri: &Uri,
         reason: String,
     ) {
+        if let Some(case_id) = &self.active_case_id {
+            self.http_events.dirty_case_ids.insert(case_id.clone());
+        }
         self.http_events.unmatched.push(HttpRequestReport {
             case_id: self.active_case_id.clone(),
             scheme,

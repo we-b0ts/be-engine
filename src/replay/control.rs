@@ -647,33 +647,8 @@ pub(super) fn report_is_complete(report: &ReplayReport) -> bool {
 
 impl ReplayState {
     fn case_is_dirty(&self, case_id: &str) -> bool {
-        let dirty = self
-            .unrecorded_targets
-            .iter()
-            .any(|target| target.case_id.as_deref() == Some(case_id))
-            || self
-                .mysql
-                .events
-                .unmatched_queries
-                .iter()
-                .any(|query| query.case_id.as_deref() == Some(case_id))
-            || self
-                .mysql
-                .events
-                .unsupported_commands
-                .iter()
-                .any(|query| query.case_id.as_deref() == Some(case_id))
-            || self.mysql.exchanges.iter().any(|exchange| {
-                let optional = exchange.optional_session.filter(|kind| {
-                    exchange.status.is_available()
-                        || *kind == OptionalSessionExchange::Rollback
-                            && exchange.status == ReplayExchangeStatus::Responding
-                });
-                exchange.source == ReplaySource::Case
-                    && exchange.case_id.as_deref() == Some(case_id)
-                    && !exchange.status.is_consumed()
-                    && optional.is_none()
-            })
+        let dirty = self.unrecorded_case_ids.contains(case_id)
+            || self.mysql.case_is_dirty(case_id)
             || self.http_case_is_dirty(case_id)
             || self.redis.case_is_dirty(case_id)
             || self.memcached.case_is_dirty(case_id)

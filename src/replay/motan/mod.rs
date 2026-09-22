@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
@@ -24,9 +24,9 @@ use super::report::command::{
     CommandUnusedReport,
 };
 use super::{
-    ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplaySource, ReplayState,
-    ReplayTarget, SuccessDetailBudget, TargetKey, is_connection_termination, normalize_host,
-    push_success_detail, register_replay_target_at,
+    CaseExchangeIndex, ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplaySource,
+    ReplayState, ReplayTarget, SuccessDetailBudget, TargetKey, is_connection_termination,
+    normalize_host, push_success_detail, register_replay_target_at,
 };
 
 mod auth;
@@ -146,6 +146,7 @@ struct MatchedExchange {
 #[derive(Debug)]
 pub(super) struct MotanReplayState {
     exchanges: Vec<ReplayExchange>,
+    case_exchange_index: CaseExchangeIndex,
     heartbeats: Vec<HeartbeatTemplate>,
     lane_progress: watch::Sender<u64>,
     pub(super) events: MotanReplayEvents,
@@ -153,6 +154,7 @@ pub(super) struct MotanReplayState {
 
 #[derive(Debug, Default)]
 pub(super) struct MotanReplayEvents {
+    dirty_case_ids: BTreeSet<String>,
     connections: usize,
     matched_count: usize,
     matched: Vec<CommandMatchedReport>,
@@ -167,6 +169,7 @@ impl Default for MotanReplayState {
         let (lane_progress, _) = watch::channel(0);
         Self {
             exchanges: Vec::new(),
+            case_exchange_index: CaseExchangeIndex::default(),
             heartbeats: Vec::new(),
             lane_progress,
             events: MotanReplayEvents::default(),
@@ -253,6 +256,9 @@ impl MotanReplayState {
             record.response.decode()?
         };
         let timing = ReplayExchangeTiming::from_recorded(record.duration_ms, record.outcome);
+        let exchange_index = self.exchanges.len();
+        self.case_exchange_index
+            .register(source, case_id, exchange_index);
         self.exchanges.push(ReplayExchange {
             source,
             case_id: case_id.map(ToOwned::to_owned),
@@ -406,6 +412,9 @@ impl MotanReplayState {
 
     fn fail(&mut self, matched: &MatchedExchange, reason: String) {
         self.exchanges[matched.index].status = ReplayExchangeStatus::Failed;
+        if let Some(case_id) = &matched.report.case_id {
+            self.events.dirty_case_ids.insert(case_id.clone());
+        }
         self.events.unsafe_events.push(CommandRequestReport {
             case_id: matched.report.case_id.clone(),
             target: matched.report.target.clone(),
@@ -430,16 +439,11 @@ impl MotanReplayState {
     }
 
     pub(super) fn case_is_dirty(&self, case_id: &str) -> bool {
-        self.events
-            .unmatched
-            .iter()
-            .chain(&self.events.unsupported)
-            .chain(&self.events.unsafe_events)
-            .any(|request| request.case_id.as_deref() == Some(case_id))
-            || self.exchanges.iter().any(|exchange| {
-                exchange.source == ReplaySource::Case
-                    && exchange.case_id.as_deref() == Some(case_id)
-                    && !exchange.status.is_consumed()
+        self.events.dirty_case_ids.contains(case_id)
+            || self.case_exchange_index.any(case_id, |index| {
+                self.exchanges
+                    .get(index)
+                    .is_some_and(|exchange| !exchange.status.is_consumed())
             })
     }
 }
@@ -642,6 +646,9 @@ async fn enqueue_request(
         let Some(mut template) = template else {
             let mut replay = state.lock().await;
             let case_id = replay.active_case_id.clone();
+            if let Some(case_id) = &case_id {
+                replay.motan.events.dirty_case_ids.insert(case_id.clone());
+            }
             replay.motan.events.unsupported.push(CommandRequestReport {
                 case_id,
                 target: target.clone(),
@@ -712,19 +719,17 @@ async fn record_unmatched_request(
     diagnostic: CommandMatchDiagnostic,
 ) {
     let reason = motan_unmatched_reason(&diagnostic);
-    state
-        .lock()
-        .await
-        .motan
-        .events
-        .unmatched
-        .push(CommandRequestReport {
-            case_id: active_case_id,
-            target: target.clone(),
-            command: identity.command(),
-            reason,
-            diagnostic: Some(diagnostic),
-        });
+    let mut state = state.lock().await;
+    if let Some(case_id) = &active_case_id {
+        state.motan.events.dirty_case_ids.insert(case_id.clone());
+    }
+    state.motan.events.unmatched.push(CommandRequestReport {
+        case_id: active_case_id,
+        target: target.clone(),
+        command: identity.command(),
+        reason,
+        diagnostic: Some(diagnostic),
+    });
 }
 
 impl RecordedCapture {

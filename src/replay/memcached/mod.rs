@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
@@ -12,9 +12,10 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::{
-    DependencyRuleDecision, MemcachedPolicyContext, ReplayExchangeStatus, ReplayExchangeTiming,
-    ReplayPolicyRuntime, ReplayProtocol, ReplaySource, ReplayState, ReplayTarget,
-    SuccessDetailBudget, TargetKey, normalize_host, push_success_detail, register_replay_target,
+    CaseExchangeIndex, DependencyRuleDecision, MemcachedPolicyContext, ReplayExchangeStatus,
+    ReplayExchangeTiming, ReplayPolicyRuntime, ReplayProtocol, ReplaySource, ReplayState,
+    ReplayTarget, SuccessDetailBudget, TargetKey, normalize_host, push_success_detail,
+    register_replay_target,
 };
 use crate::DependencyExchangeOutcome;
 use crate::memcached::{
@@ -123,11 +124,13 @@ struct MemcachedMatchContext<'a> {
 #[derive(Debug, Default)]
 pub(super) struct MemcachedReplayState {
     exchanges: Vec<ReplayExchange>,
+    case_exchange_index: CaseExchangeIndex,
     pub(super) events: MemcachedReplayEvents,
 }
 
 #[derive(Debug, Default)]
 pub(super) struct MemcachedReplayEvents {
+    dirty_case_ids: BTreeSet<String>,
     pub(super) connections: usize,
     matched_count: usize,
     matched: Vec<CommandMatchedReport>,
@@ -237,6 +240,9 @@ impl MemcachedReplayState {
             source,
             record.global_dependency_reason.as_deref(),
         );
+        let exchange_index = self.exchanges.len();
+        self.case_exchange_index
+            .register(source, case_id, exchange_index);
         self.exchanges.push(ReplayExchange {
             source,
             case_id: case_id.map(ToOwned::to_owned),
@@ -379,6 +385,9 @@ impl MemcachedReplayState {
         if let Some(exchange) = self.exchanges.get_mut(matched.index) {
             exchange.status = ReplayExchangeStatus::Failed;
         }
+        if let Some(case_id) = &matched.report.case_id {
+            self.events.dirty_case_ids.insert(case_id.clone());
+        }
         self.events.unsafe_events.push(CommandRequestReport {
             case_id: matched.report.case_id.clone(),
             target: matched.report.target.clone(),
@@ -403,16 +412,11 @@ impl MemcachedReplayState {
     }
 
     pub(super) fn case_is_dirty(&self, case_id: &str) -> bool {
-        self.events
-            .unmatched
-            .iter()
-            .chain(&self.events.unsupported)
-            .chain(&self.events.unsafe_events)
-            .any(|request| request.case_id.as_deref() == Some(case_id))
-            || self.exchanges.iter().any(|exchange| {
-                exchange.source == ReplaySource::Case
-                    && exchange.case_id.as_deref() == Some(case_id)
-                    && !exchange.status.is_consumed()
+        self.events.dirty_case_ids.contains(case_id)
+            || self.case_exchange_index.any(case_id, |index| {
+                self.exchanges
+                    .get(index)
+                    .is_some_and(|exchange| !exchange.status.is_consumed())
             })
     }
 }
@@ -605,6 +609,13 @@ async fn record_runtime_unsafe(
         diagnostic: None,
     };
     let _ = protocol;
+    if let Some(case_id) = &request.case_id {
+        state
+            .memcached
+            .events
+            .dirty_case_ids
+            .insert(case_id.clone());
+    }
     state.memcached.events.unsafe_events.push(request);
 }
 
@@ -618,6 +629,13 @@ async fn match_memcached_request(
     let active_case_id = state.active_case_id.clone();
     let observed_at = Utc::now();
     if memcached_is_unsupported(request) {
+        if let Some(case_id) = &active_case_id {
+            state
+                .memcached
+                .events
+                .dirty_case_ids
+                .insert(case_id.clone());
+        }
         state
             .memcached
             .events
@@ -651,6 +669,13 @@ async fn match_memcached_request(
             Some(matched)
         }
         Err(diagnostic) => {
+            if let Some(case_id) = &active_case_id {
+                state
+                    .memcached
+                    .events
+                    .dirty_case_ids
+                    .insert(case_id.clone());
+            }
             state.memcached.events.unmatched.push(CommandRequestReport {
                 case_id: active_case_id,
                 target: target.clone(),

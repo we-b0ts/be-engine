@@ -3,8 +3,32 @@ use super::*;
 #[derive(Debug, Default)]
 pub(in crate::replay) struct MysqlReplayState {
     pub(in crate::replay) exchanges: Vec<ReplayExchange>,
+    case_exchange_index: CaseExchangeIndex,
     pub(in crate::replay) events: ReplayEvents,
     pub(super) sql_cache: sql_match::cache::SqlCache,
+}
+
+impl MysqlReplayState {
+    pub(in crate::replay) fn register_exchange(&mut self, exchange: ReplayExchange) {
+        let index = self.exchanges.len();
+        self.case_exchange_index
+            .register(exchange.source, exchange.case_id.as_deref(), index);
+        self.exchanges.push(exchange);
+    }
+
+    pub(in crate::replay) fn case_is_dirty(&self, case_id: &str) -> bool {
+        self.events.dirty_case_ids.contains(case_id)
+            || self.case_exchange_index.any(case_id, |index| {
+                self.exchanges.get(index).is_some_and(|exchange| {
+                    let optional = exchange.optional_session.filter(|kind| {
+                        exchange.status.is_available()
+                            || *kind == OptionalSessionExchange::Rollback
+                                && exchange.status == ReplayExchangeStatus::Responding
+                    });
+                    !exchange.status.is_consumed() && optional.is_none()
+                })
+            })
+    }
 }
 
 impl ReplayState {
@@ -65,6 +89,9 @@ impl ReplayState {
         params: Option<&[RecordedMysqlValue]>,
         reason: &str,
     ) {
+        if let Some(case_id) = &self.active_case_id {
+            self.mysql.events.dirty_case_ids.insert(case_id.clone());
+        }
         self.mysql.events.unsupported_commands.push(QueryReport {
             case_id: self.active_case_id.clone(),
             target: identity.target.clone(),
@@ -88,6 +115,9 @@ impl ReplayState {
         params: Option<&[RecordedMysqlValue]>,
         reason: &str,
     ) {
+        if let Some(case_id) = &self.active_case_id {
+            self.mysql.events.dirty_case_ids.insert(case_id.clone());
+        }
         self.mysql.events.unmatched_queries.push(QueryReport {
             case_id: self.active_case_id.clone(),
             target: identity.target.clone(),

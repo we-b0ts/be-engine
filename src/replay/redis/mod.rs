@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, ensure};
@@ -19,8 +19,8 @@ use crate::redis::{
 };
 
 use super::{
-    ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplaySource, ReplayState,
-    ReplayTarget, SuccessDetailBudget, TargetKey, normalize_host, push_success_detail,
+    CaseExchangeIndex, ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplaySource,
+    ReplayState, ReplayTarget, SuccessDetailBudget, TargetKey, normalize_host, push_success_detail,
     register_replay_target,
 };
 
@@ -119,6 +119,7 @@ pub(super) struct RedisReplayState {
     pub(super) value_rules: Vec<value::ValueRule>,
     unordered_value: value::evidence::OrderEvidence,
     exchanges: Vec<ReplayExchange>,
+    case_exchange_index: CaseExchangeIndex,
     pub(super) events: RedisReplayEvents,
     snapshot_overlays: Vec<super::report::command::CommandSnapshotOverlayReport>,
     snapshot_overlay_warnings: Vec<String>,
@@ -126,6 +127,7 @@ pub(super) struct RedisReplayState {
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayEvents {
+    dirty_case_ids: BTreeSet<String>,
     pub(super) connections: usize,
     matched_count: usize,
     matched: Vec<CommandMatchedReport>,
@@ -238,6 +240,9 @@ impl RedisReplayState {
             return Ok(());
         }
         self.connection_scopes.register(&record, &args);
+        let exchange_index = self.exchanges.len();
+        self.case_exchange_index
+            .register(source, case_id, exchange_index);
         self.exchanges.push(ReplayExchange {
             response_time_shift: None,
             source,
@@ -279,6 +284,9 @@ impl RedisReplayState {
         if let Some(exchange) = self.exchanges.get_mut(matched.index) {
             exchange.status = ReplayExchangeStatus::Failed;
         }
+        if let Some(case_id) = &matched.report.case_id {
+            self.events.dirty_case_ids.insert(case_id.clone());
+        }
         self.events.unsafe_events.push(CommandRequestReport {
             case_id: matched.report.case_id.clone(),
             target: matched.report.target.clone(),
@@ -306,20 +314,15 @@ impl RedisReplayState {
     }
 
     pub(super) fn case_is_dirty(&self, case_id: &str) -> bool {
-        self.events
-            .unmatched
-            .iter()
-            .chain(&self.events.unsupported)
-            .chain(&self.events.unsafe_events)
-            .any(|request| request.case_id.as_deref() == Some(case_id))
-            || self.exchanges.iter().any(|exchange| {
-                exchange.source == ReplaySource::Case
-                    && exchange.case_id.as_deref() == Some(case_id)
-                    && if exchange.reusable_snapshot {
+        self.events.dirty_case_ids.contains(case_id)
+            || self.case_exchange_index.any(case_id, |index| {
+                self.exchanges.get(index).is_some_and(|exchange| {
+                    if exchange.reusable_snapshot {
                         !exchange.matched_once
                     } else {
                         !exchange.status.is_consumed()
                     }
+                })
             })
     }
 }
@@ -457,6 +460,9 @@ pub(super) async fn handle_connection(
                 }
                 Err(diagnostic) => {
                     let authentication_hint = redis_authentication_hint(&diagnostic);
+                    if let Some(case_id) = &active_case_id {
+                        state.redis.events.dirty_case_ids.insert(case_id.clone());
+                    }
                     state.redis.events.unmatched.push(CommandRequestReport {
                         case_id: active_case_id,
                         target: target_key.clone(),
@@ -590,6 +596,9 @@ async fn record_runtime_unsafe(
         reason,
         diagnostic: None,
     };
+    if let Some(case_id) = &request.case_id {
+        state.redis.events.dirty_case_ids.insert(case_id.clone());
+    }
     state.redis.events.unsafe_events.push(request);
 }
 

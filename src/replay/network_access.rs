@@ -107,6 +107,9 @@ impl ReplayState {
         {
             return;
         }
+        if let Some(case_id) = &case_id {
+            self.unrecorded_case_ids.insert(case_id.clone());
+        }
         self.unrecorded_targets.push(super::UnrecordedTargetReport {
             case_id,
             target,

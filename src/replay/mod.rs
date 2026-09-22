@@ -22,6 +22,7 @@ use crate::MitmCa;
 use crate::request_headers::validate_request_file;
 mod assertion;
 mod auto_protocol;
+mod case_index;
 mod command_matching;
 #[cfg(test)]
 mod command_protocol_tests;
@@ -56,6 +57,7 @@ pub(crate) mod report;
 #[cfg(test)]
 mod test_support;
 
+use case_index::*;
 use control::*;
 use dependencies::*;
 use dns::*;
@@ -318,7 +320,7 @@ impl ReplayRuntime {
                 path,
                 ReplaySource::Global,
                 None,
-                &mut mysql.exchanges,
+                &mut mysql,
                 &mut http_exchanges,
                 &mut http_blackholes,
                 &mut redis,
@@ -339,7 +341,7 @@ impl ReplayRuntime {
                 &case.dependencies_path,
                 ReplaySource::Case,
                 Some(&case.id),
-                &mut mysql.exchanges,
+                &mut mysql,
                 &mut http_exchanges,
                 &mut http_blackholes,
                 &mut redis,
@@ -385,6 +387,7 @@ impl ReplayRuntime {
         })
         .await
         .context("HTTP cross-case preload task failed")??;
+        let http_case_exchange_index = http::case_exchange_index(&http_exchanges);
         redis.apply_snapshot_overlays(&root_dir, process_owned_dependencies);
 
         let recording_network_path =
@@ -449,6 +452,7 @@ impl ReplayRuntime {
             targets,
             mysql,
             http_exchanges,
+            http_case_exchange_index,
             http_blackholes,
             redis,
             memcached,
@@ -466,6 +470,7 @@ impl ReplayRuntime {
             occupied_fake_ips,
             next_unrecorded_fake_offset: 1,
             unrecorded_targets: Vec::new(),
+            unrecorded_case_ids: BTreeSet::new(),
         };
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
@@ -576,6 +581,7 @@ struct ReplayState {
     targets: Vec<ReplayTarget>,
     mysql: mysql::MysqlReplayState,
     http_exchanges: Vec<http::ReplayHttpExchange>,
+    http_case_exchange_index: CaseExchangeIndex,
     http_blackholes: Vec<http::ReplayHttpBlackhole>,
     redis: redis::RedisReplayState,
     memcached: memcached::MemcachedReplayState,
@@ -593,6 +599,7 @@ struct ReplayState {
     occupied_fake_ips: BTreeSet<Ipv4Addr>,
     next_unrecorded_fake_offset: u32,
     unrecorded_targets: Vec<UnrecordedTargetReport>,
+    unrecorded_case_ids: BTreeSet<String>,
 }
 
 impl ReplayState {

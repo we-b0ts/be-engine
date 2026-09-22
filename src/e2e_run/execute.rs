@@ -538,10 +538,17 @@ async fn execute_case(
     case_dir: &Path,
     runtime: &CaseExecutionRuntime,
 ) {
-    let Some(case_index) = state.cases.iter().position(|case| case.case_id == case_id) else {
-        state.push_error(format!("case {case_id} disappeared from run state"));
+    let case_index = position;
+    if state
+        .cases
+        .get(case_index)
+        .is_none_or(|case| case.case_id != case_id)
+    {
+        state.push_error(format!(
+            "case {case_id} no longer matches run position {position}"
+        ));
         return;
-    };
+    }
     state.cases[case_index].status = CaseStatus::Running;
 
     let begin = control(state, "begin", Some(case_id), false, false).await;

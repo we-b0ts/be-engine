@@ -31,7 +31,7 @@ pub(super) async fn load_dependency_file(
     path: &Path,
     source: ReplaySource,
     case_id: Option<&str>,
-    exchanges: &mut Vec<ReplayExchange>,
+    mysql: &mut MysqlReplayState,
     http_exchanges: &mut Vec<http::ReplayHttpExchange>,
     http_blackholes: &mut Vec<http::ReplayHttpBlackhole>,
     redis: &mut redis::RedisReplayState,
@@ -177,7 +177,7 @@ pub(super) async fn load_dependency_file(
             })?;
         register_replay_target(targets, &identity.target, ReplayProtocol::Mysql)?;
         let timing = ReplayExchangeTiming::from_recorded(exchange.duration_ms, exchange.outcome);
-        exchanges.push(ReplayExchange {
+        mysql.register_exchange(ReplayExchange {
             source,
             case_id: case_id.map(ToOwned::to_owned),
             identity,
