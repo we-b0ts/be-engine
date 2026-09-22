@@ -15,6 +15,8 @@ use super::{E2eRunInitOptions, E2eRunInitResult, branch};
 use crate::replay::validate_replay_policy;
 use anyhow::{Context, Result, bail, ensure};
 
+mod cache;
+
 pub(super) const CONFIG_VERSION: u32 = 18;
 pub(super) const DEFAULT_RUNTIME_ROOT: &str = crate::internal_runtime::PROJECT_RELATIVE_ROOT;
 pub(crate) const PROJECT_CONFIG_FILE: &str = "project.yaml";
@@ -205,6 +207,9 @@ pub(super) fn resolve_layout(
 pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedProjectConfig)> {
     let target_root = fs::canonicalize(target_root)
         .with_context(|| format!("failed to resolve target root {}", target_root.display()))?;
+    if let Some(project) = cache::get(&target_root) {
+        return Ok((target_root, project));
+    }
     let config_path = target_root
         .join(crate::repository::TRAFFIC_E2E_ROOT)
         .join(PROJECT_CONFIG_FILE);
@@ -273,49 +278,50 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
             "verification process_output_rules references disabled or unknown process output {output_id:?}"
         );
     }
-    Ok((
-        target_root.clone(),
-        ResolvedProjectConfig {
-            target_dockerfile: resolve_under(&target_root, &config.project.target.dockerfile),
-            target_build_contexts: managed.build_contexts,
-            target_startup: config.project.target.startup,
-            target_runtime_outputs: config.project.target.runtime_outputs,
-            target_http_origin: format!("http://127.0.0.1:{target_port}"),
-            target_port,
-            target_http_readiness_enabled,
-            target_motan_upstream,
-            target_motan_connect_timeout,
-            target_motan_request_timeout,
-            target_motan_limits,
-            target_readiness_path: recorder.http_gateway.ready.path,
-            target_readiness_status: recorder.http_gateway.ready.success_status,
-            target_startup_timeout: Duration::from_secs(
-                config.project.target.startup_timeout_seconds,
-            ),
-            target_request_timeout,
-            target_quality_gates,
-            target_max_response_bytes,
-            process_outputs,
-            process_output_rules: policy.process_output_rules,
-            breeze_container: config.project.breeze.map(|breeze| breeze.container),
-            replay_policy: policy_path,
-            replay_case_dependency_post_response_window: Duration::from_millis(
-                config
-                    .project
-                    .replay
-                    .case_dependency_post_response_window_ms,
-            ),
-            max_failed_cases_per_api: config.project.verification.max_failed_cases_per_api,
-            replay_startup_timeout: Duration::from_secs(
-                super::model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
-            ),
-            pr_base: config.project.delivery.pr_base,
-            managed_paths: managed.paths,
-            recorder_config,
-            source_traffic_policy,
-            runner_owned_response_assertions: policy.runner_owned_response_assertions,
-        },
-    ))
+    let project = ResolvedProjectConfig {
+        target_dockerfile: resolve_under(&target_root, &config.project.target.dockerfile),
+        target_build_contexts: managed.build_contexts,
+        target_startup: config.project.target.startup,
+        target_runtime_outputs: config.project.target.runtime_outputs,
+        target_http_origin: format!("http://127.0.0.1:{target_port}"),
+        target_port,
+        target_http_readiness_enabled,
+        target_motan_upstream,
+        target_motan_connect_timeout,
+        target_motan_request_timeout,
+        target_motan_limits,
+        target_readiness_path: recorder.http_gateway.ready.path,
+        target_readiness_status: recorder.http_gateway.ready.success_status,
+        target_startup_timeout: Duration::from_secs(config.project.target.startup_timeout_seconds),
+        target_request_timeout,
+        target_quality_gates,
+        target_max_response_bytes,
+        process_outputs,
+        process_output_rules: policy.process_output_rules,
+        breeze_container: config.project.breeze.map(|breeze| breeze.container),
+        replay_policy: policy_path,
+        replay_case_dependency_post_response_window: Duration::from_millis(
+            config
+                .project
+                .replay
+                .case_dependency_post_response_window_ms,
+        ),
+        max_failed_cases_per_api: config.project.verification.max_failed_cases_per_api,
+        replay_startup_timeout: Duration::from_secs(
+            super::model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
+        ),
+        pr_base: config.project.delivery.pr_base,
+        managed_paths: managed.paths,
+        recorder_config,
+        source_traffic_policy,
+        runner_owned_response_assertions: policy.runner_owned_response_assertions,
+    };
+    cache::insert(target_root.clone(), project.clone());
+    Ok((target_root, project))
+}
+
+pub(crate) fn with_project_resolution_cache<T>(operation: impl FnOnce() -> T) -> T {
+    cache::scope(operation)
 }
 
 pub(super) fn require_internal_root_ignored(
@@ -344,6 +350,9 @@ pub(super) fn require_internal_root_ignored(
 }
 
 pub(super) fn load_project_config(target_root: &Path, config_path: &Path) -> Result<ProjectConfig> {
+    if let Some(config) = cache::document(config_path) {
+        return Ok(config);
+    }
     if !config_path.exists() {
         bail!(
             "{} is missing; from the target repository run `backend-rewrite init \
@@ -366,6 +375,7 @@ pub(super) fn load_project_config(target_root: &Path, config_path: &Path) -> Res
         )
     })?;
     branch::validate_pr_base(target_root, &config.project.delivery.pr_base)?;
+    cache::insert_document(config_path.to_path_buf(), config.clone());
     Ok(config)
 }
 

@@ -15,6 +15,10 @@ pub fn status_rewrite(context: RewriteContext) -> Result<RewriteStatusReport> {
 }
 
 pub fn inventory_rewrite(context: RewriteContext) -> Result<RewriteInventoryReport> {
+    with_read_snapshot(|| inventory_rewrite_uncached(context))
+}
+
+fn inventory_rewrite_uncached(context: RewriteContext) -> Result<RewriteInventoryReport> {
     let (target_root, project) = crate::e2e_run::resolve_project(&context.target_root)?;
     if super::purpose::pending(&target_root)?.is_some() {
         return Ok(RewriteInventoryReport {
@@ -77,6 +81,13 @@ pub fn inventory_rewrite(context: RewriteContext) -> Result<RewriteInventoryRepo
 }
 
 pub fn status_rewrite_for_api(
+    context: RewriteContext,
+    api: Option<&RecordingApi>,
+) -> Result<RewriteStatusReport> {
+    with_read_snapshot(|| status_rewrite_for_api_uncached(context, api))
+}
+
+fn status_rewrite_for_api_uncached(
     context: RewriteContext,
     api: Option<&RecordingApi>,
 ) -> Result<RewriteStatusReport> {
@@ -152,6 +163,13 @@ pub fn status_rewrite_for_api(
 }
 
 pub fn status_rewrite_for_process_output(
+    context: RewriteContext,
+    id: &str,
+) -> Result<RewriteStatusReport> {
+    with_read_snapshot(|| status_rewrite_for_process_output_uncached(context, id))
+}
+
+fn status_rewrite_for_process_output_uncached(
     context: RewriteContext,
     id: &str,
 ) -> Result<RewriteStatusReport> {
@@ -248,6 +266,14 @@ pub fn status_rewrite_for_process_output(
                 action: envelope.action,
             }
         }
+    })
+}
+
+fn with_read_snapshot<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    crate::repository::with_git_root_cache(|| {
+        crate::e2e_run::with_project_resolution_cache(|| {
+            fingerprint::with_repository_cache(operation)
+        })
     })
 }
 

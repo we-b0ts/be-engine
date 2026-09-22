@@ -40,6 +40,7 @@ pub use admin_startup::{
 
 pub(crate) use config::render_project_config;
 pub(crate) use config::resolve_project;
+pub(crate) use config::with_project_resolution_cache;
 pub(crate) use delivery::resolve_managed_directories;
 pub use dirty_evidence::{
     E2eDependencyDifference, E2eDependencyEndpoint, E2eDependencyObservation,
