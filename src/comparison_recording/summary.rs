@@ -34,7 +34,10 @@ pub(super) struct ComparisonRecordingCounts {
     pub(super) candidate_response_too_large: usize,
     pub(super) published: usize,
     pub(super) failed: usize,
+    pub(super) verification_failed: usize,
+    pub(super) apis_stopped_by_failure_limit: usize,
     pub(super) suppressed_by_case_limit: usize,
+    pub(super) suppressed_by_failure_limit: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

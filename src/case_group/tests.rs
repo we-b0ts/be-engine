@@ -182,6 +182,40 @@ fn dynamic_group_collects_sibling_directories_applies_pattern_and_is_idempotent(
 }
 
 #[test]
+fn replay_api_selection_collects_cases_across_member_directories() {
+    let temporary = tempdir().unwrap();
+    let source = temporary.path().join("cases");
+    write_case(&source, "get-alpha", "case-a", "GET", "/api/widgets/alpha");
+    write_case(&source, "get-beta", "case-b", "GET", "/api/widgets/beta");
+    write_case(&source, "get-other", "case-other", "GET", "/api/other");
+
+    let selected =
+        resolve_recording_api_case_ids(&source, &["GET /api/widgets/*".parse().unwrap()]).unwrap();
+
+    assert_eq!(selected, ["case-a", "case-b"]);
+}
+
+#[test]
+fn replay_api_selection_rejects_overlapping_selectors() {
+    let temporary = tempdir().unwrap();
+    let source = temporary.path().join("cases");
+    write_case(&source, "get-alpha", "case-a", "GET", "/api/widgets/alpha");
+
+    let error = resolve_recording_api_case_ids(
+        &source,
+        &[
+            "GET /api/widgets/*".parse().unwrap(),
+            "GET /api/widgets/alpha".parse().unwrap(),
+        ],
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("overlapping replay API selectors"));
+    assert!(error.contains("case-a"));
+}
+
+#[test]
 fn catch_all_group_collects_cases_at_different_remaining_depths() {
     let temporary = tempdir().unwrap();
     let source = temporary.path().join("cases");

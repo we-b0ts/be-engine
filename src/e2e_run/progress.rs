@@ -503,6 +503,7 @@ fn count_current_run(index: &mut RunIndex) {
 }
 
 fn update_api_progress(index: &mut RunIndex, api: &ApiExecution, global_evidence_clean: bool) {
+    let executed = api.passed.saturating_add(api.failed);
     let progress = index.apis.entry(api.api_key.clone()).or_default();
     let contribution = index
         .current_run
@@ -519,7 +520,7 @@ fn update_api_progress(index: &mut RunIndex, api: &ApiExecution, global_evidence
     progress.executed_cases = progress
         .executed_cases
         .saturating_sub(contribution.executed_cases)
-        .saturating_add(u64::from(api.total));
+        .saturating_add(u64::from(executed));
     progress.passed_cases = progress
         .passed_cases
         .saturating_sub(contribution.passed_cases)
@@ -530,7 +531,7 @@ fn update_api_progress(index: &mut RunIndex, api: &ApiExecution, global_evidence
         .saturating_sub(u64::from(contribution.passed))
         .saturating_add(u64::from(passed));
     contribution.passed = passed;
-    contribution.executed_cases = u64::from(api.total);
+    contribution.executed_cases = u64::from(executed);
     contribution.passed_cases = u64::from(api.passed);
 }
 

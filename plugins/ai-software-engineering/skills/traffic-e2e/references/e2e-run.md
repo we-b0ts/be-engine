@@ -23,10 +23,14 @@ Recorder HTTP gateway listens on port `4080` by default; use
 ports must differ.
 
 The generated version-18 project configuration has separate `source`, `target`,
-`replay`, `recording`, `delivery`, and `state` settings plus an embedded static
-`recorder` section. `replay.case_dependency_post_response_window_ms`
+`replay`, `verification`, `recording`, `delivery`, and `state` settings plus an
+embedded static `recorder` section.
+`replay.case_dependency_post_response_window_ms`
 keeps the active Replay case open for dependencies admitted just after the
-primary response and defaults to 10 ms. AI-managed source-traffic evidence
+primary response and defaults to 10 ms.
+`verification.max_failed_cases_per_api` defaults to 10 and stops the current
+API after that many non-passing cases; remaining cases are left unexecuted.
+AI-managed source-traffic evidence
 acquisition and classification policy is kept in the separate
 `.traffic-e2e/source-traffic-policy.yaml` document.
 Relevant target fields are `.traffic-e2e/Dockerfile.e2e`, startup mount paths,

@@ -705,16 +705,24 @@ async fn handle_gateway_connection(
 ) -> Result<()> {
     let target = match replay_destination_for_stream(&stream, &state).await {
         ReplayDestination::Recorded(target) => Some(target),
-        ReplayDestination::Unrecorded(target) => {
-            if !network_access::wait_for_unrecorded_payload(&stream).await? {
+        ReplayDestination::Unrecorded {
+            target,
+            active_case,
+        } => {
+            if !network_access::wait_for_unrecorded_payload(&stream, active_case).await? {
                 return Ok(());
             }
             let mut replay = state.lock().await;
             replay.record_unrecorded_target(target.clone());
             drop(replay);
             report_writer.flush(state.clone()).await?;
+            let action = if active_case {
+                "connected to"
+            } else {
+                "exchanged data with"
+            };
             return Err(anyhow!(
-                "target exchanged data with dependency endpoint {}:{} that was not accessed during recording",
+                "target {action} dependency endpoint {}:{} that was not accessed during recording",
                 target.host,
                 target.port
             ));
@@ -725,13 +733,13 @@ async fn handle_gateway_connection(
         Some(ReplayProtocol::Auto) => {
             let target = target.context("auto replay connection has no target")?;
             match auto_protocol::detect(&stream).await? {
-                ReplayProtocol::Redis => {
+                Some(ReplayProtocol::Redis) => {
                     redis::handle_connection(stream, target, state, report_writer).await
                 }
-                ReplayProtocol::Memcached => {
+                Some(ReplayProtocol::Memcached) => {
                     memcached::handle_connection(stream, target, state, report_writer).await
                 }
-                protocol @ (ReplayProtocol::Http | ReplayProtocol::Https) => {
+                Some(protocol @ (ReplayProtocol::Http | ReplayProtocol::Https)) => {
                     let mut target = target.clone();
                     target.protocol = protocol;
                     http::handle_http_replay_connection(
@@ -744,9 +752,10 @@ async fn handle_gateway_connection(
                     )
                     .await
                 }
-                protocol => Err(anyhow!(
+                Some(protocol) => Err(anyhow!(
                     "auto replay target resolved to unsupported protocol {protocol:?}"
                 )),
+                None => Ok(()),
             }
         }
         Some(ReplayProtocol::Http) | Some(ReplayProtocol::Https) => {
@@ -823,7 +832,10 @@ async fn handle_gateway_connection(
 
 enum ReplayDestination {
     Recorded(ReplayTarget),
-    Unrecorded(TargetKey),
+    Unrecorded {
+        target: TargetKey,
+        active_case: bool,
+    },
     Unknown,
 }
 
@@ -839,7 +851,10 @@ async fn replay_destination_for_stream(
     if let Some(SocketAddr::V4(addr)) = original
         && let Some(target) = state.unrecorded_target_for(*addr.ip(), addr.port())
     {
-        return ReplayDestination::Unrecorded(target);
+        return ReplayDestination::Unrecorded {
+            target,
+            active_case: state.active_case_id.is_some(),
+        };
     }
     #[cfg(test)]
     if state.targets.len() == 1 {

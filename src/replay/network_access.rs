@@ -11,7 +11,13 @@ use super::{
 };
 use crate::recording_network::{RECORDING_NETWORK_FILENAME, RecordingNetworkManifest};
 
-pub(super) async fn wait_for_unrecorded_payload(stream: &TcpStream) -> Result<bool> {
+pub(super) async fn wait_for_unrecorded_payload(
+    stream: &TcpStream,
+    active_case: bool,
+) -> Result<bool> {
+    if active_case {
+        return Ok(true);
+    }
     let mut first_byte = [0_u8; 1];
     Ok(stream.peek(&mut first_byte).await? > 0)
 }
@@ -260,7 +266,7 @@ mod tests {
         let (server, _) = listener.accept().await.unwrap();
         drop(client);
 
-        assert!(!wait_for_unrecorded_payload(&server).await.unwrap());
+        assert!(!wait_for_unrecorded_payload(&server, false).await.unwrap());
     }
 
     #[tokio::test]
@@ -274,6 +280,25 @@ mod tests {
         let (server, _) = listener.accept().await.unwrap();
         client.write_all(b"x").await.unwrap();
 
-        assert!(wait_for_unrecorded_payload(&server).await.unwrap());
+        assert!(wait_for_unrecorded_payload(&server, false).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn active_case_rejects_unrecorded_server_first_connection_immediately() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                wait_for_unrecorded_payload(&server, true),
+            )
+            .await
+            .unwrap()
+            .unwrap()
+        );
     }
 }

@@ -10,6 +10,7 @@ pub(crate) enum RecordingCompletionReason {
     DurationElapsed,
     InputExhausted,
     PerApiCaseLimitReached,
+    FailureLimitReached,
     ShutdownSignal,
 }
 
@@ -17,6 +18,7 @@ pub(crate) enum RecordingCompletionReason {
 struct ApiProgress {
     published: usize,
     limit: usize,
+    stopped: bool,
 }
 
 #[derive(Debug)]
@@ -46,6 +48,7 @@ impl ExplicitApiCaseLimits {
                     ApiProgress {
                         published: 0,
                         limit,
+                        stopped: false,
                     },
                 )
             })
@@ -86,7 +89,31 @@ impl ExplicitApiCaseLimits {
             let complete = state
                 .apis
                 .values()
-                .all(|progress| progress.published >= progress.limit);
+                .all(|progress| progress.stopped || progress.published >= progress.limit);
+            let newly_complete = complete && !state.complete;
+            state.complete = complete;
+            newly_complete
+        };
+        if newly_complete {
+            inner.completed.notify_waiters();
+        }
+        newly_complete
+    }
+
+    pub(crate) async fn record_stopped(&self, api: &str) -> bool {
+        let Some(inner) = &self.inner else {
+            return false;
+        };
+        let newly_complete = {
+            let mut state = inner.state.lock().await;
+            let Some(progress) = state.apis.get_mut(api) else {
+                return false;
+            };
+            progress.stopped = true;
+            let complete = state
+                .apis
+                .values()
+                .all(|progress| progress.stopped || progress.published >= progress.limit);
             let newly_complete = complete && !state.complete;
             state.complete = complete;
             newly_complete
@@ -162,6 +189,20 @@ mod tests {
     async fn zero_limits_are_complete_without_a_publication() {
         let limits = ExplicitApiCaseLimits::new([("GET /disabled".to_string(), 0)]);
 
+        tokio::time::timeout(Duration::from_millis(20), limits.wait_until_complete())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn stopped_api_satisfies_only_its_own_completion() {
+        let limits = ExplicitApiCaseLimits::new([
+            ("GET /api/failing".to_string(), 100),
+            ("GET /api/passing".to_string(), 1),
+        ]);
+
+        assert!(!limits.record_stopped("GET /api/failing").await);
+        assert!(limits.record_published("GET /api/passing").await);
         tokio::time::timeout(Duration::from_millis(20), limits.wait_until_complete())
             .await
             .unwrap();

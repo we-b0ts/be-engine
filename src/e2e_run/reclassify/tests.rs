@@ -132,6 +132,23 @@ fn final_reclassification_promotes_a_case_that_became_clean_after_case_end() {
     assert_eq!(state.status, RunStatus::Successful);
 }
 
+#[test]
+fn final_reclassification_keeps_an_unexecuted_case_pending() {
+    let mut state = clean_state();
+    state.cases[0].status = CaseStatus::Pending;
+    state.cases[0].assertion_passed = None;
+    state.cases[0].replay_clean = None;
+    let reclassified = BackgroundReclassification {
+        remaining_dirty_case_ids: BTreeSet::from(["case-clean".to_string()]),
+        ..BackgroundReclassification::default()
+    };
+
+    apply_reclassified_case_outcomes(&mut state, &reclassified);
+
+    assert_eq!(state.cases[0].status, CaseStatus::Pending);
+    assert_eq!(state.cases[0].replay_clean, None);
+}
+
 fn clean_state() -> ActiveRunState {
     ActiveRunState {
         version: STATE_VERSION,

@@ -86,7 +86,7 @@ pub use build_info::BINARY_VERSION;
 
 pub use case_group::{
     CaseGroupEnsureResult, CaseGroupOptions, CaseGroupStatus, PatternOutcome, PatternOutcomeStatus,
-    ensure_case_group, resolve_recording_api_member,
+    ensure_case_group, resolve_recording_api_case_ids, resolve_recording_api_member,
 };
 pub use comparison_recording::{
     ComparisonRecordingRunOptions, ComparisonRepresentativeDifference,
@@ -132,11 +132,12 @@ pub use config::{
 pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{
-    E2eApiRunResult, E2eCaseResponseDifference, E2eCaseResponseDifferences,
-    E2eDependencyCorrelation, E2eDependencyDifference, E2eDependencyEndpoint, E2eDependencyGate,
-    E2eDependencyObservation, E2eDependencyRepresentative, E2eDependencyTargetMatch, E2eDiagnosis,
-    E2eDiagnosisCounts, E2eDirtyCluster, E2eDirtyCounts, E2eFailureCluster, E2eFocusedApiStatus,
-    E2eReplayGate, E2eRepresentativeDifference, E2eResponseDifferenceDiagnosis, E2eResponseGate,
+    DEFAULT_MAX_FAILED_CASES_PER_API, E2eApiRunResult, E2eCaseResponseDifference,
+    E2eCaseResponseDifferences, E2eDependencyCorrelation, E2eDependencyDifference,
+    E2eDependencyEndpoint, E2eDependencyGate, E2eDependencyObservation,
+    E2eDependencyRepresentative, E2eDependencyTargetMatch, E2eDiagnosis, E2eDiagnosisCounts,
+    E2eDirtyCluster, E2eDirtyCounts, E2eFailureCluster, E2eFocusedApiStatus, E2eReplayGate,
+    E2eRepresentativeDifference, E2eResponseDifferenceDiagnosis, E2eResponseGate,
     E2eResponseRuleEvidence, E2eResponseUnavailableReason, E2eRunContext, E2eRunInitOptions,
     E2eRunInitResult, E2eRunPrepareOptions, E2eRunPrepareResult, E2eRunResult, E2eRunStatus,
     E2eSourcePreReadiness, E2eSourcePreReadinessEndpoint, E2eSourceValueCount, E2eSourceVariation,

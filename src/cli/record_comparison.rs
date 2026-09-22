@@ -42,6 +42,9 @@ pub(super) struct RecordComparisonArgs {
     /// Override the per-API case limit for this run.
     #[arg(long = "per-api-case-limit", value_name = "N")]
     per_api_case_limit: Option<NonZeroUsize>,
+    /// Stop a selected API after this many non-passing comparison cases.
+    #[arg(long, default_value = "10")]
+    max_failed_cases_per_api: NonZeroUsize,
     /// Publish comparison readiness on this Unix socket for the managed runtime.
     #[arg(long)]
     control_socket: Option<PathBuf>,
@@ -97,6 +100,8 @@ pub(super) async fn run(args: RecordComparisonArgs) -> Result<()> {
             duration: Some(Duration::from_secs(args.duration_seconds.get())),
             recording_apis: args.apis,
             control_socket: args.control_socket,
+            verification_policy: Some(policy_path),
+            max_failed_cases_per_api: args.max_failed_cases_per_api.get(),
         },
     )
     .await
@@ -261,6 +266,10 @@ mod tests {
                 .map(NonZeroUsize::get),
             Some(250)
         );
+        assert_eq!(
+            parsed.record_comparison.max_failed_cases_per_api.get(),
+            traffic_e2e::DEFAULT_MAX_FAILED_CASES_PER_API
+        );
         assert!(
             TestCli::try_parse_from(["test", "--config", "project.yaml", "--intercept",]).is_err()
         );
@@ -279,6 +288,16 @@ mod tests {
                 "test",
                 "--config",
                 "project.yaml",
+                "--max-failed-cases-per-api",
+                "0",
+            ])
+            .is_err()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "--config",
+                "project.yaml",
                 "--per-api-case-limit",
                 "0",
             ])
@@ -288,6 +307,10 @@ mod tests {
         let defaults = TestCli::try_parse_from(["test", "--config", "project.yaml"]).unwrap();
         assert_eq!(defaults.record_comparison.duration_seconds.get(), 60);
         assert!(defaults.record_comparison.policy.is_none());
+        assert_eq!(
+            defaults.record_comparison.max_failed_cases_per_api.get(),
+            traffic_e2e::DEFAULT_MAX_FAILED_CASES_PER_API
+        );
     }
 
     #[test]

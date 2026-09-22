@@ -214,7 +214,13 @@ traffic-e2e --help
 traffic-e2e diagnose --help
 traffic-e2e replay path/to/case-dir
 traffic-e2e replay path/to/recordings/<run-id>
+traffic-e2e replay --api 'GET /api/widgets/*' path/to/recordings/<run-id>
 ```
+
+`--api` selects every published case whose recorded method and path belong to
+the canonical API, including dynamic APIs whose cases span multiple member
+directories. Use repeatable `--case-id` only for an explicit diagnostic subset;
+the two selector forms are mutually exclusive.
 
 For runtime-generated UUIDs, timestamps, signed query fields, and reviewed
 response-comparison exemptions, keep a

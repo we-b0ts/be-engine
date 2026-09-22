@@ -7,6 +7,7 @@ mod delivery;
 mod dirty_evidence;
 mod evidence;
 mod execute;
+mod failure_limit;
 mod final_evidence;
 mod http_driver;
 pub(crate) mod jwt_evidence;
@@ -55,6 +56,7 @@ pub use evidence::{
 pub(crate) use execute::recover_focused_e2e_api;
 pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};
 pub(crate) use http_driver::wait_until_ready;
+pub use model::DEFAULT_MAX_FAILED_CASES_PER_API;
 use model::RunStatus;
 pub(crate) use model::{ResolvedProjectConfig, TargetBuildContext, TargetQualityGateConfig};
 pub(crate) use reclassify::{

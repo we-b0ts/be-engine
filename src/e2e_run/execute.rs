@@ -397,6 +397,7 @@ async fn run_active_with_replay(
             bail!("replay process exited before becoming ready with {status}");
         }
     };
+    super::runtime::validate_replay_case_selection(&ready, state)?;
     state.session_id = ready
         .pointer("/session/session_id")
         .and_then(serde_json::Value::as_str)
@@ -415,8 +416,13 @@ async fn run_active_with_replay(
         .context("target Replay runtime contract failed")?;
 
     let total_cases = state.cases.len();
+    let mut failure_limit =
+        super::failure_limit::ApiFailureLimit::new(config.max_failed_cases_per_api);
     case_progress::log_start(total_cases);
     for (position, case) in state.cases.clone().into_iter().enumerate() {
+        if !failure_limit.should_execute(&case.group_id) {
+            continue;
+        }
         execute_case(
             config,
             layout,
@@ -427,14 +433,26 @@ async fn run_active_with_replay(
         )
         .await;
         case_progress::log_completion(position + 1, total_cases);
+        if failure_limit.observe(&case.group_id, state.cases[position].status) {
+            state.push_error(format!(
+                "API {:?} stopped after reaching the configured failure limit of {} case(s)",
+                case.group_id, config.max_failed_cases_per_api
+            ));
+            let _ = store::write_active(layout, state);
+        }
     }
+
+    let intentionally_incomplete = state
+        .cases
+        .iter()
+        .any(|case| case.status == CaseStatus::Pending);
 
     capture_target_process_outputs(config, layout, state).await?;
     stop_target_runtime(layout, state).await?;
     state.status = RunStatus::Finalizing;
     store::write_active(layout, state)?;
 
-    finalize_replay(state).await?;
+    finalize_replay(state, intentionally_incomplete).await?;
     wait_for_replay(replay).await?;
     state.replay_pid = None;
     build_final_evidence(config, layout, inventory, state)?;

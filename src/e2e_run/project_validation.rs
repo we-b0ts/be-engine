@@ -52,6 +52,10 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         "replay.policy must not be empty"
     );
     ensure!(
+        project.verification.max_failed_cases_per_api > 0,
+        "verification.max_failed_cases_per_api must be greater than zero"
+    );
+    ensure!(
         !project.delivery.pr_base.trim().is_empty(),
         "delivery.pr_base must not be empty"
     );
@@ -95,4 +99,30 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         crate::config::SOURCE_TRAFFIC_POLICY_FILE
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::e2e_run::model::{DEFAULT_MAX_FAILED_CASES_PER_API, VerificationProjectConfig};
+
+    #[test]
+    fn omitted_failure_limit_uses_the_default() {
+        let verification: VerificationProjectConfig = serde_yaml::from_str("{}").unwrap();
+
+        assert_eq!(
+            verification.max_failed_cases_per_api,
+            DEFAULT_MAX_FAILED_CASES_PER_API
+        );
+    }
+
+    #[test]
+    fn zero_failure_limit_is_rejected() {
+        let mut config: ProjectConfig =
+            serde_yaml::from_str(include_str!("../../config/project.example.yaml")).unwrap();
+        config.project.verification.max_failed_cases_per_api = 0;
+
+        let error = validate_project_config(&config).unwrap_err().to_string();
+        assert!(error.contains("must be greater than zero"));
+    }
 }

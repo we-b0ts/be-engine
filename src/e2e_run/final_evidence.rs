@@ -47,6 +47,9 @@ pub(super) fn apply_reclassified_case_outcomes(
     reclassified: &BackgroundReclassification,
 ) {
     for case in &mut state.cases {
+        if matches!(case.status, CaseStatus::Pending | CaseStatus::Incomplete) {
+            continue;
+        }
         let dirty = reclassified
             .remaining_dirty_case_ids
             .contains(&case.case_id);
@@ -198,9 +201,9 @@ fn build_api_evidence(
         let failed = case_ids
             .iter()
             .filter(|case_id| {
-                cases
-                    .get(case_id.as_str())
-                    .is_some_and(|case| case.status == CaseStatus::Failed)
+                cases.get(case_id.as_str()).is_some_and(|case| {
+                    matches!(case.status, CaseStatus::Failed | CaseStatus::Incomplete)
+                })
             })
             .count() as u32;
         let total = case_ids.len() as u32;
@@ -324,9 +327,9 @@ pub(super) fn summarize_apis_without_aggregate(
             let failed = case_ids
                 .iter()
                 .filter(|id| {
-                    cases
-                        .get(id.as_str())
-                        .is_some_and(|case| case.status == CaseStatus::Failed)
+                    cases.get(id.as_str()).is_some_and(|case| {
+                        matches!(case.status, CaseStatus::Failed | CaseStatus::Incomplete)
+                    })
                 })
                 .count() as u32;
             let total = case_ids.len() as u32;

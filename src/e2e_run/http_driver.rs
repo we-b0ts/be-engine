@@ -370,6 +370,7 @@ mod tests {
             breeze_container: None,
             replay_policy: PathBuf::from("replay.yaml"),
             replay_case_dependency_post_response_window: Duration::from_millis(10),
+            max_failed_cases_per_api: crate::DEFAULT_MAX_FAILED_CASES_PER_API,
             replay_startup_timeout: Duration::from_secs(1),
             pr_base: "main".to_string(),
             managed_paths: Vec::new(),

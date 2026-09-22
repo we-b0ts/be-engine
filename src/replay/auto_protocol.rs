@@ -9,9 +9,13 @@ const MAX_SNIFF_BYTES: usize = 4096;
 const SNIFF_TIMEOUT: Duration = Duration::from_secs(1);
 const RETRY_INTERVAL: Duration = Duration::from_millis(5);
 
-pub(super) async fn detect(stream: &TcpStream) -> Result<ReplayProtocol> {
-    let deadline = tokio::time::Instant::now() + SNIFF_TIMEOUT;
+pub(super) async fn detect(stream: &TcpStream) -> Result<Option<ReplayProtocol>> {
     let mut buffer = vec![0_u8; MAX_SNIFF_BYTES];
+    let initial_len = stream.peek(&mut buffer).await?;
+    if initial_len == 0 {
+        return Ok(None);
+    }
+    let deadline = tokio::time::Instant::now() + SNIFF_TIMEOUT;
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
@@ -23,22 +27,22 @@ pub(super) async fn detect(stream: &TcpStream) -> Result<ReplayProtocol> {
         let bytes = &buffer[..len];
         match detect_client_protocol(bytes) {
             ClientProtocolDetection::Match(DetectedClientProtocol::Redis) => {
-                return Ok(ReplayProtocol::Redis);
+                return Ok(Some(ReplayProtocol::Redis));
             }
             ClientProtocolDetection::Match(
                 DetectedClientProtocol::MemcachedText | DetectedClientProtocol::MemcachedBinary,
-            ) => return Ok(ReplayProtocol::Memcached),
+            ) => return Ok(Some(ReplayProtocol::Memcached)),
             ClientProtocolDetection::Match(DetectedClientProtocol::Http) => {
-                return Ok(ReplayProtocol::Http);
+                return Ok(Some(ReplayProtocol::Http));
             }
             ClientProtocolDetection::Match(DetectedClientProtocol::Tls) => {
-                return Ok(ReplayProtocol::Https);
+                return Ok(Some(ReplayProtocol::Https));
             }
             ClientProtocolDetection::NeedMore if len < MAX_SNIFF_BYTES => {
                 sleep(RETRY_INTERVAL).await;
             }
             ClientProtocolDetection::NeedMore if bytes.first() == Some(&b'*') => {
-                return Ok(ReplayProtocol::Redis);
+                return Ok(Some(ReplayProtocol::Redis));
             }
             ClientProtocolDetection::NeedMore | ClientProtocolDetection::NoMatch => {
                 return Err(anyhow!(
@@ -79,7 +83,37 @@ mod tests {
             let (server, _) = listener.accept().await.unwrap();
             client.write_all(payload).await.unwrap();
 
-            assert_eq!(detect(&server).await.unwrap(), expected);
+            assert_eq!(detect(&server).await.unwrap(), Some(expected));
         }
+    }
+
+    #[tokio::test]
+    async fn idle_before_first_byte_does_not_consume_protocol_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        let detection = tokio::spawn(async move { detect(&server).await });
+
+        tokio::time::sleep(SNIFF_TIMEOUT + Duration::from_millis(50)).await;
+        client.write_all(b"*1\r\n$4\r\nPING\r\n").await.unwrap();
+
+        assert_eq!(
+            detection.await.unwrap().unwrap(),
+            Some(ReplayProtocol::Redis)
+        );
+    }
+
+    #[tokio::test]
+    async fn eof_before_first_byte_is_a_clean_connection_close() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        drop(client);
+
+        assert_eq!(detect(&server).await.unwrap(), None);
     }
 }

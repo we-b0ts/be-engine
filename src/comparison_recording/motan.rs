@@ -237,8 +237,18 @@ async fn handle_connection(
             candidate: candidate.capture.record,
             baseline_recheck: baseline_recheck.map(|value| value.capture.record),
         };
-        if let Err(error) = runtime.store.publish(&case, reservation).await {
-            warn!(%error, case_id = %case.id, "failed to publish Motan comparison case");
+        match runtime.store.publish(&case, reservation).await {
+            Ok(case_dir) => {
+                super::runtime::record_case_verification(
+                    &runtime,
+                    &format!("MOTAN {api_pattern}"),
+                    &case_dir,
+                )
+                .await;
+            }
+            Err(error) => {
+                warn!(%error, case_id = %case.id, "failed to publish Motan comparison case");
+            }
         }
         drop(permit);
         // Return the baseline response only after the case is published and the

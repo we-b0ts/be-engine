@@ -17,6 +17,8 @@ use crate::recording_completion::ExplicitApiCaseLimits;
 struct Quota {
     published: usize,
     reserved: usize,
+    verification_failed: usize,
+    failure_limit_reached: bool,
 }
 
 #[derive(Clone)]
@@ -111,6 +113,18 @@ impl ComparisonRecordingStore {
         let key = recording_api.to_string();
         let mut quotas = self.quotas.lock().await;
         let quota = quotas.entry(key.clone()).or_default();
+        if quota.failure_limit_reached {
+            drop(quotas);
+            self.summary
+                .update(|counts| counts.suppressed_by_failure_limit += 1)
+                .await;
+            self.summary
+                .api_update(recording_api, |counts| {
+                    counts.suppressed_by_failure_limit += 1
+                })
+                .await;
+            return None;
+        }
         if quota.published.saturating_add(quota.reserved) >= limit {
             drop(quotas);
             self.summary
@@ -129,7 +143,7 @@ impl ComparisonRecordingStore {
         &self,
         case: &ComparisonRecordingCase,
         reservation: Reservation,
-    ) -> Result<()> {
+    ) -> Result<PathBuf> {
         let result = self.write_and_publish(case).await;
         match result {
             Ok(()) => {
@@ -146,7 +160,7 @@ impl ComparisonRecordingStore {
                 {
                     info!("every explicitly selected comparison API reached its case limit");
                 }
-                Ok(())
+                Ok(self.published_path(case))
             }
             Err(error) => {
                 self.release(reservation).await;
@@ -247,6 +261,49 @@ impl ComparisonRecordingStore {
         }
     }
 
+    pub(super) async fn record_verification_failure(&self, recording_api: &str, limit: usize) {
+        let newly_reached = {
+            let mut quotas = self.quotas.lock().await;
+            let quota = quotas.entry(recording_api.to_string()).or_default();
+            quota.verification_failed = quota.verification_failed.saturating_add(1);
+            let newly_reached = quota.verification_failed >= limit && !quota.failure_limit_reached;
+            quota.failure_limit_reached |= newly_reached;
+            newly_reached
+        };
+        self.summary
+            .update(|counts| {
+                counts.verification_failed += 1;
+                if newly_reached {
+                    counts.apis_stopped_by_failure_limit += 1;
+                }
+            })
+            .await;
+        self.summary
+            .api_update(recording_api, |counts| {
+                counts.verification_failed += 1;
+                counts.failure_limit_reached |= newly_reached;
+            })
+            .await;
+        if newly_reached
+            && self
+                .explicit_api_case_limits
+                .record_stopped(recording_api)
+                .await
+        {
+            info!(
+                "every explicitly selected comparison API completed or reached its failure limit"
+            );
+        }
+    }
+
+    pub(super) async fn failure_limit_reached(&self) -> bool {
+        self.quotas
+            .lock()
+            .await
+            .values()
+            .any(|quota| quota.failure_limit_reached)
+    }
+
     pub(super) async fn wait_for_explicit_api_case_limit(&self) {
         self.explicit_api_case_limits.wait_until_complete().await;
     }
@@ -297,4 +354,36 @@ fn collect_leaf_directories(root: &Path, directory: &Path, out: &mut Vec<PathBuf
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn failure_limit_stops_new_cases_and_completes_selected_api() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = ComparisonRecordingStore::create(
+            temp.path(),
+            "20260922000000",
+            vec![("GET /api".to_string(), 100)],
+        )
+        .await
+        .unwrap();
+        let reservation = store.try_reserve("GET /api", 100).await.unwrap();
+        store.release(reservation).await;
+
+        store.record_verification_failure("GET /api", 1).await;
+
+        assert!(store.failure_limit_reached().await);
+        assert!(store.try_reserve("GET /api", 100).await.is_none());
+        tokio::time::timeout(
+            Duration::from_millis(20),
+            store.wait_for_explicit_api_case_limit(),
+        )
+        .await
+        .unwrap();
+    }
 }

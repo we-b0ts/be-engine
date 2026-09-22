@@ -7,8 +7,8 @@ use clap::{ArgAction, Args};
 use serde::Deserialize;
 use traffic_e2e::{
     AppConfig, DEFAULT_DNS_MOCK_LISTEN, DEFAULT_FAKE_CIDR, DEFAULT_TCP_GATEWAY_LISTEN,
-    DEFAULT_UDP_GATEWAY_PORT, ReplayAllowedUnusedHttpConfig, ReplayConfig, ReplayLifecycleConfig,
-    run_replay_with_counters,
+    DEFAULT_UDP_GATEWAY_PORT, RecordingApi, ReplayAllowedUnusedHttpConfig, ReplayConfig,
+    ReplayLifecycleConfig, resolve_recording_api_case_ids, run_replay_with_counters,
 };
 use uuid::Uuid;
 
@@ -29,6 +29,13 @@ pub(super) struct ReplayArgs {
     /// Start replay listeners without changing local DNS or iptables state.
     #[arg(long, action = ArgAction::SetTrue, overrides_with = "intercept")]
     no_intercept: bool,
+    /// Replay every published case belonging to this API. Repeat for an API set.
+    #[arg(
+        long = "api",
+        value_name = "METHOD path-or-pattern",
+        conflicts_with = "case_ids"
+    )]
+    apis: Vec<RecordingApi>,
     /// Replay only this published case. Repeat for a case set.
     #[arg(long = "case-id")]
     case_ids: Vec<String>,
@@ -220,6 +227,11 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
         "case directory not found: {}",
         case.display()
     );
+    let case_ids = if args.apis.is_empty() {
+        args.case_ids
+    } else {
+        resolve_recording_api_case_ids(&case, &args.apis)?
+    };
     let dns_listen = args
         .dns_listen
         .or(file.replay.dns_listen)
@@ -314,7 +326,7 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
         .unwrap_or(traffic_e2e::DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS);
     Ok(ResolvedReplay {
         case,
-        case_ids: args.case_ids,
+        case_ids,
         report,
         session,
         control_socket,
@@ -406,7 +418,7 @@ mod tests {
 
     use super::*;
 
-    #[derive(Parser)]
+    #[derive(Debug, Parser)]
     struct TestCli {
         #[command(flatten)]
         replay: ReplayArgs,
@@ -468,6 +480,47 @@ mod tests {
             case_dir.canonicalize().unwrap()
         );
         assert!(!resolved.intercept);
+    }
+
+    #[test]
+    fn api_selection_resolves_cases_across_recording_members() {
+        let directory = tempfile::tempdir().unwrap();
+        write_case(
+            &directory.path().join("apis/widgets-alpha/case-a"),
+            "GET",
+            "/api/widgets/alpha",
+        );
+        write_case(
+            &directory.path().join("apis/widgets-beta/case-b"),
+            "GET",
+            "/api/widgets/beta",
+        );
+        write_case(
+            &directory.path().join("apis/other/case-other"),
+            "GET",
+            "/api/other",
+        );
+        let mut args = replay_args(Some(directory.path().to_path_buf()), None);
+        args.apis = vec!["GET /api/widgets/*".parse().unwrap()];
+
+        let resolved = resolve(args).unwrap();
+
+        assert_eq!(resolved.case_ids, ["case-a", "case-b"]);
+    }
+
+    #[test]
+    fn api_and_case_id_selectors_are_mutually_exclusive() {
+        let error = TestCli::try_parse_from([
+            "test",
+            "--api",
+            "GET /api/widgets/*",
+            "--case-id",
+            "case-a",
+            "cases",
+        ])
+        .unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]
@@ -542,6 +595,7 @@ mod tests {
             config,
             intercept: false,
             no_intercept: false,
+            apis: Vec::new(),
             case_ids: Vec::new(),
             report: None,
             session: None,
@@ -556,5 +610,16 @@ mod tests {
             http_ignore_query_params: Vec::new(),
             case_dependency_post_response_window_ms: None,
         }
+    }
+
+    fn write_case(directory: &Path, method: &str, uri: &str) {
+        std::fs::create_dir_all(directory).unwrap();
+        std::fs::write(
+            directory.join("request.json"),
+            serde_json::to_vec(&serde_json::json!({"method": method, "uri": uri})).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(directory.join("expected-response.json"), b"{}\n").unwrap();
+        std::fs::write(directory.join("dependencies.jsonl"), b"").unwrap();
     }
 }

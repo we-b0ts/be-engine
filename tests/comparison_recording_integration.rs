@@ -68,6 +68,7 @@ async fn motan_requests_are_compared_with_the_same_case_lifecycle() {
             duration: None,
             recording_apis: Vec::new(),
             control_socket: Some(control_socket.clone()),
+            ..ComparisonRecordingRunOptions::default()
         },
     ));
     let readiness = wait_for_recording_ready(RecordingWaitConfig {
@@ -227,6 +228,7 @@ async fn duration_stops_cleanly_after_comparison_recording_is_ready() {
             duration: Some(Duration::from_millis(250)),
             recording_apis: Vec::new(),
             control_socket: Some(control_socket.clone()),
+            ..ComparisonRecordingRunOptions::default()
         },
     ));
     let readiness = wait_for_recording_ready(RecordingWaitConfig {
@@ -262,6 +264,7 @@ async fn finite_input_completion_stops_before_duration_after_the_case_is_publish
             duration: Some(Duration::from_secs(5)),
             recording_apis: Vec::new(),
             control_socket: Some(control_socket.clone()),
+            ..ComparisonRecordingRunOptions::default()
         },
     ));
     wait_for_recording_ready(RecordingWaitConfig {
@@ -305,6 +308,7 @@ async fn finite_input_completion_rejects_missing_published_cases() {
             duration: Some(Duration::from_secs(5)),
             recording_apis: Vec::new(),
             control_socket: Some(control_socket.clone()),
+            ..ComparisonRecordingRunOptions::default()
         },
     ));
     wait_for_recording_ready(RecordingWaitConfig {
@@ -348,6 +352,7 @@ async fn returns_baseline_after_the_serial_comparison_case_is_complete() {
             duration: None,
             recording_apis: vec!["GET /api/users/*".parse().unwrap()],
             control_socket: None,
+            ..ComparisonRecordingRunOptions::default()
         },
     ));
     wait_for_port(gateway).await;
@@ -387,6 +392,60 @@ async fn returns_baseline_after_the_serial_comparison_case_is_complete() {
         serde_json::json!(["GET /api/users/*"])
     );
     task.abort();
+}
+
+#[tokio::test]
+async fn comparison_stops_selected_api_when_verification_failure_limit_is_reached() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
+    install_crypto();
+    let temp = tempdir().unwrap();
+    let baseline = spawn_response_upstream("baseline", 1).await;
+    let candidate = spawn_response_upstream("candidate", 1).await;
+    let gateway = free_addr();
+    let run_id = "20260922120000";
+    let config = comparison_recording_config(&temp, gateway, baseline, candidate);
+    let policy = temp.path().join("verification.yaml");
+    let control_socket = temp.path().join("failure-limit-comparison.sock");
+    std::fs::write(
+        &policy,
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+    )
+    .unwrap();
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording_with_options(
+        config,
+        ComparisonRecordingRunOptions {
+            run_id: Some(run_id.to_string()),
+            duration: None,
+            recording_apis: vec!["GET /api/users/*".parse().unwrap()],
+            control_socket: Some(control_socket.clone()),
+            verification_policy: Some(policy),
+            max_failed_cases_per_api: 1,
+        },
+    ));
+    wait_for_recording_ready(RecordingWaitConfig {
+        control_socket_path: control_socket,
+        timeout: Duration::from_secs(2),
+    })
+    .await
+    .unwrap();
+
+    let response = raw_get(gateway, "/api/users/42").await;
+    assert!(response.contains("baseline"), "{response}");
+    tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    let summary = read_json(&run_dir(&temp, run_id).join("comparison-recording-run.json"));
+    assert_eq!(summary["status"], "completed");
+    assert_eq!(summary["completion_reason"], "failure_limit_reached");
+    assert_eq!(summary["counts"]["verification_failed"], 1);
+    assert_eq!(summary["counts"]["apis_stopped_by_failure_limit"], 1);
+    assert_eq!(
+        summary["apis"]["GET /api/users/*"]["failure_limit_reached"],
+        true
+    );
 }
 
 #[tokio::test]
@@ -704,6 +763,7 @@ async fn http_and_motan_comparison_share_one_process_wide_case_slot() {
             duration: None,
             recording_apis: Vec::new(),
             control_socket: Some(control_socket.clone()),
+            ..ComparisonRecordingRunOptions::default()
         },
     ));
     wait_for_recording_ready(RecordingWaitConfig {

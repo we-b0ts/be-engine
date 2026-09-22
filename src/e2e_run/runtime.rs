@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::SeekFrom;
@@ -69,13 +70,7 @@ pub(super) fn spawn_replay(
                 .to_string(),
         );
     command.args(recorder_config_args(config));
-    for case_id in inventory
-        .groups
-        .iter()
-        .flat_map(|group| group.cases.iter().map(|case| &case.case_id))
-    {
-        command.arg("--case-id").arg(case_id);
-    }
+    command.args(replay_api_args(inventory));
     command
         .arg(&layout.case_source)
         .stdout(Stdio::from(stdout))
@@ -96,6 +91,14 @@ fn recorder_config_args(config: &ResolvedProjectConfig) -> Vec<OsString> {
         OsString::from("--recorder-config"),
         config.recorder_config.as_os_str().to_owned(),
     ]
+}
+
+fn replay_api_args(inventory: &CaseGroupInventory) -> Vec<OsString> {
+    inventory
+        .groups
+        .iter()
+        .flat_map(|group| [OsString::from("--api"), OsString::from(&group.group_id)])
+        .collect()
 }
 
 pub(super) async fn build_target_image(
@@ -354,6 +357,51 @@ pub(super) async fn wait_for_replay_ready(
     }
 }
 
+pub(super) fn validate_replay_case_selection(
+    ready: &serde_json::Value,
+    state: &ActiveRunState,
+) -> Result<()> {
+    let selected_values = ready
+        .pointer("/session/selected_case_ids")
+        .and_then(serde_json::Value::as_array)
+        .context("Replay session has no selected_case_ids")?;
+    let mut selected = BTreeSet::new();
+    for value in selected_values {
+        let case_id = value
+            .as_str()
+            .context("Replay session contains a non-string selected case id")?;
+        ensure!(
+            selected.insert(case_id),
+            "Replay session contains duplicate selected case id {case_id:?}"
+        );
+    }
+    let expected = state
+        .cases
+        .iter()
+        .map(|case| case.case_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if selected != expected {
+        let missing = expected
+            .difference(&selected)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let unexpected = selected
+            .difference(&expected)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(", ");
+        bail!(
+            "Replay API selection differs from the canonical case inventory: expected {} cases, resolved {}; missing [{}], unexpected [{}]",
+            expected.len(),
+            selected.len(),
+            missing,
+            unexpected
+        );
+    }
+    Ok(())
+}
+
 async fn relay_replay_startup_progress(path: &Path, offset: &mut u64, pending: &mut Vec<u8>) {
     if let Err(error) = try_relay_replay_startup_progress(path, offset, pending).await {
         tracing::warn!(
@@ -402,7 +450,20 @@ fn is_replay_startup_progress(line: &str) -> bool {
     line.contains("loading replay case dependencies")
 }
 
-pub(super) async fn finalize_replay(state: &mut ActiveRunState) -> Result<()> {
+pub(super) async fn finalize_replay(
+    state: &mut ActiveRunState,
+    intentionally_incomplete: bool,
+) -> Result<()> {
+    if intentionally_incomplete {
+        let response = control(state, "finalize", None, false, false)
+            .await
+            .context("failed to finalize intentionally incomplete replay")?;
+        state.replay_finalized = response
+            .get("finalized")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        return Ok(());
+    }
     let response = match control(state, "finalize", None, true, true).await {
         Ok(response) => response,
         Err(strict_error) => {
@@ -521,6 +582,7 @@ async fn capture_target_diagnostics(layout: &RunLayout, state: &mut ActiveRunSta
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::case_group::{CanonicalCase, CanonicalCaseGroup};
     use crate::e2e_run::model::ResolvedProjectConfig;
     use std::fs;
     use std::time::Duration;
@@ -549,6 +611,7 @@ mod tests {
             breeze_container: Some("breeze".to_string()),
             replay_policy: PathBuf::from("/target/config/replay.yaml"),
             replay_case_dependency_post_response_window: Duration::from_millis(10),
+            max_failed_cases_per_api: crate::DEFAULT_MAX_FAILED_CASES_PER_API,
             replay_startup_timeout: Duration::from_secs(1),
             pr_base: "dev-migration".to_string(),
             managed_paths: Vec::new(),
@@ -653,5 +716,70 @@ mod tests {
                 OsString::from("/target/config/project.yaml"),
             ]
         );
+    }
+
+    #[test]
+    fn managed_replay_passes_api_identity_instead_of_expanded_case_ids() {
+        let inventory = case_inventory();
+
+        assert_eq!(
+            replay_api_args(&inventory),
+            vec![
+                OsString::from("--api"),
+                OsString::from("GET /api/widgets/*"),
+            ]
+        );
+    }
+
+    #[test]
+    fn managed_replay_requires_api_selection_to_match_canonical_cases() {
+        let inventory = case_inventory();
+        let state = ActiveRunState::new("run".to_string(), 1, &inventory, Path::new("/run"));
+        validate_replay_case_selection(
+            &serde_json::json!({
+                "session": {"selected_case_ids": ["case-a", "case-b"]}
+            }),
+            &state,
+        )
+        .unwrap();
+
+        let error = validate_replay_case_selection(
+            &serde_json::json!({
+                "session": {"selected_case_ids": ["case-a"]}
+            }),
+            &state,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("expected 2 cases, resolved 1"));
+        assert!(error.contains("missing [case-b]"));
+    }
+
+    fn case_inventory() -> CaseGroupInventory {
+        CaseGroupInventory {
+            case_source: PathBuf::from("/cases"),
+            source_revision: "source".to_string(),
+            case_inventory_id: "inventory".to_string(),
+            groups: vec![CanonicalCaseGroup {
+                group_id: "GET /api/widgets/*".to_string(),
+                method: "GET".to_string(),
+                source_route: "/api/widgets/:id".to_string(),
+                pattern: Some("/api/widgets/*".to_string()),
+                case_inventory_id: "widgets".to_string(),
+                cases: vec![
+                    CanonicalCase {
+                        case_id: "case-a".to_string(),
+                        case_dir: PathBuf::from("/cases/alpha/case-a"),
+                        recorded_at: None,
+                    },
+                    CanonicalCase {
+                        case_id: "case-b".to_string(),
+                        case_dir: PathBuf::from("/cases/beta/case-b"),
+                        recorded_at: None,
+                    },
+                ],
+            }],
+        }
     }
 }
