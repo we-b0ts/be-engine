@@ -26,6 +26,7 @@ required_environment=(
     TRAFFIC_E2E_RECORDER_CONFIG
     TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY
     TRAFFIC_E2E_REPLAY_POLICY
+    TRAFFIC_E2E_MAX_FAILED_CASES_PER_API
     TRAFFIC_E2E_PLATFORM_ASSETS
     TRAFFIC_E2E_COMPARISON_PROCESS_OUTPUTS_ENABLED
     TRAFFIC_E2E_COMPARISON_PROCESS_OUTPUT_FLUSH_AFTER_LAST_CASE_MS
@@ -100,6 +101,10 @@ done
 
 [[ "$duration_seconds" =~ ^[1-9][0-9]*$ ]] || {
     printf 'error: duration must be a positive integer\n' >&2
+    exit 2
+}
+[[ "$TRAFFIC_E2E_MAX_FAILED_CASES_PER_API" =~ ^[1-9][0-9]*$ ]] || {
+    printf 'error: max failed cases per API must be a positive integer\n' >&2
     exit 2
 }
 if [[ -z "$run_id" ]]; then
@@ -906,7 +911,7 @@ run_comparison_recording() {
     # heartbeat and waits for every enabled upstream before recording input.
     # A one-shot TCP check here races the target container's normal startup.
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-ready --control-socket /workspace/control/cache-snapshot.sock
-    local -a comparison_command=(internal comparison-run --config "$TRAFFIC_E2E_RECORDER_CONFIG" --candidate-upstream "$target_origin" --policy "$TRAFFIC_E2E_REPLAY_POLICY" --run-id "$run_id" --duration-seconds "$duration_seconds" --control-socket "$comparison_control_socket")
+    local -a comparison_command=(internal comparison-run --config "$TRAFFIC_E2E_RECORDER_CONFIG" --candidate-upstream "$target_origin" --policy "$TRAFFIC_E2E_REPLAY_POLICY" --run-id "$run_id" --duration-seconds "$duration_seconds" --max-failed-cases-per-api "$TRAFFIC_E2E_MAX_FAILED_CASES_PER_API" --control-socket "$comparison_control_socket")
     [[ -z "${TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN-}" ]] || comparison_command+=(--listen "$TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN")
     [[ -z "${TRAFFIC_E2E_MANAGED_COMPARISON_MOTAN_LISTEN-}" ]] || comparison_command+=(--motan-listen "$TRAFFIC_E2E_MANAGED_COMPARISON_MOTAN_LISTEN")
     if [[ "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true ]]; then

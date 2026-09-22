@@ -182,6 +182,48 @@ mod tests {
     }
 
     #[test]
+    fn failed_partial_comparison_preserves_the_standard_case_inventory() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("progress.yaml");
+        record_batch(&path, "standard-1", &[("GET /users", 100)]);
+
+        assert!(
+            update_comparison_progress(
+                &report("comparison-1", "GET /users", 9, 1),
+                &path,
+                "standard-1",
+            )
+            .unwrap()
+        );
+
+        let progress = load(&path, VerificationStage::Progress).unwrap().unwrap();
+        let observation = &progress.counted_observations["standard-1"].observation;
+        assert_eq!(observation.apis["GET /users"].cases.executed, 100);
+        assert_eq!(observation.apis["GET /users"].cases.passed, 9);
+        assert!(!observation.apis["GET /users"].passed);
+    }
+
+    #[test]
+    fn passing_partial_comparison_cannot_settle_the_standard_batch() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("progress.yaml");
+        record_batch(&path, "standard-1", &[("GET /users", 100)]);
+
+        let error = update_comparison_progress(
+            &report("comparison-1", "GET /users", 10, 0),
+            &path,
+            "standard-1",
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("does not cover the standard recording case inventory")
+        );
+    }
+
+    #[test]
     fn comparison_failure_then_success_does_not_reconnect_the_old_streak() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("progress.yaml");

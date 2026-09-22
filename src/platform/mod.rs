@@ -17,7 +17,7 @@ mod asset_contract_tests;
 mod assets;
 #[cfg(test)]
 mod container_runtime_tests;
-mod encryption_key;
+pub(crate) mod encryption_key;
 mod listen_preflight;
 #[cfg(test)]
 mod manager_tests;
@@ -496,6 +496,10 @@ async fn run_managed_runtime(
         .env("TRAFFIC_E2E_RECORDER_CONFIG", recorder_config)
         .env("TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY", source_traffic_policy)
         .env("TRAFFIC_E2E_REPLAY_POLICY", &config.replay_policy)
+        .env(
+            "TRAFFIC_E2E_MAX_FAILED_CASES_PER_API",
+            config.max_failed_cases_per_api.to_string(),
+        )
         .env("TRAFFIC_E2E_PLATFORM_ASSETS", &assets)
         .env(
             "TRAFFIC_E2E_COMPARISON_PROCESS_OUTPUTS_ENABLED",

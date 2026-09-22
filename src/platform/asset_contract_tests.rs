@@ -307,6 +307,8 @@ fn embedded_platform_manager_is_valid_bash() {
         "\"$TRAFFIC_E2E_BIN\" recording wait-ready --control-socket \"$comparison_control_socket\""
     ));
     assert!(MANAGER.contains("start_recording_input \"$comparison_control_socket\""));
+    assert!(MANAGER.contains("TRAFFIC_E2E_MAX_FAILED_CASES_PER_API"));
+    assert!(MANAGER.contains("--max-failed-cases-per-api"));
     assert!(
         MANAGER.contains(
             "input_command+=(--completion-control-socket \"$completion_control_socket\")"

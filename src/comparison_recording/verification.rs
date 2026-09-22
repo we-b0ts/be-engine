@@ -429,6 +429,70 @@ pub fn verify_comparison_recording(
     Ok(report)
 }
 
+pub(super) fn comparison_case_passes(case_dir: &Path, policy_path: &Path) -> Result<bool> {
+    let policy = validate_replay_policy(policy_path)?;
+    ensure!(
+        policy.runner_owned_response_assertions,
+        "comparison verification requires replay policy version 3"
+    );
+    let case_id = case_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("comparison recording case directory has no UTF-8 name")?
+        .to_string();
+    let request = case_dir.join("request.json");
+    let expected = case_dir.join("expected-response.json");
+    let response = assert_comparison_response(ComparisonResponseAssertionOptions {
+        case_id: case_id.clone(),
+        request: request.clone(),
+        expected_response: expected.clone(),
+        response: case_dir.join("response.json"),
+        policy: policy_path.to_path_buf(),
+    })?;
+    let recheck_path = case_dir.join("expected-response-after.json");
+    let has_recheck = path_is_present(&recheck_path)?;
+    let baseline_recheck = if has_recheck {
+        Some(assert_comparison_response(
+            ComparisonResponseAssertionOptions {
+                case_id: case_id.clone(),
+                request: request.clone(),
+                expected_response: expected,
+                response: recheck_path.clone(),
+                policy: policy_path.to_path_buf(),
+            },
+        )?)
+    } else {
+        None
+    };
+    let response_after = match policy.comparison.source_match {
+        ComparisonSourceMatch::Before => None,
+        ComparisonSourceMatch::BeforeOrAfter if has_recheck => Some(assert_comparison_response(
+            ComparisonResponseAssertionOptions {
+                case_id,
+                request,
+                expected_response: recheck_path,
+                response: case_dir.join("response.json"),
+                policy: policy_path.to_path_buf(),
+            },
+        )?),
+        ComparisonSourceMatch::BeforeOrAfter => {
+            return Err(anyhow!(
+                "response_settings.comparison.source_match=before_or_after requires expected-response-after.json"
+            ));
+        }
+    };
+    let matched_source = response.differences.is_empty()
+        || response_after
+            .as_ref()
+            .is_some_and(|report| report.differences.is_empty());
+    let policy_mismatch = policy_mismatch_rule_ids(
+        &response,
+        baseline_recheck.as_ref(),
+        response_after.as_ref(),
+    );
+    Ok(matched_source && policy_mismatch.is_empty())
+}
+
 pub(crate) fn resolve_comparison_case_dir(case_source: &Path, case_id: &str) -> Result<PathBuf> {
     let case_source = case_source.canonicalize().with_context(|| {
         format!(

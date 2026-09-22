@@ -83,7 +83,10 @@ impl Default for CaseKind {
 pub(super) struct ApiCounts {
     pub(super) published: usize,
     pub(super) failed: usize,
+    pub(super) verification_failed: usize,
+    pub(super) failure_limit_reached: bool,
     pub(super) suppressed_by_case_limit: usize,
+    pub(super) suppressed_by_failure_limit: usize,
     pub(super) last_observed_at: Option<DateTime<Utc>>,
     pub(super) last_baseline_status: Option<u16>,
     pub(super) last_baseline_recheck_status: Option<u16>,

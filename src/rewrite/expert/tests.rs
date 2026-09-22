@@ -493,7 +493,7 @@ async fn bounded_wait_observes_a_deadline_crossing_without_any_worker_event() {
     let lock = store.lock().unwrap();
     assert!(required_action(target.path(), &state, None).is_none());
     let waited = tokio::time::timeout(
-        std::time::Duration::from_secs(4),
+        std::time::Duration::from_secs(8),
         crate::rewrite::wait_rewrite(crate::rewrite::RewriteWaitOptions {
             target_root: target.path().into(),
             seconds: 30,

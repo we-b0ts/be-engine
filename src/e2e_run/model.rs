@@ -24,6 +24,7 @@ pub(super) const DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS: u64 = 180;
 pub(super) const MAX_TARGET_STARTUP_TIMEOUT_SECONDS: u64 = 30 * 60;
 pub(super) const DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS: u64 = 30;
 pub(super) const MAX_RESPONSE_DIFFERENCE_INDEX: usize = 256;
+pub const DEFAULT_MAX_FAILED_CASES_PER_API: usize = 10;
 
 fn default_target_startup_timeout_seconds() -> u64 {
     DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS
@@ -51,6 +52,8 @@ pub(super) struct ProjectSettings {
     pub process_outputs: Vec<ProcessOutputSettings>,
     pub target: TargetProjectConfig,
     pub replay: ReplayProjectConfig,
+    #[serde(default)]
+    pub verification: VerificationProjectConfig,
     pub recording: RecordingProjectConfig,
     pub delivery: DeliveryProjectConfig,
     pub state: StateProjectConfig,
@@ -109,6 +112,25 @@ pub(super) struct ReplayProjectConfig {
     pub policy: PathBuf,
     #[serde(default = "default_replay_case_dependency_post_response_window_ms")]
     pub case_dependency_post_response_window_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct VerificationProjectConfig {
+    #[serde(default = "default_max_failed_cases_per_api")]
+    pub max_failed_cases_per_api: usize,
+}
+
+impl Default for VerificationProjectConfig {
+    fn default() -> Self {
+        Self {
+            max_failed_cases_per_api: DEFAULT_MAX_FAILED_CASES_PER_API,
+        }
+    }
+}
+
+fn default_max_failed_cases_per_api() -> usize {
+    DEFAULT_MAX_FAILED_CASES_PER_API
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,6 +220,7 @@ pub(crate) struct ResolvedProjectConfig {
     pub(crate) breeze_container: Option<String>,
     pub(crate) replay_policy: PathBuf,
     pub(crate) replay_case_dependency_post_response_window: Duration,
+    pub(crate) max_failed_cases_per_api: usize,
     pub(crate) replay_startup_timeout: Duration,
     pub(crate) pr_base: String,
     pub(crate) managed_paths: Vec<PathBuf>,

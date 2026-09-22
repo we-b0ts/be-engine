@@ -38,12 +38,27 @@ use crate::recording_control::{
 };
 use crate::request_headers::RequestHeaderCapture;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ComparisonRecordingRunOptions {
     pub run_id: Option<String>,
     pub duration: Option<Duration>,
     pub recording_apis: Vec<RecordingApi>,
     pub control_socket: Option<PathBuf>,
+    pub verification_policy: Option<PathBuf>,
+    pub max_failed_cases_per_api: usize,
+}
+
+impl Default for ComparisonRecordingRunOptions {
+    fn default() -> Self {
+        Self {
+            run_id: None,
+            duration: None,
+            recording_apis: Vec::new(),
+            control_socket: None,
+            verification_policy: None,
+            max_failed_cases_per_api: crate::DEFAULT_MAX_FAILED_CASES_PER_API,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -55,6 +70,8 @@ pub(super) struct ComparisonRecordingRuntime {
     pub(super) motan_gateway: MotanGatewayConfig,
     pub(super) candidate_motan_upstream: String,
     pub(super) recording_apis: Vec<RecordingApi>,
+    pub(super) verification_policy: Option<PathBuf>,
+    pub(super) max_failed_cases_per_api: usize,
     pub(super) client: crate::ProxyClient,
     pub(super) store: ComparisonRecordingStore,
     pub(super) ready: Arc<AtomicBool>,
@@ -63,6 +80,7 @@ pub(super) struct ComparisonRecordingRuntime {
     request_header_capture: RequestHeaderCapture,
     pub(super) active_case_permits: Arc<Semaphore>,
     pub(super) dispatch_schedule: Arc<ComparisonDispatchSchedule>,
+    connection_shutdown: watch::Sender<bool>,
     background: BackgroundTasks,
 }
 
@@ -102,11 +120,20 @@ pub async fn run_with_options(
         duration,
         recording_apis,
         control_socket,
+        verification_policy,
+        max_failed_cases_per_api,
     } = options;
     ensure!(
         duration.is_none_or(|duration| !duration.is_zero()),
         "comparison recording duration must be greater than zero"
     );
+    ensure!(
+        max_failed_cases_per_api > 0,
+        "max_failed_cases_per_api must be greater than zero"
+    );
+    if let Some(policy) = &verification_policy {
+        crate::validate_replay_policy(policy).context("invalid comparison verification policy")?;
+    }
     config
         .validate_comparison_recording()
         .context("invalid comparison recording configuration")?;
@@ -203,6 +230,7 @@ pub async fn run_with_options(
         .clone()
         .unwrap_or_default();
     let dispatch_schedule = Arc::new(ComparisonDispatchSchedule::randomized()?);
+    let (connection_shutdown, _) = watch::channel(false);
     let initially_ready = !(gateway.enabled && gateway.ready.enabled || motan_gateway.enabled);
     let runtime = ComparisonRecordingRuntime {
         config: Arc::new(config),
@@ -212,6 +240,8 @@ pub async fn run_with_options(
         motan_gateway,
         candidate_motan_upstream,
         recording_apis,
+        verification_policy,
+        max_failed_cases_per_api,
         client,
         store,
         ready: Arc::new(AtomicBool::new(initially_ready)),
@@ -220,6 +250,7 @@ pub async fn run_with_options(
         request_header_capture,
         active_case_permits: Arc::new(Semaphore::new(comparison_recording.max_in_flight)),
         dispatch_schedule,
+        connection_shutdown,
         background: BackgroundTasks::new(),
     };
     if runtime.ready.load(Ordering::Acquire) {
@@ -282,6 +313,10 @@ pub async fn run_with_options(
                 break RecordingCompletionReason::DurationElapsed;
             }
             _ = &mut case_limit_completion => {
+                if runtime.store.failure_limit_reached().await {
+                    info!("every explicitly selected comparison API completed or reached its failure limit");
+                    break RecordingCompletionReason::FailureLimitReached;
+                }
                 info!("every explicitly selected comparison API reached its case limit");
                 break RecordingCompletionReason::PerApiCaseLimitReached;
             }
@@ -315,6 +350,7 @@ pub async fn run_with_options(
                     accepted.context("failed to accept comparison recording client")?;
                 let runtime = runtime.clone();
                 connections.spawn(async move {
+                    let mut shutdown = runtime.connection_shutdown.subscribe();
                     let service = service_fn(move |request| {
                         let runtime = runtime.clone();
                         async move {
@@ -323,12 +359,19 @@ pub async fn run_with_options(
                             )
                         }
                     });
-                    if let Err(error) = hyper::server::conn::http1::Builder::new()
+                    let connection = hyper::server::conn::http1::Builder::new()
                         .preserve_header_case(true)
                         .title_case_headers(true)
-                        .serve_connection(TokioIo::new(stream), service)
-                        .await
-                    {
+                        .serve_connection(TokioIo::new(stream), service);
+                    tokio::pin!(connection);
+                    let result = tokio::select! {
+                        result = &mut connection => result,
+                        _ = shutdown.changed() => {
+                            connection.as_mut().graceful_shutdown();
+                            connection.await
+                        }
+                    };
+                    if let Err(error) = result {
                         warn!(%error, "comparison recording client connection ended with error");
                     }
                 });
@@ -342,8 +385,15 @@ pub async fn run_with_options(
     };
     drop(listener);
     runtime.recording_lifecycle.mark_stopping();
-    connections.abort_all();
-    while connections.join_next().await.is_some() {}
+    let _ = runtime.connection_shutdown.send(true);
+    let connection_drain = async { while connections.join_next().await.is_some() {} };
+    if tokio::time::timeout(Duration::from_secs(2), connection_drain)
+        .await
+        .is_err()
+    {
+        connections.abort_all();
+        while connections.join_next().await.is_some() {}
+    }
     ready_tasks.abort_all();
     while ready_tasks.join_next().await.is_some() {}
     summary_task.abort();
@@ -745,12 +795,17 @@ async fn run_dual(
         candidate: candidate.record,
         baseline_recheck: baseline_recheck.map(|capture| capture.record),
     };
-    if let Err(error) = runtime.store.publish(&case, reservation).await {
-        warn!(
-            %error,
-            case_id = %case.id,
-            "failed to publish comparison recording case"
-        );
+    match runtime.store.publish(&case, reservation).await {
+        Ok(case_dir) => {
+            record_case_verification(&runtime, &recording_api, &case_dir).await;
+        }
+        Err(error) => {
+            warn!(
+                %error,
+                case_id = %case.id,
+                "failed to publish comparison recording case"
+            );
+        }
     }
     drop(permit);
     runtime
@@ -764,6 +819,36 @@ async fn run_dual(
         )
         .await;
     let _ = baseline_sender.send(baseline);
+}
+
+pub(super) async fn record_case_verification(
+    runtime: &ComparisonRecordingRuntime,
+    recording_api: &str,
+    case_dir: &std::path::Path,
+) {
+    let Some(policy) = &runtime.verification_policy else {
+        return;
+    };
+    match super::verification::comparison_case_passes(case_dir, policy) {
+        Ok(true) => {}
+        Ok(false) => {
+            runtime
+                .store
+                .record_verification_failure(recording_api, runtime.max_failed_cases_per_api)
+                .await;
+        }
+        Err(error) => {
+            warn!(
+                %error,
+                case_dir = %case_dir.display(),
+                "comparison case could not be evaluated during recording"
+            );
+            runtime
+                .store
+                .record_verification_failure(recording_api, runtime.max_failed_cases_per_api)
+                .await;
+        }
+    }
 }
 
 async fn fixed_response(runtime: &ComparisonRecordingRuntime) -> Response<GatewayBody> {

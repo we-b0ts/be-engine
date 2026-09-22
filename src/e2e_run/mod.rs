@@ -7,6 +7,7 @@ mod delivery;
 mod dirty_evidence;
 mod evidence;
 mod execute;
+mod failure_limit;
 mod final_evidence;
 mod http_driver;
 pub(crate) mod jwt_evidence;
@@ -55,7 +56,8 @@ pub use evidence::{
 pub(crate) use execute::recover_focused_e2e_api;
 pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};
 pub(crate) use http_driver::wait_until_ready;
-use model::RunStatus;
+pub use model::DEFAULT_MAX_FAILED_CASES_PER_API;
+use model::{CaseStatus, RunStatus};
 pub(crate) use model::{ResolvedProjectConfig, TargetBuildContext, TargetQualityGateConfig};
 pub(crate) use reclassify::{
     FocusedBackgroundReclassification, ensure_focused_background_reclassification_revisable,
@@ -147,6 +149,13 @@ pub(crate) struct E2eFocusedAttemptSummary {
     pub(crate) passed: bool,
     pub(crate) case_source: PathBuf,
     pub(crate) case_inventory_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum E2eActiveProgress {
+    Building,
+    Replaying { completed: usize, total: usize },
+    Finalizing,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -327,6 +336,46 @@ pub fn status_e2e_run(context: E2eRunContext) -> Result<E2eRunStatus> {
         focused_apis,
         runtime_outputs,
     })
+}
+
+pub(crate) fn focused_active_progress(
+    context: &E2eRunContext,
+    api_key: &str,
+) -> Result<Option<E2eActiveProgress>> {
+    let (_, layout) = config::resolve_layout(
+        &context.target_root,
+        &context.case_source,
+        context.run_key.as_deref(),
+    )?;
+    let state_path = layout
+        .run_root
+        .join("focused")
+        .join(support::api_directory(api_key))
+        .join(".active/state.yaml");
+    if !state_path.is_file() {
+        return Ok(None);
+    }
+    let state: model::ActiveRunState = store::read_yaml(&state_path)?;
+    Ok(Some(match state.status {
+        RunStatus::Running if state.replay_pid.is_none() => E2eActiveProgress::Building,
+        RunStatus::Running => E2eActiveProgress::Replaying {
+            completed: state
+                .cases
+                .iter()
+                .filter(|case| {
+                    matches!(
+                        case.status,
+                        CaseStatus::Passed | CaseStatus::Failed | CaseStatus::Incomplete
+                    )
+                })
+                .count(),
+            total: state.cases.len(),
+        },
+        RunStatus::Finalizing
+        | RunStatus::Successful
+        | RunStatus::Failed
+        | RunStatus::Interrupted => E2eActiveProgress::Finalizing,
+    }))
 }
 
 pub fn resolve_e2e_response_rule_evidence(

@@ -47,6 +47,9 @@ pub(super) fn apply_reclassified_case_outcomes(
     reclassified: &BackgroundReclassification,
 ) {
     for case in &mut state.cases {
+        if matches!(case.status, CaseStatus::Pending | CaseStatus::Incomplete) {
+            continue;
+        }
         let dirty = reclassified
             .remaining_dirty_case_ids
             .contains(&case.case_id);
@@ -198,9 +201,9 @@ fn build_api_evidence(
         let failed = case_ids
             .iter()
             .filter(|case_id| {
-                cases
-                    .get(case_id.as_str())
-                    .is_some_and(|case| case.status == CaseStatus::Failed)
+                cases.get(case_id.as_str()).is_some_and(|case| {
+                    matches!(case.status, CaseStatus::Failed | CaseStatus::Incomplete)
+                })
             })
             .count() as u32;
         let total = case_ids.len() as u32;
@@ -279,15 +282,14 @@ fn assertion_report<'a>(
         .collect::<BTreeMap<_, _>>();
     let mut report = AssertionReport::new(state, runner_owned);
     report.cases = case_ids
-        .map(|case_id| AssertionCase {
-            case_id: case_id.to_string(),
-            passed: cases
-                .get(case_id)
-                .and_then(|case| case.assertion_passed)
-                .unwrap_or(false),
-            response: cases
-                .get(case_id)
-                .and_then(|case| case.response_assertion.clone()),
+        .filter_map(|case_id| {
+            let case = cases.get(case_id)?;
+            let passed = case.assertion_passed?;
+            Some(AssertionCase {
+                case_id: case_id.to_string(),
+                passed,
+                response: case.response_assertion.clone(),
+            })
         })
         .collect();
     report
@@ -324,9 +326,9 @@ pub(super) fn summarize_apis_without_aggregate(
             let failed = case_ids
                 .iter()
                 .filter(|id| {
-                    cases
-                        .get(id.as_str())
-                        .is_some_and(|case| case.status == CaseStatus::Failed)
+                    cases.get(id.as_str()).is_some_and(|case| {
+                        matches!(case.status, CaseStatus::Failed | CaseStatus::Incomplete)
+                    })
                 })
                 .count() as u32;
             let total = case_ids.len() as u32;
@@ -352,4 +354,72 @@ pub(super) fn summarize_apis_without_aggregate(
             }
         })
         .collect();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::case_group::{CanonicalCase, CanonicalCaseGroup};
+
+    #[test]
+    fn assertion_report_omits_cases_without_an_assertion_result() {
+        let inventory = CaseGroupInventory {
+            case_source: PathBuf::from("/cases"),
+            source_revision: "source".to_string(),
+            case_inventory_id: "inventory".to_string(),
+            groups: vec![CanonicalCaseGroup {
+                group_id: "GET /api/devices".to_string(),
+                method: "GET".to_string(),
+                source_route: "/api/devices".to_string(),
+                pattern: None,
+                case_inventory_id: "inventory".to_string(),
+                cases: ["passed", "failed", "pending"]
+                    .into_iter()
+                    .map(|case_id| CanonicalCase {
+                        case_id: case_id.to_string(),
+                        case_dir: PathBuf::from("/cases").join(case_id),
+                        recorded_at: None,
+                    })
+                    .collect(),
+            }],
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let mut state = ActiveRunState::new("run".to_string(), 1, &inventory, temp.path());
+        let passed = state
+            .cases
+            .iter_mut()
+            .find(|case| case.case_id == "passed")
+            .unwrap();
+        passed.assertion_passed = Some(true);
+        passed.status = CaseStatus::Passed;
+        let failed = state
+            .cases
+            .iter_mut()
+            .find(|case| case.case_id == "failed")
+            .unwrap();
+        failed.assertion_passed = Some(false);
+        failed.status = CaseStatus::Failed;
+
+        let report = assertion_report(
+            &state,
+            true,
+            state.cases.iter().map(|case| case.case_id.as_str()),
+        );
+
+        assert_eq!(report.cases.len(), 2);
+        assert!(
+            report
+                .cases
+                .iter()
+                .any(|case| case.case_id == "passed" && case.passed)
+        );
+        assert!(
+            report
+                .cases
+                .iter()
+                .any(|case| case.case_id == "failed" && !case.passed)
+        );
+    }
 }

@@ -12,6 +12,7 @@ mod output;
 mod platform;
 mod record;
 mod record_comparison;
+mod record_source;
 mod recording;
 mod replay;
 mod signal;
@@ -45,6 +46,8 @@ struct Cli {
 enum Command {
     /// Record source traffic through the repository's managed recording configuration.
     Record(platform::RecordArgs),
+    /// Start a local Source process and record it without Docker.
+    RecordSource(record_source::RecordSourceArgs),
     /// Record source and target responses through the managed comparison runtime.
     RecordComparison(platform::RecordComparisonArgs),
     /// Compare a finalized comparison recording with replay response rules.
@@ -93,6 +96,7 @@ pub(crate) async fn run() -> Result<()> {
         Command::RecordComparison(args) => platform::run_record_comparison(args).await,
         Command::Compare(args) => compare::run(args).await,
         Command::Record(args) => platform::run_record(args).await,
+        Command::RecordSource(args) => record_source::run(args).await,
         Command::Recording(args) => recording::run(args).await,
         Command::Replay(args) => replay::run(args).await,
         Command::Target(args) => target::run(args).await,
@@ -138,6 +142,7 @@ mod tests {
             names,
             [
                 "record",
+                "record-source",
                 "record-comparison",
                 "compare",
                 "recording",

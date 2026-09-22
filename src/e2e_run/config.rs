@@ -7,7 +7,7 @@ use super::model::{
     BreezeProjectConfig, DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS, DeliveryProjectConfig,
     ProcessOutputSettings, ProjectConfig, ProjectSettings, RecordingProjectConfig,
     ReplayProjectConfig, ResolvedProjectConfig, RunLayout, SourceProjectConfig, StateProjectConfig,
-    TargetProjectConfig,
+    TargetProjectConfig, VerificationProjectConfig,
 };
 use super::project_validation::validate_project_config;
 use super::target_quality_config::inferred_target_quality_gates;
@@ -135,6 +135,7 @@ pub(crate) fn render_project_config(
                 case_dependency_post_response_window_ms:
                     crate::replay::DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS,
             },
+            verification: VerificationProjectConfig::default(),
             recording: RecordingProjectConfig {
                 _legacy_rule: None,
                 source_traffic_policy: PathBuf::from(crate::config::SOURCE_TRAFFIC_POLICY_FILE),
@@ -304,6 +305,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
                     .replay
                     .case_dependency_post_response_window_ms,
             ),
+            max_failed_cases_per_api: config.project.verification.max_failed_cases_per_api,
             replay_startup_timeout: Duration::from_secs(
                 super::model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
             ),
@@ -592,7 +594,12 @@ mod tests {
                 .case_dependency_post_response_window_ms,
             crate::replay::DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS
         );
+        assert_eq!(
+            config.project.verification.max_failed_cases_per_api,
+            super::super::model::DEFAULT_MAX_FAILED_CASES_PER_API
+        );
         let raw = fs::read_to_string(&result.config).unwrap();
+        assert!(raw.contains("max_failed_cases_per_api: 10"));
         for duplicate in [
             "readiness_path",
             "readiness_status",

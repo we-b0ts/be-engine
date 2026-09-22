@@ -118,6 +118,72 @@ pub fn resolve_recording_api_member(
     Ok(members.into_iter().next().expect("one member was required"))
 }
 
+pub fn resolve_recording_api_case_ids(
+    case_source: &Path,
+    apis: &[crate::RecordingApi],
+) -> Result<Vec<String>> {
+    ensure!(!apis.is_empty(), "at least one replay API is required");
+    let case_source = fs::canonicalize(case_source)
+        .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
+    let cases = discover_published_cases(&case_source)?;
+    ensure!(!cases.is_empty(), "case source contains no published cases");
+    reject_duplicate_case_ids(&cases)?;
+
+    let mut selectors = BTreeSet::new();
+    for api in apis {
+        ensure!(
+            selectors.insert(api.to_string()),
+            "duplicate replay API selector: {api}"
+        );
+    }
+
+    let mut matched = vec![0_usize; apis.len()];
+    let mut selected = Vec::new();
+    for case in cases {
+        let method = case.method.parse().with_context(|| {
+            format!(
+                "recorded case {} has invalid method {:?}",
+                case.dir.display(),
+                case.method
+            )
+        })?;
+        let uri = case.path.parse().with_context(|| {
+            format!(
+                "recorded case {} has invalid path {:?}",
+                case.dir.display(),
+                case.path
+            )
+        })?;
+        let owners = apis
+            .iter()
+            .enumerate()
+            .filter(|(_, api)| api.matches(&method, &uri))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        ensure!(
+            owners.len() <= 1,
+            "recorded case {} matches overlapping replay API selectors: {}",
+            case.id,
+            owners
+                .iter()
+                .map(|index| apis[*index].to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        if let Some(index) = owners.first().copied() {
+            matched[index] = matched[index].saturating_add(1);
+            selected.push(case.id);
+        }
+    }
+    for (index, api) in apis.iter().enumerate() {
+        ensure!(
+            matched[index] > 0,
+            "recording API {api} has no recorded cases"
+        );
+    }
+    Ok(selected)
+}
+
 pub(crate) fn resolve_recording_api_seed_member(
     case_source: &Path,
     api: &crate::RecordingApi,
