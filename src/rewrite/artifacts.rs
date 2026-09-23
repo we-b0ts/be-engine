@@ -18,6 +18,19 @@ pub(super) enum RecordingPublication {
     Finalized,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct RecordingProgress {
+    pub(super) apis: usize,
+    pub(super) published_cases: usize,
+    pub(super) failed_cases: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct RecordingStatus {
+    pub(super) publication: RecordingPublication,
+    pub(super) progress: RecordingProgress,
+}
+
 pub(super) fn allocate_run_id(
     target_root: &Path,
     operation: ManagedRecordingOperation,
@@ -107,10 +120,29 @@ pub(super) fn standard_recording_publication(
     target_root: &Path,
     run_id: &str,
 ) -> Result<RecordingPublication> {
-    manifest_publication::<StandardRecordingManifest>(
-        &recording_manifest(target_root, run_id),
-        |manifest| manifest.status.as_str(),
-    )
+    Ok(standard_recording_status(target_root, run_id)?.publication)
+}
+
+pub(super) fn standard_recording_status(
+    target_root: &Path,
+    run_id: &str,
+) -> Result<RecordingStatus> {
+    let path = recording_manifest(target_root, run_id);
+    if !path.is_file() {
+        return Ok(RecordingStatus {
+            publication: RecordingPublication::Missing,
+            progress: RecordingProgress::default(),
+        });
+    }
+    let manifest: StandardRecordingManifest = read_json(&path)?;
+    Ok(RecordingStatus {
+        publication: publication(&manifest.status)?,
+        progress: RecordingProgress {
+            apis: manifest.observed_api_count,
+            published_cases: manifest.published_cases,
+            failed_cases: manifest.failed_cases,
+        },
+    })
 }
 
 pub(super) fn standard_recording_apis(
@@ -218,10 +250,29 @@ pub(super) fn comparison_recording_publication(
     target_root: &Path,
     run_id: &str,
 ) -> Result<RecordingPublication> {
-    manifest_publication::<ComparisonRecordingManifest>(
-        &comparison_manifest(target_root, run_id),
-        |manifest| manifest.status.as_str(),
-    )
+    Ok(comparison_recording_status(target_root, run_id)?.publication)
+}
+
+pub(super) fn comparison_recording_status(
+    target_root: &Path,
+    run_id: &str,
+) -> Result<RecordingStatus> {
+    let path = comparison_manifest(target_root, run_id);
+    if !path.is_file() {
+        return Ok(RecordingStatus {
+            publication: RecordingPublication::Missing,
+            progress: RecordingProgress::default(),
+        });
+    }
+    let manifest: ComparisonRecordingManifest = read_json(&path)?;
+    Ok(RecordingStatus {
+        publication: publication(&manifest.status)?,
+        progress: RecordingProgress {
+            apis: manifest.apis.len(),
+            published_cases: manifest.counts.published,
+            failed_cases: manifest.counts.failed,
+        },
+    })
 }
 
 pub(super) fn recording_rejection(error: &anyhow::Error) -> String {
@@ -444,18 +495,8 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
         .with_context(|| format!("invalid generated evidence {}", path.display()))
 }
 
-fn manifest_publication<T>(
-    path: &Path,
-    status: impl FnOnce(&T) -> &str,
-) -> Result<RecordingPublication>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    if !path.is_file() {
-        return Ok(RecordingPublication::Missing);
-    }
-    let manifest: T = read_json(path)?;
-    Ok(match status(&manifest) {
+fn publication(status: &str) -> Result<RecordingPublication> {
+    Ok(match status {
         "running" => RecordingPublication::Running,
         "completed" | "failed" => RecordingPublication::Finalized,
         other => anyhow::bail!("generated recording manifest has unsupported status {other:?}"),
@@ -466,7 +507,11 @@ where
 struct StandardRecordingManifest {
     status: String,
     recording_apis: Vec<String>,
+    #[serde(default)]
+    observed_api_count: usize,
     published_cases: usize,
+    #[serde(default)]
+    failed_cases: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -483,6 +528,8 @@ struct ComparisonRecordingManifest {
     ready: bool,
     recording_apis: Vec<String>,
     counts: ComparisonRecordingCounts,
+    #[serde(default)]
+    apis: BTreeMap<String, serde_json::Value>,
     errors: Vec<String>,
 }
 

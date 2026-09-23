@@ -22,7 +22,7 @@ use crate::{
 };
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 32;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 33;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -726,6 +726,7 @@ pub enum RewriteAction {
     RecordingInProgress {
         summary: String,
         run_id: String,
+        progress: RewriteRecordingProgress,
         status_poll_after_seconds: u64,
         status: RewriteCommandSpec,
     },
@@ -810,6 +811,13 @@ pub enum RewriteAction {
         e2e_current: bool,
         comparison_current: bool,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct RewriteRecordingProgress {
+    pub apis: usize,
+    pub published_cases: usize,
+    pub failed_cases: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
