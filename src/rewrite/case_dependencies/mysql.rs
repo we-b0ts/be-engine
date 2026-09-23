@@ -1,4 +1,4 @@
-//! Bounded MySQL query, identity and response facts for API-worker diagnosis.
+//! Bounded MySQL query, identity and response facts for API-implementer diagnosis.
 use super::*;
 
 // Keep complete SQL for every template the MySQL ownership planner accepts.

@@ -4,6 +4,15 @@ Use for `integration_required` or a source-review assignment. Own dispatch,
 result reconciliation, canonical publication, and engine reports. Delegate code
 analysis and merge preparation to `code-integrator`.
 
+The code integrator prepares and reviews a candidate; the coordinator publishes
+that exact candidate and reports it to the engine. The code integrator is not an
+API implementer, does not own an API binding, and never reports `worker`
+activity.
+
+Only the coordinator publishes candidates, applies rule or startup inputs,
+reports API-implementer activity, invokes traffic acceptance, and releases
+retained implementation or integration tasks after final delivery.
+
 ## Retain One Integrator
 
 Keep one integrator handle and one separate integration worktree per workflow.
@@ -14,7 +23,7 @@ worktree through final delivery.
 
 Run one integrator assignment at a time. Record its task identity, actual
 runtime state, input identities, base, and any returned candidate. Do not put
-this handle into an API worker binding or report integrator activity through
+this handle into an API-implementer binding or report integrator activity through
 `worker report`. The engine validates candidate reports but has no separate
 integration-task lifecycle API.
 
@@ -61,7 +70,7 @@ confirmation, feedback, and dispatch when allowed. An unchanged
 Use bounded runtime waits when this assignment is the outstanding operation;
 do not invent an engine wait command or call `next` to bypass it.
 Before waiting and after each wait, actually invoke runtime list/status tools
-following the [runtime query protocol](coordinator-worker-protocol.md#mandatory-runtime-queries).
+following the [runtime query protocol](coordinator-agent-protocol.md#mandatory-runtime-queries).
 An old running observation or absence of a completion event is insufficient.
 
 Do not start canonical verification, publish another change, or apply related

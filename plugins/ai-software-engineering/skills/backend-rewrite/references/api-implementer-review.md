@@ -1,4 +1,4 @@
-# Implementation Worker Review And Handoff
+# API Implementer Review And Handoff
 
 Use before returning an implementation handoff from the assigned worktree,
 including unchanged code when a post-input resume still requires delivery.
@@ -40,10 +40,10 @@ means the command executed. For `changes_required`, fix the code. For
 `evidence_required`, inspect source using the evidence contract and extend the
 returned check with `--evidence /absolute/path/evidence.json`. Rerun after the
 final edit and commit; only a current `passed` report qualifies for handoff.
-For `demo.test` or `sample.test` findings, follow the source-proof contract in
-[integrator-hardcode-evidence.md](integrator-hardcode-evidence.md) and supply one
-exact `--hardcode-ai-verified` mapping per proven occurrence. Public domain
-exceptions never waive private Replay markers.
+For `demo.test` or `sample.test` findings, follow
+[Public-Domain Hardcode Evidence](source-review-rules.md#public-domain-hardcode-evidence)
+and supply one exact `--hardcode-ai-verified` mapping per proven occurrence.
+Public-domain exceptions never waive private Replay markers.
 
 The bundled organization script may be an earlier local check; it does not
 replace this report. Reports bind the code, canonical configuration, runtime
