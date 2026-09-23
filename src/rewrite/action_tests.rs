@@ -304,7 +304,7 @@ fn status_reports_a_live_recording_without_returning_execute_again() {
     fs::create_dir_all(manifest.parent().unwrap()).unwrap();
     fs::write(
             manifest,
-            br#"{"status":"running","recording_apis":["GET /api"],"published_cases":1,"failed_cases":0,"errors":[]}"#,
+            br#"{"status":"running","recording_apis":[],"observed_api_count":2,"published_cases":7,"failed_cases":2,"errors":[]}"#,
         )
         .unwrap();
     recording_execution::publish(
@@ -326,6 +326,20 @@ fn status_reports_a_live_recording_without_returning_execute_again() {
     assert_eq!(
         status.pointer("/action/details/status_poll_after_seconds"),
         Some(&serde_json::json!(30))
+    );
+    assert_eq!(
+        status.pointer("/action/details/progress"),
+        Some(&serde_json::json!({
+            "apis": 2,
+            "published_cases": 7,
+            "failed_cases": 2
+        }))
+    );
+    assert_eq!(
+        status.pointer("/action/summary"),
+        Some(&serde_json::json!(
+            "standard recording run 20260802000000 is executing: 2 APIs, 7 cases published, 2 cases failed"
+        ))
     );
     assert_eq!(
         status.pointer("/action/commands/wait/argv"),

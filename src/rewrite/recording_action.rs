@@ -2,7 +2,9 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::model::{RewriteAction, RewriteCommandSpec, RewritePhase, RewriteState};
+use super::model::{
+    RewriteAction, RewriteCommandSpec, RewritePhase, RewriteRecordingProgress, RewriteState,
+};
 use super::recording_execution::RecordingExecutionState;
 use super::{action, artifacts, fingerprint, inventory, recording, recording_execution};
 
@@ -10,12 +12,15 @@ pub(super) fn status_action(
     target_root: &Path,
     state: &RewriteState,
 ) -> Result<Option<RewriteAction>> {
-    let (run_id, publication, label) = match state.phase {
-        RewritePhase::RecordingRequired => (
-            state.recording_run_id.as_str(),
-            artifacts::standard_recording_publication(target_root, &state.recording_run_id)?,
-            "standard",
-        ),
+    let (run_id, recording_status, label) = match state.phase {
+        RewritePhase::RecordingRequired => {
+            let run_id = state.recording_run_id.as_str();
+            (
+                run_id,
+                artifacts::standard_recording_status(target_root, run_id)?,
+                "standard",
+            )
+        }
         RewritePhase::ComparisonRecordingRequired => {
             let run_id = state
                 .comparison_run_id
@@ -23,12 +28,13 @@ pub(super) fn status_action(
                 .expect("comparison recording phase requires a run id");
             (
                 run_id,
-                artifacts::comparison_recording_publication(target_root, run_id)?,
+                artifacts::comparison_recording_status(target_root, run_id)?,
                 "comparison",
             )
         }
         _ => return Ok(None),
     };
+    let publication = recording_status.publication;
     let execution = recording_execution::state(target_root)?;
     Ok(Some(match execution {
         RecordingExecutionState::Live(marker) => {
@@ -42,11 +48,18 @@ pub(super) fn status_action(
                     "recording executor does not match the current coordinator action",
                 )
             } else {
+                let progress = recording_status.progress;
                 RewriteAction::RecordingInProgress {
                     summary: format!(
-                        "{label} recording run {run_id} is executing under coordinator ownership"
+                        "{label} recording run {run_id} is executing: {} APIs, {} cases published, {} cases failed",
+                        progress.apis, progress.published_cases, progress.failed_cases
                     ),
                     run_id: run_id.to_string(),
+                    progress: RewriteRecordingProgress {
+                        apis: progress.apis,
+                        published_cases: progress.published_cases,
+                        failed_cases: progress.failed_cases,
+                    },
                     status_poll_after_seconds: recording::STATUS_POLL_AFTER_SECONDS,
                     status: action::status_command(target_root),
                 }

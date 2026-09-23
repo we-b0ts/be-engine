@@ -112,7 +112,7 @@ listed protocol before handling that action.
 
 ## Coordinator Loop
 
-Use the existing `backend-rewrite` interface. Response schema v32 actions have
+Use the existing `backend-rewrite` interface. Response schema v33 actions have
 exactly `kind`, `summary`, `details`, and `commands`. Status/next expose scheduling
 and short issue facts, not diagnostic payloads. Default `workflow` has `id` and
 `revision`; use `inventory` for binding recovery and scheduling detail. Never

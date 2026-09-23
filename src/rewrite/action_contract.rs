@@ -101,6 +101,7 @@ impl Serialize for RewriteAction {
             Self::RecordingInProgress {
                 summary,
                 run_id,
+                progress,
                 status_poll_after_seconds,
                 status,
             } => RewriteActionView {
@@ -108,6 +109,7 @@ impl Serialize for RewriteAction {
                 summary,
                 details: RewriteRecordingInProgressDetails {
                     run_id,
+                    progress,
                     status_poll_after_seconds: *status_poll_after_seconds,
                 },
                 commands: serde_json::json!({"wait": super::waiting::command(status, *status_poll_after_seconds)}),
@@ -346,6 +348,7 @@ struct RewriteRecordingRunDetails<'a> {
 #[derive(Serialize)]
 struct RewriteRecordingInProgressDetails<'a> {
     run_id: &'a str,
+    progress: &'a super::model::RewriteRecordingProgress,
     status_poll_after_seconds: u64,
 }
 

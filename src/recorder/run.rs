@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -18,6 +18,7 @@ struct RecorderRunReport {
     status: &'static str,
     output_dir: String,
     recording_apis: Vec<String>,
+    observed_api_count: usize,
     access_policy: &'static str,
     traffic_jsonl: &'static str,
     published_cases: usize,
@@ -31,6 +32,7 @@ struct RecorderRunReport {
 pub(crate) struct RecorderRunState {
     pub(crate) run_id: String,
     pub(crate) recording_apis: Vec<String>,
+    pub(crate) observed_apis: BTreeSet<String>,
     pub(crate) published_cases: usize,
     pub(crate) published_cases_by_group: BTreeMap<Option<String>, usize>,
     pub(crate) failed_cases: usize,
@@ -121,6 +123,9 @@ impl Recorder {
         {
             let mut state = self.run_state.lock().await;
             state.published_cases += 1;
+            if let Some(recording_api) = recording_api {
+                state.observed_apis.insert(recording_api.to_string());
+            }
             *state
                 .published_cases_by_group
                 .entry(case.uri_group.clone())
@@ -437,6 +442,7 @@ impl Recorder {
             status,
             output_dir: self.run_dir.display().to_string(),
             recording_apis: state.recording_apis.clone(),
+            observed_api_count: state.observed_apis.len(),
             access_policy: self.access_policy.as_str(),
             traffic_jsonl: self.traffic_jsonl.as_str(),
             published_cases: state.published_cases,
@@ -543,6 +549,7 @@ mod tests {
         assert_eq!(report["status"], "running");
         assert_eq!(report["published_cases"], 3);
         assert_eq!(report["failed_cases"], 1);
+        assert_eq!(report["observed_api_count"], 0);
     }
 
     #[tokio::test]
@@ -574,6 +581,13 @@ mod tests {
             .publish_case_for_api(&case("api-users-wildcard"), Some("GET /api/users/*"))
             .await
             .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(
+            &tokio::fs::read(recorder.run_dir.join("recording-run.json"))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["observed_api_count"], serde_json::json!(1));
         assert!(
             tokio::time::timeout(
                 std::time::Duration::from_millis(20),
@@ -587,6 +601,13 @@ mod tests {
             .publish_case_for_api(&case("api-users-wildcard"), Some("GET /api/users/*"))
             .await
             .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(
+            &tokio::fs::read(recorder.run_dir.join("recording-run.json"))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["observed_api_count"], serde_json::json!(1));
         tokio::time::timeout(
             std::time::Duration::from_millis(20),
             recorder.wait_for_explicit_api_case_limit(),
@@ -603,6 +624,7 @@ mod tests {
             .unwrap();
         let report: serde_json::Value = serde_json::from_str(&report_raw).unwrap();
         assert_eq!(report["published_cases"], 2);
+        assert_eq!(report["observed_api_count"], 1);
         assert_eq!(report["completion_reason"], "per_api_case_limit_reached");
     }
 
