@@ -1,10 +1,11 @@
-# Implementation Worker Diagnosis
+# API Implementer Diagnosis
 
-Audience: implementation workers assigned an `implementation_required` work
-item. Read before work-item diagnosis or code changes. Before edits, read
+Audience: API implementers assigned an `implementation_required` work item,
+including legacy process-output assignments. Read before work-item diagnosis
+or code changes. Before edits, read
 [target-code-rules.md](target-code-rules.md).
 For a proven environment override, mount, or writable-directory requirement,
-read [worker-startup-inputs.md](worker-startup-inputs.md).
+read [api-implementer-startup-inputs.md](api-implementer-startup-inputs.md).
 Use the engine's current
 work-item facts to identify one repair before the engine-issued acceptance.
 Select the diagnosis path from the assigned work scope and confirm it against
@@ -52,7 +53,7 @@ representative when available. Treat possible causes as hypotheses.
 The same context includes `review` with the registered worktree/base and the
 local check command. For a `target_quality` issue, read the assigned findings
 in `context.review.rework.findings` and the supplied review report, then follow
-[worker-review.md](worker-review.md); no traffic mismatch is implied. An
+[api-implementer-review.md](api-implementer-review.md); no traffic mismatch is implied. An
 unpublished candidate's findings need not appear in canonical `review show`.
 For a quality rework alongside an existing behavioral issue, read the assigned
 findings in `context.review.rework.findings` and address them as well. These
@@ -60,7 +61,7 @@ retain the routing evidence if a later integration makes `review show` stale.
 Every changed-code handoff requires a `passed` review after the final
 edit and commit; include its absolute `report_path` and any spawn ownership
 evidence. Follow the delivery steps in
-[worker-review.md](worker-review.md).
+[api-implementer-review.md](api-implementer-review.md).
 Do not run integration-candidate checks or report your own handoff.
 
 Retain the initial overview's workflow/recording, scope, issue, binding and
@@ -81,7 +82,7 @@ acceptance command. End your turn after returning the result.
 
 If resumed after input application while an implementation handoff is still
 required, review the current target even when no code repair remains. Follow
-[worker-review.md](worker-review.md) and return the existing commit and passing
+[api-implementer-review.md](api-implementer-review.md) and return the existing commit and passing
 report; no artificial patch or new commit is needed.
 
 For `work_scope.kind=api`, exact further evidence-query argv are under the
@@ -344,7 +345,7 @@ Classify exactly one cause:
 
 Environment handling is not limited to this failure classification. If source
 analysis proves during implementation that target logic requires an
-application-owned environment variable, follow [worker-startup-inputs.md](worker-startup-inputs.md)
+application-owned environment variable, follow [api-implementer-startup-inputs.md](api-implementer-startup-inputs.md)
 immediately and return the startup input without waiting for a runtime failure.
 
 For a status mismatch, inspect authentication/preconditions, source error
@@ -553,7 +554,7 @@ then the normal target boundary:
 5. container identity, foreground process ownership, and bounded `SIGTERM`
    shutdown behavior; and
 6. runtime-writable directories. When logs contain `Permission denied` or
-   `EACCES`, follow [worker-startup-inputs.md](worker-startup-inputs.md#writable-directories)
+   `EACCES`, follow [api-implementer-startup-inputs.md](api-implementer-startup-inputs.md#writable-directories)
    for source proof and the affected image's directory contract.
 
 Repair product startup, composition, configuration loading, or
@@ -658,7 +659,7 @@ result and end the turn; do not run replacement acceptance.
 Return one supported result with the original evidence/dispatch identity:
 
 - Target API, cache, startup, or process-output generation defect: make one
-  coherent repair, run focused tests, and complete [worker-review.md](worker-review.md).
+  coherent repair, run focused tests, and complete [api-implementer-review.md](api-implementer-review.md).
 - Supported nondeterminism/order/counter: return source proof and exact typed
   rule inputs. Do not apply the rule.
 - Source-proven omitted dependency: return evidence ID, `hostname[:port]`,

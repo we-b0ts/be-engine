@@ -76,9 +76,10 @@ responsible API/process-output owner. Do not assign a shared defect to the
 currently selected API merely because that API exposed it.
 
 For a public-domain hardcode finding, read
-[integrator-hardcode-evidence.md](integrator-hardcode-evidence.md). Prepare the required
-source-evidence commit in your worktree and return its candidate and exact
-mappings. This permits evidence metadata, not an unrelated product repair.
+[Public-Domain Hardcode Evidence](source-review-rules.md#public-domain-hardcode-evidence).
+Prepare the required source-evidence commit in your worktree and return its
+candidate and exact mappings. This permits evidence metadata, not an unrelated
+product repair.
 
 For an evidence-only candidate or final quality refresh, run `review check
 --integration --worktree /absolute/integration` against the canonical target

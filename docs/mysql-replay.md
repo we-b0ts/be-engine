@@ -376,7 +376,7 @@ report and corresponding complete, successful immutable dependency evidence;
 unmatched or unsupported target queries selected by the rule reject the plan.
 Apply checks that evidence and rules have not changed since planning.
 
-In a backend rewrite, the API worker starts with the dirty-cluster result's
+In a backend rewrite, the API implementer starts with the dirty-cluster result's
 `representative_dependencies_command`, then the relevant target's returned
 `detail_command`. Like Redis, MySQL has a structured detail view: SQL (up to
 8192 bytes), typed parameters, connection identity, attribution, result status,

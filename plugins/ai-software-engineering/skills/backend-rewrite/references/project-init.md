@@ -119,7 +119,7 @@ preflight. Delete the module, declaration, and call when real target
 implementation begins, as marked by generated comments.
 
 If an image needs an image-local writable directory, follow
-[worker-startup-inputs.md](worker-startup-inputs.md#writable-directories) and update the applicable Dockerfile after inspecting
+[api-implementer-startup-inputs.md](api-implementer-startup-inputs.md#writable-directories) and update the applicable Dockerfile after inspecting
 its real structure. Do not assume a fixed base image or available shell tool.
 
 ## Verify Initialization

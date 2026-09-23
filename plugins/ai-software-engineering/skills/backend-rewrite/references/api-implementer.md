@@ -7,10 +7,10 @@ operating protocols.
 ## Start
 
 For an explicit `route_analysis` assignment, read
-[api-route-analysis.md](api-route-analysis.md), return its result, and stop.
+[api-implementer-route-analysis.md](api-implementer-route-analysis.md), return its result, and stop.
 This mode has no implementation issue and does not query API evidence.
 
-For implementation or repair, read [worker-diagnosis.md](worker-diagnosis.md).
+For implementation or repair, read [api-implementer-diagnosis.md](api-implementer-diagnosis.md).
 Restore the exact assigned API from its scoped evidence entrypoint. Before
 changing code, startup, or configuration, read
 [target-code-rules.md](target-code-rules.md).
@@ -24,7 +24,7 @@ repair; retain implementation, local-check, and handoff responsibility.
 ## Return
 
 For code changes or a post-input resume that still requires reviewed delivery,
-follow [worker-review.md](worker-review.md). Return the original issue/dispatch identity, cause and evidence,
+follow [api-implementer-review.md](api-implementer-review.md). Return the original issue/dispatch identity, cause and evidence,
 commit, local checks, passing review, shared impact, required inputs, and risks.
 End the turn after handoff; retain your assignment for later rework.
 

@@ -210,7 +210,7 @@ every configured repository gate with its exact arguments in the delivery
 worktree. Configuration comes from the canonical target, so changing a worker's
 local gate configuration cannot skip checks. Worker review checks the frozen
 dispatch ancestry and uses the same full PR diff baseline as integration review.
-See the [worker review protocol](../plugins/ai-software-engineering/skills/backend-rewrite/references/worker-review.md).
+See the [API implementer review protocol](../plugins/ai-software-engineering/skills/backend-rewrite/references/api-implementer-review.md).
 
 Code integrators check their committed merged candidate using `review check
 --integration --worktree /absolute/integration --api 'GET /api' --handoff-id ID`
@@ -1495,7 +1495,7 @@ integration, the timer starts at initial worker confirmation. Legacy bindings
 without a timestamp initialize it on their next accepted confirmation or activity
 report, without asking the coordinator to reconstruct history.
 
-When exactly one API implementation worker is actually running, and more than
+When exactly one API implementer is actually running, and more than
 two hours have passed since its last code integration (or initial binding), the
 engine returns `expert_required`. Queued and ended tasks do not count as running;
 unknown, stale, or unconfirmed runtime status requires reconciliation first.

@@ -6,10 +6,24 @@ reconciliation, waiting, and completion. Delegate source diagnosis, code edits,
 and integration analysis. Load only the coordinator references linked at the
 relevant action below.
 
+## Coordinator Boundary
+
+The engine selects the legal action; the coordinator executes or delegates it.
+API implementers own API diagnosis and implementation. The retained code integrator owns
+candidate preparation and review. An engine-requested API expert investigates
+read-only and reports through the coordinator to the existing API implementer. The
+task runtime supplies live handles and events but does not replace engine state.
+
+Do not turn a task mode into another role: `route_analysis` belongs to an API
+implementer, and source review belongs to the code integrator. Only the coordinator reports
+their results to the engine or performs coordinator-owned mutations.
+
 ## Contents
 
+- Coordinator boundary
 - Session start and resume
 - Execution rules
+- Action routing
 - Coordinator loop
 - Engine phase order
 - Core action handling
@@ -26,7 +40,7 @@ backend-rewrite status
 
 If `status` returns `purpose_required`, handle it before all old dispatch,
 expert and old-worker runtime-query actions. Read the
-[purpose confirmation protocol](coordinator-worker-protocol.md#authorized-regression-start).
+[purpose confirmation protocol](coordinator-agent-protocol.md#authorized-regression-start).
 Actually query current-session active child agents (excluding self, unrelated
 peers, engine bindings and historical sessions); require zero and supply count,
 query command and time. Confirm the user's purpose through the returned command; the engine generates and
@@ -74,6 +88,27 @@ AI-owned reference and handoff context, never as engine state;
   or functions, or execute them through loops, command chains, or automatic runners.
 - Read each complete response and handle task events before deciding the next
   engine command. Do not prearrange subsequent commands.
+
+## Action Routing
+
+Use `action.kind` and, for `input_required`, `details.reason` as the routing
+contract. The engine remains authoritative for the exact command. Read only the
+listed protocol before handling that action.
+
+| Action | Coordinator responsibility | Agent or external owner | Protocol |
+| --- | --- | --- | --- |
+| `purpose_required` | Confirm the user-authorized purpose after the required live runtime query | None | [authorized regression start](coordinator-agent-protocol.md#authorized-regression-start) |
+| `recording_required`, `recording_in_progress`, `comparison_recording_required`, `recording_refresh_pending` | Execute or wait for the exact recording action | External traffic source only when the action requires it | [recording actions](coordinator-recording.md) |
+| `case_pattern_identification_required` | Retain the batch, delegate analysis, then apply the exact result | API implementer in read-only `route_analysis` mode | [case patterns](coordinator-case-patterns.md) |
+| `implementation_required`, `worker_status_required` | Dispatch/resume/query the bound implementer and report actual runtime observations | API implementer | [agent protocol](coordinator-agent-protocol.md) |
+| `expert_required` | Reserve, dispatch, reconcile, forward, and close exactly as returned | API expert, reporting to the existing API implementer | [API expert assistance](coordinator-agent-protocol.md#api-expert-assistance) |
+| `integration_required` | Retain identity, publish only the reviewed candidate, then report integration | Code integrator | [integration](coordinator-integration.md) |
+| `source_review_required`, `target_quality_required` | Delegate candidate review or rework and admit only a matching report | Code integrator; API implementer only for a routed work-item defect | [review actions](coordinator-review.md) |
+| `plan_apply_required` | Apply the unchanged engine plan with source-proven inputs | Inputs originate from the assigned API implementer or process-output worker | [rule actions](coordinator-rule-actions.md) |
+| `input_required` | Resolve only the named input and resume the retained invocation | Delegate semantic/source questions to the owning API implementer or code integrator | [input handling](#input_required) and, for startup inputs, [startup inputs](coordinator-startup-inputs.md) |
+| `system_repair_required`, `recovery_required`, `blocked` | Execute only the returned acceptance/recovery action or stop with retained context | External system owner may install the named repair | [recovery and system repair](coordinator-recovery.md) |
+| `wait_required`, `worker_events_required` | Perform the mandatory runtime query pass, reconcile events, then wait or refresh status | Task runtime provides live observations | [mandatory runtime queries](coordinator-agent-protocol.md#mandatory-runtime-queries) |
+| `advance_required`, `execution_failed`, `complete` | Execute the returned advance/retry only when its stated prerequisite is satisfied; finish only with `terminal_allowed=true` | None | [core action handling](#core-action-handling) |
 
 ## Coordinator Loop
 
@@ -127,9 +162,9 @@ Reconcile retained integrator assignments through
 [coordinator-integration.md](coordinator-integration.md). An active runtime
 assignment for the current handoff prevents duplicate dispatch; wait on that
 actual task when no independent permitted action remains. Never report its
-handle as an implementation worker or invent new engine activities.
+handle as an API implementer or invent new engine activities.
 This wait guard does not apply to worker confirmation, status checks, or feedback;
-execute those engine actions even when the implementation worker is running.
+execute those engine actions even when the API implementer is running.
 
 Check for arrived events after every action, even while `pending` stays positive;
 report handoffs immediately instead of holding their runtime events until the queue
@@ -137,7 +172,7 @@ drains or a sixty-minute activity report expires. The engine may keep a reported
 handoff's integration waiting while it completes the first verification attempt for
 every recorded API, allowing all independent implementation work to be dispatched
 before ordinary integration begins. Dispatch experts only through engine-issued
-[API expert assistance](coordinator-worker-protocol.md#api-expert-assistance);
+[API expert assistance](coordinator-agent-protocol.md#api-expert-assistance);
 do not initiate it yourself. Forward arrived expert reports on the same loop.
 Report responses replace the previous scheduling action. Preserve each
 event's actual worker handle, dispatch identity, and delivered handoff identity;
@@ -147,7 +182,7 @@ a running or idle observation.
 
 When no productive action is ready but workers or engine operations remain,
 `pending=1` selects `commands.wait`. Before waiting on agents, complete the
-[mandatory runtime query pass](coordinator-worker-protocol.md#mandatory-runtime-queries)
+[mandatory runtime query pass](coordinator-agent-protocol.md#mandatory-runtime-queries)
 and handle its results. Execute the returned wait only if it is still appropriate;
 the command waits at most 30 seconds and may return sooner when engine-observable
 state changes. On `worker_events_required`, actually invoke the runtime's
@@ -192,7 +227,7 @@ Use `inventory` when a scheduling breakdown or binding recovery is needed.
 work. When waiting is the selected coordinator operation, `details.ready.wait=1`. Scoped
 status retains global `pending` while showing one item's action. After inspecting
 an item, return to global status for the loop. Worker event, dispatch, and handoff
-mechanics are in [coordinator-worker-protocol.md](coordinator-worker-protocol.md).
+mechanics are in [coordinator-agent-protocol.md](coordinator-agent-protocol.md).
 
 ## Engine Phase Order
 
@@ -231,7 +266,7 @@ does not guarantee an unconditional top-level `next` command. Source-process
 traffic is issue-scoped evidence, not engine state. Both unscoped and
 scoped status return compact scheduling actions, as does `next`. Dispatch the
 worker assignment as defined
-in [coordinator-worker-protocol.md](coordinator-worker-protocol.md). Implementation
+in [coordinator-agent-protocol.md](coordinator-agent-protocol.md). Implementation
 workers fetch their own diagnostics. Do not attach diagnostic payloads or
 investigate business source in the coordinator.
 
@@ -239,7 +274,7 @@ investigate business source in the coordinator.
 
 Execute `commands.wait` when verification resources are occupied or all workers
 have just been queried and are running/queued. Follow the
-[mandatory runtime query pass](coordinator-worker-protocol.md#mandatory-runtime-queries)
+[mandatory runtime query pass](coordinator-agent-protocol.md#mandatory-runtime-queries)
 before waiting on agents and after each wait returns. Preserve the reported
 blocking API and operation as context;
 never start another traffic operation or recover a live owner. Wait returns
@@ -352,7 +387,7 @@ require progress commits.
 
 For `implementation_required`, `worker_status_required`, `integration_required`,
 and `expert_required`, follow
-[coordinator-worker-protocol.md](coordinator-worker-protocol.md).
+[coordinator-agent-protocol.md](coordinator-agent-protocol.md).
 Dispatch/resume, task runtime observations, handoffs, and integration are reported
 through the exact returned commands. Confirmation belongs to one work item;
 it does not freeze scheduling or feedback for other items. A worker ending

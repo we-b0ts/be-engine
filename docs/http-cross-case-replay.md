@@ -10,7 +10,7 @@ startup behavior.
 ## Discovery and coordinator workflow
 
 After a finalized Replay reports a case-scoped HTTP `unmatched_target`, the
-API workers query `evidence --api '<METHOD pattern>'` against the canonical
+API implementers query `evidence --api '<METHOD pattern>'` against the canonical
 target root, then follow the returned overview to `dirty_clusters`.
 The engine searches only that completed standard recording run, including the
 other cases of the same API and cases of other APIs. It streams dependency

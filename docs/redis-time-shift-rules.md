@@ -11,7 +11,7 @@ JWT inbound request transformation and from assertion comparison rules.
 There is deliberately no automatic hint or candidate detector. A field name,
 integer magnitude, elapsed time or unmatched GET/HGET does not establish expiry.
 Workers consult the scenario index in
-[worker diagnosis](../plugins/ai-software-engineering/skills/backend-rewrite/references/worker-diagnosis.md#rule-discovery-from-source-diagnosis)
+[API implementer diagnosis](../plugins/ai-software-engineering/skills/backend-rewrite/references/api-implementer-diagnosis.md#rule-discovery-from-source-diagnosis)
 and trace cache initialization, expiry, refresh and downstream consumers.
 For example, case 1 reads a token, case 2 reuses it during recording, but the
 same code refetches during Replay because the recorded timestamp is now stale.

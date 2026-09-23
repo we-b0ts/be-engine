@@ -1,10 +1,24 @@
-# Coordinator Worker Protocol
+# Coordinator Agent Protocol
 
 Audience: the workflow coordinator. Read for dispatch, resume, worker status
-checks, completion events, integration, or binding recovery. The coordinator
+checks, completion events, expert assistance, or binding recovery. The coordinator
 executes the workflow mutations in this guide and delegates code operations.
 Follow the main loop in
 [coordinator.md](coordinator.md#coordinator-loop) throughout these operations.
+
+## Role Language
+
+In this protocol, **API implementer** means the dedicated `api-implementer`
+bound to one API work item. The engine may still expose protocol names such as
+`implementation worker`, `subagent`, `agent_handle`, or a legacy process-output
+worker; those names do not create additional core roles.
+
+The **code integrator** is one retained `code-integrator` task for the workflow
+and is never stored or reported as an API-implementer binding. An **API expert** is a
+read-only, engine-requested task whose findings are forwarded to the existing
+API implementer. The **task runtime** supplies live task state; it is not the engine
+and its observations advance workflow state only after the coordinator reports
+them through the returned engine command.
 
 ## Persistent Assignment
 
@@ -131,7 +145,7 @@ Dispatch an expert only when the engine returns `expert_required` with
 `details.state=dispatch_required` after reservation. The coordinator must not
 initiate expert assistance based on elapsed time, difficulty, or its own judgment.
 
-The engine returns `expert_required` when exactly one API worker is running and
+The engine returns `expert_required` when exactly one API implementer is running and
 more than two hours have elapsed since that API's last integrated code delivery
 (or its first binding before any such delivery). Handle the returned action;
 the coordinator does not report timestamps, runtime duration, or calculate
@@ -147,7 +161,7 @@ eligibility. Empty handoffs and worker resumes do not reset this timer.
 - Once the runtime accepts that task, including queuing, execute
   `commands.confirm_expert` with `BACKEND_REWRITE_EXPERT_HANDLE`. Continue the
   returned engine work while the expert runs. Never register or report its
-  handle as an API implementation worker.
+  handle as an API implementer.
 - Query the retained expert in the normal runtime pass. When it ends, forward
   each unfinished API's findings to its retained implementer with evidence/revision identity.
   For an unresolved, failed, or interrupted investigation, forward the available
@@ -243,6 +257,9 @@ tasks and arrived events, and report actual changes before refreshing global
 status. Keep the original review report and handoff identity.
 
 The worker returns the handoff and ends its turn; it does not wait for Replay.
+When the engine accepts that handoff and returns `integration_required`, switch
+to [coordinator-integration.md](coordinator-integration.md). Do not extend this
+agent-lifecycle protocol into candidate preparation or publication.
 
 ## Authorized Regression Start
 
@@ -304,7 +321,7 @@ For `replay`, follow `next` into fresh verification of the selected recording.
 For `record`, the engine requests new external live traffic, then proceeds through
 publication/case preparation to Replay. It supersedes the old recording pin for
 this workflow. Preserve local API selection and Comparison requirements. Do not
-request an implementation worker or expert before fresh verification needs one.
+request an API implementer or expert before fresh verification needs one.
 Actual live/stale engine operations retain their finish/recovery contract; they
 are not task-runtime worker cleanup requirements.
 
@@ -316,7 +333,7 @@ bounded engine or task-runtime wait, **actually invoke a runtime agent-list or
 status tool**. Query all assigned workers still awaiting results in one pass,
 including parked API and process-output workers. Also check retained integrator,
 route-analysis, and expert tasks before waiting on them, without reporting their
-handles as implementation workers. A pass just completed after a wait can serve the
+handles as API implementers. A pass just completed after a wait can serve the
 immediately following wait; repeat after intervening work or assignment changes.
 
 - In Claude Code, **invoke the built-in `ListAgents` tool (`/list-agents`)**
@@ -369,41 +386,3 @@ unknown activity is not evidence of either running or idle.
 Completion events should be reported immediately, not held until that interval.
 The sixty-minute expiry is an engine fallback, not permission to skip the runtime
 queries required on every wait cycle.
-
-## Integration And Focused Acceptance
-
-For `integration_required`, follow
-[coordinator-integration.md](coordinator-integration.md). Delegate preparation to
-`code-integrator`, publish only the matched candidate, apply necessary inputs,
-and report with the original implementation worker handle, accepted handoff ID,
-and the integrator's passing `--review-report`. Integration review is bound to
-that handoff and exact published candidate; the earlier worker report cannot
-replace it. Do not analyze or resolve code conflicts in the coordinator.
-
-If an accepted handoff requires API changes, report `rework_required` with its
-original `--review-report` when the engine permits it and resume the same binding.
-Preserve its original handoff ID; the new dispatch invalidates late results from
-the previous attempt.
-Quality checks execute in worker and integration worktrees before delivery.
-Return their failures to the responsible delivery owner with the report and
-exact evidence. Coordinator admission validates reports without rerunning those
-commands. Legacy failed quality operations can be retried only after a valid
-current integration receipt is admitted.
-
-Evidence-backed rule, route, capture, and startup inputs use the existing
-coordinator interfaces with their original evidence/plan identities. Read
-[coordinator-rule-actions.md](coordinator-rule-actions.md) or
-[coordinator-startup-inputs.md](coordinator-startup-inputs.md) for the returned input kind.
-The canonical target environment remains coordinator-owned.
-
-One API's admitted integrated handoff schedules only its Replay and
-batch-required Comparison. An unsuccessful acceptance resumes its original
-worker. Do not schedule speculative extra APIs from shared-impact notes; final
-unified verification covers the integrated target after ordinary work drains.
-
-Only the coordinator confirms/reports/transfers worker bindings, applies rules,
-advances the engine, requests recording, admits quality reports, invokes traffic acceptance, and
-executes repair verification or recovery. The integrator returns code results;
-its runtime task is not an API worker activity. Release retained implementation
-and integration bindings/worktrees only after `terminal_allowed` and final
-delivery no longer need them.

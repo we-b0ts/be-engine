@@ -10,7 +10,7 @@ use traffic_e2e::{
 pub(super) struct EvidenceArgs {
     /// Current overview or detail-query id returned by the engine.
     query_id: Option<String>,
-    /// Fetch this exact API worker's current issue, identity, and evidence queries.
+    /// Fetch this exact API implementer's current issue, identity, and evidence queries.
     #[arg(long, value_name = "METHOD PATH_OR_PATTERN")]
     api: Option<RecordingApi>,
     /// Fetch this process-output worker's current issue and identity.

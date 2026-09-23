@@ -116,7 +116,7 @@ the prior argv or start a second executor manually.
 `wait_required` is not recovery. It proves that a live or non-preemptible owner
 blocks the requested transition or a worker handoff is pending, and supplies a
 bounded wait command. Before waiting on agents and after each wait, follow the
-[mandatory runtime query pass](coordinator-worker-protocol.md#mandatory-runtime-queries),
+[mandatory runtime query pass](coordinator-agent-protocol.md#mandatory-runtime-queries),
 reconcile results and events, and refresh global status. Only
 `recovery_required` authorizes `recover`.
 

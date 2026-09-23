@@ -9,9 +9,9 @@ batch and its workflow/recording identity as one assignment.
 
 Dispatch `api-implementer` with `task=route_analysis`, an assignment ID, the
 source repository location, and the exact candidate batch. This read-only task
-uses its route-analysis entrypoint; do not confirm it as an implementation worker
-or invent an API issue. Retain its actual runtime handle and resume that task
-for missing source proof.
+uses its route-analysis entrypoint. Do not call the engine's `worker confirm`
+for this task or invent an API issue; it has no implementation-worker binding.
+Retain its actual runtime handle and resume that task for missing source proof.
 
 Require the same assignment and complete input batch in the result, plus one
 JSON pattern array and source references. Re-read global status before applying.

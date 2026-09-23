@@ -703,7 +703,7 @@ fn source_process_evidence_purpose(kind: RewriteIssueKind) -> &'static str {
 }
 
 fn query_id(state: &RewriteState, issue: &RewriteIssue, kind: &str) -> String {
-    // Global workflow revisions change while other API workers are active. Bind
+    // Global workflow revisions change while other API implementers are active. Bind
     // the command only to evidence inputs owned by this API slice.
     let attempt = issue.attempt.to_string();
     let case_source = state
