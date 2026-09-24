@@ -195,6 +195,35 @@ pub(crate) fn resolve_recording_api_seed_member(
         .context("recording API has no canonical member directory")
 }
 
+/// Validate a recording inventory with one case-source discovery. A selected
+/// recording can contain many APIs, so rediscovering every case for each API
+/// makes read-only coordinator status proportional to APIs times cases.
+pub(crate) fn validate_recording_api_cases(
+    case_source: &Path,
+    apis: &[crate::RecordingApi],
+) -> Result<()> {
+    let case_source = fs::canonicalize(case_source)
+        .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
+    let cases = discover_published_cases(&case_source)?;
+    ensure!(!cases.is_empty(), "case source contains no published cases");
+    reject_duplicate_case_ids(&cases)?;
+    for api in apis {
+        ensure!(
+            cases.iter().any(|case| {
+                let Ok(method) = case.method.parse() else {
+                    return false;
+                };
+                let Ok(uri) = case.path.parse() else {
+                    return false;
+                };
+                api.matches(&method, &uri)
+            }),
+            "recording API {api} has no recorded cases"
+        );
+    }
+    Ok(())
+}
+
 fn resolve_recording_api_members(
     case_source: &Path,
     api: &crate::RecordingApi,

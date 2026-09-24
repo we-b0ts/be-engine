@@ -173,12 +173,12 @@ pub(super) fn standard_recording_apis_for_scope(
         !apis.is_empty(),
         "standard recording contains no API inventory"
     );
-    for api in &apis {
-        let api = api.parse::<RecordingApi>()?;
-        crate::case_group::resolve_recording_api_seed_member(&case_source, &api).with_context(
-            || format!("standard recording has no canonical case member for {api}"),
-        )?;
-    }
+    let selectors = apis
+        .iter()
+        .map(|api| api.parse::<RecordingApi>())
+        .collect::<Result<Vec<_>>>()?;
+    crate::case_group::validate_recording_api_cases(&case_source, &selectors)
+        .context("standard recording has no canonical case member for its API inventory")?;
     Ok(apis)
 }
 
