@@ -7,7 +7,7 @@ pub(in crate::replay) async fn handle_connection(
     state: Arc<Mutex<ReplayState>>,
     ca: Arc<MitmCa>,
 ) -> Result<()> {
-    write_packet(&mut tcp_stream, handshake_packet(1)).await?;
+    write_packet_and_flush(&mut tcp_stream, handshake_packet(1)).await?;
     let first_login_packet = read_packet(&mut tcp_stream)
         .await
         .context("failed to read MySQL replay login packet")?
@@ -42,7 +42,7 @@ pub(in crate::replay) async fn handle_connection(
             login.username.clone(),
         );
     }
-    write_packet(
+    write_packet_and_flush(
         &mut stream,
         MysqlPacket {
             sequence_id: login_packet.sequence_id.wrapping_add(1),
@@ -71,7 +71,7 @@ pub(in crate::replay) async fn handle_connection(
                 if command.command_name == "COM_INIT_DB" {
                     session.database = command.query.clone();
                 }
-                write_packet(
+                write_packet_and_flush(
                     &mut stream,
                     MysqlPacket {
                         sequence_id: 1,
@@ -147,7 +147,7 @@ pub(in crate::replay) async fn handle_connection(
                         "unsupported MySQL command",
                     );
                 }
-                write_packet(
+                write_packet_and_flush(
                     &mut stream,
                     MysqlPacket {
                         sequence_id: 1,

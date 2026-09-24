@@ -16,7 +16,7 @@ pub(in crate::replay) async fn write_response(
             .await
         }
         "ok" => {
-            write_packet(
+            write_packet_and_flush(
                 stream,
                 MysqlPacket {
                     sequence_id: 1,
@@ -30,7 +30,7 @@ pub(in crate::replay) async fn write_response(
             .await
         }
         "error" => {
-            write_packet(
+            write_packet_and_flush(
                 stream,
                 MysqlPacket {
                     sequence_id: 1,
@@ -46,7 +46,7 @@ pub(in crate::replay) async fn write_response(
             .await
         }
         other => {
-            write_packet(
+            write_packet_and_flush(
                 stream,
                 MysqlPacket {
                     sequence_id: 1,
@@ -153,7 +153,7 @@ pub(in crate::replay) async fn write_resultset(
     status_flags: u16,
 ) -> Result<()> {
     if columns.is_empty() {
-        return write_packet(
+        return write_packet_and_flush(
             stream,
             MysqlPacket {
                 sequence_id: 1,
@@ -239,6 +239,17 @@ pub(in crate::replay) async fn write_packet(
         .write_all(&packet.to_wire_bytes())
         .await
         .context("failed to write MySQL replay packet")
+}
+
+pub(in crate::replay) async fn write_packet_and_flush(
+    stream: &mut (impl MysqlReplayIo + ?Sized),
+    packet: MysqlPacket,
+) -> Result<()> {
+    write_packet(stream, packet).await?;
+    stream
+        .flush()
+        .await
+        .context("failed to flush MySQL replay packet")
 }
 
 pub(in crate::replay) fn advance_sequence_id(sequence_id: &mut u8) {

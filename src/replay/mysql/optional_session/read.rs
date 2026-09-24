@@ -17,8 +17,11 @@ pub(super) fn classify(sql: &str) -> Effect {
     }
     // The scanner bounds the input and rejects executable comments/hints.
     // It separates strings and quoted keywords from executable SQL tokens.
+    // The token cap stays below the 64 KiB size bound above; a batched read
+    // that inlines a large id set (for example a wide `IN (...)`) must still
+    // be provable as read-only, or its session cleanup can never be allowed.
     let Some((tokens, spans)) =
-        sql::tokens_with_spans(sql).filter(|(tokens, _)| tokens.len() <= 4096)
+        sql::tokens_with_spans(sql).filter(|(tokens, _)| tokens.len() <= 8192)
     else {
         return Effect::Unknown;
     };

@@ -50,6 +50,21 @@ impl<T> MysqlIo for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
 
 type BoxedMysqlIo = Box<dyn MysqlIo>;
 
+async fn write_packet<W>(
+    writer: &mut W,
+    packet: &MysqlPacket,
+    flush_boundary: bool,
+) -> std::io::Result<()>
+where
+    W: AsyncWrite + Unpin + ?Sized,
+{
+    writer.write_all(&packet.to_wire_bytes()).await?;
+    if flush_boundary {
+        writer.flush().await?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct MysqlConnectionContext {
     pub route_name: Option<String>,
@@ -178,8 +193,7 @@ pub(crate) async fn handle_connected_mysql(
     // off before either peer can switch to the seven-byte compressed header.
     clear_server_compression_capability(&mut handshake);
     server_to_client_bytes += handshake.encoded_len() as u64;
-    client
-        .write_all(&handshake.to_wire_bytes())
+    write_packet(&mut client, &handshake, true)
         .await
         .context("failed to forward MySQL handshake")?;
 
@@ -192,8 +206,7 @@ pub(crate) async fn handle_connected_mysql(
     let mut login = parse_handshake_response(&login_packet);
 
     let (client, upstream): (BoxedMysqlIo, BoxedMysqlIo) = if login.tls_requested {
-        upstream
-            .write_all(&login_packet.to_wire_bytes())
+        write_packet(&mut upstream, &login_packet, true)
             .await
             .context("failed to forward MySQL SSL request")?;
 
@@ -225,14 +238,12 @@ pub(crate) async fn handle_connected_mysql(
         clear_client_compression_capability(&mut secure_login_packet);
         client_to_server_bytes += secure_login_packet.encoded_len() as u64;
         login = parse_handshake_response(&secure_login_packet);
-        upstream_tls
-            .write_all(&secure_login_packet.to_wire_bytes())
+        write_packet(&mut upstream_tls, &secure_login_packet, true)
             .await
             .context("failed to forward MySQL TLS login packet")?;
         (Box::new(client_tls), Box::new(upstream_tls))
     } else {
-        upstream
-            .write_all(&login_packet.to_wire_bytes())
+        write_packet(&mut upstream, &login_packet, true)
             .await
             .context("failed to forward MySQL login packet")?;
         (Box::new(client), Box::new(upstream))
@@ -347,14 +358,8 @@ pub(crate) async fn handle_connected_mysql(
                             "MySQL command is classified as a write operation",
                         )
                         .await;
-                    c2s_client_write
-                        .lock()
-                        .await
-                        .write_all(
-                            &readonly_error_packet(packet.sequence_id.wrapping_add(1))
-                                .to_wire_bytes(),
-                        )
-                        .await?;
+                    let rejection = readonly_error_packet(packet.sequence_id.wrapping_add(1));
+                    write_packet(&mut *c2s_client_write.lock().await, &rejection, true).await?;
                     drop(dependency_ownership);
                     continue;
                 }
@@ -412,7 +417,9 @@ pub(crate) async fn handle_connected_mysql(
                     c2s_dependency_ownerships.take(sequence);
                 }
             }
-            upstream_write.write_all(&packet.to_wire_bytes()).await?;
+            // A command packet is a request boundary. The upstream writer may
+            // be rustls, whose write completion does not imply TCP delivery.
+            write_packet(&mut upstream_write, &packet, true).await?;
         }
         let _ = upstream_write.shutdown().await;
         Ok::<u64, anyhow::Error>(bytes)
@@ -441,7 +448,8 @@ pub(crate) async fn handle_connected_mysql(
             };
             bytes += packet.encoded_len() as u64;
             let packet_info = parse_server_packet(&packet);
-            if !s2c_authenticated.load(Ordering::SeqCst) && packet_info.kind == "ok" {
+            let authenticating = !s2c_authenticated.load(Ordering::SeqCst);
+            if authenticating && packet_info.kind == "ok" {
                 s2c_authenticated.store(true, Ordering::SeqCst);
             }
             let mut completion = if s2c_authenticated.load(Ordering::SeqCst) {
@@ -464,14 +472,17 @@ pub(crate) async fn handle_connected_mysql(
                 record_query_completion(&s2c_state, &s2c_dependency_ownerships, completion).await?;
                 break;
             }
-            let write_result = s2c_client_write
-                .lock()
-                .await
-                .write_all(&packet.to_wire_bytes())
-                .await;
+            let response_complete = !completion.is_empty();
+            // Authentication packets are individual request/response turns.
+            // Query packets flush once, after the terminal response packet.
+            let flush_boundary = authenticating || response_complete;
+            let write_result = {
+                let mut client_write = s2c_client_write.lock().await;
+                write_packet(&mut *client_write, &packet, flush_boundary).await
+            };
             match write_result {
                 Ok(()) => {
-                    if !completion.is_empty() {
+                    if response_complete {
                         record_query_completion(&s2c_state, &s2c_dependency_ownerships, completion)
                             .await?;
                     }

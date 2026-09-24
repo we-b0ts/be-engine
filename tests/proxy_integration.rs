@@ -872,10 +872,11 @@ async fn records_mysql_exchange_over_tls() {
                 .unwrap();
             let (_, query) = read_mysql_packet(&mut stream).await.unwrap();
             assert_eq!(query, b"\x03SELECT tls_value");
-            stream
-                .write_all(&mysql_packet(1, mysql_ok_payload().as_slice()))
-                .await
-                .unwrap();
+            for packet in mysql_text_resultset(640) {
+                stream.write_all(&packet).await.unwrap();
+            }
+            stream.flush().await.unwrap();
+            let _ = read_mysql_packet(&mut stream).await;
         }
     });
 
@@ -935,8 +936,21 @@ async fn records_mysql_exchange_over_tls() {
         .write_all(&mysql_packet(0, b"\x03SELECT tls_value"))
         .await
         .unwrap();
-    let (_, query_response) = read_mysql_packet(&mut client).await.unwrap();
-    assert_eq!(query_response[0], 0x00);
+    let mut query_response = Vec::new();
+    for packet_index in 0..644 {
+        let (_, payload) =
+            tokio::time::timeout(Duration::from_secs(1), read_mysql_packet(&mut client))
+                .await
+                .expect("timed out reading the complete TLS result set")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "MySQL TLS connection closed before result-set packet {packet_index} of 644"
+                    )
+                });
+        query_response.push(payload);
+    }
+    assert_eq!(query_response.first().unwrap(), &[0x01]);
+    assert_eq!(query_response.last().unwrap(), &[0xfe, 0, 0, 2, 0]);
     client.shutdown().await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1196,6 +1210,52 @@ fn mysql_login_payload(flags: u32, username: &str, database: &str) -> Vec<u8> {
 
 fn mysql_ok_payload() -> Vec<u8> {
     vec![0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00]
+}
+
+fn mysql_text_resultset(row_count: usize) -> Vec<Vec<u8>> {
+    let mut packets = Vec::with_capacity(row_count + 4);
+    let mut sequence_id = 1_u8;
+    let mut push_packet = |payload: &[u8]| {
+        packets.push(mysql_packet(sequence_id, payload));
+        sequence_id = sequence_id.wrapping_add(1);
+    };
+
+    push_packet(&[0x01]);
+    push_packet(&mysql_text_column_definition());
+    push_packet(&[0xfe, 0, 0, 2, 0]);
+    for row_index in 0..row_count {
+        let payload = if row_index < 438 {
+            b"\x0bnamespace01".as_slice()
+        } else {
+            b"\x0cnamespace002".as_slice()
+        };
+        push_packet(payload);
+    }
+    push_packet(&[0xfe, 0, 0, 2, 0]);
+    packets
+}
+
+fn mysql_text_column_definition() -> Vec<u8> {
+    let mut payload = Vec::new();
+    for field in [
+        b"def".as_slice(),
+        b"appdb",
+        b"namespace",
+        b"namespace",
+        b"name",
+        b"name",
+    ] {
+        payload.push(field.len() as u8);
+        payload.extend_from_slice(field);
+    }
+    payload.push(0x0c);
+    payload.extend_from_slice(&33_u16.to_le_bytes());
+    payload.extend_from_slice(&255_u32.to_le_bytes());
+    payload.push(0xfd);
+    payload.extend_from_slice(&0_u16.to_le_bytes());
+    payload.push(0);
+    payload.extend_from_slice(&[0, 0]);
+    payload
 }
 
 fn mysql_handshake_payload() -> Vec<u8> {

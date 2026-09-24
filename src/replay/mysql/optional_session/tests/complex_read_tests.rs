@@ -118,9 +118,11 @@ fn large_predicate_width_preserves_read_proof_and_checks_every_branch() {
             }
         }
     }
+    // The classifier still bounds the work it accepts: a predicate wide enough
+    // to cross the token cap stays unproven rather than being parsed unbounded.
     let oversized = format!(
         "SELECT id FROM kinds WHERE {}",
-        vec!["id=1"; 1500].join(" OR ")
+        vec!["id=1"; 2500].join(" OR ")
     );
     assert_eq!(classify(&oversized), Effect::Unknown);
 }
