@@ -153,7 +153,7 @@ pub(in crate::replay) async fn handle_query(
                     "no recorded semantic dependency matched this SQL",
                 );
             }
-            write_packet(
+            write_packet_and_flush(
                 stream,
                 MysqlPacket {
                     sequence_id: 1,
@@ -226,7 +226,7 @@ pub(in crate::replay) async fn handle_stmt_execute(
                 "COM_STMT_EXECUTE referenced an unknown replay statement id",
             );
         }
-        write_packet(
+        write_packet_and_flush(
             stream,
             MysqlPacket {
                 sequence_id: 1,
@@ -297,7 +297,7 @@ pub(in crate::replay) async fn handle_stmt_execute(
                     "no recorded semantic dependency matched this prepared SQL and params",
                 );
             }
-            write_packet(
+            write_packet_and_flush(
                 stream,
                 MysqlPacket {
                     sequence_id: 1,

@@ -12,6 +12,65 @@ use crate::{
     RecordingAccessRuleEffect,
 };
 
+#[derive(Default)]
+struct FlushBufferedWriter {
+    pending: Vec<u8>,
+    delivered: Vec<u8>,
+    flushes: usize,
+}
+
+impl tokio::io::AsyncWrite for FlushBufferedWriter {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        self.pending.extend_from_slice(buf);
+        std::task::Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let pending = std::mem::take(&mut self.pending);
+        self.delivered.extend_from_slice(&pending);
+        self.flushes += 1;
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        self.poll_flush(cx)
+    }
+}
+
+#[tokio::test]
+async fn completed_response_flushes_buffered_server_packets() {
+    let row = MysqlPacket {
+        sequence_id: 4,
+        payload: b"\x0bnamespace01".to_vec(),
+    };
+    let eof = MysqlPacket {
+        sequence_id: 5,
+        payload: vec![0xfe, 0, 0, 2, 0],
+    };
+    let mut writer = FlushBufferedWriter::default();
+
+    write_packet(&mut writer, &row, false).await.unwrap();
+    assert!(writer.delivered.is_empty());
+    assert_eq!(writer.flushes, 0);
+
+    write_packet(&mut writer, &eof, true).await.unwrap();
+    assert_eq!(writer.flushes, 1);
+    assert_eq!(
+        writer.delivered,
+        [row.to_wire_bytes(), eof.to_wire_bytes()].concat()
+    );
+}
+
 #[test]
 fn aggregates_resultset_packets_into_one_response() {
     let mut tracker = MysqlResponseTracker::new(1024, true);
