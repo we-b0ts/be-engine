@@ -40,6 +40,9 @@ pub async fn run(state: AppState) -> Result<()> {
             .accept()
             .await
             .context("failed to accept HTTP client")?;
+        stream
+            .set_nodelay(true)
+            .context("failed to enable TCP_NODELAY for HTTP proxy client")?;
         let state = state.clone();
         tokio::spawn(async move {
             let io = TokioIo::new(stream);

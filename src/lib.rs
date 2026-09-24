@@ -56,7 +56,6 @@ use anyhow::{Context, Result};
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::rt::TokioExecutor;
 use rustls::{ClientConfig, RootCertStore};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -410,12 +409,7 @@ impl AppState {
         let ca = MitmCa::load_or_generate(&config.tls.ca_cert_path, &config.tls.ca_key_path)
             .context("failed to initialize MITM CA")?;
         let upstream_tls_config = build_upstream_tls_config(&ca)?;
-        let https = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_webpki_roots()
-            .https_or_http()
-            .enable_http1()
-            .build();
-        let client = Client::builder(TokioExecutor::new()).build(https);
+        let client = http::client::new_proxy_client();
 
         let case_matching_ready = !(config.http_gateway.enabled
             && config.http_gateway.ready.enabled

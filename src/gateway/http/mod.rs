@@ -79,6 +79,9 @@ pub async fn run(state: AppState) -> Result<()> {
             accepted = listener.accept() => accepted,
         };
         let (stream, peer_addr) = accepted.context("failed to accept HTTP gateway client")?;
+        stream
+            .set_nodelay(true)
+            .context("failed to enable TCP_NODELAY for HTTP gateway client")?;
         let state = state.clone();
         let config = config.clone();
         tokio::spawn(async move {

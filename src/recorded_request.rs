@@ -62,6 +62,7 @@ impl RecordedHttpClient {
     ) -> Self {
         let mut connector = HttpConnector::new();
         connector.enforce_http(true);
+        connector.set_nodelay(true);
         Self {
             client: Client::builder(TokioExecutor::new()).build(connector),
             origin,

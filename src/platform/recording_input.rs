@@ -223,6 +223,9 @@ async fn send_request(
             .await
             .with_context(|| format!("failed to connect to Motan gateway {upstream}"))?;
         stream
+            .set_nodelay(true)
+            .context("failed to enable TCP_NODELAY for managed Motan input")?;
+        stream
             .write_all(&raw)
             .await
             .context("failed to write Motan request")?;

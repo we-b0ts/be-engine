@@ -685,6 +685,7 @@ async fn send_https_upstream(
     let stream = TcpStream::connect(upstream_addr)
         .await
         .with_context(|| format!("failed to connect HTTPS upstream {upstream_addr}"))?;
+    stream.set_nodelay(true)?;
     let connector = TlsConnector::from(state.upstream_tls_config());
     let server_name = ServerName::try_from(server_name.to_string())
         .with_context(|| format!("invalid HTTPS upstream server name {server_name}"))?;
