@@ -43,6 +43,8 @@ The integrator returns a passing report for its exact candidate. Publish only
 that candidate after checking assignment, base and configuration freshness.
 For an accepted work-item handoff, use `worker report --activity integrated
 --review-report /absolute/report.json` with the original handoff and dispatch.
+For a batch report, repeat this command for every listed handoff with its own
+original worker handle and handoff ID; the report path is shared.
 For global evidence work or final quality refresh, execute the returned accept
 command with `BACKEND_REWRITE_REVIEW_REPORT`, or `review accept --report
 /absolute/report.json`. The engine verifies published code and frozen quality

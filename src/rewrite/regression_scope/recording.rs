@@ -55,6 +55,31 @@ pub(super) fn apply(
         // Explicit new-traffic purpose supersedes the old local recording pin.
         return Ok(false);
     }
+    if policy
+        .recording_run_id
+        .as_deref()
+        .is_some_and(|run_id| run_id == state.recording_run_id)
+        && !state.api_inventory.is_empty()
+    {
+        // Cases are immutable once adopted. Keep checking the selected run's
+        // finalized manifest and newly edited selectors, without rediscovering
+        // all cases on every read-only status call.
+        artifacts::standard_recording_scope(target_root, &state.recording_run_id).with_context(
+            || {
+                format!(
+                    "{PATH}: recording_run_id {:?} is unavailable",
+                    state.recording_run_id
+                )
+            },
+        )?;
+        for api in policy.selectors() {
+            ensure!(
+                state.api_inventory.iter().any(|item| item.api == *api),
+                "{PATH}: API {api:?} is absent from the selected recording inventory"
+            );
+        }
+        return Ok(false);
+    }
     let Some(selection) = load(target_root, policy)? else {
         return Ok(false);
     };

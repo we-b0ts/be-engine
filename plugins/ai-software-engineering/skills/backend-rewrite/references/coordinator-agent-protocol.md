@@ -210,7 +210,8 @@ For `handoff_ready`, `integrated`, and `rework_required`, also supply the same s
 `BACKEND_REWRITE_WORKER_HANDOFF_ID`, normally the worker commit or another exact
 handoff identity, and `--review-report` from the original delivery. For rework,
 use the accepted worker report or that handoff's integration report. Each review
-returns a separate file; retain its exact path. The engine rejects an integration
+returns a separate file; one batch integration review may list several handoffs
+in that same file. Retain its exact path. The engine rejects an integration
 report without a matching received handoff. Duplicate handoff events do not create duplicate work. Stale
 attempts or wrong handles cannot advance the current issue; recover its current
 status without replacing the dedicated worker.

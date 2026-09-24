@@ -78,8 +78,9 @@ mod source_diff;
 mod store;
 mod target_quality;
 pub use review::{
-    RewriteReviewOptions, RewriteReviewReport, accept as accept_rewrite_review,
-    check as check_rewrite_review, rework as rework_rewrite_review,
+    IntegrationHandoffSelection, RewriteReviewOptions, RewriteReviewReport,
+    accept as accept_rewrite_review, check as check_rewrite_review,
+    check_batch as check_batch_rewrite_review, rework as rework_rewrite_review,
     rework_with_report as rework_rewrite_review_with_report, show as show_rewrite_review,
 };
 #[cfg(test)]
