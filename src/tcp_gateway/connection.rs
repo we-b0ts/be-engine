@@ -55,6 +55,9 @@ pub(crate) async fn run(state: AppState) -> Result<()> {
             .accept()
             .await
             .context("failed to accept TCP gateway client")?;
+        client
+            .set_nodelay(true)
+            .context("failed to enable TCP_NODELAY for TCP gateway client")?;
         let state = state.clone();
         tokio::spawn(async move {
             if let Err(err) = handle_connection(client, peer_addr, state).await {
@@ -268,6 +271,9 @@ async fn proxy_raw_tcp(
             return Err(err).with_context(|| format!("failed to connect upstream {upstream_addr}"));
         }
     };
+    upstream
+        .set_nodelay(true)
+        .context("failed to enable TCP_NODELAY for TCP gateway upstream")?;
 
     let mut protocol = options.detected_protocol;
     if protocol.is_none()

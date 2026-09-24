@@ -9,9 +9,7 @@ use chrono::Utc;
 use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper::{HeaderMap, Method, Request, Response, StatusCode, Uri};
-use hyper_rustls::HttpsConnectorBuilder;
-use hyper_util::client::legacy::Client;
-use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::rt::TokioIo;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, oneshot, watch};
 use tokio::task::JoinSet;
 use tracing::{info, warn};
@@ -208,12 +206,7 @@ pub async fn run_with_options(
         recording_api_limits,
     )
     .await?;
-    let https = HttpsConnectorBuilder::new()
-        .with_webpki_roots()
-        .https_or_http()
-        .enable_http1()
-        .build();
-    let client = Client::builder(TokioExecutor::new()).build(https);
+    let client = crate::http::client::new_proxy_client();
     let recording_lifecycle = RecordingLifecycle::for_comparison_gateway(
         gateway.enabled,
         gateway.ready.enabled,
@@ -427,10 +420,16 @@ async fn accept_optional(
     listener: &Option<tokio::net::TcpListener>,
 ) -> Result<(tokio::net::TcpStream, std::net::SocketAddr)> {
     match listener {
-        Some(listener) => listener
-            .accept()
-            .await
-            .context("failed to accept comparison recording client"),
+        Some(listener) => {
+            let (stream, peer) = listener
+                .accept()
+                .await
+                .context("failed to accept comparison recording client")?;
+            stream
+                .set_nodelay(true)
+                .context("failed to enable TCP_NODELAY for comparison recording client")?;
+            Ok((stream, peer))
+        }
         None => std::future::pending().await,
     }
 }
