@@ -70,6 +70,47 @@ pub(super) fn handoff(
     ))
 }
 
+pub(super) fn batch_handoffs(
+    state: &RewriteState,
+    selections: &[IntegrationHandoffSelection],
+) -> Result<Vec<IntegrationHandoffReview>> {
+    let mut seen = std::collections::BTreeSet::new();
+    selections
+        .iter()
+        .map(|selection| {
+            ensure!(
+                matches!(selection.scope, RewriteWorkScope::Api { .. }),
+                "batch integration currently supports API handoffs only"
+            );
+            ensure!(
+                seen.insert(selection.scope.binding_key()),
+                "batch integration contains a duplicate work item"
+            );
+            ensure!(
+                worker::runtime::coverage(state, &selection.scope)
+                    == worker::model::RewriteWorkerCoverageState::IntegrationRequired,
+                "batch integration requires a ready, unintegrated handoff for {}",
+                selection.scope.label()
+            );
+            let scoped = worker::runtime::scoped(state, &selection.scope)?;
+            ensure!(
+                scoped.rule_plan.is_none()
+                    && scoped.dependency_rule_plan.is_none()
+                    && scoped.recorder_capture_plan.is_none(),
+                "finish the pending rule or capture plan before batching {}",
+                selection.scope.label()
+            );
+            let dispatch_id = handoff(state, Some(&selection.scope), Some(&selection.handoff_id))?
+                .expect("batch handoff has a scope");
+            Ok(IntegrationHandoffReview {
+                scope: selection.scope.clone(),
+                dispatch_id,
+                handoff_id: selection.handoff_id.clone(),
+            })
+        })
+        .collect()
+}
+
 pub(super) fn fresh(
     root: &Path,
     code_root: &Path,
@@ -82,7 +123,16 @@ pub(super) fn fresh(
         .as_ref()
         .context("legacy review has no complete quality receipt; rerun review check")?;
     ensure!(
-        report.schema_version == 2
+        report.schema_version
+            == if report
+                .integration
+                .as_ref()
+                .is_some_and(|value| !value.handoffs.is_empty())
+            {
+                3
+            } else {
+                2
+            }
             && report.rules_version == RULE_VERSION
             && report.workflow_id == state.workflow_id
             && validation.recording_run_id == state.recording_run_id
@@ -199,16 +249,34 @@ pub(in crate::rewrite) fn accept_locked(
         .integration
         .as_ref()
         .context("integrated delivery requires an integration review report")?;
-    ensure!(
-        report.scope.as_ref() == expected_scope
-            && integration.handoff_id.as_deref() == expected_handoff,
-        "integration report does not match the delivered scope and handoff"
-    );
     let dispatch = handoff(state, expected_scope, expected_handoff)?;
-    ensure!(
-        report.dispatch_id == dispatch,
-        "integration report dispatch is stale"
-    );
+    if integration.handoffs.is_empty() {
+        ensure!(
+            report.scope.as_ref() == expected_scope
+                && integration.handoff_id.as_deref() == expected_handoff,
+            "integration report does not match the delivered scope and handoff"
+        );
+        ensure!(
+            report.dispatch_id == dispatch,
+            "integration report dispatch is stale"
+        );
+    } else {
+        let scope = expected_scope.context("batch integration requires a worker scope")?;
+        let entry = integration
+            .handoffs
+            .iter()
+            .find(|entry| {
+                &entry.scope == scope && Some(entry.handoff_id.as_str()) == expected_handoff
+            })
+            .context("integration report does not contain the delivered handoff")?;
+        ensure!(
+            report.scope.is_none()
+                && report.dispatch_id.is_none()
+                && integration.handoff_id.is_none()
+                && dispatch.as_deref() == Some(entry.dispatch_id.as_str()),
+            "batch integration report dispatch is stale"
+        );
+    }
     let (_, project) = crate::e2e_run::resolve_project(root)?;
     require_published_head(root, &report, integration)?;
     validate(root, root, state, &report, &project)?;

@@ -41,6 +41,16 @@ fn exposes_worker_and_integrated_review_commands() {
         vec![
             "test",
             "review",
+            "check",
+            "--integration",
+            "--worktree",
+            "/integration",
+            "--batch-handoffs",
+            "/integration/handoffs.json",
+        ],
+        vec![
+            "test",
+            "review",
             "accept",
             "--report",
             "/integration/report.json",

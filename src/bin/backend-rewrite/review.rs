@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, ensure};
 use clap::{Args, Subcommand};
-use traffic_e2e::{RewriteReviewOptions, RewriteWorkScope};
+use traffic_e2e::{IntegrationHandoffSelection, RewriteReviewOptions, RewriteWorkScope};
 
 #[cfg(test)]
 mod tests;
@@ -33,6 +33,9 @@ enum ReviewCommand {
         /// Accepted worker handoff; pair with its scope for an integration delivery.
         #[arg(long, requires = "integration")]
         handoff_id: Option<String>,
+        /// JSON array of {scope, handoff_id} entries; freeze the batch at review time.
+        #[arg(long, requires = "integration", conflicts_with_all = ["api", "process_output", "handoff_id"])]
+        batch_handoffs: Option<PathBuf>,
         /// JSON document containing spawn ownership and code evidence.
         #[arg(long)]
         evidence: Option<PathBuf>,
@@ -71,6 +74,7 @@ pub(super) fn run(root: PathBuf, args: ReviewArgs, pretty: bool) -> Result<()> {
             api,
             process_output,
             handoff_id,
+            batch_handoffs,
             evidence,
             hardcode_ai_verified,
         } => {
@@ -81,7 +85,7 @@ pub(super) fn run(root: PathBuf, args: ReviewArgs, pretty: bool) -> Result<()> {
                 !integration || scope.is_some() == handoff_id.is_some(),
                 "integration review requires both a work-item selector and --handoff-id, or neither for a global candidate"
             );
-            let report = traffic_e2e::check_rewrite_review(RewriteReviewOptions {
+            let options = RewriteReviewOptions {
                 target_root: root,
                 worktree: Some(worktree),
                 integration,
@@ -89,7 +93,14 @@ pub(super) fn run(root: PathBuf, args: ReviewArgs, pretty: bool) -> Result<()> {
                 handoff_id,
                 evidence,
                 hardcode_ai_verified,
-            })?;
+            };
+            let report = if let Some(path) = batch_handoffs {
+                let bytes = std::fs::read(&path)?;
+                let handoffs: Vec<IntegrationHandoffSelection> = serde_json::from_slice(&bytes)?;
+                traffic_e2e::check_batch_rewrite_review(options, handoffs)?
+            } else {
+                traffic_e2e::check_rewrite_review(options)?
+            };
             super::print_json(&report, pretty)
         }
         ReviewCommand::Accept { report } => {

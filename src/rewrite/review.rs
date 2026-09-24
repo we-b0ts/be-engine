@@ -30,7 +30,29 @@ pub fn check(options: RewriteReviewOptions) -> Result<RewriteReviewReport> {
     let state = RewriteStore::new(&target_root)?
         .load()?
         .context("rewrite workflow is not initialized")?;
-    check_candidate(&target_root, &project, &state, options)
+    check_candidate(&target_root, &project, &state, options, None)
+}
+
+pub fn check_batch(
+    options: RewriteReviewOptions,
+    handoffs: Vec<IntegrationHandoffSelection>,
+) -> Result<RewriteReviewReport> {
+    ensure!(
+        options.integration
+            && options.worktree.is_some()
+            && options.scope.is_none()
+            && options.handoff_id.is_none(),
+        "batch review requires --integration without a single work-item selector"
+    );
+    ensure!(
+        handoffs.len() >= 2,
+        "batch review requires at least two handoffs"
+    );
+    let (target_root, project) = crate::e2e_run::resolve_project(&options.target_root)?;
+    let state = RewriteStore::new(&target_root)?
+        .load()?
+        .context("rewrite workflow is not initialized")?;
+    check_candidate(&target_root, &project, &state, options, Some(&handoffs))
 }
 
 // The only complete quality-check pipeline. Both worker and integrator invoke
@@ -40,6 +62,7 @@ fn check_candidate(
     project: &crate::e2e_run::ResolvedProjectConfig,
     state: &RewriteState,
     options: RewriteReviewOptions,
+    batch: Option<&[IntegrationHandoffSelection]>,
 ) -> Result<RewriteReviewReport> {
     let root = source_diff::project_root_in_worktree(
         target_root,
@@ -55,8 +78,14 @@ fn check_candidate(
     let canonical_head = candidate::head(target_root)?;
     let canonical_fingerprint = fingerprint::repository_fingerprint(target_root)?;
     let (base, dispatch, integration) = if integration_mode {
-        let dispatch =
-            candidate::handoff(state, options.scope.as_ref(), options.handoff_id.as_deref())?;
+        let (dispatch, handoffs) = if let Some(batch) = batch {
+            (None, candidate::batch_handoffs(state, batch)?)
+        } else {
+            (
+                candidate::handoff(state, options.scope.as_ref(), options.handoff_id.as_deref())?,
+                Vec::new(),
+            )
+        };
         source_diff::git_text(
             &root,
             &["merge-base", "--is-ancestor", &canonical_head, "HEAD"],
@@ -69,6 +98,7 @@ fn check_candidate(
                 canonical_base_revision: canonical_head.clone(),
                 canonical_base_fingerprint: canonical_fingerprint.clone(),
                 handoff_id: options.handoff_id.clone(),
+                handoffs,
             }),
         )
     } else {
@@ -147,7 +177,7 @@ fn check_candidate(
     }
     // A returned delivery path must retain its original dispatch even after
     // another review or resumed turn. The coordinator submits this exact file.
-    let report_path = if options.scope.is_some() {
+    let report_path = if options.scope.is_some() || batch.is_some() {
         crate::internal_runtime::root(&root)
             .join("review-reports")
             .join(format!("{}.json", uuid::Uuid::new_v4().simple()))
@@ -161,13 +191,15 @@ fn check_candidate(
         unreachable!("worker review requires a scope")
     };
     let report = RewriteReviewReport {
-        schema_version: 2, rules_version: RULE_VERSION.into(), workflow_id: state.workflow_id.clone(),
+        schema_version: if batch.is_some() { 3 } else { 2 },
+        rules_version: RULE_VERSION.into(), workflow_id: state.workflow_id.clone(),
         dispatch_id: dispatch, scope: options.scope, worktree: root, base_revision: base,
         head_revision: head, target_fingerprint: current, status, files, findings, evidence, evidence_files,
         report_path: report_path.clone(), quality, validation: Some(validation), integration,
         hardcode_ai_verified: options.hardcode_ai_verified, accepted_target_fingerprint: None,
         required_gates: crate::rewrite::quality::gate_names(&project.target_quality_gates),
         next_step: match status {
+            ReviewStatus::Passed if batch.is_some() => "Return the exact candidate and this report. The coordinator must publish head_revision to canonical HEAD, then report integrated once for each listed handoff with this same report. Resume any unreported handoffs after interruption; review check does not publish or verify APIs.",
             ReviewStatus::Passed if integration_mode => "Return the exact candidate and this report. The coordinator must publish head_revision to canonical HEAD before submitting this report through worker report --activity integrated --review-report, or review accept --report for an unscoped review. If both HEADs already match, no merge or new commit is needed; equal file content alone is insufficient. Publication or verification is not performed by review check.",
             ReviewStatus::Passed => "Deliver this exact code and complete quality report; the coordinator must inspect source evidence before reporting handoff_ready with --review-report.",
             ReviewStatus::ChangesRequired => "Fix the reported source or quality findings in the delivery worktree. Inspect quality command log_path for compiler/test errors; for hardcoded domains follow the exact source-evidence contract and --hardcode-ai-verified. Rerun review check before returning a handoff.",

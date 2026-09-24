@@ -137,6 +137,23 @@ pub struct IntegrationReview {
     pub canonical_base_revision: String,
     pub canonical_base_fingerprint: String,
     pub handoff_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub handoffs: Vec<IntegrationHandoffReview>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntegrationHandoffSelection {
+    pub scope: RewriteWorkScope,
+    pub handoff_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntegrationHandoffReview {
+    pub scope: RewriteWorkScope,
+    pub dispatch_id: String,
+    pub handoff_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

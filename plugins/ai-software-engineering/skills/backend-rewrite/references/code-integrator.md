@@ -9,9 +9,10 @@ operating protocols, select another handoff, or mutate workflow state.
 Require an assignment ID, canonical root, absolute worktree, canonical base
 commit, and relevant source locations.
 
-- `integrate`: exact work scope, original workflow/recording and worker
+- `integrate`: each exact work scope, original workflow/recording and worker
   binding/dispatch, handoff ID, worker base, delivery commit, accepted review,
-  local-test results, shared impact, and required-input references.
+  local-test results, shared impact, and required-input references. The
+  coordinator may add ready API handoffs before final candidate review.
 - `review`: inspected target version, current findings/report when available,
   and available commit-to-work-item provenance. This includes a missing or stale
   final quality report. No API issue is implied by this assignment.
@@ -27,7 +28,7 @@ integrator evidence endpoint or engine integration activity to invent.
 2. Prepare a branch from the supplied canonical base, preserving any unfinished
    local work. Identify the undelivered change from the worker base, commit, and
    previous integration provenance; do not replay already integrated history.
-3. Merge the assigned change. Resolve only conflicts whose behavior is determined
+3. Merge every assigned change. Resolve only conflicts whose behavior is determined
    by the accepted changes and source contract. Route order, dependency versions,
    and shared data semantics require proof; their filenames do not make them
    mechanical. Return unresolved business decisions to the responsible owner.
@@ -41,7 +42,12 @@ integrator evidence endpoint or engine integration activity to invent.
      --api 'GET /api' --handoff-id ACCEPTED_HANDOFF_ID
    ```
 
-   Use `--process-output ID` for that scope. Supply current `--evidence` and
+   For two or more assigned API handoffs, write a JSON array of their exact
+   `scope` and `handoff_id` pairs and replace `--api ... --handoff-id ...` with
+   `--batch-handoffs /absolute/handoffs.json`. This one check freezes membership
+   and reviews the complete combined candidate. A later addition requires a
+   new complete review. Use `--process-output ID` for a single process-output
+   scope. Supply current `--evidence` and
    `--hardcode-ai-verified` mappings when required. Only a `passed` report
    qualifies. Resolve integration-induced failures here; return original
    implementation defects with exact findings to their responsible worker.
@@ -52,7 +58,8 @@ integrator evidence endpoint or engine integration activity to invent.
 A worker's passing report covers its delivery. Integration review runs the same
 source, Replay-isolation, public-domain, and engine-standard quality checks against
 the complete merged candidate. It binds the accepted handoff, canonical check
-configuration and runtime inputs, and exact candidate code. Never reuse a
+configuration and runtime inputs, and exact candidate code. A batch report binds
+every included handoff to that candidate. Never reuse a
 worker report for integration or a candidate report after subsequent changes.
 
 When the reviewed handoff needs no code change after input application, the

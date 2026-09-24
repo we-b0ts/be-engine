@@ -27,6 +27,16 @@ this handle into an API-implementer binding or report integrator activity throug
 `worker report`. The engine validates candidate reports but has no separate
 integration-task lifecycle API.
 
+Several accepted API handoffs may share one integration candidate. Read
+`backend-rewrite inventory` for every `integration_required` worker; an
+unconfirmed, running, integrated, or rework handoff is not eligible. Add newly
+ready handoffs to the integrator's in-progress candidate only before its final
+review check. Do not wait merely to fill a batch. A handoff arriving after the
+check belongs to a later candidate unless the integrator updates this one and
+reruns the complete review. The review report, not assignment creation, fixes
+the batch membership and candidate HEAD. A handoff remains pending until its
+own integrated report is accepted; it is never consumed by selection alone.
+
 ## Dispatch
 
 For `integration_required`, first match the accepted handoff to its original
@@ -114,7 +124,13 @@ verification/traffic owner. If any prerequisite changed, return to status or
 the integrator instead of resolving a source conflict yourself.
 
 The integrator must run `review check --integration` on the final candidate,
-using the original work-item selector and accepted `--handoff-id`. The report
+using the original work-item selector and accepted `--handoff-id` for one handoff.
+For two or more API handoffs, write a JSON array of exact accepted identities,
+for example
+`[{"scope":{"kind":"api","api":"GET /a"},"handoff_id":"id-a"},{"scope":{"kind":"api","api":"GET /b"},"handoff_id":"id-b"}]`,
+and run `review check --integration --batch-handoffs /absolute/handoffs.json`.
+The engine checks every current dispatch and handoff before issuing one report.
+The report
 must cover every required source, isolation and engine-standard quality check, and
 the canonical inputs that will be used for acceptance. If applying required
 inputs changes that context, complete the supported input transition and send
@@ -130,7 +146,10 @@ Apply required inputs through [coordinator-startup-inputs.md](coordinator-startu
 or [coordinator-rule-actions.md](coordinator-rule-actions.md), and follow
 configuration commit requirements. Only when code and required inputs are in
 place, report `integrated` with the accepted handoff ID, original worker handle,
-and `--review-report /absolute/integration-report.json`. The engine verifies
+and `--review-report /absolute/integration-report.json`. For a batch, repeat
+the worker report for each listed original handle and handoff ID using the same
+review report. A successful duplicate is harmless; after interruption, inspect
+inventory and report only the remaining ready handoffs. The engine verifies
 the candidate's original handoff, published code and quality inputs before
 admission; a stale or failing report requires integrator recheck. Then refresh
 global status and execute the returned Replay/Comparison acceptance action.

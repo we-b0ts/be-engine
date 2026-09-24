@@ -54,10 +54,30 @@ pub(super) fn report_scope(
             .with_context(|| format!("cannot read review document {}", path.display()))?;
         let report: RewriteReviewReport = serde_json::from_slice(&bytes)
             .with_context(|| format!("invalid review document {}", path.display()))?;
+        let batch_entry = report.integration.as_ref().and_then(|integration| {
+            integration
+                .handoffs
+                .iter()
+                .find(|entry| entry.scope == scope && entry.dispatch_id == dispatch)
+        });
+        let matching_delivery = report.scope.as_ref() == Some(&scope)
+            && report.dispatch_id.as_deref() == Some(dispatch.as_str());
+        let matching_batch = matches!(
+            options.activity,
+            RewriteWorkerActivity::Integrated | RewriteWorkerActivity::ReworkRequired
+        ) && report.scope.is_none()
+            && report.dispatch_id.is_none()
+            && report.schema_version == 3
+            && report
+                .integration
+                .as_ref()
+                .is_some_and(|integration| integration.handoff_id.is_none())
+            && batch_entry.is_some_and(|entry| {
+                Some(entry.handoff_id.as_str()) == options.handoff_id.as_deref()
+            });
         ensure!(
             report.workflow_id == state.workflow_id
-                && report.scope.as_ref() == Some(&scope)
-                && report.dispatch_id.as_deref() == Some(dispatch.as_str())
+                && (matching_delivery || matching_batch)
                 && report.validation.as_ref().is_some_and(|validation| {
                     validation.recording_run_id == state.recording_run_id
                 }),
