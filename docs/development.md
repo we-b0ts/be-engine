@@ -2985,6 +2985,14 @@ to 64 commands and 16 MiB of retained request payload per connection; exceeding
 either bound fails the connection rather than guessing response ownership.
 Intrinsic no-response commands do not consume or flush the FIFO.
 
+MySQL recording flushes each complete forwarded wire packet, including TLS
+ciphertext, independently of semantic response completion. This keeps delivery
+working when a response form is not recognized by the semantic tracker; it does
+not extend semantic recording or replay support for those forms. Completion
+events are published only after the corresponding downstream flush succeeds.
+Motan replay connections and HTTP readiness probes use TCP_NODELAY, consistent
+with the other engine request paths.
+
 Redis and Memcached dependencies are semantic `redis_connection`,
 `redis_exchange`, `memcached_connection`, and `memcached_exchange` records.
 Successful Redis authentication/session initialization is handled by replay

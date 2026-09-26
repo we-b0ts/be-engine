@@ -17,6 +17,7 @@ struct FlushBufferedWriter {
     pending: Vec<u8>,
     delivered: Vec<u8>,
     flushes: usize,
+    fail_flush: bool,
 }
 
 impl tokio::io::AsyncWrite for FlushBufferedWriter {
@@ -33,6 +34,9 @@ impl tokio::io::AsyncWrite for FlushBufferedWriter {
         mut self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
+        if self.fail_flush {
+            return std::task::Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()));
+        }
         let pending = std::mem::take(&mut self.pending);
         self.delivered.extend_from_slice(&pending);
         self.flushes += 1;
@@ -48,7 +52,7 @@ impl tokio::io::AsyncWrite for FlushBufferedWriter {
 }
 
 #[tokio::test]
-async fn completed_response_flushes_buffered_server_packets() {
+async fn each_packet_flushes_without_a_semantic_response_boundary() {
     let row = MysqlPacket {
         sequence_id: 4,
         payload: b"\x0bnamespace01".to_vec(),
@@ -59,16 +63,87 @@ async fn completed_response_flushes_buffered_server_packets() {
     };
     let mut writer = FlushBufferedWriter::default();
 
-    write_packet(&mut writer, &row, false).await.unwrap();
-    assert!(writer.delivered.is_empty());
-    assert_eq!(writer.flushes, 0);
-
-    write_packet(&mut writer, &eof, true).await.unwrap();
+    write_packet(&mut writer, &row).await.unwrap();
+    assert_eq!(writer.delivered, row.to_wire_bytes());
     assert_eq!(writer.flushes, 1);
+
+    write_packet(&mut writer, &eof).await.unwrap();
+    assert_eq!(writer.flushes, 2);
     assert_eq!(
         writer.delivered,
         [row.to_wire_bytes(), eof.to_wire_bytes()].concat()
     );
+}
+
+#[tokio::test]
+async fn packet_flush_failure_is_not_reported_as_success() {
+    let mut writer = FlushBufferedWriter {
+        fail_flush: true,
+        ..Default::default()
+    };
+    let packet = MysqlPacket {
+        sequence_id: 1,
+        payload: vec![0x00, 0, 0, 2, 0, 0, 0],
+    };
+    let error = write_packet(&mut writer, &packet).await.unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+    assert_eq!(writer.pending, packet.to_wire_bytes());
+    assert!(writer.delivered.is_empty());
+}
+
+#[tokio::test]
+async fn tls_packet_tail_flushes_under_bounded_transport_backpressure() {
+    use tokio::io::AsyncReadExt;
+
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let temp = tempdir().unwrap();
+    let ca =
+        crate::MitmCa::load_or_generate(temp.path().join("ca.pem"), temp.path().join("key.pem"))
+            .unwrap();
+    let mut server_config = ca.server_config_for_host("localhost").unwrap();
+    // Session tickets are post-handshake writes; suppress them so the tiny
+    // transport tests packet delivery rather than blocking handshake completion.
+    Arc::make_mut(&mut server_config).send_tls13_tickets = 0;
+    let acceptor = TlsAcceptor::from(server_config);
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(ca.ca_cert_der()).unwrap();
+    let connector = TlsConnector::from(Arc::new(
+        rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    ));
+    // A tiny transport forces rustls to retain ciphertext after partial writes.
+    let (client_io, server_io) = tokio::io::duplex(64);
+    let server_name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let (client, server) = tokio::join!(
+            connector.connect(server_name, client_io),
+            acceptor.accept(server_io),
+        );
+        let mut client = client.unwrap();
+        let mut server = server.unwrap();
+        let packet = MysqlPacket {
+            sequence_id: 4,
+            payload: vec![b'x'; 32768],
+        };
+        let expected = packet.to_wire_bytes();
+        let (delivered, wait_delivered) = tokio::sync::oneshot::channel();
+        let writer = async {
+            write_packet(&mut server, &packet).await.unwrap();
+            // No subsequent write or TLS shutdown may drain the tail for us.
+            wait_delivered.await.unwrap();
+        };
+        let reader = async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let mut actual = vec![0; expected.len()];
+            client.read_exact(&mut actual).await.unwrap();
+            assert_eq!(actual, expected);
+            delivered.send(()).unwrap();
+        };
+        tokio::join!(writer, reader);
+    })
+    .await
+    .expect("TLS packet tail remained buffered");
 }
 
 #[test]
