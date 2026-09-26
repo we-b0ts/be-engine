@@ -206,19 +206,13 @@ pub(super) async fn verify_target_runtime_contract(
         config,
     );
     crate::target_container::verify_target_identity(container).await?;
-    crate::target_container::verify_startup_environment(
-        container,
-        &layout.target_root,
-        target.breeze_enabled,
-    )
-    .await?;
+    crate::target_container::verify_startup_environment(container, &layout.target_root).await?;
     let snapshot = crate::startup::load_startup_snapshot(&layout.target_root, &target.startup)?;
     crate::target_container::verify_runtime_mounts(
         container,
         snapshot.mounts(),
         &config.target_runtime_outputs,
         true,
-        target.breeze_enabled,
     )
     .await?;
     if config.target_http_readiness_enabled {
@@ -608,7 +602,6 @@ mod tests {
             process_outputs: Vec::new(),
             process_output_rules: Default::default(),
             target_max_response_bytes: 1024,
-            breeze_container: Some("breeze".to_string()),
             replay_policy: PathBuf::from("/target/config/replay.yaml"),
             replay_case_dependency_post_response_window: Duration::from_millis(10),
             max_failed_cases_per_api: crate::DEFAULT_MAX_FAILED_CASES_PER_API,

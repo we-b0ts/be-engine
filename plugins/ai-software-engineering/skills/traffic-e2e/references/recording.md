@@ -37,22 +37,15 @@ network capabilities required by local interception. It writes only to
 or custom artifact roots so backend-rewrite can consume the run directly.
 
 Project config supplies the ignored initialization-owned source snapshot and
-the optional Breeze container. traffic-e2e selects the runtime internally and
-owns the adapted source, Recorder, optional Breeze, readiness, finalization,
+the configured startup inputs. traffic-e2e selects the runtime internally and
+owns the adapted source, Recorder, readiness, finalization,
 signals, and cleanup. It builds the capture-only source adaptor from the exact
 snapshotted image. Do not generate or invoke repository recording wrappers.
 
-For a Breeze-enabled initialized project, the source adaptor preserves the
-source entrypoint and all source Mesh routing switches. It does not force
-`mesh.switcher`, pool initialization, or any namespace/method selection. Its
-Breeze SDK patch disables automatic degrade and exception fallback to the
-source TCP client only when the system-owned `MESH_CONNECT_HOST` is non-blank.
-The same variable selects the recordable Breeze TCP connection path and takes
-precedence over `mesh.unix.domain.socket.enable`; Recorder cannot observe Unix
-domain socket dependency traffic. `init
-preflight`, not every ordinary recording, actively resolves
-`breeze.recording` as UID `998` and requires Recorder to preserve that DNS
-observation in `recording-network.json`.
+The engine does not provision a Breeze sidecar or install Java class patches.
+Application-specific source adaptation belongs to the reviewed recording
+Dockerfile and explicit startup inputs. SDK and response rewrite policies are
+independent of that startup contract.
 
 The managed runtime retains a target-scoped adaptor image. Every managed run
 loads the immutable image ID, effective environment, command, security
@@ -81,7 +74,7 @@ reuse the mode-0600 project key at
 `.traffic-e2e/local/secrets/traffic-e2e-enc.sec`; the AI does not provide it.
 An explicit `TRAFFIC_E2E_ENCRYPTION_KEY_B64` is accepted only to initialize an
 absent managed key and must decode to exactly 32 bytes. Never print or commit
-the key, or inject it into source, target, Breeze, commands, or policy.
+the key, or inject it into source, target, commands, or policy.
 
 ## Recorder Rules
 

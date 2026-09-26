@@ -29,15 +29,6 @@ fn bind_mounts_reject_docker_mount_delimiters() {
 }
 
 #[test]
-fn breeze_connect_host_is_managed_only_for_breeze_targets() {
-    assert_eq!(
-        breeze_connect_host_environment(true),
-        Some("MESH_CONNECT_HOST=breeze.recording")
-    );
-    assert_eq!(breeze_connect_host_environment(false), None);
-}
-
-#[test]
 fn target_log_bound_keeps_the_latest_output() {
     let mut log = vec![b'a'; MAX_TARGET_LOG_BYTES];
     log.extend_from_slice(b"latest failure\n");

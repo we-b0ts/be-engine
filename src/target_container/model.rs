@@ -9,7 +9,6 @@ pub(crate) struct TargetContainerConfig {
     pub(crate) build_contexts: Vec<crate::e2e_run::TargetBuildContext>,
     pub(crate) startup: crate::startup::StartupConfig,
     pub(crate) port: u16,
-    pub(crate) breeze_enabled: bool,
 }
 
 impl TargetContainerConfig {
@@ -23,7 +22,6 @@ impl TargetContainerConfig {
             build_contexts: project.target_build_contexts.clone(),
             startup: project.target_startup.clone(),
             port: project.target_port,
-            breeze_enabled: project.breeze_container.is_some(),
         }
     }
 }

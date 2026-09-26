@@ -195,18 +195,10 @@ source_image_id=$(jq -er '.image_id' "$TRAFFIC_E2E_SOURCE_RUNTIME") || {
         "$source_image_id" >&2
     exit 1
 }
-breeze_inspect=""
-breeze_enabled=false
-if [[ -n "${TRAFFIC_E2E_BREEZE_CONTAINER-}" ]]; then
-    breeze_inspect=$(docker inspect "$TRAFFIC_E2E_BREEZE_CONTAINER")
-    [[ "$(jq 'length' <<<"$breeze_inspect")" == 1 ]] || exit 1
-    breeze_enabled=true
-fi
 
 anchor_image='registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1@sha256:095f39e3b242e744ec8f7d85e732bb663af8a4a02bdef0d7a216d2e66e365a62'
 recorder_image='registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev@sha256:c71fa374b229bc6fbf7ad34c5bb5cede1c27b2314a7b274b62ce2d44d3213107'
 network_probe_image='registry.api.demo.test/weibo_rd_if/traffic-e2e-network-probe:0.0.1@sha256:6804ffe944eb4709c4f8387e984dfcf524be14241c571756a6b6b85a8cb13f8e'
-breeze_image='registry.api.demo.test/weibo_rd_if/breeze:v0.1.21-e2e@sha256:5aba065755724d43c7da3f6b79ac82890a0a0a08c6ae3f43af12558b5e52462f'
 
 repo_name=$(basename "$TRAFFIC_E2E_TARGET_ROOT" | tr -cs 'A-Za-z0-9_.-' '-')
 repo_name=${repo_name#-}
@@ -220,7 +212,6 @@ token="${run_id}-$$"
 prefix="traffic-e2e-${repo_name}-${operation}-${token}"
 anchor_name="${prefix}-anchor"
 recorder_name="${prefix}-recorder"
-breeze_name="${prefix}-breeze"
 source_name="${prefix}-source"
 target_name="${prefix}-target"
 target_anchor_name="${prefix}-target-anchor"
@@ -273,7 +264,6 @@ fi
 
 anchor_started=false
 recorder_started=false
-breeze_started=false
 source_started=false
 target_started=false
 target_anchor_started=false
@@ -302,7 +292,7 @@ source "$TRAFFIC_E2E_PLATFORM_ASSETS/recorder-runtime.sh"
 
 capture_diagnostics() {
     local name
-    for name in "$recorder_name" "$breeze_name" "$source_name" "$target_name"; do
+    for name in "$recorder_name" "$source_name" "$target_name"; do
         if container_exists "$name"; then
             docker logs "$name" >"$diagnostics_dir/${name}.log" 2>&1 || true
         fi
@@ -374,7 +364,6 @@ cleanup() {
     fi
     capture_diagnostics
     "$source_started" && stop_container "$source_name"
-    "$breeze_started" && stop_container "$breeze_name"
     "$recorder_started" && stop_container "$recorder_name"
     "$target_started" && stop_container "$target_name"
     remove_comparison_target_network || status=1
@@ -478,35 +467,9 @@ wait_http() {
     return 1
 }
 
-normalize_breeze_directories() {
-    docker run --rm --platform linux/amd64 --network none --user 0:0 --entrypoint /bin/sh \
-        --volume /data1:/host-data1 "$adapter_image_id" -ec '
-            mkdir -p /host-data1/breeze/socks /host-data1/breeze/snapshot /host-data1/breeze/logs
-            chown -hR 998:998 -- /host-data1/breeze/socks /host-data1/breeze/snapshot /host-data1/breeze/logs
-            chmod -R u+rwX -- /host-data1/breeze/socks /host-data1/breeze/snapshot /host-data1/breeze/logs
-            chmod 2775 /host-data1/breeze/socks
-            chmod 0775 /host-data1/breeze/snapshot /host-data1/breeze/logs
-        '
-}
-
-start_breeze() {
-    local network=$1
-    local ready_host=${2:-127.0.0.1}
-    load_runtime_spec "$breeze_inspect" exact exact exact
-    docker run --detach --name "$breeze_name" --network "$network" \
-        "${runtime_args[@]}" "$breeze_image" "${runtime_command[@]}" >/dev/null
-    breeze_started=true
-    wait_host_port "$ready_host" 9984 Breeze "$breeze_name"
-}
-
 start_comparison_source() {
     local network=$1
     load_source_runtime_spec "$TRAFFIC_E2E_SOURCE_RUNTIME"
-    if "$breeze_enabled"; then
-        runtime_args+=(
-            --env "MESH_CONNECT_HOST=${target_network_ip}"
-        )
-    fi
     if "$http_recording_enabled"; then
         require_port_available "$TRAFFIC_E2E_SOURCE_HOST" "$TRAFFIC_E2E_SOURCE_PORT" source
     fi
@@ -636,11 +599,6 @@ start_recording_source() {
             )
         fi
     fi
-    if "$breeze_enabled"; then
-        runtime_args+=(
-            --env MESH_CONNECT_HOST=breeze.recording
-        )
-    fi
     docker run --detach --name "$source_name" --network "container:${anchor_name}" \
         "${runtime_args[@]}" "$adapter_image_id" "${runtime_command[@]}" >/dev/null
     source_started=true
@@ -680,20 +638,6 @@ run_preflight_https_probe() {
                 return 1
             }
     fi
-}
-
-run_preflight_breeze_dns_probe() {
-    [[ "$operation" == preflight ]] || return 0
-    "$breeze_enabled" || return 0
-    docker exec --user 998:998 "$source_name" /bin/sh -ec '
-        command -v getent >/dev/null
-        address=$(getent ahostsv4 breeze.recording | awk "NR == 1 { print \$1 }")
-        test -n "$address"
-        printf "Breeze DNS preflight resolved breeze.recording to %s\n" "$address" >&2
-    ' || {
-        printf 'error: Breeze preflight could not resolve breeze.recording as UID 998\n' >&2
-        return 1
-    }
 }
 
 start_recording_input() {
@@ -743,10 +687,6 @@ run_standard_recording() {
     }
     resolve_or_build_recording_adapter
     detect_source_java_runtime
-    if "$breeze_enabled"; then
-        normalize_breeze_directories
-        docker pull "$breeze_image" >/dev/null
-    fi
     docker pull "$anchor_image" >/dev/null
     docker pull "$recorder_image" >/dev/null
     if [[ "$operation" == preflight ]] && ! "$source_uses_java"; then
@@ -756,22 +696,12 @@ run_standard_recording() {
         "$anchor_image" >/dev/null
     anchor_started=true
     local -a recorder_command=(internal recorder-run --config /workspace/project.yaml --control-socket "$control_socket" --artifact-owner "$artifact_owner" --dns --run-id "$run_id")
-    if "$breeze_enabled"; then
-        recorder_command+=(--breeze)
-    fi
     if [[ "$operation" == preflight ]]; then
         if "$source_uses_java"; then
             recorder_command+=(--preflight-probe java-truststore)
         else
             recorder_command+=(--preflight-probe system-network)
         fi
-    fi
-    local -a recorder_mounts=()
-    if "$breeze_enabled"; then
-        recorder_mounts+=(
-            --volume /data1/breeze/socks:/data1/breeze/socks:ro
-            --volume /data1/breeze/snapshot:/data1/breeze/snapshot:ro
-        )
     fi
     local selector
     for selector in "${api_selectors[@]}"; do recorder_command+=(--api "$selector"); done
@@ -784,7 +714,6 @@ run_standard_recording() {
         --volume "$data_dir:/workspace/.traffic-e2e/local/data" \
         --volume "$artifacts_dir:/workspace/.traffic-e2e/local/artifacts" \
         --volume "$control_dir:/workspace/control" \
-        "${recorder_mounts[@]}" \
         --env TRAFFIC_E2E_ENCRYPTION_KEY_B64 \
         --entrypoint /usr/local/bin/traffic-e2e \
         "$recorder_image" \
@@ -803,12 +732,8 @@ run_standard_recording() {
                 chmod 0644 /workspace/data/traffic-recorder-ca.pem /workspace/data/source-truststore.jks
             '
     fi
-    if "$breeze_enabled"; then
-        start_breeze "container:${anchor_name}"
-    fi
     start_recording_source "$truststore"
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-ready --control-socket "$control_socket"
-    run_preflight_breeze_dns_probe
     run_preflight_https_probe
     record_preflight_readiness
     start_recording_input
@@ -890,12 +815,6 @@ run_comparison_recording() {
     anchor_started=true
     start_comparison_target_network
     start_cache_snapshot
-    if "$breeze_enabled"; then
-        enable_comparison_target_loopback_ingress
-        normalize_breeze_directories
-        docker pull "$breeze_image" >/dev/null
-        start_breeze "container:${target_anchor_name}" "$target_network_ip"
-    fi
     start_comparison_source "container:${anchor_name}"
     start_target
     if "$http_recording_enabled"; then

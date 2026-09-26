@@ -17,7 +17,6 @@ fn platform_mount_assets_expose_the_isolation_contract() {
     );
     assert!(PLATFORM_MOUNTS.contains("partially overlaps startup mount"));
     assert!(PLATFORM_MOUNTS.contains("prepare_empty_runtime_mount source \"$destination\""));
-    assert!(CONTAINER_RUNTIME.contains("/etc/resolv.conf|/etc/hosts|/etc/hostname"));
     assert!(!MANAGER.contains("translated=\"/data1/${first}-recording\""));
 
     let temp = tempfile::tempdir().unwrap();

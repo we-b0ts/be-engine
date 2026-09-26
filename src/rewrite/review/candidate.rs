@@ -175,7 +175,7 @@ pub(super) fn validate_accepted(
     fresh(root, root, state, report, project)?;
     ensure!(
         report.accepted_target_fingerprint.as_deref()
-            == Some(fingerprint::repository_fingerprint(root)?.as_str()),
+            == Some(fingerprint::review_fingerprint(root)?.as_str()),
         "accepted review content or inputs changed"
     );
     source_diff::git_text(
@@ -310,7 +310,7 @@ pub(in crate::rewrite) fn accept_locked(
     } else {
         None
     };
-    report.accepted_target_fingerprint = Some(fingerprint::repository_fingerprint(root)?);
+    report.accepted_target_fingerprint = Some(fingerprint::review_fingerprint(root)?);
     write_json(&integrated_path(root), &report)?;
     // Admission remains mandatory even when a receipt is lost or old caches
     // are invalidated by rule/configuration changes.

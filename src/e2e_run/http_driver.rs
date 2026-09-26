@@ -369,7 +369,6 @@ mod tests {
             process_outputs: Vec::new(),
             process_output_rules: Default::default(),
             target_max_response_bytes: 1024,
-            breeze_container: None,
             replay_policy: PathBuf::from("replay.yaml"),
             replay_case_dependency_post_response_window: Duration::from_millis(10),
             max_failed_cases_per_api: crate::DEFAULT_MAX_FAILED_CASES_PER_API,

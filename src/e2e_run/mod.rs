@@ -82,7 +82,6 @@ pub use startup_inputs::{
 #[derive(Debug, Clone)]
 pub struct E2eRunInitOptions {
     pub target_root: PathBuf,
-    pub breeze_container: Option<String>,
     pub target_dockerfile: PathBuf,
     pub target_startup: crate::startup::StartupConfig,
     pub replay_policy: PathBuf,

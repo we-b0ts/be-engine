@@ -114,14 +114,6 @@ pub(crate) fn validate_mount_path(path: &Path) -> Result<()> {
         "startup mount conflicts with reserved target path \"/app\": {}",
         path.display()
     );
-    for managed in ["/data1/breeze/socks", "/data1/breeze/snapshot"] {
-        let managed = Path::new(managed);
-        ensure!(
-            path != managed && !path.starts_with(managed) && !managed.starts_with(path),
-            "startup mount conflicts with managed Breeze path {managed:?}: {}",
-            path.display()
-        );
-    }
     Ok(())
 }
 
@@ -135,7 +127,8 @@ mod tests {
         assert!(validate_mount_path(Path::new("data1/weibo/confs")).is_err());
         assert!(validate_mount_path(Path::new("/app/config")).is_ok());
         assert!(validate_mount_path(Path::new("/app")).is_err());
-        assert!(validate_mount_path(Path::new("/data1")).is_err());
+        assert!(validate_mount_path(Path::new("/data1")).is_ok());
+        assert!(validate_mount_path(Path::new("/data1/breeze/snapshot")).is_ok());
     }
 
     #[test]

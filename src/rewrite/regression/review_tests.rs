@@ -193,3 +193,50 @@ fn changed_purpose_needs_a_fresh_accepted_receipt_and_keeps_rework_gates() {
     );
     assert!(!review::admission_current(target.path(), &state));
 }
+
+#[test]
+fn first_case_pattern_policy_update_does_not_require_delivery_review() {
+    for record_new_traffic in [false, true] {
+        let target = fixture();
+        begin(RewriteRegressionBeginOptions {
+            record_new_traffic,
+            ..options(target.path())
+        })
+        .unwrap();
+        let state = RewriteStore::new(target.path())
+            .unwrap()
+            .load()
+            .unwrap()
+            .unwrap();
+        let policy_path = target
+            .path()
+            .join(".traffic-e2e/source-traffic-policy.yaml");
+        let mut policy = crate::config::SourceTrafficPolicyConfig::load(&policy_path).unwrap();
+        policy.http.case_path_patterns = vec!["/api/*".into()];
+        fs::write(&policy_path, policy.render().unwrap()).unwrap();
+        assert!(!review::requires_delivery_review(target.path(), &state));
+        assert!(
+            review::gate(target.path(), &state, "master")
+                .unwrap()
+                .is_none()
+        );
+        git(
+            target.path(),
+            &["add", ".traffic-e2e/source-traffic-policy.yaml"],
+        );
+        git(target.path(), &["commit", "-qm", "discover case pattern"]);
+        assert!(!review::requires_delivery_review(target.path(), &state));
+        assert!(
+            review::gate(target.path(), &state, "master")
+                .unwrap()
+                .is_none()
+        );
+        fs::write(target.path().join("lib.rs"), "pub fn changed() {}\n").unwrap();
+        assert!(review::requires_delivery_review(target.path(), &state));
+        assert!(
+            review::gate(target.path(), &state, "master")
+                .unwrap()
+                .is_some()
+        );
+    }
+}

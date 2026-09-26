@@ -4,10 +4,10 @@ use std::process::Command;
 use std::time::Duration;
 
 use super::model::{
-    BreezeProjectConfig, DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS, DeliveryProjectConfig,
-    ProcessOutputSettings, ProjectConfig, ProjectSettings, RecordingProjectConfig,
-    ReplayProjectConfig, ResolvedProjectConfig, RunLayout, SourceProjectConfig, StateProjectConfig,
-    TargetProjectConfig, VerificationProjectConfig,
+    DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS, DeliveryProjectConfig, ProcessOutputSettings,
+    ProjectConfig, ProjectSettings, RecordingProjectConfig, ReplayProjectConfig,
+    ResolvedProjectConfig, RunLayout, SourceProjectConfig, StateProjectConfig, TargetProjectConfig,
+    VerificationProjectConfig,
 };
 use super::project_validation::validate_project_config;
 use super::target_quality_config::inferred_target_quality_gates;
@@ -109,22 +109,12 @@ pub(crate) fn render_project_config(
     options: &E2eRunInitOptions,
     recorder: crate::config::AppConfig,
 ) -> Result<Vec<u8>> {
-    if let Some(container) = &options.breeze_container {
-        ensure!(
-            !container.trim().is_empty(),
-            "breeze_container must not be empty when configured"
-        );
-    }
     let project_config = ProjectConfig {
         version: CONFIG_VERSION,
         project: ProjectSettings {
             source: SourceProjectConfig {
                 snapshot: PathBuf::from(crate::repository::LOCAL_SOURCE_ROOT),
             },
-            breeze: options
-                .breeze_container
-                .clone()
-                .map(|container| BreezeProjectConfig { container }),
             process_outputs: Vec::new(),
             target: TargetProjectConfig {
                 dockerfile: options.target_dockerfile.clone(),
@@ -298,7 +288,6 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         target_max_response_bytes,
         process_outputs,
         process_output_rules: policy.process_output_rules,
-        breeze_container: config.project.breeze.map(|breeze| breeze.container),
         replay_policy: policy_path,
         replay_case_dependency_post_response_window: Duration::from_millis(
             config
@@ -553,10 +542,21 @@ mod tests {
         target
     }
 
+    #[test]
+    fn retired_breeze_startup_configuration_is_rejected() {
+        let target = target();
+        let rendered =
+            render_project_config(&options(target.path()), crate::config::AppConfig::default())
+                .unwrap();
+        let mut value: serde_yaml::Value = serde_yaml::from_slice(&rendered).unwrap();
+        value["project"]["breeze"] = serde_yaml::from_str("container: breeze").unwrap();
+        let error = serde_yaml::from_value::<ProjectConfig>(value).unwrap_err();
+        assert!(error.to_string().contains("unknown field `breeze`"));
+    }
+
     fn options(target_root: &Path) -> E2eRunInitOptions {
         E2eRunInitOptions {
             target_root: target_root.to_path_buf(),
-            breeze_container: Some("breeze".to_string()),
             target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
             target_startup: crate::startup::StartupConfig::default(),
             replay_policy: PathBuf::from("config/replay.yaml"),

@@ -131,8 +131,6 @@ pub struct ManagedRecordingResult {
     pub run_id: String,
     pub target_root: PathBuf,
     pub source_snapshot_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub breeze_container: Option<String>,
     pub manifest: PathBuf,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub runtime_outputs: Vec<crate::RuntimeOutputLocation>,
@@ -145,7 +143,6 @@ struct ManagedRuntimeResult {
     run_id: String,
     target_root: PathBuf,
     source_snapshot_id: String,
-    breeze_container: Option<String>,
     manifest: PathBuf,
     runtime_outputs: Vec<crate::RuntimeOutputLocation>,
     motan: Option<MotanRuntimeContext>,
@@ -175,7 +172,6 @@ pub async fn run_managed_recording(
         run_id: result.run_id,
         target_root: result.target_root,
         source_snapshot_id: result.source_snapshot_id,
-        breeze_container: result.breeze_container,
         manifest: result.manifest,
         runtime_outputs: result.runtime_outputs,
         motan,
@@ -218,12 +214,7 @@ pub async fn run_managed_recording_preflight(
         ManagedRuntimeOperation::Preflight,
     )
     .await?;
-    let breeze_enabled = runtime.breeze_container.is_some();
-    let evidence = preflight::validate(
-        &runtime.manifest,
-        breeze_enabled,
-        &project.target_readiness_path,
-    )?;
+    let evidence = preflight::validate(&runtime.manifest, &project.target_readiness_path)?;
     let (replay_network, target_runtime) = replay_preflight::run(
         &runtime.target_root,
         &project,
@@ -249,13 +240,10 @@ pub async fn run_managed_recording_preflight(
             target_root: runtime.target_root,
             source_snapshot_id: runtime.source_snapshot_id,
             probe_kind: evidence.probe_kind,
-            breeze_container: runtime.breeze_container,
             manifest: runtime.manifest,
             published_cases: evidence.published_cases,
             https_interception_verified: evidence.https_interception_verified,
             global_probe_dependency_verified: evidence.global_probe_dependency_verified,
-            breeze_dns_resolution_verified: breeze_enabled
-                .then_some(evidence.breeze_dns_resolution_verified),
         },
         replay_network,
         target_runtime,
@@ -533,9 +521,6 @@ async fn run_managed_runtime(
     if let Some(request_source) = request_source {
         command.env("TRAFFIC_E2E_REQUEST_SOURCE", request_source);
     }
-    if let Some(container) = &config.breeze_container {
-        command.env("TRAFFIC_E2E_BREEZE_CONTAINER", container);
-    }
     if options.baseline_recheck {
         command.arg("--baseline-recheck");
     }
@@ -573,7 +558,6 @@ async fn run_managed_runtime(
         run_id,
         target_root,
         source_snapshot_id,
-        breeze_container: config.breeze_container,
         manifest,
         runtime_outputs: runtime_output_locations,
         motan,

@@ -148,7 +148,7 @@ fn embedded_platform_manager_is_valid_bash() {
         .0;
     assert!(!adapted_source.contains("--user"));
     assert!(!adapted_source.contains("--privileged"));
-    assert!(adapted_source.contains("MESH_CONNECT_HOST=breeze.recording"));
+    assert!(!adapted_source.contains("MESH_CONNECT_HOST"));
     assert!(!adapted_source.contains("TRAFFIC_E2E_BREEZE_NO_FALLBACK"));
     let comparison_source = MANAGER
         .split_once("start_comparison_source()")
@@ -160,7 +160,7 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(comparison_source.contains("load_source_runtime_spec \"$TRAFFIC_E2E_SOURCE_RUNTIME\""));
     assert!(comparison_source.contains("\"${runtime_args[@]}\" \"$adapter_image_id\""));
     assert!(!comparison_source.contains(".[0].Config.Image"));
-    assert!(comparison_source.contains("MESH_CONNECT_HOST=${target_network_ip}"));
+    assert!(!comparison_source.contains("MESH_CONNECT_HOST"));
     assert!(!comparison_source.contains("TRAFFIC_E2E_BREEZE_NO_FALLBACK"));
     let comparison_runtime = MANAGER
         .split_once("run_comparison_recording()")
@@ -201,8 +201,6 @@ fn embedded_platform_manager_is_valid_bash() {
         &[
             "start_comparison_target_network",
             "start_cache_snapshot",
-            "enable_comparison_target_loopback_ingress",
-            "start_breeze \"container:${target_anchor_name}\" \"$target_network_ip\"",
             "start_comparison_source",
             "start_target",
             "wait_http \"$target_origin\"",
@@ -225,9 +223,6 @@ fn embedded_platform_manager_is_valid_bash() {
         ],
     );
     assert!(COMPARISON_TARGET_NETWORK.contains("docker network create --driver bridge"));
-    assert!(COMPARISON_TARGET_NETWORK.contains("net.ipv4.conf.all.route_localnet=1"));
-    assert!(COMPARISON_TARGET_NETWORK.contains("enable_comparison_target_loopback_ingress()"));
-    assert!(COMPARISON_TARGET_NETWORK.contains("--to-destination 127.0.0.1"));
     assert!(
         COMPARISON_TARGET_NETWORK
             .contains("target_origin=\"http://${target_network_ip}:${TRAFFIC_E2E_TARGET_PORT}\"")
@@ -235,8 +230,6 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(MANAGER.contains("--candidate-upstream \"$target_origin\""));
     assert!(!MANAGER.contains("run_no_fallback"));
     assert!(!MANAGER.contains("brz-no-fallback.sh"));
-    assert!(MANAGER.contains("getent ahostsv4 breeze.recording"));
-    assert!(MANAGER.contains("docker exec --user 998:998 \"$source_name\""));
     assert!(!MANAGER.contains("wait_port 880 source"));
     let standard_recording = MANAGER
         .split_once("run_standard_recording()")
@@ -250,7 +243,6 @@ fn embedded_platform_manager_is_valid_bash() {
         &[
             "start_recording_source \"$truststore\"",
             "recording wait-ready",
-            "run_preflight_breeze_dns_probe",
             "run_preflight_https_probe",
         ],
     );
@@ -271,9 +263,7 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(!MANAGER.contains("TRAFFIC_E2E_SOURCE_RUN_COMMAND"));
     assert!(!MANAGER.contains("docker image rm \"$adapter_image\""));
     assert!(MANAGER.contains("[[ \"$operation\" == preflight ]]"));
-    assert!(MANAGER.contains(
-            "registry.api.demo.test/weibo_rd_if/breeze:v0.1.21-e2e@sha256:5aba065755724d43c7da3f6b79ac82890a0a0a08c6ae3f43af12558b5e52462f"
-        ));
+    assert!(!MANAGER.contains("TRAFFIC_E2E_BREEZE_CONTAINER"));
     assert!(MANAGER.contains("internal recorder-run --config"));
     assert!(MANAGER.contains("internal comparison-run --config"));
     assert!(RECORDER_RUNTIME.contains("internal cache-snapshot-run"));
@@ -346,7 +336,7 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(MANAGER.contains("manifest_filter+=' and .published_cases > 0'"));
     assert!(MANAGER.contains("run_preflight_https_probe"));
     assert!(!MANAGER.contains("recorder_command+=(--full-traffic-jsonl)"));
-    assert!(MANAGER.contains("recorder_command+=(--breeze)"));
+    assert!(!MANAGER.contains("recorder_command+=(--breeze)"));
     assert!(MANAGER.contains("recorder_command+=(--preflight-probe java-truststore)"));
     assert!(MANAGER.contains("recorder_command+=(--preflight-probe system-network)"));
     assert!(!MANAGER.contains("chmod 0644 \"$data_dir/traffic-recorder-ca.pem\""));
@@ -482,56 +472,6 @@ fn stages_private_executable_assets() {
     assert_eq!(u16::from_be_bytes([HTTPS_PROBE[6], HTTPS_PROBE[7]]), 52);
     assert!(!assets.join("MeshConnectUtil.java").exists());
     assert!(!assets.join("apply-breeze-sdk-patch").exists());
-}
-
-#[test]
-fn managed_mesh_connect_host_forces_the_recordable_tcp_path() {
-    const SOURCE: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/plugins/ai-software-engineering/skills/backend-rewrite/assets-src/",
-        "com/weibo/api/datamesh/common/utils/MeshConnectUtil.java"
-    ));
-    const CLASS: &[u8] = include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/plugins/ai-software-engineering/skills/backend-rewrite/assets/MeshConnectUtil.class"
-    ));
-
-    assert!(SOURCE.contains("System.getenv(MESH_CONNECT_HOST_ENV)"));
-    assert!(SOURCE.contains("isUnixDomainSocketOpen = false;"));
-    assert!(SOURCE.contains("SocketFileUtil.tryConnectTcpSocket(meshConnectHost, socketPort)"));
-    assert_eq!(&CLASS[..4], b"\xca\xfe\xba\xbe");
-    assert_eq!(u16::from_be_bytes([CLASS[6], CLASS[7]]), 52);
-    assert!(
-        CLASS
-            .windows(b"MESH_CONNECT_HOST".len())
-            .any(|window| window == b"MESH_CONNECT_HOST")
-    );
-}
-
-#[test]
-fn managed_breeze_sdk_disables_tcp_fallback_without_forcing_mesh_selection() {
-    const PATCH: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/plugins/ai-software-engineering/skills/backend-rewrite/assets-src/",
-        "breeze-sdk-core-0.1.90-recording.patch"
-    ));
-    const COMMON_SWITCHER: &[u8] = include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/plugins/ai-software-engineering/skills/backend-rewrite/assets/CommonSwitcher.class"
-    ));
-    assert!(PATCH.contains("public static boolean isExceptionToTcp"));
-    assert!(PATCH.contains("public static void autoDegrade"));
-    assert!(!PATCH.contains("JedisMSServerProxy"));
-    assert_eq!(&COMMON_SWITCHER[..4], b"\xca\xfe\xba\xbe");
-    assert_eq!(
-        u16::from_be_bytes([COMMON_SWITCHER[6], COMMON_SWITCHER[7]]),
-        52
-    );
-    assert!(
-        COMMON_SWITCHER
-            .windows(b"MESH_CONNECT_HOST".len())
-            .any(|window| { window == b"MESH_CONNECT_HOST" })
-    );
 }
 
 #[test]

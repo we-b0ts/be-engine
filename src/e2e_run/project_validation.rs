@@ -18,12 +18,6 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         "source.snapshot must be {:?}",
         crate::repository::LOCAL_SOURCE_ROOT
     );
-    if let Some(breeze) = &project.breeze {
-        ensure!(
-            !breeze.container.trim().is_empty(),
-            "breeze.container must not be empty"
-        );
-    }
     let process_outputs = project
         .process_outputs
         .iter()
