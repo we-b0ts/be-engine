@@ -26,7 +26,8 @@ fn source_runtime_preserves_pod_environment_security_and_launch_overrides() {
                 "DATABASE_URL": "mysql://source",
                 "HOSTNAME": "pod-name",
                 "JAVA_TOOL_OPTIONS": "source-value",
-                "PORT": "8080"
+                "PORT": "8080",
+                "MESH_CONNECT_HOST": "source-owned-host"
             },
             "mounts": []
         }))
@@ -69,6 +70,7 @@ fn source_runtime_preserves_pod_environment_security_and_launch_overrides() {
         "arg=MKNOD",
         "arg=DATABASE_URL=mysql://source",
         "arg=PORT=8080",
+        "arg=MESH_CONNECT_HOST=source-owned-host",
         "arg=--entrypoint",
         "arg=/bin/sh",
         "command=-c",

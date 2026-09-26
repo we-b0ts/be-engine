@@ -261,19 +261,13 @@ async fn run_target_runtime(
         .await
         .context("target did not satisfy the configured readiness contract")?;
     crate::target_container::verify_target_identity(container).await?;
-    crate::target_container::verify_startup_environment(
-        container,
-        target_root,
-        target.breeze_enabled,
-    )
-    .await?;
+    crate::target_container::verify_startup_environment(container, target_root).await?;
     let snapshot = crate::startup::load_startup_snapshot(target_root, &target.startup)?;
     crate::target_container::verify_runtime_mounts(
         container,
         snapshot.mounts(),
         &project.target_runtime_outputs,
         true,
-        target.breeze_enabled,
     )
     .await?;
     crate::target_container::verify_listen_address(container, target.port).await?;

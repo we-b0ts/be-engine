@@ -246,11 +246,7 @@ resolve_recording_mount_source() {
             return 1
         fi
     done
-    if [[ "$destination" == /data1/breeze/* || "$original_source" == /data1/breeze/* ]]; then
-        prepared_mount_source=$original_source
-    else
-        prepare_empty_runtime_mount source "$destination"
-    fi
+    prepare_empty_runtime_mount source "$destination"
 }
 
 prepare_writable_source_snapshot_mount() {

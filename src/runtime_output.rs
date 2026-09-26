@@ -146,8 +146,6 @@ fn validate_container_path(path: &Path) -> Result<()> {
         "/lib64",
         "/run",
         "/traffic-e2e",
-        "/data1/breeze/socks",
-        "/data1/breeze/snapshot",
     ] {
         ensure!(
             !paths_overlap(path, Path::new(reserved)),

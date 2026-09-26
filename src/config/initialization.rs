@@ -20,7 +20,7 @@ pub(crate) struct RecorderConfigInitOptions {
     pub http_gateway_port: u16,
     pub readiness_path: String,
     pub upstream_dns: SocketAddr,
-    pub breeze_enabled: bool,
+    pub platform_response_rewrite_enabled: bool,
 }
 
 pub(crate) fn render_validated_recorder_config(
@@ -111,7 +111,7 @@ fn render_recorder_template(scope: &str, options: &RecorderConfigInitOptions) ->
     let fallback_body = render_yaml_scalar(&format!(
         r#"{{"code":"40401","msg":"not_in_{scope}_record_api"}}"#
     ))?;
-    let response_rewrite = if options.breeze_enabled {
+    let response_rewrite = if options.platform_response_rewrite_enabled {
         PLATFORM_RESPONSE_REWRITE_YAML
     } else {
         "http_response_rewrite:\n  enabled: false\n  rules: []"
@@ -299,7 +299,7 @@ mod tests {
             http_gateway_port: 18_181,
             readiness_path: "/healthy".to_string(),
             upstream_dns: "10.10.10.11:53".parse().unwrap(),
-            breeze_enabled: true,
+            platform_response_rewrite_enabled: true,
         })
         .unwrap();
 
@@ -408,7 +408,7 @@ mod tests {
             http_gateway_port: 0,
             readiness_path: "healthy".to_string(),
             upstream_dns: "10.10.10.11:53".parse().unwrap(),
-            breeze_enabled: false,
+            platform_response_rewrite_enabled: false,
         })
         .unwrap_err();
         assert!(error.to_string().contains("source_http_port"));
@@ -424,7 +424,7 @@ mod tests {
             http_gateway_port: 18_181,
             readiness_path: "/healthz".to_string(),
             upstream_dns: "10.10.10.11:53".parse().unwrap(),
-            breeze_enabled: false,
+            platform_response_rewrite_enabled: false,
         })
         .unwrap();
 
@@ -461,7 +461,7 @@ mod tests {
             http_gateway_port: 8081,
             readiness_path: "/healthz".to_string(),
             upstream_dns: "10.10.10.11:53".parse().unwrap(),
-            breeze_enabled: false,
+            platform_response_rewrite_enabled: false,
         })
         .unwrap_err();
 

@@ -259,7 +259,9 @@ is unclear.
   execution. `integrated` owns freshness, action projection and unchanged-purpose
   baseline admission. Its baseline comparison uses `fingerprint::matches_revision`
   to include tracked/untracked source and configuration changes while excluding
-  private runtime and progress publication. `repair`
+  source traffic acquisition policy, private runtime and progress publication.
+  Review fingerprints use the same policy exclusion; traffic verification
+  fingerprints continue to include acquisition policy. `repair`
   returns quality findings to existing API/process-output worker ownership,
   including fresh unpublished candidate reports without admitting failed code.
   Review does not create traffic failures or a second migration state machine.

@@ -16,14 +16,10 @@ the source snapshot. Captured ConfigMap/Secret access is preserved and
 image-local source paths default to read-only. Every target start loads source
 application environment from that snapshot, followed by the ignored
 project-level `.traffic-e2e/local/target.env` overrides. There is no
-generic or application-specific port mapping. The Breeze connection host below
-is runtime-owned and does not require a declaration. Target code must not
+generic or application-specific port mapping. Target code must not
 depend on generic `TRAFFIC_E2E_*` environment variables.
 
-When Breeze is configured, the system mounts `/data1/breeze/socks` and
-`/data1/breeze/snapshot` read-only and injects
-`MESH_CONNECT_HOST=breeze.recording` without a target startup declaration; the
-image must not start Breeze. During Replay,
+During Replay,
 `/traffic-e2e/trust/replay-ca.pem` is a read-only public certificate. A target
 runtime that needs an application-owned variable for this fixed path receives
 it through `target.env`, managed during implementation. Target TLS clients must

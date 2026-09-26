@@ -18,16 +18,13 @@ use the same repeatable `--api` input; protocol adapters own discovery,
 transport, and comparison behavior. Motan inventory entries use an opaque
 engine-generated `MOTAN /rpc/<api-id>` canonical value.
 
-traffic-e2e builds `.traffic-e2e/Dockerfile.e2e` and owns source, one shared
-Breeze, target container, their managed network namespaces, readiness,
-comparison recorder, finalization, signals, and cleanup. The source keeps the
-host recording namespace, while Breeze and target share the run-owned target
-namespace so Breeze loopback endpoints remain valid. The adapted source uses
-the target bridge IP to reach that same Breeze through a namespace-scoped
-loopback ingress mapping. A run-scoped egress guard owns target forwarding and
-masquerade for the lifetime of the cache snapshot. The target receives the
-fixed config mount and port environment contract. Do not generate or invoke
-repository comparison wrappers.
+traffic-e2e builds `.traffic-e2e/Dockerfile.e2e` and owns source and target
+containers, their managed network namespaces, readiness, comparison recorder,
+finalization, signals, and cleanup. The source keeps the host recording
+namespace, while the target uses a run-owned bridge namespace. A run-scoped
+egress guard owns target forwarding and masquerade for the lifetime of the
+cache snapshot. The target receives its declared startup mounts and environment.
+Do not generate or invoke repository comparison wrappers.
 
 Managed comparison runs source through the same reviewed
 `.traffic-e2e/Dockerfile.recording` adaptor used by standard recording. The
@@ -39,7 +36,7 @@ adapted, run-private source container. The initialization Pod is not required.
 When the recorder config contains Redis process-owned rules, managed comparison
 also owns one cache-only run-local snapshot across both managed namespaces.
 Fixed-UID `OUTPUT` interception captures source traffic, while source-IP-scoped
-`PREROUTING` interception captures target and Breeze traffic before target
+`PREROUTING` interception captures target traffic before target
 egress masquerade. Source and candidate share the first successful response for
 each matching logical Redis read. This comparison snapshot starts empty and
 never loads the standard recording's Replay snapshot.
@@ -56,8 +53,7 @@ schedule. The schedule is fixed for the lifetime of that run, but different
 runs can send the same workload to source or candidate first. Dispatch order
 is intentionally not published in comparison evidence or reports.
 
-When Breeze is absent, the same command selects the configured runtime without
-starting Breeze. Comparison sends every admitted request symmetrically to
+Comparison sends every admitted request symmetrically to
 source and candidate, using the methods declared by the selected HTTP gateway
 rule or the matching Motan gateway rule without a separate read-only-method
 restriction. Use repeatable `--api`, optional positive `--per-api-case-limit`,

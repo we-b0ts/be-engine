@@ -7,6 +7,8 @@ use anyhow::{Context, Result, ensure};
 mod cache;
 mod engine;
 
+const SOURCE_POLICY_PATHSPEC: &str = ":(exclude).traffic-e2e/source-traffic-policy.yaml";
+
 const RUNTIME_PROGRESS_PATHSPECS: &[&str] = &[
     ":(exclude).traffic-e2e/progress.yaml",
     ":(exclude).traffic-e2e/replay-progress.yaml",
@@ -18,32 +20,41 @@ pub(super) fn repository_fingerprint(target_root: &Path) -> Result<String> {
     if let Some(fingerprint) = cache::repository(target_root) {
         return Ok(fingerprint);
     }
-    let mut hash = repository_files_hash(target_root)?;
+    let hash = repository_files_hash(target_root, false)?;
+    let fingerprint = runtime_inputs_fingerprint(target_root, hash)?;
+    cache::insert_repository(target_root.to_path_buf(), fingerprint.clone());
+    Ok(fingerprint)
+}
+
+/// Review identity excludes acquisition policy, while verification retains it.
+pub(super) fn review_fingerprint(target_root: &Path) -> Result<String> {
+    runtime_inputs_fingerprint(target_root, repository_files_hash(target_root, true)?)
+}
+
+fn runtime_inputs_fingerprint(target_root: &Path, mut hash: Fnv1a) -> Result<String> {
     hash.update(b"startup-snapshot");
     hash.update(crate::startup::startup_snapshot_revision(target_root)?.as_bytes());
     hash.update(&[0]);
     hash.update(b"target-environment");
     hash.update(crate::startup::startup_environment_revision(target_root)?.as_bytes());
     hash.update(&[0]);
-    let fingerprint = hash.finish();
-    cache::insert_repository(target_root.to_path_buf(), fingerprint.clone());
-    Ok(fingerprint)
+    Ok(hash.finish())
 }
 
 /// Portable delivery identity; private startup inputs belong to the canonical
 /// validation context, not the candidate worktree's local runtime directory.
 pub(super) fn code_fingerprint(target_root: &Path) -> Result<String> {
-    Ok(repository_files_hash(target_root)?.finish())
+    Ok(repository_files_hash(target_root, true)?.finish())
 }
 
-fn repository_files_hash(target_root: &Path) -> Result<Fnv1a> {
-    if let Some(hash) = cache::repository_files(target_root) {
+fn repository_files_hash(target_root: &Path, review: bool) -> Result<Fnv1a> {
+    if let Some(hash) = cache::repository_files(target_root, review) {
         return Ok(hash);
     }
     let managed = crate::e2e_run::resolve_managed_directories(target_root)?;
     if managed.len() == 1 {
-        let hash = directory_files_hash(&managed[0].root)?;
-        cache::insert_repository_files(target_root.to_path_buf(), hash);
+        let hash = directory_files_hash(&managed[0].root, review)?;
+        cache::insert_repository_files(target_root.to_path_buf(), review, hash);
         return Ok(hash);
     }
     let mut hash = Fnv1a::default();
@@ -51,10 +62,14 @@ fn repository_files_hash(target_root: &Path) -> Result<Fnv1a> {
         hash.update(b"managed-directory");
         hash.update(directory.target_relative.as_os_str().as_encoded_bytes());
         hash.update(&[0]);
-        hash.update(directory_files_hash(&directory.root)?.finish().as_bytes());
+        hash.update(
+            directory_files_hash(&directory.root, review)?
+                .finish()
+                .as_bytes(),
+        );
         hash.update(&[0]);
     }
-    cache::insert_repository_files(target_root.to_path_buf(), hash);
+    cache::insert_repository_files(target_root.to_path_buf(), review, hash);
     Ok(hash)
 }
 
@@ -62,7 +77,7 @@ pub(super) fn with_repository_cache<T>(operation: impl FnOnce() -> T) -> T {
     cache::scope(operation)
 }
 
-fn directory_files_hash(target_root: &Path) -> Result<Fnv1a> {
+fn directory_files_hash(target_root: &Path, review: bool) -> Result<Fnv1a> {
     let mut paths_args = vec![
         "ls-files",
         "--cached",
@@ -75,6 +90,9 @@ fn directory_files_hash(target_root: &Path) -> Result<Fnv1a> {
     ];
     paths_args.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
     paths_args.push(crate::config::regression::GIT_PATHSPEC);
+    if review {
+        paths_args.push(SOURCE_POLICY_PATHSPEC);
+    }
     let listed = git_bytes(target_root, &paths_args)?;
     let mut paths = listed
         .split(|byte| *byte == 0)
@@ -91,7 +109,7 @@ fn directory_files_hash(target_root: &Path) -> Result<Fnv1a> {
 }
 
 /// Compare a purpose's committed baseline with the current tracked and untracked
-/// files. Progress publication and private runtime are not code changes.
+/// files. Acquisition policy, progress publication and private runtime are not code changes.
 pub(super) fn matches_revision(target_root: &Path, revision: &str) -> Result<bool> {
     for directory in crate::e2e_run::resolve_managed_directories(target_root)? {
         if !directory_matches_revision(&directory.root, revision)? {
@@ -114,6 +132,7 @@ fn directory_matches_revision(target_root: &Path, revision: &str) -> Result<bool
         crate::internal_runtime::LOCAL_GIT_PATHSPEC,
         crate::config::regression::GIT_PATHSPEC,
     ];
+    diff.push(SOURCE_POLICY_PATHSPEC);
     diff.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
     if !git_bytes(target_root, &diff)?.is_empty() {
         return Ok(false);
@@ -128,6 +147,7 @@ fn directory_matches_revision(target_root: &Path, revision: &str) -> Result<bool
         crate::internal_runtime::LOCAL_GIT_PATHSPEC,
         crate::config::regression::GIT_PATHSPEC,
     ];
+    untracked.push(SOURCE_POLICY_PATHSPEC);
     untracked.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
     Ok(git_bytes(target_root, &untracked)?.is_empty())
 }
@@ -412,6 +432,55 @@ mod tests {
             repository_fingerprint(repository.path()).unwrap(),
             dirty_deletion
         );
+    }
+
+    #[test]
+    fn source_policy_changes_affect_verification_but_not_review() {
+        let repository = tempfile::tempdir().unwrap();
+        let root = repository.path();
+        fs::create_dir_all(root.join(".traffic-e2e")).unwrap();
+        fs::write(root.join("lib.rs"), "pub fn value() {}\n").unwrap();
+        git_ok(root, &["init", "-q"]);
+        git_ok(root, &["config", "user.email", "test@example.com"]);
+        git_ok(root, &["config", "user.name", "Test"]);
+        git_ok(root, &["add", "."]);
+        git_ok(root, &["commit", "-qm", "baseline"]);
+        let revision = String::from_utf8(git_bytes(root, &["rev-parse", "HEAD"]).unwrap()).unwrap();
+        let revision = revision.trim();
+        let code = code_fingerprint(root).unwrap();
+        let review = review_fingerprint(root).unwrap();
+        let verification = repository_fingerprint(root).unwrap();
+        let policy = root.join(".traffic-e2e/source-traffic-policy.yaml");
+        fs::write(&policy, "version: 2\n").unwrap();
+        let with_policy = repository_fingerprint(root).unwrap();
+        for stage in ["untracked", "staged", "committed", "modified", "deleted"] {
+            match stage {
+                "staged" => git_ok(root, &["add", "."]),
+                "committed" => git_ok(root, &["commit", "-qm", "source policy"]),
+                "modified" => fs::write(&policy, "version: 2\nhttp: {}\n").unwrap(),
+                "deleted" => fs::remove_file(&policy).unwrap(),
+                _ => {}
+            }
+            with_repository_cache(|| {
+                assert_ne!(
+                    repository_fingerprint(root).unwrap(),
+                    if stage == "deleted" {
+                        &with_policy
+                    } else {
+                        &verification
+                    }
+                    .as_str(),
+                    "{stage}"
+                );
+                assert_eq!(code_fingerprint(root).unwrap(), code, "{stage}");
+                assert_eq!(review_fingerprint(root).unwrap(), review, "{stage}");
+                assert!(matches_revision(root, revision).unwrap(), "{stage}");
+            });
+        }
+        fs::write(root.join("lib.rs"), "pub fn changed() {}\n").unwrap();
+        assert_ne!(code_fingerprint(root).unwrap(), code);
+        assert_ne!(review_fingerprint(root).unwrap(), review);
+        assert!(!matches_revision(root, revision).unwrap());
     }
 
     #[test]

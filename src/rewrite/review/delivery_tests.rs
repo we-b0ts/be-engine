@@ -677,6 +677,33 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
     .unwrap();
     assert_eq!(fs::read_to_string(&counter).unwrap(), review_invocations);
 
+    // Case pattern discovery invalidates traffic verification, not the code receipt.
+    let policy_path = target
+        .path()
+        .join(".traffic-e2e/source-traffic-policy.yaml");
+    let mut policy = crate::config::SourceTrafficPolicyConfig::load(&policy_path).unwrap();
+    let verification = fingerprint::repository_fingerprint(target.path()).unwrap();
+    policy.http.case_path_patterns = vec!["/api/*".into()];
+    fs::write(&policy_path, policy.render().unwrap()).unwrap();
+    assert_ne!(
+        fingerprint::repository_fingerprint(target.path()).unwrap(),
+        verification
+    );
+    assert!(terminal_current(target.path(), &state));
+    assert!(gate(target.path(), &state, "master").unwrap().is_none());
+    git(
+        target.path(),
+        &["add", ".traffic-e2e/source-traffic-policy.yaml"],
+    );
+    git(target.path(), &["commit", "-qm", "discover case pattern"]);
+    assert!(terminal_current(target.path(), &state));
+    assert!(gate(target.path(), &state, "master").unwrap().is_none());
+    assert_eq!(fs::read_to_string(&counter).unwrap(), review_invocations);
+    let code = fs::read(target.path().join("lib.rs")).unwrap();
+    fs::write(target.path().join("lib.rs"), "pub fn changed() {}\n").unwrap();
+    assert!(!terminal_current(target.path(), &state));
+    fs::write(target.path().join("lib.rs"), code).unwrap();
+
     // Source-proof metadata changes require review even without a code change.
     git(
         target.path(),

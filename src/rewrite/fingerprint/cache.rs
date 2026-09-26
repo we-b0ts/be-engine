@@ -6,7 +6,7 @@ use super::Fnv1a;
 
 #[derive(Default)]
 struct FingerprintCache {
-    repository_files: HashMap<PathBuf, Fnv1a>,
+    repository_files: HashMap<(PathBuf, bool), Fnv1a>,
     repositories: HashMap<PathBuf, String>,
 }
 
@@ -28,14 +28,20 @@ pub(super) fn scope<T>(operation: impl FnOnce() -> T) -> T {
     operation()
 }
 
-pub(super) fn repository_files(root: &Path) -> Option<Fnv1a> {
-    CACHE.with(|slot| slot.borrow().as_ref()?.repository_files.get(root).copied())
+pub(super) fn repository_files(root: &Path, review: bool) -> Option<Fnv1a> {
+    CACHE.with(|slot| {
+        slot.borrow()
+            .as_ref()?
+            .repository_files
+            .get(&(root.to_path_buf(), review))
+            .copied()
+    })
 }
 
-pub(super) fn insert_repository_files(root: PathBuf, hash: Fnv1a) {
+pub(super) fn insert_repository_files(root: PathBuf, review: bool, hash: Fnv1a) {
     CACHE.with(|slot| {
         if let Some(cache) = slot.borrow_mut().as_mut() {
-            cache.repository_files.insert(root, hash);
+            cache.repository_files.insert((root, review), hash);
         }
     });
 }

@@ -145,7 +145,7 @@ fn initialize_repository_config_with(
         http_gateway_port: options.http_gateway_port,
         readiness_path: options.readiness_path.clone(),
         upstream_dns: options.upstream_dns,
-        breeze_enabled: false,
+        platform_response_rewrite_enabled: false,
     };
     let (_, recorder) = render_validated_recorder_config(&recorder_options)?;
     let verification = crate::replay::render_validated_replay_policy()?;
@@ -154,7 +154,6 @@ fn initialize_repository_config_with(
     let project = render_project_config(
         &E2eRunInitOptions {
             target_root: target_root.clone(),
-            breeze_container: None,
             target_dockerfile: PathBuf::from(TARGET_DOCKERFILE_PATH),
             target_startup: crate::startup::StartupConfig::default(),
             replay_policy: PathBuf::from(VERIFICATION_POLICY_PATH),

@@ -46,8 +46,6 @@ pub(super) struct ProjectConfig {
 #[serde(deny_unknown_fields)]
 pub(super) struct ProjectSettings {
     pub source: SourceProjectConfig,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub breeze: Option<BreezeProjectConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub process_outputs: Vec<ProcessOutputSettings>,
     pub target: TargetProjectConfig,
@@ -80,12 +78,6 @@ impl ProcessOutputSettings {
 #[serde(deny_unknown_fields)]
 pub(super) struct SourceProjectConfig {
     pub snapshot: PathBuf,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct BreezeProjectConfig {
-    pub container: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,7 +209,6 @@ pub(crate) struct ResolvedProjectConfig {
     pub(crate) target_max_response_bytes: usize,
     pub(crate) process_outputs: Vec<crate::process_output::ProcessOutputConfig>,
     pub(crate) process_output_rules: BTreeMap<String, crate::ProfileByTypeVerificationRules>,
-    pub(crate) breeze_container: Option<String>,
     pub(crate) replay_policy: PathBuf,
     pub(crate) replay_case_dependency_post_response_window: Duration,
     pub(crate) max_failed_cases_per_api: usize,

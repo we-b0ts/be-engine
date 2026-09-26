@@ -531,7 +531,6 @@ mod tests {
             build_contexts: Vec::new(),
             startup: crate::startup::StartupConfig::default(),
             port: 8081,
-            breeze_enabled: false,
         };
         let dockerfile = format!(
             "FROM {} AS builder\nRUN --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked --mount=type=cache,id=traffic-e2e-service-target,target=/build/target,sharing=locked cargo build --locked --release\nFROM {}\nENTRYPOINT [\"/app/bin/service\"]\n",
@@ -560,7 +559,6 @@ mod tests {
             }],
             startup: crate::startup::StartupConfig::default(),
             port: 8081,
-            breeze_enabled: false,
         };
         let base = format!(
             "FROM {} AS builder\nRUN --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/registry,sharing=locked --mount=type=cache,id=traffic-e2e-service-target,target=/build/target,sharing=locked cargo build --locked --release\nFROM {}\nENTRYPOINT [\"/app/bin/service\"]\n",

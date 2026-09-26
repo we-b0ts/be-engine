@@ -17,7 +17,6 @@ use crate::{TRAFFIC_PROCESS_GID, TRAFFIC_PROCESS_UID, TRAFFIC_PROCESS_USER};
 const DOCKER_TIMEOUT: Duration = Duration::from_secs(60);
 const STOP_SECONDS: &str = "15";
 const MANAGED_LABEL: &str = "com.weibo.traffic-e2e.managed=true";
-const BREEZE_CONNECT_HOST_ENVIRONMENT: &str = "MESH_CONNECT_HOST=breeze.recording";
 const TARGET_LOG_TAIL_LINES: &str = "2000";
 const MAX_TARGET_LOG_BYTES: usize = 1024 * 1024;
 
@@ -124,9 +123,6 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
         &options.config.target_root,
         &options.config.startup,
     )?;
-    if options.config.breeze_enabled {
-        require_breeze_mounts()?;
-    }
     let replay_ca_mount = if let Some(ca_cert) = &options.replay_ca_cert {
         require_regular_file(ca_cert, "Replay CA certificate")?;
         Some(bind_mount(ca_cert, TARGET_REPLAY_CA_PATH, false)?)
@@ -219,24 +215,10 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
             )?,
         ]);
     }
-    if options.config.breeze_enabled {
-        command
-            .args([
-                "--mount",
-                "type=bind,source=/data1/breeze/socks,target=/data1/breeze/socks,readonly",
-            ])
-            .args([
-                "--mount",
-                "type=bind,source=/data1/breeze/snapshot,target=/data1/breeze/snapshot,readonly",
-            ]);
-    }
     if let Some(replay_ca_mount) = &replay_ca_mount {
         command.args(["--mount", replay_ca_mount]);
     }
     command.arg("--env-file").arg(&environment_file);
-    if let Some(environment) = breeze_connect_host_environment(options.config.breeze_enabled) {
-        command.args(["--env", environment]);
-    }
     command.arg(&options.image.id);
     let output = docker_output(&mut command, "start target container").await;
     if let Err(error) = remove_environment_file(&environment_file).await {
@@ -330,7 +312,6 @@ pub(crate) async fn verify_runtime_mounts(
     mounts: &[crate::startup::StartupSnapshotMount],
     runtime_outputs: &[crate::runtime_output::RuntimeOutputConfig],
     replay_ca: bool,
-    breeze_enabled: bool,
 ) -> Result<()> {
     let inspection = inspect_container(container).await?;
     ensure!(
@@ -356,15 +337,7 @@ pub(crate) async fn verify_runtime_mounts(
             expected.container_path.display()
         );
     }
-    let managed_read_only_mounts = replay_ca
-        .then_some(TARGET_REPLAY_CA_PATH)
-        .into_iter()
-        .chain(
-            breeze_enabled
-                .then_some(["/data1/breeze/socks", "/data1/breeze/snapshot"])
-                .into_iter()
-                .flatten(),
-        );
+    let managed_read_only_mounts = replay_ca.then_some(TARGET_REPLAY_CA_PATH).into_iter();
     for expected in managed_read_only_mounts {
         ensure!(
             inspection
@@ -377,11 +350,7 @@ pub(crate) async fn verify_runtime_mounts(
     Ok(())
 }
 
-pub(crate) async fn verify_startup_environment(
-    container: &str,
-    target_root: &Path,
-    breeze_enabled: bool,
-) -> Result<()> {
+pub(crate) async fn verify_startup_environment(container: &str, target_root: &Path) -> Result<()> {
     let inspection = inspect_container(container).await?;
     ensure!(
         inspection.config.env.iter().all(|value| {
@@ -401,17 +370,7 @@ pub(crate) async fn verify_startup_environment(
             "target container is missing configured startup environment {expected:?}"
         );
     }
-    if let Some(expected) = breeze_connect_host_environment(breeze_enabled) {
-        ensure!(
-            inspection.config.env.iter().any(|value| value == expected),
-            "Breeze-enabled target container is missing managed environment {expected:?}"
-        );
-    }
     Ok(())
-}
-
-fn breeze_connect_host_environment(enabled: bool) -> Option<&'static str> {
-    enabled.then_some(BREEZE_CONNECT_HOST_ENVIRONMENT)
 }
 
 pub(crate) async fn verify_listen_address(container: &str, port: u16) -> Result<()> {
@@ -574,18 +533,6 @@ async fn inspect_container(name: &str) -> Result<ContainerInspection> {
         values.len()
     );
     Ok(values.remove(0))
-}
-
-fn require_breeze_mounts() -> Result<()> {
-    for path in ["/data1/breeze/socks", "/data1/breeze/snapshot"] {
-        let metadata = std::fs::symlink_metadata(path)
-            .with_context(|| format!("required Breeze mount is missing: {path}"))?;
-        ensure!(
-            metadata.is_dir() && !metadata.file_type().is_symlink(),
-            "required Breeze mount must be a directory and not a symlink: {path}"
-        );
-    }
-    Ok(())
 }
 
 fn require_regular_file(path: &Path, label: &str) -> Result<()> {

@@ -2165,7 +2165,7 @@ recording, data, credential, and environment-file exclusions; existing regular
 target files are preserved.
 `project.yaml` combines project settings with the static recorder settings;
 `source-traffic-policy.yaml` is wholly AI/coordinator managed. Project settings
-have explicit source, optional Breeze, target, replay, verification, recording,
+have explicit source, target, replay, verification, recording,
 delivery, and state sections. `verification.max_failed_cases_per_api` defaults
 to `10`; Replay and Comparison stop admitting additional cases for an API once
 that many cases have not passed. Remaining Replay cases stay unexecuted rather
@@ -2329,8 +2329,7 @@ then mounted `rw`; the canonical snapshot is never exposed writable. Managed
 source and target containers receive separate writable copies. Other
 application Docker mounts are recreated as empty, destination-mirrored private
 directories with their original `rw`/`ro` access. Docker-managed host files
-(`/etc/hosts`, `/etc/hostname`, and `/etc/resolv.conf`) are not copied, and the
-engine-managed Breeze mounts keep their existing shared behavior. Runtime mount
+(`/etc/hosts`, `/etc/hostname`, and `/etc/resolv.conf`) are not copied. Runtime mount
 copies are removed after their owning container or managed run stops.
 
 `target.runtime_outputs` is a separate output-only contract. Every configured
@@ -2344,7 +2343,7 @@ recording run ID. The resolved paths and their roles are printed when a
 container starts and returned by run/status or managed recording results.
 `retention: keep` preserves them after container cleanup for host-side
 analysis. Runtime output paths must not overlap each other, startup mounts,
-Replay-owned paths, or managed Breeze mounts.
+or Replay-owned paths.
 
 Runtime output contents do not update the startup snapshot and do not trigger
 startup recapture. The host directory is below `.traffic-e2e/local/`, which the
@@ -2365,12 +2364,7 @@ does not define a generic port variable or adapt framework-specific environment
 names. The target contract contains no generic `TRAFFIC_E2E_CONFIG_DIR`,
 `TRAFFIC_E2E_TARGET_PORT`, or `TRAFFIC_E2E_REPLAY_CA_CERT_PATH` variables.
 
-When Breeze is configured, traffic-e2e also mounts `/data1/breeze/socks` and
-`/data1/breeze/snapshot` read-only and injects
-`MESH_CONNECT_HOST=breeze.recording` into the target without requiring a
-startup declaration. This engine-managed address keeps target Breeze clients
-on the same managed connection path as the adapted recording source. During
-Replay traffic-e2e mounts the public Replay CA at
+During Replay traffic-e2e mounts the public Replay CA at
 `/traffic-e2e/trust/replay-ca.pem`. If a target runtime needs an
 application-owned environment variable for this fixed path, implementation
 adds it to `target.env` through the startup API. Target TLS clients must add
@@ -2394,16 +2388,7 @@ owns the reviewed `.traffic-e2e/Dockerfile.recording` build contract. Adaptor
 build binds the exact image ID through a deterministic temporary local alias
 and labels the resulting adaptor with that ID. A missing adaptor or one labeled
 for another source image or build-contract revision triggers a build/refresh.
-The Breeze-only `.traffic-e2e/MeshConnectUtil.class` and
-`.traffic-e2e/CommonSwitcher.class` inputs are owned and validated by the
-Dockerfile; the generic manager does not inspect them. The SDK patch interprets
-the manager-injected non-blank
-`MESH_CONNECT_HOST` as an explicit TCP selection and ignores
-`mesh.unix.domain.socket.enable` for that managed run. It preserves every
-source Mesh selection switch, but disables automatic degrade and
-exception-to-TCP fallback after Mesh is selected. Mesh initialization failure
-retains the SDK's original behavior and is left to managed Breeze readiness and
-source startup diagnostics. The adaptor preserves the snapshotted source
+The adaptor preserves the snapshotted source
 command and arguments and does not send commands to port `880`. The manager forms a
 non-recursive build context from regular files at the top of `.traffic-e2e`, so
 `.traffic-e2e/local/` is never included.
@@ -2413,8 +2398,19 @@ from `RUN_COMMAND`. Cleanup removes run-private containers but retains the
 matching adaptor image. Comparison recording uses the same adaptor image,
 snapshotted runtime inputs, and fixed `998:998` source identity as standard
 recording, so cache-only interception observes both source and target traffic.
-Breeze itself always uses the centrally managed pinned image and is not built
-from a target-repository Dockerfile.
+Initialization and managed runtime do not provision a Breeze sidecar, inject
+Mesh connection settings, or ship Java class patches. Existing projects must
+remove the retired `project.breeze` setting and any obsolete patch-copy steps
+from `Dockerfile.recording`. Application-specific startup inputs use the normal
+startup declarations; Breeze SDK use and Vintage response rewrite rules remain
+independent of this startup contract.
+
+Changes confined to `.traffic-e2e/source-traffic-policy.yaml` (including case
+pattern discovery) do not require code review or invalidate an accepted code
+review receipt. The policy remains part of the configuration commit gate and
+traffic verification fingerprints; changed source, startup inputs and other
+configuration still require the usual review. Candidate publication still
+requires the exact reviewed commit.
 
 Before worker and integration delivery, `review check` runs the same built-in
 target `replay-isolation` quality gate. It
@@ -2433,8 +2429,8 @@ added-line gate.
 The runner sends HTTP requests itself; the target image does not read cases or
 write response reports. The configured port is shared by the image
 environment, readiness, replay requests, and comparison requests. Comparison
-keeps source in the host recording namespace and places optional Breeze with
-the target in one run-owned bridge namespace. Replay starts the target once for
+keeps source in the host recording namespace and places the target in one
+run-owned bridge namespace. Replay starts the target once for
 the selected cases, intercepts dependency traffic by fixed UID, and prevents
 uncontrolled external egress.
 
@@ -2456,9 +2452,6 @@ marked
 `demo.test` Global dependency; Replay must consume it through fake DNS, reject
 payload sent to unrecorded `example.com:443` with `unrecorded_targets`
 evidence, and block direct external egress for UID `998`.
-For a Breeze-enabled project, recording preflight also resolves
-`breeze.recording` inside the source adaptor as UID `998` and fails unless the
-finalized `recording-network.json` proves Recorder observed that DNS query.
 Source-local port `880` is not a preflight dependency and receives no managed
 switch commands; the configured HTTP Gateway readiness contract remains
 authoritative. The HTTPS probe runs before the one-case readiness request. The
