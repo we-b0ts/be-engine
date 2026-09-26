@@ -257,6 +257,7 @@ async fn capture_motan_case(
     let request_sent_at = chrono::Utc::now();
     let operation = async {
         let mut stream = TcpStream::connect(upstream).await?;
+        stream.set_nodelay(true)?;
         stream.write_all(&raw).await?;
         if request.flags.oneway() {
             return Ok((204, Vec::new()));
@@ -305,6 +306,7 @@ async fn capture_motan_case(
 fn client() -> HttpClient {
     let mut connector = HttpConnector::new();
     connector.enforce_http(true);
+    connector.set_nodelay(true);
     Client::builder(TokioExecutor::new()).build(connector)
 }
 

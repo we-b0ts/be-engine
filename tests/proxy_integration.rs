@@ -837,6 +837,20 @@ async fn http_gateway_keeps_truncated_case_out_of_published_recordings() {
 
 #[tokio::test]
 async fn records_mysql_exchange_over_tls() {
+    check_mysql_tls_packet_delivery(false, false).await;
+}
+
+#[tokio::test]
+async fn forwards_mysql_deprecated_eof_over_tls() {
+    check_mysql_tls_packet_delivery(true, false).await;
+}
+
+#[tokio::test]
+async fn forwards_mysql_multiple_results_over_tls() {
+    check_mysql_tls_packet_delivery(false, true).await;
+}
+
+async fn check_mysql_tls_packet_delivery(deprecated_eof: bool, multiple_results: bool) {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
@@ -849,7 +863,21 @@ async fn records_mysql_exchange_over_tls() {
     let upstream_tls_config = upstream_ca.server_config_for_host("127.0.0.1").unwrap();
     let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_addr = upstream.local_addr().unwrap();
-    tokio::spawn(async move {
+    let mut response = mysql_text_resultset(8192);
+    if deprecated_eof {
+        response.remove(2); // CLIENT_DEPRECATE_EOF omits the metadata EOF.
+        *response.last_mut().unwrap() = mysql_packet(0, &[0xfe, 0, 0, 2, 0, 0, 0]);
+    }
+    if multiple_results {
+        // SERVER_MORE_RESULTS_EXISTS on the first result's terminal EOF.
+        response.last_mut().unwrap()[7] |= 0x08;
+        response.extend(mysql_text_resultset(8192));
+    }
+    for (index, packet) in response.iter_mut().enumerate() {
+        packet[3] = (index + 1) as u8;
+    }
+    let expected_response = response.clone();
+    let upstream_handle = tokio::spawn(async move {
         for _ in 0..2 {
             let (mut stream, _) = upstream.accept().await.unwrap();
             stream
@@ -870,12 +898,16 @@ async fn records_mysql_exchange_over_tls() {
                 .write_all(&mysql_packet(3, mysql_ok_payload().as_slice()))
                 .await
                 .unwrap();
-            let (_, query) = read_mysql_packet(&mut stream).await.unwrap();
-            assert_eq!(query, b"\x03SELECT tls_value");
-            for packet in mysql_text_resultset(640) {
-                stream.write_all(&packet).await.unwrap();
-            }
             stream.flush().await.unwrap();
+            for _ in 0..2 {
+                let (_, query) = read_mysql_packet(&mut stream).await.unwrap();
+                assert_eq!(query, b"\x03SELECT tls_value");
+                for packet in &response {
+                    stream.write_all(packet).await.unwrap();
+                }
+                stream.flush().await.unwrap();
+            }
+            // Keep TLS open: shutdown must not be what flushes the response tail.
             let _ = read_mysql_packet(&mut stream).await;
         }
     });
@@ -904,7 +936,7 @@ async fn records_mysql_exchange_over_tls() {
     let mut payload = vec![0_u8; payload_len];
     client.read_exact(&mut payload).await.unwrap();
 
-    let tls_flags = 0x0008_8a08_u32;
+    let tls_flags = 0x000a_8a08_u32 | if deprecated_eof { 0x0100_0000 } else { 0 };
     let mut ssl_request = vec![0_u8; 32];
     ssl_request[0..4].copy_from_slice(&tls_flags.to_le_bytes());
     client
@@ -929,32 +961,33 @@ async fn records_mysql_exchange_over_tls() {
         ))
         .await
         .unwrap();
+    client.flush().await.unwrap();
     let (sequence_id, login_response) = read_mysql_packet(&mut client).await.unwrap();
     assert_eq!(sequence_id, 3);
     assert_eq!(login_response[0], 0x00);
-    client
-        .write_all(&mysql_packet(0, b"\x03SELECT tls_value"))
-        .await
-        .unwrap();
-    let mut query_response = Vec::new();
-    for packet_index in 0..644 {
-        let (_, payload) =
-            tokio::time::timeout(Duration::from_secs(1), read_mysql_packet(&mut client))
-                .await
-                .expect("timed out reading the complete TLS result set")
-                .unwrap_or_else(|| {
-                    panic!(
-                        "MySQL TLS connection closed before result-set packet {packet_index} of 644"
-                    )
-                });
-        query_response.push(payload);
+    for _ in 0..2 {
+        client
+            .write_all(&mysql_packet(0, b"\x03SELECT tls_value"))
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+        // Delay reads while the response spans multiple TLS records.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        for (packet_index, expected) in expected_response.iter().enumerate() {
+            let (sequence_id, payload) =
+                tokio::time::timeout(Duration::from_secs(5), read_mysql_packet(&mut client))
+                    .await
+                    .expect("timed out reading the complete TLS response")
+                    .unwrap_or_else(|| panic!("connection closed before packet {packet_index}"));
+            assert_eq!(sequence_id, expected[3]);
+            assert_eq!(payload, expected[4..]);
+        }
     }
-    assert_eq!(query_response.first().unwrap(), &[0x01]);
-    assert_eq!(query_response.last().unwrap(), &[0xfe, 0, 0, 2, 0]);
     client.shutdown().await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     handle.abort();
+    upstream_handle.abort();
     recorder.flush_traffic().await.unwrap();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
@@ -963,7 +996,9 @@ async fn records_mysql_exchange_over_tls() {
         .unwrap();
     assert!(!jsonl.contains(r#""event_type":"mysql_tls_rejected""#));
     assert!(jsonl.contains(r#""event_type":"mysql_connection""#));
-    assert!(jsonl.contains(r#""event_type":"mysql_exchange""#));
+    if !deprecated_eof && !multiple_results {
+        assert!(jsonl.contains(r#""event_type":"mysql_exchange""#));
+    }
     assert!(jsonl.contains(r#""sql":"SELECT tls_value""#));
 }
 
