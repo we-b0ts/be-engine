@@ -283,7 +283,7 @@ pub(super) fn envelope(
         .pending(),
         workflow,
         api_inventory: Some(inventory::view(state)),
-        process_output_inventory: Some(process_outputs::view(state)),
+        process_output_inventory: process_outputs::optional_view(state),
         latest_focused_e2e: latest_focused_e2e(state),
         terminal_allowed: super::expert::counts(state).2 == 0
             && super::review::admission_current(target_root, state)

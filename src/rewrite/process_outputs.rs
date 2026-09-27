@@ -471,11 +471,21 @@ pub(super) fn view(state: &RewriteState) -> RewriteProcessOutputInventoryView {
     }
 }
 
+pub(super) fn optional_view(state: &RewriteState) -> Option<RewriteProcessOutputInventoryView> {
+    (!state.process_outputs.inventory.is_empty()).then(|| view(state))
+}
+
 pub(super) fn details(state: &RewriteState) -> RewriteProcessOutputInventoryDetails {
     RewriteProcessOutputInventoryDetails {
         summary: view(state),
         items: state.process_outputs.inventory.clone(),
     }
+}
+
+pub(super) fn optional_details(
+    state: &RewriteState,
+) -> Option<RewriteProcessOutputInventoryDetails> {
+    (!state.process_outputs.inventory.is_empty()).then(|| details(state))
 }
 
 fn count(state: &RewriteState, status: RewriteProcessOutputStatus) -> usize {
@@ -506,6 +516,19 @@ mod tests {
             .api_inventory
             .push(api("GET /b", RewriteApiStatus::Pending));
         assert_eq!(next_eligible_id(&state), None);
+    }
+
+    #[test]
+    fn optional_inventory_views_exist_only_for_configured_outputs() {
+        let mut state = crate::rewrite::test_state();
+
+        assert!(optional_view(&state).is_none());
+        assert!(optional_details(&state).is_none());
+
+        state.process_outputs.inventory = vec![output(RewriteProcessOutputStatus::Pending)];
+
+        assert_eq!(optional_view(&state).unwrap().total, 1);
+        assert_eq!(optional_details(&state).unwrap().items.len(), 1);
     }
 
     #[test]
