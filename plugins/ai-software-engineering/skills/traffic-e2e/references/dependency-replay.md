@@ -73,8 +73,11 @@ require an ownership rule or new recording. COUNT(*) and integer constants keep
 their expression identity. Physical tables, predicates, values, sorting and
 pagination remain constrained. DISTINCT permits aliases and column reordering
 only when both queries retain the same complete direct-column projection; it
-never permits dropping/adding columns or switching to ordinary SELECT. Grouping, joins, subqueries, locks,
-wildcards and other expressions retain strict matching. See
+never permits dropping/adding columns or switching to ordinary SELECT. Grouping,
+subqueries, locks, wildcards and other expressions retain strict matching. JOIN
+queries do not gain projection adaptation; their pure WHERE predicates may use
+the compatibility below only when the projection and complete JOIN envelope
+remain exact. See
 [MySQL interoperability](../../../../../docs/mysql-replay.md) for the exact
 boundary and actual-client acceptance tests.
 
@@ -90,11 +93,14 @@ See [SQL time rules](../../../../../docs/mysql-time-rules.md). Preserve database
 error propagation in target code; swallowing an unmatched UPDATE is not a fix.
 
 Ordinary single-table SELECT predicates also support reordered IN/NOT IN values
-and pure AND conditions / OR branches, including source text literals versus target bound `?`
-parameters. Values, types, NULL and duplicate counts stay exact. This built-in
-compatibility needs no rule or new recording and does not require target to
-reproduce source collection order. It composes with direct-column mapping;
-an unchanged wildcard projection can use predicate compatibility as well.
+and pure AND conditions / OR branches, including source text literals versus
+target bound `?` parameters. Direct-table JOIN SELECTs use the same pure
+predicate compatibility only when their projection, FROM/JOIN/ON clauses,
+sorting and pagination remain exact. Values, types, NULL and duplicate counts
+stay exact. This built-in compatibility needs no rule or new recording and does
+not require target to reproduce source collection order. For single-table
+queries it composes with direct-column mapping; an unchanged wildcard projection
+can use predicate compatibility as well.
 Complex predicates and positional dynamic parameter rules retain their existing
 constraints. Parsed templates and constant queries are cached within Replay;
 actual values and finite dependency availability are checked for each execution.

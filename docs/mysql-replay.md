@@ -182,8 +182,10 @@ every successful delivery still consumes its original exchange once.
 constant, with optional alias changes. These expressions cannot be dropped,
 added or replaced with ordinary columns. This compatibility does not equate
 `COUNT(*)` with `COUNT(column)`, nor `1` with a different expression or result
-type. GROUP BY, joins, subqueries, locks, wildcard projections and
-other computed expressions stay on the existing strict matching path.
+type. GROUP BY, subqueries, locks, wildcard projections and other computed
+expressions stay on the existing strict matching path. JOIN queries do not gain
+projection adaptation; only the pure-predicate compatibility below applies when
+the complete projection, FROM/JOIN/ON clauses and query tail stay exact.
 
 Single-table `SELECT DISTINCT` supports the same alias and qualifier adaptation
 when both queries select exactly the same complete set of direct columns.
@@ -218,9 +220,12 @@ and cached parameter rebinding.
 ## SELECT predicate order compatibility
 
 Replay accepts different list orders in ordinary `IN` / `NOT IN` predicates
-and different orders of pure `AND` conditions and `OR` branches in single-table SELECTs. This is
-built in and requires neither a rule nor a new recording. Source can interpolate
-literal values into text SQL while target retains its normal `?` binding:
+and different orders of pure `AND` conditions and `OR` branches in single-table
+SELECTs. Direct-table JOIN SELECTs use the same predicate compatibility when
+their complete projection, FROM/JOIN/ON clauses, sorting and pagination are
+otherwise exact. This is built in and requires neither a rule nor a new
+recording. Source can interpolate literal values into text SQL while target
+retains its normal `?` binding:
 
 ```sql
 -- Recorded source text
