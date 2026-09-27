@@ -110,6 +110,13 @@ SELECT. The complete AST outside eligible lists stays exact, including
 functions, JSON paths, projections, tables, correlations, operators, boolean
 structure and non-list values; joins and other subquery forms remain strict.
 
+A separate bounded full-query fallback permits the same list reordering inside
+supported `UNION ALL` read trees, including JOIN predicates, derived tables,
+inline window expressions, and computed projections. It retains exact UNION
+branch order, JOIN conditions, every non-list expression, sorting, pagination,
+types, NULL positions, and duplicate counts. UNION DISTINCT, other set
+operations, locks, writes, CTEs, and unsupported subquery forms remain strict.
+
 Flat tuple IN/NOT IN also permits whole-row reordering, including
 `(user_id,namespace,name) IN ((?,?,?),(?,?,?))` versus source text literals.
 Column order, tuple width, component values/types, NULL positions, value pairing

@@ -1,8 +1,9 @@
 //! Replay-local SQL compilation cache. Only immutable parsing/normalization is
 //! cached; identity, policy, runtime parameters and exchange availability are not.
 use super::{
-    bound_value, nested_in,
+    bound_value,
     predicate::{Key, Template},
+    query_in,
 };
 use crate::mysql::sql::{Token, projection::DirectSelect, tokens};
 use crate::replay::mysql::RecordedMysqlValue;
@@ -28,7 +29,7 @@ pub(in crate::replay::mysql) struct SqlCache {
 pub(in crate::replay::mysql) struct CompiledSql {
     tokens: Vec<Token>,
     predicate: Option<Template>,
-    nested_in: Option<nested_in::Template>,
+    query_in: Option<query_in::Template>,
     projection: Option<DirectSelect>,
     projection_predicate: Option<Template>,
     param_count: usize,
@@ -46,7 +47,7 @@ pub(in crate::replay::mysql) struct BoundSql {
 #[derive(Debug)]
 enum SemanticKey {
     Predicate(Key),
-    NestedIn(nested_in::Key),
+    QueryIn(query_in::Key),
 }
 
 impl SqlCache {
@@ -84,9 +85,9 @@ impl CompiledSql {
             .filter(|tokens| tokens.len() <= 4096)
             .unwrap_or_default();
         let mut predicate = Template::parse(&tokens, true);
-        let nested_in = predicate
+        let query_in = predicate
             .is_none()
-            .then(|| nested_in::Template::parse(&tokens))
+            .then(|| query_in::Template::parse(&tokens))
             .flatten();
         let projection = predicate
             .as_ref()
@@ -119,7 +120,7 @@ impl CompiledSql {
             param_count: tokens.iter().filter(|t| **t == Token::Placeholder).count(),
             tokens,
             predicate,
-            nested_in,
+            query_in,
             projection,
             projection_predicate,
             constants: OnceLock::new(),
@@ -180,7 +181,7 @@ impl CompiledSql {
         let key = if let Some(template) = &self.predicate {
             SemanticKey::Predicate(template.bind(&bound)?)
         } else {
-            SemanticKey::NestedIn(self.nested_in.as_ref()?.bind(&bound)?)
+            SemanticKey::QueryIn(self.query_in.as_ref()?.bind(&bound)?)
         };
         let mut projection = self.projection.clone();
         let projection_key = if let Some(select) = &mut projection {
@@ -205,7 +206,7 @@ impl BoundSql {
             (SemanticKey::Predicate(actual), SemanticKey::Predicate(recorded)) => {
                 actual == recorded || metadata && actual.metadata_matches(recorded)
             }
-            (SemanticKey::NestedIn(actual), SemanticKey::NestedIn(recorded)) => {
+            (SemanticKey::QueryIn(actual), SemanticKey::QueryIn(recorded)) => {
                 actual == recorded || metadata && actual.metadata_matches(recorded)
             }
             _ => false,

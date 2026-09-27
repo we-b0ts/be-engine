@@ -308,9 +308,10 @@ explicit repository-wide audit.
   `replay/mysql/sql_match/predicate` uses sqlparser's MySQL grammar and owns
   bounded pure-predicate equivalence; `sql_match/cache` owns Replay-local
   compiled templates, constant normalization and fresh parameter binding.
-  `sql_match/nested_in` owns the narrow full-AST fallback for list-order
-  compatibility inside correlated `EXISTS` branches while keeping every
-  surrounding query node strict.
+  `sql_match/query_in` owns bounded full-AST list-order compatibility inside
+  correlated `EXISTS` branches and supported `UNION ALL` read trees with joins,
+  derived tables, inline windows, and computed projections. Every surrounding
+  query node remains strict.
   `sql_match/predicate/in_list` owns scalar/flat-tuple list shapes, per-component
   type checks, atomic multiset normalization and bounded partial-row PREPARE
   matching. Tuple fields are never normalized as independent sets.
