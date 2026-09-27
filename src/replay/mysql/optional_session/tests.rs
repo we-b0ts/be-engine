@@ -339,15 +339,17 @@ fn read_effect_accepts_a_batched_read_above_the_legacy_token_cap() {
     // A batched read that inlines a large id set stays read-only. Otherwise the
     // session cleanup allowance for such a request would depend on how wide the
     // source rendered its `IN (...)`, which is not a property of the statement.
-    // The statement stays inside the 64 KiB size bound.
-    let ids = (0..3000)
+    // This matches the scale of recorded history reads while staying inside
+    // the bounded classifier budget.
+    let ids = (0..16_148)
         .map(|id| id.to_string())
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(
         "SELECT id FROM subtask_contexts WHERE subtask_contexts.subtask_id IN ({ids}) ORDER BY subtask_contexts.id ASC"
     );
-    assert!(sql.len() < 64 * 1024, "size {}", sql.len());
+    assert!(sql.len() > 64 * 1024, "size {}", sql.len());
+    assert!(sql.len() < 1024 * 1024, "size {}", sql.len());
     assert_eq!(super::read::classify(&sql), super::read::Effect::ReadOnly);
 }
 

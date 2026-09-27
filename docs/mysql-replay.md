@@ -58,8 +58,9 @@ before/after transaction flags, and complete successful responses. Successful
 PREPARE preserves the read proof because it does not execute SQL. The rollback
 must confirm transaction completion without chaining or further results.
 
-The independent SQL classifier parses one bounded query and excludes common
-locking and side-effect forms across its full token stream. It does not maintain
+The independent SQL classifier parses one bounded query (at most 1 MiB and
+32,768 tokens) and excludes common locking and side-effect forms across its
+full token stream. It does not maintain
 a whitelist of SELECT expressions or functions: JSON operations, COALESCE,
 CASE, aggregates, joins, CTEs, scalar/IN/EXISTS subqueries and window expressions
 use the same check. Literal strings, ordinary comments and quoted keywords do
@@ -283,9 +284,14 @@ strict: projections, functions, JSON paths, tables, correlations, boolean
 structure, operators and every non-list value must be identical. This covers
 source collections whose order changes inside access-control `EXISTS` checks
 without treating the surrounding complex predicate as generally equivalent.
-Other function/arithmetic predicate changes, subquery forms, tuple comparisons
-outside IN, joins, grouping, locks, writes and computed sorting retain their
-existing strict matching behavior. Wildcard SELECTs can match
+A second full-AST fallback supports the same list reordering in supported
+`UNION ALL` read trees, including direct joins, derived tables, inline window
+expressions and computed projection expressions. Every node outside eligible
+lists remains exact: UNION branch order, JOIN conditions, projections, windows,
+predicates, sorting and pagination cannot change. Only `UNION ALL` is admitted;
+UNION DISTINCT and other set operations remain strict. Other function/arithmetic
+predicate changes, unsupported subquery forms, tuple comparisons outside IN,
+locks and writes retain their existing strict matching behavior. Wildcard SELECTs can match
 when their projection remains the same; supported direct-column projections
 can also use the column compatibility above.
 

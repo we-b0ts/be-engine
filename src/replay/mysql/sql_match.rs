@@ -3,8 +3,8 @@ use super::*;
 use crate::mysql::sql::{Token, number, tokens};
 
 pub(super) mod cache;
-mod nested_in;
 mod predicate;
+mod query_in;
 
 pub(in crate::replay) fn materialize(
     sql: &str,

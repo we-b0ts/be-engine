@@ -2,8 +2,8 @@ use super::*;
 use crate::replay::mysql::{mysql_json, mysql_null};
 use serde_json::json;
 
-mod nested_in_tests;
 mod or_tests;
+mod query_in_tests;
 mod truth_tests;
 mod tuple_tests;
 

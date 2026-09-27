@@ -110,6 +110,13 @@ SELECT. The complete AST outside eligible lists stays exact, including
 functions, JSON paths, projections, tables, correlations, operators, boolean
 structure and non-list values; joins and other subquery forms remain strict.
 
+A separate bounded full-query fallback permits the same list reordering inside
+supported `UNION ALL` read trees, including JOIN predicates, derived tables,
+inline window expressions, and computed projections. It retains exact UNION
+branch order, JOIN conditions, every non-list expression, sorting, pagination,
+types, NULL positions, and duplicate counts. UNION DISTINCT, other set
+operations, locks, writes, CTEs, and unsupported subquery forms remain strict.
+
 Flat tuple IN/NOT IN also permits whole-row reordering, including
 `(user_id,namespace,name) IN ((?,?,?),(?,?,?))` versus source text literals.
 Column order, tuple width, component values/types, NULL positions, value pairing
@@ -158,9 +165,12 @@ pooling; do not reproduce short source connections for ordinary GET/MGET calls.
 Redis RESP2 `SUBSCRIBE`, `PSUBSCRIBE`, and `SSUBSCRIBE` evidence is replayable
 only when one command argument produced one exact three-element subscription
 confirmation (or an ordinary Redis error). Replay returns that recorded
-confirmation and leaves the connection open. Multiple subscription arguments,
-asynchronous Pub/Sub messages, unsubscribe commands, and RESP3 push frames are
-unsupported and remain dirty.
+confirmation and leaves the connection open. Recorder transparently forwards a
+subsequent well-formed RESP2 `message`, `pmessage`, or `smessage` only when its
+channel or pattern matches the active subscription; these process notifications
+do not become semantic Replay evidence, and Replay does not synthesize them.
+Malformed or unbound pushes remain dirty. Multiple subscription arguments,
+unsubscribe commands, and RESP3 push frames are unsupported and remain dirty.
 
 Match Case evidence before run-level Global evidence. Consume ordinary
 exchanges once. A marked Redis background cache-snapshot seed is the narrow

@@ -1,4 +1,4 @@
-//! Narrow semantic matching for unordered IN lists inside correlated EXISTS.
+//! Bounded full-AST matching for unordered IN lists in supported complex queries.
 //! The complete query AST stays exact; only scalar/flat-tuple list order changes.
 use crate::mysql::sql::{Token, render};
 use sqlparser::{
@@ -49,9 +49,12 @@ impl Template {
         let Statement::Query(query) = statements.pop()? else {
             return None;
         };
-        validate_query_tree(&query)?;
-        let selection = select(&query)?.selection.as_ref()?;
-        has_nested_in_anchor(selection, false).then_some(Self { query })
+        let nested_exists = validate_nested_query_tree(&query).is_some()
+            && select(&query)
+                .and_then(|select| select.selection.as_ref())
+                .is_some_and(|selection| has_nested_in_anchor(selection, false));
+        let union_all = validate_union_query_tree(&query).is_some();
+        (nested_exists || union_all).then_some(Self { query })
     }
 
     pub(super) fn bind(&self, tokens: &[Token]) -> Option<Key> {
@@ -115,7 +118,7 @@ fn bounded_parentheses(tokens: &[Token]) -> bool {
     depth == 0
 }
 
-fn validate_query_tree(query: &Query) -> Option<()> {
+fn validate_nested_query_tree(query: &Query) -> Option<()> {
     #[derive(Default)]
     struct Validator {
         queries: usize,
@@ -126,7 +129,7 @@ fn validate_query_tree(query: &Query) -> Option<()> {
 
         fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
             self.queries += 1;
-            if validate_select(query).is_none() {
+            if validate_nested_select(query).is_none() {
                 return ControlFlow::Break(());
             }
             ControlFlow::Continue(())
@@ -148,7 +151,7 @@ fn validate_query_tree(query: &Query) -> Option<()> {
     (validator.queries == validator.exists + 1).then_some(())
 }
 
-fn validate_select(query: &Query) -> Option<&Select> {
+fn validate_nested_select(query: &Query) -> Option<&Select> {
     if query.with.is_some()
         || query.order_by.is_some()
         || query.limit_clause.is_some()
@@ -204,6 +207,105 @@ fn validate_select(query: &Query) -> Option<&Select> {
         return None;
     }
     Some(select)
+}
+
+fn validate_union_query_tree(query: &Query) -> Option<()> {
+    #[derive(Default)]
+    struct Validator {
+        union_all: bool,
+    }
+    impl Visitor for Validator {
+        type Break = ();
+
+        fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
+            if validate_union_query(query).is_none() {
+                return ControlFlow::Break(());
+            }
+            self.union_all |= contains_union_all(&query.body);
+            ControlFlow::Continue(())
+        }
+
+        fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<Self::Break> {
+            if matches!(
+                expr,
+                Expr::Exists { .. } | Expr::Subquery(_) | Expr::InSubquery { .. }
+            ) {
+                return ControlFlow::Break(());
+            }
+            ControlFlow::Continue(())
+        }
+    }
+    let mut validator = Validator::default();
+    query.visit(&mut validator).is_continue().then_some(())?;
+    validator.union_all.then_some(())
+}
+
+fn validate_union_query(query: &Query) -> Option<()> {
+    if query.with.is_some()
+        || !query.locks.is_empty()
+        || query.fetch.is_some()
+        || query.for_clause.is_some()
+        || query.settings.is_some()
+        || query.format_clause.is_some()
+        || !query.pipe_operators.is_empty()
+    {
+        return None;
+    }
+    validate_union_body(&query.body)
+}
+
+fn validate_union_body(body: &SetExpr) -> Option<()> {
+    match body {
+        SetExpr::Select(select) => validate_union_select(select),
+        SetExpr::Query(query) => validate_union_query(query),
+        SetExpr::SetOperation {
+            left,
+            op: sqlparser::ast::SetOperator::Union,
+            set_quantifier: sqlparser::ast::SetQuantifier::All,
+            right,
+        } => {
+            validate_union_body(left)?;
+            validate_union_body(right)
+        }
+        _ => None,
+    }
+}
+
+fn validate_union_select(select: &Select) -> Option<()> {
+    let empty_group =
+        matches!(&select.group_by, GroupByExpr::Expressions(items, _) if items.is_empty());
+    (select.flavor == SelectFlavor::Standard
+        && select.optimizer_hints.is_empty()
+        && select.distinct.is_none()
+        && select.select_modifiers.is_none()
+        && select.top.is_none()
+        && select.exclude.is_none()
+        && select.into.is_none()
+        && select.lateral_views.is_empty()
+        && select.prewhere.is_none()
+        && select.connect_by.is_empty()
+        && empty_group
+        && select.cluster_by.is_empty()
+        && select.distribute_by.is_empty()
+        && select.sort_by.is_empty()
+        && select.having.is_none()
+        && select.named_window.is_empty()
+        && select.qualify.is_none()
+        && select.value_table_mode.is_none()
+        && !select.projection.is_empty())
+    .then_some(())
+}
+
+fn contains_union_all(body: &SetExpr) -> bool {
+    match body {
+        SetExpr::Query(query) => contains_union_all(&query.body),
+        SetExpr::SetOperation {
+            op: sqlparser::ast::SetOperator::Union,
+            set_quantifier: sqlparser::ast::SetQuantifier::All,
+            ..
+        } => true,
+        _ => false,
+    }
 }
 
 fn select(query: &Query) -> Option<&Select> {

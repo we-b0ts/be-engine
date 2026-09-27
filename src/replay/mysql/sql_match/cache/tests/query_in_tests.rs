@@ -23,6 +23,40 @@ fn nested_query(ids: &str, entities: &str, roles: &str) -> String {
     )
 }
 
+fn teams_union_query(
+    native_restricted: &str,
+    visible_namespaces: &str,
+    shared_restricted: &str,
+    entity_ids: &str,
+    excluded_namespaces: &str,
+) -> String {
+    format!(
+        "SELECT anon_1.team_id, anon_1.restricted_guest_access \
+         FROM (SELECT combined_teams.team_id, combined_teams.restricted_guest_access, \
+           row_number() OVER (PARTITION BY combined_teams.team_id \
+             ORDER BY combined_teams.access_rank ASC, combined_teams.team_id DESC) AS access_row_number \
+           FROM (SELECT kinds.id AS team_id, \
+                    kinds.namespace IN ({native_restricted}) AS restricted_guest_access, \
+                    0 AS access_rank \
+                 FROM kinds \
+                 WHERE kinds.kind = 'Team' AND kinds.namespace IN ({visible_namespaces}) \
+                 UNION ALL \
+                 SELECT kinds.id AS team_id, \
+                    namespace.name IN ({shared_restricted}) AS restricted_guest_access, \
+                    2 AS access_rank \
+                 FROM kinds \
+                 INNER JOIN resource_members \
+                   ON resource_members.resource_id = kinds.id \
+                  AND resource_members.resource_type IN ('Team','TEAM') \
+                 INNER JOIN namespace \
+                   ON CAST(resource_members.entity_id AS SIGNED INTEGER) = namespace.id \
+                 WHERE resource_members.entity_id IN ({entity_ids}) \
+                   AND kinds.namespace NOT IN ({excluded_namespaces})) AS combined_teams) AS anon_1 \
+         WHERE anon_1.access_row_number = 1 \
+         ORDER BY anon_1.team_id DESC LIMIT 0, 100"
+    )
+}
+
 #[test]
 fn nested_exists_in_lists_match_as_atomic_multisets() {
     let source = nested_query(
@@ -204,6 +238,95 @@ fn nested_exists_templates_bind_prepared_values_and_metadata() {
     let mut mixed = params;
     mixed[4] = mysql_json("integer", json!(9));
     assert!(target.bind("COM_STMT_EXECUTE", Some(&mixed)).is_none());
+}
+
+#[test]
+fn union_join_and_projection_in_lists_match_as_atomic_multisets() {
+    let source = teams_union_query(
+        "'restricted-b','restricted-a','restricted-a'",
+        "'visible-b','visible-a'",
+        "'restricted-b','restricted-a','restricted-a'",
+        "'20','10'",
+        "'visible-b','visible-a'",
+    );
+    let reordered = teams_union_query(
+        "'restricted-a','restricted-b','restricted-a'",
+        "'visible-a','visible-b'",
+        "'restricted-a','restricted-a','restricted-b'",
+        "'10','20'",
+        "'visible-a','visible-b'",
+    );
+    assert!(equal(&source, &reordered));
+
+    let mut cache = SqlCache::default();
+    let recorded = cache.get(&source).bind("COM_QUERY", None).unwrap();
+    let prepared = cache.get(&teams_union_query("?,?,?", "?,?", "?,?,?", "?,?", "?,?"));
+    assert!(prepared.metadata().unwrap().matches(&recorded, true));
+    let mut params = [
+        "restricted-a",
+        "restricted-b",
+        "restricted-a",
+        "visible-a",
+        "visible-b",
+        "restricted-a",
+        "restricted-a",
+        "restricted-b",
+        "10",
+        "20",
+        "visible-a",
+        "visible-b",
+    ]
+    .map(|value| mysql_json("string", json!(value)));
+    assert!(
+        prepared
+            .bind("COM_STMT_EXECUTE", Some(&params))
+            .unwrap()
+            .matches(&recorded, false)
+    );
+    params[7] = mysql_json("string", json!("restricted-c"));
+    assert!(
+        !prepared
+            .bind("COM_STMT_EXECUTE", Some(&params))
+            .unwrap()
+            .matches(&recorded, false)
+    );
+}
+
+#[test]
+fn union_in_matching_keeps_every_other_query_node_strict() {
+    let source = teams_union_query(
+        "'restricted-b','restricted-a','restricted-a'",
+        "'visible-b','visible-a'",
+        "'restricted-b','restricted-a','restricted-a'",
+        "'20','10'",
+        "'visible-b','visible-a'",
+    );
+    for changed in [
+        source.replacen("UNION ALL", "UNION", 1),
+        source.replacen(
+            "resource_members.resource_id = kinds.id",
+            "resource_members.resource_id = kinds.user_id",
+            1,
+        ),
+        source.replacen(
+            "kinds.namespace IN ('restricted-b','restricted-a','restricted-a')",
+            "kinds.namespace NOT IN ('restricted-b','restricted-a','restricted-a')",
+            1,
+        ),
+        source.replacen(
+            "ORDER BY anon_1.team_id DESC",
+            "ORDER BY anon_1.team_id ASC",
+            1,
+        ),
+        source.replacen("LIMIT 0, 100", "LIMIT 0, 99", 1),
+        source.replacen(
+            "namespace.name IN ('restricted-b','restricted-a','restricted-a')",
+            "namespace.name IN ('restricted-b','restricted-a')",
+            1,
+        ),
+    ] {
+        assert!(!equal(&source, &changed), "{changed}");
+    }
 }
 
 #[test]

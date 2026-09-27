@@ -4,6 +4,9 @@
 use crate::mysql::sql::{self, Token};
 use sqlparser::{ast::Statement, dialect::MySqlDialect, parser::Parser};
 
+const MAX_SQL_BYTES: usize = 1024 * 1024;
+const MAX_TOKENS: usize = 32 * 1024;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Effect {
     ReadOnly,
@@ -12,16 +15,16 @@ pub(super) enum Effect {
 }
 
 pub(super) fn classify(sql: &str) -> Effect {
-    if sql.len() > 64 * 1024 {
+    if sql.len() > MAX_SQL_BYTES {
         return Effect::Unknown;
     }
     // The scanner bounds the input and rejects executable comments/hints.
     // It separates strings and quoted keywords from executable SQL tokens.
-    // The token cap stays below the 64 KiB size bound above; a batched read
-    // that inlines a large id set (for example a wide `IN (...)`) must still
-    // be provable as read-only, or its session cleanup can never be allowed.
+    // A batched read that inlines a large id set (for example a wide `IN (...)`)
+    // must still be provable as read-only, or its session cleanup can never be
+    // allowed. Both limits remain explicit so classification stays bounded.
     let Some((tokens, spans)) =
-        sql::tokens_with_spans(sql).filter(|(tokens, _)| tokens.len() <= 8192)
+        sql::tokens_with_spans(sql).filter(|(tokens, _)| tokens.len() <= MAX_TOKENS)
     else {
         return Effect::Unknown;
     };
