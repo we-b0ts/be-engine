@@ -56,7 +56,7 @@ fn inventory_rewrite_uncached(context: RewriteContext) -> Result<RewriteInventor
                 initialized: true,
                 workflow: Some(action::workflow_view(&state)),
                 api_inventory: Some(inventory::details(&state)),
-                process_output_inventory: Some(super::process_outputs::details(&state)),
+                process_output_inventory: super::process_outputs::optional_details(&state),
                 pending: details.pending(),
                 details,
                 workers: super::worker::scheduler::inventory(&target_root, &state),
