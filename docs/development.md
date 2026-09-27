@@ -3022,9 +3022,13 @@ it does not bypass unsafe or truncated capture validation.
 Redis Pub/Sub support is intentionally bounded to a single RESP2 subscription
 argument for `SUBSCRIBE`, `PSUBSCRIBE`, or `SSUBSCRIBE`. Recorder accepts only
 the exact three-element subscription confirmation (or an ordinary Redis error),
-and Replay returns that frame while keeping the connection open. Multiple
-subscription arguments, asynchronous message delivery, unsubscribe commands,
-and RESP3 push frames remain unsupported.
+then tracks that active subscription and transparently forwards matching RESP2
+`message`, `pmessage`, or `smessage` pushes without treating them as ordinary
+request responses. These process notifications are not semantic Replay evidence;
+Replay returns the recorded subscription confirmation and keeps the connection
+open without synthesizing pushes. A malformed push or one that does not match an
+active subscription remains a capture error. Multiple subscription arguments,
+unsubscribe commands, and RESP3 push frames remain unsupported.
 
 Case-owned Memcached matching treats recorded physical connections as source
 lanes, not as a required one-to-one connection topology. One target connection

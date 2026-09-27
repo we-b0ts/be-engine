@@ -20,9 +20,11 @@ use crate::recorder::{RecorderEvent, RedisConnectionEvent, RedisExchangeEvent, c
 
 use crate::redis::access::classify_command;
 use crate::redis::{
-    BufferedReader, RedisCommand, RedisFrameKind, frame_kind, is_subscription_command, read_frame,
-    redis_command, validate_subscription_confirmation,
+    BufferedReader, RedisCommand, RedisFrameKind, frame_kind, is_subscription_command,
+    parse_pubsub_push, read_frame, redis_command, validate_subscription_confirmation,
 };
+
+mod pubsub;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectionContext {
@@ -38,6 +40,7 @@ struct RedisSession {
     resp_version: u8,
     database: i64,
     username: Option<String>,
+    subscriptions: pubsub::Subscriptions,
 }
 
 #[derive(Debug)]
@@ -55,12 +58,15 @@ struct PendingRedisExchange {
     started: Instant,
 }
 
+struct SequencedRedisOutput {
+    sequence: u64,
+    bytes: Bytes,
+    completion: Option<(PendingRedisExchange, RedisFrameKind)>,
+}
+
 enum RedisOutput {
-    Sequenced {
-        sequence: u64,
-        bytes: Bytes,
-        completion: Option<(PendingRedisExchange, RedisFrameKind)>,
-    },
+    Sequenced(Box<SequencedRedisOutput>),
+    PubSubPush { bytes: Bytes },
 }
 
 pub(crate) async fn handle_connected(
@@ -75,6 +81,7 @@ pub(crate) async fn handle_connected(
         resp_version: 2,
         database: 0,
         username: None,
+        subscriptions: pubsub::Subscriptions::default(),
     }));
     let pending = Arc::new(Mutex::new(VecDeque::<PendingRedisExchange>::new()));
     let capture_health = Arc::new(ConnectionCaptureHealth::new(
@@ -212,13 +219,13 @@ pub(crate) async fn handle_connected(
                     )
                     .await;
                 c2s_output
-                    .send(RedisOutput::Sequenced {
+                    .send(RedisOutput::Sequenced(Box::new(SequencedRedisOutput {
                         sequence,
                         bytes: Bytes::from_static(
                             b"-READONLY request blocked by recording access policy\r\n",
                         ),
                         completion: None,
-                    })
+                    })))
                     .map_err(|_| anyhow!("Redis client response writer closed"))?;
                 bytes += frame.raw.len() as u64;
                 continue;
@@ -258,11 +265,11 @@ pub(crate) async fn handle_connected(
                         let kind = frame_kind(&response)
                             .context("cached Redis response is not a complete RESP2 frame")?;
                         c2s_output
-                            .send(RedisOutput::Sequenced {
+                            .send(RedisOutput::Sequenced(Box::new(SequencedRedisOutput {
                                 sequence,
                                 bytes: response,
                                 completion: Some((pending_exchange, kind)),
-                            })
+                            })))
                             .map_err(|_| anyhow!("Redis client response writer closed"))?;
                         bytes += frame.raw.len() as u64;
                         continue;
@@ -273,11 +280,11 @@ pub(crate) async fn handle_connected(
                         let kind = frame_kind(&response)
                             .context("shared Redis response is not a complete RESP2 frame")?;
                         c2s_output
-                            .send(RedisOutput::Sequenced {
+                            .send(RedisOutput::Sequenced(Box::new(SequencedRedisOutput {
                                 sequence,
                                 bytes: response,
                                 completion: Some((pending_exchange, kind)),
-                            })
+                            })))
                             .map_err(|_| anyhow!("Redis client response writer closed"))?;
                         bytes += frame.raw.len() as u64;
                         continue;
@@ -341,6 +348,59 @@ pub(crate) async fn handle_connected(
                 .await?;
                 break;
             }
+            let subscriptions_active = s2c_session.lock().await.subscriptions.is_active();
+            match parse_pubsub_push(&frame.raw) {
+                Ok(Some(push))
+                    if subscriptions_active
+                        && s2c_session.lock().await.subscriptions.accepts(&push) =>
+                {
+                    s2c_output
+                        .send(RedisOutput::PubSubPush {
+                            bytes: frame.raw.clone(),
+                        })
+                        .map_err(|_| anyhow!("Redis client response writer closed"))?;
+                    bytes += frame.raw.len() as u64;
+                    continue;
+                }
+                Ok(Some(_)) if subscriptions_active => {
+                    s2c_capture_health.activate(
+                        &s2c_state,
+                        "Redis Pub/Sub push did not match an active subscription; switched to raw forwarding"
+                            .to_string(),
+                    );
+                    let mut writer = s2c_client_write.lock().await;
+                    bytes += forward_buffer_and_copy(
+                        &mut reader,
+                        &mut *writer,
+                        Some(&frame.raw),
+                        &s2c_capture_health,
+                        &s2c_state,
+                        RawTrafficDirection::ServerToClient,
+                    )
+                    .await?;
+                    break;
+                }
+                Err(error) if subscriptions_active => {
+                    s2c_capture_health.activate(
+                        &s2c_state,
+                        format!(
+                            "Redis Pub/Sub push parse failed; switched to raw forwarding: {error}"
+                        ),
+                    );
+                    let mut writer = s2c_client_write.lock().await;
+                    bytes += forward_buffer_and_copy(
+                        &mut reader,
+                        &mut *writer,
+                        Some(&frame.raw),
+                        &s2c_capture_health,
+                        &s2c_state,
+                        RawTrafficDirection::ServerToClient,
+                    )
+                    .await?;
+                    break;
+                }
+                Ok(Some(_)) | Ok(None) | Err(_) => {}
+            }
             let Some(mut exchange) = s2c_pending.lock().await.pop_front() else {
                 s2c_capture_health.activate(
                     &s2c_state,
@@ -372,14 +432,14 @@ pub(crate) async fn handle_connected(
                     .await?;
             }
             if !response_is_error {
-                apply_successful_setup(&s2c_session, &exchange.command).await;
+                apply_successful_setup(&s2c_session, &exchange.command, &frame.raw).await;
             }
             s2c_output
-                .send(RedisOutput::Sequenced {
+                .send(RedisOutput::Sequenced(Box::new(SequencedRedisOutput {
                     sequence: response_sequence,
                     bytes: frame.raw.clone(),
                     completion: Some((exchange, frame.kind)),
-                })
+                })))
                 .map_err(|_| anyhow!("Redis client response writer closed"))?;
             bytes += frame.raw.len() as u64;
         }
@@ -491,15 +551,17 @@ async fn run_ordered_writer(
     let mut next_sequence = 1_u64;
     let mut buffered =
         BTreeMap::<u64, (Bytes, Option<(PendingRedisExchange, RedisFrameKind)>)>::new();
+    let mut deferred_pushes = VecDeque::<Bytes>::new();
     let mut bytes = 0_u64;
     let mut client_open = true;
     while let Some(output) = output_rx.recv().await {
         match output {
-            RedisOutput::Sequenced {
-                sequence,
-                bytes: payload,
-                completion,
-            } => {
+            RedisOutput::Sequenced(output) => {
+                let SequencedRedisOutput {
+                    sequence,
+                    bytes: payload,
+                    completion,
+                } = *output;
                 buffered.insert(sequence, (payload, completion));
                 while let Some((payload, completion)) = buffered.remove(&next_sequence) {
                     if client_open && !termination.client_ended_first() {
@@ -553,6 +615,32 @@ async fn run_ordered_writer(
                         .await?;
                     }
                     next_sequence += 1;
+                }
+                if buffered.is_empty() {
+                    while let Some(push) = deferred_pushes.pop_front() {
+                        pubsub::write_push(
+                            &client_write,
+                            &termination,
+                            &mut client_open,
+                            &mut bytes,
+                            &push,
+                        )
+                        .await?;
+                    }
+                }
+            }
+            RedisOutput::PubSubPush { bytes: payload } => {
+                if buffered.is_empty() {
+                    pubsub::write_push(
+                        &client_write,
+                        &termination,
+                        &mut client_open,
+                        &mut bytes,
+                        &payload,
+                    )
+                    .await?;
+                } else {
+                    deferred_pushes.push_back(payload);
                 }
             }
         }
@@ -828,7 +916,11 @@ fn matches_ignore_ascii_case(value: &[u8], candidates: &[&[u8]]) -> bool {
         .any(|candidate| value.eq_ignore_ascii_case(candidate))
 }
 
-async fn apply_successful_setup(session: &Arc<Mutex<RedisSession>>, command: &RedisCommand) {
+async fn apply_successful_setup(
+    session: &Arc<Mutex<RedisSession>>,
+    command: &RedisCommand,
+    response: &[u8],
+) {
     let mut session = session.lock().await;
     match command.name.as_str() {
         "HELLO" => {
@@ -869,6 +961,9 @@ async fn apply_successful_setup(session: &Arc<Mutex<RedisSession>>, command: &Re
             {
                 session.database = database;
             }
+        }
+        "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" => {
+            session.subscriptions.record_confirmation(command, response);
         }
         _ => {}
     }

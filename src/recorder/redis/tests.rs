@@ -109,6 +109,81 @@ async fn single_subscription_confirmation_is_recorded_as_replay_safe() {
 }
 
 #[tokio::test]
+async fn subscribed_push_is_forwarded_without_degrading_capture() {
+    let (state, _temp) = test_state(RecordingAccessPolicy::Unrestricted).await;
+    let (mut client, proxy_client) = tcp_pair().await;
+    let (mut upstream, proxy_upstream) = tcp_pair().await;
+    let upstream_addr = upstream.peer_addr().unwrap();
+    let handler = spawn_handler(proxy_client, proxy_upstream, state.clone(), upstream_addr);
+
+    let request = b"*2\r\n$9\r\nSUBSCRIBE\r\n$6\r\nevents\r\n";
+    client.write_all(request).await.unwrap();
+    let mut received_request = vec![0_u8; request.len()];
+    upstream.read_exact(&mut received_request).await.unwrap();
+    assert_eq!(received_request, request);
+
+    let confirmation = b"*3\r\n$9\r\nsubscribe\r\n$6\r\nevents\r\n:1\r\n";
+    let push = b"*3\r\n$7\r\nmessage\r\n$6\r\nevents\r\n$7\r\npayload\r\n";
+    upstream.write_all(confirmation).await.unwrap();
+    upstream.write_all(push).await.unwrap();
+    let mut received = vec![0_u8; confirmation.len() + push.len()];
+    client.read_exact(&mut received).await.unwrap();
+    assert_eq!(
+        received,
+        [confirmation.as_slice(), push.as_slice()].concat()
+    );
+
+    client.shutdown().await.unwrap();
+    drop(client);
+    let mut eof = [0_u8; 1];
+    assert_eq!(upstream.read(&mut eof).await.unwrap(), 0);
+    drop(upstream);
+    tokio::time::timeout(Duration::from_secs(1), handler)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    state.recorder().flush_traffic().await.unwrap();
+    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+        .await
+        .unwrap();
+    assert!(!traffic.contains("proxy_error"));
+}
+
+#[tokio::test]
+async fn unsubscribed_array_that_looks_like_a_push_remains_a_response() {
+    let (state, _temp) = test_state(RecordingAccessPolicy::Unrestricted).await;
+    let (mut client, proxy_client) = tcp_pair().await;
+    let (mut upstream, proxy_upstream) = tcp_pair().await;
+    let upstream_addr = upstream.peer_addr().unwrap();
+    let handler = spawn_handler(proxy_client, proxy_upstream, state, upstream_addr);
+
+    let request = b"*4\r\n$6\r\nLRANGE\r\n$3\r\nkey\r\n$1\r\n0\r\n$2\r\n-1\r\n";
+    client.write_all(request).await.unwrap();
+    let mut received_request = vec![0_u8; request.len()];
+    upstream.read_exact(&mut received_request).await.unwrap();
+    assert_eq!(received_request, request);
+
+    let response = b"*3\r\n$7\r\nmessage\r\n$6\r\nevents\r\n$7\r\npayload\r\n";
+    upstream.write_all(response).await.unwrap();
+    let mut received_response = vec![0_u8; response.len()];
+    client.read_exact(&mut received_response).await.unwrap();
+    assert_eq!(received_response, response);
+
+    client.shutdown().await.unwrap();
+    drop(client);
+    let mut eof = [0_u8; 1];
+    assert_eq!(upstream.read(&mut eof).await.unwrap(), 0);
+    drop(upstream);
+    tokio::time::timeout(Duration::from_secs(1), handler)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
 async fn blocked_write_returns_ordered_error_without_reaching_upstream() {
     let (state, _temp) = test_state(RecordingAccessPolicy::BlockKnownWrites).await;
     let (mut client, proxy_client) = tcp_pair().await;

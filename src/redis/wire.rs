@@ -27,6 +27,19 @@ pub(crate) struct RedisCommand {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RedisSubscriptionKind {
+    Channel,
+    Pattern,
+    ShardChannel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RedisPubSubPush {
+    pub(crate) subscription_kind: RedisSubscriptionKind,
+    pub(crate) subject: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RedisFrameKind {
     SimpleString,
     Error,
@@ -204,6 +217,63 @@ pub(crate) fn validate_subscription_confirmation(command: &RedisCommand, raw: &[
     Ok(())
 }
 
+pub(crate) fn parse_pubsub_push(raw: &[u8]) -> Result<Option<RedisPubSubPush>> {
+    let raw = Bytes::copy_from_slice(raw);
+    let Some((frame, consumed)) =
+        redis_protocol::resp2::decode::decode_bytes(&raw).map_err(|err| anyhow!(err))?
+    else {
+        return Err(anyhow!("incomplete Redis Pub/Sub push"));
+    };
+    if consumed != raw.len() {
+        return Err(anyhow!("Redis Pub/Sub push contains trailing bytes"));
+    }
+    let Resp2Frame::Array(values) = frame else {
+        return Ok(None);
+    };
+    let Some(kind) = values.first().and_then(resp2_bytes_ref) else {
+        return Ok(None);
+    };
+    let (subscription_kind, subject_index, expected_len) = if kind.eq_ignore_ascii_case(b"message")
+    {
+        (RedisSubscriptionKind::Channel, 1, 3)
+    } else if kind.eq_ignore_ascii_case(b"pmessage") {
+        (RedisSubscriptionKind::Pattern, 1, 4)
+    } else if kind.eq_ignore_ascii_case(b"smessage") {
+        (RedisSubscriptionKind::ShardChannel, 1, 3)
+    } else {
+        return Ok(None);
+    };
+    if values.len() != expected_len {
+        return Err(anyhow!(
+            "Redis Pub/Sub push must contain {expected_len} elements"
+        ));
+    }
+    let Some(subject) = values.get(subject_index).and_then(resp2_bytes_ref) else {
+        return Err(anyhow!(
+            "Redis Pub/Sub push subscription subject must be a string"
+        ));
+    };
+    let channel_index = if subscription_kind == RedisSubscriptionKind::Pattern {
+        2
+    } else {
+        1
+    };
+    if values
+        .get(channel_index)
+        .and_then(resp2_bytes_ref)
+        .is_none()
+        || values.last().and_then(resp2_bytes_ref).is_none()
+    {
+        return Err(anyhow!(
+            "Redis Pub/Sub push channel and payload must be strings"
+        ));
+    }
+    Ok(Some(RedisPubSubPush {
+        subscription_kind,
+        subject: subject.to_vec(),
+    }))
+}
+
 fn resp2_bytes(frame: Resp2Frame) -> Option<Vec<u8>> {
     match frame {
         Resp2Frame::BulkString(value) | Resp2Frame::SimpleString(value) => Some(value.to_vec()),
@@ -330,6 +400,35 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("exactly one"));
+    }
+
+    #[test]
+    fn parses_resp2_pubsub_pushes() {
+        let message =
+            parse_pubsub_push(b"*3\r\n$7\r\nmessage\r\n$6\r\nevents\r\n$7\r\npayload\r\n")
+                .unwrap()
+                .unwrap();
+        assert_eq!(message.subscription_kind, RedisSubscriptionKind::Channel);
+        assert_eq!(message.subject, b"events");
+
+        let pmessage = parse_pubsub_push(
+            b"*4\r\n$8\r\npmessage\r\n$8\r\nevents.*\r\n$10\r\nevents.one\r\n$7\r\npayload\r\n",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(pmessage.subscription_kind, RedisSubscriptionKind::Pattern);
+        assert_eq!(pmessage.subject, b"events.*");
+    }
+
+    #[test]
+    fn distinguishes_non_push_arrays_and_rejects_malformed_pushes() {
+        assert!(
+            parse_pubsub_push(b"*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n")
+                .unwrap()
+                .is_none()
+        );
+        let error = parse_pubsub_push(b"*2\r\n$7\r\nmessage\r\n$6\r\nevents\r\n").unwrap_err();
+        assert!(error.to_string().contains("must contain 3 elements"));
     }
 
     #[tokio::test]
