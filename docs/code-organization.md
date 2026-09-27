@@ -306,7 +306,8 @@ explicit repository-wide audit.
   `replay/mysql/session_setup.rs` owns builtin
   initialization recognition; `sql_match.rs` owns text/prepared correlation.
   `replay/mysql/sql_match/predicate` uses sqlparser's MySQL grammar and owns
-  bounded pure-predicate equivalence; `sql_match/cache` owns Replay-local
+  bounded pure-predicate equivalence for single-table SELECTs and strict-envelope
+  direct-table JOIN SELECTs; `sql_match/cache` owns Replay-local
   compiled templates, constant normalization and fresh parameter binding.
   `sql_match/query_in` owns bounded full-AST list-order compatibility inside
   correlated `EXISTS` branches and supported `UNION ALL` read trees with joins,

@@ -98,8 +98,7 @@ impl Template {
         let expr = if whole_query {
             if tokens.iter().any(|t| {
                 [
-                    "group", "having", "union", "join", "into", "for", "lock", "@", "@@", ":=",
-                    "||", "&&",
+                    "group", "having", "union", "into", "for", "lock", "@", "@@", ":=", "||", "&&",
                 ]
                 .iter()
                 .any(|s| t.is(s))
@@ -137,12 +136,18 @@ impl Template {
             {
                 return None;
             }
+            // Direct-table JOINs remain part of the exact prefix. Only the
+            // proven-pure WHERE predicate below is normalized, so JOIN kind,
+            // relation and ON conditions cannot acquire compatibility here.
             if select.from.len() != 1
-                || !select.from[0].joins.is_empty()
                 || !matches!(
                     select.from[0].relation,
                     TableFactor::Table { args: None, .. }
                 )
+                || select.from[0]
+                    .joins
+                    .iter()
+                    .any(|join| !matches!(&join.relation, TableFactor::Table { args: None, .. }))
                 || select.projection.iter().any(|item| match item {
                     SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => {
                         !matches!(
