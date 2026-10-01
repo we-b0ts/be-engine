@@ -26,6 +26,8 @@ use super::{
 
 mod builtins;
 mod connection_scope;
+pub(in crate::replay) mod cross_case;
+pub(in crate::replay) use cross_case::load as load_cross_case;
 mod json;
 mod key_selector;
 mod matching;
@@ -88,6 +90,7 @@ struct RecordedCapture {
 #[derive(Debug, Clone)]
 struct ReplayExchange {
     response_time_shift: Option<time_shift::ResponseShift>,
+    shared_rule_id: Option<String>,
     source: ReplaySource,
     case_id: Option<String>,
     record: RecordedExchange,
@@ -245,6 +248,7 @@ impl RedisReplayState {
             .register(source, case_id, exchange_index);
         self.exchanges.push(ReplayExchange {
             response_time_shift: None,
+            shared_rule_id: None,
             source,
             case_id: case_id.map(ToOwned::to_owned),
             record,
@@ -291,6 +295,7 @@ impl RedisReplayState {
             case_id: matched.report.case_id.clone(),
             target: matched.report.target.clone(),
             command: matched.report.command.clone(),
+            request_fingerprint: None,
             reason,
             diagnostic: None,
         });
@@ -317,6 +322,9 @@ impl RedisReplayState {
         self.events.dirty_case_ids.contains(case_id)
             || self.case_exchange_index.any(case_id, |index| {
                 self.exchanges.get(index).is_some_and(|exchange| {
+                    if exchange.source != ReplaySource::Case {
+                        return false;
+                    }
                     if exchange.reusable_snapshot {
                         !exchange.matched_once
                     } else {
@@ -384,6 +392,7 @@ pub(super) async fn handle_connection(
                     case_id,
                     target: target_key.clone(),
                     command: command.name.clone(),
+                    request_fingerprint: None,
                     reason: "Redis command mode is unsupported for replay".to_string(),
                     diagnostic: None,
                 });
@@ -467,6 +476,14 @@ pub(super) async fn handle_connection(
                         case_id: active_case_id,
                         target: target_key.clone(),
                         command: command.name.clone(),
+                        request_fingerprint: Some(cross_case::target_fingerprint(
+                            &target_key,
+                            resp_version,
+                            database,
+                            username.as_deref(),
+                            &command.name,
+                            &command.args,
+                        )),
                         reason: authentication_hint
                             .unwrap_or(
                                 "no recorded Redis exchange matched target/session/arguments",
@@ -593,6 +610,7 @@ async fn record_runtime_unsafe(
         case_id: state.active_case_id.clone(),
         target: target.clone(),
         command: command.to_string(),
+        request_fingerprint: None,
         reason,
         diagnostic: None,
     };

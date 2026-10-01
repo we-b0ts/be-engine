@@ -11,6 +11,18 @@ fn selector() -> RedisTimeShiftSelector {
     }))
     .unwrap()
 }
+
+#[test]
+fn recording_run_scope_rejects_patterned_redis_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("verification.yaml");
+    let document = "version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: token-time\n  replay_scope: recording_run\n  source_evidence: tauth.py cache is shared\n  protocol: redis\n  target: {host: redis.test, port: 6379}\n  redis:\n    command: HGET\n    key: token_v2\n    hash_field: {numeric: true}\n    response_json:\n      /timestamp: {time: preserve_relative, format: unix_milliseconds}\n";
+    fs::write(&path, document).unwrap();
+    let error = crate::replay::validate_replay_policy(&path).unwrap_err();
+    assert!(format!("{error:#}").contains("exact key and hash field"));
+    fs::write(&path, document.replace("{numeric: true}", "'00123'")).unwrap();
+    crate::replay::validate_replay_policy(&path).unwrap();
+}
 fn record(value: Value) -> RecordedExchange {
     let body = value.to_string();
     serde_json::from_value(json!({

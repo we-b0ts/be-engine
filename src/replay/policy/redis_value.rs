@@ -47,20 +47,28 @@ pub(super) fn validate(rule: &ReplayDependencyRule) -> Result<()> {
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Redis rule requires redis selector"))?;
     ensure!(
-        rule.replay_scope == ReplayScope::Case && rule.case_selector.is_none(),
-        "Redis value rules preserve ordinary replay scope"
+        rule.case_selector.is_none(),
+        "Redis rules cannot select a case"
+    );
+    ensure!(
+        rule.replay_scope == ReplayScope::Case || matches!(redis, RedisSelector::TimeShift(_)),
+        "Redis recording_run scope requires a GET/HGET time-shift selector"
     );
     ensure!(
         rule.http.is_none() && rule.mysql.is_none() && rule.memcached.is_none(),
         "Redis rule cannot define another protocol selector"
     );
     if let RedisSelector::TimeShift(read) = redis {
-        return crate::replay::redis::time_shift::RedisTimeShiftSelector {
+        let selector = crate::replay::redis::time_shift::RedisTimeShiftSelector {
             host: rule.target.host.clone().unwrap_or_default(),
             port: rule.target.port.unwrap_or_default(),
             read: read.clone(),
+        };
+        selector.validate()?;
+        if rule.replay_scope == ReplayScope::RecordingRun {
+            crate::replay::redis::cross_case::exact_read(&selector)?;
         }
-        .validate();
+        return Ok(());
     }
     let RedisSelector::Value(value) = redis else {
         unreachable!()

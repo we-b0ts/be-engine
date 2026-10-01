@@ -152,16 +152,16 @@ pub use policy::{
     MysqlTimeRulePlan, MysqlTimeRuleReport, MysqlTimeSelector, MysqlTimeValueSelector,
     ProfileTargetMissingFeedback, ProfileTargetMissingPlan, ProfileTargetMissingReport,
     ProtobufFieldPath, ProtobufJoinedStringFieldType, ProtobufJoinedStringPath,
-    ProtobufRepeatedElementType, ProtobufUnorderedPath, ReplayPolicyInitOptions,
-    ReplayPolicyInitResult, ReplayPolicyValidationReport, ResponseBodyCodec,
-    ResponseBodyJoinedStringPath, ResponseBodyRuleEvidence, ResponseBodyRuleEvidenceKind,
-    ResponseBodyRuleFeedback, ResponseBodyRulePlan, ResponseBodyRuleReport,
-    ResponseBodyRuleVerificationOutcome, ResponseBodyUnorderedPath, ResponseDurationUnit,
-    ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan, ResponseRuleReport, ResponseTimeRule,
-    ResponseTimestampFormat, initialize_replay_policy, plan_comparison_response_rule,
-    plan_http_cross_case, plan_memcached_timestamp_rule, plan_mysql_time_rule,
-    plan_profile_target_missing, plan_response_body_rule, plan_response_rule,
-    validate_replay_policy,
+    ProtobufRepeatedElementType, ProtobufUnorderedPath, RedisCrossCaseFeedback, RedisCrossCasePlan,
+    RedisCrossCaseReport, ReplayPolicyInitOptions, ReplayPolicyInitResult,
+    ReplayPolicyValidationReport, ResponseBodyCodec, ResponseBodyJoinedStringPath,
+    ResponseBodyRuleEvidence, ResponseBodyRuleEvidenceKind, ResponseBodyRuleFeedback,
+    ResponseBodyRulePlan, ResponseBodyRuleReport, ResponseBodyRuleVerificationOutcome,
+    ResponseBodyUnorderedPath, ResponseDurationUnit, ResponseRuleFeedback, ResponseRuleKind,
+    ResponseRulePlan, ResponseRuleReport, ResponseTimeRule, ResponseTimestampFormat,
+    initialize_replay_policy, plan_comparison_response_rule, plan_http_cross_case,
+    plan_memcached_timestamp_rule, plan_mysql_time_rule, plan_profile_target_missing,
+    plan_redis_cross_case, plan_response_body_rule, plan_response_rule, validate_replay_policy,
 };
 pub(crate) use redis::snapshot_overlay::inspect_case_source_snapshot_overlay;
 pub(crate) use report::aggregate::aggregate_replay_report_with_options;
@@ -388,6 +388,23 @@ impl ReplayRuntime {
         .await
         .context("HTTP cross-case preload task failed")??;
         let http_case_exchange_index = http::case_exchange_index(&http_exchanges);
+        let redis_root = root_dir.clone();
+        let redis_policy = config.policy_path.clone();
+        let redis_cases = cases.clone();
+        let redis_process_rules = process_owned_dependencies.to_vec();
+        let (mut redis, mut targets) = tokio::task::spawn_blocking(move || -> Result<_> {
+            redis::load_cross_case(
+                &mut redis,
+                &redis_root,
+                redis_policy.as_deref(),
+                &redis_cases,
+                &mut targets,
+                &redis_process_rules,
+            )?;
+            Ok((redis, targets))
+        })
+        .await
+        .context("Redis cross-case preload task failed")??;
         redis.apply_snapshot_overlays(&root_dir, process_owned_dependencies);
 
         let recording_network_path =

@@ -110,6 +110,30 @@ finite consumption are unchanged. Reusable/background snapshots cannot be
 combined with this rule. Successful delivery records bounded rule IDs and
 offsets, never credentials. Failed transformation/delivery remains dirty.
 
+## One shared read across cases
+
+When a source cache outlives an individual API case, an existing time-shift
+rule can be promoted to `recording_run` scope. This applies only to one
+ordinary, successful GET or HGET exchange in the completed recording run.
+The key and HGET field must be exact selectors. The planner requires a
+finalized Replay report containing an unmatched read with the same request
+identity in another case, plus source evidence for the shared cache lifetime.
+
+```bash
+backend-rewrite --target-root /path/to/target dependency-rule plan redis cross-case \
+  --evidence-id <current-dirty-cluster-evidence-id> --rule-id tauth-token-time \
+  --source-evidence 'app/services/tauth.py: module cache retains the token across requests; inspect refresh and expiry'
+
+backend-rewrite --target-root /path/to/target dependency-rule apply <plan-id>
+```
+
+The resulting rule adds `replay_scope: recording_run` and retains the source
+evidence. Replay loads the selected sibling exchange into the run inventory,
+reports its origin case and rule ID, and consumes it only once. Other Redis
+commands retain their case scope. A rule selecting multiple reads, a partial
+connection lane, a snapshot, or an unsafe response fails validation. The
+recording remains unchanged; fresh Replay verifies the repaired contract.
+
 If the selected timestamp participates in a signature or a later dependency
 argument, simple field translation may not be applicable; source review must
 establish that contract before planning. Current support neither re-signs opaque

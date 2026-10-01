@@ -13,7 +13,15 @@ pub(in crate::replay) struct CommandMatchedReport {
     pub(in crate::replay) sequence: u64,
     pub(in crate::replay) command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) shared_origin: Option<SharedCommandOrigin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) target_event_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(in crate::replay) struct SharedCommandOrigin {
+    pub(in crate::replay) rule_id: String,
+    pub(in crate::replay) case_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -21,6 +29,8 @@ pub(in crate::replay) struct CommandRequestReport {
     pub(in crate::replay) case_id: Option<String>,
     pub(in crate::replay) target: TargetKey,
     pub(in crate::replay) command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) request_fingerprint: Option<String>,
     pub(in crate::replay) reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) diagnostic: Option<CommandMatchDiagnostic>,

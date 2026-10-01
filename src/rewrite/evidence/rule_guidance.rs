@@ -85,6 +85,11 @@ pub(super) fn rule_hints(
             hint: "Inspect redis_unordered_candidates. Redis string-write values automatically compare JSON objects by content; JSON arrays and Protobuf repeated fields require source-proven unordered semantics. Confirm host, port, exact key or key affixes, field path and Protobuf element type. Use dependency-rule plan redis unordered, apply and fresh Replay; this never changes dependency ownership. Old reports require fresh Replay.".into(),
             help: super::super::action::command(target_root, vec!["dependency-rule".into(), "plan".into(), "redis".into(), "unordered".into(), "--help".into()], Vec::new()),
         });
+        hints.push(RewriteRuleHint {
+            capability: "redis_cross_case".into(), rule: "cross-case".into(),
+            hint: "If an existing case-scoped GET/HGET time-shift rule describes a shared source cache, inspect the completed recording for one exact read in a sibling case. Confirm the same host, port, database, key and field, then trace cache initialization, refresh and side effects in source. A finalized unmatched Replay report and source evidence are required for dependency-rule plan redis cross-case; apply requires fresh Replay.".into(),
+            help: super::super::action::command(target_root, vec!["dependency-rule".into(), "plan".into(), "redis".into(), "cross-case".into(), "--help".into()], Vec::new()),
+        });
     }
     if facts["egress_rejections"]["rejected_packets_in_samples"]
         .as_u64()

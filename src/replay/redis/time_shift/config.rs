@@ -53,7 +53,11 @@ impl RedisTimeShiftSelector {
         );
         self.read.validate()
     }
-    pub(super) fn matches(&self, record: &RecordedExchange, args: &[Vec<u8>]) -> bool {
+    pub(in crate::replay::redis) fn matches(
+        &self,
+        record: &RecordedExchange,
+        args: &[Vec<u8>],
+    ) -> bool {
         super::super::normalize_host(&self.host)
             == super::super::normalize_host(&record.target_host)
             && self.port == record.target_port

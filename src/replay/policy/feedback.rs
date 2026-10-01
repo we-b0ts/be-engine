@@ -752,7 +752,11 @@ pub use http_unordered::{
     HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
 };
 
+mod redis_cross_case;
 mod redis_time_shift;
+pub use redis_cross_case::{
+    RedisCrossCaseFeedback, RedisCrossCasePlan, RedisCrossCaseReport, plan_redis_cross_case,
+};
 mod redis_unordered;
 pub use redis_time_shift::{
     RedisTimeShiftFeedback, RedisTimeShiftPlan, RedisTimeShiftReport, plan_redis_time_shift,

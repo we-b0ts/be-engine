@@ -387,6 +387,7 @@ impl MotanReplayState {
                 connection_id: exchange.record.connection_id,
                 sequence: exchange.record.sequence,
                 command: exchange.record.command.clone(),
+                shared_origin: None,
                 target_event_index: None,
             },
         })
@@ -419,6 +420,7 @@ impl MotanReplayState {
             case_id: matched.report.case_id.clone(),
             target: matched.report.target.clone(),
             command: matched.report.command.clone(),
+            request_fingerprint: None,
             reason,
             diagnostic: None,
         });
@@ -653,6 +655,7 @@ async fn enqueue_request(
                 case_id,
                 target: target.clone(),
                 command: identity.command(),
+                request_fingerprint: None,
                 reason: "no recorded Motan heartbeat response template".to_string(),
                 diagnostic: None,
             });
@@ -727,6 +730,7 @@ async fn record_unmatched_request(
         case_id: active_case_id,
         target: target.clone(),
         command: identity.command(),
+        request_fingerprint: None,
         reason,
         diagnostic: Some(diagnostic),
     });

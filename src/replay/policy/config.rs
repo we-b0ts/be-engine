@@ -392,25 +392,39 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
     ensure_identifier(&rule.id, "rule id")?;
     if rule.replay_scope == ReplayScope::RecordingRun {
         ensure!(
-            rule.protocol == DependencyProtocol::Http && rule.case_selector.is_none(),
-            "recording_run scope requires HTTP without a case selector"
+            rule.case_selector.is_none(),
+            "recording_run scope cannot select a case"
         );
         validate_source_evidence(&rule.source_evidence)?;
-        let http = rule
-            .http
-            .as_ref()
-            .context("recording_run scope requires HTTP selector")?;
-        crate::replay::http_cross_case::HttpCrossCaseSelector {
-            host: rule.target.host.clone().unwrap_or_default(),
-            port: rule.target.port.unwrap_or_default(),
-            method: http.method.clone(),
-            path: http.path.clone(),
+        match rule.protocol {
+            DependencyProtocol::Http => {
+                let http = rule
+                    .http
+                    .as_ref()
+                    .context("recording_run scope requires HTTP selector")?;
+                crate::replay::http_cross_case::HttpCrossCaseSelector {
+                    host: rule.target.host.clone().unwrap_or_default(),
+                    port: rule.target.port.unwrap_or_default(),
+                    method: http.method.clone(),
+                    path: http.path.clone(),
+                }
+                .validate()?;
+                ensure!(
+                    http.query.is_empty(),
+                    "cross-case requires exact query matching; dynamic query rules are not supported"
+                );
+            }
+            DependencyProtocol::Redis => {
+                ensure!(
+                    matches!(
+                        rule.redis.as_ref(),
+                        Some(super::redis_value::RedisSelector::TimeShift(_))
+                    ),
+                    "Redis recording_run scope requires a GET/HGET time-shift selector"
+                );
+            }
+            _ => anyhow::bail!("recording_run scope supports only HTTP and Redis"),
         }
-        .validate()?;
-        ensure!(
-            http.query.is_empty(),
-            "cross-case requires exact query matching; dynamic query rules are not supported"
-        );
     } else {
         ensure!(
             rule.source_evidence.is_empty(),

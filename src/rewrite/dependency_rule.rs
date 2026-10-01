@@ -75,6 +75,9 @@ pub struct RewriteDependencyRulePlanReport {
 
 #[derive(Debug, Clone)]
 pub enum RewriteDependencyRuleSelector {
+    RedisCrossCase {
+        rule_id: String,
+    },
     RedisTimeShift {
         selector: crate::RedisTimeShiftSelector,
     },
@@ -159,6 +162,7 @@ pub(super) fn plan(
             | RewriteDependencyRuleSpec::HttpUnordered { .. }
             | RewriteDependencyRuleSpec::RedisUnordered { .. }
             | RewriteDependencyRuleSpec::RedisTimeShift { .. }
+            | RewriteDependencyRuleSpec::RedisCrossCase { .. }
     );
     ensure!(
         !request_rule || options.ownership == RewriteDependencyOwnership::RequestOwned,
@@ -211,6 +215,7 @@ pub(super) fn plan(
         record.spec,
         RewriteDependencyRuleSpec::RedisUnordered { .. }
             | RewriteDependencyRuleSpec::RedisTimeShift { .. }
+            | RewriteDependencyRuleSpec::RedisCrossCase { .. }
     ) {
         record.review_fingerprint = Some(fingerprint::id(&[&serde_json::to_string(&report)?]));
     }
@@ -379,6 +384,7 @@ pub(super) fn apply(
             | RewriteDependencyRuleSpec::HttpUnordered { .. }
             | RewriteDependencyRuleSpec::RedisUnordered { .. }
             | RewriteDependencyRuleSpec::RedisTimeShift { .. }
+            | RewriteDependencyRuleSpec::RedisCrossCase { .. }
     ) {
         validate_plan_evidence(
             target_root,
@@ -396,6 +402,7 @@ pub(super) fn apply(
             | RewriteDependencyRuleSpec::HttpUnordered { .. }
             | RewriteDependencyRuleSpec::RedisUnordered { .. }
             | RewriteDependencyRuleSpec::RedisTimeShift { .. }
+            | RewriteDependencyRuleSpec::RedisCrossCase { .. }
     ) && state.case_source.is_some()
         && state.group_id.is_some()
     {
@@ -453,6 +460,7 @@ fn dependency_issue(
                 | RewriteDependencyRuleSpec::HttpUnordered { .. }
                 | RewriteDependencyRuleSpec::RedisUnordered { .. }
                 | RewriteDependencyRuleSpec::RedisTimeShift { .. }
+                | RewriteDependencyRuleSpec::RedisCrossCase { .. }
         ) && matches!(
             issue.kind,
             RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
@@ -501,6 +509,7 @@ fn validate_plan_evidence(
             | RewriteDependencyRuleSpec::HttpUnordered { .. }
             | RewriteDependencyRuleSpec::RedisUnordered { .. }
             | RewriteDependencyRuleSpec::RedisTimeShift { .. }
+            | RewriteDependencyRuleSpec::RedisCrossCase { .. }
     ) && state
         .dependency_rule_plan
         .as_ref()
