@@ -557,6 +557,36 @@ mod tests {
     }
 
     #[test]
+    fn redis_cross_case_promotes_one_existing_request_rule() {
+        let parsed = TestCli::try_parse_from([
+            "test",
+            "plan",
+            "redis",
+            "cross-case",
+            "--evidence-id",
+            "current",
+            "--rule-id",
+            "tauth-token-time",
+            "--source-evidence",
+            "tauth.py: module cache shares the token",
+        ])
+        .unwrap();
+        let DependencyRuleCommand::Plan(plan) = parsed.dependency_rule.command else {
+            panic!("plan")
+        };
+        let DependencyPlan::Ownership(options) = plan.protocol.try_into().unwrap() else {
+            panic!("scope")
+        };
+        assert_eq!(options.ownership, RewriteDependencyOwnership::RequestOwned);
+        assert_eq!(options.name.as_deref(), Some("tauth-token-time"));
+        assert!(matches!(
+            options.selector,
+            RewriteDependencyRuleSelector::RedisCrossCase { rule_id }
+                if rule_id == "tauth-token-time"
+        ));
+    }
+
+    #[test]
     fn http_cross_case_is_a_request_scope_plan_without_ownership_or_query_flags() {
         let parsed = TestCli::try_parse_from([
             "test",

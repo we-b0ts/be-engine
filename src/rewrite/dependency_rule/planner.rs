@@ -13,6 +13,7 @@ use crate::{
 use std::path::PathBuf;
 
 pub(super) enum DependencyRulePlan {
+    RedisCrossCase(crate::RedisCrossCasePlan),
     HttpCrossCase(crate::HttpCrossCasePlan),
     HttpUnordered(crate::HttpUnorderedPlan),
     RedisUnordered(crate::RedisUnorderedPlan),
@@ -40,6 +41,7 @@ struct ExactKeyRedisPlanInput<'a> {
 impl DependencyRulePlan {
     pub(super) fn report(&self) -> Result<Value> {
         match self {
+            Self::RedisCrossCase(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::HttpCrossCase(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::RedisUnordered(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::RedisTimeShift(plan) => Ok(serde_json::to_value(plan.report())?),
@@ -56,6 +58,7 @@ impl DependencyRulePlan {
 
     pub(super) fn apply(self) -> Result<Value> {
         match self {
+            Self::RedisCrossCase(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::HttpCrossCase(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::RedisUnordered(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::RedisTimeShift(plan) => Ok(serde_json::to_value(plan.apply()?)?),
@@ -72,6 +75,9 @@ impl DependencyRulePlan {
 
     pub(super) fn reused_existing(&self) -> Option<&str> {
         match self {
+            Self::RedisCrossCase(plan) if plan.report().reused_existing => {
+                Some(&plan.report().effective_rule_id)
+            }
             Self::RedisUnordered(plan) if plan.report().reused_existing => {
                 Some(&plan.report().effective_rule_id)
             }
@@ -111,6 +117,7 @@ impl DependencyRulePlan {
 
     pub(super) fn effective_name(&self) -> &str {
         match self {
+            Self::RedisCrossCase(plan) => &plan.report().effective_rule_id,
             Self::HttpCrossCase(plan) => &plan.report().effective_rule_id,
             Self::HttpUnordered(plan) => &plan.report().effective_rule_id,
             Self::RedisUnordered(plan) => &plan.report().effective_rule_id,
@@ -130,6 +137,9 @@ pub(super) fn spec_from_selector(
     selector: RewriteDependencyRuleSelector,
 ) -> RewriteDependencyRuleSpec {
     match selector {
+        RewriteDependencyRuleSelector::RedisCrossCase { rule_id } => {
+            RewriteDependencyRuleSpec::RedisCrossCase { rule_id }
+        }
         RewriteDependencyRuleSelector::RedisUnordered { selector } => {
             RewriteDependencyRuleSpec::RedisUnordered { selector }
         }
@@ -326,6 +336,17 @@ pub(super) fn build_plan(
             })?,
         ));
     }
+    if let RewriteDependencyRuleSpec::RedisCrossCase { rule_id } = &record.spec {
+        return Ok(DependencyRulePlan::RedisCrossCase(
+            crate::plan_redis_cross_case(crate::RedisCrossCaseFeedback {
+                policy_path: target_root.join(".traffic-e2e/verification.yaml"),
+                case_source,
+                replay_report_path,
+                rule_id: rule_id.clone(),
+                source_evidence: record.source_evidence.clone(),
+            })?,
+        ));
+    }
     if let RewriteDependencyRuleSpec::HttpCrossCase { selector } = &record.spec {
         return Ok(DependencyRulePlan::HttpCrossCase(
             crate::plan_http_cross_case(crate::HttpCrossCaseFeedback {
@@ -412,6 +433,11 @@ pub(super) fn build_plan(
         | RewriteDependencyRuleSpec::HttpUnordered { .. }
         | RewriteDependencyRuleSpec::RedisUnordered { .. }
         | RewriteDependencyRuleSpec::RedisTimeShift { .. } => {
+            unreachable!(
+                "Redis cross-case and value plans return before background evidence resolution"
+            )
+        }
+        RewriteDependencyRuleSpec::RedisCrossCase { .. } => {
             unreachable!("Memcached payload plans return before background evidence resolution")
         }
         RewriteDependencyRuleSpec::Motan {

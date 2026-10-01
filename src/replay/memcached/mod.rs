@@ -358,6 +358,7 @@ impl MemcachedReplayState {
                 connection_id: exchange.record.connection_id,
                 sequence: exchange.record.sequence,
                 command: exchange.record.command.clone(),
+                shared_origin: None,
                 target_event_index: None,
             },
         })
@@ -392,6 +393,7 @@ impl MemcachedReplayState {
             case_id: matched.report.case_id.clone(),
             target: matched.report.target.clone(),
             command: matched.report.command.clone(),
+            request_fingerprint: None,
             reason,
             diagnostic: None,
         });
@@ -605,6 +607,7 @@ async fn record_runtime_unsafe(
         case_id: state.active_case_id.clone(),
         target: target.clone(),
         command: command.to_string(),
+        request_fingerprint: None,
         reason,
         diagnostic: None,
     };
@@ -644,6 +647,7 @@ async fn match_memcached_request(
                 case_id: active_case_id,
                 target: target.clone(),
                 command: request.command.clone(),
+                request_fingerprint: None,
                 reason: "Memcached command mode is unsupported for replay".to_string(),
                 diagnostic: None,
             });
@@ -680,6 +684,7 @@ async fn match_memcached_request(
                 case_id: active_case_id,
                 target: target.clone(),
                 command: request.command.clone(),
+                request_fingerprint: None,
                 reason: "no recorded Memcached exchange matched target/protocol/arguments"
                     .to_string(),
                 diagnostic: Some(diagnostic),

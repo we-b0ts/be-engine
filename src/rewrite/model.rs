@@ -285,6 +285,9 @@ pub struct RewriteResponseBodyRuleSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum RewriteDependencyRuleSpec {
+    RedisCrossCase {
+        rule_id: String,
+    },
     RedisTimeShift {
         selector: crate::RedisTimeShiftSelector,
     },

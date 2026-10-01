@@ -2,6 +2,9 @@ mod config;
 mod feedback;
 pub(crate) use feedback::replace_request_rule_section;
 pub use feedback::{
+    RedisCrossCaseFeedback, RedisCrossCasePlan, RedisCrossCaseReport, plan_redis_cross_case,
+};
+pub use feedback::{
     RedisTimeShiftFeedback, RedisTimeShiftPlan, RedisTimeShiftReport, plan_redis_time_shift,
 };
 mod initialization;
@@ -59,7 +62,10 @@ pub(in crate::replay) fn http_cross_case_rules(
         .document
         .dependency_rules
         .into_iter()
-        .filter(|r| r.replay_scope == config::ReplayScope::RecordingRun)
+        .filter(|r| {
+            r.replay_scope == config::ReplayScope::RecordingRun
+                && r.protocol == config::DependencyProtocol::Http
+        })
         .map(|r| {
             let http = r.http.expect("validated HTTP scope");
             (
@@ -71,6 +77,38 @@ pub(in crate::replay) fn http_cross_case_rules(
                     path: http.path,
                 },
             )
+        })
+        .collect())
+}
+
+/// Redis scope rules reuse the exact selector of an existing time-shift rule.
+pub(in crate::replay) fn redis_cross_case_rules(
+    path: &std::path::Path,
+) -> anyhow::Result<Vec<(String, crate::replay::RedisTimeShiftSelector)>> {
+    let loaded = load_replay_policy(path)?;
+    Ok(loaded
+        .document
+        .dependency_rules
+        .into_iter()
+        .filter_map(|rule| {
+            if rule.replay_scope != config::ReplayScope::RecordingRun
+                || rule.protocol != config::DependencyProtocol::Redis
+            {
+                return None;
+            }
+            let redis_value::RedisSelector::TimeShift(read) =
+                rule.redis.expect("validated Redis scope")
+            else {
+                unreachable!("validated Redis scope uses time-shift")
+            };
+            Some((
+                rule.id,
+                crate::replay::RedisTimeShiftSelector {
+                    host: rule.target.host.expect("validated Redis host"),
+                    port: rule.target.port.expect("validated Redis port"),
+                    read,
+                },
+            ))
         })
         .collect())
 }

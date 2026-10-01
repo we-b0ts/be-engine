@@ -9,6 +9,8 @@ pub(super) struct RedisDependencyRuleArgs {
 
 #[derive(Debug, Subcommand)]
 enum RedisDependencyRuleModeArgs {
+    /// Share one source-proven GET/HGET token read across cases of a completed recording.
+    CrossCase(RedisCrossCaseArgs),
     /// Preserve source-proven relative lifetimes in matched GET/HGET JSON responses.
     TimeShift(time_shift::RedisTimeShiftArgs),
     /// Source-proven unordered JSON arrays or Protobuf repeated fields in string writes.
@@ -27,6 +29,18 @@ enum RedisDependencyRuleModeArgs {
     Hmget(RedisHashReadDependencyRuleArgs),
     /// Process-owned Redis HSCAN traffic selected by exact keys or compact key shapes.
     Hscan(RedisScanDependencyRuleArgs),
+}
+
+#[derive(Debug, Args)]
+struct RedisCrossCaseArgs {
+    #[arg(long)]
+    evidence_id: String,
+    /// Existing case-scoped Redis time-shift rule to promote.
+    #[arg(long)]
+    rule_id: String,
+    /// Source cache initialization and reuse proof.
+    #[arg(long)]
+    source_evidence: String,
 }
 
 #[derive(Debug, Args)]
@@ -86,6 +100,17 @@ struct RedisScanDependencyRuleArgs {
 
 pub(super) fn options(args: RedisDependencyRuleArgs) -> Result<RewriteDependencyRulePlanOptions> {
     Ok(match args.mode {
+        RedisDependencyRuleModeArgs::CrossCase(args) => {
+            return Ok(RewriteDependencyRulePlanOptions {
+                evidence_id: args.evidence_id,
+                ownership: RewriteDependencyOwnership::RequestOwned,
+                name: Some(args.rule_id.clone()),
+                source_evidence: Some(args.source_evidence),
+                selector: RewriteDependencyRuleSelector::RedisCrossCase {
+                    rule_id: args.rule_id,
+                },
+            });
+        }
         RedisDependencyRuleModeArgs::TimeShift(args) => return time_shift::options(args),
         RedisDependencyRuleModeArgs::Unordered(args) => return unordered_options(args),
         RedisDependencyRuleModeArgs::Zcount(args) => dependency_rule_options(

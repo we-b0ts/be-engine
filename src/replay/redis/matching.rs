@@ -135,6 +135,15 @@ impl RedisReplayState {
                 connection_id: exchange.record.connection_id,
                 sequence: exchange.record.sequence,
                 command: exchange.record.command.clone(),
+                shared_origin: exchange.shared_rule_id.as_ref().map(|rule_id| {
+                    crate::replay::report::command::SharedCommandOrigin {
+                        rule_id: rule_id.clone(),
+                        case_id: exchange
+                            .case_id
+                            .clone()
+                            .expect("shared Redis exchange has origin case"),
+                    }
+                }),
                 target_event_index: None,
             },
         })
@@ -198,6 +207,7 @@ impl RedisReplayState {
                 connection_id: exchange.record.connection_id,
                 sequence: exchange.record.sequence,
                 command: exchange.record.command.clone(),
+                shared_origin: None,
                 target_event_index: None,
             },
         })
