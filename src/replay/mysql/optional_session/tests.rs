@@ -339,9 +339,9 @@ fn read_effect_accepts_a_batched_read_above_the_legacy_token_cap() {
     // A batched read that inlines a large id set stays read-only. Otherwise the
     // session cleanup allowance for such a request would depend on how wide the
     // source rendered its `IN (...)`, which is not a property of the statement.
-    // This matches the scale of recorded history reads while staying inside
-    // the bounded classifier budget.
-    let ids = (0..16_148)
+    // This matches the widest recorded history read (recording 20260928050001,
+    // 16,508 ids) while staying inside the bounded classifier budget.
+    let ids = (0..16_508)
         .map(|id| id.to_string())
         .collect::<Vec<_>>()
         .join(",");
