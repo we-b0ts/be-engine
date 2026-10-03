@@ -158,11 +158,8 @@ fn configure_baseline_recheck(
         .as_mut()
         .expect("comparison recording config was validated");
     let configured = comparison.baseline_recheck;
-    let policy_required = policy.comparison.source_match == ComparisonSourceMatch::BeforeOrAfter;
-    comparison.baseline_recheck = configured || explicitly_enabled || policy_required;
-    let reason = if policy_required {
-        "source_match_before_or_after"
-    } else if explicitly_enabled {
+    comparison.baseline_recheck = configured || explicitly_enabled;
+    let reason = if explicitly_enabled {
         "command_line"
     } else if configured {
         "recorder_config"
@@ -347,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn before_or_after_policy_enables_baseline_recheck() {
+    fn removed_before_or_after_policy_is_rejected_without_enabling_recheck() {
         let temp = tempdir().unwrap();
         let policy = temp.path().join("verification.yaml");
         fs::write(
@@ -360,13 +357,12 @@ mod tests {
         )
         .unwrap();
 
-        let decision = configure_baseline_recheck(&mut config, &policy, false).unwrap();
-
-        assert!(decision.enabled);
-        assert_eq!(decision.source_match, ComparisonSourceMatch::BeforeOrAfter);
-        assert_eq!(decision.reason, "source_match_before_or_after");
+        let error = configure_baseline_recheck(&mut config, &policy, false)
+            .err()
+            .unwrap();
+        assert!(format!("{error:#}").contains("unknown variant `before_or_after`"));
         assert!(
-            config
+            !config
                 .comparison_recording
                 .as_ref()
                 .unwrap()

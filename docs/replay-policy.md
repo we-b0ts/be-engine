@@ -50,12 +50,12 @@ Standard replay loads JSON `timestamp`, `duration`, `uuid`, `random`, and
 loads JSON `counter` rules. Rule kinds selecting JSON must use disjoint
 subtrees.
 
-`response_settings.comparison.source_match` controls which complete source
-observation may serve as the comparison oracle. `before` is the default. Set
-`before_or_after` only for runs that record `expected-response-after.json` for
-every case. The candidate must match either complete source response under the
-active response rules; fields from the two source observations are never
-combined. Standard replay ignores this comparison-only setting.
+Comparison uses the first source response as its oracle under the active
+response rules. `response_settings.comparison.source_match` accepts only
+`before` (the default). The removed `before_or_after` value is rejected; remove
+that setting or change it to `before` in existing configurations. Source-after
+is optional diagnostic evidence and never permits a candidate difference.
+Standard Replay ignores this comparison-only setting.
 
 `expected-response.json` is an assertion oracle only. Target product code,
 dependency mocks, E2E setup, and verification policy generation must not read its
@@ -68,11 +68,10 @@ verification. `traffic-e2e compare <comparison-recording-run> --policy
 <verification.yaml>` treats the baseline `expected-response.json` as the
 oracle and the candidate `response.json` as actual output. When
 `expected-response-after.json` exists, it also checks source-before against
-source-after. With `source_match: before_or_after`, a complete candidate match
-against source-after also passes and is recorded as `matched_source: after`.
-When the candidate matches neither observation, a source change makes only
-candidate differences at the same response location inconclusive; unrelated
-candidate differences remain target differences. Replay dependency rules are
+source-after for diagnosis. When the candidate differs from source-before, a
+source change makes only candidate differences at the same response location
+inconclusive; unrelated candidate differences remain target differences. Neither classification passes
+verification; both require diagnosis. Replay dependency rules are
 ignored during this file-only operation, and no interception or isolation is
 enabled.
 
@@ -107,9 +106,8 @@ target may omit or add it. When the source response contains it, the target
 response must also contain it. If the source response echoes the source request
 value, the target response must echo the request value actually sent to the
 target. Otherwise, the trimmed target response value must have the same byte
-length as the trimmed source response value. In `before_or_after` mode the
-candidate's status, headers, and body must match one complete source
-observation.
+length as the trimmed source response value. The candidate's status, headers,
+and body are always checked against the first source observation.
 
 Legacy response artifacts without a header snapshot retain their status/body
 verdict because header evidence is unavailable. New HTTP Replay artifacts

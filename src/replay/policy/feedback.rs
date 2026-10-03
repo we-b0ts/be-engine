@@ -365,8 +365,8 @@ fn validate_response_evidence(
     let mut unselected_difference_pointers = BTreeSet::new();
     for (case, response) in &matching {
         ensure!(
-            case.matched_source.as_deref() != Some("after") || response.differences.is_empty(),
-            "case {:?} already matches the permitted source-after observation",
+            case.matched_source.as_deref() != Some("after"),
+            "case {:?} uses removed source-after acceptance; regenerate comparison evidence",
             case.case_id
         );
         ensure!(

@@ -202,7 +202,7 @@ comparison_recording:
 # replaces this loopback origin with the run-owned target bridge IP while
 # preserving this native target port.
   candidate_upstream: http://127.0.0.1:__CANDIDATE_HTTP_PORT__
-# source_match: before_or_after in verification.yaml enables this automatically.
+# Diagnostic only: rechecking the source never changes the comparison oracle.
   baseline_recheck: false
   upstream_timeout_ms: 30000
   max_in_flight: 1

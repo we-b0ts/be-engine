@@ -170,7 +170,6 @@ mod tests {
                 passed: false,
                 response: None,
                 baseline_recheck: None,
-                response_after: None,
                 matched_source: None,
                 source_change_pointers: Vec::new(),
                 candidate_only_pointers: Vec::new(),

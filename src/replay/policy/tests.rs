@@ -144,32 +144,31 @@ fn validates_verification_policy_example() {
 }
 
 #[test]
-fn validates_comparison_source_match_and_requires_version_three() {
+fn validates_before_comparison_source_match_for_supported_policy_versions() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("verification.yaml");
-    fs::write(
-        &path,
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
-    )
-    .unwrap();
-
-    let report = validate_replay_policy(&path).unwrap();
-    assert_eq!(
-        report.comparison.source_match,
-        crate::replay::ComparisonSourceMatch::BeforeOrAfter
-    );
-
-    fs::write(
-        &path,
-        "version: 1\nexpected_response: assertions_only\ndependency_rules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
-    )
-    .unwrap();
-    let error = validate_replay_policy(&path).unwrap_err();
-    assert!(
-        format!("{error:#}").contains(
-            "response_settings and response_rules, plus process_output_rules, require replay policy version 3"
+    for version in [1, 3] {
+        fs::write(
+            &path,
+            format!("version: {version}\nexpected_response: assertions_only\ndependency_rules: []\nresponse_settings:\n  comparison:\n    source_match: before\n"),
         )
-    );
+        .unwrap();
+        let report = validate_replay_policy(&path).unwrap();
+        assert_eq!(
+            report.comparison.source_match,
+            crate::replay::ComparisonSourceMatch::Before
+        );
+        assert_eq!(report.runner_owned_response_assertions, version == 3);
+    }
+}
+
+#[test]
+fn rejects_removed_before_or_after_comparison_policy() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("verification.yaml");
+    fs::write(&path, "version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n").unwrap();
+    let error = validate_replay_policy(&path).unwrap_err();
+    assert!(format!("{error:#}").contains("unknown variant `before_or_after`"));
 }
 
 #[test]
