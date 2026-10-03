@@ -35,6 +35,371 @@ async fn hget(client: &mut TcpStream) -> Value {
 fn control(command: &str, case: &str) -> ReplayControlRequest {
     serde_json::from_value(json!({"command":command,"case_id":case})).unwrap()
 }
+
+fn shared_read_recording(read_count: usize) -> tempfile::TempDir {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let consumer = root.join("apis/tasks/consumer");
+    std::fs::create_dir_all(&consumer).unwrap();
+    std::fs::write(
+        consumer.join("request.json"),
+        r#"{"method":"GET","uri":"/tasks/1"}"#,
+    )
+    .unwrap();
+    std::fs::write(consumer.join("expected-response.json"), "{}").unwrap();
+    std::fs::write(consumer.join("dependencies.jsonl"), "").unwrap();
+    std::fs::write(root.join("recording-run.json"), r#"{"status":"completed"}"#).unwrap();
+    for index in 0..read_count {
+        let origin = root.join(format!("apis/playback/origin-{index}"));
+        std::fs::create_dir_all(&origin).unwrap();
+        std::fs::write(
+            origin.join("request.json"),
+            r#"{"method":"GET","uri":"/playback"}"#,
+        )
+        .unwrap();
+        std::fs::write(origin.join("expected-response.json"), "{}").unwrap();
+        // Deliberately reverse capture order relative to the origin case IDs.
+        let capture_time = Utc::now() - chrono::Duration::days(1)
+            + chrono::Duration::seconds((read_count - index) as i64);
+        let body = json!({"timestamp":capture_time.timestamp_millis(),"read_id":index}).to_string();
+        let wire = format!("${}\r\n{}\r\n", body.len(), body);
+        let mut record = redis_hash_dependency(
+            Uuid::new_v4(),
+            1,
+            "HGET",
+            &["token_v2", "00123"],
+            wire.as_bytes(),
+        );
+        record["timestamp"] = json!(capture_time);
+        std::fs::write(origin.join("dependencies.jsonl"), record.to_string()).unwrap();
+    }
+    std::fs::write(root.join("verification.yaml"), "version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: token-time\n  replay_scope: recording_run\n  source_evidence: module cache shares one token across requests\n  protocol: redis\n  target: {host: redis.internal, port: 6379}\n  redis:\n    command: HGET\n    key: token_v2\n    hash_field: '00123'\n    response_json:\n      /timestamp: {time: preserve_relative, format: unix_milliseconds}\n").unwrap();
+    temp
+}
+
+async fn load_shared_read_recording(case: &Path, policy: &Path) -> anyhow::Result<ReplayRuntime> {
+    super::super::write_test_recording_network_manifest(case);
+    let addr = "127.0.0.1:0".parse().unwrap();
+    ReplayRuntime::load(
+        MysqlReplayConfig {
+            case_dir: case.into(),
+            selected_case_ids: Vec::new(),
+            dns_listen: addr,
+            tcp_listen: addr,
+            fake_cidr: "198.18.0.0/15".into(),
+            report_path: None,
+            session_path: None,
+            control_socket_path: None,
+            ca_cert_path: Some(case.join(".replay/ca.pem")),
+            ca_key_path: Some(case.join(".replay/ca-key.pem")),
+            policy_path: Some(policy.into()),
+            http_ignore_query_params: Vec::new(),
+            process_owned_dependencies: Vec::new(),
+            allowed_unused_http: None,
+        },
+        addr,
+        addr,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn redis_time_shift_scope_without_recorded_reads_allows_batch_and_focused_replay() {
+    let temp = shared_read_recording(0);
+    let root = temp.path();
+    let policy = root.join("verification.yaml");
+    for case in [root.to_path_buf(), root.join("apis/tasks/consumer")] {
+        let runtime = load_shared_read_recording(&case, &policy).await.unwrap();
+        assert_eq!(
+            begin_case(&control("begin", "consumer"), runtime.state.clone()).await["ok"],
+            true
+        );
+        assert_eq!(
+            end_case(&control("end", "consumer"), runtime.state.clone()).await["ok"],
+            true
+        );
+        let state = runtime.state.lock().await;
+        assert!(state.targets.is_empty());
+        let report = serde_json::to_value(state.snapshot_report()).unwrap();
+        assert_eq!(report["redis"]["matched_count"], 0);
+        assert!(report["redis"]["unmatched"].as_array().unwrap().is_empty());
+        assert!(
+            report["redis"]["unused_case"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
+async fn redis_time_shift_scope_without_selected_read_keeps_other_reads_and_unmatched_strict() {
+    let temp = shared_read_recording(0);
+    let root = temp.path();
+    let consumer = root.join("apis/tasks/consumer");
+    let recording = consumer.join("dependencies.jsonl");
+    let dependency = redis_dependency(Uuid::new_v4(), 1, "other", b"$5\r\nvalue\r\n");
+    std::fs::write(&recording, dependency.to_string()).unwrap();
+    let immutable = std::fs::read(&recording).unwrap();
+    let (addr, state, task) =
+        redis_value_tests::spawn(&consumer, Some(root.join("verification.yaml"))).await;
+    assert_eq!(
+        begin_case(&control("begin", "consumer"), state.clone()).await["ok"],
+        true
+    );
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    client
+        .write_all(b"*2\r\n$3\r\nGET\r\n$5\r\nother\r\n")
+        .await
+        .unwrap();
+    let mut response = [0; 11];
+    client.read_exact(&mut response).await.unwrap();
+    assert_eq!(&response, b"$5\r\nvalue\r\n");
+    client
+        .write_all(b"*3\r\n$4\r\nHGET\r\n$8\r\ntoken_v2\r\n$5\r\n00123\r\n")
+        .await
+        .unwrap();
+    let error = b"-ERR no recorded Redis dependency matched\r\n";
+    let mut response = vec![0; error.len()];
+    tokio::time::timeout(Duration::from_secs(5), client.read_exact(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&response, error);
+    let report = serde_json::to_value(state.lock().await.snapshot_report()).unwrap();
+    assert_eq!(report["redis"]["matched_count"], 1);
+    assert!(report["redis"]["matched"][0]["shared_origin"].is_null());
+    assert_eq!(report["redis"]["unmatched"].as_array().unwrap().len(), 1);
+    assert_eq!(report["redis"]["unmatched"][0]["command"], "HGET");
+    assert!(report["redis"].get("time_shifts").is_none());
+    assert_eq!(std::fs::read(recording).unwrap(), immutable);
+    task.abort();
+}
+
+#[tokio::test]
+async fn redis_time_shift_scope_shares_multiple_reads_in_capture_order_with_finite_consumption() {
+    let temp = shared_read_recording(2);
+    let root = temp.path();
+    let policy = root.join("verification.yaml");
+    let ordinary = root.join("apis/other/zz-ordinary");
+    std::fs::create_dir_all(&ordinary).unwrap();
+    std::fs::write(
+        ordinary.join("request.json"),
+        r#"{"method":"GET","uri":"/other"}"#,
+    )
+    .unwrap();
+    std::fs::write(ordinary.join("expected-response.json"), "{}").unwrap();
+    let dependency = redis_dependency(Uuid::new_v4(), 1, "other", b"$5\r\nvalue\r\n");
+    std::fs::write(ordinary.join("dependencies.jsonl"), dependency.to_string()).unwrap();
+    super::super::write_test_recording_network_manifest(root);
+    let consumer = root.join("apis/tasks/consumer");
+    std::fs::copy(
+        root.join(crate::recording_network::RECORDING_NETWORK_FILENAME),
+        consumer.join(crate::recording_network::RECORDING_NETWORK_FILENAME),
+    )
+    .unwrap();
+    for case in [root.to_path_buf(), consumer] {
+        let (addr, state, task) = redis_value_tests::spawn(&case, Some(policy.clone())).await;
+        assert_eq!(
+            begin_case(&control("begin", "consumer"), state.clone()).await["ok"],
+            true
+        );
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        assert_eq!(hget(&mut client).await["read_id"], 1);
+        assert_eq!(hget(&mut client).await["read_id"], 0);
+        assert_eq!(
+            end_case(&control("end", "consumer"), state.clone()).await["dirty"],
+            false
+        );
+        let report = serde_json::to_value(state.lock().await.snapshot_report()).unwrap();
+        assert_eq!(report["redis"]["matched_count"], 2);
+        assert_eq!(
+            report["redis"]["matched"][0]["shared_origin"]["case_id"],
+            "origin-1"
+        );
+        assert_eq!(
+            report["redis"]["matched"][1]["shared_origin"]["case_id"],
+            "origin-0"
+        );
+        assert!(
+            report["redis"]["unused_global"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(report["redis"]["time_shifts"].as_array().unwrap().len(), 2);
+        if case == root {
+            // Sorting shared reads must rebuild the ordinary case gate index.
+            let replay = state.lock().await;
+            assert!(replay.redis.case_is_dirty("zz-ordinary"));
+            assert!(!replay.redis.case_is_dirty("origin-0"));
+            assert!(!replay.redis.case_is_dirty("origin-1"));
+        }
+        assert_eq!(
+            begin_case(&control("begin", "consumer"), state.clone()).await["ok"],
+            true
+        );
+        client
+            .write_all(b"*3\r\n$4\r\nHGET\r\n$8\r\ntoken_v2\r\n$5\r\n00123\r\n")
+            .await
+            .unwrap();
+        let error = b"-ERR no recorded Redis dependency matched\r\n";
+        let mut response = vec![0; error.len()];
+        tokio::time::timeout(Duration::from_secs(5), client.read_exact(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&response, error);
+        task.abort();
+    }
+}
+
+#[tokio::test]
+async fn redis_time_shift_scope_rejects_duplicate_partial_and_unsafe_shared_lanes() {
+    for variant in ["duplicate", "partial", "nil", "timestamp"] {
+        let temp = shared_read_recording(1);
+        let root = temp.path();
+        let file = root.join("apis/playback/origin-0/dependencies.jsonl");
+        let mut record: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        let (dependency, expected) = match variant {
+            "duplicate" => (
+                format!("{record}\n{record}"),
+                "duplicate Redis cross-case exchange identity",
+            ),
+            "partial" => {
+                let connection = serde_json::from_value(record["connection_id"].clone()).unwrap();
+                let other = redis_dependency(connection, 2, "other", b"$5\r\nvalue\r\n");
+                (
+                    format!("{record}\n{other}"),
+                    "cannot split a recorded connection lane",
+                )
+            }
+            "nil" => {
+                record["response_kind"] = json!("nil");
+                record["response"] = capture_json(b"$-1\r\n");
+                (record.to_string(), "complete successful ordinary JSON read")
+            }
+            "timestamp" => {
+                record.as_object_mut().unwrap().remove("timestamp");
+                (record.to_string(), "original exchange timestamp")
+            }
+            _ => unreachable!(),
+        };
+        std::fs::write(&file, dependency).unwrap();
+        for case in [root.to_path_buf(), root.join("apis/tasks/consumer")] {
+            let error = load_shared_read_recording(&case, &root.join("verification.yaml"))
+                .await
+                .err()
+                .expect("invalid shared evidence must prevent startup");
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected {variant} failure: {error:#}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn redis_time_shift_scope_plan_apply_shares_a_complete_multi_read_lane() {
+    let temp = shared_read_recording(2);
+    let root = temp.path();
+    let origin = root.join("apis/playback/origin-0/dependencies.jsonl");
+    let second = root.join("apis/playback/origin-1/dependencies.jsonl");
+    let first: Value = serde_json::from_slice(&std::fs::read(&origin).unwrap()).unwrap();
+    let mut refresh: Value = serde_json::from_slice(&std::fs::read(&second).unwrap()).unwrap();
+    refresh["connection_id"] = first["connection_id"].clone();
+    refresh["sequence"] = json!(2);
+    let timestamp: chrono::DateTime<Utc> =
+        serde_json::from_value(first["timestamp"].clone()).unwrap();
+    refresh["timestamp"] = json!(timestamp + chrono::Duration::seconds(1));
+    std::fs::write(&origin, format!("{first}\n{refresh}")).unwrap();
+    std::fs::write(&second, "").unwrap();
+    let immutable = std::fs::read(&origin).unwrap();
+    let policy = root.join("verification.yaml");
+    let original_policy = std::fs::read_to_string(&policy)
+        .unwrap()
+        .replace("  replay_scope: recording_run\n", "")
+        .replace(
+            "  source_evidence: module cache shares one token across requests\n",
+            "",
+        );
+    std::fs::write(&policy, original_policy).unwrap();
+    super::super::write_test_recording_network_manifest(root);
+    let consumer = root.join("apis/tasks/consumer");
+    std::fs::copy(
+        root.join(crate::recording_network::RECORDING_NETWORK_FILENAME),
+        consumer.join(crate::recording_network::RECORDING_NETWORK_FILENAME),
+    )
+    .unwrap();
+    let (addr, state, task) = redis_value_tests::spawn(&consumer, Some(policy.clone())).await;
+    assert_eq!(
+        begin_case(&control("begin", "consumer"), state.clone()).await["ok"],
+        true
+    );
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    client
+        .write_all(b"*3\r\n$4\r\nHGET\r\n$8\r\ntoken_v2\r\n$5\r\n00123\r\n")
+        .await
+        .unwrap();
+    let error = b"-ERR no recorded Redis dependency matched\r\n";
+    let mut response = vec![0; error.len()];
+    tokio::time::timeout(Duration::from_secs(5), client.read_exact(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&response, error);
+    let report = root.join("failed-replay.json");
+    {
+        let mut replay = state.lock().await;
+        replay.finalized_at = Some(Utc::now());
+        std::fs::write(
+            &report,
+            serde_json::to_vec(&replay.snapshot_report()).unwrap(),
+        )
+        .unwrap();
+    }
+    task.abort();
+    let feedback = RedisCrossCaseFeedback {
+        policy_path: policy.clone(),
+        case_source: consumer.clone(),
+        replay_report_path: report,
+        rule_id: "token-time".into(),
+        source_evidence: "module cache shares initial and refreshed tokens across requests".into(),
+    };
+    let plan = plan_redis_cross_case(feedback.clone()).unwrap();
+    assert_eq!(plan.report().evidence["matching_exchanges"], 2);
+    // Planning must still reject a partial lane and changed evidence at apply.
+    let connection = serde_json::from_value(first["connection_id"].clone()).unwrap();
+    let other = redis_dependency(connection, 3, "other", b"$5\r\nvalue\r\n");
+    std::fs::write(&origin, format!("{first}\n{refresh}\n{other}")).unwrap();
+    assert!(plan_redis_cross_case(feedback.clone()).is_err());
+    assert!(plan.apply().is_err());
+    std::fs::write(&origin, &immutable).unwrap();
+    plan_redis_cross_case(feedback).unwrap().apply().unwrap();
+    for case in [root.to_path_buf(), consumer] {
+        let (addr, state, task) = redis_value_tests::spawn(&case, Some(policy.clone())).await;
+        assert_eq!(
+            begin_case(&control("begin", "consumer"), state.clone()).await["ok"],
+            true
+        );
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        assert_eq!(hget(&mut client).await["read_id"], 0);
+        assert_eq!(hget(&mut client).await["read_id"], 1);
+        let report = serde_json::to_value(state.lock().await.snapshot_report()).unwrap();
+        assert_eq!(report["redis"]["matched_count"], 2);
+        assert_eq!(report["redis"]["matched"][0]["sequence"], 1);
+        assert_eq!(report["redis"]["matched"][1]["sequence"], 2);
+        assert!(
+            report["redis"]["unused_global"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        task.abort();
+    }
+    assert_eq!(std::fs::read(origin).unwrap(), immutable);
+}
+
 async fn get_token(cache: &mut Option<Value>, client: &mut TcpStream) -> Value {
     if let Some(token) = cache.as_ref()
         && Utc::now().timestamp_millis() - token["timestamp"].as_i64().unwrap() < 10800000

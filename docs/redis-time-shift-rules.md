@@ -110,11 +110,13 @@ finite consumption are unchanged. Reusable/background snapshots cannot be
 combined with this rule. Successful delivery records bounded rule IDs and
 offsets, never credentials. Failed transformation/delivery remains dirty.
 
-## One shared read across cases
+## Shared reads across cases
 
 When a source cache outlives an individual API case, an existing time-shift
-rule can be promoted to `recording_run` scope. This applies only to one
-ordinary, successful GET or HGET exchange in the completed recording run.
+rule can be promoted to `recording_run` scope. This applies to ordinary,
+successful GET or HGET exchanges in the completed recording run, including
+multiple cache refreshes. These remain request-owned evidence; sharing does
+not classify the reads as process-owned background work.
 The key and HGET field must be exact selectors. The planner requires a
 finalized Replay report containing an unmatched read with the same request
 identity in another case, plus source evidence for the shared cache lifetime.
@@ -128,11 +130,15 @@ backend-rewrite --target-root /path/to/target dependency-rule apply <plan-id>
 ```
 
 The resulting rule adds `replay_scope: recording_run` and retains the source
-evidence. Replay loads the selected sibling exchange into the run inventory,
-reports its origin case and rule ID, and consumes it only once. Other Redis
-commands retain their case scope. A rule selecting multiple reads, a partial
-connection lane, a snapshot, or an unsafe response fails validation. The
-recording remains unchanged; fresh Replay verifies the repaired contract.
+evidence. Replay loads the selected sibling exchanges into the run inventory
+in capture-time order, reports each origin case and rule ID, and consumes each
+exchange only once. A later recording with no selected reads still starts:
+the rule creates no inventory, and any actual unrecorded target read remains
+unmatched. Planning a new rule still requires exact unmatched-request and
+recorded sibling evidence. Other Redis commands retain their case scope.
+A partial connection lane, a snapshot, or an unsafe response fails validation;
+every read in a shared lane must be selected. The recording remains unchanged;
+fresh Replay verifies the repaired contract.
 
 If the selected timestamp participates in a signature or a later dependency
 argument, simple field translation may not be applicable; source review must
