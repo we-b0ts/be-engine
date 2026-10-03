@@ -1433,7 +1433,7 @@ fn classifies_an_overlapping_baseline_change_as_source_change() {
 }
 
 #[test]
-fn source_after_is_not_an_alternate_oracle_by_default() {
+fn source_after_match_never_passes_comparison() {
     let temp = tempdir().unwrap();
     let run = create_run(
         temp.path(),
@@ -1465,126 +1465,6 @@ fn source_after_is_not_an_alternate_oracle_by_default() {
         ComparisonVerificationClassification::SourceChange
     );
     assert_eq!(report.cases[0].matched_source, None);
-    assert!(report.cases[0].response_after.is_none());
-}
-
-#[test]
-fn before_or_after_accepts_a_complete_source_after_match() {
-    let temp = tempdir().unwrap();
-    let run = create_run(
-        temp.path(),
-        json!({"left": "before", "right": "before"}),
-        json!({"left": "after", "right": "after"}),
-    );
-    let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");
-    write_response(
-        &case.join("expected-response-after.json"),
-        json!({"left": "after", "right": "after"}),
-    );
-    let policy = temp.path().join("verification.yaml");
-    fs::write(
-        &policy,
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
-    )
-    .unwrap();
-
-    let report = verify_comparison_recording(ComparisonVerificationOptions {
-        case_source: run.clone(),
-        policy,
-        report: run.join("comparison-report.json"),
-    })
-    .unwrap();
-
-    assert!(report.complete);
-    assert!(report.passed);
-    assert_eq!(report.counts.passed, 1);
-    assert_eq!(
-        report.cases[0].matched_source,
-        Some(MatchedSourceObservation::After)
-    );
-    assert!(
-        report.cases[0]
-            .response_after
-            .as_ref()
-            .unwrap()
-            .differences
-            .is_empty()
-    );
-}
-
-#[test]
-fn before_or_after_does_not_mix_fields_from_source_observations() {
-    let temp = tempdir().unwrap();
-    let run = create_run(
-        temp.path(),
-        json!({"left": "before", "right": "before"}),
-        json!({"left": "before", "right": "after"}),
-    );
-    let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");
-    write_response(
-        &case.join("expected-response-after.json"),
-        json!({"left": "after", "right": "after"}),
-    );
-    let policy = temp.path().join("verification.yaml");
-    fs::write(
-        &policy,
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
-    )
-    .unwrap();
-
-    let report = verify_comparison_recording(ComparisonVerificationOptions {
-        case_source: run.clone(),
-        policy,
-        report: run.join("comparison-report.json"),
-    })
-    .unwrap();
-
-    assert!(!report.passed);
-    assert_eq!(
-        report.cases[0].classification,
-        ComparisonVerificationClassification::SourceChange
-    );
-    assert_eq!(report.cases[0].matched_source, None);
-    assert_eq!(
-        report.cases[0]
-            .response_after
-            .as_ref()
-            .unwrap()
-            .differences
-            .len(),
-        1
-    );
-}
-
-#[test]
-fn before_or_after_requires_a_source_after_artifact() {
-    let temp = tempdir().unwrap();
-    let body = json!({"value": "stable"});
-    let run = create_run(temp.path(), body.clone(), body);
-    let policy = temp.path().join("verification.yaml");
-    fs::write(
-        &policy,
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
-    )
-    .unwrap();
-
-    let report = verify_comparison_recording(ComparisonVerificationOptions {
-        case_source: run.clone(),
-        policy,
-        report: run.join("comparison-report.json"),
-    })
-    .unwrap();
-
-    assert!(!report.complete);
-    assert!(!report.passed);
-    assert_eq!(report.counts.unevaluable, 1);
-    assert!(
-        report.cases[0]
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("requires expected-response-after.json")
-    );
 }
 
 #[test]
@@ -1652,6 +1532,10 @@ fn source_change_is_diagnostic_when_candidate_matches_source_before() {
     .unwrap();
 
     assert!(report.passed);
+    assert_eq!(
+        report.cases[0].matched_source,
+        Some(MatchedSourceObservation::Before)
+    );
     assert_eq!(
         report.cases[0].classification,
         ComparisonVerificationClassification::Passed

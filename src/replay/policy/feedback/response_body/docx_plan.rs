@@ -102,18 +102,6 @@ pub(super) fn plan(
             }) {
                 examples_observed.insert((rule.part.clone(), rule.element.clone()));
             }
-            if let Some(source_after) = &case.source_after_body
-                && crate::replay::assertion::docx::timestamp_values(
-                    source_after,
-                    &case.actual_body,
-                    rule,
-                )?
-                .is_some_and(|(source, target)| {
-                    source == rule.source_example && target == rule.target_example
-                })
-            {
-                examples_observed.insert((rule.part.clone(), rule.element.clone()));
-            }
         }
         let case_discovered = diagnosis
             .differences
@@ -143,25 +131,8 @@ pub(super) fn plan(
             &effective,
             case.times,
         )?;
-        let matches_after = if !matches_before
-            && evidence.source_match == ComparisonSourceMatch::BeforeOrAfter
-            && case.source_after_body.is_some()
-        {
-            crate::replay::assertion::docx::evaluate_docx(
-                case.source_after_body.as_deref().unwrap_or_default(),
-                &case.actual_body,
-                &effective,
-                RequestTimes {
-                    source: case.source_after_time,
-                    target: case.times.target,
-                },
-            )?
-            .0
-        } else {
-            false
-        };
         ensure!(
-            matches_before || matches_after,
+            matches_before,
             "DOCX timestamp rules leave a content or time-validation difference in case {:?}",
             case.case_id
         );

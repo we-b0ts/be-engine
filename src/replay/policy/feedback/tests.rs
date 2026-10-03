@@ -537,7 +537,7 @@ fn plans_and_applies_comparison_only_counter_fields() {
     let comparison = temp.path().join("comparison-report.json");
     fs::write(
         &policy,
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_settings:\n  comparison:\n    source_match: before\n",
     )
     .unwrap();
     let fingerprint = validate_replay_policy(&policy).unwrap().fingerprint;
@@ -595,24 +595,24 @@ fn plans_and_applies_comparison_only_counter_fields() {
     plan.apply().unwrap();
     let updated = fs::read_to_string(&policy).unwrap();
     assert!(updated.contains("comparison:"));
-    assert!(updated.contains("source_match: before_or_after"));
+    assert!(updated.contains("source_match: before"));
     assert!(updated.contains("counter:"));
     assert!(updated.contains("src/user.rs:load live follower count"));
     let report = validate_replay_policy(&policy).unwrap();
     assert_eq!(
         report.comparison.source_match,
-        crate::replay::ComparisonSourceMatch::BeforeOrAfter
+        crate::replay::ComparisonSourceMatch::Before
     );
 }
 
 #[test]
-fn a_permitted_source_after_match_does_not_authorize_a_response_rule() {
+fn historical_source_after_verdict_does_not_authorize_a_response_rule() {
     let temp = tempdir().unwrap();
     let policy = temp.path().join("verification.yaml");
     let comparison = temp.path().join("comparison-report.json");
     fs::write(
         &policy,
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_settings:\n  comparison:\n    source_match: before\n",
     )
     .unwrap();
     let fingerprint = validate_replay_policy(&policy).unwrap().fingerprint;
@@ -666,7 +666,7 @@ fn a_permitted_source_after_match_does_not_authorize_a_response_rule() {
     assert!(
         error
             .to_string()
-            .contains("already matches the permitted source-after observation")
+            .contains("uses removed source-after acceptance")
     );
 }
 

@@ -18,7 +18,7 @@ use crate::comparison_recording::{
 };
 use crate::replay::assertion::{RequestTimes, diagnose_response_body, read_replay_request_times};
 use crate::replay::{
-    ComparisonSourceMatch, ResponseAssertionCaseReport, ResponseBodyJoinedStringCandidate,
+    ResponseAssertionCaseReport, ResponseBodyJoinedStringCandidate,
     ResponseBodyUnorderedPathCandidate, ResponseDifferenceKind, read_actual_response_body,
     read_comparison_response_observation, read_expected_response_body,
 };
@@ -134,7 +134,6 @@ struct ResponseBodyPlanningEvidence {
     kind: ResponseBodyRuleEvidenceKind,
     report: PathBuf,
     fingerprint: String,
-    source_match: ComparisonSourceMatch,
     cases: Vec<ResponseBodyPlanningCase>,
     verification: ResponseBodyPlanVerification,
 }
@@ -148,9 +147,7 @@ struct ResponseBodyPlanningCase {
     response: Option<ResponseAssertionCaseReport>,
     expected_body: Vec<u8>,
     actual_body: Vec<u8>,
-    source_after_body: Option<Vec<u8>>,
     times: RequestTimes,
-    source_after_time: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 fn load_planning_evidence(
@@ -204,44 +201,29 @@ fn load_comparison_evidence(
     let mut cases = Vec::with_capacity(matching.len());
     for case in matching {
         let case_dir = Path::new(&case.case_dir);
-        let (expected_body, actual_body, source_after_body, times, source_after_time) =
-            if case.passed {
-                (Vec::new(), Vec::new(), None, RequestTimes::default(), None)
-            } else {
-                let request = case_dir.join("request.json");
-                let expected = read_comparison_response_observation(
-                    &request,
-                    &case_dir.join("expected-response.json"),
-                    "source-before response",
-                )?;
-                let actual = read_comparison_response_observation(
-                    &request,
-                    &case_dir.join("response.json"),
-                    "candidate response",
-                )?;
-                let after = case
-                    .response_after
-                    .as_ref()
-                    .map(|_| {
-                        read_comparison_response_observation(
-                            &request,
-                            &case_dir.join("expected-response-after.json"),
-                            "source-after response",
-                        )
-                    })
-                    .transpose()?;
-                let source_after_time = after.as_ref().and_then(|response| response.timestamp);
-                (
-                    expected.body,
-                    actual.body,
-                    after.map(|response| response.body),
-                    RequestTimes {
-                        source: expected.timestamp,
-                        target: actual.timestamp,
-                    },
-                    source_after_time,
-                )
-            };
+        let (expected_body, actual_body, times) = if case.passed {
+            (Vec::new(), Vec::new(), RequestTimes::default())
+        } else {
+            let request = case_dir.join("request.json");
+            let expected = read_comparison_response_observation(
+                &request,
+                &case_dir.join("expected-response.json"),
+                "source-before response",
+            )?;
+            let actual = read_comparison_response_observation(
+                &request,
+                &case_dir.join("response.json"),
+                "candidate response",
+            )?;
+            (
+                expected.body,
+                actual.body,
+                RequestTimes {
+                    source: expected.timestamp,
+                    target: actual.timestamp,
+                },
+            )
+        };
         cases.push(ResponseBodyPlanningCase {
             case_id: case.case_id.clone(),
             passed: case.passed,
@@ -252,16 +234,13 @@ fn load_comparison_evidence(
             response: case.response.clone(),
             expected_body,
             actual_body,
-            source_after_body,
             times,
-            source_after_time,
         });
     }
     Ok(ResponseBodyPlanningEvidence {
         kind: ResponseBodyRuleEvidenceKind::Comparison,
         report: comparison_report.to_path_buf(),
         fingerprint: fingerprint(&bytes),
-        source_match: comparison.source_match,
         cases,
         verification: ResponseBodyPlanVerification::Comparison {
             case_source: PathBuf::from(comparison.case_source),
@@ -404,9 +383,7 @@ fn load_focused_e2e_evidence(
             response: Some(detail),
             expected_body,
             actual_body,
-            source_after_body: None,
             times,
-            source_after_time: None,
         });
     }
     ensure!(
@@ -417,7 +394,6 @@ fn load_focused_e2e_evidence(
         kind: ResponseBodyRuleEvidenceKind::FocusedE2e,
         report: assertion_report.to_path_buf(),
         fingerprint: fingerprint(&assertion_bytes),
-        source_match: ComparisonSourceMatch::Before,
         cases,
         verification: ResponseBodyPlanVerification::FocusedE2e {
             cases: verification_cases,
@@ -736,24 +712,8 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
                     &feedback.unordered_paths,
                     &feedback.unordered_joined_string_paths,
                 )?;
-                let selected_matches_after = if !selected_matches_before
-                    && evidence.source_match == ComparisonSourceMatch::BeforeOrAfter
-                    && case.source_after_body.is_some()
-                {
-                    selected_response_body_paths_match(
-                        case.source_after_body.as_deref().unwrap_or_default(),
-                        &case.actual_body,
-                        feedback.codec,
-                        &effective_paths,
-                        &effective_joined_string_paths,
-                        &feedback.unordered_paths,
-                        &feedback.unordered_joined_string_paths,
-                    )?
-                } else {
-                    false
-                };
                 ensure!(
-                    selected_matches_before || selected_matches_after,
+                    selected_matches_before,
                     "reviewed response-body unordered paths do not preserve exact values at their selected locations in case {:?}",
                     case.case_id
                 );
@@ -765,21 +725,7 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
                 &effective_paths,
                 &effective_joined_string_paths,
             )?;
-            let matches_after = if !matches_before
-                && evidence.source_match == ComparisonSourceMatch::BeforeOrAfter
-                && case.source_after_body.is_some()
-            {
-                compare_response_body(
-                    case.source_after_body.as_deref().unwrap_or_default(),
-                    &case.actual_body,
-                    feedback.codec,
-                    &effective_paths,
-                    &effective_joined_string_paths,
-                )?
-            } else {
-                false
-            };
-            residual_difference_cases += usize::from(!matches_before && !matches_after);
+            residual_difference_cases += usize::from(!matches_before);
         }
     } else {
         residual_difference_cases = diagnosed_difference_cases;

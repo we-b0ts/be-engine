@@ -360,20 +360,21 @@ invalid, or wrong managed key material blocks Replay. The system passes the key
 only to Recorder and Comparison processes; it is never injected into source,
 target, Breeze, commands, or policy.
 
-Comparison recording does not compare responses. It returns the baseline
-response and records the request plus baseline and candidate responses under
+Comparison recording returns the baseline response and records the request
+plus baseline and candidate responses under
 `<artifacts.root_dir>/comparison-recordings/<run-id>/`. It uses
 `http_gateway.matched_upstream` as the baseline unless
 `comparison_recording.baseline_upstream` is explicitly set. It does not load
-response rules while recording, publish dependencies, or initialize a MITM
-CA. Managed comparison installs only the cache-port interception needed for
+response rules in the capture path, publish dependencies, or initialize a MITM
+CA. Managed recording evaluates published cases under the verification policy
+for its online failure limit; file-only comparison reports the finalized verdict. Managed comparison installs only the cache-port interception needed for
 configured Redis process-owned rules; source and candidate share a new run-local
 first-value snapshot independent of standard Replay evidence. It validates the
-verification policy and reads
-only `response_settings.comparison.source_match` to decide whether source recheck
-evidence is required. The policy defaults to `verification.yaml` next to the
-recorder config and may be provided explicitly with `--policy`. Response bodies
-are decoded according to their own `Content-Encoding` before being stored for
+verification policy; source rechecks are enabled only by explicit recorder
+configuration or `--baseline-recheck`. The policy defaults to `verification.yaml`
+next to the recorder config and may be provided explicitly with `--policy`.
+Response bodies are decoded according to their own `Content-Encoding` before
+being stored for
 semantic comparison, while the baseline response returned to the frontend
 retains its original encoding. Comparison request and response bodies each
 default to a 64 MiB limit.
@@ -401,28 +402,22 @@ receives the configured fixed response. The runtime never intentionally
 forwards comparison traffic only to the source.
 
 By default the source baseline is requested once. Set
-`[comparison_recording].baseline_recheck = true` to capture the same request in
-strict source-before, candidate, source-after order. The frontend receives the
-first source response after the complete serial comparison case is captured
-and published. The recheck adds `expected-response-after.json` and is diagnostic
-evidence for source-time drift by default. It runs only for admitted cases.
-Use the enable-only `--baseline-recheck` flag for one diagnostic run without
-changing the source-controlled default. A policy with
-`source_match: before_or_after` enables the recheck automatically.
+`comparison_recording.baseline_recheck: true` or use the enable-only
+`--baseline-recheck` flag to capture a second source response for diagnosis.
+The first source and candidate dispatches use the run's pair-balanced random
+schedule; the source recheck follows both. The frontend receives the first
+source response after the complete comparison case is captured and published.
+The recheck adds `expected-response-after.json` and reports source changes,
+but never supplies an alternate acceptance oracle. It runs only for admitted
+cases.
 
-The verification policy separately controls source-observation acceptance:
-
-```yaml
-response_settings:
-  comparison:
-    source_match: before_or_after
-```
-
-The default is `before`. `before_or_after` automatically records a source
-recheck for every admitted case and passes only when the candidate matches one
-complete source response under the active response rules. It never combines
-fields from source-before and source-after. Standard replay ignores this
-setting.
+Comparison always checks the candidate against the first source response under
+the active response rules. `response_settings.comparison.source_match` supports
+only `before` (the default). The removed `before_or_after` value is rejected;
+existing configurations must remove that setting or change it to `before`.
+A difference still requires source-code diagnosis even when source-after changes
+at the same location or matches the candidate. Standard Replay ignores this
+comparison-only setting.
 
 Comparison recording artifacts carry `case-kind.json` with
 `kind = comparison_recording` and are not replay inputs. `prepare`, case
@@ -486,10 +481,11 @@ traffic-e2e compare \
 ```
 
 The command writes `comparison-report.json` in the run directory by default
-and exits non-zero when a response differs from every permitted source
-observation, source-before/source-after drift makes a case inconclusive, or a
-case cannot be evaluated. The comparison behavior and field rules under
-`response_rules` participate in this phase; dependency matching rules remain
+and exits non-zero when a candidate response differs from the first source
+response under the active rules, an applicable response rule is unused, or a
+case cannot be evaluated. Source-before/source-after drift is diagnostic and
+never makes a differing candidate pass. The field rules under `response_rules`
+participate in this phase; dependency matching rules remain
 replay-only. Comparison applies JSON `timestamp`, `duration`, `uuid`, `random`,
 `unordered`, and `counter` rules plus configured protobuf, Hessian2, and DOCX rules. A failed response report includes one
 top-level `representative_difference` with the API, case ID, Pointer,

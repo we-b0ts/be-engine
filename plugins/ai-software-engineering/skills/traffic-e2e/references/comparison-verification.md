@@ -57,8 +57,8 @@ Comparison sends every admitted request symmetrically to
 source and candidate, using the methods declared by the selected HTTP gateway
 rule or the matching Motan gateway rule without a separate read-only-method
 restriction. Use repeatable `--api`, optional positive `--per-api-case-limit`,
-and `--baseline-recheck` only when the verification policy or diagnosis needs
-source-after evidence.
+and `--baseline-recheck` only when diagnosis needs source-after evidence.
+Source-after never serves as an alternate acceptance oracle.
 With explicit API selectors, comparison recording finalizes normally when
 every selected API reaches its case limit; `--duration-seconds` remains the
 upper bound. The project-level `verification.max_failed_cases_per_api` limit
@@ -85,7 +85,7 @@ period is extended to
 default). Source and candidate files are copied after that wait and before
 their containers stop. The capture is scoped to this single-API comparison
 run; standard Replay does not collect these outputs. Source-after remains
-independently controlled by `baseline_recheck` and the verification policy.
+explicitly controlled by `baseline_recheck` or `--baseline-recheck`.
 Because source-after sends a second request only to the source process,
 cumulative process-output contents are not workload-symmetric when it is
 enabled; do not add raw-content equality without an explicit segmentation or

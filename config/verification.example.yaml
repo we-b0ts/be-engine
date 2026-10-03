@@ -95,7 +95,7 @@ process_output_rules: {}
 # Whole-response comparison settings are not field rules.
 response_settings:
   comparison:
-    # before_or_after automatically enables source rechecks during record-comparison.
+    # Only the first source response is accepted as the comparison oracle.
     source_match: before
 
 # Add source-proven replay fields through `config replay` and comparison-only

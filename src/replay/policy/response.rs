@@ -29,7 +29,6 @@ pub use joined_string::{
 pub enum ComparisonSourceMatch {
     #[default]
     Before,
-    BeforeOrAfter,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]

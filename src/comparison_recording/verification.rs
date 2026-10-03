@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::representative::{
@@ -67,7 +67,6 @@ pub enum ComparisonVerificationClassification {
 #[serde(rename_all = "snake_case")]
 pub enum MatchedSourceObservation {
     Before,
-    After,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,8 +80,6 @@ pub struct ComparisonVerificationCase {
     pub response: Option<ResponseAssertionCaseReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub baseline_recheck: Option<ResponseAssertionCaseReport>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub response_after: Option<ResponseAssertionCaseReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matched_source: Option<MatchedSourceObservation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -273,42 +270,18 @@ pub fn verify_comparison_recording(
         } else {
             None
         };
-        let response_after = match policy.comparison.source_match {
-            ComparisonSourceMatch::Before => Ok(None),
-            ComparisonSourceMatch::BeforeOrAfter if has_recheck => {
-                assert_comparison_response(ComparisonResponseAssertionOptions {
-                    case_id: case_id.clone(),
-                    request: case_dir.join("request.json"),
-                    expected_response: recheck_path,
-                    response: case_dir.join("response.json"),
-                    policy: options.policy.clone(),
-                })
-                .map(Some)
-            }
-            ComparisonSourceMatch::BeforeOrAfter => Err(anyhow!(
-                "response_settings.comparison.source_match=before_or_after requires expected-response-after.json"
-            )),
-        };
-        match (response, baseline_recheck.transpose(), response_after) {
-            (Ok(response), Ok(baseline_recheck), Ok(response_after)) => {
+        match (response, baseline_recheck.transpose()) {
+            (Ok(response), Ok(baseline_recheck)) => {
                 let source_change_pointers = baseline_recheck
                     .as_ref()
                     .map(difference_pointers)
                     .unwrap_or_default();
                 let candidate_only_pointers =
                     unexplained_candidate_pointers(&response, baseline_recheck.as_ref());
-                let policy_mismatch_rule_ids = policy_mismatch_rule_ids(
-                    &response,
-                    baseline_recheck.as_ref(),
-                    response_after.as_ref(),
-                );
+                let policy_mismatch_rule_ids =
+                    policy_mismatch_rule_ids(&response, baseline_recheck.as_ref());
                 let matched_source = if response.differences.is_empty() {
                     Some(MatchedSourceObservation::Before)
-                } else if response_after
-                    .as_ref()
-                    .is_some_and(|report| report.differences.is_empty())
-                {
-                    Some(MatchedSourceObservation::After)
                 } else {
                     None
                 };
@@ -347,7 +320,6 @@ pub fn verify_comparison_recording(
                     passed,
                     response: Some(response),
                     baseline_recheck,
-                    response_after,
                     matched_source,
                     source_change_pointers,
                     candidate_only_pointers,
@@ -355,7 +327,7 @@ pub fn verify_comparison_recording(
                     error: None,
                 });
             }
-            (response, baseline_recheck, response_after) => {
+            (response, baseline_recheck) => {
                 counts.unevaluable += 1;
                 update_api_counts(
                     api_counts.entry(api.clone()).or_default(),
@@ -365,7 +337,6 @@ pub fn verify_comparison_recording(
                     .err()
                     .into_iter()
                     .chain(baseline_recheck.err())
-                    .chain(response_after.err())
                     .map(|error| format!("{error:#}"))
                     .collect::<Vec<_>>()
                     .join("; ");
@@ -377,7 +348,6 @@ pub fn verify_comparison_recording(
                     passed: false,
                     response: None,
                     baseline_recheck: None,
-                    response_after: None,
                     matched_source: None,
                     source_change_pointers: Vec::new(),
                     candidate_only_pointers: Vec::new(),
@@ -464,32 +434,8 @@ pub(super) fn comparison_case_passes(case_dir: &Path, policy_path: &Path) -> Res
     } else {
         None
     };
-    let response_after = match policy.comparison.source_match {
-        ComparisonSourceMatch::Before => None,
-        ComparisonSourceMatch::BeforeOrAfter if has_recheck => Some(assert_comparison_response(
-            ComparisonResponseAssertionOptions {
-                case_id,
-                request,
-                expected_response: recheck_path,
-                response: case_dir.join("response.json"),
-                policy: policy_path.to_path_buf(),
-            },
-        )?),
-        ComparisonSourceMatch::BeforeOrAfter => {
-            return Err(anyhow!(
-                "response_settings.comparison.source_match=before_or_after requires expected-response-after.json"
-            ));
-        }
-    };
-    let matched_source = response.differences.is_empty()
-        || response_after
-            .as_ref()
-            .is_some_and(|report| report.differences.is_empty());
-    let policy_mismatch = policy_mismatch_rule_ids(
-        &response,
-        baseline_recheck.as_ref(),
-        response_after.as_ref(),
-    );
+    let matched_source = response.differences.is_empty();
+    let policy_mismatch = policy_mismatch_rule_ids(&response, baseline_recheck.as_ref());
     Ok(matched_source && policy_mismatch.is_empty())
 }
 
@@ -567,9 +513,8 @@ fn unexplained_candidate_pointers(
 fn policy_mismatch_rule_ids(
     response: &ResponseAssertionCaseReport,
     baseline_recheck: Option<&ResponseAssertionCaseReport>,
-    response_after: Option<&ResponseAssertionCaseReport>,
 ) -> Vec<String> {
-    let reports = [Some(response), baseline_recheck, response_after]
+    let reports = [Some(response), baseline_recheck]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();

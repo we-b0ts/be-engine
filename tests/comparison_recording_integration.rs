@@ -395,15 +395,24 @@ async fn returns_baseline_after_the_serial_comparison_case_is_complete() {
 }
 
 #[tokio::test]
-async fn comparison_stops_selected_api_when_verification_failure_limit_is_reached() {
+async fn source_after_match_still_reaches_verification_failure_limit() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
-    let baseline = spawn_response_upstream("baseline", 1).await;
+    let baseline = spawn_status_sequence_upstream(vec![
+        (StatusCode::OK, "baseline"),
+        (StatusCode::OK, "candidate"),
+    ])
+    .await;
     let candidate = spawn_response_upstream("candidate", 1).await;
     let gateway = free_addr();
     let run_id = "20260922120000";
-    let config = comparison_recording_config(&temp, gateway, baseline, candidate);
+    let mut config = comparison_recording_config(&temp, gateway, baseline, candidate);
+    config
+        .comparison_recording
+        .as_mut()
+        .unwrap()
+        .baseline_recheck = true;
     let policy = temp.path().join("verification.yaml");
     let control_socket = temp.path().join("failure-limit-comparison.sock");
     std::fs::write(
@@ -441,6 +450,7 @@ async fn comparison_stops_selected_api_when_verification_failure_limit_is_reache
     assert_eq!(summary["status"], "completed");
     assert_eq!(summary["completion_reason"], "failure_limit_reached");
     assert_eq!(summary["counts"]["verification_failed"], 1);
+    assert_eq!(summary["counts"]["baseline_recheck_success"], 1);
     assert_eq!(summary["counts"]["apis_stopped_by_failure_limit"], 1);
     assert_eq!(
         summary["apis"]["GET /api/users/*"]["failure_limit_reached"],

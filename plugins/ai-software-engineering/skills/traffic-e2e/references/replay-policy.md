@@ -51,13 +51,13 @@ Comparison also loads JSON `counter` rules. Replay and comparison-only rules
 must select disjoint JSON subtrees;
 overlapping strategies are rejected rather than ordered by precedence.
 
-`response_settings.comparison.source_match` is whole-response verification
-behavior, not a Pointer rule. `before` is the default. `before_or_after` requires
-`expected-response-after.json` for every comparison case and accepts the
-candidate only when it matches either complete source observation under all
-active response rules. Never combine fields from source-before and
-source-after. Standard replay ignores this setting. Do not create Pointer
-rules merely because the permitted complete source-after response matches.
+Comparison always checks the candidate against the first source response under
+all active response rules. `response_settings.comparison.source_match` accepts
+only `before` (the default); removed `before_or_after` configurations are
+rejected and must omit that setting or use `before`. Source-after evidence is
+optional and diagnostic only. Source changes and a candidate matching source-after
+do not authorize acceptance or response rules; investigate the source code.
+Standard Replay ignores this setting.
 
 `traffic-e2e config init` validates the initial policy, every
 evidence-driven `apply` validates the resulting policy, and the runner validates
@@ -265,8 +265,8 @@ requires target presence. When the source response echoes the source request,
 the target response must echo the request actually sent to the target; otherwise
 the trimmed source and target response values must have equal byte length.
 Comparison uses the request forwarded symmetrically to source and candidate.
-For `comparison.source_match: before_or_after`, headers, status, and body must
-all match the same complete source observation.
+Comparison checks headers, status, and body against the first complete source
+observation under the active response rules.
 
 An older artifact with no `headers` member has unavailable header evidence and
 retains its existing status/body verdict. Do not treat a missing snapshot as an
