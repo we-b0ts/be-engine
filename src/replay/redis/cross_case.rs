@@ -53,7 +53,7 @@ fn recorded_fingerprint(record: &RecordedExchange, args: &[Vec<u8>]) -> String {
     )
 }
 
-/// Prove an unmatched target read has one exact, safe sibling exchange.
+/// Prove an unmatched target read has exact, safe sibling evidence.
 pub(in crate::replay) fn verify_candidate(
     source: &Path,
     report_path: &Path,
@@ -96,7 +96,8 @@ pub(in crate::replay) fn verify_candidate(
     for file in files {
         let origin = super::super::recording_evidence::case_id(&file)?;
         let mut lane_counts = BTreeMap::<Uuid, usize>::new();
-        let mut selected_lanes = Vec::new();
+        let mut selected_lanes = BTreeMap::<Uuid, usize>::new();
+        let mut selected_identities = BTreeSet::new();
         for (line, raw) in BufReader::new(fs::File::open(&file)?).lines().enumerate() {
             let raw = raw?;
             if !raw.contains("redis_exchange") {
@@ -119,8 +120,12 @@ pub(in crate::replay) fn verify_candidate(
                 continue;
             }
             shareable(&record, selector)?;
+            ensure!(
+                selected_identities.insert((record.connection_id, record.sequence)),
+                "duplicate Redis cross-case exchange identity"
+            );
             selected += 1;
-            selected_lanes.push(record.connection_id);
+            *selected_lanes.entry(record.connection_id).or_default() += 1;
             digest.update(file.strip_prefix(&root)?.as_os_str().as_encoded_bytes());
             digest.update((line as u64).to_be_bytes());
             digest.update(Sha256::digest(raw.as_bytes()));
@@ -132,16 +137,16 @@ pub(in crate::replay) fn verify_candidate(
                 );
             }
         }
-        for lane in selected_lanes {
+        for (lane, selected_count) in selected_lanes {
             ensure!(
-                lane_counts.get(&lane) == Some(&1),
+                lane_counts.get(&lane) == Some(&selected_count),
                 "Redis cross-case cannot split a recorded connection lane"
             );
         }
     }
     ensure!(
-        selected == 1,
-        "Redis cross-case requires exactly one selected read in the completed recording run"
+        selected > 0,
+        "Redis cross-case requires selected read evidence in the completed recording run"
     );
     let candidate = candidate
         .context("no exact Redis cross-case candidate for the current unmatched target read")?;
@@ -201,7 +206,7 @@ pub(in crate::replay) fn load(
         exact_read(selector)?;
     }
     let (_, files) = super::super::recording_evidence::files(root)?;
-    let mut counts = BTreeMap::<String, usize>::new();
+    let mut selected_identities = BTreeSet::new();
 
     // The selected cases were loaded normally. Reclassify only selected reads,
     // retaining the origin case for reporting and excluding them from its gate.
@@ -218,16 +223,24 @@ pub(in crate::replay) fn load(
         };
         shareable(&exchange.record, selector)?;
         ensure!(
+            selected_identities.insert((
+                exchange.case_id.clone(),
+                exchange.record.connection_id,
+                exchange.record.sequence,
+            )),
+            "duplicate Redis cross-case exchange identity"
+        );
+        ensure!(
             state
                 .exchanges
                 .iter()
                 .filter(|other| other.case_id == exchange.case_id
                     && other.record.connection_id == exchange.record.connection_id)
-                .count()
-                == 1,
+                .all(|other| rules
+                    .iter()
+                    .any(|(_, selector)| selector.matches(&other.record, &other.args))),
             "Redis cross-case cannot split a recorded connection lane"
         );
-        *counts.entry(rule_id.clone()).or_default() += 1;
         let exchange = &mut state.exchanges[index];
         exchange.source = ReplaySource::Global;
         exchange.shared_rule_id = Some(rule_id.clone());
@@ -263,15 +276,26 @@ pub(in crate::replay) fn load(
                 .find(|(_, selector)| selector.matches(&record, &args))
             {
                 shareable(&record, selector)?;
+                ensure!(
+                    selected_identities.insert((
+                        Some(origin.clone()),
+                        record.connection_id,
+                        record.sequence,
+                    )),
+                    "duplicate Redis cross-case exchange identity"
+                );
                 selected.push((rule_id.clone(), record));
             }
         }
+        let mut selected_lanes = BTreeMap::<Uuid, usize>::new();
+        for (_, record) in &selected {
+            *selected_lanes.entry(record.connection_id).or_default() += 1;
+        }
         for (rule_id, record) in selected {
             ensure!(
-                lane_counts.get(&record.connection_id) == Some(&1),
+                lane_counts.get(&record.connection_id) == selected_lanes.get(&record.connection_id),
                 "Redis cross-case cannot split a recorded connection lane"
             );
-            *counts.entry(rule_id.clone()).or_default() += 1;
             state.register_exchange(
                 record,
                 ReplaySource::Global,
@@ -286,11 +310,24 @@ pub(in crate::replay) fn load(
                 .shared_rule_id = Some(rule_id);
         }
     }
-    for (rule_id, _) in &rules {
-        ensure!(
-            counts.get(rule_id) == Some(&1),
-            "Redis cross-case scope requires exactly one selected read per recording run for rule {rule_id}"
-        );
+    // A persistent rule authorizes only the reads present in this run. Missing
+    // reads create no inventory; refreshes remain separate, single-use entries.
+    // Keep ordinary inventory order and order shared reads by capture time,
+    // independent of case UUIDs or which cases were selected for Replay.
+    state.exchanges.sort_by_key(|exchange| {
+        (
+            exchange.shared_rule_id.is_some(),
+            exchange
+                .shared_rule_id
+                .as_ref()
+                .and(exchange.record.timestamp),
+        )
+    });
+    state.case_exchange_index = CaseExchangeIndex::default();
+    for (index, exchange) in state.exchanges.iter().enumerate() {
+        state
+            .case_exchange_index
+            .register(exchange.source, exchange.case_id.as_deref(), index);
     }
     Ok(())
 }
