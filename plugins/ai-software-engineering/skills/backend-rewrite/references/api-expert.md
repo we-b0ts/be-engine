@@ -23,9 +23,9 @@ Follow the returned read-only queries. Inspect source behavior, target code in
 the supplied worktree, and relevant immutable evidence. Record the issue,
 recording, evidence IDs, and inspected code revisions or uncommitted changes.
 Use each returned query's purpose and bounded output as the diagnostic route.
-Use [api-implementer-diagnosis.md](api-implementer-diagnosis.md) for relevant
-diagnostic methods only; its code-repair and delivery instructions do not apply
-to this role.
+Use [api-implementer-diagnosis.md](api-implementer-diagnosis.md) and its routed
+specialty documents for relevant diagnostic methods only; code-repair and
+delivery instructions do not apply to this role.
 
 Do not edit code, configuration, rules, recordings, or workflow state. Do not
 run formal Replay or Comparison, integrate changes, or confirm/report workers.
