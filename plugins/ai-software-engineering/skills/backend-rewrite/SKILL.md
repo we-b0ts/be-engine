@@ -53,7 +53,8 @@ references it requests.
 
 A legacy implementation-worker assignment with API scope uses the
 `api-implementer` entrypoint. Existing `work_scope.kind=process_output`
-assignments retain [api-implementer-diagnosis.md](references/api-implementer-diagnosis.md).
+assignments use [api-implementer-diagnosis.md](references/api-implementer-diagnosis.md)
+and its routed [process-output diagnosis](references/api-implementer-process-output.md).
 
 For an explicit request to initialize an uninitialized target, read
 [project-init.md](references/project-init.md). Ordinary rewrite sessions never
@@ -70,7 +71,7 @@ instructions into one operating guide.
 | Rewrite coordinator | [coordinator.md](references/coordinator.md) | `coordinator-*.md` matching the current action |
 | API implementer | [api-implementer.md](references/api-implementer.md) | `api-implementer-*.md`, [target-code-rules.md](references/target-code-rules.md), and shared review rules as directed |
 | Code integrator | [code-integrator.md](references/code-integrator.md) | [target-code-rules.md](references/target-code-rules.md), [source-review-rules.md](references/source-review-rules.md), and `code-integrator-*.md` as directed |
-| API expert | [api-expert.md](references/api-expert.md) | Relevant read-only diagnostic methods in [api-implementer-diagnosis.md](references/api-implementer-diagnosis.md) as directed; never its code-repair or delivery instructions |
+| API expert | [api-expert.md](references/api-expert.md) | Relevant read-only diagnostic methods in [api-implementer-diagnosis.md](references/api-implementer-diagnosis.md) and its routed specialty documents as directed; never code-repair or delivery instructions |
 
 Neutral shared contracts such as target-code and source-review rules keep
 capability-based names because more than one role consumes them. Task-mode

@@ -5,7 +5,7 @@ use crate::mysql::sql::{self, Token};
 use sqlparser::{ast::Statement, dialect::MySqlDialect, parser::Parser};
 
 const MAX_SQL_BYTES: usize = 1024 * 1024;
-const MAX_TOKENS: usize = 32 * 1024;
+const MAX_TOKENS: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Effect {

@@ -122,7 +122,7 @@ fn large_predicate_width_preserves_read_proof_and_checks_every_branch() {
     // to cross the token cap stays unproven rather than being parsed unbounded.
     let oversized = format!(
         "SELECT id FROM kinds WHERE {}",
-        vec!["id=1"; 9000].join(" OR ")
+        vec!["id=1"; 20_000].join(" OR ")
     );
     assert_eq!(classify(&oversized), Effect::Unknown);
 }
