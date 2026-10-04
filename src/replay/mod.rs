@@ -39,6 +39,11 @@ mod global_dependency_tests;
 mod http;
 pub(crate) use http::cross_case as http_cross_case;
 pub use http::cross_case::HttpCrossCaseSelector;
+#[cfg(test)]
+pub(crate) use http::tests::{
+    snapshot_http_replay, spawn_coordinator_http_replay, write_http_case,
+    write_http_replay_evidence,
+};
 pub(crate) use http::unordered as http_unordered;
 pub use http::unordered::HttpUnorderedSelector;
 mod kafka;

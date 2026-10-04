@@ -88,6 +88,7 @@ pub(super) fn route(
     state.active_issue = Some(issue.clone());
     state.route = Some(route.clone());
     state.phase = super::model::RewritePhase::SystemRepairRequired;
+    state.rule_replay_pending = false;
     state.rule_plan = None;
     state.dependency_rule_plan = None;
     state.recorder_capture_plan = None;
@@ -164,6 +165,7 @@ pub(super) fn verify(
             state.system_repair_accepted = true;
             state.target_fingerprint = None;
             state.route = None;
+            state.rule_replay_pending = false;
             state.rule_plan = None;
             state.dependency_rule_plan = None;
             state.recorder_capture_plan = None;
@@ -429,6 +431,7 @@ fn resume_replay_planning(
     state.phase = RewritePhase::ImplementationRequired;
     state.target_fingerprint = None;
     state.route = None;
+    state.rule_replay_pending = false;
     state.rule_plan = None;
     state.dependency_rule_plan = None;
     state.recorder_capture_plan = None;

@@ -88,6 +88,24 @@ pub(in crate::rewrite) enum RewriteDependencyRuleSpec {
     },
 }
 
+impl RewriteDependencyRuleSpec {
+    /// These rules change live matching or assertions and cannot be accepted by
+    /// reclassifying the report produced before application.
+    pub(in crate::rewrite) fn requires_fresh_replay(&self) -> bool {
+        matches!(
+            self,
+            Self::RedisCrossCase { .. }
+                | Self::RedisTimeShift { .. }
+                | Self::HttpHeaderTimestamp { .. }
+                | Self::HttpUnordered { .. }
+                | Self::RedisUnordered { .. }
+                | Self::HttpCrossCase { .. }
+                | Self::MysqlSqlTime { .. }
+                | Self::MemcachedProtobufTimestamp { .. }
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::rewrite) struct RewriteDependencyRulePlanRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -103,3 +121,6 @@ pub(in crate::rewrite) struct RewriteDependencyRulePlanRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_name: Option<String>,
 }
+
+#[cfg(test)]
+mod tests;

@@ -275,6 +275,7 @@ pub(in crate::rewrite) fn scopes(state: &RewriteState) -> Vec<RewriteWorkScope> 
         && state.phase == RewritePhase::ImplementationRequired
         && state.active_issue.is_some()
         && !state.system_repair_accepted
+        && !super::super::rule_replay::pending(&state.active_slice)
     {
         scopes.push(RewriteWorkScope::Api {
             api: state.api.clone(),
@@ -286,6 +287,7 @@ pub(in crate::rewrite) fn scopes(state: &RewriteState) -> Vec<RewriteWorkScope> 
             && slice.phase == RewritePhase::ImplementationRequired
             && slice.active_issue.is_some()
             && !slice.system_repair_accepted
+            && !super::super::rule_replay::pending(slice)
         {
             scopes.push(RewriteWorkScope::Api { api: api.clone() });
         }
@@ -393,7 +395,8 @@ pub(in crate::rewrite) fn record_running_for_test(
 }
 
 pub(in crate::rewrite) fn acceptance_ready(state: &RewriteState, scope: &RewriteWorkScope) -> bool {
-    super::super::repair::replay_ready(state, scope)
+    super::super::rule_replay::ready(state, scope)
+        || super::super::repair::replay_ready(state, scope)
         || (super::issue_for_scope(state, scope).is_some()
             && coverage(state, scope) == RewriteWorkerCoverageState::VerificationRequired)
 }

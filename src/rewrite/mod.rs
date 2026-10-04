@@ -66,6 +66,7 @@ mod response_url_evidence;
 mod revalidation;
 mod route;
 mod rule;
+mod rule_replay;
 pub use jwt_rule::JwtRulePlanOptions;
 mod scheduling;
 mod source_process_traffic;
@@ -314,17 +315,10 @@ pub fn apply_rewrite_dependency_rule(
     })?;
     let (mut report, cache_snapshot_refresh) =
         inventory::with_slice_mut(&mut state, &owner_api, |state| {
-            let dependency_payload = state.dependency_rule_plan.as_ref().is_some_and(|plan| {
-                matches!(
-                    plan.spec,
-                    model::RewriteDependencyRuleSpec::MemcachedProtobufTimestamp { .. }
-                        | model::RewriteDependencyRuleSpec::MysqlSqlTime { .. }
-                        | model::RewriteDependencyRuleSpec::HttpCrossCase { .. }
-                        | model::RewriteDependencyRuleSpec::HttpUnordered { .. }
-                        | model::RewriteDependencyRuleSpec::RedisUnordered { .. }
-                        | model::RewriteDependencyRuleSpec::RedisTimeShift { .. }
-                )
-            });
+            let requires_fresh_replay = state
+                .dependency_rule_plan
+                .as_ref()
+                .is_some_and(|plan| plan.spec.requires_fresh_replay());
             let cache_snapshot_refresh =
                 dependency_rule::pending_cache_snapshot_refresh(state, plan_id)?;
             let mut report = dependency_rule::apply(&target_root, state, plan_id)?;
@@ -367,7 +361,7 @@ pub fn apply_rewrite_dependency_rule(
                     }
                 }
             }
-            if dependency_payload {
+            if requires_fresh_replay {
                 return Ok((report, false));
             }
             report.evidence_reclassification =
@@ -445,6 +439,7 @@ async fn run_and_transition(target_root: &Path, state: &mut RewriteState) -> Res
         state.phase = RewritePhase::ApiPending;
         state.target_fingerprint = None;
         state.active_issue = None;
+        state.rule_replay_pending = false;
         state.e2e_current = false;
         state.comparison_current = false;
         state.bump();

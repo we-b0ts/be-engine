@@ -65,6 +65,7 @@ pub(super) fn new_state(
             recorder_capture_plan: None,
             route: None,
             system_repair_accepted: false,
+            rule_replay_pending: false,
             e2e_current: false,
             comparison_current: false,
         },

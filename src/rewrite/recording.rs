@@ -658,6 +658,7 @@ pub(super) fn reset_for_fresh_recording(
     state.attempts.clear();
     state.attempt_delta = None;
     state.active_issue = None;
+    state.rule_replay_pending = false;
     state.rule_plan = None;
     state.dependency_rule_plan = None;
     state.recorder_capture_plan = None;

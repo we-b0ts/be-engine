@@ -454,6 +454,13 @@ fn global_apply_invalidates_other_completed_api_without_new_recording() {
         super::super::model::RewriteApiStatus::RevalidationPending
     );
     assert!(!state.api_inventory[1].e2e_current);
+    assert!(state.rule_replay_pending);
+    assert!(super::super::worker::runtime::acceptance_ready(
+        &state,
+        &crate::rewrite::RewriteWorkScope::Api {
+            api: state.api.clone()
+        }
+    ));
     assert!(state.recording_refresh.is_none());
     assert_eq!(report.traffic_e2e_report["requires_rerecording"], false);
 }

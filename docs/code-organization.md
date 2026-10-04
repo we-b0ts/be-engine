@@ -182,7 +182,9 @@ is unclear.
   `waiting.rs` owns bounded read-only waits and the return to external task-event
   reconciliation. Neither implements a task-runtime adapter.
   `repair.rs` owns revision readiness and the API-scoped permission to replay an
-  accepted system repair. `fingerprint/engine.rs` caches the executable digest
+  accepted system repair. `rule_replay` owns the API-scoped one-shot Replay
+  admission after successful verification-rule application; it does not own
+  worker delivery or bypass quality gates. `fingerprint/engine.rs` caches the executable digest
   within a process and invalidates it when the file identity changes.
   `recording.rs` owns managed recording execution.
   `execution.rs` owns detached Next and legacy quality-receipt operations, completion, failure, and

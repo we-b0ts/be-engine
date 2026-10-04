@@ -8,7 +8,7 @@ pub(crate) fn install_attempt(
     source: &Path,
     cases: &[(PathBuf, u16, u16)],
     replayed_at: DateTime<Utc>,
-) {
+) -> crate::E2eResponseRuleEvidence {
     let (_, layout) = config::resolve_layout(root, source, None).unwrap();
     let latest = layout
         .run_root
@@ -95,4 +95,9 @@ pub(crate) fn install_attempt(
         });
     }
     store::write_yaml(&latest.join("state.yaml"), &state).unwrap();
+    crate::E2eResponseRuleEvidence {
+        replay: state.replay_report,
+        assertions: state.assertions_report,
+        aggregate: state.aggregate_report,
+    }
 }

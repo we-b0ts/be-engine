@@ -952,7 +952,7 @@ fn error_response(status: StatusCode, message: &str) -> Response<Full<Bytes>> {
 
 #[cfg(test)]
 #[path = "http_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 #[path = "http/cross_case/tests.rs"]

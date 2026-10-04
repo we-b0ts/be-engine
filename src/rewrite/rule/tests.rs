@@ -53,6 +53,7 @@ fn response_apply_does_not_revalidate_revision_scoped_evidence() {
 
     let error = apply(Path::new("/missing-target"), &mut state, "plan-response").unwrap_err();
 
+    assert!(!state.rule_replay_pending);
     assert!(
         error
             .to_string()

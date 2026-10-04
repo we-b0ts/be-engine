@@ -223,6 +223,20 @@ without re-recording. First run Replay with the upgraded engine to obtain fresh
 clock witnesses; plan/apply then checks those witnesses against the immutable
 source exchanges. Editing timing metadata or clock witnesses invalidates the plan.
 
+Successful coordinator apply (including confirmation of a reused rule) queues
+one fresh Replay for the owning API. Follow the returned scoped `next` command;
+no target code change or worker handoff is required to authorize this verification.
+Configuration commits, source review, target quality and the serialized traffic
+lease still apply. The previous dirty report stays authoritative until that new
+Replay finishes. A still-dirty result consumes the request and opens work from
+its new evidence rather than repeatedly replaying the same applied rule.
+
+This admission also applies to response/JWT rules, MySQL SQL time, Memcached
+protobuf timestamps, HTTP/Redis unordered and cross-case rules, and Redis time
+shift. Process-owned dependency rules retain their existing evidence
+reclassification/snapshot-refresh flow. Recorder acquisition rules retain their
+recording-refresh flow because they change what must be captured.
+
 ```bash
 backend-rewrite --target-root /path/to/target dependency-rule plan http header-timestamp \
   --evidence-id CURRENT_EVIDENCE --rule-id s3-get-signing-time \

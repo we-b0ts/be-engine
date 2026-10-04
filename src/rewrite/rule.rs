@@ -256,8 +256,7 @@ pub(super) fn apply(
     }
     let projected = build_plan(target_root, state, &record)?.apply()?;
     state.rule_plan = None;
-    state.e2e_current = false;
-    state.comparison_current = false;
+    super::rule_replay::request(state);
     state.bump();
     Ok(RewriteRuleReport {
         plan_id: record.id,

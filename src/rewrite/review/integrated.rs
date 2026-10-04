@@ -100,9 +100,10 @@ pub(in crate::rewrite) fn required_action(
         && !state.api_inventory.is_empty()
         && state.api_inventory.iter().all(|a| a.status.is_done())
         && crate::rewrite::process_outputs::all_complete(state);
-    let ready = worker::runtime::scopes(state)
-        .iter()
-        .any(|scope| worker::runtime::acceptance_ready(state, scope));
+    let ready = super::super::rule_replay::any_ready(state)
+        || worker::runtime::scopes(state)
+            .iter()
+            .any(|scope| worker::runtime::acceptance_ready(state, scope));
     let review_required = requires_delivery_review(root, state);
     let comparison_ready = review_required
         && state.phase == RewritePhase::ComparisonRecordingRequired

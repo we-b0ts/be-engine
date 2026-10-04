@@ -360,6 +360,9 @@ pub(super) struct RewriteSliceState {
     pub route: Option<RewriteRouteRecord>,
     #[serde(default)]
     pub system_repair_accepted: bool,
+    /// A successfully applied rule authorizes one verification without a code handoff.
+    #[serde(default)]
+    pub rule_replay_pending: bool,
     pub e2e_current: bool,
     pub comparison_current: bool,
 }
@@ -385,6 +388,7 @@ impl RewriteSliceState {
             recorder_capture_plan: None,
             route: None,
             system_repair_accepted: false,
+            rule_replay_pending: false,
             e2e_current: false,
             comparison_current: false,
         }

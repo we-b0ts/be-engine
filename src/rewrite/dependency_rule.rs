@@ -158,16 +158,7 @@ pub(super) fn plan(
     options: RewriteDependencyRulePlanOptions,
 ) -> Result<RewriteDependencyRulePlanReport> {
     let spec = spec_from_selector(options.selector.clone());
-    let request_rule = matches!(
-        &spec,
-        RewriteDependencyRuleSpec::MysqlSqlTime { .. }
-            | RewriteDependencyRuleSpec::HttpCrossCase { .. }
-            | RewriteDependencyRuleSpec::HttpUnordered { .. }
-            | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
-            | RewriteDependencyRuleSpec::RedisUnordered { .. }
-            | RewriteDependencyRuleSpec::RedisTimeShift { .. }
-            | RewriteDependencyRuleSpec::RedisCrossCase { .. }
-    );
+    let request_rule = spec.requires_fresh_replay();
     ensure!(
         !request_rule || options.ownership == RewriteDependencyOwnership::RequestOwned,
         "value and scope rules do not change dependency ownership; use request-owned"
@@ -400,17 +391,8 @@ pub(super) fn apply(
             &record.spec,
         )?;
     }
-    if !matches!(
-        &record.spec,
-        RewriteDependencyRuleSpec::MemcachedProtobufTimestamp { .. }
-            | RewriteDependencyRuleSpec::MysqlSqlTime { .. }
-            | RewriteDependencyRuleSpec::HttpCrossCase { .. }
-            | RewriteDependencyRuleSpec::HttpUnordered { .. }
-            | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
-            | RewriteDependencyRuleSpec::RedisUnordered { .. }
-            | RewriteDependencyRuleSpec::RedisTimeShift { .. }
-            | RewriteDependencyRuleSpec::RedisCrossCase { .. }
-    ) && state.case_source.is_some()
+    if !record.spec.requires_fresh_replay()
+        && state.case_source.is_some()
         && state.group_id.is_some()
     {
         crate::e2e_run::ensure_focused_background_reclassification_revisable(
@@ -437,6 +419,9 @@ pub(super) fn apply(
     }
     let report = plan.apply()?;
     state.dependency_rule_plan = None;
+    if record.spec.requires_fresh_replay() {
+        super::rule_replay::request(state);
+    }
     state.e2e_current = false;
     state.comparison_current = false;
     state.bump();
@@ -459,20 +444,14 @@ fn dependency_issue(
         .clone()
         .context("rewrite workflow has no active issue")?;
     ensure!(
-        (matches!(
-            spec,
-            RewriteDependencyRuleSpec::MemcachedProtobufTimestamp { .. }
-                | RewriteDependencyRuleSpec::MysqlSqlTime { .. }
-                | RewriteDependencyRuleSpec::HttpCrossCase { .. }
-                | RewriteDependencyRuleSpec::HttpUnordered { .. }
-                | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
-                | RewriteDependencyRuleSpec::RedisUnordered { .. }
-                | RewriteDependencyRuleSpec::RedisTimeShift { .. }
-                | RewriteDependencyRuleSpec::RedisCrossCase { .. }
-        ) && matches!(
-            issue.kind,
-            RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
-        )) || issue.kind == RewriteIssueKind::Dependency
+        (spec.requires_fresh_replay()
+            && matches!(
+                issue.kind,
+                RewriteIssueKind::Response
+                    | RewriteIssueKind::Dependency
+                    | RewriteIssueKind::Replay
+            ))
+            || issue.kind == RewriteIssueKind::Dependency
             || (issue.kind == RewriteIssueKind::Response
                 && matches!(
                     spec,

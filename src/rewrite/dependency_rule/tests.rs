@@ -165,6 +165,7 @@ fn apply_does_not_revalidate_revision_scoped_evidence() {
     )
     .unwrap_err();
 
+    assert!(!state.rule_replay_pending);
     assert!(
         error
             .to_string()
