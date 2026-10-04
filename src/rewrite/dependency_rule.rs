@@ -81,6 +81,9 @@ pub enum RewriteDependencyRuleSelector {
     RedisTimeShift {
         selector: crate::RedisTimeShiftSelector,
     },
+    HttpHeaderTimestamp {
+        selector: crate::HttpHeaderTimestampSelector,
+    },
     HttpUnordered {
         selector: crate::HttpUnorderedSelector,
     },
@@ -160,6 +163,7 @@ pub(super) fn plan(
         RewriteDependencyRuleSpec::MysqlSqlTime { .. }
             | RewriteDependencyRuleSpec::HttpCrossCase { .. }
             | RewriteDependencyRuleSpec::HttpUnordered { .. }
+            | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
             | RewriteDependencyRuleSpec::RedisUnordered { .. }
             | RewriteDependencyRuleSpec::RedisTimeShift { .. }
             | RewriteDependencyRuleSpec::RedisCrossCase { .. }
@@ -213,7 +217,8 @@ pub(super) fn plan(
     let report = plan.report()?;
     if matches!(
         record.spec,
-        RewriteDependencyRuleSpec::RedisUnordered { .. }
+        RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
+            | RewriteDependencyRuleSpec::RedisUnordered { .. }
             | RewriteDependencyRuleSpec::RedisTimeShift { .. }
             | RewriteDependencyRuleSpec::RedisCrossCase { .. }
     ) {
@@ -382,6 +387,7 @@ pub(super) fn apply(
         record.spec,
         RewriteDependencyRuleSpec::HttpCrossCase { .. }
             | RewriteDependencyRuleSpec::HttpUnordered { .. }
+            | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
             | RewriteDependencyRuleSpec::RedisUnordered { .. }
             | RewriteDependencyRuleSpec::RedisTimeShift { .. }
             | RewriteDependencyRuleSpec::RedisCrossCase { .. }
@@ -400,6 +406,7 @@ pub(super) fn apply(
             | RewriteDependencyRuleSpec::MysqlSqlTime { .. }
             | RewriteDependencyRuleSpec::HttpCrossCase { .. }
             | RewriteDependencyRuleSpec::HttpUnordered { .. }
+            | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
             | RewriteDependencyRuleSpec::RedisUnordered { .. }
             | RewriteDependencyRuleSpec::RedisTimeShift { .. }
             | RewriteDependencyRuleSpec::RedisCrossCase { .. }
@@ -458,6 +465,7 @@ fn dependency_issue(
                 | RewriteDependencyRuleSpec::MysqlSqlTime { .. }
                 | RewriteDependencyRuleSpec::HttpCrossCase { .. }
                 | RewriteDependencyRuleSpec::HttpUnordered { .. }
+                | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
                 | RewriteDependencyRuleSpec::RedisUnordered { .. }
                 | RewriteDependencyRuleSpec::RedisTimeShift { .. }
                 | RewriteDependencyRuleSpec::RedisCrossCase { .. }
@@ -507,6 +515,7 @@ fn validate_plan_evidence(
         spec,
         RewriteDependencyRuleSpec::HttpCrossCase { .. }
             | RewriteDependencyRuleSpec::HttpUnordered { .. }
+            | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
             | RewriteDependencyRuleSpec::RedisUnordered { .. }
             | RewriteDependencyRuleSpec::RedisTimeShift { .. }
             | RewriteDependencyRuleSpec::RedisCrossCase { .. }

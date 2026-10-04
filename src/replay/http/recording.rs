@@ -25,8 +25,19 @@ pub(super) fn visit(
         if tag.event_type != "http_exchange" {
             continue;
         }
-        let record = serde_json::from_str(&raw).context("invalid recorded HTTP exchange")?;
+        let mut record: RecordedHttpExchange =
+            serde_json::from_str(&raw).context("invalid recorded HTTP exchange")?;
+        record.decrypt_request_headers(file)?;
         visitor(line + 1, record)?;
     }
     Ok(())
+}
+
+impl RecordedHttpExchange {
+    pub(in crate::replay) fn decrypt_request_headers(&mut self, file: &Path) -> Result<()> {
+        self.protected_request_headers =
+            crate::request_headers::decrypt_dependency_headers(&mut self.request_headers, file)
+                .context("failed to decrypt recorded HTTP dependency headers")?;
+        Ok(())
+    }
 }

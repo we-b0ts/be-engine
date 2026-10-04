@@ -97,6 +97,7 @@ impl RecorderEvent {
 pub struct HttpExchangeEvent {
     pub id: Uuid,
     pub timestamp: DateTime<Utc>,
+    pub request_started_at: DateTime<Utc>,
     pub client_addr: Option<String>,
     pub scheme: String,
     pub method: String,

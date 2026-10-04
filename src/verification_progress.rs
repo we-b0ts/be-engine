@@ -544,7 +544,7 @@ pub(crate) fn load(path: &Path, stage: VerificationStage) -> Result<Option<Progr
         persisted_ledger.observation_baseline,
     )?;
     normalize_failure_markers(&mut report.counted_observations);
-    report.requires_persistence = public_missing || schema_migration || embedded_counted_runs;
+    report.requires_persistence |= public_missing || schema_migration || embedded_counted_runs;
     if report.observation_baseline.is_some() || !report.counted_observations.is_empty() {
         let public_aggregate = public::Snapshot::from_report(&report);
         report.rebuild_aggregates()?;

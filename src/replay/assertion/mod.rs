@@ -6,7 +6,7 @@ mod headers;
 pub(in crate::replay) mod hessian2;
 mod joined_string;
 mod model;
-mod time;
+pub(in crate::replay) mod time;
 pub(in crate::replay) use time::RequestTimes;
 mod motan;
 pub(in crate::replay) mod protobuf;

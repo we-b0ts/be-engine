@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -66,7 +66,7 @@ impl RequestHeaderCapture {
     }
 
     #[cfg(test)]
-    fn with_key(
+    pub(crate) fn with_key(
         encrypted_names: &[String],
         redacted_names: &[String],
         key: &[u8; AES_256_KEY_BYTES],
@@ -100,6 +100,42 @@ pub(crate) fn read_request_file_parts(path: &Path) -> Result<(Vec<u8>, Option<Ve
 pub(crate) fn validate_request_file(path: &Path) -> Result<()> {
     let _ = decrypt_request_file(path)?;
     Ok(())
+}
+
+/// Decode dependency headers using the same managed key as inbound requests.
+/// Return protected names so diagnostic projections never reveal encrypted or
+/// explicitly redacted values from either side of a comparison.
+pub(crate) fn decrypt_dependency_headers(
+    headers: &mut HeaderSnapshot,
+    path: &Path,
+) -> Result<BTreeSet<String>> {
+    let protected = headers
+        .iter()
+        .filter(|(_, values)| {
+            values
+                .iter()
+                .any(|value| value.starts_with("traffic-e2e:enc:") || value == "<redacted>")
+        })
+        .map(|(name, _)| name.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>();
+    if !headers
+        .values()
+        .flatten()
+        .any(|value| value.starts_with("traffic-e2e:enc:"))
+    {
+        return Ok(protected);
+    }
+    let cipher = RequestHeaderCipher::from_environment_or_request_path(Some(path))?;
+    for (name, values) in headers {
+        for value in values {
+            if value.starts_with("traffic-e2e:enc:") {
+                let plaintext = cipher.decrypt(&name.to_ascii_lowercase(), value)?;
+                *value = String::from_utf8(plaintext.clone())
+                    .unwrap_or_else(|_| STANDARD.encode(plaintext));
+            }
+        }
+    }
+    Ok(protected)
 }
 
 fn decrypt_request_payload(raw: &[u8], request_path: Option<&Path>) -> Result<Option<Vec<u8>>> {
@@ -308,6 +344,75 @@ mod tests {
     use super::*;
 
     const KEY: [u8; AES_256_KEY_BYTES] = [7; AES_256_KEY_BYTES];
+
+    #[test]
+    fn decrypts_dependency_headers_and_keeps_custom_encrypted_names_protected() {
+        let key = match std::env::var(ENCRYPTION_KEY_ENV) {
+            Ok(value) => STANDARD
+                .decode(value)
+                .unwrap()
+                .try_into()
+                .unwrap_or_else(|_| panic!("test requires an AES-256 key")),
+            Err(_) => KEY,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join(".traffic-e2e/local");
+        let key_path = local.join(crate::repository::LOCAL_ENCRYPTION_KEY_FROM_LOCAL);
+        std::fs::create_dir_all(key_path.parent().unwrap()).unwrap();
+        std::fs::write(key_path, STANDARD.encode(key)).unwrap();
+        let cipher = RequestHeaderCipher::from_key(&key);
+        let mut headers = HeaderSnapshot::from([
+            (
+                "authorization".into(),
+                vec![
+                    cipher
+                        .encrypt("authorization", b"Bearer source-token")
+                        .unwrap(),
+                ],
+            ),
+            (
+                "private-context".into(),
+                vec![
+                    cipher
+                        .encrypt("private-context", b"secret-context")
+                        .unwrap(),
+                ],
+            ),
+            ("tenant-id".into(), vec!["tenant".into()]),
+            ("private-redacted".into(), vec!["<redacted>".into()]),
+        ]);
+        let protected = decrypt_dependency_headers(
+            &mut headers,
+            &local.join("recordings/case/dependencies.jsonl"),
+        )
+        .unwrap();
+        assert_eq!(headers["authorization"], ["Bearer source-token"]);
+        assert_eq!(headers["private-context"], ["secret-context"]);
+        assert_eq!(
+            protected,
+            BTreeSet::from([
+                "authorization".into(),
+                "private-context".into(),
+                "private-redacted".into()
+            ])
+        );
+        headers.insert(
+            "private-context".into(),
+            vec![
+                cipher
+                    .encrypt("private-context", b"secret-context")
+                    .unwrap()
+                    .replace("aes-256-gcm", "unsupported"),
+            ],
+        );
+        assert!(
+            decrypt_dependency_headers(
+                &mut headers,
+                &local.join("recordings/case/dependencies.jsonl")
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn default_recording_preserves_authentication_headers_for_replay() {

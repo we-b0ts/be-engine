@@ -8,6 +8,15 @@ pub(in crate::replay) struct SuccessDetailBudget {
     observed_by_case: BTreeMap<Option<String>, usize>,
 }
 
+impl SuccessDetailBudget {
+    pub(in crate::replay) fn next_event_index(&self, case_id: Option<&str>) -> usize {
+        self.observed_by_case
+            .get(&case_id.map(ToOwned::to_owned))
+            .copied()
+            .unwrap_or_default()
+    }
+}
+
 pub(in crate::replay) fn push_success_detail<T, F>(
     total: &mut usize,
     details: &mut Vec<T>,

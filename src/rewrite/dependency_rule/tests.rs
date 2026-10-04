@@ -50,6 +50,40 @@ fn persisted_plan_remains_applicable_after_plan_revision_bump() {
 }
 
 #[test]
+fn header_timestamp_remains_request_owned_and_rechecks_persisted_evidence() {
+    let mut state = dependency_state();
+    let spec = RewriteDependencyRuleSpec::HttpHeaderTimestamp {
+        selector: crate::HttpHeaderTimestampSelector {
+            host: "storage.example.test".into(),
+            port: 9100,
+            method: "GET".into(),
+            path: "/bucket/*".into(),
+            header: "x-amz-date".into(),
+            format: crate::ResponseTimestampFormat::AmzDate,
+        },
+    };
+    state.dependency_rule_plan.as_mut().unwrap().spec = spec.clone();
+    for kind in [
+        RewriteIssueKind::Response,
+        RewriteIssueKind::Dependency,
+        RewriteIssueKind::Replay,
+    ] {
+        state.active_issue.as_mut().unwrap().kind = kind;
+        assert!(dependency_issue(&state, &spec).is_ok());
+        assert!(
+            validate_plan_evidence(
+                Path::new("/missing-target"),
+                &state,
+                "issue-dependency",
+                "evidence-dirty-clusters",
+                &spec
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn http_unordered_remains_request_owned_and_rechecks_persisted_evidence() {
     let mut state = dependency_state();
     let spec = RewriteDependencyRuleSpec::HttpUnordered {

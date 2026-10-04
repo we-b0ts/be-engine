@@ -82,6 +82,25 @@ fn marks_pending_and_unused_evidence_in_summary() {
 }
 
 #[test]
+fn matched_header_mismatch_is_dirty_and_observations_only_are_clean() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    let mut report = report_value(6, &source.join("api"), &[("case-a", "ended")], 0);
+    let event = json!({"case_id": "case-a", "header": "tenant-id"});
+    report["http_request_header_mismatches"] = json!([event]);
+    report["http_request_header_observations"] = json!([event]);
+    report["http_request_header_observation_count"] = json!(12);
+    write_report(&source, "api", report.clone());
+    let aggregate = aggregate_replay_reports(&source).unwrap();
+    assert!(aggregate.is_dirty());
+    assert_eq!(aggregate.counts.events.http.request_header_mismatches, 1);
+    assert_eq!(aggregate.counts.events.http.request_header_observations, 12);
+    report["http_request_header_mismatches"] = json!([]);
+    write_report(&source, "api", report);
+    assert!(!aggregate_replay_reports(&source).unwrap().is_dirty());
+}
+
+#[test]
 fn retains_unused_global_as_diagnostic_without_marking_dirty() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");

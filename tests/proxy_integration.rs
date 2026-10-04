@@ -35,6 +35,7 @@ async fn records_http_proxy_exchange() {
         let (mut stream, _) = upstream.accept().await.unwrap();
         let mut buf = [0_u8; 2048];
         let _ = stream.read(&mut buf).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(120)).await;
         stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello")
             .await
@@ -76,6 +77,16 @@ async fn records_http_proxy_exchange() {
         .unwrap();
     assert!(jsonl.contains(r#""event_type":"http_exchange""#));
     assert!(jsonl.contains(r#""method":"GET""#));
+    let exchange: Value = jsonl
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|event| event["event_type"] == "http_exchange")
+        .unwrap();
+    let started: chrono::DateTime<chrono::Utc> =
+        serde_json::from_value(exchange["request_started_at"].clone()).unwrap();
+    let completed: chrono::DateTime<chrono::Utc> =
+        serde_json::from_value(exchange["timestamp"].clone()).unwrap();
+    assert!((completed - started).num_milliseconds() >= 120);
 }
 
 #[tokio::test]

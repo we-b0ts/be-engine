@@ -464,6 +464,7 @@ fn dirty_case_ids(report: &Value) -> BTreeSet<String> {
         "unused_case_exchanges",
         "unmatched_http_requests",
         "unsupported_http_exchanges",
+        "http_request_header_mismatches",
         "unused_case_http_exchanges",
     ] {
         collect_case_ids(report, field, &mut case_ids);

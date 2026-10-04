@@ -42,6 +42,17 @@ is unclear.
 - Top-level `http` owns reusable HTTP forwarding policy. `proxy/http` and
   `gateway/http` own their respective runtimes, while `recorder/http` owns
   recorded HTTP case persistence.
+- `replay/assertion/time` owns the shared timestamp formats and fixed request
+  time windows consumed by response assertions and dependency-header rules.
+  `replay/policy/http_headers` owns typed selectors/schema validation, its
+  matcher child selects/accounts for rules, and its feedback child owns
+  evidence-backed plan/apply. `replay/http/request_headers` owns post-match
+  audit evidence; its time-reference child resolves dependency-local recorded or
+  completion-minus-duration clocks internally. Its
+  timestamp-evidence child verifies immutable witnesses.
+  `rewrite/evidence/rule_guidance/http_header_timestamp` projects bounded
+  candidates without proving source semantics. The coordinator model and HTTP
+  CLI children own dependency-rule persistence and command projection.
 - `gateway/motan` owns primary Motan request admission, fixed-response routing,
   matched-source forwarding, and primary-case persistence orchestration for
   both Motan1 and Motan2.
@@ -80,6 +91,10 @@ is unclear.
   `replay/egress_counter` owns bounded sampling and per-case counter differences;
   `e2e_run/result/egress` projects this evidence only for failed verification.
   Counter observations never become dependency mismatches or gate inputs.
+- `cli/interception/dns` owns fixed-UID DNS redirects and the corresponding
+  conntrack-zone rule lifecycle. Its `conntrack` child owns bounded native
+  netlink enumeration and exact entry deletion for the reserved DNS zone;
+  it never owns general host connection-table maintenance.
 - `rewrite/ip_capture` owns IP defect preflight, `response_url_evidence` owns
   bounded recorded-response correlation, and `recorder_capture/http_response`
   owns planning/applying acquisition rules through the existing refresh
@@ -157,6 +172,8 @@ is unclear.
   keeps pending batches, idempotency, and irreversible failure barriers;
   `verification_progress/public.rs` owns only the compact committed
   `.traffic-e2e/progress.yaml` projection and migration parser.
+  Its `api_scope` child excludes concrete members already covered by a
+  same-method pattern in the progress inventory; local history remains intact.
 - Within `rewrite`, `mod.rs` is the public coordinator facade and `advance.rs`
   owns the atomic verification transition. `action.rs` projects actions and
   commands; `coordination.rs` projects executable `pending` and the expanded
@@ -399,6 +416,11 @@ explicit repository-wide audit.
   plan/apply. Coordinator dependency rules own dispatch, source proof and
   verification invalidation; neither matcher nor evidence loader changes
   recorded files, target state, or coordinator completion.
+  `replay/http/request_headers` owns post-match outbound request-header auditing,
+  its built-in exclusions, and protected difference observations. It does not
+  select exchanges or change response delivery. `request_headers` retains
+  encryption ownership, including dependency-header decryption; dependency
+  reports and aggregation own dirty propagation and bounded diagnosis.
 
 - `replay/http/unordered` owns explicit request JSON array normalization and
   bounded order-only witnesses; its `evidence` child verifies those witnesses

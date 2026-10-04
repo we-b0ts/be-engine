@@ -166,6 +166,7 @@ async fn forward_and_record(
 ) -> Response<ProxyBody> {
     let id = Uuid::new_v4();
     let started = Instant::now();
+    let request_started_at = Utc::now();
     let method = req.method().clone();
     let original_uri = req.uri().clone();
     let operation_class = classify_method(&method);
@@ -223,6 +224,7 @@ async fn forward_and_record(
                 request_headers: request_headers_for_record,
                 request_body: Bytes::new(),
                 started,
+                request_started_at,
                 err: anyhow!("failed to read request body: {err}"),
             })
             .await;
@@ -243,6 +245,7 @@ async fn forward_and_record(
                 request_headers: request_headers_for_record,
                 request_body,
                 started,
+                request_started_at,
                 err,
             })
             .await;
@@ -268,6 +271,7 @@ async fn forward_and_record(
                 request_headers: request_headers_for_record,
                 request_body,
                 started,
+                request_started_at,
                 err,
             })
             .await;
@@ -292,6 +296,7 @@ async fn forward_and_record(
                         request_headers: request_headers_for_record,
                         request_body,
                         started,
+                        request_started_at,
                         err: anyhow!("failed to read upstream response body: {err}"),
                     })
                     .await;
@@ -333,6 +338,7 @@ async fn forward_and_record(
                         request_headers: request_headers_for_record,
                         request_body,
                         started,
+                        request_started_at,
                         err,
                     })
                     .await;
@@ -344,6 +350,7 @@ async fn forward_and_record(
             let event = HttpExchangeEvent {
                 id,
                 timestamp: Utc::now(),
+                request_started_at,
                 client_addr,
                 scheme: scheme.to_string(),
                 method: method.to_string(),
@@ -377,6 +384,7 @@ async fn forward_and_record(
                 request_headers: request_headers_for_record,
                 request_body,
                 started,
+                request_started_at,
                 err: anyhow!("upstream request failed: {err}"),
             })
             .await
@@ -402,6 +410,7 @@ struct HttpErrorContext {
     request_headers: crate::recorder::HeaderMapSnapshot,
     request_body: Bytes,
     started: Instant,
+    request_started_at: chrono::DateTime<Utc>,
     err: anyhow::Error,
 }
 
@@ -410,6 +419,7 @@ async fn record_http_error(ctx: HttpErrorContext) -> Response<ProxyBody> {
     let event = HttpExchangeEvent {
         id: ctx.id,
         timestamp: Utc::now(),
+        request_started_at: ctx.request_started_at,
         client_addr: ctx.client_addr.clone(),
         scheme: ctx.scheme.clone(),
         method: ctx.method.to_string(),

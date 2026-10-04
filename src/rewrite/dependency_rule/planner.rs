@@ -16,6 +16,7 @@ pub(super) enum DependencyRulePlan {
     RedisCrossCase(crate::RedisCrossCasePlan),
     HttpCrossCase(crate::HttpCrossCasePlan),
     HttpUnordered(crate::HttpUnorderedPlan),
+    HttpHeaderTimestamp(crate::HttpHeaderTimestampPlan),
     RedisUnordered(crate::RedisUnorderedPlan),
     RedisTimeShift(crate::RedisTimeShiftPlan),
     MysqlTime(crate::MysqlTimeRulePlan),
@@ -46,6 +47,7 @@ impl DependencyRulePlan {
             Self::RedisUnordered(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::RedisTimeShift(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::HttpUnordered(plan) => Ok(serde_json::to_value(plan.report())?),
+            Self::HttpHeaderTimestamp(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::MysqlTime(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::Http(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::Mysql(plan) => Ok(serde_json::to_value(plan.report())?),
@@ -63,6 +65,7 @@ impl DependencyRulePlan {
             Self::RedisUnordered(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::RedisTimeShift(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::HttpUnordered(plan) => Ok(serde_json::to_value(plan.apply()?)?),
+            Self::HttpHeaderTimestamp(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::MysqlTime(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::Http(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::Mysql(plan) => Ok(serde_json::to_value(plan.apply()?)?),
@@ -82,6 +85,9 @@ impl DependencyRulePlan {
                 Some(&plan.report().effective_rule_id)
             }
             Self::RedisTimeShift(plan) if plan.report().reused_existing => {
+                Some(&plan.report().effective_rule_id)
+            }
+            Self::HttpHeaderTimestamp(plan) if plan.report().reused_existing => {
                 Some(&plan.report().effective_rule_id)
             }
             Self::HttpUnordered(plan) if plan.report().reused_existing => {
@@ -120,6 +126,7 @@ impl DependencyRulePlan {
             Self::RedisCrossCase(plan) => &plan.report().effective_rule_id,
             Self::HttpCrossCase(plan) => &plan.report().effective_rule_id,
             Self::HttpUnordered(plan) => &plan.report().effective_rule_id,
+            Self::HttpHeaderTimestamp(plan) => &plan.report().effective_rule_id,
             Self::RedisUnordered(plan) => &plan.report().effective_rule_id,
             Self::RedisTimeShift(plan) => &plan.report().effective_rule_id,
             Self::MysqlTime(plan) => &plan.report().effective_rule_id,
@@ -145,6 +152,9 @@ pub(super) fn spec_from_selector(
         }
         RewriteDependencyRuleSelector::RedisTimeShift { selector } => {
             RewriteDependencyRuleSpec::RedisTimeShift { selector }
+        }
+        RewriteDependencyRuleSelector::HttpHeaderTimestamp { selector } => {
+            RewriteDependencyRuleSpec::HttpHeaderTimestamp { selector }
         }
         RewriteDependencyRuleSelector::HttpUnordered { selector } => {
             RewriteDependencyRuleSpec::HttpUnordered { selector }
@@ -300,6 +310,18 @@ pub(super) fn build_plan(
         api,
     )?
     .replay;
+    if let RewriteDependencyRuleSpec::HttpHeaderTimestamp { selector } = &record.spec {
+        return Ok(DependencyRulePlan::HttpHeaderTimestamp(
+            crate::plan_http_header_timestamp(crate::HttpHeaderTimestampFeedback {
+                policy_path: target_root.join(".traffic-e2e/verification.yaml"),
+                case_source,
+                replay_report_path,
+                rule_id: record.name.clone(),
+                selector: selector.clone(),
+                source_evidence: record.source_evidence.clone(),
+            })?,
+        ));
+    }
     if let RewriteDependencyRuleSpec::HttpUnordered { selector } = &record.spec {
         return Ok(DependencyRulePlan::HttpUnordered(
             crate::plan_http_unordered(crate::HttpUnorderedFeedback {
@@ -431,6 +453,7 @@ pub(super) fn build_plan(
         | RewriteDependencyRuleSpec::MysqlSqlTime { .. }
         | RewriteDependencyRuleSpec::HttpCrossCase { .. }
         | RewriteDependencyRuleSpec::HttpUnordered { .. }
+        | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
         | RewriteDependencyRuleSpec::RedisUnordered { .. }
         | RewriteDependencyRuleSpec::RedisTimeShift { .. } => {
             unreachable!(

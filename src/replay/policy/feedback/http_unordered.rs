@@ -86,6 +86,7 @@ pub fn plan_http_unordered(feedback: HttpUnorderedFeedback) -> Result<HttpUnorde
             port: Some(feedback.selector.port),
         },
         http: Some(HttpSelector {
+            headers: Default::default(),
             json: HttpJsonRules {
                 unordered: vec![HttpUnorderedField {
                     pointer: feedback.selector.pointer.clone(),

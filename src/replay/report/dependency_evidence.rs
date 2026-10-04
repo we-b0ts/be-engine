@@ -107,6 +107,7 @@ struct ClusterBuilder {
 enum DifferenceDirection {
     UnusedRecorded,
     TargetOnly,
+    HeaderMismatch,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -139,6 +140,12 @@ const MYSQL_EVENTS: &[EventArray] = &[
 ];
 
 const HTTP_EVENTS: &[EventArray] = &[
+    EventArray {
+        protocol: "http",
+        field: "http_request_header_mismatches",
+        reason: "request_header_mismatch",
+        direction: DifferenceDirection::HeaderMismatch,
+    },
     EventArray {
         protocol: "http",
         field: "unmatched_http_requests",
@@ -225,7 +232,7 @@ pub(crate) fn read_dependency_evidence(report_path: &Path) -> Result<ReplayDepen
     Ok(evidence)
 }
 
-pub(super) fn build_dependency_evidence(report: &Value) -> ReplayDependencyEvidence {
+pub(in crate::replay) fn build_dependency_evidence(report: &Value) -> ReplayDependencyEvidence {
     let mut builders = BTreeMap::<ClusterKey, ClusterBuilder>::new();
     collect_arrays(report, NETWORK_EVENTS.iter().copied(), true, &mut builders);
     collect_arrays(report, MYSQL_EVENTS.iter().copied(), false, &mut builders);
@@ -292,7 +299,7 @@ pub(super) fn build_dependency_evidence(report: &Value) -> ReplayDependencyEvide
     }
 }
 
-pub(super) fn report_has_case_dirty_events(report: &Value) -> bool {
+pub(in crate::replay) fn report_has_case_dirty_events(report: &Value) -> bool {
     report
         .get("unrecorded_targets")
         .and_then(Value::as_array)
@@ -340,7 +347,20 @@ fn collect_arrays(
             let key = ClusterKey {
                 protocol: array.protocol.to_string(),
                 endpoint: endpoint_key(endpoint.as_ref()),
-                reason: array.reason.to_string(),
+                reason: if matches!(array.direction, DifferenceDirection::HeaderMismatch) {
+                    format!(
+                        "{}: {}",
+                        array.reason,
+                        bounded(
+                            event
+                                .get("header")
+                                .and_then(Value::as_str)
+                                .unwrap_or("unknown")
+                        )
+                    )
+                } else {
+                    array.reason.to_string()
+                },
             };
             let builder = builders.entry(key).or_insert_with(|| ClusterBuilder {
                 endpoint: endpoint.clone(),
@@ -362,7 +382,7 @@ fn collect_arrays(
                     .representative
                     .get_or_insert(ReplayDependencyRepresentative {
                         case_id,
-                        difference: difference(array.direction, signature(event)),
+                        difference: event_difference(array.direction, event),
                         target_matches: Vec::new(),
                         target_matches_may_be_truncated: false,
                     });
@@ -550,6 +570,41 @@ fn bounded(value: &str) -> String {
     }
 }
 
+fn event_difference(direction: DifferenceDirection, event: &Value) -> ReplayDependencyDifference {
+    if matches!(direction, DifferenceDirection::HeaderMismatch) {
+        let observation = |side: &str| {
+            let value = &event[side];
+            ReplayDependencyObservation {
+                presence: value
+                    .get("presence")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unavailable")
+                    .to_string(),
+                signature: Some(bounded_value(&serde_json::json!({
+                    "header": event.get("header"),
+                    "method": event.get("method"),
+                    "uri": event.get("uri"),
+                    "values": value.get("values"),
+                    "protected": value.get("protected"),
+                    "rule_id": event.get("rule_id"),
+                    "validation_error": event.get("validation_error"),
+                    "request_started_at": event.get(if side == "expected" { "source_request_started_at" } else { "target_request_started_at" }),
+                }))),
+            }
+        };
+        return ReplayDependencyDifference {
+            kind: event
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or("header_mismatch")
+                .to_string(),
+            expected: observation("expected"),
+            actual: observation("actual"),
+        };
+    }
+    difference(direction, signature(event))
+}
+
 fn difference(direction: DifferenceDirection, signature: Value) -> ReplayDependencyDifference {
     let present = ReplayDependencyObservation {
         presence: "present".to_string(),
@@ -570,6 +625,9 @@ fn difference(direction: DifferenceDirection, signature: Value) -> ReplayDepende
             expected: missing,
             actual: present,
         },
+        DifferenceDirection::HeaderMismatch => {
+            unreachable!("header differences carry two observations")
+        }
     }
 }
 

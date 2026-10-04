@@ -1,5 +1,10 @@
 use super::super::evidence_model::{RewriteApplicableRulePlanner, RewriteRuleHint};
 use super::*;
+mod http_header_timestamp;
+
+pub(super) fn http_header_timestamp_candidates(facts: &Value) -> Vec<Value> {
+    http_header_timestamp::candidates(facts)
+}
 
 pub(super) fn rule_hints(
     target_root: &Path,
@@ -59,6 +64,16 @@ pub(super) fn rule_hints(
         .flatten()
         .any(|cluster| cluster.get("protocol").and_then(Value::as_str) == Some("memcached"));
     let mut hints = Vec::new();
+    if facts["http_header_timestamp_candidates"]
+        .as_array()
+        .is_some_and(|items| !items.is_empty())
+    {
+        hints.push(RewriteRuleHint {
+            capability: "http_header_timestamp".into(), rule: "header-timestamp".into(),
+            hint: "HTTP request header differences contain timestamp-format candidates near each dependency request's own start. Trace SDK/source generation and confirm host, port, method, path and header. Use dependency-rule plan http header-timestamp with --timestamp-format and source evidence, apply, then fresh Replay. The tolerance is fixed at five seconds; primary API request clocks are not used. Presence, multiplicity, invalid times and ordinary identity headers remain checked.".into(),
+            help: super::super::action::command(target_root, vec!["dependency-rule".into(), "plan".into(), "http".into(), "header-timestamp".into(), "--help".into()], Vec::new()),
+        });
+    }
     if facts["clusters"].as_array().is_some_and(|items| {
         items
             .iter()
@@ -131,6 +146,34 @@ pub(super) fn applicable_rule_planners(
     evidence_id: &str,
 ) -> Vec<RewriteApplicableRulePlanner> {
     let mut planners = Vec::new();
+    if query_kind == QUERY_DIRTY_CLUSTERS
+        && matches!(
+            issue_kind,
+            RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
+        )
+        && facts["http_header_timestamp_candidates"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+    {
+        planners.push(RewriteApplicableRulePlanner {
+            kind: "dependency_value".into(),
+            capability: "http_header_timestamp".into(),
+            evidence_id: evidence_id.into(),
+            command: super::super::action::command(
+                target_root,
+                vec![
+                    "dependency-rule".into(),
+                    "plan".into(),
+                    "http".into(),
+                    "header-timestamp".into(),
+                    "--evidence-id".into(),
+                    evidence_id.into(),
+                    "--help".into(),
+                ],
+                Vec::new(),
+            ),
+        });
+    }
     if query_kind == QUERY_DIRTY_CLUSTERS
         && matches!(
             issue_kind,

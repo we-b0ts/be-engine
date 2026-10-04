@@ -270,6 +270,7 @@ fn facts(
         QUERY_DIRTY_CLUSTERS => {
             let counts = query_e2e_dirty_counts(e2e_context(target_root, state)?, group_id(state)?)?;
             let mut facts = dirty_cluster_facts(target_root, counts);
+            facts["http_header_timestamp_candidates"] = serde_json::to_value(rule_guidance::http_header_timestamp_candidates(&facts))?;
             if facts["clusters"].as_array().is_some_and(|clusters| clusters.iter().any(|c| c["protocol"] == "http" && c["reason"] == "unmatched_target")) {
                 facts["http_unordered_candidates"] = crate::e2e_run::query_http_unordered_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
                 facts["redis_unordered_candidates"] = crate::e2e_run::query_redis_unordered_candidates(e2e_context(target_root, state)?, group_id(state)?)?;

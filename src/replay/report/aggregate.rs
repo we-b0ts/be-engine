@@ -118,6 +118,8 @@ pub struct MysqlEventCounts {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct HttpEventCounts {
     pub matched_exchanges: usize,
+    pub request_header_mismatches: usize,
+    pub request_header_observations: usize,
     pub unmatched_requests: usize,
     pub unsupported_exchanges: usize,
     pub unused_case_exchanges: usize,
@@ -652,6 +654,8 @@ impl MysqlEventCounts {
 impl HttpEventCounts {
     fn add(&mut self, other: &Self) {
         self.matched_exchanges += other.matched_exchanges;
+        self.request_header_mismatches += other.request_header_mismatches;
+        self.request_header_observations += other.request_header_observations;
         self.unmatched_requests += other.unmatched_requests;
         self.unsupported_exchanges += other.unsupported_exchanges;
         self.unused_case_exchanges += other.unused_case_exchanges;

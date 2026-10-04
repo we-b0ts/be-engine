@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 
+use crate::replay::report::read_dependency_evidence;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -9,6 +10,35 @@ use super::*;
 const CASE_ID: &str = "case-a";
 const CONNECTION_ID: &str = "connection-a";
 const KEY: &str = "106.2020tagid_020_007.itagv3";
+
+#[test]
+fn background_reclassification_preserves_case_header_mismatches() {
+    let fixture = Fixture::new();
+    fixture.write_config(true);
+    let mut report = fixture.report();
+    report["http_request_header_mismatches"] = json!([{
+        "case_id": CASE_ID,
+        "header": "tenant-id",
+        "kind": "header_missing",
+        "target": {"host": "business.test", "port": 80},
+        "method": "GET", "uri": "/business",
+        "expected": {"presence": "present", "values": ["tenant"]},
+        "actual": {"presence": "missing"},
+    }]);
+    fs::write(&fixture.report, serde_json::to_vec(&report).unwrap()).unwrap();
+    let reclassified = fixture.reclassify();
+    assert_eq!(reclassified.matched_unused_case, 1);
+    assert_eq!(
+        reclassified.remaining_dirty_case_ids,
+        BTreeSet::from([CASE_ID.into()])
+    );
+    assert!(
+        !read_dependency_evidence(&fixture.report)
+            .unwrap()
+            .clusters
+            .is_empty()
+    );
+}
 
 #[test]
 fn redis_exact_key_rule_reclassifies_existing_report_without_mutating_capture() {

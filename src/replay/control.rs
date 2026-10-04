@@ -305,7 +305,7 @@ pub(super) async fn handle_control_request(
                     "ok": false,
                     "complete": complete,
                     "dirty": true,
-                    "error": "replay report has unmatched, unused, or unsupported exchanges",
+                    "error": "replay report has dirty dependency evidence",
                 })
             } else {
                 serde_json::json!({
@@ -398,7 +398,7 @@ async fn finalize_replay(
                 "ok": false,
                 "complete": complete,
                 "dirty": true,
-                "error": "cannot finalize replay with unmatched, unused, or unsupported exchanges",
+                "error": "cannot finalize replay with dirty dependency evidence",
             }),
             None,
         );
@@ -541,7 +541,7 @@ pub(super) async fn end_case(
         serde_json::json!({
             "ok": false,
             "dirty": true,
-            "error": format!("replay case {case_id} has unmatched, unused, or unsupported exchanges"),
+            "error": format!("replay case {case_id} has dirty dependency evidence"),
         })
     } else {
         serde_json::json!({

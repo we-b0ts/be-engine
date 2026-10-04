@@ -145,6 +145,8 @@ pub(super) struct MysqlTimeFieldRule {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct HttpSelector {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) headers: BTreeMap<String, super::http_headers::HttpHeaderRule>,
     #[serde(
         default,
         skip_serializing_if = "super::http_json::HttpJsonRules::is_empty"
@@ -330,6 +332,7 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
     }
     super::redis_value::validate_overlaps(&document.dependency_rules)?;
     super::http_json::validate_overlaps(&document.dependency_rules)?;
+    super::http_headers::validate_overlaps(&document.dependency_rules)?;
     let mut ids = BTreeSet::new();
     for rule in &document.dependency_rules {
         ensure!(
@@ -342,6 +345,11 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
         );
         validate_rule(rule)?;
         super::http_json::validate(rule)?;
+        super::http_headers::validate(rule)?;
+        ensure!(
+            document.version >= 3 || rule.http.as_ref().is_none_or(|h| h.headers.is_empty()),
+            "HTTP header timestamp rules require policy version 3"
+        );
         ensure!(
             document.version >= 3 || rule.http.as_ref().is_none_or(|h| h.json.is_empty()),
             "HTTP JSON rules require policy version 3"
@@ -506,9 +514,10 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
             );
             ensure!(
                 !http.query.is_empty()
+                    || !http.headers.is_empty()
                     || !http.json.is_empty()
                     || rule.replay_scope == ReplayScope::RecordingRun,
-                "HTTP rule {:?} must configure query fields, JSON rules or recording_run scope",
+                "HTTP rule {:?} must configure query fields, JSON rules, header rules or recording_run scope",
                 rule.id
             );
             for (name, field) in &http.query {

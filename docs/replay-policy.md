@@ -119,6 +119,119 @@ header recorded as `<redacted>` is unevaluable. Other headers, including
 identity, and tracing fields other than `x-request-id`, remain outside the
 default verdict.
 
+## Outbound HTTP Request Headers
+
+After the existing method/URI/body matcher selects an HTTP or HTTPS dependency,
+Replay audits its request headers and returns the recorded response. Header
+differences do not change ordinary exchange selection or finite consumption.
+Existing cross-case identity checks remain strict before selection.
+
+All business header names are checked, including names without an `x-` prefix.
+Names are case-insensitive; leading/trailing HTTP whitespace is ignored, while
+values, repeated-value order and multiplicity remain exact. Missing, added or
+changed business headers produce `http_request_header_mismatches`, mark the
+active case dirty, and fail clean-dependency gates even if response assertions
+pass. This evidence is retained independently of capped successful-match details.
+
+The engine owns the exclusions; there is no project configuration:
+
+- Host retains its existing routing check. Connection, Keep-Alive,
+  Proxy-Connection, Transfer-Encoding, Content-Length, TE, Trailer, Upgrade,
+  Proxy-Authorization, and fields nominated by either Connection header are
+  excluded from the new audit.
+- User-Agent, Accept-Encoding, traceparent, tracestate, b3,
+  X-Correlation-Id, X-Amzn-Trace-Id, X-Cloud-Trace-Context, `x-b3-*`,
+  `x-datadog-*`, and engine-owned `x-recorder-*` are excluded.
+- X-Request-Id is required when present in the source request. Its value may
+  change, and the target may add it when the source omitted it. Only a missing
+  source-required header is dirty; its value is not persisted in this audit.
+- Authorization and Cookie presence differences are dirty; value differences
+  are reported only. Content-Type, Accept and Accept-Language differences are
+  also reported only in this first version. These observations appear in
+  `http_request_header_observations` and do not make a clean dependency dirty.
+  Observations retain details from the first 100 matched requests per case;
+  `http_request_header_observation_count` counts every observation, including
+  omitted details. Dirty mismatch evidence is never dropped by this limit.
+
+Credential, API-key, token, secret, password, signature and session values are
+protected in differences. Headers encrypted during recording are decrypted with
+the existing managed request-header key and remain protected in diagnostics,
+including custom names. Explicitly redacted values are reported as unevaluable;
+their known presence still allows detection of a missing header. Missing header
+snapshots receive no compatibility exemption.
+
+Dependency HTTP request headers can declare source-proven current-time generation
+under `dependency_rules[].http.headers`. These are post-match timestamp rules;
+ordinary method, URI, query, body, response selection and finite consumption
+remain exact. Undeclared business headers retain strict value comparison.
+
+```yaml
+dependency_rules:
+  - id: s3-get-signing-time
+    protocol: http
+    target:
+      host: storage.example.test
+      port: 9100
+    http:
+      method: GET
+      path: /bucket/attachments/*
+      headers:
+        x-amz-date:
+          kind: timestamp
+          format: amz_date
+          source_evidence: "minio/api.py:Minio._build_headers uses current UTC time"
+```
+
+Header names are case-insensitive. Selectors require an exact host, port and
+method; paths support whole-segment `*` only. Overlapping selectors for the same
+header are rejected. Rules cannot select excluded, credential, or presence-only
+headers, cannot change ownership or request bodies, and require source evidence.
+
+Timestamp validation reuses the response timestamp comparator and its fixed
+inclusive ±5-second window. Each header is checked against **its own dependency
+HTTP request start**, never the primary API request time.
+Recorder persists `http_exchange.request_started_at` when request headers arrive;
+Replay captures the target clock before collecting the body or taking its state
+lock. Source evidence prefers the recorded start. If it is absent, Replay can
+estimate that dependency's start from its own completion `timestamp` minus
+`duration_ms`. This is an estimate because clock sampling and millisecond
+rounding can introduce error; the same ±5-second window still applies. This is
+an internal clock-resolution detail and adds no report fields, rule hints or
+dirty reasons. The duration must be an
+integral nonnegative JSON number, both inputs must be present, and subtraction
+must be representable. Invalid metadata remains a missing time reference; it
+does not prevent ordinary request matching or recorded response delivery.
+An existing start is never replaced to make validation pass. Missing clocks
+never fall back to current wall time or to the header value. Equal literal values
+still undergo time validation. Both headers must occur exactly once, parse in
+the declared format, and fall within their own request windows. Missing headers,
+invalid formats, unavailable values, and out-of-window timestamps remain dirty
+while Replay still returns the recorded response.
+
+Formats are `unix_seconds`, `unix_milliseconds`, `rfc3339`, and `amz_date`.
+The latter requires strict UTC `YYYYMMDDTHHMMSSZ`. There is no configurable
+tolerance or automatic exemption for AWS headers.
+
+Dirty evidence exposes mechanical timestamp candidates, bounded clock witnesses
+and `backend-rewrite dependency-rule plan http header-timestamp --help`. Candidate
+formats and clock proximity do not prove current-time generation; trace the
+source SDK/code first. Plan verifies the finalized report and immutable source
+records. Apply rechecks policy/evidence freshness, retains the existing dirty
+report, invalidates verification and requires fresh Replay. Older recordings
+with usable dependency completion/duration metadata can authorize this rule
+without re-recording. First run Replay with the upgraded engine to obtain fresh
+clock witnesses; plan/apply then checks those witnesses against the immutable
+source exchanges. Editing timing metadata or clock witnesses invalidates the plan.
+
+```bash
+backend-rewrite --target-root /path/to/target dependency-rule plan http header-timestamp \
+  --evidence-id CURRENT_EVIDENCE --rule-id s3-get-signing-time \
+  --host storage.example.test --port 9100 --method GET --path '/bucket/attachments/*' \
+  --header x-amz-date --timestamp-format amz-date \
+  --source-evidence 'minio/api.py:Minio._build_headers uses current UTC time'
+backend-rewrite --target-root /path/to/target dependency-rule apply PLAN_ID
+```
+
 Do not put recorded values, response bodies, secrets, absolute case paths, or
 case-id exceptions in the policy. Use selectors and semantic validation only.
 In particular, ordinary mutable business data observed at different times is
@@ -353,8 +466,8 @@ start times. Replay reads source `request.json.timestamp` and target
 `request_sent_at`; Comparison uses each capture's request-start `timestamp`.
 No current wall-clock fallback or configurable tolerance is allowed.
 
-- `timestamp` requires `format: unix_seconds`, `unix_milliseconds`, or
-  `rfc3339`. Each source/target timestamp must be within five seconds of its
+- `timestamp` requires `format: unix_seconds`, `unix_milliseconds`, `rfc3339`,
+  or `amz_date`. Each source/target timestamp must be within five seconds of its
   own request start, even if the two field literals are equal.
 - `duration` requires `unit: milliseconds`, `seconds`, `minutes`, or `hours`.
   After conversion to the same unit, it requires
@@ -387,7 +500,8 @@ response_rules:
 ```
 
 CLI planning/application uses `--timestamp-format unix-seconds`,
-`--timestamp-format unix-milliseconds`, or `--timestamp-format rfc3339` for
+`--timestamp-format unix-milliseconds`, `--timestamp-format rfc3339`, or
+`--timestamp-format amz-date` for
 `--kind timestamp`, and `--unit hours` (or another supported unit) for
 `--kind duration`. Quote wildcard Pointers, e.g. `--json-pointer '/data/*/elapsed_hours'`.
 These settings also persist through `backend-rewrite rule plan` / `rule apply`.

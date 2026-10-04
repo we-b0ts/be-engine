@@ -673,6 +673,9 @@ impl ReplayState {
             matched_http_exchanges: self.http_events.matched.clone(),
             unmatched_http_requests: self.http_events.unmatched.clone(),
             unsupported_http_exchanges: self.http_events.unsupported.clone(),
+            http_request_header_mismatches: self.http_events.header_mismatches.clone(),
+            http_request_header_observations: self.http_events.header_observations.clone(),
+            http_request_header_observation_count: self.http_events.header_observation_count,
             unused_global_http_exchanges: self.unused_http_exchanges(ReplaySource::Global, false),
             unused_case_http_exchanges,
             allowed_unused_case_http_exchanges,
@@ -944,3 +947,10 @@ pub(crate) use redis::value as redis_value;
 
 mod json_order;
 mod recording_evidence;
+
+pub use policy::HttpHeaderTimestampSelector;
+
+pub use policy::{
+    HttpHeaderTimestampFeedback, HttpHeaderTimestampPlan, HttpHeaderTimestampReport,
+    plan_http_header_timestamp,
+};

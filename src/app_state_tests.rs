@@ -99,6 +99,7 @@ async fn preflight_case_limit_keeps_the_runtime_alive_for_the_fixed_grace() {
 fn http_dependency(authority: &str, uri: &str) -> RecorderEvent {
     let response = vec![b'x'; 314_066];
     RecorderEvent::HttpExchange(HttpExchangeEvent {
+        request_started_at: Utc::now(),
         id: Uuid::new_v4(),
         timestamp: Utc::now(),
         client_addr: None,

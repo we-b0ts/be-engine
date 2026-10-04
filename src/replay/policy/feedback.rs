@@ -765,3 +765,9 @@ pub use redis_time_shift::{
 pub use redis_unordered::{
     RedisUnorderedFeedback, RedisUnorderedPlan, RedisUnorderedReport, plan_redis_unordered,
 };
+
+mod http_header_timestamp;
+pub use http_header_timestamp::{
+    HttpHeaderTimestampFeedback, HttpHeaderTimestampPlan, HttpHeaderTimestampReport,
+    plan_http_header_timestamp,
+};

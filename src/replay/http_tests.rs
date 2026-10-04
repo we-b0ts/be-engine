@@ -75,7 +75,10 @@ fn one_fake_ip_is_reused_for_all_ports_on_a_host() {
 #[test]
 fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
     let record = RecordedHttpExchange {
+        duration_ms: None,
+        request_started_at: None,
         request_headers: Default::default(),
+        protected_request_headers: Default::default(),
         timestamp: None,
         scheme: "http".to_string(),
         method: "GET".to_string(),
@@ -132,7 +135,10 @@ fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
 #[test]
 fn response_discovered_http_target_reserves_its_recorded_fake_ip() {
     let record = RecordedHttpExchange {
+        duration_ms: None,
+        request_started_at: None,
         request_headers: Default::default(),
+        protected_request_headers: Default::default(),
         timestamp: None,
         scheme: "http".to_string(),
         method: "GET".to_string(),

@@ -118,6 +118,7 @@ async fn handle_gateway_request(
 ) -> Response<GatewayBody> {
     let id = Uuid::new_v4();
     let started = Instant::now();
+    let request_started_at = Utc::now();
     let method = req.method().clone();
     let original_uri = req.uri().clone();
     let operation_class = classify_method(&method);
@@ -211,6 +212,7 @@ async fn handle_gateway_request(
                 request_headers: request_headers_for_record,
                 request_body: Bytes::new(),
                 started,
+                request_started_at,
                 matched_rule: matched_rule_name,
                 case: None,
                 should_record: false,
@@ -290,6 +292,7 @@ async fn handle_gateway_request(
                     request_headers: request_headers_for_record,
                     request_body,
                     started,
+                    request_started_at,
                     matched_rule: matched_rule_name.clone(),
                     case,
                     should_record,
@@ -319,6 +322,7 @@ async fn handle_gateway_request(
                     request_headers: request_headers_for_record,
                     request_body,
                     started,
+                    request_started_at,
                     matched_rule: matched_rule_name.clone(),
                     case,
                     should_record,
@@ -359,6 +363,7 @@ async fn handle_gateway_request(
                     request_headers: request_headers_for_record,
                     request_body,
                     started,
+                    request_started_at,
                     matched_rule: matched_rule_name.clone(),
                     case,
                     should_record,
@@ -379,6 +384,7 @@ async fn handle_gateway_request(
                         request_headers: request_headers_for_record,
                         request_body,
                         started,
+                        request_started_at,
                         matched_rule: matched_rule_name.clone(),
                         case,
                         should_record,
@@ -429,6 +435,7 @@ async fn handle_gateway_request(
                     request_headers: request_headers_for_record,
                     request_body,
                     started,
+                    request_started_at,
                     matched_rule: matched_rule_name.clone(),
                     case,
                     should_record,
@@ -445,6 +452,7 @@ async fn handle_gateway_request(
             let event = HttpExchangeEvent {
                 id,
                 timestamp: Utc::now(),
+                request_started_at,
                 client_addr: client_addr.clone(),
                 scheme: "http_gateway".to_string(),
                 method: method.to_string(),
@@ -531,6 +539,7 @@ struct GatewayErrorContext {
     request_headers: HeaderMapSnapshot,
     request_body: Bytes,
     started: Instant,
+    request_started_at: chrono::DateTime<Utc>,
     matched_rule: Option<String>,
     case: Option<CaseContext>,
     should_record: bool,
@@ -596,6 +605,7 @@ async fn record_gateway_error_with_status(
         let event = HttpExchangeEvent {
             id: ctx.id,
             timestamp: Utc::now(),
+            request_started_at: ctx.request_started_at,
             client_addr: ctx.client_addr.clone(),
             scheme: "http_gateway".to_string(),
             method: ctx.method.to_string(),
