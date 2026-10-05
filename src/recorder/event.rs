@@ -95,6 +95,7 @@ impl RecorderEvent {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct HttpExchangeEvent {
+    pub outcome: crate::DependencyExchangeOutcome,
     pub id: Uuid,
     pub timestamp: DateTime<Utc>,
     pub request_started_at: DateTime<Utc>,

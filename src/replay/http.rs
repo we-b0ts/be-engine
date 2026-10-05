@@ -37,7 +37,10 @@ mod identity;
 mod recording;
 pub(in crate::replay) mod request_headers;
 mod selector;
+mod termination;
+mod transport;
 pub(crate) mod unordered;
+pub(super) use transport::handle_http_replay_connection;
 
 type HeaderSnapshot = BTreeMap<String, Vec<String>>;
 pub(super) use request_headers::HeaderDifferenceReport;
@@ -45,6 +48,8 @@ pub(super) use request_headers::HeaderDifferenceReport;
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct RecordedHttpExchange {
     scheme: String,
+    #[serde(default)]
+    outcome: crate::DependencyExchangeOutcome,
     #[serde(default)]
     timestamp: Option<chrono::DateTime<Utc>>,
     #[serde(default)]
@@ -100,7 +105,7 @@ pub(super) struct ReplayHttpExchange {
     case_id: Option<String>,
     identity: HttpDependencyIdentity,
     record: RecordedHttpExchange,
-    consumed: bool,
+    status: super::ReplayExchangeStatus,
     shared_origin: Option<cross_case::SharedOrigin>,
 }
 
@@ -121,6 +126,7 @@ pub(super) struct ReplayHttpBlackhole {
 }
 
 enum HttpReplayMatchError {
+    ClientTerminated(Box<termination::PendingHttpTermination>),
     Blackhole,
     BadGateway(String),
 }
@@ -157,7 +163,8 @@ pub(super) struct MatchedHttpExchangeReport {
     target: TargetKey,
     method: String,
     uri: String,
-    status: u16,
+    status: Option<u16>,
+    outcome: crate::DependencyExchangeOutcome,
     target_event_index: usize,
 }
 
@@ -220,6 +227,7 @@ pub(super) fn register_http_exchange(
             Some(discovered.advertised_ip),
         )?;
     }
+    termination::validate_record(&record)?;
     let identity = identity_from_record(&record)?;
     let protocol = match identity.scheme {
         HttpReplayScheme::Http => ReplayProtocol::Http,
@@ -249,7 +257,7 @@ pub(super) fn register_http_exchange(
         case_id: case_id.map(ToOwned::to_owned),
         identity,
         record,
-        consumed: false,
+        status: super::ReplayExchangeStatus::Available,
         shared_origin: None,
     });
     Ok(())
@@ -338,115 +346,6 @@ fn normalize_scheme(value: &str) -> Result<HttpReplayScheme> {
     }
 }
 
-pub(super) async fn handle_http_replay_connection(
-    stream: TcpStream,
-    _peer_addr: std::net::SocketAddr,
-    target: ReplayTarget,
-    state: Arc<Mutex<ReplayState>>,
-    ca: Arc<MitmCa>,
-) -> Result<()> {
-    match target.protocol {
-        ReplayProtocol::Http => serve_http_io(stream, target, state).await,
-        ReplayProtocol::Https => {
-            let server_config = ca.server_config_for_host(&target.host)?;
-            let tls = TlsAcceptor::from(server_config)
-                .accept(stream)
-                .await
-                .with_context(|| {
-                    format!("HTTPS replay TLS handshake failed for {}", target.host)
-                })?;
-            serve_http_io(tls, target, state).await
-        }
-        ReplayProtocol::Auto
-        | ReplayProtocol::Mysql
-        | ReplayProtocol::Redis
-        | ReplayProtocol::Memcached
-        | ReplayProtocol::Kafka
-        | ReplayProtocol::Motan => Err(anyhow!("HTTP replay received a non-HTTP target")),
-    }
-}
-
-async fn serve_http_io<T>(io: T, target: ReplayTarget, state: Arc<Mutex<ReplayState>>) -> Result<()>
-where
-    T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-{
-    let service =
-        service_fn(move |request| handle_http_request(request, target.clone(), state.clone()));
-    hyper::server::conn::http1::Builder::new()
-        .serve_connection(TokioIo::new(io), service)
-        .await
-        .context("failed to serve HTTP replay connection")
-}
-
-async fn handle_http_request(
-    request: Request<Incoming>,
-    target: ReplayTarget,
-    state: Arc<Mutex<ReplayState>>,
-) -> Result<Response<Full<Bytes>>, Infallible> {
-    let request_started_at = Utc::now();
-    let method = request.method().clone();
-    let uri = request.uri().clone();
-    let host = request
-        .headers()
-        .get(HOST)
-        .and_then(|value| value.to_str().ok())
-        .map(ToOwned::to_owned);
-    let headers = request_headers::capture(request.headers());
-    let body = match request.into_body().collect().await {
-        Ok(body) => body.to_bytes(),
-        Err(error) => {
-            return Ok(error_response(
-                StatusCode::BAD_GATEWAY,
-                &format!("failed to read replay request body: {error}"),
-            ));
-        }
-    };
-    let scheme = match target.protocol {
-        ReplayProtocol::Https => HttpReplayScheme::Https,
-        _ => HttpReplayScheme::Http,
-    };
-    let target_key = TargetKey {
-        host: target.host,
-        port: target.port,
-    };
-    let matched = {
-        let mut state = state.lock().await;
-        let unmatched_before = state.http_events.unmatched.len();
-        let result = state.match_http_request(
-            scheme,
-            &target_key,
-            &method,
-            &uri,
-            host.as_deref(),
-            &body,
-            &headers,
-            request_started_at,
-        );
-        if state.http_events.unmatched.len() > unmatched_before
-            && let Some(event) = state.http_events.unmatched.last_mut()
-        {
-            event.request_fingerprint = Some(cross_case::request_fingerprint(
-                &uri.to_string(),
-                &body,
-                &headers,
-            ));
-        }
-        result
-    };
-    let record = match matched {
-        Ok(record) => record,
-        Err(HttpReplayMatchError::Blackhole) => {
-            return pending::<Result<Response<Full<Bytes>>, Infallible>>().await;
-        }
-        Err(HttpReplayMatchError::BadGateway(reason)) => {
-            return Ok(error_response(StatusCode::BAD_GATEWAY, &reason));
-        }
-    };
-    let response = response_from_record(record)
-        .unwrap_or_else(|error| error_response(StatusCode::BAD_GATEWAY, &error.to_string()));
-    Ok(response)
-}
-
 impl ReplayState {
     pub(super) fn http_case_is_dirty(&self, case_id: &str) -> bool {
         self.http_events.dirty_case_ids.contains(case_id)
@@ -455,7 +354,7 @@ impl ReplayState {
                     let allowed = self.allowed_unused_http.as_ref().is_some_and(|config| {
                         config.hosts.contains(&exchange.identity.target.host)
                     });
-                    !exchange.consumed && !allowed
+                    !exchange.status.is_consumed() && !allowed
                 })
             })
     }
@@ -490,7 +389,7 @@ impl ReplayState {
         let mut target_fingerprint = None;
         'sources: for source in [ReplaySource::Case, ReplaySource::Global] {
             for (index, exchange) in self.http_exchanges.iter().enumerate() {
-                if exchange.consumed && !exchange.is_repeatable_preflight_probe()
+                if !exchange.status.is_available() && !exchange.is_repeatable_preflight_probe()
                     || exchange.source != source
                     || !active_http_case_matches(active_case_id.as_deref(), exchange)
                     || exchange.identity.scheme != scheme
@@ -588,8 +487,10 @@ impl ReplayState {
             return Err(HttpReplayMatchError::BadGateway(reason));
         };
         let exchange = self.http_exchanges[index].clone();
-        if exchange.record.error.is_some() || exchange.record.response_status.is_none() {
-            self.http_exchanges[index].consumed = true;
+        if !exchange.record.outcome.is_client_terminated()
+            && (exchange.record.error.is_some() || exchange.record.response_status.is_none())
+        {
+            self.http_exchanges[index].status = super::ReplayExchangeStatus::Consumed;
             let reason = "recorded HTTP exchange contains an upstream error that replay v1 cannot synthesize"
                 .to_string();
             if let Some(case_id) = &exchange.case_id {
@@ -608,31 +509,32 @@ impl ReplayState {
             return Err(HttpReplayMatchError::BadGateway(reason));
         }
 
-        self.http_exchanges[index].consumed = true;
         self.audit_http_request_headers(&exchange, index, headers, request_started_at);
         if let Some(policy) = &mut self.replay_policy {
             policy.commit(active_case_id.as_deref(), matching_policy_decision);
         }
-        let report_case_id = active_case_id.clone();
-        let budget_case_id = report_case_id.clone();
-        push_success_detail(
-            &mut self.http_events.matched_count,
-            &mut self.http_events.matched,
-            &mut self.http_events.matched_details,
-            budget_case_id.as_deref(),
-            |target_event_index| MatchedHttpExchangeReport {
-                case_id: report_case_id,
-                shared_origin: exchange.shared_origin,
-                source: exchange.source,
-                index,
-                scheme,
-                target: target.clone(),
-                method: method.to_string(),
-                uri: uri_path_only(&uri.to_string()),
-                status: exchange.record.response_status.unwrap_or_default(),
-                target_event_index,
-            },
-        );
+        let detail = MatchedHttpExchangeReport {
+            case_id: active_case_id.clone(),
+            shared_origin: exchange.shared_origin.clone(),
+            source: exchange.source,
+            index,
+            scheme,
+            target: target.clone(),
+            method: method.to_string(),
+            uri: uri_path_only(&uri.to_string()),
+            status: exchange.record.response_status,
+            outcome: exchange.record.outcome,
+            target_event_index: 0,
+        };
+        if exchange.record.outcome.is_client_terminated() {
+            self.http_exchanges[index].status =
+                super::ReplayExchangeStatus::AwaitingClientTermination;
+            return Err(HttpReplayMatchError::ClientTerminated(Box::new(
+                termination::PendingHttpTermination::new(detail, &exchange.record),
+            )));
+        }
+        self.http_exchanges[index].status = super::ReplayExchangeStatus::Consumed;
+        self.complete_http_exchange(detail);
         Ok(exchange.record)
     }
 
@@ -691,7 +593,7 @@ impl ReplayState {
             .iter()
             .enumerate()
             .filter(|(_, exchange)| {
-                if exchange.source != source || exchange.consumed {
+                if exchange.source != source || exchange.status.is_consumed() {
                     return false;
                 }
                 let is_allowed = source == ReplaySource::Case
@@ -717,6 +619,7 @@ impl ReplayState {
 impl ReplayHttpExchange {
     fn is_repeatable_preflight_probe(&self) -> bool {
         self.source == ReplaySource::Global
+            && !self.record.outcome.is_client_terminated()
             && self.record.global_dependency_reason.as_deref() == Some("preflight_probe")
             && self.record.global_dependency_phase.as_deref() == Some("runtime")
             && matches!(

@@ -75,6 +75,7 @@ fn one_fake_ip_is_reused_for_all_ports_on_a_host() {
 #[test]
 fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
     let record = RecordedHttpExchange {
+        outcome: crate::DependencyExchangeOutcome::Response,
         duration_ms: None,
         request_started_at: None,
         request_headers: Default::default(),
@@ -135,6 +136,7 @@ fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
 #[test]
 fn response_discovered_http_target_reserves_its_recorded_fake_ip() {
     let record = RecordedHttpExchange {
+        outcome: crate::DependencyExchangeOutcome::Response,
         duration_ms: None,
         request_started_at: None,
         request_headers: Default::default(),
@@ -689,7 +691,7 @@ async fn global_zero_byte_tcp_connection_does_not_blackhole_a_case_request() {
     task.abort();
 }
 
-async fn spawn_http_replay(
+pub(super) async fn spawn_http_replay(
     case_dir: &Path,
     ignored_query_params: Vec<String>,
 ) -> (

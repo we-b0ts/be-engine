@@ -19,9 +19,12 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::access_policy::AccessDecision;
+use crate::active_case::DependencyTargets;
 use crate::dns_mock::{FakeDnsEntry, FakeDnsUpstreamProtocol};
 use crate::http::access::classify_method;
 use crate::http::rewrite::{self, RewriteInput};
+use crate::http::termination::{ClientTermination, ObservedClientIo};
+use crate::recorder::http::dependency::PendingHttpCapture;
 use crate::recorder::{
     HeaderMapSnapshot, HttpExchangeEvent, ProxyErrorEvent, RecorderEvent,
     TcpGatewayConnectionEvent, capture_body, redact_headers,
@@ -31,8 +34,15 @@ use crate::{AppState, ProxyClient};
 mod connection;
 mod detection;
 mod http_transport;
+mod recording;
+use recording::{
+    HttpErrorContext, TcpConnectionRecord, record_http_error, record_proxy_error,
+    record_tcp_connection,
+};
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod timeout_tests;
 
 pub(crate) use connection::run;
 use connection::upstream_addr;
@@ -60,14 +70,25 @@ async fn serve_http_connection(
     state: AppState,
 ) -> Result<()> {
     let upstream_addr = upstream_addr(&entry, fake_addr.port())?;
-    let io = TokioIo::new(client);
+    let termination = ClientTermination::default();
+    let io = TokioIo::new(ObservedClientIo::new(client, termination.clone()));
     let service = service_fn(move |req| {
         let state = state.clone();
         let entry = entry.clone();
         let client_addr = client_addr.clone();
+        let termination = termination.clone();
         async move {
             Ok::<_, Infallible>(
-                handle_http_request(req, state, entry, fake_addr, upstream_addr, client_addr).await,
+                handle_http_request(
+                    req,
+                    state,
+                    entry,
+                    fake_addr,
+                    upstream_addr,
+                    client_addr,
+                    termination,
+                )
+                .await,
             )
         }
     });
@@ -120,12 +141,14 @@ async fn serve_https_mitm_connection(
         }
     };
 
-    let io = TokioIo::new(tls);
+    let termination = ClientTermination::default();
+    let io = TokioIo::new(ObservedClientIo::new(tls, termination.clone()));
     let service = service_fn(move |req| {
         let state = state.clone();
         let entry = entry.clone();
         let client_addr = client_addr.clone();
         let authority = authority.clone();
+        let termination = termination.clone();
         async move {
             Ok::<_, Infallible>(
                 handle_https_request(
@@ -137,6 +160,7 @@ async fn serve_https_mitm_connection(
                     HttpsRequestContext {
                         client_addr,
                         fallback_authority: authority,
+                        termination,
                     },
                 )
                 .await,
@@ -160,7 +184,9 @@ async fn handle_http_request(
     fake_addr: SocketAddr,
     upstream_addr: SocketAddr,
     client_addr: Option<String>,
+    termination: ClientTermination,
 ) -> Response<GatewayBody> {
+    let targets = state.capture_dependency_targets();
     let id = Uuid::new_v4();
     let started = Instant::now();
     let request_started_at = Utc::now();
@@ -202,6 +228,7 @@ async fn handle_http_request(
         Ok(collected) => collected.to_bytes(),
         Err(err) => {
             return record_http_error(HttpErrorContext {
+                targets: targets.clone(),
                 state,
                 id,
                 client_addr,
@@ -226,6 +253,7 @@ async fn handle_http_request(
         Ok(uri) => uri,
         Err(err) => {
             return record_http_error(HttpErrorContext {
+                targets: targets.clone(),
                 state,
                 id,
                 client_addr,
@@ -258,6 +286,7 @@ async fn handle_http_request(
         Ok(req) => req,
         Err(err) => {
             return record_http_error(HttpErrorContext {
+                targets: targets.clone(),
                 state,
                 id,
                 client_addr,
@@ -278,14 +307,157 @@ async fn handle_http_request(
         }
     };
 
-    match send_upstream(state.client(), outbound).await {
-        Ok(upstream_response) => {
-            let status = upstream_response.status();
-            let mut response_headers = upstream_response.headers().clone();
-            let mut body_bytes = match upstream_response.into_body().collect().await {
-                Ok(collected) => collected.to_bytes(),
+    let pending = PendingHttpCapture::new(
+        state.clone(),
+        targets.clone(),
+        HttpExchangeEvent {
+            outcome: crate::DependencyExchangeOutcome::Response,
+            id,
+            timestamp: Utc::now(),
+            request_started_at,
+            client_addr: client_addr.clone(),
+            scheme: "fake_ip_http".to_string(),
+            method: method.to_string(),
+            uri: original_uri.to_string(),
+            authority: authority.clone(),
+            request_headers: with_fake_gateway_headers(
+                request_headers_for_record.clone(),
+                &entry,
+                fake_addr,
+                Some(upstream_addr),
+            ),
+            request_body: capture_body(&request_body, state.config().recording.max_body_bytes),
+            response_status: None,
+            response_headers: None,
+            response_body: None,
+            discovered_tcp_targets: Vec::new(),
+            duration_ms: 0,
+            error: None,
+        },
+        started,
+        termination,
+    );
+    pending
+        .run(async {
+            match send_upstream(state.client(), outbound).await {
+                Ok(upstream_response) => {
+                    let status = upstream_response.status();
+                    let mut response_headers = upstream_response.headers().clone();
+                    let mut body_bytes = match upstream_response.into_body().collect().await {
+                        Ok(collected) => collected.to_bytes(),
+                        Err(err) => {
+                            return record_http_error(HttpErrorContext {
+                                targets: targets.clone(),
+                                state,
+                                id,
+                                client_addr,
+                                scheme: "fake_ip_http".to_string(),
+                                method,
+                                original_uri,
+                                authority,
+                                request_headers: request_headers_for_record,
+                                request_body,
+                                started,
+                                request_started_at,
+                                entry,
+                                fake_addr,
+                                upstream_addr: Some(upstream_addr),
+                                err: anyhow!(
+                                    "failed to read fake-IP HTTP upstream response body: {err}"
+                                ),
+                            })
+                            .await;
+                        }
+                    };
+                    let mut discovered_tcp_targets = Vec::new();
+                    match rewrite::apply(
+                        &state.config().http_response_rewrite,
+                        state.dns_registry(),
+                        state.kubectl_proxy_manager(),
+                        state.ca().ca_cert_pem_ref(),
+                        state.config().recording.decoded_body_limit(),
+                        RewriteInput {
+                            method: &method,
+                            uri: &original_uri,
+                            authority: authority.as_deref(),
+                            status,
+                            headers: &response_headers,
+                            body: &body_bytes,
+                        },
+                    )
+                    .await
+                    {
+                        Ok(Some(rewritten)) => {
+                            response_headers = rewritten.headers;
+                            body_bytes = rewritten.body;
+                            discovered_tcp_targets = rewritten.discovered_tcp_targets;
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            return record_http_error(HttpErrorContext {
+                                targets: targets.clone(),
+                                state,
+                                id,
+                                client_addr,
+                                scheme: "fake_ip_http".to_string(),
+                                method,
+                                original_uri,
+                                authority,
+                                request_headers: request_headers_for_record,
+                                request_body,
+                                started,
+                                request_started_at,
+                                entry,
+                                fake_addr,
+                                upstream_addr: Some(upstream_addr),
+                                err,
+                            })
+                            .await;
+                        }
+                    }
+                    let response_headers_for_record =
+                        redact_headers(&response_headers, &state.config().recording.redact_headers);
+
+                    let event = HttpExchangeEvent {
+                        outcome: crate::DependencyExchangeOutcome::Response,
+                        id,
+                        timestamp: Utc::now(),
+                        request_started_at,
+                        client_addr,
+                        scheme: "fake_ip_http".to_string(),
+                        method: method.to_string(),
+                        uri: original_uri.to_string(),
+                        authority,
+                        request_headers: with_fake_gateway_headers(
+                            request_headers_for_record,
+                            &entry,
+                            fake_addr,
+                            Some(upstream_addr),
+                        ),
+                        request_body: capture_body(
+                            &request_body,
+                            state.config().recording.max_body_bytes,
+                        ),
+                        response_status: Some(status.as_u16()),
+                        response_headers: Some(response_headers_for_record),
+                        response_body: Some(capture_body(
+                            &body_bytes,
+                            state.config().recording.max_body_bytes,
+                        )),
+                        discovered_tcp_targets,
+                        duration_ms: started.elapsed().as_millis(),
+                        error: None,
+                    };
+                    state.record_event_for_targets(
+                        RecorderEvent::HttpExchange(event),
+                        targets.clone(),
+                    );
+
+                    build_downstream_response(status, &response_headers, body_bytes)
+                }
                 Err(err) => {
-                    return record_http_error(HttpErrorContext {
+                    record_http_error(HttpErrorContext {
+                        targets: targets.clone(),
                         state,
                         id,
                         client_addr,
@@ -300,115 +472,19 @@ async fn handle_http_request(
                         entry,
                         fake_addr,
                         upstream_addr: Some(upstream_addr),
-                        err: anyhow!("failed to read fake-IP HTTP upstream response body: {err}"),
+                        err: anyhow!("fake-IP HTTP upstream request failed: {err}"),
                     })
-                    .await;
-                }
-            };
-            let mut discovered_tcp_targets = Vec::new();
-            match rewrite::apply(
-                &state.config().http_response_rewrite,
-                state.dns_registry(),
-                state.kubectl_proxy_manager(),
-                state.ca().ca_cert_pem_ref(),
-                state.config().recording.decoded_body_limit(),
-                RewriteInput {
-                    method: &method,
-                    uri: &original_uri,
-                    authority: authority.as_deref(),
-                    status,
-                    headers: &response_headers,
-                    body: &body_bytes,
-                },
-            )
-            .await
-            {
-                Ok(Some(rewritten)) => {
-                    response_headers = rewritten.headers;
-                    body_bytes = rewritten.body;
-                    discovered_tcp_targets = rewritten.discovered_tcp_targets;
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    return record_http_error(HttpErrorContext {
-                        state,
-                        id,
-                        client_addr,
-                        scheme: "fake_ip_http".to_string(),
-                        method,
-                        original_uri,
-                        authority,
-                        request_headers: request_headers_for_record,
-                        request_body,
-                        started,
-                        request_started_at,
-                        entry,
-                        fake_addr,
-                        upstream_addr: Some(upstream_addr),
-                        err,
-                    })
-                    .await;
+                    .await
                 }
             }
-            let response_headers_for_record =
-                redact_headers(&response_headers, &state.config().recording.redact_headers);
-
-            let event = HttpExchangeEvent {
-                id,
-                timestamp: Utc::now(),
-                request_started_at,
-                client_addr,
-                scheme: "fake_ip_http".to_string(),
-                method: method.to_string(),
-                uri: original_uri.to_string(),
-                authority,
-                request_headers: with_fake_gateway_headers(
-                    request_headers_for_record,
-                    &entry,
-                    fake_addr,
-                    Some(upstream_addr),
-                ),
-                request_body: capture_body(&request_body, state.config().recording.max_body_bytes),
-                response_status: Some(status.as_u16()),
-                response_headers: Some(response_headers_for_record),
-                response_body: Some(capture_body(
-                    &body_bytes,
-                    state.config().recording.max_body_bytes,
-                )),
-                discovered_tcp_targets,
-                duration_ms: started.elapsed().as_millis(),
-                error: None,
-            };
-            record_event_and_case_dependency(&state, RecorderEvent::HttpExchange(event));
-
-            build_downstream_response(status, &response_headers, body_bytes)
-        }
-        Err(err) => {
-            record_http_error(HttpErrorContext {
-                state,
-                id,
-                client_addr,
-                scheme: "fake_ip_http".to_string(),
-                method,
-                original_uri,
-                authority,
-                request_headers: request_headers_for_record,
-                request_body,
-                started,
-                request_started_at,
-                entry,
-                fake_addr,
-                upstream_addr: Some(upstream_addr),
-                err: anyhow!("fake-IP HTTP upstream request failed: {err}"),
-            })
-            .await
-        }
-    }
+        })
+        .await
 }
 
 struct HttpsRequestContext {
     client_addr: Option<String>,
     fallback_authority: String,
+    termination: ClientTermination,
 }
 
 async fn handle_https_request(
@@ -422,7 +498,9 @@ async fn handle_https_request(
     let HttpsRequestContext {
         client_addr,
         fallback_authority,
+        termination,
     } = client;
+    let targets = state.capture_dependency_targets();
     let id = Uuid::new_v4();
     let started = Instant::now();
     let request_started_at = Utc::now();
@@ -464,6 +542,7 @@ async fn handle_https_request(
         Ok(collected) => collected.to_bytes(),
         Err(err) => {
             return record_http_error(HttpErrorContext {
+                targets: targets.clone(),
                 state,
                 id,
                 client_addr,
@@ -493,6 +572,7 @@ async fn handle_https_request(
         Ok(uri) => uri,
         Err(err) => {
             return record_http_error(HttpErrorContext {
+                targets: targets.clone(),
                 state,
                 id,
                 client_addr,
@@ -525,6 +605,7 @@ async fn handle_https_request(
         Ok(req) => req,
         Err(err) => {
             return record_http_error(HttpErrorContext {
+                targets: targets.clone(),
                 state,
                 id,
                 client_addr,
@@ -545,71 +626,169 @@ async fn handle_https_request(
         }
     };
 
-    let upstream_response = if plain_http_upstream {
-        send_upstream(state.client(), outbound)
-            .await
-            .map_err(anyhow::Error::from)
-    } else {
-        let server_name = entry
-            .upstream_authority
-            .as_deref()
-            .and_then(|authority| authority.split(':').next())
-            .unwrap_or(&entry.domain);
-        send_https_upstream(&state, upstream_addr, server_name, outbound).await
-    };
-    match upstream_response {
-        Ok(upstream_response) => {
-            let status = upstream_response.status();
-            let mut response_headers = upstream_response.headers().clone();
-            let mut body_bytes = match upstream_response.into_body().collect().await {
-                Ok(collected) => collected.to_bytes(),
-                Err(err) => {
-                    return record_http_error(HttpErrorContext {
-                        state,
-                        id,
-                        client_addr,
-                        scheme: "fake_ip_https".to_string(),
-                        method,
-                        original_uri,
-                        authority,
-                        request_headers: request_headers_for_record,
-                        request_body,
-                        started,
-                        request_started_at,
-                        entry,
-                        fake_addr,
-                        upstream_addr: Some(upstream_addr),
-                        err: anyhow!("failed to read fake-IP HTTPS upstream response body: {err}"),
-                    })
-                    .await;
-                }
+    let pending = PendingHttpCapture::new(
+        state.clone(),
+        targets.clone(),
+        HttpExchangeEvent {
+            outcome: crate::DependencyExchangeOutcome::Response,
+            id,
+            timestamp: Utc::now(),
+            request_started_at,
+            client_addr: client_addr.clone(),
+            scheme: "fake_ip_https".to_string(),
+            method: method.to_string(),
+            uri: original_uri.to_string(),
+            authority: authority.clone(),
+            request_headers: with_fake_gateway_headers(
+                request_headers_for_record.clone(),
+                &entry,
+                fake_addr,
+                Some(upstream_addr),
+            ),
+            request_body: capture_body(&request_body, state.config().recording.max_body_bytes),
+            response_status: None,
+            response_headers: None,
+            response_body: None,
+            discovered_tcp_targets: Vec::new(),
+            duration_ms: 0,
+            error: None,
+        },
+        started,
+        termination,
+    );
+    pending
+        .run(async {
+            let upstream_response = if plain_http_upstream {
+                send_upstream(state.client(), outbound)
+                    .await
+                    .map_err(anyhow::Error::from)
+            } else {
+                let server_name = entry
+                    .upstream_authority
+                    .as_deref()
+                    .and_then(|authority| authority.split(':').next())
+                    .unwrap_or(&entry.domain);
+                send_https_upstream(&state, upstream_addr, server_name, outbound).await
             };
-            let mut discovered_tcp_targets = Vec::new();
-            match rewrite::apply(
-                &state.config().http_response_rewrite,
-                state.dns_registry(),
-                state.kubectl_proxy_manager(),
-                state.ca().ca_cert_pem_ref(),
-                state.config().recording.decoded_body_limit(),
-                RewriteInput {
-                    method: &method,
-                    uri: &original_uri,
-                    authority: authority.as_deref(),
-                    status,
-                    headers: &response_headers,
-                    body: &body_bytes,
-                },
-            )
-            .await
-            {
-                Ok(Some(rewritten)) => {
-                    response_headers = rewritten.headers;
-                    body_bytes = rewritten.body;
-                    discovered_tcp_targets = rewritten.discovered_tcp_targets;
+            match upstream_response {
+                Ok(upstream_response) => {
+                    let status = upstream_response.status();
+                    let mut response_headers = upstream_response.headers().clone();
+                    let mut body_bytes = match upstream_response.into_body().collect().await {
+                        Ok(collected) => collected.to_bytes(),
+                        Err(err) => {
+                            return record_http_error(HttpErrorContext {
+                                targets: targets.clone(),
+                                state,
+                                id,
+                                client_addr,
+                                scheme: "fake_ip_https".to_string(),
+                                method,
+                                original_uri,
+                                authority,
+                                request_headers: request_headers_for_record,
+                                request_body,
+                                started,
+                                request_started_at,
+                                entry,
+                                fake_addr,
+                                upstream_addr: Some(upstream_addr),
+                                err: anyhow!(
+                                    "failed to read fake-IP HTTPS upstream response body: {err}"
+                                ),
+                            })
+                            .await;
+                        }
+                    };
+                    let mut discovered_tcp_targets = Vec::new();
+                    match rewrite::apply(
+                        &state.config().http_response_rewrite,
+                        state.dns_registry(),
+                        state.kubectl_proxy_manager(),
+                        state.ca().ca_cert_pem_ref(),
+                        state.config().recording.decoded_body_limit(),
+                        RewriteInput {
+                            method: &method,
+                            uri: &original_uri,
+                            authority: authority.as_deref(),
+                            status,
+                            headers: &response_headers,
+                            body: &body_bytes,
+                        },
+                    )
+                    .await
+                    {
+                        Ok(Some(rewritten)) => {
+                            response_headers = rewritten.headers;
+                            body_bytes = rewritten.body;
+                            discovered_tcp_targets = rewritten.discovered_tcp_targets;
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            return record_http_error(HttpErrorContext {
+                                targets: targets.clone(),
+                                state,
+                                id,
+                                client_addr,
+                                scheme: "fake_ip_https".to_string(),
+                                method,
+                                original_uri,
+                                authority,
+                                request_headers: request_headers_for_record,
+                                request_body,
+                                started,
+                                request_started_at,
+                                entry,
+                                fake_addr,
+                                upstream_addr: Some(upstream_addr),
+                                err,
+                            })
+                            .await;
+                        }
+                    }
+                    let response_headers_for_record =
+                        redact_headers(&response_headers, &state.config().recording.redact_headers);
+
+                    let event = HttpExchangeEvent {
+                        outcome: crate::DependencyExchangeOutcome::Response,
+                        id,
+                        timestamp: Utc::now(),
+                        request_started_at,
+                        client_addr,
+                        scheme: "fake_ip_https".to_string(),
+                        method: method.to_string(),
+                        uri: original_uri.to_string(),
+                        authority,
+                        request_headers: with_fake_gateway_headers(
+                            request_headers_for_record,
+                            &entry,
+                            fake_addr,
+                            Some(upstream_addr),
+                        ),
+                        request_body: capture_body(
+                            &request_body,
+                            state.config().recording.max_body_bytes,
+                        ),
+                        response_status: Some(status.as_u16()),
+                        response_headers: Some(response_headers_for_record),
+                        response_body: Some(capture_body(
+                            &body_bytes,
+                            state.config().recording.max_body_bytes,
+                        )),
+                        discovered_tcp_targets,
+                        duration_ms: started.elapsed().as_millis(),
+                        error: None,
+                    };
+                    state.record_event_for_targets(
+                        RecorderEvent::HttpExchange(event),
+                        targets.clone(),
+                    );
+
+                    build_downstream_response(status, &response_headers, body_bytes)
                 }
-                Ok(None) => {}
                 Err(err) => {
-                    return record_http_error(HttpErrorContext {
+                    record_http_error(HttpErrorContext {
+                        targets: targets.clone(),
                         state,
                         id,
                         client_addr,
@@ -624,65 +803,13 @@ async fn handle_https_request(
                         entry,
                         fake_addr,
                         upstream_addr: Some(upstream_addr),
-                        err,
+                        err: anyhow!("fake-IP HTTPS client upstream request failed: {err}"),
                     })
-                    .await;
+                    .await
                 }
             }
-            let response_headers_for_record =
-                redact_headers(&response_headers, &state.config().recording.redact_headers);
-
-            let event = HttpExchangeEvent {
-                id,
-                timestamp: Utc::now(),
-                request_started_at,
-                client_addr,
-                scheme: "fake_ip_https".to_string(),
-                method: method.to_string(),
-                uri: original_uri.to_string(),
-                authority,
-                request_headers: with_fake_gateway_headers(
-                    request_headers_for_record,
-                    &entry,
-                    fake_addr,
-                    Some(upstream_addr),
-                ),
-                request_body: capture_body(&request_body, state.config().recording.max_body_bytes),
-                response_status: Some(status.as_u16()),
-                response_headers: Some(response_headers_for_record),
-                response_body: Some(capture_body(
-                    &body_bytes,
-                    state.config().recording.max_body_bytes,
-                )),
-                discovered_tcp_targets,
-                duration_ms: started.elapsed().as_millis(),
-                error: None,
-            };
-            record_event_and_case_dependency(&state, RecorderEvent::HttpExchange(event));
-
-            build_downstream_response(status, &response_headers, body_bytes)
-        }
-        Err(err) => {
-            record_http_error(HttpErrorContext {
-                state,
-                id,
-                client_addr,
-                scheme: "fake_ip_https".to_string(),
-                method,
-                original_uri,
-                authority,
-                request_headers: request_headers_for_record,
-                request_body,
-                started,
-                request_started_at,
-                entry,
-                fake_addr,
-                upstream_addr: Some(upstream_addr),
-                err: anyhow!("fake-IP HTTPS client upstream request failed: {err}"),
-            })
-            .await
-        }
-    }
+        })
+        .await
 }
 
 async fn send_upstream(
@@ -721,119 +848,6 @@ async fn send_https_upstream(
         .send_request(request)
         .await
         .context("failed to send fake-IP HTTPS upstream request")
-}
-
-async fn record_proxy_error(
-    state: &AppState,
-    protocol: &str,
-    client_addr: Option<String>,
-    target: Option<String>,
-    error: String,
-) {
-    record_event_and_case_dependency(
-        state,
-        RecorderEvent::ProxyError(ProxyErrorEvent {
-            id: Uuid::new_v4(),
-            connection_id: None,
-            timestamp: Utc::now(),
-            protocol: protocol.to_string(),
-            client_addr,
-            target,
-            error,
-        }),
-    );
-}
-
-struct HttpErrorContext {
-    state: AppState,
-    id: Uuid,
-    client_addr: Option<String>,
-    scheme: String,
-    method: Method,
-    original_uri: Uri,
-    authority: Option<String>,
-    request_headers: HeaderMapSnapshot,
-    request_body: Bytes,
-    started: Instant,
-    request_started_at: chrono::DateTime<Utc>,
-    entry: FakeDnsEntry,
-    fake_addr: SocketAddr,
-    upstream_addr: Option<SocketAddr>,
-    err: anyhow::Error,
-}
-
-async fn record_http_error(ctx: HttpErrorContext) -> Response<GatewayBody> {
-    let error = ctx.err.to_string();
-    let event = HttpExchangeEvent {
-        id: ctx.id,
-        timestamp: Utc::now(),
-        request_started_at: ctx.request_started_at,
-        client_addr: ctx.client_addr.clone(),
-        scheme: ctx.scheme.clone(),
-        method: ctx.method.to_string(),
-        uri: ctx.original_uri.to_string(),
-        authority: ctx.authority.clone(),
-        request_headers: with_fake_gateway_headers(
-            ctx.request_headers,
-            &ctx.entry,
-            ctx.fake_addr,
-            ctx.upstream_addr,
-        ),
-        request_body: capture_body(
-            &ctx.request_body,
-            ctx.state.config().recording.max_body_bytes,
-        ),
-        response_status: None,
-        response_headers: None,
-        response_body: None,
-        discovered_tcp_targets: Vec::new(),
-        duration_ms: ctx.started.elapsed().as_millis(),
-        error: Some(error.clone()),
-    };
-    record_event_and_case_dependency(&ctx.state, RecorderEvent::HttpExchange(event));
-    record_proxy_error(
-        &ctx.state,
-        &ctx.scheme,
-        ctx.client_addr,
-        ctx.upstream_addr.map(|addr| addr.to_string()),
-        error.clone(),
-    )
-    .await;
-    simple_response(StatusCode::BAD_GATEWAY, &error)
-}
-
-struct TcpConnectionRecord {
-    id: Uuid,
-    client_addr: Option<String>,
-    domain: Option<String>,
-    fake_addr: SocketAddr,
-    upstream_addr: Option<SocketAddr>,
-    client_to_server_bytes: u64,
-    server_to_client_bytes: u64,
-    duration_ms: u128,
-    error: Option<String>,
-}
-
-async fn record_tcp_connection(state: &AppState, record: TcpConnectionRecord) {
-    record_event_and_case_dependency(
-        state,
-        RecorderEvent::TcpGatewayConnection(TcpGatewayConnectionEvent {
-            id: record.id,
-            timestamp: Utc::now(),
-            client_addr: record.client_addr,
-            domain: record.domain,
-            fake_addr: record.fake_addr.to_string(),
-            upstream_addr: record.upstream_addr.map(|addr| addr.to_string()),
-            client_to_server_bytes: record.client_to_server_bytes,
-            server_to_client_bytes: record.server_to_client_bytes,
-            duration_ms: record.duration_ms,
-            error: record.error,
-        }),
-    );
-}
-
-fn record_event_and_case_dependency(state: &AppState, event: RecorderEvent) {
-    state.record_event(event);
 }
 
 fn request_authority(uri: &Uri, headers: &HeaderMap) -> Option<String> {

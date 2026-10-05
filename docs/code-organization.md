@@ -72,6 +72,11 @@ is unclear.
   `recording_runtime` owns the Recorder application's listener supervision,
   stop triggers, graceful drain, and finalization lifecycle.
 - Proxy and gateway modules own connection and request orchestration.
+- `http/termination` observes downstream EOF/reset without initiating a close.
+  `recorder/http/dependency` retains HTTP evidence and dependency admission
+  ownership across service cancellation. `replay/http/transport` owns HTTP/TLS
+  delivery and `replay/http/termination` validates and completes zero-response
+  exchanges. `tcp_gateway/recording` owns gateway evidence persistence.
 - Protocol and semantic modules own parsing, encoding, and interpretation.
 - Recorder event, run, writer, and summary modules own capture, persistence,
   and reporting.

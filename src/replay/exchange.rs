@@ -49,6 +49,26 @@ impl ReplayExchangeTiming {
         self.outcome
     }
 
+    pub(super) fn termination_deadline(self, started: Instant) -> Instant {
+        started + self.duration + CLIENT_TERMINATION_LATE_TOLERANCE
+    }
+
+    pub(super) fn validate_client_termination(self, elapsed: Duration) -> Result<()> {
+        if elapsed + CLIENT_TERMINATION_EARLY_TOLERANCE < self.duration {
+            return Err(anyhow!(
+                "client terminated dependency connection too early: observed {}ms, recorded {}ms",
+                elapsed.as_millis(),
+                self.duration.as_millis()
+            ));
+        }
+        if elapsed > self.duration + CLIENT_TERMINATION_LATE_TOLERANCE {
+            return Err(anyhow!(
+                "client did not terminate dependency connection within recorded timing window"
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) async fn delay_response(self) {
         if !self.duration.is_zero() {
             sleep(self.duration).await;
@@ -88,13 +108,7 @@ impl ReplayExchangeTiming {
                 ));
             }
         }
-        if elapsed + CLIENT_TERMINATION_EARLY_TOLERANCE < self.duration {
-            return Err(anyhow!(
-                "client terminated dependency connection too early: observed {}ms, recorded {}ms",
-                elapsed.as_millis(),
-                self.duration.as_millis()
-            ));
-        }
+        self.validate_client_termination(elapsed)?;
         Ok(elapsed)
     }
 
@@ -118,13 +132,7 @@ impl ReplayExchangeTiming {
             }
         }
         let elapsed = started.elapsed();
-        if elapsed + CLIENT_TERMINATION_EARLY_TOLERANCE < self.duration {
-            return Err(anyhow!(
-                "client terminated dependency connection too early: observed {}ms, recorded {}ms",
-                elapsed.as_millis(),
-                self.duration.as_millis()
-            ));
-        }
+        self.validate_client_termination(elapsed)?;
         Ok(elapsed)
     }
 }

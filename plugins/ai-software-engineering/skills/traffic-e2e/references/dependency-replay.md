@@ -231,6 +231,15 @@ For other dependency types, require recorder-supported semantic input, output,
 ordering, and error evidence. Do not synthesize downstream HTTP payloads, cache
 values, queue messages, rows, or side effects from the expected response.
 
+HTTP(S) `http_exchange` records with `outcome: client_terminated` carry a
+complete request and integer `duration_ms`, with no response or capture error.
+Replay sends zero response bytes and consumes the exchange only after the
+actual client EOF/reset, within 50ms before through 1000ms after the recorded
+duration. Early, late, or absent termination remains dirty. Recorder shutdown
+is not client-timeout evidence, and a call-level timeout that leaves its
+connection open is unsupported. This support does not reconstruct HTTP
+requests missing from a historical recording.
+
 ## Metrics
 
 Treat recorded push metrics as dependency side effects and validate them through

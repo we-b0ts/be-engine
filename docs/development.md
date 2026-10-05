@@ -3097,6 +3097,28 @@ consumes the exchange only after the SDK closes or resets the same connection
 near the recorded time; replay itself does not initiate that close. Intrinsic
 no-response commands remain `no_response` and are not treated as timeouts.
 
+HTTP and HTTPS dependencies also support `outcome: client_terminated` when a
+complete request was captured but the client closed or reset its connection
+while awaiting the buffered upstream response. This applies to the explicit
+proxy (including CONNECT/TLS) and the fake-IP HTTP/HTTPS gateway. Cancellation
+preserves the request and its original Case/Global admission ownership in
+`dependencies.jsonl`; recorder task cancellation without observed client
+termination remains a capture error. HTTPS upstream certificate verification
+remains strict.
+
+HTTP timeout replay matches the ordinary method, endpoint, path, body, and
+header contract, then sends zero response bytes. It consumes the exchange only
+after the client closes or resets the connection. All supported dependency
+protocols use the same timing tolerance: at most 50ms earlier or 1000ms later
+than the recorded `duration_ms`. A client that closes too early, too late, or
+never closes leaves the exchange dirty; the upper bound only limits cleanup,
+and engine-initiated cleanup is not successful client termination. This
+contract does not support a call-level timeout that leaves the connection
+open. HTTP termination evidence with missing timing, truncated request bytes,
+response bytes/headers, or a capture error is rejected. Legacy successful HTTP
+records without `outcome` retain their response behavior; missing historical
+timeout exchanges cannot be recovered by upgrading Replay.
+
 Legacy Motan dependencies are semantic `motan_connection` and
 `motan_exchange` records. Recorder recognizes the F1F1 outer frame containing
 the F0F0 inner frame, supports codec versions 1 and 2 (including gzip-compressed

@@ -43,7 +43,7 @@ pub(in crate::replay::http) fn capture(
         return evidence;
     };
     for exchange in &state.http_exchanges {
-        if exchange.consumed
+        if !exchange.status.is_available()
             || exchange.shared_origin.is_some()
             || !active_http_case_matches(state.active_case_id.as_deref(), exchange)
             || exchange.identity.scheme != scheme

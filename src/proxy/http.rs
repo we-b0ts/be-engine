@@ -17,9 +17,12 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::access_policy::AccessDecision;
+use crate::active_case::DependencyTargets;
 use crate::http::access::classify_method;
 use crate::http::forward::{HostHeaderPolicy, append_end_to_end_headers};
 use crate::http::rewrite::{self, RewriteInput};
+use crate::http::termination::{ClientTermination, ObservedClientIo};
+use crate::recorder::http::dependency::PendingHttpCapture;
 use crate::recorder::{
     HttpExchangeEvent, ProxyErrorEvent, RecorderEvent, capture_body, redact_headers,
 };
@@ -27,6 +30,9 @@ use crate::recording_control::RecordingListener;
 use crate::{AppState, ProxyClient};
 
 type ProxyBody = BoxBody<Bytes, Infallible>;
+
+#[cfg(test)]
+mod timeout_tests;
 
 pub async fn run(state: AppState) -> Result<()> {
     let listener = TcpListener::bind(state.config().http.listen)
@@ -45,12 +51,18 @@ pub async fn run(state: AppState) -> Result<()> {
             .context("failed to enable TCP_NODELAY for HTTP proxy client")?;
         let state = state.clone();
         tokio::spawn(async move {
-            let io = TokioIo::new(stream);
+            let termination = ClientTermination::default();
+            let io = TokioIo::new(ObservedClientIo::new(stream, termination.clone()));
             let client_addr = Some(peer_addr.to_string());
             let service = service_fn(move |req| {
                 let state = state.clone();
                 let client_addr = client_addr.clone();
-                async move { Ok::<_, Infallible>(handle_proxy_request(req, state, client_addr).await) }
+                let termination = termination.clone();
+                async move {
+                    Ok::<_, Infallible>(
+                        handle_proxy_request(req, state, client_addr, termination).await,
+                    )
+                }
             });
 
             if let Err(err) = hyper::server::conn::http1::Builder::new()
@@ -70,12 +82,13 @@ async fn handle_proxy_request(
     req: Request<Incoming>,
     state: AppState,
     client_addr: Option<String>,
+    termination: ClientTermination,
 ) -> Response<ProxyBody> {
     if req.method() == Method::CONNECT {
         return handle_connect(req, state, client_addr).await;
     }
 
-    forward_and_record(req, state, client_addr, "http", None).await
+    forward_and_record(req, state, client_addr, "http", None, termination).await
 }
 
 async fn handle_connect(
@@ -136,14 +149,24 @@ async fn serve_mitm_connection(
         .await
         .with_context(|| format!("failed TLS handshake with client for {authority}"))?;
 
-    let io = TokioIo::new(tls);
+    let termination = ClientTermination::default();
+    let io = TokioIo::new(ObservedClientIo::new(tls, termination.clone()));
     let service = service_fn(move |req| {
         let state = state.clone();
         let client_addr = client_addr.clone();
         let authority = authority.clone();
+        let termination = termination.clone();
         async move {
             Ok::<_, Infallible>(
-                forward_and_record(req, state, client_addr, "https", Some(authority)).await,
+                forward_and_record(
+                    req,
+                    state,
+                    client_addr,
+                    "https",
+                    Some(authority),
+                    termination,
+                )
+                .await,
             )
         }
     });
@@ -163,7 +186,9 @@ async fn forward_and_record(
     client_addr: Option<String>,
     scheme: &str,
     fallback_authority: Option<String>,
+    termination: ClientTermination,
 ) -> Response<ProxyBody> {
+    let targets = state.capture_dependency_targets();
     let id = Uuid::new_v4();
     let started = Instant::now();
     let request_started_at = Utc::now();
@@ -214,6 +239,7 @@ async fn forward_and_record(
         Ok(collected) => collected.to_bytes(),
         Err(err) => {
             return record_http_error(HttpErrorContext {
+                targets: targets.clone(),
                 state,
                 id,
                 client_addr,
@@ -235,6 +261,7 @@ async fn forward_and_record(
         Ok(uri) => uri,
         Err(err) => {
             return record_http_error(HttpErrorContext {
+                targets: targets.clone(),
                 state,
                 id,
                 client_addr,
@@ -261,6 +288,7 @@ async fn forward_and_record(
         Ok(req) => req,
         Err(err) => {
             return record_http_error(HttpErrorContext {
+                targets: targets.clone(),
                 state,
                 id,
                 client_addr,
@@ -278,14 +306,139 @@ async fn forward_and_record(
         }
     };
 
-    match send_upstream(state.client(), outbound).await {
-        Ok(upstream_response) => {
-            let status = upstream_response.status();
-            let mut response_headers = upstream_response.headers().clone();
-            let mut body_bytes = match upstream_response.into_body().collect().await {
-                Ok(collected) => collected.to_bytes(),
+    let pending = PendingHttpCapture::new(
+        state.clone(),
+        targets.clone(),
+        HttpExchangeEvent {
+            outcome: crate::DependencyExchangeOutcome::Response,
+            id,
+            timestamp: Utc::now(),
+            request_started_at,
+            client_addr: client_addr.clone(),
+            scheme: scheme.to_string(),
+            method: method.to_string(),
+            uri: original_uri.to_string(),
+            authority: authority.clone(),
+            request_headers: request_headers_for_record.clone(),
+            request_body: capture_body(&request_body, state.config().recording.max_body_bytes),
+            response_status: None,
+            response_headers: None,
+            response_body: None,
+            discovered_tcp_targets: Vec::new(),
+            duration_ms: 0,
+            error: None,
+        },
+        started,
+        termination,
+    );
+    pending
+        .run(async {
+            match send_upstream(state.client(), outbound).await {
+                Ok(upstream_response) => {
+                    let status = upstream_response.status();
+                    let mut response_headers = upstream_response.headers().clone();
+                    let mut body_bytes = match upstream_response.into_body().collect().await {
+                        Ok(collected) => collected.to_bytes(),
+                        Err(err) => {
+                            return record_http_error(HttpErrorContext {
+                                targets: targets.clone(),
+                                state,
+                                id,
+                                client_addr,
+                                scheme: scheme.to_string(),
+                                method,
+                                original_uri,
+                                authority,
+                                request_headers: request_headers_for_record,
+                                request_body,
+                                started,
+                                request_started_at,
+                                err: anyhow!("failed to read upstream response body: {err}"),
+                            })
+                            .await;
+                        }
+                    };
+                    let mut discovered_tcp_targets = Vec::new();
+                    match rewrite::apply(
+                        &state.config().http_response_rewrite,
+                        state.dns_registry(),
+                        state.kubectl_proxy_manager(),
+                        state.ca().ca_cert_pem_ref(),
+                        state.config().recording.decoded_body_limit(),
+                        RewriteInput {
+                            method: &method,
+                            uri: &original_uri,
+                            authority: authority.as_deref(),
+                            status,
+                            headers: &response_headers,
+                            body: &body_bytes,
+                        },
+                    )
+                    .await
+                    {
+                        Ok(Some(rewritten)) => {
+                            response_headers = rewritten.headers;
+                            body_bytes = rewritten.body;
+                            discovered_tcp_targets = rewritten.discovered_tcp_targets;
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            return record_http_error(HttpErrorContext {
+                                targets: targets.clone(),
+                                state,
+                                id,
+                                client_addr,
+                                scheme: scheme.to_string(),
+                                method,
+                                original_uri,
+                                authority,
+                                request_headers: request_headers_for_record,
+                                request_body,
+                                started,
+                                request_started_at,
+                                err,
+                            })
+                            .await;
+                        }
+                    }
+                    let response_headers_for_record =
+                        redact_headers(&response_headers, &state.config().recording.redact_headers);
+
+                    let event = HttpExchangeEvent {
+                        outcome: crate::DependencyExchangeOutcome::Response,
+                        id,
+                        timestamp: Utc::now(),
+                        request_started_at,
+                        client_addr,
+                        scheme: scheme.to_string(),
+                        method: method.to_string(),
+                        uri: original_uri.to_string(),
+                        authority,
+                        request_headers: request_headers_for_record,
+                        request_body: capture_body(
+                            &request_body,
+                            state.config().recording.max_body_bytes,
+                        ),
+                        response_status: Some(status.as_u16()),
+                        response_headers: Some(response_headers_for_record),
+                        response_body: Some(capture_body(
+                            &body_bytes,
+                            state.config().recording.max_body_bytes,
+                        )),
+                        discovered_tcp_targets,
+                        duration_ms: started.elapsed().as_millis(),
+                        error: None,
+                    };
+                    state.record_event_for_targets(
+                        RecorderEvent::HttpExchange(event),
+                        targets.clone(),
+                    );
+
+                    build_downstream_response(status, &response_headers, body_bytes)
+                }
                 Err(err) => {
-                    return record_http_error(HttpErrorContext {
+                    record_http_error(HttpErrorContext {
+                        targets: targets.clone(),
                         state,
                         id,
                         client_addr,
@@ -297,99 +450,13 @@ async fn forward_and_record(
                         request_body,
                         started,
                         request_started_at,
-                        err: anyhow!("failed to read upstream response body: {err}"),
+                        err: anyhow!("upstream request failed: {err}"),
                     })
-                    .await;
-                }
-            };
-            let mut discovered_tcp_targets = Vec::new();
-            match rewrite::apply(
-                &state.config().http_response_rewrite,
-                state.dns_registry(),
-                state.kubectl_proxy_manager(),
-                state.ca().ca_cert_pem_ref(),
-                state.config().recording.decoded_body_limit(),
-                RewriteInput {
-                    method: &method,
-                    uri: &original_uri,
-                    authority: authority.as_deref(),
-                    status,
-                    headers: &response_headers,
-                    body: &body_bytes,
-                },
-            )
-            .await
-            {
-                Ok(Some(rewritten)) => {
-                    response_headers = rewritten.headers;
-                    body_bytes = rewritten.body;
-                    discovered_tcp_targets = rewritten.discovered_tcp_targets;
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    return record_http_error(HttpErrorContext {
-                        state,
-                        id,
-                        client_addr,
-                        scheme: scheme.to_string(),
-                        method,
-                        original_uri,
-                        authority,
-                        request_headers: request_headers_for_record,
-                        request_body,
-                        started,
-                        request_started_at,
-                        err,
-                    })
-                    .await;
+                    .await
                 }
             }
-            let response_headers_for_record =
-                redact_headers(&response_headers, &state.config().recording.redact_headers);
-
-            let event = HttpExchangeEvent {
-                id,
-                timestamp: Utc::now(),
-                request_started_at,
-                client_addr,
-                scheme: scheme.to_string(),
-                method: method.to_string(),
-                uri: original_uri.to_string(),
-                authority,
-                request_headers: request_headers_for_record,
-                request_body: capture_body(&request_body, state.config().recording.max_body_bytes),
-                response_status: Some(status.as_u16()),
-                response_headers: Some(response_headers_for_record),
-                response_body: Some(capture_body(
-                    &body_bytes,
-                    state.config().recording.max_body_bytes,
-                )),
-                discovered_tcp_targets,
-                duration_ms: started.elapsed().as_millis(),
-                error: None,
-            };
-            record_event_and_case_dependency(&state, RecorderEvent::HttpExchange(event));
-
-            build_downstream_response(status, &response_headers, body_bytes)
-        }
-        Err(err) => {
-            record_http_error(HttpErrorContext {
-                state,
-                id,
-                client_addr,
-                scheme: scheme.to_string(),
-                method,
-                original_uri,
-                authority,
-                request_headers: request_headers_for_record,
-                request_body,
-                started,
-                request_started_at,
-                err: anyhow!("upstream request failed: {err}"),
-            })
-            .await
-        }
-    }
+        })
+        .await
 }
 
 async fn send_upstream(
@@ -400,6 +467,7 @@ async fn send_upstream(
 }
 
 struct HttpErrorContext {
+    targets: DependencyTargets,
     state: AppState,
     id: Uuid,
     client_addr: Option<String>,
@@ -417,6 +485,7 @@ struct HttpErrorContext {
 async fn record_http_error(ctx: HttpErrorContext) -> Response<ProxyBody> {
     let error = format!("{:#}", ctx.err);
     let event = HttpExchangeEvent {
+        outcome: crate::DependencyExchangeOutcome::Response,
         id: ctx.id,
         timestamp: Utc::now(),
         request_started_at: ctx.request_started_at,
@@ -437,7 +506,8 @@ async fn record_http_error(ctx: HttpErrorContext) -> Response<ProxyBody> {
         duration_ms: ctx.started.elapsed().as_millis(),
         error: Some(error.clone()),
     };
-    record_event_and_case_dependency(&ctx.state, RecorderEvent::HttpExchange(event));
+    ctx.state
+        .record_event_for_targets(RecorderEvent::HttpExchange(event), ctx.targets.clone());
     record_event_and_case_dependency(
         &ctx.state,
         RecorderEvent::ProxyError(ProxyErrorEvent {
