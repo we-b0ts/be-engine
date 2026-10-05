@@ -1,10 +1,10 @@
 use std::ffi::OsString;
 
+use crate::TRAFFIC_PROCESS_UID;
 use anyhow::Result;
-use traffic_e2e::TRAFFIC_PROCESS_UID;
 
 use super::{checked_output, checked_status, status_success};
-use crate::cli::output::stdout_line;
+use crate::command_output::stdout_line;
 
 const CHAIN: &str = "TRP_REPLAY_EGRESS";
 

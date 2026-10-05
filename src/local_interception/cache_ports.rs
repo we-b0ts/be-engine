@@ -1,8 +1,8 @@
 use std::ffi::OsString;
 use std::net::Ipv4Addr;
 
+use crate::TRAFFIC_PROCESS_UID;
 use anyhow::Result;
-use traffic_e2e::TRAFFIC_PROCESS_UID;
 
 use super::{checked_output, checked_status, status_success};
 
