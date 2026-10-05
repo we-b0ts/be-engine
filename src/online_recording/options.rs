@@ -1,6 +1,9 @@
 //! Parameters for a standalone recording service, without project or API policy files.
 
-use crate::{AppConfig, ArtifactsConfig, HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig};
+use crate::{
+    AppConfig, ArtifactOwner, ArtifactsConfig, HttpGatewayFallbackMode,
+    HttpGatewayFixedResponseConfig,
+};
 use anyhow::{Context, Result, ensure};
 use brz_redis::{RedisService, RedisServiceOptions};
 use clap::Args;
@@ -50,6 +53,9 @@ pub struct OnlineRecordingOptions {
         default_value = "/data/traffic-e2e"
     )]
     pub data_root: PathBuf,
+    /// Assign private storage and finalized recording runs to this numeric UID:GID.
+    #[arg(long, env = "TRAFFIC_E2E_ARTIFACT_OWNER", value_name = "UID:GID")]
+    pub artifact_owner: Option<ArtifactOwner>,
     #[arg(long, env = "TRAFFIC_E2E_SOURCE_WORKDIR", default_value = "/app")]
     pub source_workdir: PathBuf,
     #[arg(long, env = "TRAFFIC_E2E_DNS_UPSTREAM")]
@@ -69,14 +75,35 @@ pub struct OnlineRecordingOptions {
 }
 
 impl OnlineRecordingOptions {
+    pub(super) fn storage_owner(&self) -> Result<ArtifactOwner> {
+        let owner = match self.artifact_owner {
+            Some(owner) => owner,
+            None => ArtifactOwner::invoking()?,
+        };
+        ensure!(
+            owner.uid() != crate::TRAFFIC_PROCESS_UID,
+            "recording artifact owner cannot use the reserved Source UID"
+        );
+        ensure!(
+            self.artifact_owner.is_none() || crate::local_interception::effective_uid() == 0,
+            "--artifact-owner requires a root controller"
+        );
+        Ok(owner)
+    }
+
     pub fn initialize_storage(&mut self) -> Result<String> {
+        let owner = self.storage_owner()?;
         std::fs::create_dir_all(&self.data_root)?;
         self.data_root = self.data_root.canonicalize()?;
-        crate::source_recording::prepare_recordings_root(
-            &self.data_root,
-            crate::ArtifactOwner::invoking()?,
+        crate::source_recording::prepare_recordings_root(&self.data_root, owner)?;
+        let key = crate::platform::encryption_key::load_or_create(&self.data_root)?;
+        owner.assign_path_to(&self.data_root.join(crate::repository::LOCAL_SECRETS_ROOT))?;
+        owner.assign_path_to(
+            &self
+                .data_root
+                .join(crate::repository::LOCAL_ENCRYPTION_KEY_PATH),
         )?;
-        crate::platform::encryption_key::load_or_create(&self.data_root)
+        Ok(key)
     }
 
     pub(super) fn discovery_key(&self) -> String {

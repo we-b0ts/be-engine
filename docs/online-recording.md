@@ -52,6 +52,7 @@ original path. There is no duration limit; SIGTERM/SIGINT ends the session.
 | `--scope` / `TRAFFIC_E2E_RECORDING_SCOPE` | `all-apis` | One shared request slot |
 | `--url-key` / `TRAFFIC_E2E_RECORDING_URL_KEY` | `<prefix>:url` | Address lease key |
 | `--data-root` / `TRAFFIC_E2E_DATA_ROOT` | `/data/traffic-e2e` | Persistent evidence, encryption key and CA |
+| `--artifact-owner` / `TRAFFIC_E2E_ARTIFACT_OWNER` | invoking controller owner | Numeric host UID:GID for private storage and finalized runs; explicit values require root |
 | `--source-workdir` / `TRAFFIC_E2E_SOURCE_WORKDIR` | `/app` | Source working directory |
 | `--startup-timeout-seconds` | `300` | Startup/readiness deadline |
 | `--request-timeout-seconds` | `30` | Request forwarding/response deadline |
@@ -102,3 +103,9 @@ cookie request headers are encrypted using a persistent key in
 `<data-root>/.traffic-e2e/local/secrets/traffic-e2e-enc.sec`. Persist the entire
 data root across restarts. Source cannot read private evidence, the encryption
 key, or CA private key.
+
+For a host bind mount, pass the invoking host user's numeric UID:GID as
+`TRAFFIC_E2E_ARTIFACT_OWNER` when creating the container. The controller stays
+root and Source stays UID/GID 998. Private storage retains restrictive permissions;
+normal finalization recursively assigns the completed run to the configured host
+user. The reserved Source UID cannot own recording artifacts.
