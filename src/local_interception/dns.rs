@@ -1,11 +1,11 @@
 use std::ffi::OsString;
 use std::net::Ipv4Addr;
 
+use crate::TRAFFIC_PROCESS_UID;
 use anyhow::{Context, Result, ensure};
-use traffic_e2e::TRAFFIC_PROCESS_UID;
 
 use super::{DnsConfig, FIXED_USER, checked_output, checked_status, status_success};
-use crate::cli::output::{stdout, stdout_line};
+use crate::command_output::{stdout, stdout_line};
 
 mod conntrack;
 

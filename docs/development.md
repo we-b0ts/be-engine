@@ -35,6 +35,11 @@ The build produces sibling `traffic-e2e`, `backend-rewrite`, and
 `backend-rewrite-admin` executables. Keep them together in installed packages
 because detached coordinator actions delegate engine work to `traffic-e2e`.
 
+`cargo build --features online-recording --bin recording-online` additionally
+builds the independent [online recording service](online-recording.md). Its
+adapter tests run with `cargo test --features online-recording`; include that
+feature when running Clippy for online recording changes.
+
 All binaries report the package version, build revision, and exact pinned
 target-runtime image from `--version`. Git checkouts derive the revision
 automatically and append `-dirty` for uncommitted content. Builds without Git

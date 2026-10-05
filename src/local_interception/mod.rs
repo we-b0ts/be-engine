@@ -3,14 +3,14 @@ use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use anyhow::{Context, Result, bail, ensure};
-use clap::{Args, Subcommand};
-use traffic_e2e::{
+use crate::{
     DEFAULT_DNS_MOCK_PORT, DEFAULT_FAKE_CIDR, DEFAULT_TCP_GATEWAY_PORT, DEFAULT_UDP_GATEWAY_PORT,
     TRAFFIC_PROCESS_UID,
 };
+use anyhow::{Context, Result, bail, ensure};
+use clap::{Args, Subcommand};
 
-use super::output::{stderr_line, stdout_line};
+use crate::command_output::{stderr_line, stdout_line};
 
 mod cache_ports;
 mod dns;
@@ -19,12 +19,12 @@ mod egress_counters;
 mod fake_ip;
 mod target_egress;
 
-pub(super) struct CachePortGuard {
+pub struct CachePortGuard {
     active: bool,
 }
 
 impl CachePortGuard {
-    pub(super) fn enable(
+    pub fn enable(
         ports: &[u16],
         tcp_port: u16,
         target_source_ip: Option<Ipv4Addr>,
@@ -39,7 +39,7 @@ impl CachePortGuard {
         Ok(Self { active: true })
     }
 
-    pub(super) fn disable(&mut self) {
+    pub fn disable(&mut self) {
         if std::mem::take(&mut self.active)
             && let Err(error) = cache_ports::down()
         {
@@ -56,12 +56,12 @@ impl Drop for CachePortGuard {
     }
 }
 
-pub(super) struct TargetEgressGuard {
+pub struct TargetEgressGuard {
     active: bool,
 }
 
 impl TargetEgressGuard {
-    pub(super) fn enable(target_source_ip: Option<Ipv4Addr>) -> Result<Self> {
+    pub fn enable(target_source_ip: Option<Ipv4Addr>) -> Result<Self> {
         let Some(target_source_ip) = target_source_ip else {
             return Ok(Self { active: false });
         };
@@ -70,7 +70,7 @@ impl TargetEgressGuard {
         Ok(Self { active: true })
     }
 
-    pub(super) fn disable(&mut self) {
+    pub fn disable(&mut self) {
         if std::mem::take(&mut self.active)
             && let Err(error) = target_egress::down()
         {
@@ -87,10 +87,10 @@ impl Drop for TargetEgressGuard {
     }
 }
 
-pub(super) const FIXED_USER: &str = "trp-record";
+pub const FIXED_USER: &str = "trp-record";
 
 #[derive(Debug, Args)]
-pub(super) struct InterceptionArgs {
+pub struct InterceptionArgs {
     #[command(subcommand)]
     command: InterceptionCommand,
 }
@@ -159,21 +159,21 @@ enum RuleAction {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct DnsConfig {
-    pub(super) dns_ip: String,
-    pub(super) dns_port: u16,
+pub struct DnsConfig {
+    pub dns_ip: String,
+    pub dns_port: u16,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct FakeIpConfig {
-    pub(super) fake_cidr: String,
-    pub(super) tcp_port: u16,
-    pub(super) udp_port: u16,
-    pub(super) tcp: bool,
-    pub(super) udp: bool,
+pub struct FakeIpConfig {
+    pub fake_cidr: String,
+    pub tcp_port: u16,
+    pub udp_port: u16,
+    pub tcp: bool,
+    pub udp: bool,
 }
 
-pub(super) struct Guard {
+pub struct Guard {
     dns: DnsConfig,
     fake_ip: FakeIpConfig,
     dns_up: bool,
@@ -189,11 +189,11 @@ struct ActiveRules {
 }
 
 impl Guard {
-    pub(super) fn enable(dns: DnsConfig, fake_ip: FakeIpConfig) -> Result<Self> {
+    pub fn enable(dns: DnsConfig, fake_ip: FakeIpConfig) -> Result<Self> {
         Self::enable_with_egress(dns, fake_ip, false)
     }
 
-    pub(super) fn enable_replay(dns: DnsConfig, fake_ip: FakeIpConfig) -> Result<Self> {
+    pub fn enable_replay(dns: DnsConfig, fake_ip: FakeIpConfig) -> Result<Self> {
         Self::enable_with_egress(dns, fake_ip, true)
     }
 
@@ -228,7 +228,7 @@ impl Guard {
         Ok(guard)
     }
 
-    pub(super) fn disable(&mut self) {
+    pub fn disable(&mut self) {
         let active = self.take_active_rules();
         if active.egress
             && let Err(error) = self.run_root_egress(RuleAction::Down)
@@ -329,7 +329,7 @@ impl RuleAction {
     }
 }
 
-pub(super) fn run(args: InterceptionArgs) -> Result<()> {
+pub fn run(args: InterceptionArgs) -> Result<()> {
     match args.command {
         InterceptionCommand::Dns(args) => {
             require_root()?;
@@ -392,7 +392,7 @@ fn run_fake_ip(action: RuleAction, config: &FakeIpConfig) -> Result<()> {
     }
 }
 
-pub(super) fn effective_uid() -> u32 {
+pub fn effective_uid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
@@ -406,7 +406,7 @@ fn ensure_controller_not_traffic_process(controller_uid: u32) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn checked_status<I, S>(program: &str, args: I) -> Result<()>
+pub fn checked_status<I, S>(program: &str, args: I) -> Result<()>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -428,7 +428,7 @@ where
     Ok(())
 }
 
-pub(super) fn checked_output<I, S>(program: &str, args: I) -> Result<Output>
+pub fn checked_output<I, S>(program: &str, args: I) -> Result<Output>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -451,7 +451,7 @@ where
     Ok(output)
 }
 
-pub(super) fn status_success<I, S>(program: &str, args: I) -> Result<bool>
+pub fn status_success<I, S>(program: &str, args: I) -> Result<bool>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -510,13 +510,13 @@ fn display_command(program: &str, args: &[OsString]) -> String {
         .join(" ")
 }
 
-pub(super) fn temp_root() -> PathBuf {
+pub fn temp_root() -> PathBuf {
     std::env::var_os("TMPDIR")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
 }
 
-pub(super) fn system_program(name: &str) -> Result<PathBuf> {
+pub fn system_program(name: &str) -> Result<PathBuf> {
     ["/usr/sbin", "/usr/bin", "/sbin", "/bin"]
         .into_iter()
         .map(|directory| Path::new(directory).join(name))
@@ -524,7 +524,7 @@ pub(super) fn system_program(name: &str) -> Result<PathBuf> {
         .with_context(|| format!("required system command not found: {name}"))
 }
 
-pub(super) fn counter_reader() -> Result<traffic_e2e::ReplayEgressCounterReader> {
+pub fn counter_reader() -> Result<crate::ReplayEgressCounterReader> {
     let executable = std::env::current_exe()?;
     let (program, mut arguments) = if effective_uid() == 0 {
         (executable, Vec::new())
@@ -539,7 +539,7 @@ pub(super) fn counter_reader() -> Result<traffic_e2e::ReplayEgressCounterReader>
         )
     };
     arguments.extend(["diagnose", "interception", "egress-counters"].map(OsString::from));
-    Ok(traffic_e2e::ReplayEgressCounterReader { program, arguments })
+    Ok(crate::ReplayEgressCounterReader { program, arguments })
 }
 
 #[cfg(test)]

@@ -64,6 +64,14 @@ is unclear.
 - `bin/backend-rewrite/` owns the AI-facing coordinator CLI bootstrap only.
 - `bin/backend-rewrite-admin/` owns explicit administrator repair CLI bootstrap
   only; administrator behavior remains in the library owner for that contract.
+- `bin/recording-online/` owns the optional standalone online CLI bootstrap.
+  `online_recording/options` constructs direct engine configuration without a
+  project loader; `online_recording/proxy` owns reservation validation, forwarding
+  and completion, while its parent owns Source/Recorder supervision and address
+  heartbeat scheduling. Redis lease primitives stay in the gateway SDK.
+- `local_interception` owns reusable fixed-identity firewall setup/cleanup and
+  diagnostics; CLI entry points delegate to it. `command_output` owns shared
+  broken-pipe-safe diagnostic output for those library and CLI callers.
 - `lib.rs` owns application wiring, shared state, and stable exports;
   it remains one large crate façade within the hard limit because its flat
   exports and shared application-state composition have the same crate-root
@@ -92,11 +100,11 @@ is unclear.
   HTTP routes. Recorder configuration owns concise rule validation and the
   source-traffic-policy overlay; no application-specific sandbox plugin is
   required.
-- `cli/interception/egress_counters` owns read-only firewall command parsing.
+- `local_interception/egress_counters` owns read-only firewall command parsing.
   `replay/egress_counter` owns bounded sampling and per-case counter differences;
   `e2e_run/result/egress` projects this evidence only for failed verification.
   Counter observations never become dependency mismatches or gate inputs.
-- `cli/interception/dns` owns fixed-UID DNS redirects and the corresponding
+- `local_interception/dns` owns fixed-UID DNS redirects and the corresponding
   conntrack-zone rule lifecycle. Its `conntrack` child owns bounded native
   netlink enumeration and exact entry deletion for the reserved DNS zone;
   it never owns general host connection-table maintenance.
@@ -125,6 +133,8 @@ is unclear.
   readiness ordering, signals, finalization ordering, and cleanup. Recorder
   listeners, interception, protocol capture, and persistence remain in their
   existing owners.
+  Its `process` child owns shared fixed-identity process startup, trust projection,
+  isolation checks, and process-group cleanup for project and online entry points.
 - `startup` owns the source-compatible target startup declaration,
   initialization-owned target-mount snapshot lifecycle, and merged source plus
   override Docker environment projection. Its `snapshot` child copies declared

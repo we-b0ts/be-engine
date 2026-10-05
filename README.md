@@ -6,6 +6,10 @@ diagnostics; `backend-rewrite` owns the AI-facing migration workflow and uses
 the same `traffic_e2e` crate; `backend-rewrite-admin` owns explicit
 administrator repair outside ordinary AI workflows.
 
+The optional [`recording-online`](docs/online-recording.md) application starts
+Source and Recorder directly, with Redis discovery and reservation completion,
+without project YAML or rewrite orchestration. Enable `online-recording` to build it.
+
 ## Features
 
 - Optional HTTP proxy for regular absolute-form proxy requests.

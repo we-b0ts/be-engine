@@ -36,6 +36,15 @@ impl AppState {
     }
 
     pub async fn run_with_control_socket(self, control_socket: Option<PathBuf>) -> Result<()> {
+        self.run_until(control_socket, shutdown_signal()).await
+    }
+
+    /// Runs until the caller requests shutdown, then drains and finalizes cases.
+    pub async fn run_until<F>(self, control_socket: Option<PathBuf>, shutdown: F) -> Result<()>
+    where
+        F: std::future::Future<Output = Result<()>>,
+    {
+        tokio::pin!(shutdown);
         let control_server = match control_socket {
             Some(path) => Some(
                 RecordingControlServer::start(self.inner.recording_lifecycle.clone(), path).await?,
@@ -98,8 +107,6 @@ impl AppState {
             dns_mock::REGISTRY_FLUSH_INTERVAL,
         );
         registry_flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let shutdown = shutdown_signal();
-        tokio::pin!(shutdown);
         let case_limit_completion = self.recorder().wait_for_explicit_api_case_limit();
         tokio::pin!(case_limit_completion);
         let mut case_limit_grace = None;

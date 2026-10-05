@@ -1,8 +1,8 @@
+use crate::ReplayEgressCounterSnapshot;
 use anyhow::{Context, Result, ensure};
-use traffic_e2e::ReplayEgressCounterSnapshot;
 
 use super::checked_output;
-use crate::cli::output::stdout_line;
+use crate::command_output::stdout_line;
 
 pub(super) fn read() -> Result<()> {
     let (ipv4_packets, v4_generation) = family("iptables")?;
