@@ -76,6 +76,53 @@ fn standalone_options_keep_case_limits_without_project_or_api_filters() {
     );
 }
 
+#[test]
+fn standalone_artifact_owner_uses_numeric_ids_and_excludes_source_identity() {
+    let cli = OptionsCli::try_parse_from([
+        "recording-online",
+        "--advertise-url",
+        "http://127.0.0.1:4080",
+        "--artifact-owner",
+        "1115:1116",
+        "--",
+        "true",
+    ])
+    .unwrap();
+    assert_eq!(
+        cli.options.artifact_owner,
+        Some(crate::ArtifactOwner::new(1115, 1116))
+    );
+    assert!(
+        OptionsCli::try_parse_from([
+            "recording-online",
+            "--advertise-url",
+            "http://127.0.0.1:4080",
+            "--artifact-owner",
+            "icy:icy",
+            "--",
+            "true",
+        ])
+        .is_err()
+    );
+    let cli = OptionsCli::try_parse_from([
+        "recording-online",
+        "--advertise-url",
+        "http://127.0.0.1:4080",
+        "--artifact-owner",
+        "998:998",
+        "--",
+        "true",
+    ])
+    .unwrap();
+    assert!(
+        cli.options
+            .storage_owner()
+            .unwrap_err()
+            .to_string()
+            .contains("reserved Source UID")
+    );
+}
+
 fn runtime() -> &'static tokio::runtime::Runtime {
     // brz-net's shared resolver outlives every test client in this binary.
     static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();

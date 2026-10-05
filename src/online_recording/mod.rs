@@ -53,7 +53,13 @@ pub async fn run(options: OnlineRecordingOptions) -> Result<()> {
         .join("runtime")
         .join(uuid::Uuid::new_v4().to_string());
     std::fs::create_dir_all(&runtime)?;
-    let state = AppState::new(config.clone()).await?;
+    let state = AppState::new_with_recording_apis_and_artifact_owner(
+        config.clone(),
+        None,
+        Vec::new(),
+        Some(options.storage_owner()?),
+    )
+    .await?;
     let guard = if options.no_interception {
         None
     } else {
