@@ -450,6 +450,7 @@ async fn handle_gateway_request(
 
         if should_record {
             let event = HttpExchangeEvent {
+                outcome: crate::DependencyExchangeOutcome::Response,
                 id,
                 timestamp: Utc::now(),
                 request_started_at,
@@ -603,6 +604,7 @@ async fn record_gateway_error_with_status(
 
     if ctx.should_record {
         let event = HttpExchangeEvent {
+            outcome: crate::DependencyExchangeOutcome::Response,
             id: ctx.id,
             timestamp: Utc::now(),
             request_started_at: ctx.request_started_at,

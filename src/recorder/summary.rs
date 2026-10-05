@@ -267,6 +267,7 @@ struct HttpDependencySummary {
     authorities: BTreeMap<String, usize>,
     status_codes: BTreeMap<String, usize>,
     errors: usize,
+    client_terminated: usize,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -520,6 +521,9 @@ fn mysql_dependency_identity_key(
 
 fn record_http_summary(summary: &mut HttpDependencySummary, value: &Value) {
     summary.calls += 1;
+    if json_str(value, "outcome") == Some("client_terminated") {
+        summary.client_terminated += 1;
+    }
     if let Some(method) = json_str(value, "method") {
         *summary
             .methods
@@ -962,7 +966,8 @@ mod tests {
     fn dependency_summary_tracks_publishable_client_terminations() {
         let raw = r#"{"event_type":"mysql_exchange","command":"COM_QUERY","sql":"SELECT * FROM `user`","outcome":"client_terminated","response":{"status":"client_terminated"}}
 {"event_type":"redis_exchange","command":"GET","outcome":"client_terminated","response_kind":"other","replay_safe":true}
-{"event_type":"memcached_exchange","command":"get","outcome":"client_terminated","response_status":"incomplete","replay_safe":true}"#;
+{"event_type":"memcached_exchange","command":"get","outcome":"client_terminated","response_status":"incomplete","replay_safe":true}
+{"event_type":"http_exchange","method":"POST","outcome":"client_terminated","response_status":null}"#;
         let summary = serde_json::to_value(build_dependency_summary(raw)).unwrap();
 
         assert_eq!(summary["mysql"]["failed"]["total"], 1);
@@ -970,5 +975,6 @@ mod tests {
         assert_eq!(summary["redis"]["outcomes"]["client_terminated"], 1);
         assert_eq!(summary["memcached"]["client_terminated"], 1);
         assert_eq!(summary["memcached"]["outcomes"]["client_terminated"], 1);
+        assert_eq!(summary["http"]["client_terminated"], 1);
     }
 }
