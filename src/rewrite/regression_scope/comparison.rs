@@ -63,6 +63,7 @@ fn reconcile_slice(slice: &mut RewriteSliceState, required: bool) -> bool {
         slice.active_issue = None;
         slice.route = None;
         slice.system_repair_accepted = false;
+        slice.rule_replay_pending = false;
         slice.rule_plan = None;
         slice.dependency_rule_plan = None;
         slice.recorder_capture_plan = None;

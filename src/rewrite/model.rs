@@ -282,105 +282,8 @@ pub struct RewriteResponseBodyRuleSpec {
     pub docx_timestamps: Vec<crate::DocxTimestampRule>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub(super) enum RewriteDependencyRuleSpec {
-    RedisCrossCase {
-        rule_id: String,
-    },
-    RedisTimeShift {
-        selector: crate::RedisTimeShiftSelector,
-    },
-    HttpUnordered {
-        selector: crate::HttpUnorderedSelector,
-    },
-    RedisUnordered {
-        selector: crate::RedisUnorderedSelector,
-    },
-    HttpCrossCase {
-        selector: crate::HttpCrossCaseSelector,
-    },
-    MysqlSqlTime {
-        selector: crate::MysqlTimeSelector,
-    },
-    Mysql {
-        selector: crate::MysqlBackgroundSelector,
-    },
-    Http {
-        authority: String,
-        method: String,
-        path_prefix: String,
-    },
-    Memcached {
-        breeze_resource: String,
-        command: String,
-        key_start: u64,
-        key_end: u64,
-        key_separator: String,
-        key_suffix: String,
-        initial_load_timeout_ms: u64,
-    },
-    MemcachedProtobufTimestamp {
-        rule_id: String,
-        port: u16,
-        key_prefix: String,
-        key_suffix: String,
-        field_number: u32,
-    },
-    Motan {
-        group: String,
-        interface_name: String,
-        method_name: String,
-    },
-    RedisZcount {
-        ports: Vec<u16>,
-        key_prefix: String,
-        key_suffix: String,
-    },
-    RedisGet {
-        ports: Vec<u16>,
-        keys: Vec<String>,
-        initial_load_timeout_ms: u64,
-    },
-    RedisScard {
-        ports: Vec<u16>,
-        keys: Vec<String>,
-        initial_load_timeout_ms: u64,
-    },
-    RedisHgetall {
-        ports: Vec<u16>,
-        keys: Vec<String>,
-        initial_load_timeout_ms: u64,
-    },
-    RedisHscan {
-        ports: Vec<u16>,
-        keys: Vec<String>,
-        key_patterns: Vec<RedisKeyPatternConfig>,
-    },
-    RedisHashRead {
-        command: String,
-        ports: Vec<u16>,
-        keys: Vec<String>,
-        key_patterns: Vec<RedisKeyPatternConfig>,
-        fields: Vec<String>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct RewriteDependencyRulePlanRecord {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub review_fingerprint: Option<String>,
-    pub id: String,
-    pub issue_id: String,
-    pub evidence_id: String,
-    pub name: String,
-    pub source_evidence: String,
-    pub spec: RewriteDependencyRuleSpec,
-    #[serde(default)]
-    pub reused_existing: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effective_name: Option<String>,
-}
+mod dependency_rule;
+pub(super) use dependency_rule::{RewriteDependencyRulePlanRecord, RewriteDependencyRuleSpec};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct RewriteRecorderCapturePlanRecord {
@@ -457,6 +360,9 @@ pub(super) struct RewriteSliceState {
     pub route: Option<RewriteRouteRecord>,
     #[serde(default)]
     pub system_repair_accepted: bool,
+    /// A successfully applied rule authorizes one verification without a code handoff.
+    #[serde(default)]
+    pub rule_replay_pending: bool,
     pub e2e_current: bool,
     pub comparison_current: bool,
 }
@@ -482,6 +388,7 @@ impl RewriteSliceState {
             recorder_capture_plan: None,
             route: None,
             system_repair_accepted: false,
+            rule_replay_pending: false,
             e2e_current: false,
             comparison_current: false,
         }

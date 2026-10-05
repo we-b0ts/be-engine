@@ -45,6 +45,7 @@ pub(super) fn from_e2e_result(
     state.comparison_current = false;
     state.route = None;
     state.system_repair_accepted = false;
+    state.rule_replay_pending = false;
     state.rule_plan = None;
     state.dependency_rule_plan = None;
     state.recorder_capture_plan = None;

@@ -971,3 +971,10 @@ pub use replay::{RedisUnorderedField, RedisUnorderedSelector, RedisValueKeySelec
 pub use replay::{
     RedisUnorderedFeedback, RedisUnorderedPlan, RedisUnorderedReport, plan_redis_unordered,
 };
+
+pub use replay::HttpHeaderTimestampSelector;
+
+pub use replay::{
+    HttpHeaderTimestampFeedback, HttpHeaderTimestampPlan, HttpHeaderTimestampReport,
+    plan_http_header_timestamp,
+};

@@ -328,6 +328,13 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
     if process_outputs::active_scope(state).is_some() {
         return worker::implementation_action(target_root, state, None);
     }
+    if super::rule_replay::pending(&state.active_slice) {
+        return advance_required(
+            target_root,
+            Some(&state.api),
+            "verification rule applied; replay the same API and immutable cases".into(),
+        );
+    }
     if state.system_repair_accepted {
         return advance_required(
             target_root,
@@ -370,7 +377,9 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
         }
         if let Some(plan) = &state.dependency_rule_plan {
             return RewriteAction::PlanApplyRequired {
-                summary: if plan.reused_existing {
+                summary: if plan.spec.requires_fresh_replay() {
+                    "apply or confirm the pending dependency rule, then run fresh Replay for this API".into()
+                } else if plan.reused_existing {
                     format!(
                         "confirm reused process-owned dependency rule {} and reclassify the current attempt",
                         plan.effective_name.as_deref().unwrap_or(&plan.name)

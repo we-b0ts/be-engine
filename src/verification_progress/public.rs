@@ -8,6 +8,8 @@ use super::{
     ProgressTotals, SuccessCounts, SuccessStreak, VerificationStage,
 };
 
+mod api_scope;
+
 #[derive(PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Snapshot {
@@ -57,6 +59,25 @@ struct PublicProgressApi {
 
 impl Snapshot {
     pub(super) fn from_report(report: &ProgressReport) -> Self {
+        let apis = api_scope::visible_apis(&report.apis)
+            .map(|(api, progress)| {
+                (
+                    api.clone(),
+                    PublicProgressApi {
+                        runs: PublicSuccessCounts {
+                            executed: progress.totals.runs.executed,
+                            passed: progress.totals.runs.passed,
+                            success_streak: progress.success_streak.runs,
+                        },
+                        cases: PublicSuccessCounts {
+                            executed: progress.totals.cases.executed,
+                            passed: progress.totals.cases.passed,
+                            success_streak: progress.success_streak.cases,
+                        },
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
         Self {
             version: PROGRESS_VERSION,
             updated_at: report.updated_at.clone(),
@@ -72,7 +93,7 @@ impl Snapshot {
                     success_streak: report.success_streak.cases,
                 },
                 apis: PublicApiCoverage {
-                    covered: report.totals.apis.total,
+                    covered: apis.len() as u64,
                 },
             },
             latest_run: report.latest_run.as_ref().map(|latest| PublicLatestRun {
@@ -80,31 +101,12 @@ impl Snapshot {
                 apis: latest.apis.executed,
                 cases: latest.cases.executed,
             }),
-            apis: report
-                .apis
-                .iter()
-                .map(|(api, progress)| {
-                    (
-                        api.clone(),
-                        PublicProgressApi {
-                            runs: PublicSuccessCounts {
-                                executed: progress.totals.runs.executed,
-                                passed: progress.totals.runs.passed,
-                                success_streak: progress.success_streak.runs,
-                            },
-                            cases: PublicSuccessCounts {
-                                executed: progress.totals.cases.executed,
-                                passed: progress.totals.cases.passed,
-                                success_streak: progress.success_streak.cases,
-                            },
-                        },
-                    )
-                })
-                .collect(),
+            apis,
         }
     }
 
     fn into_report(self, stage: VerificationStage) -> ProgressReport {
+        let requires_persistence = api_scope::visible_apis(&self.apis).count() != self.apis.len();
         let success_streak = SuccessStreak {
             runs: self.totals.runs.success_streak,
             cases: self.totals.cases.success_streak,
@@ -172,7 +174,7 @@ impl Snapshot {
                     )
                 })
                 .collect(),
-            requires_persistence: false,
+            requires_persistence,
         }
     }
 }

@@ -100,7 +100,8 @@ pub(super) async fn load_dependency_file(
     let optional_sessions = mysql::optional_session::classify(&records);
     for (record_index, record) in records.into_iter().enumerate() {
         match record {
-            DependencyRecord::HttpExchange(exchange) => {
+            DependencyRecord::HttpExchange(mut exchange) => {
+                exchange.decrypt_request_headers(path)?;
                 http::register_http_exchange(*exchange, source, case_id, http_exchanges, targets)?;
                 continue;
             }

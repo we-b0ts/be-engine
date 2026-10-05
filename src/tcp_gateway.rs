@@ -163,6 +163,7 @@ async fn handle_http_request(
 ) -> Response<GatewayBody> {
     let id = Uuid::new_v4();
     let started = Instant::now();
+    let request_started_at = Utc::now();
     let method = req.method().clone();
     let original_uri = req.uri().clone();
     let operation_class = classify_method(&method);
@@ -211,6 +212,7 @@ async fn handle_http_request(
                 request_headers: request_headers_for_record,
                 request_body: Bytes::new(),
                 started,
+                request_started_at,
                 entry,
                 fake_addr,
                 upstream_addr: Some(upstream_addr),
@@ -234,6 +236,7 @@ async fn handle_http_request(
                 request_headers: request_headers_for_record,
                 request_body,
                 started,
+                request_started_at,
                 entry,
                 fake_addr,
                 upstream_addr: Some(upstream_addr),
@@ -265,6 +268,7 @@ async fn handle_http_request(
                 request_headers: request_headers_for_record,
                 request_body,
                 started,
+                request_started_at,
                 entry,
                 fake_addr,
                 upstream_addr: Some(upstream_addr),
@@ -292,6 +296,7 @@ async fn handle_http_request(
                         request_headers: request_headers_for_record,
                         request_body,
                         started,
+                        request_started_at,
                         entry,
                         fake_addr,
                         upstream_addr: Some(upstream_addr),
@@ -336,6 +341,7 @@ async fn handle_http_request(
                         request_headers: request_headers_for_record,
                         request_body,
                         started,
+                        request_started_at,
                         entry,
                         fake_addr,
                         upstream_addr: Some(upstream_addr),
@@ -350,6 +356,7 @@ async fn handle_http_request(
             let event = HttpExchangeEvent {
                 id,
                 timestamp: Utc::now(),
+                request_started_at,
                 client_addr,
                 scheme: "fake_ip_http".to_string(),
                 method: method.to_string(),
@@ -388,6 +395,7 @@ async fn handle_http_request(
                 request_headers: request_headers_for_record,
                 request_body,
                 started,
+                request_started_at,
                 entry,
                 fake_addr,
                 upstream_addr: Some(upstream_addr),
@@ -417,6 +425,7 @@ async fn handle_https_request(
     } = client;
     let id = Uuid::new_v4();
     let started = Instant::now();
+    let request_started_at = Utc::now();
     let method = req.method().clone();
     let original_uri = req.uri().clone();
     let operation_class = classify_method(&method);
@@ -465,6 +474,7 @@ async fn handle_https_request(
                 request_headers: request_headers_for_record,
                 request_body: Bytes::new(),
                 started,
+                request_started_at,
                 entry,
                 fake_addr,
                 upstream_addr: Some(upstream_addr),
@@ -493,6 +503,7 @@ async fn handle_https_request(
                 request_headers: request_headers_for_record,
                 request_body,
                 started,
+                request_started_at,
                 entry,
                 fake_addr,
                 upstream_addr: Some(upstream_addr),
@@ -524,6 +535,7 @@ async fn handle_https_request(
                 request_headers: request_headers_for_record,
                 request_body,
                 started,
+                request_started_at,
                 entry,
                 fake_addr,
                 upstream_addr: Some(upstream_addr),
@@ -563,6 +575,7 @@ async fn handle_https_request(
                         request_headers: request_headers_for_record,
                         request_body,
                         started,
+                        request_started_at,
                         entry,
                         fake_addr,
                         upstream_addr: Some(upstream_addr),
@@ -607,6 +620,7 @@ async fn handle_https_request(
                         request_headers: request_headers_for_record,
                         request_body,
                         started,
+                        request_started_at,
                         entry,
                         fake_addr,
                         upstream_addr: Some(upstream_addr),
@@ -621,6 +635,7 @@ async fn handle_https_request(
             let event = HttpExchangeEvent {
                 id,
                 timestamp: Utc::now(),
+                request_started_at,
                 client_addr,
                 scheme: "fake_ip_https".to_string(),
                 method: method.to_string(),
@@ -659,6 +674,7 @@ async fn handle_https_request(
                 request_headers: request_headers_for_record,
                 request_body,
                 started,
+                request_started_at,
                 entry,
                 fake_addr,
                 upstream_addr: Some(upstream_addr),
@@ -739,6 +755,7 @@ struct HttpErrorContext {
     request_headers: HeaderMapSnapshot,
     request_body: Bytes,
     started: Instant,
+    request_started_at: chrono::DateTime<Utc>,
     entry: FakeDnsEntry,
     fake_addr: SocketAddr,
     upstream_addr: Option<SocketAddr>,
@@ -750,6 +767,7 @@ async fn record_http_error(ctx: HttpErrorContext) -> Response<GatewayBody> {
     let event = HttpExchangeEvent {
         id: ctx.id,
         timestamp: Utc::now(),
+        request_started_at: ctx.request_started_at,
         client_addr: ctx.client_addr.clone(),
         scheme: ctx.scheme.clone(),
         method: ctx.method.to_string(),

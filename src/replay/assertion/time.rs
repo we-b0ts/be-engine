@@ -13,7 +13,7 @@ pub(in crate::replay) struct RequestTimes {
     pub(in crate::replay) target: Option<DateTime<Utc>>,
 }
 
-pub(super) fn compare(
+pub(in crate::replay) fn compare(
     rule: ResponseTimeRule,
     expected: &Value,
     actual: &Value,
@@ -85,6 +85,21 @@ fn timestamp_nanos(value: &Value, format: ResponseTimestampFormat) -> Option<i12
         ResponseTimestampFormat::Rfc3339 => DateTime::parse_from_rfc3339(value.as_str()?)
             .ok()
             .map(|time| date_nanos(time.with_timezone(&Utc))),
+        ResponseTimestampFormat::AmzDate => {
+            let text = value.as_str()?;
+            if text.len() != 16
+                || !text.bytes().enumerate().all(|(index, byte)| match index {
+                    8 => byte == b'T',
+                    15 => byte == b'Z',
+                    _ => byte.is_ascii_digit(),
+                })
+            {
+                return None;
+            }
+            chrono::NaiveDateTime::parse_from_str(text, "%Y%m%dT%H%M%SZ")
+                .ok()
+                .map(|time| date_nanos(time.and_utc()))
+        }
     }
 }
 

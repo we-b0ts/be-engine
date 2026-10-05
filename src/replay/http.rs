@@ -35,22 +35,31 @@ use crate::DiscoveredTcpTarget;
 pub(crate) mod cross_case;
 mod identity;
 mod recording;
+pub(in crate::replay) mod request_headers;
 mod selector;
 pub(crate) mod unordered;
 
 type HeaderSnapshot = BTreeMap<String, Vec<String>>;
+pub(super) use request_headers::HeaderDifferenceReport;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct RecordedHttpExchange {
     scheme: String,
     #[serde(default)]
     timestamp: Option<chrono::DateTime<Utc>>,
+    #[serde(default)]
+    request_started_at: Option<chrono::DateTime<Utc>>,
+    // Untrusted optional timing evidence must not prevent ordinary HTTP matching.
+    #[serde(default)]
+    duration_ms: Option<serde_json::Value>,
     method: String,
     uri: String,
     authority: Option<String>,
     request_body: RecordedBodyCapture,
     #[serde(default)]
     request_headers: HeaderSnapshot,
+    #[serde(skip)]
+    protected_request_headers: BTreeSet<String>,
     response_status: Option<u16>,
     response_headers: Option<HeaderSnapshot>,
     response_body: Option<RecordedBodyCapture>,
@@ -124,6 +133,9 @@ pub(super) struct HttpReplayEvents {
     pub(super) matched_details: SuccessDetailBudget,
     pub(super) unmatched: Vec<HttpRequestReport>,
     pub(super) unsupported: Vec<HttpRequestReport>,
+    pub(super) header_mismatches: Vec<HeaderDifferenceReport>,
+    pub(super) header_observations: Vec<HeaderDifferenceReport>,
+    pub(super) header_observation_count: usize,
 }
 
 pub(super) fn case_exchange_index(exchanges: &[ReplayHttpExchange]) -> CaseExchangeIndex {
@@ -371,6 +383,7 @@ async fn handle_http_request(
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
+    let request_started_at = Utc::now();
     let method = request.method().clone();
     let uri = request.uri().clone();
     let host = request
@@ -378,17 +391,7 @@ async fn handle_http_request(
         .get(HOST)
         .and_then(|value| value.to_str().ok())
         .map(ToOwned::to_owned);
-    let mut headers = HeaderSnapshot::new();
-    for (name, value) in request.headers() {
-        if matches!(name.as_str(), "authorization" | "cookie" | "content-type")
-            && let Ok(value) = value.to_str()
-        {
-            headers
-                .entry(name.to_string())
-                .or_default()
-                .push(value.to_string());
-        }
-    }
+    let headers = request_headers::capture(request.headers());
     let body = match request.into_body().collect().await {
         Ok(body) => body.to_bytes(),
         Err(error) => {
@@ -417,6 +420,7 @@ async fn handle_http_request(
             host.as_deref(),
             &body,
             &headers,
+            request_started_at,
         );
         if state.http_events.unmatched.len() > unmatched_before
             && let Some(event) = state.http_events.unmatched.last_mut()
@@ -466,6 +470,7 @@ impl ReplayState {
         host: Option<&str>,
         body: &[u8],
         headers: &HeaderSnapshot,
+        request_started_at: chrono::DateTime<Utc>,
     ) -> std::result::Result<RecordedHttpExchange, HttpReplayMatchError> {
         let active_case_id = self.active_case_id.clone();
         if let Some(host) = host
@@ -604,6 +609,7 @@ impl ReplayState {
         }
 
         self.http_exchanges[index].consumed = true;
+        self.audit_http_request_headers(&exchange, index, headers, request_started_at);
         if let Some(policy) = &mut self.replay_policy {
             policy.commit(active_case_id.as_deref(), matching_policy_decision);
         }
@@ -946,7 +952,7 @@ fn error_response(status: StatusCode, message: &str) -> Response<Full<Bytes>> {
 
 #[cfg(test)]
 #[path = "http_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 #[path = "http/cross_case/tests.rs"]

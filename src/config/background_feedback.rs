@@ -221,6 +221,8 @@ struct ReplayEvidenceReport {
     unmatched_http_requests: Vec<HttpEvidence>,
     #[serde(default)]
     unsupported_http_exchanges: Vec<HttpEvidence>,
+    #[serde(default)]
+    http_request_header_mismatches: Vec<HttpEvidence>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -269,6 +271,13 @@ fn parse_replay_evidence(
             .iter()
             .any(|event| selector.matches(event)),
         "background selector also matches an unsupported target HTTP request"
+    );
+    ensure!(
+        !report
+            .http_request_header_mismatches
+            .iter()
+            .any(|event| selector.matches(event)),
+        "background selector also matches a target HTTP request-header mismatch"
     );
     let matching = report
         .unused_case_http_exchanges

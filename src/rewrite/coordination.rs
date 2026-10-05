@@ -125,13 +125,15 @@ pub(super) fn details(
         .filter(|item| item.status == RewriteApiStatus::Pending)
         .count()
         + usize::from(state.phase == RewritePhase::ApiPending)
-        + usize::from(state.system_repair_accepted)
+        + usize::from(
+            state.system_repair_accepted || super::rule_replay::pending(&state.active_slice),
+        )
         + state
             .parked_slices
             .values()
             .filter(|slice| {
                 slice.api != state.api
-                    && slice.system_repair_accepted
+                    && (slice.system_repair_accepted || super::rule_replay::pending(slice))
                     && !super::regression_scope::is_skipped(state, &slice.api)
             })
             .count();
@@ -185,7 +187,7 @@ pub(super) fn details(
         | RewriteAction::SourceReviewRequired { .. }
             if !busy =>
         {
-            let previous = if state.system_repair_accepted {
+            let previous = if state.system_repair_accepted || super::rule_replay::any_ready(state) {
                 "verify_api"
             } else {
                 "verify_handoff"

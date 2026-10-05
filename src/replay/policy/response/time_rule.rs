@@ -18,6 +18,7 @@ pub enum ResponseTimestampFormat {
     UnixSeconds,
     UnixMilliseconds,
     Rfc3339,
+    AmzDate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,7 +41,7 @@ impl ResponseTimeRule {
                     "timestamp rules use --timestamp-format / format, not unit"
                 );
                 let format = format.ok_or_else(|| anyhow::anyhow!(
-                    "timestamp rules require --timestamp-format / format (unix_seconds, unix_milliseconds, rfc3339)"
+                    "timestamp rules require --timestamp-format / format (unix_seconds, unix_milliseconds, rfc3339, amz_date)"
                 ))?;
                 Ok(Some(Self::Timestamp { format }))
             }

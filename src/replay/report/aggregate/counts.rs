@@ -56,6 +56,17 @@ pub(super) fn read(report: &Value, path: &Path) -> Result<ReplayEventCounts> {
             metadata_warnings: required_len(report, "metadata_warnings", path)?,
         },
         http: HttpEventCounts {
+            request_header_mismatches: optional_len(
+                report,
+                "http_request_header_mismatches",
+                path,
+            )?,
+            request_header_observations: optional_count(
+                report,
+                "http_request_header_observations",
+                "http_request_header_observation_count",
+                path,
+            )?,
             matched_exchanges: success_count(
                 report,
                 "matched_http_exchanges",
@@ -199,6 +210,21 @@ fn optional_len(value: &Value, field: &str, path: &Path) -> Result<usize> {
         Some(_) => required_len(value, field, path),
         None => Ok(0),
     }
+}
+
+fn optional_count(value: &Value, details: &str, count: &str, path: &Path) -> Result<usize> {
+    let retained = optional_len(value, details, path)?;
+    if value.get(count).is_none() {
+        return Ok(retained);
+    }
+    let total = required_usize(value, count, path)?;
+    if total < retained {
+        bail!(
+            "replay report {} field {details} exceeds its declared count {total}",
+            path.display()
+        );
+    }
+    Ok(total)
 }
 
 fn required_usize(value: &Value, field: &str, path: &Path) -> Result<usize> {

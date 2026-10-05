@@ -84,6 +84,23 @@ fn report_with_unused() -> Value {
 }
 
 #[test]
+fn header_mismatch_cannot_be_hidden_by_a_background_rule() {
+    let mut report = report_with_unused();
+    report["http_request_header_mismatches"] = json!([evidence(
+        "case-a",
+        "config.api.demo.test",
+        80,
+        "GET",
+        "/1/config/service"
+    )]);
+    let fixture = Fixture::new(report);
+    let error = plan_background_dependency(fixture.feedback())
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("request-header mismatch"));
+}
+
+#[test]
 fn plan_and_apply_add_a_valid_idempotent_managed_rule() {
     let fixture = Fixture::new(report_with_unused());
 

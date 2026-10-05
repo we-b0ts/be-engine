@@ -114,9 +114,10 @@ pub(super) fn is_clean_case_dependency_error(
 }
 
 pub(super) fn is_strict_dependency_finalize_error(error: &str) -> bool {
-    error.starts_with(
+    [
+        "strict replay finalize failed: cannot finalize replay with dirty dependency evidence;",
         "strict replay finalize failed: cannot finalize replay with unmatched, unused, or unsupported exchanges;",
-    )
+    ].iter().any(|prefix| error.starts_with(prefix))
 }
 
 pub(super) fn build_final_evidence_from_current_report(

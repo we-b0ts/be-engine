@@ -45,6 +45,9 @@ pub(in crate::replay) struct ReplayReport {
     pub(in crate::replay) matched_http_exchanges: Vec<http::MatchedHttpExchangeReport>,
     pub(in crate::replay) unmatched_http_requests: Vec<http::HttpRequestReport>,
     pub(in crate::replay) unsupported_http_exchanges: Vec<http::HttpRequestReport>,
+    pub(in crate::replay) http_request_header_mismatches: Vec<http::HeaderDifferenceReport>,
+    pub(in crate::replay) http_request_header_observations: Vec<http::HeaderDifferenceReport>,
+    pub(in crate::replay) http_request_header_observation_count: usize,
     pub(in crate::replay) unused_global_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
     pub(in crate::replay) unused_case_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
     pub(in crate::replay) allowed_unused_case_http_exchanges:
@@ -89,6 +92,10 @@ impl ReplayReport {
                 .iter()
                 .any(|request| request.case_id.is_some())
             || !self.unused_case_http_exchanges.is_empty()
+            || self
+                .http_request_header_mismatches
+                .iter()
+                .any(|event| event.case_id.is_some())
             || self.protocols.redis.is_dirty()
             || self.protocols.memcached.is_dirty()
             || self.protocols.kafka.is_dirty()

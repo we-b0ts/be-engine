@@ -602,6 +602,23 @@ by a container process running as UID `998`; it has no destination DNS bypass.
 Recorder itself runs as root, so its upstream queries are outside the fixed
 owner scope.
 
+DNS interception places fixed-UID queries and mock-listener replies in reserved
+IPv4 conntrack zone `4053`, before connection tracking runs. Other processes,
+including Recorder's real upstream queries, retain their ordinary zone. This
+prevents a reused UDP source port from inheriting another UID's earlier NAT
+decision and bypassing capture. Both installation and removal delete only the
+reserved zone's entries, using native netlink requests with each entry's full
+original tuple and ID. They never flush the namespace's connection table and
+do not require the `conntrack` executable. Interception requires a concrete
+IPv4 DNS listener address, such as `127.0.0.153`; `0.0.0.0` is rejected because
+wildcard UDP replies can use a source IP incompatible with reverse NAT.
+Kernel and iptables conntrack-zone support is required;
+installation failures roll back instead of continuing without isolation.
+
+The opt-in [DNS conntrack regression](../tests/manual/dns_conntrack/README.md)
+exercises the actual interception commands in a disposable network namespace,
+including source-port reuse, reply translation, listener changes and cleanup.
+
 The local interception path limits DNS and fake-IP interception to numeric UID
 `998`. Run the containerized source service as `998:998` so bootstrap and case
 dependencies are not polluted by unrelated processes. Host account resolution
@@ -2545,6 +2562,14 @@ summary. Replay/comparison provenance, pending state, failure barriers,
 idempotency keys, and ordered observations remain in the ignored
 `.traffic-e2e/local/artifacts/progress/counted-runs.yaml` ledger. That local
 ledger is runtime authority and can reconstruct a reset public snapshot.
+The public API list excludes concrete paths already covered by a same-method
+case pattern in the cumulative progress inventory. This applies to numeric,
+UUID and named members alike; numbers alone never cause an API to be hidden.
+`totals.apis.covered` counts the visible API entries. Historical per-member
+observations remain in the local ledger and global run/case totals are retained;
+member counters are not added to pattern counters because historical coverage
+may overlap. Every publication, including reconstruction and epoch transitions,
+uses the same projection, so old member entries cannot reappear after Replay.
 Existing `replay-progress.yaml` coverage is migrated once and both split files
 are removed after `progress.yaml` is durably published. Historical comparison
 counters are execution detail, so they are not added to business coverage.

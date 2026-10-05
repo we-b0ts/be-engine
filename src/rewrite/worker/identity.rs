@@ -8,8 +8,29 @@ use super::model::RewriteWorkerActivity;
 use super::runtime::{self, RewriteWorkerReportOptions};
 
 pub(super) fn scope_for_handle(state: &RewriteState, handle: &str) -> Result<RewriteWorkScope> {
+    resolve_handle(state, handle, false)
+}
+
+fn resolve_handle(
+    state: &RewriteState,
+    handle: &str,
+    observe_rule_replay: bool,
+) -> Result<RewriteWorkScope> {
     let fingerprint = fingerprint::id(&["rewrite-subagent-handle-v1", handle]);
-    let mut matches = runtime::scopes(state).into_iter().filter(|scope| {
+    let mut scopes = runtime::scopes(state);
+    if observe_rule_replay {
+        // A rule can release worker delivery while its existing task is still
+        // finishing. Accept runtime observations without redispatching that task.
+        scopes.extend(
+            std::iter::once(&state.active_slice)
+                .chain(state.parked_slices.values())
+                .map(|slice| RewriteWorkScope::Api {
+                    api: slice.api.clone(),
+                })
+                .filter(|scope| super::super::rule_replay::ready(state, scope)),
+        );
+    }
+    let mut matches = scopes.into_iter().filter(|scope| {
         state
             .worker_bindings
             .get(&scope.binding_key())
@@ -29,7 +50,13 @@ pub(super) fn report_scope(
     state: &RewriteState,
     options: &RewriteWorkerReportOptions,
 ) -> Result<RewriteWorkScope> {
-    let scope = scope_for_handle(state, &options.agent_handle)?;
+    let runtime_observation = matches!(
+        options.activity,
+        RewriteWorkerActivity::Running
+            | RewriteWorkerActivity::Queued
+            | RewriteWorkerActivity::Idle
+    );
+    let scope = resolve_handle(state, &options.agent_handle, runtime_observation)?;
     let dispatch = super::dispatch_id(state, &scope);
     let binding = &state.worker_bindings[&scope.binding_key()];
     ensure!(

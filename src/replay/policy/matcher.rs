@@ -781,6 +781,7 @@ fn rule_matches_target(rule: &ReplayDependencyRule, actual: Option<&TargetKey>) 
     normalize_host(host) == actual.host && rule.target.port.is_none_or(|port| port == actual.port)
 }
 
+mod http_headers;
 mod http_json;
 
 mod redis_value;

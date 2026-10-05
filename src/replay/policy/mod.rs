@@ -117,7 +117,9 @@ pub use feedback::{
     HttpCrossCaseFeedback, HttpCrossCasePlan, HttpCrossCaseReport, plan_http_cross_case,
 };
 
+mod http_headers;
 mod http_json;
+pub use http_headers::HttpHeaderTimestampSelector;
 pub(in crate::replay) use response::{response_pointer_matches, validate_json_pointer};
 
 pub use feedback::{
@@ -128,4 +130,9 @@ mod redis_value;
 
 pub use feedback::{
     RedisUnorderedFeedback, RedisUnorderedPlan, RedisUnorderedReport, plan_redis_unordered,
+};
+
+pub use feedback::{
+    HttpHeaderTimestampFeedback, HttpHeaderTimestampPlan, HttpHeaderTimestampReport,
+    plan_http_header_timestamp,
 };

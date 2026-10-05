@@ -75,7 +75,10 @@ fn one_fake_ip_is_reused_for_all_ports_on_a_host() {
 #[test]
 fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
     let record = RecordedHttpExchange {
+        duration_ms: None,
+        request_started_at: None,
         request_headers: Default::default(),
+        protected_request_headers: Default::default(),
         timestamp: None,
         scheme: "http".to_string(),
         method: "GET".to_string(),
@@ -132,7 +135,10 @@ fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
 #[test]
 fn response_discovered_http_target_reserves_its_recorded_fake_ip() {
     let record = RecordedHttpExchange {
+        duration_ms: None,
+        request_started_at: None,
         request_headers: Default::default(),
+        protected_request_headers: Default::default(),
         timestamp: None,
         scheme: "http".to_string(),
         method: "GET".to_string(),
@@ -786,7 +792,7 @@ async fn assert_http_request_hangs(addr: std::net::SocketAddr, host: &str, uri: 
     client
 }
 
-pub(super) async fn write_http_case(
+pub(crate) async fn write_http_case(
     case_dir: &Path,
     scheme: &str,
     authority: &str,
@@ -865,4 +871,29 @@ fn body_capture(value: &str) -> Value {
         "truncated": false,
         "data": STANDARD.encode(value.as_bytes())
     })
+}
+
+/// Opaque test adapter keeps Replay's internal runtime inside its owner.
+pub(crate) struct TestHttpReplayRuntime(Arc<ReplayRuntime>);
+
+pub(crate) async fn spawn_coordinator_http_replay(
+    case: &Path,
+    policy: Option<PathBuf>,
+) -> (
+    std::net::SocketAddr,
+    TestHttpReplayRuntime,
+    tokio::task::JoinHandle<()>,
+) {
+    let (addr, runtime, task) = spawn_http_replay_with_policy(case, vec![], policy, None).await;
+    (addr, TestHttpReplayRuntime(runtime), task)
+}
+
+pub(crate) async fn snapshot_http_replay(runtime: &TestHttpReplayRuntime) -> Value {
+    serde_json::to_value(runtime.0.state.lock().await.snapshot_report()).unwrap()
+}
+
+pub(crate) async fn write_http_replay_evidence(path: &Path, report: &Value) {
+    crate::replay::report::write_final_report_value(path.to_path_buf(), report)
+        .await
+        .unwrap();
 }

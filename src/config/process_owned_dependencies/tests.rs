@@ -8,6 +8,7 @@ use crate::recorder::{BodyCapture, HttpExchangeEvent, MotanExchangeEvent};
 
 fn http_event(authority: &str, method: &str, uri: &str) -> RecorderEvent {
     RecorderEvent::HttpExchange(HttpExchangeEvent {
+        request_started_at: Utc::now(),
         id: Uuid::new_v4(),
         timestamp: Utc::now(),
         client_addr: None,

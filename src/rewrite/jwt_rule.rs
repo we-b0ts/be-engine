@@ -273,8 +273,7 @@ pub(super) fn apply(
     crate::config::edit::write_atomic(&path, updated.as_bytes())?;
     report["applied"] = json!(true);
     state.rule_plan = None;
-    state.e2e_current = false;
-    state.comparison_current = false;
+    super::rule_replay::request(state);
     state.bump();
     Ok(RewriteRuleReport {
         plan_id: record.id,
