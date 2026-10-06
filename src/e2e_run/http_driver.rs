@@ -37,6 +37,8 @@ struct ActualResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     headers: Option<HeaderMapSnapshot>,
     body: CapturedBody,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sse_observation: Option<crate::http::sse::SseObservation>,
 }
 
 #[derive(Debug, Serialize)]
@@ -160,6 +162,7 @@ pub(super) async fn capture_case(
             request_headers: Some(response.request_headers),
             status: response.status.as_u16(),
             headers: Some(response.headers),
+            sse_observation: response.sse_observation,
             body: CapturedBody {
                 encoding,
                 data,
@@ -294,6 +297,7 @@ async fn capture_motan_case(
             request_headers: None,
             status,
             headers: None,
+            sse_observation: None,
             body: CapturedBody {
                 encoding,
                 data,

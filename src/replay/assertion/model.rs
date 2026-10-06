@@ -241,6 +241,8 @@ pub enum ResponseDifferenceKind {
     HeaderMissingActual,
     HeaderUnexpectedActual,
     HeaderValueMismatch,
+    SseObservationMismatch,
+    SseStreamEndMismatch,
     GatewayMetadataMismatch,
     ValueMismatch,
     TypeMismatch,

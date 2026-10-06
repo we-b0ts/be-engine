@@ -187,7 +187,7 @@ pub struct HttpGatewayConfig {
     pub enabled: bool,
     pub listen: SocketAddr,
     pub matched_upstream: String,
-    /// Upper bound for one HTTP gateway upstream request, including its response body.
+    /// Upper bound including the body; recorded SSE uses 50 ms after response headers.
     pub request_timeout_ms: u64,
     pub fallback_upstream: String,
     pub fallback_mode: HttpGatewayFallbackMode,

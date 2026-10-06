@@ -17,6 +17,7 @@ use hyper_util::rt::TokioExecutor;
 use serde::Deserialize;
 
 use crate::http::response_headers;
+use crate::http::sse::{self, SseObservation, SseObservationPolicy};
 use crate::recorder::HeaderMapSnapshot;
 
 type HttpClient = Client<HttpConnector, Full<Bytes>>;
@@ -27,6 +28,9 @@ struct RecordedRequest {
     uri: String,
     headers: BTreeMap<String, Vec<String>>,
     body: RecordedBody,
+    #[serde(default)]
+    // Execution policy lives in request.json; expected-response.json is never read here.
+    sse_observation: Option<SseObservationPolicy>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +56,7 @@ pub(crate) struct RecordedHttpResponse {
     pub(crate) status: StatusCode,
     pub(crate) headers: HeaderMapSnapshot,
     pub(crate) body: Bytes,
+    pub(crate) sse_observation: Option<SseObservation>,
 }
 
 impl RecordedHttpClient {
@@ -126,28 +131,44 @@ impl RecordedHttpClient {
             .unwrap_or_default();
         let recorded: RecordedRequest =
             serde_json::from_value(value).context("invalid recorded request shape")?;
+        if let Some(policy) = recorded.sse_observation {
+            policy
+                .validate()
+                .context("invalid recorded request SSE observation policy")?;
+        }
         let request = build_request(&self.origin, &recorded, self.preserve_host)?;
         let request_headers = response_headers::snapshot_request_context(request.headers());
-        tokio::time::timeout(self.request_timeout, async {
-            let response = self
-                .client
-                .request(request)
-                .await
-                .context("recorded HTTP request failed")?;
-            let status = response.status();
-            let headers = response_headers::snapshot_standard(response.headers());
-            let body = collect_limited(response.into_body(), self.max_response_bytes).await?;
-            Ok::<_, anyhow::Error>(RecordedHttpResponse {
-                request_sent_at,
-                request_rules,
-                request_headers,
-                status,
-                headers,
-                body,
-            })
+        let deadline = tokio::time::Instant::now() + self.request_timeout;
+        let response = tokio::time::timeout_at(deadline, self.client.request(request))
+            .await
+            .context("recorded HTTP request timed out")?
+            .context("recorded HTTP request failed")?;
+        let status = response.status();
+        let headers = response_headers::snapshot_standard(response.headers());
+        let (body, sse_observation) = if let Some(policy) = recorded.sse_observation {
+            let (body, observation) =
+                sse::observe(response.into_body(), policy, self.max_response_bytes)
+                    .await
+                    .context("failed to read recorded HTTP response body")?;
+            (body, Some(observation))
+        } else {
+            let body = tokio::time::timeout_at(
+                deadline,
+                collect_limited(response.into_body(), self.max_response_bytes),
+            )
+            .await
+            .context("recorded HTTP request timed out")??;
+            (body, None)
+        };
+        Ok(RecordedHttpResponse {
+            request_sent_at,
+            request_rules,
+            request_headers,
+            status,
+            headers,
+            body,
+            sse_observation,
         })
-        .await
-        .context("recorded HTTP request timed out")?
     }
 }
 
@@ -256,6 +277,7 @@ fn is_hop_by_hop(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod sse;
 
     #[test]
     fn retargets_absolute_and_relative_recorded_uris() {
@@ -300,6 +322,7 @@ mod tests {
     fn strips_connection_specific_and_encoding_headers() {
         let recorded = RecordedRequest {
             method: "POST".to_string(),
+            sse_observation: None,
             uri: "/api".to_string(),
             headers: BTreeMap::from([
                 ("host".to_string(), vec!["source".to_string()]),

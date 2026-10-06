@@ -10,6 +10,7 @@ pub(in crate::replay) mod time;
 pub(in crate::replay) use time::RequestTimes;
 mod motan;
 pub(in crate::replay) mod protobuf;
+mod sse;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -290,11 +291,13 @@ fn assert_recorded_response_with_policy(
             actual_request_headers: actual.request_headers,
             expected_status,
             expected_headers: expected.headers,
+            expected_sse_observation: expected.sse_observation,
             expected_body,
             expected_path: options.expected_response,
             expected_fingerprint: fingerprint(expected_bytes),
             actual_status,
             actual_headers: actual.headers,
+            actual_sse_observation: actual.sse_observation,
             actual_body,
             actual_path: options.actual_response,
             actual_fingerprint: fingerprint(actual_bytes),
@@ -351,11 +354,13 @@ pub(crate) fn assert_comparison_response(
             actual_request_headers,
             expected_status,
             expected_headers: expected.headers,
+            expected_sse_observation: None,
             expected_body,
             expected_path: options.expected_response,
             expected_fingerprint: fingerprint(&expected_bytes),
             actual_status,
             actual_headers: response.headers,
+            actual_sse_observation: None,
             actual_body,
             actual_path: options.response,
             actual_fingerprint: fingerprint(&response_bytes),
@@ -482,11 +487,13 @@ struct AssertionInputs {
     actual_request_headers: Option<crate::recorder::HeaderMapSnapshot>,
     expected_status: u16,
     expected_headers: Option<crate::recorder::HeaderMapSnapshot>,
+    expected_sse_observation: Option<crate::http::sse::SseObservation>,
     expected_body: AssertionBody,
     expected_path: PathBuf,
     expected_fingerprint: String,
     actual_status: u16,
     actual_headers: Option<crate::recorder::HeaderMapSnapshot>,
+    actual_sse_observation: Option<crate::http::sse::SseObservation>,
     actual_body: AssertionBody,
     actual_path: PathBuf,
     actual_fingerprint: String,
@@ -567,11 +574,13 @@ fn evaluate_response(
         actual_request_headers,
         expected_status,
         expected_headers,
+        expected_sse_observation,
         expected_body,
         expected_path,
         expected_fingerprint,
         actual_status,
         actual_headers,
+        actual_sse_observation,
         actual_body,
         actual_path,
         actual_fingerprint,
@@ -621,6 +630,11 @@ fn evaluate_response(
             .push(ResponseDifference::status(expected_status, actual_status));
     }
     if gateway_protocol == ResponseGatewayProtocol::Http {
+        sse::compare(
+            expected_sse_observation,
+            actual_sse_observation,
+            &mut report,
+        );
         headers::compare_standard_headers(
             expected_headers.as_ref(),
             actual_headers.as_ref(),
