@@ -440,6 +440,9 @@ fn representative_status(
 }
 
 pub(crate) fn response_pointer_scope(pointer: &str) -> &'static str {
+    if pointer == "$sse_observation" || pointer.starts_with("$sse_observation/") {
+        return "response_sse_observation";
+    }
     if pointer.starts_with("$headers/") {
         return "response_header";
     }
@@ -497,6 +500,7 @@ fn response_gate(assertions: impl Iterator<Item = Option<bool>>) -> E2eResponseG
 
 #[cfg(test)]
 mod tests {
+    mod sse;
     use super::*;
     use crate::case_group::{CanonicalCase, CanonicalCaseGroup, CaseGroupInventory};
     use crate::e2e_run::model::ResponseAssertionSummary;

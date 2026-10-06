@@ -18,6 +18,13 @@ use tokio::{
     task::JoinHandle,
 };
 
+mod sse;
+
+#[test]
+fn bounded_sse_finalizes_through_relay_and_releases_admission() {
+    runtime().block_on(sse::bounded_sse_finalizes_through_relay_and_releases_admission());
+}
+
 #[derive(Parser)]
 struct OptionsCli {
     #[command(flatten)]

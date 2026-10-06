@@ -58,10 +58,14 @@ original path. There is no duration limit; SIGTERM/SIGINT ends the session.
 | `--request-timeout-seconds` | `30` | Request forwarding/response deadline |
 | `--dns-upstream` / `TRAFFIC_E2E_DNS_UPSTREAM` | first system resolver | Real DNS upstream before fake-IP projection |
 
-`--no-interception` is for local adapter tests only. Ordinary HTTP request and
-response bodies are buffered; HTTP upgrade and indefinite streaming sessions
-are not supported by this entry point. The existing body capture limit bounds
-request buffering; oversized input is rejected before Source dispatch.
+`--no-interception` is for local adapter tests only. HTTP request and response
+bodies are buffered. Primary `text/event-stream` responses use a bounded 50 ms
+observation after receiving Source headers, then Recorder ends the upstream
+response and finalizes the case. The adapter forwards this finite response and
+releases admission after finalization. See [bounded SSE support](http-sse.md)
+for the recording/replay contract. HTTP upgrade and indefinite streaming sessions
+are not supported. The existing body capture limit bounds request buffering;
+oversized input is rejected before Source dispatch.
 
 ## Redis lifecycle
 

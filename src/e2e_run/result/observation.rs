@@ -30,6 +30,13 @@ pub(in crate::e2e_run) fn response_observation_with_status(
             None => observation(E2eValuePresence::Missing, None),
         };
     }
+    if pointer == "$sse_observation" || pointer.starts_with("$sse_observation/") {
+        let json_pointer = format!("/{}", pointer.trim_start_matches('$'));
+        return match response.pointer(&json_pointer) {
+            Some(value) => observation(E2eValuePresence::Present, Some(bounded(value, pointer))),
+            None => observation(E2eValuePresence::Missing, None),
+        };
+    }
     if let Some(name) = pointer.strip_prefix("$headers/") {
         let Some(headers) = response.get("headers").and_then(Value::as_object) else {
             return observation(E2eValuePresence::Unavailable, None);

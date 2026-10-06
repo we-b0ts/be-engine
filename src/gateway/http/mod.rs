@@ -28,6 +28,7 @@ use crate::recording_control::RecordingListener;
 mod admission;
 mod lifecycle;
 mod ready;
+mod response;
 pub(crate) mod rules;
 pub(crate) mod transport;
 
@@ -35,7 +36,7 @@ use admission::try_admit_case;
 use rules::{RuleDecision, evaluate_request, request_authority, resolve_case_group};
 use transport::{
     GatewayBody, build_downstream_response, build_fixed_response, build_upstream_request,
-    build_upstream_uri, send_upstream, simple_response,
+    build_upstream_uri, simple_response,
 };
 
 pub async fn run(state: AppState) -> Result<()> {
@@ -261,7 +262,7 @@ async fn handle_gateway_request(
             );
         }
 
-        let case_request_record = case.as_ref().map(|_| CaseRequestRecord {
+        let mut case_request_record = case.as_ref().map(|_| CaseRequestRecord {
             timestamp: Utc::now(),
             client_addr: client_addr.clone(),
             method: method.to_string(),
@@ -277,6 +278,7 @@ async fn handle_gateway_request(
                 state.config().recording.decoded_body_limit(),
                 Some(&request_headers),
             ),
+            sse_observation: None,
         });
 
         let outbound_uri = match build_upstream_uri(&upstream_base, &original_uri) {
@@ -334,45 +336,23 @@ async fn handle_gateway_request(
         };
 
         let request_timeout = Duration::from_millis(config.request_timeout_ms);
-        let upstream_response = tokio::time::timeout(request_timeout, async {
-            let response = send_upstream(state.client(), outbound)
-                .await
-                .context("gateway upstream request failed")?;
-            let status = response.status();
-            let headers = response.headers().clone();
-            let body = response
-                .into_body()
-                .collect()
-                .await
-                .context("failed to read gateway upstream response body")?
-                .to_bytes();
-            Ok::<_, anyhow::Error>((status, headers, body))
-        })
+        let upstream_response = response::acquire(
+            state.client(),
+            outbound,
+            request_timeout,
+            should_record.then_some(state.config().recording.max_body_bytes),
+        )
         .await;
 
-        let (status, mut response_headers, mut body_bytes) = match upstream_response {
-            Ok(Ok(response)) => response,
-            Ok(Err(err)) => {
-                return record_gateway_error(GatewayErrorContext {
-                    state,
-                    id,
-                    client_addr,
-                    method,
-                    original_uri,
-                    authority,
-                    request_headers: request_headers_for_record,
-                    request_body,
-                    started,
-                    request_started_at,
-                    matched_rule: matched_rule_name.clone(),
-                    case,
-                    should_record,
-                    target: Some(upstream_base.clone()),
-                    err,
-                })
-                .await;
-            }
-            Err(_) => {
+        let response::AcquiredResponse {
+            status,
+            headers: mut response_headers,
+            body: mut body_bytes,
+            sse_observation,
+        } = match upstream_response {
+            Ok(response) => response,
+            Err(err) => {
+                let timed_out = err.is::<tokio::time::error::Elapsed>();
                 return record_gateway_error_with_status(
                     GatewayErrorContext {
                         state,
@@ -389,16 +369,29 @@ async fn handle_gateway_request(
                         case,
                         should_record,
                         target: Some(upstream_base.clone()),
-                        err: anyhow!(
-                            "gateway upstream request timed out after {} ms",
-                            config.request_timeout_ms
-                        ),
+                        err: if timed_out {
+                            anyhow!(
+                                "gateway upstream request timed out after {} ms",
+                                config.request_timeout_ms
+                            )
+                        } else {
+                            err
+                        },
                     },
-                    StatusCode::GATEWAY_TIMEOUT,
+                    if timed_out {
+                        StatusCode::GATEWAY_TIMEOUT
+                    } else {
+                        StatusCode::BAD_GATEWAY
+                    },
                 )
                 .await;
             }
         };
+        if sse_observation.is_some()
+            && let Some(request) = &mut case_request_record
+        {
+            request.sse_observation = Some(crate::http::sse::SseObservationPolicy::default());
+        }
 
         let mut discovered_tcp_targets = Vec::new();
         match rewrite::apply(
@@ -508,6 +501,7 @@ async fn handle_gateway_request(
                     )),
                     duration_ms: started.elapsed().as_millis(),
                     error: None,
+                    sse_observation,
                 },
                 state
                     .active_case_invalidation(case.id)
@@ -582,6 +576,7 @@ async fn record_gateway_error_with_status(
                     ctx.state.config().recording.decoded_body_limit(),
                     None,
                 ),
+                sse_observation: None,
             },
             CaseResponseRecord {
                 timestamp: Utc::now(),
@@ -592,6 +587,7 @@ async fn record_gateway_error_with_status(
                 body: None,
                 duration_ms: ctx.started.elapsed().as_millis(),
                 error: Some(error.clone()),
+                sse_observation: None,
             },
             ctx.state
                 .active_case_invalidation(case.id)

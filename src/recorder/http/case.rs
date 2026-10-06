@@ -2,6 +2,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
+use crate::http::sse::{SseObservation, SseObservationPolicy};
 use crate::recorder::{
     CaseBodyCapture, CaseContext, CaseInvalidation, HeaderMapSnapshot, Recorder,
 };
@@ -18,6 +19,8 @@ pub(crate) struct CaseRequestRecord {
     pub(crate) upstream: String,
     pub(crate) headers: HeaderMapSnapshot,
     pub(crate) body: CaseBodyCapture,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) sse_observation: Option<SseObservationPolicy>,
 }
 
 #[derive(Serialize)]
@@ -30,6 +33,8 @@ pub(crate) struct CaseResponseRecord {
     pub(crate) body: Option<CaseBodyCapture>,
     pub(crate) duration_ms: u128,
     pub(crate) error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) sse_observation: Option<SseObservation>,
 }
 
 pub(crate) async fn finalize_http_case(
@@ -179,6 +184,7 @@ mod tests {
             upstream: "http://127.0.0.1:7171".to_string(),
             headers: HeaderMapSnapshot::new(),
             body: capture_case_body(b"", 1024, 1024, None),
+            sse_observation: None,
         }
     }
 
@@ -198,6 +204,7 @@ mod tests {
             body: Some(capture_case_body(body, 1024, 1024, None)),
             duration_ms: 1,
             error: None,
+            sse_observation: None,
         }
     }
 

@@ -3,6 +3,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 
+use crate::http::sse::SseObservation;
 use crate::recorder::HeaderMapSnapshot;
 
 use super::model::ResponseGatewayProtocol;
@@ -38,6 +39,8 @@ impl RecordedRequest {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ExpectedResponse {
+    #[serde(default)]
+    pub(super) sse_observation: Option<SseObservation>,
     pub(super) status: Option<RecordedStatus>,
     #[serde(default)]
     pub(super) headers: Option<HeaderMapSnapshot>,
@@ -86,6 +89,8 @@ pub(super) struct ComparisonResponse {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ActualResponse {
+    #[serde(default)]
+    pub(super) sse_observation: Option<SseObservation>,
     #[serde(default)]
     pub(super) request_sent_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default, rename = "request_rules")]
