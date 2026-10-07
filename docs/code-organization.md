@@ -205,8 +205,8 @@ is unclear.
   `recording.rs` owns managed recording execution.
   `execution.rs` owns detached Next and legacy quality-receipt operations, completion, failure, and
   recovery without moving verification semantics out of their existing owners.
-  `expert.rs` owns the sole-running-API assistance trigger after two hours without
-  a code integration, one-time expert identity,
+  `expert.rs` owns assistance for the last unfinished API with a running
+  implementer after two hours without a code integration, one-time expert identity,
   serialized batch reservation, per-API report-delivery acknowledgement, and
   engine-directed expert closure after API verification;
   `expert/model.rs` owns its serialized

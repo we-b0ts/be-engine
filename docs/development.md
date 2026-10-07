@@ -1523,13 +1523,16 @@ integration, the timer starts at initial worker confirmation. Legacy bindings
 without a timestamp initialize it on their next accepted confirmation or activity
 report, without asking the coordinator to reconstruct history.
 
-When exactly one API implementer is actually running, and more than
-two hours have passed since its last code integration (or initial binding), the
-engine returns `expert_required`. Queued and ended tasks do not count as running;
+When only one unfinished API remains in the inventory, its implementer is
+actually running, and more than two hours have passed since its last code
+integration (or initial binding), the engine returns `expert_required`.
+HTTP methods on the same route count as one API. Every other route must be
+complete or skipped; unfinished APIs without worker bindings also block the
+trigger. Queued and ended tasks do not count as running;
 unknown, stale, or unconfirmed runtime status requires reconciliation first.
 The count uses current API work scopes, including parked APIs, rather than all
 historical bindings. It does not predict workers needed after future Replay.
-The trigger has no convergence or attempt-count condition. `status`, `next`, and
+The trigger has no attempt-count condition. `status`, `next`, and
 bounded `wait` checks evaluate it, including during traffic operations; `wait`
 still requires runtime-event reconciliation before the next status decision.
 
@@ -1539,9 +1542,12 @@ authorizes the assistance flow. Execute `commands.prepare` to reserve the
 returned API. Preparation rechecks
 eligibility under the worker feedback lock. The resulting `dispatch_required`
 action asks for one read-only `api-expert`, with its API worktree and evidence
-command in `details.apis`. Recover an existing runtime task for `expert_id`
-before submitting, then execute `commands.confirm_expert` once the task is
-accepted, including queued work. Continue engine work while the expert runs.
+command in `details.apis`. An unconfirmed reservation returns `not_due` with no
+dispatch command while another unfinished API exists. Already confirmed experts
+retain their report-delivery and cleanup lifecycle. Recover an existing runtime
+task for `expert_id` before submitting, then execute `commands.confirm_expert`
+once the task is accepted, including queued work. Continue engine work while the
+expert runs.
 
 When the expert ends, forward its findings or unresolved/failure report to the
 retained implementer and execute the API's
