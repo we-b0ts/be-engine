@@ -24,7 +24,8 @@ fn load(target_root: &Path, policy: &RegressionScope) -> Result<Option<Selection
             artifacts::standard_recording_apis_for_scope(target_root, run_id, scope.clone())?;
         for api in policy.selectors() {
             ensure!(
-                apis.contains(api),
+                apis.iter()
+                    .any(|item| crate::recording_api::identity(item) == api),
                 "API {api:?} is absent from the selected recording inventory"
             );
         }
@@ -74,7 +75,10 @@ pub(super) fn apply(
         )?;
         for api in policy.selectors() {
             ensure!(
-                state.api_inventory.iter().any(|item| item.api == *api),
+                state
+                    .api_inventory
+                    .iter()
+                    .any(|item| crate::recording_api::identity(&item.api) == api),
                 "{PATH}: API {api:?} is absent from the selected recording inventory"
             );
         }
