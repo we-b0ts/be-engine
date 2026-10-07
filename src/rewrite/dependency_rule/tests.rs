@@ -445,3 +445,41 @@ fn redis_lock_retains_request_ownership_and_rechecks_current_evidence() {
         );
     }
 }
+
+#[test]
+fn redis_publish_retains_request_ownership_and_rechecks_current_evidence() {
+    let mut state = dependency_state();
+    let selector = crate::RedisPublishSelector {
+        host: "redis.test".into(),
+        port: 6379,
+        channel: "events".into(),
+        uuid_index: Some(0),
+        uuid_field: None,
+    };
+    let spec =
+        planner::spec_from_selector(RewriteDependencyRuleSelector::RedisPublish { selector });
+    let encoded = serde_json::to_value(&spec).unwrap();
+    assert_eq!(encoded["kind"], "redis_publish");
+    assert_eq!(encoded["selector"]["uuid_index"], 0);
+    let spec: RewriteDependencyRuleSpec = serde_json::from_value(encoded).unwrap();
+    assert!(spec.requires_fresh_replay());
+    state.dependency_rule_plan.as_mut().unwrap().spec = spec.clone();
+    for kind in [
+        RewriteIssueKind::Response,
+        RewriteIssueKind::Dependency,
+        RewriteIssueKind::Replay,
+    ] {
+        state.active_issue.as_mut().unwrap().kind = kind;
+        assert!(dependency_issue(&state, &spec).is_ok());
+        assert!(
+            validate_plan_evidence(
+                Path::new("/missing-target"),
+                &state,
+                "issue-dependency",
+                "evidence-dirty-clusters",
+                &spec
+            )
+            .is_err()
+        );
+    }
+}

@@ -41,10 +41,10 @@ pub(in crate::replay::policy) fn validate_selector(mysql: &MysqlSelector) -> Res
     ensure!(
         template
             .first()
-            .is_some_and(|token| ["update", "insert", "delete"]
+            .is_some_and(|token| ["select", "update", "insert", "delete"]
                 .iter()
                 .any(|verb| token.is(verb))),
-        "MySQL sql_values currently requires an INSERT, UPDATE or DELETE template"
+        "MySQL sql_values requires a SELECT, INSERT, UPDATE or DELETE template"
     );
     let count = template
         .iter()
@@ -93,13 +93,13 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn sql_value_slots_require_bounded_writes_explicit_time_and_source_proof() {
+    fn sql_value_slots_require_bounded_statements_and_explicit_time() {
         let valid = json!({"command":"COM_QUERY","sql":"UPDATE keys SET stamp=? WHERE id=?","params":{},"sql_values":{"0":{"source_evidence":"security.py:auth uses datetime.utcnow()","time":{"relative_to":"replay_now","tolerance":"5s"}}}});
         let selector: MysqlSelector = serde_json::from_value(valid.clone()).unwrap();
         validate_selector(&selector).unwrap();
         for (field, value) in [
             ("command", json!("COM_STMT_PREPARE")),
-            ("sql", json!("SELECT stamp FROM keys WHERE id=?")),
+            ("sql", json!("DROP TABLE keys")),
             ("sql", json!("UPDATE keys SET stamp=?; DELETE FROM keys")),
             (
                 "sql",
@@ -119,6 +119,14 @@ mod tests {
             invalid[field] = value;
             let invalid: MysqlSelector = serde_json::from_value(invalid).unwrap();
             assert!(validate_selector(&invalid).is_err(), "{field}");
+        }
+        for sql in [
+            "SELECT count(*) FROM keys WHERE stamp>? AND id=?",
+            "SELECT id, stamp FROM keys WHERE stamp>? AND id=? ORDER BY id LIMIT 10",
+        ] {
+            let mut read = valid.clone();
+            read["sql"] = json!(sql);
+            validate_selector(&serde_json::from_value(read).unwrap()).unwrap();
         }
         assert!(template_matches(
             "UPDATE keys SET stamp=?, note='?' WHERE id=?",

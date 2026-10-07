@@ -95,3 +95,7 @@ unordered rule is needed for that object.
 Source-proven random ownership tokens use separate [Redis lock rules](redis-lock-rules.md).
 These correlate SET NX values with recorded references while every other argument
 remains exact; they do not use JSON/Protobuf collection normalization.
+
+Source-proven UUID identities in PUBLISH payloads use separate
+[Redis PUBLISH rules](redis-publish-rules.md), with exact channel and payload UUID
+positions. Every other payload byte remains exact, including serializer framing.

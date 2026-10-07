@@ -10,8 +10,24 @@ use serde::{Deserialize, Serialize};
 #[serde(untagged)]
 pub(super) enum RedisSelector {
     Lock(RedisLockConfig),
+    Publish(RedisPublishConfig),
     Value(RedisValueSelector),
     TimeShift(crate::replay::redis::time_shift::RedisTimeShiftRead),
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RedisPublishConfig {
+    pub publish: RedisPublishField,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RedisPublishField {
+    pub channel: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uuid_index: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uuid_field: Option<String>,
+    pub source_evidence: String,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -82,6 +98,20 @@ pub(super) fn validate(rule: &ReplayDependencyRule) -> Result<()> {
         )?;
         return Ok(());
     }
+    if let RedisSelector::Publish(publish) = redis {
+        crate::replay::redis::publish::RedisPublishSelector {
+            host: rule.target.host.clone().unwrap_or_default(),
+            port: rule.target.port.unwrap_or_default(),
+            channel: publish.publish.channel.clone(),
+            uuid_index: publish.publish.uuid_index,
+            uuid_field: publish.publish.uuid_field.clone(),
+        }
+        .validate()?;
+        crate::config::process_owned_dependencies::validate_source_evidence(
+            &publish.publish.source_evidence,
+        )?;
+        return Ok(());
+    }
     if let RedisSelector::TimeShift(read) = redis {
         let selector = crate::replay::redis::time_shift::RedisTimeShiftSelector {
             host: rule.target.host.clone().unwrap_or_default(),
@@ -144,6 +174,23 @@ pub(super) fn validate_overlaps(rules: &[ReplayDependencyRule]) -> Result<()> {
                 ensure!(
                     !a.lock.key.overlaps(&b.lock.key),
                     "Redis lock-token key selectors overlap between rules {:?} and {:?}",
+                    rule.id,
+                    other.id
+                );
+            }
+            if let (RedisSelector::Publish(a), RedisSelector::Publish(b)) = (redis, other_redis) {
+                ensure!(
+                    a.publish.channel != b.publish.channel
+                        || (a
+                            .publish
+                            .uuid_field
+                            .as_ref()
+                            .zip(b.publish.uuid_field.as_ref())
+                            .is_some_and(|(a, b)| a != b && !a.contains(b) && !b.contains(a)))
+                        || (a.publish.uuid_index.is_some()
+                            && b.publish.uuid_index.is_some()
+                            && a.publish.uuid_index != b.publish.uuid_index),
+                    "Redis PUBLISH UUID selectors overlap between rules {:?} and {:?}",
                     rule.id,
                     other.id
                 );

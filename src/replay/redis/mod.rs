@@ -30,8 +30,11 @@ pub(in crate::replay) mod cross_case;
 pub(in crate::replay) use cross_case::load as load_cross_case;
 mod json;
 mod key_selector;
+#[cfg(test)]
+mod lane_tests;
 pub(crate) mod lock;
 mod matching;
+pub(crate) mod publish;
 pub(crate) mod time_shift;
 pub(crate) mod value;
 use connection_scope::{ConnectionScopes, TargetConnection};
@@ -124,6 +127,8 @@ pub(super) struct RedisReplayState {
     unordered_value: value::evidence::OrderEvidence,
     lock_tokens: lock::LockTokens,
     lock_evidence: lock::evidence::LockEvidence,
+    publish_rules: publish::PublishRules,
+    publish_evidence: publish::evidence::PublishEvidence,
     exchanges: Vec<ReplayExchange>,
     case_exchange_index: CaseExchangeIndex,
     pub(super) events: RedisReplayEvents,
@@ -309,6 +314,7 @@ impl RedisReplayState {
             time_shifts: self.time_shifts.clone(),
             unordered_value: Some(self.unordered_value.clone()),
             lock_tokens: Some(self.lock_evidence.clone()),
+            publish: Some(self.publish_evidence.clone()),
             connections: self.events.connections,
             matched_count: self.events.matched_count,
             matched: self.events.matched.clone(),

@@ -179,6 +179,10 @@ impl ReplayState {
                                 .and_then(crate::mysql::autocommit::assignment)
                                 == Some(actual)
                     });
+                    let same_prepared_values = !cross_protocol
+                        && sql.is_some_and(|sql| {
+                            sql_match::prepared_values_match(&exchange.record, command, sql, params)
+                        });
                     let sql_value_decision = self.replay_policy.as_ref().and_then(|policy| {
                         policy.preview_mysql_sql_values(
                             &MysqlPolicyContext {
@@ -280,20 +284,29 @@ impl ReplayState {
                             if !project_columns
                                 && Some(recorded_sql) != normalized_sql
                                 && !same_autocommit
+                                && !same_prepared_values
                                 && !policy.allows_mysql_sql_difference(&context)
                             {
                                 continue;
                             }
-                            match policy.preview_mysql(&context, Utc::now()) {
-                                Ok(decision) => decision,
-                                Err(_) => continue,
+                            if same_prepared_values && !policy.allows_mysql_sql_difference(&context)
+                            {
+                                DependencyRuleDecision::default()
+                            } else {
+                                match policy.preview_mysql(&context, Utc::now()) {
+                                    Ok(decision) => decision,
+                                    Err(_) => continue,
+                                }
                             }
                         } else if !project_columns
                             && Some(recorded_sql) != normalized_sql
                             && !same_autocommit
+                            && !same_prepared_values
                         {
                             continue;
-                        } else if params_match(exchange.record.params.as_deref(), params) {
+                        } else if same_prepared_values
+                            || params_match(exchange.record.params.as_deref(), params)
+                        {
                             DependencyRuleDecision::default()
                         } else {
                             continue;
@@ -407,6 +420,29 @@ impl ReplayState {
                     {
                         continue;
                     }
+                    if !project_columns
+                        && !semantic
+                        && matches!(
+                            exchange.record.command.as_str(),
+                            "COM_QUERY" | "COM_STMT_EXECUTE"
+                        )
+                        && self.replay_policy.as_ref().is_some_and(|policy| {
+                            policy.mysql_sql_values_metadata_matches(&MysqlPolicyContext {
+                                case_id: self.active_case_id.as_deref(),
+                                identity,
+                                command: "COM_STMT_EXECUTE",
+                                recorded_sql: exchange.record.sql.as_deref(),
+                                sql: Some(sql),
+                                recorded: exchange.record.params.as_deref(),
+                                actual: None,
+                            })
+                        })
+                    {
+                        return StatementMetadata {
+                            param_count,
+                            columns: exchange.record.response.columns.clone(),
+                        };
+                    }
                     if semantic {
                         let Some(actual) = semantic_target
                             .get_or_insert_with(|| self.mysql.sql_cache.get(sql).metadata())
@@ -449,7 +485,10 @@ impl ReplayState {
                         continue;
                     };
                     let matches = match exchange.record.command.as_str() {
-                        "COM_STMT_EXECUTE" => normalize_sql(recorded_sql) == normalized_sql,
+                        "COM_STMT_EXECUTE" => {
+                            normalize_sql(recorded_sql) == normalized_sql
+                                || sql_match::prepared_metadata_matches(&exchange.record, sql)
+                        }
                         "COM_QUERY" => sql_match::metadata_matches(sql, recorded_sql),
                         _ => false,
                     };

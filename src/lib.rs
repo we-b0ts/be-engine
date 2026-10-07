@@ -986,3 +986,7 @@ pub use replay::{
 
 pub use replay::RedisLockSelector;
 pub use replay::{RedisLockFeedback, RedisLockPlan, RedisLockReport, plan_redis_lock};
+pub use replay::{
+    RedisPublishFeedback, RedisPublishPlan, RedisPublishReport, RedisPublishSelector,
+    plan_redis_publish,
+};

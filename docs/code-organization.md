@@ -306,9 +306,10 @@ is unclear.
   execution. `integrated` owns freshness, action projection and unchanged-purpose
   baseline admission. Its baseline comparison uses `fingerprint::matches_revision`
   to include tracked/untracked source and configuration changes while excluding
-  source traffic acquisition policy, private runtime and progress publication.
+  source traffic acquisition and verification policy, private runtime and progress
+  publication.
   Review fingerprints use the same policy exclusion; traffic verification
-  fingerprints continue to include acquisition policy. `repair`
+  fingerprints continue to include both traffic policies. `repair`
   returns quality findings to existing API/process-output worker ownership,
   including fresh unpublished candidate reports without admitting failed code.
   Review does not create traffic failures or a second migration state machine.
@@ -400,6 +401,11 @@ explicit repository-wide audit.
   SQL time-location validation across text and prepared calls. It reuses
   `replay/mysql/sql_match` value
   materialization; the MySQL matcher retains identity and finite consumption.
+  SQL time metadata previews allow unbound placeholders only during prepare;
+  execution retains time and stable-value validation for SELECT and writes.
+  `replay/mysql/sql_match` also proves exact bound-token equality between two
+  prepared forms independently of semantic predicate support; projection owns
+  materialized result-column metadata and delivery adaptation.
   `replay/policy/sql_template` owns pure bounded template extraction, and
   `replay/policy/config/mysql` owns rule-schema validation. Its sibling
   `config/mysql_time` owns compact time defaults and legacy syntax conversion;
@@ -492,3 +498,20 @@ explicit repository-wide audit.
   and `policy/feedback/redis_lock` owns stale-safe plan/apply. The Redis lock CLI
   child projects explicit host/port/key selectors; coordinator evidence exposes
   conditional hints and fresh-Replay planners through the existing lifecycle.
+
+- `replay/redis/publish` owns bounded textual UUID positions and publisher
+  identity bindings inside opaque PUBLISH payloads. Its evidence child owns
+  UUID-only mismatch witnesses and immutable exchange verification. No message
+  deserializer is executed. `policy/redis_value` owns `redis.publish` schema and
+  overlap checks; `policy/feedback/redis_publish` owns stale-safe plan/apply.
+  The Redis CLI publish child projects exact endpoint/channel/UUID positions or
+  bounded ASCII field markers.
+  Redis matching owns lane ordering and finite consumption; connection scope
+  retains whole-lane stateful affinity, including publishers in such lanes.
+
+- `replay/command_matching` separates lane-order admission from final response
+  consumption. Case-scoped Redis claims satisfy request order while Responding,
+  so pooled sockets cannot race successful delivery bookkeeping. Unclaimed,
+  failed and client-termination exchanges remain blockers; final success and
+  policy usage are still committed only after delivery. Other protocols keep
+  their existing consumption-based admission.

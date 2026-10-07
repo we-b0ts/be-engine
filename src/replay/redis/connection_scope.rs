@@ -91,7 +91,8 @@ fn pool_compatible(command: &str, args: &[Vec<u8>]) -> bool {
                 .iter()
                 .any(|name| subcommand.eq_ignore_ascii_case(name.as_bytes()))
         }),
-        "GET"
+        "PUBLISH"
+        | "GET"
         | "MGET"
         | "GETRANGE"
         | "STRLEN"

@@ -19,6 +19,9 @@ pub(in crate::rewrite) enum RewriteDependencyRuleSpec {
     RedisLock {
         selector: crate::RedisLockSelector,
     },
+    RedisPublish {
+        selector: crate::RedisPublishSelector,
+    },
     RedisUnordered {
         selector: crate::RedisUnorderedSelector,
     },
@@ -102,6 +105,7 @@ impl RewriteDependencyRuleSpec {
                 | Self::HttpHeaderTimestamp { .. }
                 | Self::HttpUnordered { .. }
                 | Self::RedisLock { .. }
+                | Self::RedisPublish { .. }
                 | Self::RedisUnordered { .. }
                 | Self::HttpCrossCase { .. }
                 | Self::MysqlSqlTime { .. }
