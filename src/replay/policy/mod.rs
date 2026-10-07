@@ -136,3 +136,5 @@ pub use feedback::{
     HttpHeaderTimestampFeedback, HttpHeaderTimestampPlan, HttpHeaderTimestampReport,
     plan_http_header_timestamp,
 };
+
+pub use feedback::{RedisLockFeedback, RedisLockPlan, RedisLockReport, plan_redis_lock};

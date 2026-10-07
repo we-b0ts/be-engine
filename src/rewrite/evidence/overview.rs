@@ -60,7 +60,8 @@ pub(super) fn report(
     issue: &RewriteIssue,
     requested_id: &str,
 ) -> Result<RewriteEvidenceReport> {
-    let queries = match &scope {
+    let scope = super::super::api_selector::canonical_scope(state, &scope);
+    let mut queries = match &scope {
         RewriteWorkScope::Api { .. }
             if issue.kind != crate::rewrite::RewriteIssueKind::TargetQuality =>
         {
@@ -69,7 +70,33 @@ pub(super) fn report(
         RewriteWorkScope::Api { .. } => Vec::new(),
         RewriteWorkScope::ProcessOutput { .. } => Vec::new(),
     };
-    let facts = json!({ "work_scope": scope, "issue": issue });
+    let methods = match &scope {
+        RewriteWorkScope::Api { api } => super::super::api_selector::members(state, &api.parse()?),
+        _ => Vec::new(),
+    };
+    let mut method_issues = Vec::new();
+    for api in &methods {
+        let Ok(selected) = super::super::inventory::scoped(state, Some(&api.parse()?)) else {
+            // Awaiting refresh/system-repair inventory may lack a retained AI
+            // slice. Its method contract is still present in method_apis.
+            continue;
+        };
+        if let Some(method_issue) = selected.active_issue.as_ref() {
+            let method_queries =
+                if method_issue.kind != crate::rewrite::RewriteIssueKind::TargetQuality {
+                    super::commands(target_root, &selected)
+                } else {
+                    Vec::new()
+                };
+            if api != &state.api {
+                queries.extend(method_queries.clone());
+            }
+            method_issues
+                .push(json!({"api": api, "issue": method_issue, "queries": method_queries}));
+        }
+    }
+    let facts = json!({ "work_scope": scope, "issue": issue, "method_apis": methods,
+        "method_issues": method_issues });
     let evidence_id = format!(
         "evidence-{}",
         fingerprint::id(&[requested_id, &serde_json::to_string(&facts)?])

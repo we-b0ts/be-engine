@@ -25,11 +25,17 @@ them through the returned engine command.
 Maintain one exact work item to one dedicated task runtime handle and one worktree:
 
 ```text
-API method/pattern or process_output:<id> <-> worker handle <-> worker worktree
+API path/pattern or process_output:<id> <-> worker handle <-> worker worktree
 ```
 
 Issue IDs, attempts, and workflow revisions can change without changing this
-binding. The engine persists the actual runtime handle and returns `agent_handle`
+binding. HTTP scope covers all included recorded methods at that exact canonical
+path/pattern. Match `details.worker.work_scope`, not `api_inventory.current_api`:
+that inventory remains method-specific. Never dispatch separate method workers
+for one route, infer scope from a directory name, or enumerate methods in the
+assignment. The worker obtains `facts.method_apis` and method-bound issue queries
+from scoped evidence. Existing method-owned bindings retain their returned scope;
+resume them without an implicit ownership transfer. The engine persists the actual runtime handle and returns `agent_handle`
 with its work scope in status and inventory. Match live runtime entries by that
 handle; do not keep a separate binding/dispatch ID table. Supply the runtime's
 addressable identifier, such as Codex's canonical `agent_name` when its tools
@@ -48,7 +54,7 @@ Use `api-` and `process-output-` slug prefixes. Dispatch only:
 
 - Role: `api-implementer` for API scope; retain the generic implementation-worker
   assignment for existing process-output scope.
-- Exact work scope: API method/pattern or process-output ID.
+- Exact work scope: canonical API path/pattern or process-output ID.
 - Absolute canonical target root for engine evidence queries.
 - Absolute assigned worktree for edits and local tests.
 - Source repository locations for behavior analysis.

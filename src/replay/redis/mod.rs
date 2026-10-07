@@ -30,6 +30,7 @@ pub(in crate::replay) mod cross_case;
 pub(in crate::replay) use cross_case::load as load_cross_case;
 mod json;
 mod key_selector;
+pub(crate) mod lock;
 mod matching;
 pub(crate) mod time_shift;
 pub(crate) mod value;
@@ -121,6 +122,8 @@ pub(super) struct RedisReplayState {
     connection_scopes: ConnectionScopes,
     pub(super) value_rules: Vec<value::ValueRule>,
     unordered_value: value::evidence::OrderEvidence,
+    lock_tokens: lock::LockTokens,
+    lock_evidence: lock::evidence::LockEvidence,
     exchanges: Vec<ReplayExchange>,
     case_exchange_index: CaseExchangeIndex,
     pub(super) events: RedisReplayEvents,
@@ -305,6 +308,7 @@ impl RedisReplayState {
         CommandProtocolReport {
             time_shifts: self.time_shifts.clone(),
             unordered_value: Some(self.unordered_value.clone()),
+            lock_tokens: Some(self.lock_evidence.clone()),
             connections: self.events.connections,
             matched_count: self.events.matched_count,
             matched: self.events.matched.clone(),

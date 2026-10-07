@@ -2,6 +2,8 @@ mod advance;
 use advance::advance_rewrite;
 mod action;
 mod action_contract;
+mod api_batch;
+mod api_selector;
 mod artifacts;
 mod background_reclassification;
 mod case_dependencies;
@@ -12,6 +14,7 @@ mod configuration_commit;
 mod coordination;
 mod execution;
 mod expert;
+pub use api_selector::{RewriteApiSelector, status_rewrite_for_selector};
 pub use configuration_commit::next_rewrite;
 pub use coordination::RewriteCoordinationDetails;
 pub use execution::{
@@ -170,13 +173,13 @@ pub(in crate::rewrite) use test_support::test_state;
 
 use crate::{
     ComparisonVerificationOptions, E2eRunContext, ManagedRecordingOperation, RecordingApi,
-    run_e2e_api, update_comparison_progress, verify_comparison_recording,
+    update_comparison_progress, verify_comparison_recording,
 };
 
 #[derive(Debug, Clone)]
 pub struct RewriteNextOptions {
     pub target_root: PathBuf,
-    pub api: Option<RecordingApi>,
+    pub api: Option<RewriteApiSelector>,
     pub process_output: Option<String>,
     pub source_route: Option<String>,
 }
@@ -418,7 +421,11 @@ pub async fn recover_rewrite(context: RewriteContext) -> Result<RewriteRecoveryR
     recovery::recover(context).await
 }
 
-async fn run_and_transition(target_root: &Path, state: &mut RewriteState) -> Result<()> {
+async fn run_and_transition(
+    target_root: &Path,
+    state: &mut RewriteState,
+    route_batch: bool,
+) -> Result<()> {
     let replay_target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
     let case_source = state
         .case_source
@@ -433,7 +440,13 @@ async fn run_and_transition(target_root: &Path, state: &mut RewriteState) -> Res
         case_source,
         run_key: None,
     };
-    let result = run_e2e_api(context.clone(), &api).await?;
+    let prepared = route_batch
+        .then(|| api_batch::prepare(target_root, state))
+        .transpose()?;
+    let apis = prepared
+        .as_ref()
+        .map_or_else(|| vec![api.clone()], |batch| batch.apis.clone());
+    let results = crate::e2e_run::run_e2e_apis(context.clone(), &apis).await?;
     let current_target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
     if current_target_fingerprint != replay_target_fingerprint {
         state.phase = RewritePhase::ApiPending;
@@ -460,13 +473,7 @@ async fn run_and_transition(target_root: &Path, state: &mut RewriteState) -> Res
         )?;
         process_outputs::observe_target_evidence(state, root, current_target_fingerprint.clone());
     }
-    transition::from_e2e_result(
-        target_root,
-        state,
-        &result,
-        transition::AttemptTransition::Append,
-    )?;
-    transition::complete_replay_if_ready(target_root, state)?;
+    api_batch::apply_results(target_root, state, &results, prepared.as_ref())?;
     Ok(())
 }
 

@@ -413,7 +413,7 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
         },
         RewritePhase::ApiPending => advance_required(
             target_root,
-            Some(&state.api),
+            Some(&super::api_selector::work_scope(state, &state.api).binding_key()),
             format!("continue with the next recorded API {}", state.api),
         ),
         RewritePhase::ImplementationRequired => worker::implementation_action(target_root, state, None),

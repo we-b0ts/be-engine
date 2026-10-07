@@ -20,29 +20,25 @@ recordings.
    HTTP method and URI path without the query component against source route
    registrations. Route discovery is allowed here; do not inspect business
    implementation details or modify product code yet.
-3. When the source route is exact and static, run `traffic-e2e prepare`
-   without `--pattern`. Its canonical grouping operation MUST inspect every
-   published case in the directory, require every method and path to resolve to
-   that same source route, return the current directory as `group_dir`, and
-   record `already_canonical` with its exact case ids. A mixed-route directory
-   receives the internal diagnostic `blocked_grouping`.
-4. When the source route is dynamic, derive the candidate recorder pattern
-   using the route-pattern feedback contract loaded from the main skill, then
-   run `traffic-e2e prepare` with the original case source, current directory,
-   method, confirmed source route, pattern, and source revision. The runner
-   supplies managed recorder config and the persisted index path. Use only the
-   returned group directory or manifest and exact case ids.
-5. Mark every returned member directory processed. A later prepare for any member
-   MUST return the same group with `already_grouped`; process the group exactly
-   once. Never infer grouping state from a directory name or hand-written
-   marker.
+3. Prepare the selected `METHOD API` against the original case source. The
+   engine inspects all published request metadata and selects only cases whose
+   method and URI path match that exact route or confirmed pattern. Different
+   methods may share one physical recording directory.
+4. For a dynamic route, supply the source-proven pattern with `--pattern`.
+   For a static route, omit it. A homogeneous static directory may return
+   `already_canonical` with `group_dir`; a shared or multi-directory static
+   selection returns a manifest-backed `created` group with exact case IDs.
+5. Mark returned case IDs and the logical `METHOD API` processed. A physical
+   member directory may still contain another method or route to prepare.
+   Repeating the same group from a member returns `already_grouped` for a
+   manifest group, or `already_canonical` for a whole static directory.
 6. Inspect or verify the selected group only after grouping reaches a valid
    terminal result. Focused verification may proceed before every other API is
    grouped, but the full round cannot advance until every published case is
    covered exactly once.
 
 The first case is a route-discovery sample, not evidence that the whole
-directory is homogeneous. The exact selected case ids come from the complete
+directory is homogeneous. Directory sharing is allowed; case-ID overlap is not. The exact selected case ids come from the complete
 group validation.
 
 ## Required Invocation
@@ -86,7 +82,7 @@ the final plan/apply/replan gate.
 Accept only `created`, `already_grouped`, or `already_canonical` as successful
 grouping results. A new dynamic group MUST return `created`, a repeat from any
 of its member directories MUST return `already_grouped`, and a static group
-MUST return `already_canonical`. Require canonical output to include:
+returns `already_canonical` only when the whole directory is that group; otherwise it is manifest-backed and returns `created`. Require canonical output to include:
 
 - status and stable group id
 - method and resolved source route
@@ -96,8 +92,8 @@ MUST return `already_canonical`. Require canonical output to include:
 - source revision and case-inventory identity
 - persisted JSON report path
 
-Treat missing commands, mixed or unmatched routes, ambiguous patterns,
-overlapping groups, missing cases, duplicate case ids, stale group inventory,
+Treat missing commands, unmatched routes, ambiguous patterns,
+overlapping case membership or same-method route specifications, missing cases, duplicate case ids, stale group inventory,
 or a changed source revision as `blocked_grouping`. Do not replace the command
 with an AI-authored target script or a hand-maintained case list.
 `blocked_grouping` is a grouping diagnostic, not the operation handoff status;
@@ -107,7 +103,7 @@ satisfied.
 
 `traffic-e2e prepare` delegates to
 `traffic-e2e diagnose case-group ensure`; direct low-level invocation is for
-diagnostics, not the normal AI workflow. Dynamic groups are manifest-backed:
+diagnostics, not the normal AI workflow. Dynamic groups and shared-directory static groups are manifest-backed:
 `group_dir` may be absent, in which case the returned manifest and exact case
 ids are the only valid replay selection. Do not invent a directory path.
 `traffic-e2e diagnose case-group` may orchestrate the managed pattern plan and

@@ -428,23 +428,56 @@ fn ignored_artifact_directory_cannot_be_used_as_a_case_source() {
 }
 
 #[test]
-fn mixed_route_directory_is_rejected() {
-    let temporary = tempdir().unwrap();
-    let source = temporary.path().join("cases");
-    let group = source.join("mixed");
-    write_case(&source, "mixed", "case-a", "GET", "/api/widgets/one");
-    write_case(&source, "mixed", "case-b", "POST", "/api/widgets/two");
-
-    let error = ensure_case_group(options(
-        &source,
-        &group,
-        &temporary.path().join("case-groups.json"),
-        "/api/widgets/:id",
-        Some("/api/widgets/*"),
-    ))
-    .unwrap_err();
-
-    assert!(error.to_string().contains("mixed-route directory"));
+fn methods_share_a_directory_with_disjoint_manifest_membership() {
+    for pattern in [None, Some("/api/subscriptions/*")] {
+        let temporary = tempdir().unwrap();
+        let source = temporary.path().join("cases");
+        let member = source.join("apis/api-subscriptions-230827");
+        write_recording_case(
+            &source,
+            "api-subscriptions-230827",
+            "put-case",
+            "PUT",
+            "/api/subscriptions/230827",
+            "/api/subscriptions/230827",
+        );
+        write_recording_case(
+            &source,
+            "api-subscriptions-230827",
+            "delete-case",
+            "DELETE",
+            "/api/subscriptions/230827",
+            "/api/subscriptions/230827",
+        );
+        let output = temporary.path().join("case-groups.json");
+        let route = if pattern.is_some() {
+            "/api/subscriptions/:id"
+        } else {
+            "/api/subscriptions/230827"
+        };
+        for (method, id) in [("PUT", "put-case"), ("DELETE", "delete-case")] {
+            let mut request = options(&source, &member, &output, route, pattern);
+            request.method = method.into();
+            let created = ensure_case_group(request.clone()).unwrap();
+            assert_eq!(created.status, CaseGroupStatus::Created);
+            assert!(created.group_dir.is_none());
+            assert_eq!(created.case_ids, vec![id]);
+            assert_eq!(
+                ensure_case_group(request).unwrap().status,
+                CaseGroupStatus::AlreadyGrouped
+            );
+        }
+        let inventory = load_complete_case_group_inventory(&output, &source).unwrap();
+        assert_eq!(inventory.groups.len(), 2);
+        assert_eq!(
+            inventory
+                .groups
+                .iter()
+                .map(|g| g.cases.len())
+                .sum::<usize>(),
+            2
+        );
+    }
 }
 
 #[test]

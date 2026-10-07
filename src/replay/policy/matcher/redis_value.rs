@@ -2,6 +2,30 @@
 use super::*;
 use crate::replay::redis::value::ValueRule;
 impl ReplayPolicyRuntime {
+    pub(in crate::replay) fn redis_lock_token_rules(
+        &self,
+    ) -> Vec<crate::replay::redis::lock::LockTokenRule> {
+        self.loaded
+            .document
+            .dependency_rules
+            .iter()
+            .filter_map(|rule| {
+                let super::super::redis_value::RedisSelector::Lock(lock) = rule.redis.as_ref()?
+                else {
+                    return None;
+                };
+                Some(crate::replay::redis::lock::LockTokenRule {
+                    id: rule.id.clone(),
+                    selector: crate::replay::redis::lock::RedisLockSelector {
+                        host: rule.target.host.clone().unwrap_or_default(),
+                        port: rule.target.port.unwrap_or_default(),
+                        key: lock.lock.key.clone(),
+                    },
+                })
+            })
+            .collect()
+    }
+
     pub(in crate::replay) fn redis_time_shift_rules(
         &self,
     ) -> Vec<(

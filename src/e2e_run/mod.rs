@@ -11,6 +11,7 @@ mod evidence;
 mod execute;
 mod failure_limit;
 mod final_evidence;
+mod focused_batch;
 mod http_driver;
 pub(crate) mod jwt_evidence;
 mod model;
@@ -56,8 +57,8 @@ pub use evidence::{
     query_e2e_case_response_differences, query_e2e_dependency_correlation, query_e2e_dirty_counts,
     query_e2e_source_variation, query_e2e_target_runtime_diagnostics,
 };
-pub(crate) use execute::recover_focused_e2e_api;
 pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};
+pub(crate) use execute::{recover_focused_e2e_api, run_e2e_apis};
 pub(crate) use http_driver::wait_until_ready;
 pub use model::DEFAULT_MAX_FAILED_CASES_PER_API;
 use model::{CaseStatus, RunStatus};
@@ -478,4 +479,5 @@ pub(crate) use evidence::query_http_cross_case_candidates;
 
 pub(crate) use evidence::query_http_unordered_candidates;
 
+pub(crate) use evidence::query_redis_lock_candidates;
 pub(crate) use evidence::query_redis_unordered_candidates;

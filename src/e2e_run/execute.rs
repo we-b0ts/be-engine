@@ -93,6 +93,27 @@ pub async fn abort_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
 }
 
 pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApiRunResult> {
+    Ok(run_e2e_apis(context, &[api_key.to_string()])
+        .await?
+        .remove(0))
+}
+
+/// A single Replay/target session, with independently published method results.
+pub(crate) async fn run_e2e_apis(
+    context: E2eRunContext,
+    api_keys: &[String],
+) -> Result<Vec<E2eApiRunResult>> {
+    let api_key = api_keys
+        .first()
+        .context("focused Replay needs at least one API")?;
+    ensure!(
+        api_keys
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == api_keys.len(),
+        "focused Replay API selectors must be unique"
+    );
     let (config, base_layout) = resolve_for_execution(&context)?;
     ensure!(
         !base_layout.active_dir.exists(),
@@ -106,17 +127,22 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
             .is_ok();
     let mut index =
         store::load_or_create_index(&base_layout, &base_layout.run_key, &base_layout.case_source)?;
-    let group = inventory
-        .groups
+    let groups = api_keys
         .iter()
-        .find(|group| group.group_id == api_key)
-        .with_context(|| format!("prepared API group not found: {api_key}"))?
-        .clone();
+        .map(|api| {
+            inventory
+                .groups
+                .iter()
+                .find(|group| &group.group_id == api)
+                .with_context(|| format!("prepared API group not found: {api}"))
+                .cloned()
+        })
+        .collect::<Result<Vec<_>>>()?;
     let focused_inventory = CaseGroupInventory {
         case_source: inventory.case_source.clone(),
         source_revision: inventory.source_revision.clone(),
         case_inventory_id: inventory.case_inventory_id.clone(),
-        groups: vec![group],
+        groups,
     };
     let focused_root = base_layout
         .run_root
@@ -179,12 +205,26 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
             &previous,
         )?;
     }
-    let attempt = if layout.latest_dir.join("state.yaml").is_file() {
-        let previous: ActiveRunState = store::read_yaml(&layout.latest_dir.join("state.yaml"))?;
-        previous.sequence + 1
-    } else {
-        1
-    };
+    let attempt = api_keys
+        .iter()
+        .map(|api| {
+            let previous_path = global_layout
+                .run_root
+                .join("focused")
+                .join(api_directory(api))
+                .join("latest/state.yaml");
+            if previous_path.is_file() {
+                let previous: ActiveRunState = store::read_yaml(&previous_path)?;
+                Ok(previous.sequence)
+            } else {
+                Ok(0)
+            }
+        })
+        .collect::<Result<Vec<u64>>>()?
+        .into_iter()
+        .max()
+        .unwrap_or(0)
+        + 1;
     let mut state = ActiveRunState::new(
         layout.run_key.clone(),
         attempt,
@@ -215,7 +255,16 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
         inventory_complete,
         &mut state,
     )?;
-    Ok(api_result(&layout, &state, api_key, attempt))
+    api_keys
+        .iter()
+        .map(|api| {
+            let (published, latest) =
+                super::evidence::finalized_focused_evidence(context.clone(), api)?;
+            let mut method_layout = layout.clone();
+            method_layout.latest_dir = latest;
+            Ok(api_result(&method_layout, &published, api, attempt))
+        })
+        .collect()
 }
 
 fn finish_focused_and_publish(
@@ -233,11 +282,7 @@ fn finish_focused_and_publish(
         "focused run state is not terminal"
     );
     update_focused_index(index, state, inventory, inventory_complete);
-    store::publish_snapshot(
-        &focused_layout.active_dir,
-        &focused_layout.latest_dir,
-        state,
-    )?;
+    super::focused_batch::publish(global_layout, focused_layout, state)?;
     store::write_yaml(&global_layout.index_path, index)?;
     write_replay_progress(
         &global_layout.progress_path,

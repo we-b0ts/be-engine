@@ -771,3 +771,6 @@ pub use http_header_timestamp::{
     HttpHeaderTimestampFeedback, HttpHeaderTimestampPlan, HttpHeaderTimestampReport,
     plan_http_header_timestamp,
 };
+
+mod redis_lock;
+pub use redis_lock::{RedisLockFeedback, RedisLockPlan, RedisLockReport, plan_redis_lock};

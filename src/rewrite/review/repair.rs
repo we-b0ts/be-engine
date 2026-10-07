@@ -32,6 +32,7 @@ pub fn rework_with_report(
         "quality rework must wait for traffic verification"
     );
     let mut state = store.load()?.context("rewrite workflow is absent")?;
+    let scope = crate::rewrite::api_selector::canonical_scope(&state, &scope);
     let report = if let Some(path) = report_path.as_deref() {
         candidate_report(&root, &state, &project, path)?
     } else {
@@ -99,7 +100,8 @@ pub fn rework_with_report(
     };
     match &scope {
         RewriteWorkScope::Api { api } => {
-            let mut scoped = crate::rewrite::inventory::scoped(&state, Some(&api.parse()?))?;
+            let mut scoped = crate::rewrite::api_selector::scoped(&state, api)?;
+            let selected_api = scoped.api.clone();
             ensure!(
                 scoped.rule_plan.is_none()
                     && scoped.dependency_rule_plan.is_none()
@@ -120,12 +122,18 @@ pub fn rework_with_report(
             if scoped.active_issue.is_none() {
                 scoped.active_issue = Some(issue);
             }
-            if state.api == *api {
+            if state.api == selected_api {
                 state.active_slice = scoped.active_slice;
             } else {
-                state.parked_slices.insert(api.clone(), scoped.active_slice);
+                state
+                    .parked_slices
+                    .insert(selected_api.clone(), scoped.active_slice);
             }
-            if let Some(item) = state.api_inventory.iter_mut().find(|item| item.api == *api) {
+            if let Some(item) = state
+                .api_inventory
+                .iter_mut()
+                .find(|item| item.api == selected_api)
+            {
                 item.status = RewriteApiStatus::ImplementationRequired;
             }
         }

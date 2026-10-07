@@ -1,5 +1,6 @@
 //! Redis dependency rule CLI selectors and conversion.
 use super::*;
+mod lock;
 mod time_shift;
 #[derive(Debug, Args)]
 pub(super) struct RedisDependencyRuleArgs {
@@ -9,6 +10,8 @@ pub(super) struct RedisDependencyRuleArgs {
 
 #[derive(Debug, Subcommand)]
 enum RedisDependencyRuleModeArgs {
+    /// Correlate source-proven random SET NX tokens with single-key release references.
+    Lock(lock::RedisLockArgs),
     /// Share one source-proven GET/HGET token read across cases of a completed recording.
     CrossCase(RedisCrossCaseArgs),
     /// Preserve source-proven relative lifetimes in matched GET/HGET JSON responses.
@@ -111,6 +114,7 @@ pub(super) fn options(args: RedisDependencyRuleArgs) -> Result<RewriteDependency
                 },
             });
         }
+        RedisDependencyRuleModeArgs::Lock(args) => return lock::options(args),
         RedisDependencyRuleModeArgs::TimeShift(args) => return time_shift::options(args),
         RedisDependencyRuleModeArgs::Unordered(args) => return unordered_options(args),
         RedisDependencyRuleModeArgs::Zcount(args) => dependency_rule_options(

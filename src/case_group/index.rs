@@ -271,10 +271,9 @@ pub(super) fn validate_index(
     cases: &[PublishedCase],
 ) -> Result<()> {
     let mut ids = BTreeSet::new();
-    let mut members = BTreeSet::new();
     let mut group_ids = BTreeSet::new();
     for group in &index.groups {
-        let expected_status = if group.pattern.is_some() {
+        let expected_status = if group.group_dir.is_none() {
             CaseGroupStatus::Created
         } else {
             CaseGroupStatus::AlreadyCanonical
@@ -326,13 +325,6 @@ pub(super) fn validate_index(
         );
         for id in &group.case_ids {
             ensure!(ids.insert(id), "case id {id} belongs to overlapping groups");
-        }
-        for member in &group.member_dirs {
-            ensure!(
-                members.insert(member),
-                "case directory {} belongs to overlapping groups",
-                member.display()
-            );
         }
     }
     for (position, left) in index.groups.iter().enumerate() {
@@ -393,27 +385,13 @@ pub(super) fn case_inventory_id(
 }
 
 pub(super) fn reject_membership_overlap(
-    storage: &IndexPathStorage,
     groups: &[CaseGroupRecord],
     case_ids: &[String],
-    member_dirs: &[PathBuf],
 ) -> Result<()> {
     for group in groups {
         ensure!(
             !case_ids.iter().any(|id| group.case_ids.contains(id)),
             "new group overlaps case ids owned by {}",
-            group.group_id
-        );
-        let existing_members = group
-            .member_dirs
-            .iter()
-            .map(|member| storage.resolve(member))
-            .collect::<Result<Vec<_>>>()?;
-        ensure!(
-            !member_dirs
-                .iter()
-                .any(|member| existing_members.contains(member)),
-            "new group overlaps member directories owned by {}",
             group.group_id
         );
     }

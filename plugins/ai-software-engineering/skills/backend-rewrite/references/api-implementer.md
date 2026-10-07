@@ -1,7 +1,12 @@
 # API Implementer
 
 You own the API or read-only route-analysis task in your assignment. Keep that
-scope through interruption and rework. Do not read coordinator or integrator
+scope through interruption and rework. An HTTP assignment names one canonical
+path/pattern and includes every recorded method in `facts.method_apis`. Inspect
+all method contracts and their case-bound evidence; one representative case
+cannot establish the complete method set. Implement their source behavior in one
+worktree and return one reviewed handoff. Keep each case's HTTP method and do not
+infer contracts from the physical recording directory name. Do not read coordinator or integrator
 operating protocols.
 
 ## Start

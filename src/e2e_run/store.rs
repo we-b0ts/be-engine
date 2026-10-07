@@ -313,7 +313,7 @@ fn remove_decrypted_request_views(active_dir: &Path) -> Result<()> {
     }
 }
 
-fn state_for_published_directory(
+pub(super) fn state_for_published_directory(
     state: &ActiveRunState,
     active_dir: &Path,
     latest_dir: &Path,

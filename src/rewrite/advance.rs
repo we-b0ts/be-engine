@@ -2,6 +2,46 @@
 use super::*;
 
 pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
+    let route_batch = matches!(options.api, Some(RewriteApiSelector::Route(_)));
+    let api = match options.api.as_ref() {
+        Some(RewriteApiSelector::Method(api)) => Some(api.clone()),
+        Some(selector @ RewriteApiSelector::Route(_)) => {
+            let state = RewriteStore::new(&options.target_root)?.load()?.context(
+                "route selection requires a recorded API inventory; start with next without --api",
+            )?;
+            let RewriteApiSelector::Route(path) = selector else {
+                unreachable!()
+            };
+            ensure!(
+                !state
+                    .worker_bindings
+                    .keys()
+                    .any(|key| key.contains(' ') && api_selector::route(key) == path),
+                "route {path} retains legacy method-owned workers; continue with their METHOD API commands without transferring ownership implicitly"
+            );
+            Some(api_selector::select(&state, selector)?)
+        }
+        None => None,
+    };
+    advance_atomic(AtomicNextOptions {
+        target_root: options.target_root,
+        api,
+        process_output: options.process_output,
+        source_route: options.source_route,
+        route_batch,
+    })
+    .await
+}
+
+struct AtomicNextOptions {
+    target_root: PathBuf,
+    api: Option<RecordingApi>,
+    process_output: Option<String>,
+    source_route: Option<String>,
+    route_batch: bool,
+}
+
+async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvelope> {
     if let Some(envelope) = purpose::pending(&options.target_root)? {
         return Ok(envelope);
     }
@@ -92,6 +132,11 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
     }
     let mut state = match store.load()? {
         Some(mut state) => {
+            if options.route_batch && !state.route_worker_scopes {
+                state.route_worker_scopes = true;
+                state.bump();
+                store.save(&state)?;
+            }
             let migrated = inventory::initialize_legacy(&mut state);
             if !state.api_inventory.is_empty() {
                 process_outputs::ensure_inventory_matches(&state, &project.process_outputs)?;
@@ -383,7 +428,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 &state,
                 traffic_operation::TrafficOperationKind::Replay,
             )?;
-            run_and_transition(&target_root, &mut state).await?;
+            run_and_transition(&target_root, &mut state, options.route_batch).await?;
             store.save(&state)?;
             Ok(action::for_state(&target_root, &state))
         }
@@ -418,7 +463,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 &state,
                 traffic_operation::TrafficOperationKind::Replay,
             )?;
-            run_and_transition(&target_root, &mut state).await?;
+            run_and_transition(&target_root, &mut state, options.route_batch).await?;
             store.save(&state)?;
             Ok(action::for_state(&target_root, &state))
         }
@@ -446,7 +491,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
                 &state,
                 traffic_operation::TrafficOperationKind::Replay,
             )?;
-            run_and_transition(&target_root, &mut state).await?;
+            run_and_transition(&target_root, &mut state, options.route_batch).await?;
             store.save(&state)?;
             Ok(action::for_state(&target_root, &state))
         }

@@ -225,12 +225,13 @@ pub use replay::{
 };
 pub use rewrite::{
     IntegrationHandoffSelection, JwtRulePlanOptions, RewriteAction, RewriteActionEnvelope,
-    RewriteApiInventoryDetails, RewriteApiInventoryView, RewriteApiProgress, RewriteApiStatus,
-    RewriteApplicableRulePlanner, RewriteCapturePreview, RewriteCaseDependenciesOptions,
-    RewriteCaseDependenciesReport, RewriteCaseDependencyProtocolDetail,
-    RewriteCaseDependencyTarget, RewriteCaseDependencyTargetSummary,
-    RewriteCaseGroupRebuildOptions, RewriteCaseGroupRebuildReport, RewriteCasePatternApplyOptions,
-    RewriteCommandSpec, RewriteContext, RewriteCoordinationDetails, RewriteDependencyOwnership,
+    RewriteApiInventoryDetails, RewriteApiInventoryView, RewriteApiProgress, RewriteApiSelector,
+    RewriteApiStatus, RewriteApplicableRulePlanner, RewriteCapturePreview,
+    RewriteCaseDependenciesOptions, RewriteCaseDependenciesReport,
+    RewriteCaseDependencyProtocolDetail, RewriteCaseDependencyTarget,
+    RewriteCaseDependencyTargetSummary, RewriteCaseGroupRebuildOptions,
+    RewriteCaseGroupRebuildReport, RewriteCasePatternApplyOptions, RewriteCommandSpec,
+    RewriteContext, RewriteCoordinationDetails, RewriteDependencyOwnership,
     RewriteDependencyPayloadRulePlanOptions, RewriteDependencyPayloadRulePlanReport,
     RewriteDependencyRulePlanOptions, RewriteDependencyRulePlanReport, RewriteDependencyRuleReport,
     RewriteDependencyRuleSelector, RewriteEvidenceCommand, RewriteEvidenceContext,
@@ -279,7 +280,7 @@ pub use rewrite::{
     rework_rewrite_review_with_report, route_rewrite, run_rewrite_target_quality,
     show_rewrite_review, start_rewrite_next, start_rewrite_recording, start_rewrite_target_quality,
     status_rewrite, status_rewrite_for_api, status_rewrite_for_process_output,
-    transfer_rewrite_worker, verify_rewrite_repair, wait_rewrite,
+    status_rewrite_for_selector, transfer_rewrite_worker, verify_rewrite_repair, wait_rewrite,
 };
 pub use runtime_output::RuntimeOutputLocation;
 pub use source_recording::{SourceRecordingOptions, SourceRecordingResult, run_source_recording};
@@ -982,3 +983,6 @@ pub use replay::{
     HttpHeaderTimestampFeedback, HttpHeaderTimestampPlan, HttpHeaderTimestampReport,
     plan_http_header_timestamp,
 };
+
+pub use replay::RedisLockSelector;
+pub use replay::{RedisLockFeedback, RedisLockPlan, RedisLockReport, plan_redis_lock};

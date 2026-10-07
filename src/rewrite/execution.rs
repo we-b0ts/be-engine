@@ -45,11 +45,11 @@ pub fn start_next(mut options: RewriteNextOptions) -> Result<RewriteActionEnvelo
     }
     let target_root = fs::canonicalize(&options.target_root)?;
     let current = if let Some(api) = options.api.as_ref() {
-        super::status_rewrite_for_api(
+        super::status_rewrite_for_selector(
             RewriteContext {
                 target_root: target_root.clone(),
             },
-            Some(api),
+            api,
         )?
     } else if let Some(id) = &options.process_output {
         super::status_rewrite_for_process_output(

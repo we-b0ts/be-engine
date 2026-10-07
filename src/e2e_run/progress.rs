@@ -87,15 +87,17 @@ pub(super) fn update_focused_index(
     inventory: &CaseGroupInventory,
     inventory_complete: bool,
 ) {
-    let Some(api) = state.apis.first() else {
+    if state.apis.is_empty() {
         return;
-    };
+    }
     reconcile_baseline(index, state);
     index.inventory_complete = inventory_complete;
     count_current_run(index);
-    index
-        .latest_focused_sequences
-        .insert(api.api_key.clone(), state.sequence);
+    for api in &state.apis {
+        index
+            .latest_focused_sequences
+            .insert(api.api_key.clone(), state.sequence);
+    }
 
     let current_apis = inventory
         .groups
@@ -117,7 +119,9 @@ pub(super) fn update_focused_index(
     }
     let global_evidence_clean =
         state.replay_finalized && state.aggregate_complete && state.aggregate_clean;
-    update_api_progress(index, api, global_evidence_clean);
+    for api in &state.apis {
+        update_api_progress(index, api, global_evidence_clean);
+    }
     update_current_run_totals(index, state);
 }
 

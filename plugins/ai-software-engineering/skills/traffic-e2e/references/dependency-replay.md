@@ -285,3 +285,11 @@ unordered rules for JSON arrays and Protobuf repeated fields use the same
 coordinator discovery/plan/apply lifecycle as HTTP. Key patterns select rule
 scope, while key bytes, TTL/options and source lanes stay exact. See
 [Redis value rules](../../../../../docs/redis-value-rules.md).
+
+Source-proven SET NX ownership tokens can use a `redis.lock` dependency rule.
+Token-only mismatch witnesses lead to explicit host/port/key-scoped plan/apply;
+source recorded equality identifies single-key EVAL/EVALSHA/DELEX references.
+The rule correlates opaque tokens without UUID or script SHA configuration,
+retains other arguments and finite consumption, and requires fresh Replay.
+It does not interpret Lua or emulate lock contention/expiry. See
+[Redis lock rules](../../../../../docs/redis-lock-rules.md).

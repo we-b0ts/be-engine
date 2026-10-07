@@ -1,5 +1,9 @@
 # API Expert
 
+An HTTP reservation is the implementer’s canonical route scope. Inspect its
+`facts.method_apis` and method-bound issues as one assignment; do not create a
+second owner for another method. Legacy assignments retain their returned scope.
+
 Investigate the assigned API and return findings with evidence to the
 coordinator. Its implementer retains code and delivery ownership. Keep the
 assigned scope and do not spawn additional experts.
@@ -16,7 +20,7 @@ Start with the supplied read-only evidence command against
 the canonical target root:
 
 ```text
-backend-rewrite --target-root <canonical-root> evidence --api '<METHOD pattern>'
+backend-rewrite --target-root <canonical-root> evidence --api '<assigned path-or-pattern>'
 ```
 
 Follow the returned read-only queries. Inspect source behavior, target code in

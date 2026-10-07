@@ -18,7 +18,7 @@ fifth agent role and is never workflow authority.
 | --- | --- | --- | --- |
 | Rewrite engine | `backend-rewrite` and `traffic-e2e` | Workflow state, legal action selection, evidence identity, traffic serialization, verification, and terminal eligibility | Invent task-runtime state or perform source diagnosis |
 | Rewrite coordinator | Main/root `coordinator` task | Execute engine actions, dispatch and reconcile agents, apply coordinator-owned inputs, publish reviewed integration candidates, invoke acceptance, and deliver | Diagnose business source, edit target code, or mark work complete from an agent report |
-| API implementer | `api-implementer` assignment | Diagnose and implement exactly one API work item, run its local review, and return a version-bound handoff | Mutate workflow state, publish to the canonical target, or accept its own work |
+| API implementer | `api-implementer` assignment | Diagnose and implement exactly one API route work item (all included recorded methods), run its local review, and return a version-bound handoff | Mutate workflow state, publish to the canonical target, or accept its own work |
 | Code integrator | `code-integrator` assignment | Prepare one retained integration/review candidate, resolve assigned conflicts, run candidate review, and return a version-bound result | Act as an API implementer, mutate engine state, or report implementation-worker activity |
 | API expert | Engine-requested `api-expert` assignment | Investigate one reserved API read-only and return evidence-backed findings for its existing API implementer | Edit code, own the API, mutate workflow state, or satisfy implementation/acceptance gates |
 
@@ -37,6 +37,21 @@ coordinator; it never creates another implementation owner.
 `work_scope.kind=process_output` assignments are a legacy worker specialization,
 not another core role. External system owners may repair infrastructure, but
 they are outside this agent-role model.
+
+## HTTP Route Work Scope
+
+HTTP implementers are assigned one canonical path/pattern, for example
+`/api/subscriptions/*`, with one worker handle and worktree. The engine derives
+its method contracts from the full recorded case inventory. Do not split this
+work into GET/PUT/DELETE workers or construct `GET|PUT /path` selectors.
+`next`, `status`, `evidence`, worker confirmation and review accept route scopes;
+use the exact scope returned by the engine. A route acceptance replays its
+included methods in one session. Each case keeps its recorded method, and
+`.traffic-e2e/progress.yaml` and the API inventory remain keyed by `METHOD API`.
+A passing method does not complete a failing sibling. Explicit `METHOD API`
+selectors retain precise method verification. Existing method-owned worker
+bindings and review receipts retain their scope until that legacy work ends;
+never silently consolidate owners or reset progress to adopt route workers.
 
 ## Select Your Agent Role
 
@@ -93,6 +108,11 @@ engine roles or action kinds.
 - Recordings and `.traffic-e2e/local/artifacts/` are immutable evidence. Preserve
   engine-generated `progress.yaml`. Do not synthesize evidence, rewrite source
   behavior to manufacture a pass, or replace engine aggregation with scripts.
+- Source-proven Redis lock tokens use the existing dependency-rule plan/apply
+  lifecycle with explicit host, port and key scope. Current dirty evidence
+  exposes token-only candidates; source diagnosis proves random ownership and
+  conditional release. Preserve token correlation, scripts and finite calls;
+  never remove locking or independently ignore token arguments.
 - Target behavior must use normal product code and configuration, never recorded
   results, expected responses, Replay sessions, reports, or private engine state.
 - Only the coordinator executes workflow mutations and formal acceptance.
