@@ -1,6 +1,7 @@
 //! Explicit relative-time translation of matched Redis response copies.
 mod config;
 pub(crate) mod evidence;
+mod timestamp;
 use super::*;
 use chrono::{DateTime, Utc};
 pub use config::{
@@ -50,10 +51,10 @@ impl ResponseShift {
         let mut rule_ids = Vec::new();
         for (id, read) in rules {
             for (path, field) in &read.response_json {
-                ensure!(
-                    payload.pointer(path).and_then(Value::as_i64).is_some(),
-                    "Redis time-shift selected field is missing or is not an integer timestamp"
-                );
+                let value = payload
+                    .pointer(path)
+                    .context("Redis time-shift selected field is missing")?;
+                timestamp::validate(value, field.format)?;
                 ensure!(
                     fields.insert(path.clone(), *field).is_none(),
                     "overlapping Redis time-shift fields"
@@ -75,22 +76,10 @@ impl ResponseShift {
             .context("Redis time-shift offset overflow")?;
         let mut payload = self.payload.clone();
         for (path, field) in &self.fields {
-            let offset = match field.format {
-                RedisTimestampFormat::UnixMilliseconds => offset_ms,
-                RedisTimestampFormat::UnixSeconds => now
-                    .timestamp()
-                    .checked_sub(self.recorded_at.timestamp())
-                    .context("Redis time-shift seconds overflow")?,
-            };
             let value = payload
                 .pointer_mut(path)
                 .context("Redis time-shift field disappeared")?;
-            let shifted = value
-                .as_i64()
-                .context("Redis time-shift requires integer timestamps")?
-                .checked_add(offset)
-                .context("Redis time-shift timestamp overflow")?;
-            *value = Value::from(shifted);
+            *value = timestamp::shift(value, field.format, self.recorded_at, now)?;
         }
         let body = serde_json::to_vec(&payload)?;
         let mut response = format!("${}\r\n", body.len()).into_bytes();

@@ -473,7 +473,8 @@ explicit repository-wide audit.
 
 - `replay/redis/time_shift` owns explicit relative-time translation of matched
   read-response copies. Its `config` child validates GET/HGET selection and
-  timestamp fields; `evidence` verifies source-selected immutable exchanges
+  timestamp fields; `timestamp` owns Unix integer and RFC3339 string validation
+  and translation; `evidence` verifies source-selected immutable exchanges
   against a finalized API attempt without heuristic discovery. Redis delivery
   owns the send-time anchor and successful-use observations; finite matching
   remains unchanged. `policy/feedback/redis_time_shift` owns stale-safe policy

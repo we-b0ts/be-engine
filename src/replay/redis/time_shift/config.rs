@@ -43,6 +43,7 @@ pub enum RelativeTime {
 pub enum RedisTimestampFormat {
     UnixSeconds,
     UnixMilliseconds,
+    Rfc3339,
 }
 
 impl RedisTimeShiftSelector {

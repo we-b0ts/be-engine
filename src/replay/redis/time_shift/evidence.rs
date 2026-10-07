@@ -119,6 +119,6 @@ pub(crate) fn verify(
         "replay_revision":format!("{:x}", Sha256::digest(report_bytes)),
         "matching_exchanges":count, "matched_in_attempt":matched_count,
         "examples":examples, "omitted_examples":count.saturating_sub(20),
-        "does_not_prove":"Selected integer fields do not prove expiry or cache semantics; source proof and fresh Replay are required."
+        "does_not_prove":"Selected timestamp fields do not prove expiry or cache semantics; source proof and fresh Replay are required."
     }))
 }

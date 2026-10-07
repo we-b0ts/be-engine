@@ -43,7 +43,7 @@ pub(super) struct RedisTimeShiftArgs {
     json_pointer: String,
     #[arg(long, value_enum)]
     timestamp_format: RedisTimestampFormat,
-    /// Source cache/expiry computation, timestamp unit and downstream consumers.
+    /// Source cache/expiry computation, timestamp format and downstream consumers.
     #[arg(long)]
     source_evidence: String,
 }
@@ -127,6 +127,41 @@ mod tests {
     struct Cli {
         #[command(flatten)]
         args: RedisTimeShiftArgs,
+    }
+    #[test]
+    fn redis_time_shift_cli_accepts_rfc3339_get_responses() {
+        let cli = Cli::try_parse_from([
+            "test",
+            "--evidence-id",
+            "current",
+            "--rule-id",
+            "session-expiry",
+            "--host",
+            "redis.test",
+            "--port",
+            "6379",
+            "--command",
+            "GET",
+            "--key-prefix",
+            "vnc_session:",
+            "--json-pointer",
+            "/expires_at",
+            "--timestamp-format",
+            "rfc3339",
+            "--source-evidence",
+            "session.py: expires_at is a RFC3339 string compared with UTC now",
+        ])
+        .unwrap();
+        let result = options(cli.args).unwrap();
+        let RewriteDependencyRuleSelector::RedisTimeShift { selector } = result.selector else {
+            panic!("expected a Redis time-shift selector");
+        };
+        assert_eq!(selector.read.command, "GET");
+        assert_eq!(selector.read.hash_field, None);
+        assert_eq!(
+            selector.read.response_json["/expires_at"].format,
+            RedisTimestampFormat::Rfc3339
+        );
     }
     #[test]
     fn redis_time_shift_cli_patterns_and_invalid_combinations() {

@@ -11,6 +11,10 @@ async fn hget(client: &mut TcpStream) -> Value {
         .write_all(b"*3\r\n$4\r\nHGET\r\n$8\r\ntoken_v2\r\n$5\r\n00123\r\n")
         .await
         .unwrap();
+    read_json_response(client).await
+}
+
+async fn read_json_response(client: &mut TcpStream) -> Value {
     let raw = tokio::time::timeout(Duration::from_secs(5), async {
         let mut raw = Vec::new();
         let mut byte = [0];
@@ -31,6 +35,98 @@ async fn hget(client: &mut TcpStream) -> Value {
     .await
     .unwrap();
     serde_json::from_slice(&raw).unwrap()
+}
+
+#[tokio::test]
+async fn redis_time_shift_rfc3339_get_plan_apply_preserves_session_expiry_over_real_tcp() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let case = root.join("apis/sessions/case-1");
+    std::fs::create_dir_all(&case).unwrap();
+    std::fs::write(
+        case.join("request.json"),
+        r#"{"method":"GET","uri":"/sessions/1"}"#,
+    )
+    .unwrap();
+    std::fs::write(case.join("expected-response.json"), "{}").unwrap();
+    std::fs::write(root.join("recording-run.json"), r#"{"status":"completed"}"#).unwrap();
+    let captured = Utc::now() - chrono::Duration::days(1);
+    let expiry = captured + chrono::Duration::hours(1);
+    let value = json!({"expires_at":expiry.to_rfc3339(),"token":"private-token","ordered":[2,1]});
+    let body = value.to_string();
+    let wire = format!("${}\r\n{body}\r\n", body.len());
+    let mut record = redis_dependency(Uuid::new_v4(), 1, "vnc_session:1", wire.as_bytes());
+    record["timestamp"] = json!(captured);
+    let recording = case.join("dependencies.jsonl");
+    std::fs::write(&recording, record.to_string()).unwrap();
+    let immutable = std::fs::read(&recording).unwrap();
+    let command = b"*2\r\n$3\r\nGET\r\n$13\r\nvnc_session:1\r\n";
+    let (addr, state, task) = redis_value_tests::spawn(&case, None).await;
+    assert_eq!(
+        begin_case(&control("begin", "case-1"), state.clone()).await["ok"],
+        true
+    );
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    client.write_all(command).await.unwrap();
+    assert_eq!(read_json_response(&mut client).await, value);
+    assert!(expiry < Utc::now());
+    let report = root.join("replay.json");
+    {
+        let mut replay = state.lock().await;
+        replay.finalized_at = Some(Utc::now());
+        std::fs::write(
+            &report,
+            serde_json::to_vec(&replay.snapshot_report()).unwrap(),
+        )
+        .unwrap();
+    }
+    task.abort();
+    let policy = root.join("verification.yaml");
+    std::fs::write(
+        &policy,
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+    )
+    .unwrap();
+    let selector: RedisTimeShiftSelector = serde_json::from_value(json!({
+        "host":"redis.internal","port":6379,
+        "read":{"command":"GET","key":{"prefix":"vnc_session:"},
+        "response_json":{"/expires_at":{"time":"preserve_relative","format":"rfc3339"}}}
+    }))
+    .unwrap();
+    plan_redis_time_shift(RedisTimeShiftFeedback {
+        policy_path:policy.clone(),case_source:case.clone(),replay_report_path:report,
+        rule_id:"session-expiry".into(),selector,
+        source_evidence:"session.py: expires_at is an RFC3339 UTC expiry set to now + 1h and compared with UTC now; no signature".into(),
+    }).unwrap().apply().unwrap();
+    let (addr, state, task) = redis_value_tests::spawn(&case, Some(policy)).await;
+    assert_eq!(
+        begin_case(&control("begin", "case-1"), state.clone()).await["ok"],
+        true
+    );
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    let before = Utc::now();
+    client.write_all(command).await.unwrap();
+    let actual = read_json_response(&mut client).await;
+    let after = Utc::now();
+    let shifted_expiry =
+        chrono::DateTime::parse_from_rfc3339(actual["expires_at"].as_str().unwrap()).unwrap();
+    assert!(shifted_expiry.signed_duration_since(before) >= chrono::Duration::hours(1));
+    assert!(shifted_expiry.signed_duration_since(after) <= chrono::Duration::hours(1));
+    assert!(actual["expires_at"].as_str().unwrap().ends_with("+00:00"));
+    assert_eq!(actual["token"], value["token"]);
+    assert_eq!(actual["ordered"], value["ordered"]);
+    assert_eq!(
+        end_case(&control("end", "case-1"), state.clone()).await["dirty"],
+        false
+    );
+    let report = serde_json::to_value(state.lock().await.snapshot_report()).unwrap();
+    assert_eq!(
+        report["redis"]["time_shifts"][0]["rule_id"],
+        "session-expiry"
+    );
+    assert!(!report.to_string().contains("private-token"));
+    assert_eq!(std::fs::read(recording).unwrap(), immutable);
+    task.abort();
 }
 fn control(command: &str, case: &str) -> ReplayControlRequest {
     serde_json::from_value(json!({"command":command,"case_id":case})).unwrap()

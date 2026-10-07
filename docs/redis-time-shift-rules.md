@@ -32,6 +32,19 @@ backend-rewrite --target-root /path/to/target dependency-rule plan redis time-sh
 backend-rewrite --target-root /path/to/target dependency-rule apply <plan-id>
 ```
 
+RFC3339 expiry strings, such as `expires_at` serialized with an explicit
+`+00:00` offset, use the same source-proven plan/apply flow:
+
+```bash
+backend-rewrite --target-root /path/to/target dependency-rule plan redis time-shift \
+  --evidence-id <current-dirty-cluster-evidence-id> --rule-id session-expiry \
+  --host redis.internal --port 6379 --command GET --key-prefix 'vnc_session:' \
+  --json-pointer /expires_at --timestamp-format rfc3339 \
+  --source-evidence 'session.py: expires_at is an RFC3339 UTC string set to now + TTL; UTC now gates reuse; this field is not signed'
+```
+
+Apply the returned plan, then run fresh Replay through its returned next command.
+
 Plan requires a finalized current API attempt with at least one selected,
 successfully matched response. It checks all selected exchanges within the same
 completed standard recording, including earlier cases and Global evidence.
@@ -82,9 +95,17 @@ An exact value cannot be combined with a pattern. Broader patterns require
 source proof that all selected responses share the stated time semantics.
 
 JSON Pointers are exact (including ordinary array indices and escaped keys).
-Wildcard expansion is not supported. Formats are `unix_seconds` and
-`unix_milliseconds`, requiring signed-64-bit integer values. Each plan selects
-one field; a response_json map or multiple non-overlapping rules can select
+Wildcard expansion is not supported. Formats `unix_seconds` and
+`unix_milliseconds` require signed-64-bit integer values. Format `rfc3339`
+requires a valid timestamp string with `Z` or an explicit timezone offset;
+timezone-free strings and numeric values are rejected. For example:
+
+```yaml
+response_json:
+  /expires_at: {time: preserve_relative, format: rfc3339}
+```
+
+Each plan selects one field; a response_json map or multiple non-overlapping rules can select
 several fields. Timestamp format and preserve_relative remain explicit.
 
 ## Runtime contract
@@ -101,6 +122,10 @@ response use the same time anchor. The engine always transforms an immutable
 response copy, with no cumulative shifting. Original relative expiry/future
 validity is preserved; timestamps are never reset to now. The application's
 expiry duration remains in normal product code and need not be configured here.
+RFC3339 strings use the full elapsed duration, including submillisecond precision,
+and retain their fixed timezone offset. UTC `Z` and explicit `+00:00` notation
+are preserved; fractional digits are rendered as needed to preserve the shifted
+instant. Results outside RFC3339's four-digit year range fail explicitly.
 
 Only selected JSON scalar values change semantically; credentials, arrays and
 other fields retain their values. RESP bulk lengths are rebuilt. JSON duplicate
