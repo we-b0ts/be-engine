@@ -1,4 +1,4 @@
-//! Standalone Recorder configuration with an optional source traffic policy overlay.
+//! Online deployment settings over optional project Recorder configuration.
 
 use crate::config::SourceTrafficPolicyConfig;
 use crate::{
@@ -12,6 +12,13 @@ use std::{ffi::OsString, net::SocketAddr, path::PathBuf, time::Duration};
 
 #[derive(Args)]
 pub struct OnlineRecordingOptions {
+    /// Reuse the Recorder section and source traffic policy from project.yaml.
+    #[arg(
+        long = "config",
+        env = "TRAFFIC_E2E_PROJECT_CONFIG",
+        value_name = "PATH"
+    )]
+    pub config_path: Option<PathBuf>,
     #[arg(
         long,
         env = "TRAFFIC_E2E_ONLINE_LISTEN",
@@ -46,8 +53,8 @@ pub struct OnlineRecordingOptions {
         default_value = "http://127.0.0.1:8080"
     )]
     pub source_origin: String,
-    #[arg(long, env = "TRAFFIC_E2E_SOURCE_READY_PATH", default_value = "/")]
-    pub ready_path: String,
+    #[arg(long, env = "TRAFFIC_E2E_SOURCE_READY_PATH")]
+    pub ready_path: Option<String>,
     #[arg(
         long,
         env = "TRAFFIC_E2E_DATA_ROOT",
@@ -66,11 +73,11 @@ pub struct OnlineRecordingOptions {
     pub dns_upstream: Option<SocketAddr>,
     #[arg(long, default_value = "300", value_parser = clap::value_parser!(u64).range(1..))]
     pub startup_timeout_seconds: u64,
-    #[arg(long, default_value = "30", value_parser = clap::value_parser!(u64).range(1..))]
-    pub request_timeout_seconds: u64,
-    /// Maximum published cases per API pattern; default is effectively unlimited.
-    #[arg(long, env = "TRAFFIC_E2E_CASE_LIMIT", default_value_t = std::num::NonZeroUsize::new(usize::MAX).unwrap())]
-    pub case_limit: std::num::NonZeroUsize,
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    pub request_timeout_seconds: Option<u64>,
+    /// Override the project case limit; without project configuration it is unlimited.
+    #[arg(long, env = "TRAFFIC_E2E_CASE_LIMIT")]
+    pub case_limit: Option<std::num::NonZeroUsize>,
     /// Development only: disable fixed-identity DNS/fake-IP interception.
     #[arg(long)]
     pub no_interception: bool,
@@ -155,20 +162,40 @@ impl OnlineRecordingOptions {
                 && origin.port_u16().unwrap_or(80) != self.listen.port(),
             "Source port must differ from both HTTP listeners"
         );
-        let mut config = AppConfig {
-            artifacts: Some(ArtifactsConfig {
-                root_dir: self.data_root.join(crate::repository::LOCAL_ARTIFACTS_ROOT),
-            }),
-            ..AppConfig::default()
+        let mut config = if let Some(path) = &self.config_path {
+            AppConfig::load_with_source_traffic_policy(path, self.source_traffic_policy.as_deref())?
+        } else {
+            let mut config = AppConfig::default();
+            config.http_gateway.per_api_case_limits.default = usize::MAX;
+            config.http_gateway.request_timeout_ms = 30_000;
+            config.recording.encrypt_request_headers =
+                vec!["authorization".to_owned(), "cookie".to_owned()];
+            config.recording.redact_headers = vec!["proxy-authorization".to_owned()];
+            config.recording.shutdown_case_drain_timeout_ms = 60_000;
+            config.dns_mock.enabled = true;
+            config.tcp_gateway.enabled = true;
+            config.udp_gateway.enabled = true;
+            config.udp_gateway.forward = true;
+            config.dns_mock.upstream_dns = system_dns();
+            if let Some(path) = &self.source_traffic_policy {
+                SourceTrafficPolicyConfig::load(path)?.apply_to(&mut config)?;
+            }
+            config
         };
+        config.artifacts = Some(ArtifactsConfig {
+            root_dir: self.data_root.join(crate::repository::LOCAL_ARTIFACTS_ROOT),
+        });
         config.http_gateway.enabled = true;
         config.http.enabled = false;
+        config.http_gateway.rules.clear();
+        config.http_gateway.exclude_rules.clear();
         config.http_gateway.listen = self.recorder_listen;
         config.http_gateway.matched_upstream = self.source_origin.clone();
-        config.http_gateway.request_timeout_ms = self
-            .request_timeout_seconds
-            .checked_mul(1000)
-            .context("request timeout too large")?;
+        if let Some(seconds) = self.request_timeout_seconds {
+            config.http_gateway.request_timeout_ms = seconds
+                .checked_mul(1000)
+                .context("request timeout too large")?;
+        }
         config.http_gateway.fallback_mode = HttpGatewayFallbackMode::FixedResponse;
         config.http_gateway.fixed_response = Some(HttpGatewayFixedResponseConfig {
             status: 404,
@@ -176,31 +203,32 @@ impl OnlineRecordingOptions {
             ..Default::default()
         });
         config.http_gateway.ready.enabled = true;
-        config.http_gateway.ready.path = self.ready_path.clone();
-        config.http_gateway.per_api_case_limits.default = self.case_limit.get();
-        config.recording.encrypt_request_headers =
-            vec!["authorization".to_owned(), "cookie".to_owned()];
-        config.recording.redact_headers = vec!["proxy-authorization".to_owned()];
-        config.recording.shutdown_case_drain_timeout_ms = 60_000;
+        if let Some(path) = &self.ready_path {
+            config.http_gateway.ready.path = path.clone();
+        }
+        if let Some(limit) = self.case_limit {
+            config.http_gateway.per_api_case_limits.default = limit.get();
+        }
         let recorder_data = self.data_root.join(crate::repository::LOCAL_DATA_ROOT);
         config.tls.ca_cert_path = recorder_data.join("traffic-recorder-ca.pem");
         config.tls.ca_key_path = recorder_data.join("traffic-recorder-ca-key.pem");
-        config.dns_mock.enabled = !self.no_interception;
-        config.tcp_gateway.enabled = !self.no_interception;
-        config.udp_gateway.enabled = !self.no_interception;
-        config.udp_gateway.forward = true;
-        config.dns_mock.upstream_dns = self.dns_upstream.unwrap_or_else(system_dns);
+        if self.no_interception {
+            config.dns_mock.enabled = false;
+            config.tcp_gateway.enabled = false;
+            config.udp_gateway.enabled = false;
+        } else {
+            ensure!(
+                config.dns_mock.enabled && config.tcp_gateway.enabled,
+                "online interception requires enabled DNS and TCP gateways"
+            );
+        }
+        if let Some(upstream) = self.dns_upstream {
+            config.dns_mock.upstream_dns = upstream;
+        }
         config.dns_mock.registry_path = self
             .data_root
             .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
             .join("fake_dns_registry.json");
-        if let Some(path) = &self.source_traffic_policy {
-            SourceTrafficPolicyConfig::load(path)?
-                .apply_to(&mut config)
-                .with_context(|| {
-                    format!("failed to apply source traffic policy {}", path.display())
-                })?;
-        }
         config
             .validate()
             .context("invalid online recording configuration")?;

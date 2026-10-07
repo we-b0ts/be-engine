@@ -1,4 +1,4 @@
-//! Standalone online recording composition. No project loader or API selectors.
+//! Online Source/Recorder composition with no rewrite orchestration or API selectors.
 
 mod options;
 mod proxy;
@@ -32,6 +32,12 @@ pub async fn run(options: OnlineRecordingOptions) -> Result<()> {
     );
     process::prepare_fixed_identity()?;
     let config = options.config()?;
+    if let Some(path) = &options.config_path {
+        info!(path = %path.display(), case_path_patterns = config.http_gateway.case_path_patterns.len(),
+            post_ready_settle_ms = config.recording.post_ready_settle_ms,
+            post_ready_max_wait_ms = config.recording.post_ready_max_wait_ms,
+            "online recording project Recorder configuration loaded");
+    }
     if let Some(path) = &options.source_traffic_policy {
         info!(
             path = %path.display(),
@@ -80,7 +86,7 @@ pub async fn run(options: OnlineRecordingOptions) -> Result<()> {
                 tcp_port: config.tcp_gateway.listen.port(),
                 udp_port: config.udp_gateway.listen.port(),
                 tcp: true,
-                udp: true,
+                udp: config.udp_gateway.enabled,
             },
         )?)
     };
@@ -94,7 +100,7 @@ pub async fn run(options: OnlineRecordingOptions) -> Result<()> {
         reservations,
         format!("http://{}", options.recorder_listen).parse()?,
         options.scope.clone(),
-        Duration::from_secs(options.request_timeout_seconds),
+        Duration::from_millis(config.http_gateway.request_timeout_ms),
         config.recording.max_body_bytes,
     );
     let (stop_adapter, adapter_stopped) = watch::channel(false);

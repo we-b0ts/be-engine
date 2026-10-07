@@ -250,6 +250,13 @@ pub struct TlsConfig {
 
 impl AppConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        Self::load_with_source_traffic_policy(path, None)
+    }
+
+    pub fn load_with_source_traffic_policy(
+        path: impl AsRef<Path>,
+        policy_path: Option<&Path>,
+    ) -> Result<Self> {
         let path = path.as_ref();
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config {}", path.display()))?;
@@ -261,10 +268,13 @@ impl AppConfig {
                     path.display()
                 )
             })?;
-        let rules_path = source_traffic_policy::resolve_from_project_config(
-            path,
-            &reference.project.recording.source_traffic_policy,
-        )?;
+        let rules_path = match policy_path {
+            Some(path) => path.to_owned(),
+            None => source_traffic_policy::resolve_from_project_config(
+                path,
+                &reference.project.recording.source_traffic_policy,
+            )?,
+        };
         let rules = SourceTrafficPolicyConfig::load(rules_path)?;
         rules.apply_to(&mut config)?;
         config

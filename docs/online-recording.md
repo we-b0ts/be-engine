@@ -3,14 +3,17 @@
 `recording-online` is an optional, independent application over `traffic_e2e`.
 It starts a co-located Source as UID/GID 998, starts Recorder, and registers a
 reachable HTTP address in coordination Redis after readiness and the existing
-post-ready settle window. It does not load `project.yaml`, inspect Git, apply
-API selectors, or start the rewrite coordinator. Gateway route configuration
-selects traffic; all methods and paths arriving with valid admission are eligible.
+post-ready settle window. Optional `--config PATH` / `TRAFFIC_E2E_PROJECT_CONFIG`
+reuses the Recorder section of `project.yaml` and its source traffic policy.
+The app does not inspect Git or start the rewrite coordinator. Gateway route
+configuration selects traffic; all methods and paths arriving with valid admission
+are eligible.
 An optional `--source-traffic-policy PATH` /
 `TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY` applies the existing source traffic policy
 overlay at startup, including HTTP case patterns, allowed unused HTTP hosts,
 HTTP response rewrites and process-owned dependency rules. This does not filter
-inbound methods or paths. Without a policy, HTTP cases use their literal URI paths.
+inbound methods or paths. An explicit policy overrides the project's policy reference
+and is applied once. Without project configuration or a policy, HTTP cases use literal URI paths.
 
 Build with the opt-in feature. The gateway SDK uses published
 `brz-http-gateway = 0.1.6`; Redis uses published `brz-redis`.
@@ -40,7 +43,13 @@ Source `127.0.0.1:8080`. Recorder and Source listeners must use different
 loopback ports. `--advertise-url` / `TRAFFIC_E2E_ONLINE_URL` is required and
 must be the HTTP origin reachable by gateways, including any Docker port mapping.
 
-The existing per-API case limit remains enabled. Its default is `usize::MAX`
+The existing per-API case limit remains enabled. With project configuration,
+Recorder settings, including limits, redaction, dependency timing, DNS strategies,
+and post-ready observation, are reused. HTTP include/exclude rules are cleared
+to admit every valid gateway request. Online deployment still supplies its
+internal listener, Source origin, fixed 404 fallback and persistent mount paths;
+explicit readiness, request-timeout and case-limit options override project values.
+Without project configuration the per-API default is `usize::MAX`
 (`u64::MAX` on the supported 64-bit deployment). `--case-limit N` or
 `TRAFFIC_E2E_CASE_LIMIT=N` applies a smaller positive limit. After an API hits
 its limit, Recorder returns the configured 404 so the gateway can use its
@@ -48,10 +57,11 @@ original path. There is no duration limit; SIGTERM/SIGINT ends the session.
 
 | Parameter / environment | Default | Purpose |
 | --- | --- | --- |
+| `--config` / `TRAFFIC_E2E_PROJECT_CONFIG` | unset | Read-only project YAML; reuses Recorder configuration and policy, without target or rewrite orchestration |
 | `--listen` / `TRAFFIC_E2E_ONLINE_LISTEN` | `0.0.0.0:4080` | Public adapter |
 | `--recorder-listen` / `TRAFFIC_E2E_RECORDER_LISTEN` | `127.0.0.1:4081` | Internal Recorder |
 | `--source-origin` / `TRAFFIC_E2E_SOURCE_ORIGIN` | `http://127.0.0.1:8080` | Source origin |
-| `--ready-path` / `TRAFFIC_E2E_SOURCE_READY_PATH` | `/` | Source readiness, expects 200 |
+| `--ready-path` / `TRAFFIC_E2E_SOURCE_READY_PATH` | project value or `/` | Override Source readiness path |
 | `--redis-url` / `TRAFFIC_E2E_RECORDING_REDIS_URL` | exported `REDIS_URL` | Coordination Redis; supports password/default user and DB |
 | `--prefix` / `TRAFFIC_E2E_RECORDING_PREFIX` | `recording` | Shared coordination prefix |
 | `--scope` / `TRAFFIC_E2E_RECORDING_SCOPE` | `all-apis` | One shared request slot |
@@ -61,14 +71,25 @@ original path. There is no duration limit; SIGTERM/SIGINT ends the session.
 | `--source-workdir` / `TRAFFIC_E2E_SOURCE_WORKDIR` | `/app` | Source working directory |
 | `--source-traffic-policy` / `TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY` | unset | Optional policy file, loaded and validated once before Source startup and discovery registration |
 | `--startup-timeout-seconds` | `300` | Startup/readiness deadline |
-| `--request-timeout-seconds` | `30` | Request forwarding/response deadline |
-| `--dns-upstream` / `TRAFFIC_E2E_DNS_UPSTREAM` | first system resolver | Real DNS upstream before fake-IP projection |
+| `--request-timeout-seconds` | project value or `30` seconds | Override request forwarding/response deadline |
+| `--dns-upstream` / `TRAFFIC_E2E_DNS_UPSTREAM` | project value or first system resolver | Override real DNS upstream before fake-IP projection |
+
+The post-ready cap is separate from the startup failure deadline. For example,
+`recorder.recording.post_ready_max_wait_ms: 30000` allows case admission after at most
+30 seconds of post-ready observation even when periodic Redis snapshot requests
+prevent a quiet period. Source startup and bootstrap dependency sealing are
+separate phases. `recorder.recording.post_ready_settle_ms` controls the quiet
+period, with a 15-second minimum for nonzero values. A missing or invalid
+explicit project configuration fails before Source startup and registration.
+Mount project YAML read-only alongside its policy and restart after edits.
 
 Keep project-specific policy outside the image and bind-mount it read-only:
 
 ```bash
 --mount "type=bind,src=$PWD/.traffic-e2e/source-traffic-policy.yaml,dst=/etc/traffic-e2e/source-traffic-policy.yaml,readonly" \
---env TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY=/etc/traffic-e2e/source-traffic-policy.yaml
+--mount "type=bind,src=$PWD/.traffic-e2e/project.yaml,dst=/etc/traffic-e2e/project.yaml,readonly" \
+--env TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY=/etc/traffic-e2e/source-traffic-policy.yaml \
+--env TRAFFIC_E2E_PROJECT_CONFIG=/etc/traffic-e2e/project.yaml
 ```
 
 An explicitly configured missing, non-regular or invalid policy fails startup;

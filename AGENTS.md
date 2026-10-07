@@ -20,7 +20,8 @@ configuration starts from `config/project.example.yaml`. Repository scripts
 are development or manual host-trust tools only.
 
 The optional `online-recording` feature adds `recording-online`, a standalone
-Source/Recorder app with Redis discovery and completion and no project loader;
+Source/Recorder app with Redis discovery, completion and optional project
+Recorder configuration;
 see [docs/online-recording.md](docs/online-recording.md).
 
 ## Read First
