@@ -19,6 +19,8 @@ use tokio::{
 };
 
 mod policy;
+mod project;
+mod readiness;
 mod sse;
 
 #[test]
