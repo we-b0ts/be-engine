@@ -118,6 +118,25 @@ impl ReplayPolicyRuntime {
         context: &MysqlPolicyContext<'_>,
         now: DateTime<Utc>,
     ) -> Option<Result<DependencyRuleDecision, String>> {
+        self.mysql_sql_values_decision(context, now, false)
+    }
+
+    // Prepare exposes metadata without consuming evidence or binding unknown
+    // parameters. Execution still validates every selected time and stable value.
+    pub(in crate::replay) fn mysql_sql_values_metadata_matches(
+        &self,
+        context: &MysqlPolicyContext<'_>,
+    ) -> bool {
+        self.mysql_sql_values_decision(context, Utc::now(), true)
+            .is_some_and(|decision| decision.is_ok())
+    }
+
+    fn mysql_sql_values_decision(
+        &self,
+        context: &MysqlPolicyContext<'_>,
+        now: DateTime<Utc>,
+        metadata: bool,
+    ) -> Option<Result<DependencyRuleDecision, String>> {
         if !self.loaded.document.dependency_rules.iter().any(|rule| {
             rule.mysql
                 .as_ref()
@@ -147,7 +166,12 @@ impl ReplayPolicyRuntime {
         }
         Some((|| {
             let recorded = materialized(context.recorded_sql, context.recorded)?;
-            let actual = materialized(context.sql, context.actual)?;
+            let actual = if metadata {
+                bounded_tokens(context.sql.ok_or("MySQL SQL is absent")?)
+                    .ok_or("invalid or oversized MySQL SQL")?
+            } else {
+                materialized(context.sql, context.actual)?
+            };
             let mut selected = BTreeMap::new();
             let mut decision = DependencyRuleDecision::default();
             // Track absolute token positions so different templates cannot
@@ -171,6 +195,9 @@ impl ReplayPolicyRuntime {
                                 "overlapping MySQL sql_values at token {position}"
                             ));
                         }
+                        if metadata && actual[position] == Token::Placeholder {
+                            continue;
+                        }
                         let times = selected_times(&recorded[position], &actual[position], field)?;
                         for selected in &times {
                             parse_time(&selected.source, &selected.rule)
@@ -192,7 +219,9 @@ impl ReplayPolicyRuntime {
                     .zip(&actual)
                     .enumerate()
                     .any(|(position, (source, target))| {
-                        !selected.contains_key(&position) && source != target
+                        !selected.contains_key(&position)
+                            && source != target
+                            && !(metadata && *target == Token::Placeholder && source.is_value())
                     })
             {
                 return Err("stable MySQL SQL tokens or values differ".into());

@@ -257,6 +257,16 @@ and no new `Hardcode-Source-Evidence` commit trailers.
 The engine checks this automatically; do not manufacture another handoff or
 rerun checks merely to publish progress metadata.
 
+Changes confined to `.traffic-e2e/source-traffic-policy.yaml` or
+`.traffic-e2e/verification.yaml` preserve an accepted code review receipt when
+its other freshness conditions still hold. These files are excluded from review
+code identity and the purpose baseline comparison, but remain part of the traffic
+verification fingerprint: policy edits invalidate prior E2E/Comparison evidence
+and require fresh verification. The persistent-configuration commit gate still
+requires these edits to be committed before continuing verification. Receipts
+created before this verification-policy exclusion may need one replacement
+review because their stored code fingerprints include that file.
+
 After external changes are published on the canonical migration branch, prepare
 the retained integration worktree at that current commit for a global quality
 refresh. Preserve divergent or unfinished work; do not create an empty merge to
@@ -1835,9 +1845,10 @@ query confirming that worker is missing.
 The committed `pr_base` revision captured by purpose confirmation is the trusted
 review baseline. An unchanged baseline proceeds directly through recording/Replay
 and can complete without a source-review receipt, including when an old or broken
-`source-review.json` remains on disk. Committing engine progress files does not
-create a source-review obligation. New committed, staged, working-tree or untracked
-source/configuration changes require a current accepted integration review before
+`source-review.json` remains on disk. Committing engine progress files or changing
+only source traffic or verification policy does not create a source-review
+obligation. Other committed, staged, working-tree or untracked source/configuration
+changes require a current accepted integration review before
 verification and final delivery. Pending handoff/finding admission retains its
 ordinary review contract; the exemption does not admit an unpublished candidate.
 Source review and engine-standard quality commands belong to the delegated integrator,
@@ -2440,8 +2451,9 @@ startup declarations; Breeze SDK use and Vintage response rewrite rules remain
 independent of this startup contract.
 
 Changes confined to `.traffic-e2e/source-traffic-policy.yaml` (including case
-pattern discovery) do not require code review or invalidate an accepted code
-review receipt. The policy remains part of the configuration commit gate and
+pattern discovery) or `.traffic-e2e/verification.yaml` do not require code review
+or invalidate an otherwise current accepted code review receipt. Both policies
+remain part of the configuration commit gate and
 traffic verification fingerprints; changed source, startup inputs and other
 configuration still require the usual review. Candidate publication still
 requires the exact reviewed commit.

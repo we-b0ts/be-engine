@@ -11,6 +11,11 @@ pub(super) trait CommandExchangeScope {
     fn command(&self) -> &str;
     fn is_available(&self) -> bool;
     fn is_consumed(&self) -> bool;
+    /// Ordering admission can precede successful response delivery. Protocols
+    /// opt in explicitly; final consumption still tracks delivery and failures.
+    fn satisfies_lane_order(&self) -> bool {
+        self.is_consumed()
+    }
     fn preserves_connection_order(&self) -> bool {
         true
     }
@@ -175,7 +180,7 @@ where
     }
     exchanges.iter().enumerate().find_map(|(index, other)| {
         (other.preserves_connection_order()
-            && !other.is_consumed()
+            && !other.satisfies_lane_order()
             && other.source() == exchange.source()
             && other.case_id() == exchange.case_id()
             && other.connection_id() == exchange.connection_id()

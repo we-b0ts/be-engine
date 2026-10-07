@@ -45,6 +45,27 @@ pub(super) fn cross_protocol_matches(
     forms.is_some_and(|(recorded, actual)| recorded == actual)
 }
 
+/// Prepared statements can put equal scalar values in different placeholder
+/// positions. This is exact token equality after binding, including subqueries;
+/// it authorizes no predicate, scalar-category or value changes.
+pub(super) fn prepared_values_match(
+    recorded: &RecordedMysqlExchange,
+    command: &str,
+    sql: &str,
+    params: Option<&[RecordedMysqlValue]>,
+) -> bool {
+    if recorded.command != "COM_STMT_EXECUTE" || command != "COM_STMT_EXECUTE" {
+        return false;
+    }
+    let forms = recorded.sql.as_deref().and_then(|recorded_sql| {
+        Some((
+            materialize(recorded_sql, recorded.params.as_deref().unwrap_or_default())?,
+            materialize(sql, params.unwrap_or_default())?,
+        ))
+    });
+    forms.is_some_and(|(recorded, actual)| recorded == actual)
+}
+
 /// Only actual parameter positions are wildcards. Constants, table names,
 /// predicates, projections and LIMIT clauses must still match.
 pub(super) fn metadata_matches(template: &str, recorded: &str) -> bool {
@@ -56,6 +77,21 @@ pub(super) fn metadata_matches(template: &str, recorded: &str) -> bool {
             .iter()
             .zip(&recorded)
             .all(|(t, r)| t == r || (*t == Token::Placeholder && r.is_value()))
+}
+
+pub(super) fn prepared_metadata_matches(recorded: &RecordedMysqlExchange, sql: &str) -> bool {
+    let forms = recorded.sql.as_deref().and_then(|source| {
+        Some((
+            materialize(source, recorded.params.as_deref().unwrap_or_default())?,
+            tokens(sql)?,
+        ))
+    });
+    forms.is_some_and(|(source, actual)| {
+        source.len() == actual.len()
+            && actual.iter().zip(&source).all(|(actual, source)| {
+                actual == source || (*actual == Token::Placeholder && source.is_value())
+            })
+    })
 }
 
 fn bound_value(value: &RecordedMysqlValue) -> Option<Token> {

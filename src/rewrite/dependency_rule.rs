@@ -90,6 +90,9 @@ pub enum RewriteDependencyRuleSelector {
     RedisLock {
         selector: crate::RedisLockSelector,
     },
+    RedisPublish {
+        selector: crate::RedisPublishSelector,
+    },
     RedisUnordered {
         selector: crate::RedisUnorderedSelector,
     },
@@ -213,6 +216,7 @@ pub(super) fn plan(
         record.spec,
         RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
             | RewriteDependencyRuleSpec::RedisLock { .. }
+            | RewriteDependencyRuleSpec::RedisPublish { .. }
             | RewriteDependencyRuleSpec::RedisUnordered { .. }
             | RewriteDependencyRuleSpec::RedisTimeShift { .. }
             | RewriteDependencyRuleSpec::RedisCrossCase { .. }
@@ -384,6 +388,7 @@ pub(super) fn apply(
             | RewriteDependencyRuleSpec::HttpUnordered { .. }
             | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
             | RewriteDependencyRuleSpec::RedisLock { .. }
+            | RewriteDependencyRuleSpec::RedisPublish { .. }
             | RewriteDependencyRuleSpec::RedisUnordered { .. }
             | RewriteDependencyRuleSpec::RedisTimeShift { .. }
             | RewriteDependencyRuleSpec::RedisCrossCase { .. }
@@ -501,6 +506,7 @@ fn validate_plan_evidence(
             | RewriteDependencyRuleSpec::HttpUnordered { .. }
             | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
             | RewriteDependencyRuleSpec::RedisLock { .. }
+            | RewriteDependencyRuleSpec::RedisPublish { .. }
             | RewriteDependencyRuleSpec::RedisUnordered { .. }
             | RewriteDependencyRuleSpec::RedisTimeShift { .. }
             | RewriteDependencyRuleSpec::RedisCrossCase { .. }

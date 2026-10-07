@@ -138,3 +138,6 @@ pub use feedback::{
 };
 
 pub use feedback::{RedisLockFeedback, RedisLockPlan, RedisLockReport, plan_redis_lock};
+pub use feedback::{
+    RedisPublishFeedback, RedisPublishPlan, RedisPublishReport, plan_redis_publish,
+};

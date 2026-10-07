@@ -480,4 +480,5 @@ pub(crate) use evidence::query_http_cross_case_candidates;
 pub(crate) use evidence::query_http_unordered_candidates;
 
 pub(crate) use evidence::query_redis_lock_candidates;
+pub(crate) use evidence::query_redis_publish_candidates;
 pub(crate) use evidence::query_redis_unordered_candidates;

@@ -453,6 +453,7 @@ impl ReplayRuntime {
             memcached::observe_recorded_policy_exchanges(policy, &memcached);
             redis.value_rules = policy.redis_value_rules();
             redis.configure_lock_tokens(&policy.redis_lock_token_rules());
+            redis.configure_publish(policy.redis_publish_rules());
             redis.configure_time_shift(&policy.redis_time_shift_rules())?;
             policy.reject_http_ignore_overlap(&http_ignore_query_params)?;
         }
@@ -962,5 +963,8 @@ pub use policy::{
 };
 
 pub use policy::{RedisLockFeedback, RedisLockPlan, RedisLockReport, plan_redis_lock};
+pub use policy::{RedisPublishFeedback, RedisPublishPlan, RedisPublishReport, plan_redis_publish};
 pub(crate) use redis::lock as redis_lock;
 pub use redis::lock::RedisLockSelector;
+pub(crate) use redis::publish as redis_publish;
+pub use redis::publish::RedisPublishSelector;

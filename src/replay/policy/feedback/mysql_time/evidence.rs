@@ -1,9 +1,41 @@
-//! Correlate SQL time slots with finalized replay and immutable write evidence.
+//! Correlate SQL time slots with finalized replay and immutable SQL evidence.
 use super::*;
 use crate::replay::policy::config::MysqlTimeValueRule;
 use crate::replay::policy::matcher::mysql_values::{selected_times, values};
 use crate::replay::policy::value::parse_time;
 use serde_json::Value;
+
+fn complete_response(event: &Value) -> bool {
+    if !event["parse_warnings"]
+        .as_array()
+        .is_some_and(Vec::is_empty)
+        || event
+            .get("outcome")
+            .is_some_and(|outcome| outcome != "response")
+    {
+        return false;
+    }
+    match event["response"]["status"].as_str() {
+        Some("ok" | "error") => true,
+        Some("resultset") => {
+            if !event["response"]["rows"].is_array() {
+                return false;
+            }
+            let Ok(response) = serde_json::from_value::<crate::replay::mysql::RecordedMysqlResponse>(
+                event["response"].clone(),
+            ) else {
+                return false;
+            };
+            !response.rows_truncated
+                && !response.columns.is_empty()
+                && response
+                    .rows
+                    .iter()
+                    .all(|row| row.len() == response.columns.len())
+        }
+        _ => false,
+    }
+}
 
 fn identity(s: &MysqlTimeSelector, event: &Value, recorded: bool) -> bool {
     let host = if recorded {
@@ -125,11 +157,7 @@ pub(super) fn validate(
             {
                 continue;
             }
-            if !event["parse_warnings"]
-                .as_array()
-                .is_some_and(Vec::is_empty)
-                || !matches!(event["response"]["status"].as_str(), Some("ok" | "error"))
-            {
+            if !complete_response(&event) {
                 continue;
             }
             let mut validated = 0;
@@ -192,6 +220,6 @@ pub(super) fn validate(
         }
     }
     anyhow::bail!(
-        "SQL time rule requires a matching recorded write and unmatched target write differing only in all selected current-time locations"
+        "SQL time rule requires a matching complete recorded statement and unmatched target statement differing only in all selected current-time locations"
     )
 }

@@ -19,9 +19,11 @@ pub(super) fn query_response(
 ) -> Option<RecordedMysqlResponse> {
     let recorded_sql = record.sql.as_deref()?;
     let forms = match (record.command.as_str(), command) {
-        ("COM_QUERY", "COM_QUERY") | ("COM_STMT_EXECUTE", "COM_STMT_EXECUTE") => {
-            (tokens(recorded_sql)?, tokens(sql)?)
-        }
+        ("COM_QUERY", "COM_QUERY") => (tokens(recorded_sql)?, tokens(sql)?),
+        ("COM_STMT_EXECUTE", "COM_STMT_EXECUTE") => (
+            sql_match::materialize(recorded_sql, record.params.as_deref().unwrap_or_default())?,
+            sql_match::materialize(sql, params.unwrap_or_default())?,
+        ),
         ("COM_QUERY", "COM_STMT_EXECUTE") => {
             (tokens(recorded_sql)?, sql_match::materialize(sql, params?)?)
         }
@@ -60,16 +62,13 @@ pub(super) fn statement_columns(
     if !matches!(record.command.as_str(), "COM_QUERY" | "COM_STMT_EXECUTE") {
         return None;
     }
-    Some(
-        mapping(
-            record,
-            sql,
-            &tokens(record.sql.as_deref()?)?,
-            &tokens(sql)?,
-            true,
-        )?
-        .columns,
-    )
+    let recorded_sql = record.sql.as_deref()?;
+    let recorded_tokens = if record.command == "COM_STMT_EXECUTE" {
+        sql_match::materialize(recorded_sql, record.params.as_deref().unwrap_or_default())?
+    } else {
+        tokens(recorded_sql)?
+    };
+    Some(mapping(record, sql, &recorded_tokens, &tokens(sql)?, true)?.columns)
 }
 
 fn same_column(a: &DirectColumn, b: &DirectColumn) -> bool {

@@ -1,6 +1,6 @@
 # MySQL SQL time rules
 
-Runtime-generated timestamps in INSERT, UPDATE and DELETE can be validated with
+Runtime-generated timestamps in SELECT, INSERT, UPDATE and DELETE can be validated with
 explicit `dependency_rules.mysql.sql_values` rules. One rule can atomically
 select multiple scalar SQL slots and exact JSON Pointer fields inside a string
 slot. These cover text literals, bound parameters and prepared statements with
@@ -56,12 +56,21 @@ and username selectors remain supported, but the time-rule planner generates
 only database/SQL scope. Source-code proof stays in the plan report and
 coordinator plan record, rather than the runtime configuration.
 
-Templates are limited to one write, 64 KiB and 4096 tokens. Executable comments
+Templates are limited to one statement, 64 KiB and 4096 tokens. Executable comments
 and optimizer hints remain unsupported. Quoted `?` does not create a slot;
 `*` is a SQL token, not a glob. Functions cannot replace scalar slots. Legacy
 `params` rules retain their behavior and cannot be combined with `sql_values`
-in one rule. Overlapping dynamic rules fail. SELECT compatibility remains under
-its existing metadata/projection contract.
+in one rule. Overlapping dynamic rules fail. SELECT time rules replay the recorded
+columns and rows, including COUNT queries and prepared-statement metadata. A
+count query and a row query need separate templates even when both use slot zero.
+For a moving cutoff such as `now - 24 hours`, set `offset: -24h`; stable filters,
+ordering and limits remain exact.
+
+Ordinary queries with no dynamic values need no time rule. Text queries and
+prepared statements with bound, inline or mixed scalar values match by exact
+tokens after binding, including `IN (SELECT ...)` subqueries. Prepared metadata
+uses the same recorded bound values to resolve result columns. This does not
+reorder or simplify subquery predicates; types and stable values remain exact.
 
 ## Coordinator plan/apply
 
@@ -90,11 +99,12 @@ Plan requires source-code proof and uses current active API evidence for the
 correlation, without adding an API selector to the generated rule. Optional
 `--target-host`/`--target-port` and `--username` filter the evidence lookup only.
 Source and target evidence must still have the same endpoint, database and user.
-It correlates an unmatched target write with an immutable recorded write in the
+It correlates an unmatched target statement with an immutable recorded statement in the
 same case. Every selected time must differ, parse and fall in the captured replay
 interval plus its configured offset/tolerance, while all unselected SQL and JSON
 values remain equal. Wrong keys, malformed source times, parse warnings,
-unfinished replay and unrelated APIs cannot authorize the plan. The preview
+unfinished replay and unrelated APIs cannot authorize the plan. SELECT resultsets
+must have complete columns and rows, with no truncation or client termination. The preview
 includes the policy diff and a case id.
 
 Apply edits only `dependency_rules` in `.traffic-e2e/verification.yaml`. It does

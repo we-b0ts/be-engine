@@ -7,7 +7,10 @@ use anyhow::{Context, Result, ensure};
 mod cache;
 mod engine;
 
-const SOURCE_POLICY_PATHSPEC: &str = ":(exclude).traffic-e2e/source-traffic-policy.yaml";
+const TRAFFIC_POLICY_PATHSPECS: &[&str] = &[
+    ":(exclude).traffic-e2e/source-traffic-policy.yaml",
+    ":(exclude).traffic-e2e/verification.yaml",
+];
 
 const RUNTIME_PROGRESS_PATHSPECS: &[&str] = &[
     ":(exclude).traffic-e2e/progress.yaml",
@@ -26,7 +29,7 @@ pub(super) fn repository_fingerprint(target_root: &Path) -> Result<String> {
     Ok(fingerprint)
 }
 
-/// Review identity excludes acquisition policy, while verification retains it.
+/// Review identity excludes traffic policy, while verification retains it.
 pub(super) fn review_fingerprint(target_root: &Path) -> Result<String> {
     runtime_inputs_fingerprint(target_root, repository_files_hash(target_root, true)?)
 }
@@ -91,7 +94,7 @@ fn directory_files_hash(target_root: &Path, review: bool) -> Result<Fnv1a> {
     paths_args.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
     paths_args.push(crate::config::regression::GIT_PATHSPEC);
     if review {
-        paths_args.push(SOURCE_POLICY_PATHSPEC);
+        paths_args.extend_from_slice(TRAFFIC_POLICY_PATHSPECS);
     }
     let listed = git_bytes(target_root, &paths_args)?;
     let mut paths = listed
@@ -109,7 +112,7 @@ fn directory_files_hash(target_root: &Path, review: bool) -> Result<Fnv1a> {
 }
 
 /// Compare a purpose's committed baseline with the current tracked and untracked
-/// files. Acquisition policy, progress publication and private runtime are not code changes.
+/// files. Traffic policy, progress publication and private runtime are not code changes.
 pub(super) fn matches_revision(target_root: &Path, revision: &str) -> Result<bool> {
     for directory in crate::e2e_run::resolve_managed_directories(target_root)? {
         if !directory_matches_revision(&directory.root, revision)? {
@@ -132,7 +135,7 @@ fn directory_matches_revision(target_root: &Path, revision: &str) -> Result<bool
         crate::internal_runtime::LOCAL_GIT_PATHSPEC,
         crate::config::regression::GIT_PATHSPEC,
     ];
-    diff.push(SOURCE_POLICY_PATHSPEC);
+    diff.extend_from_slice(TRAFFIC_POLICY_PATHSPECS);
     diff.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
     if !git_bytes(target_root, &diff)?.is_empty() {
         return Ok(false);
@@ -147,7 +150,7 @@ fn directory_matches_revision(target_root: &Path, revision: &str) -> Result<bool
         crate::internal_runtime::LOCAL_GIT_PATHSPEC,
         crate::config::regression::GIT_PATHSPEC,
     ];
-    untracked.push(SOURCE_POLICY_PATHSPEC);
+    untracked.extend_from_slice(TRAFFIC_POLICY_PATHSPECS);
     untracked.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
     Ok(git_bytes(target_root, &untracked)?.is_empty())
 }
@@ -435,7 +438,13 @@ mod tests {
     }
 
     #[test]
-    fn source_policy_changes_affect_verification_but_not_review() {
+    fn traffic_policy_changes_affect_verification_but_not_review() {
+        for policy_name in ["source-traffic-policy.yaml", "verification.yaml"] {
+            assert_traffic_policy_fingerprints(policy_name);
+        }
+    }
+
+    fn assert_traffic_policy_fingerprints(policy_name: &str) {
         let repository = tempfile::tempdir().unwrap();
         let root = repository.path();
         fs::create_dir_all(root.join(".traffic-e2e")).unwrap();
@@ -450,7 +459,7 @@ mod tests {
         let code = code_fingerprint(root).unwrap();
         let review = review_fingerprint(root).unwrap();
         let verification = repository_fingerprint(root).unwrap();
-        let policy = root.join(".traffic-e2e/source-traffic-policy.yaml");
+        let policy = root.join(".traffic-e2e").join(policy_name);
         fs::write(&policy, "version: 2\n").unwrap();
         let with_policy = repository_fingerprint(root).unwrap();
         for stage in ["untracked", "staged", "committed", "modified", "deleted"] {

@@ -16,7 +16,9 @@ mod or_tests;
 mod predicate_tests;
 mod projection_tests;
 mod rollback_tests;
+mod select_time_tests;
 mod sql_values_tests;
+mod subquery_tests;
 mod tuple_tests;
 
 fn exchange(sql: &str, response: Value) -> Value {

@@ -43,6 +43,59 @@ fn fixture() -> (tempfile::TempDir, MysqlTimeRuleFeedback) {
 }
 
 #[test]
+fn select_sql_time_plan_requires_complete_same_case_resultsets() {
+    for mutation in [
+        "valid",
+        "truncated",
+        "missing_columns",
+        "short_row",
+        "missing_rows",
+        "client_terminated",
+        "stable_filter",
+    ] {
+        let (temp, mut feedback) = fixture();
+        feedback.selector.sql =
+            "SELECT count(*) AS total FROM errors WHERE created_at>? AND project_id=?".into();
+        feedback.selector.time_values[0].offset = "-24h".into();
+        let mut source = json!({
+            "event_type":"mysql_exchange", "target_host":"db.internal", "target_port":3306,
+            "database":"app", "username":"user", "command":"COM_QUERY",
+            "sql":"SELECT count(*) AS total FROM errors WHERE created_at>'2020-01-01 00:00:00' AND project_id=7",
+            "parse_warnings":[], "response":{"status":"resultset", "columns":[{"name":"total", "family":"integer","sql_type":"BIGINT"}], "rows":[[{"kind":"integer","value":3}]]}
+        });
+        match mutation {
+            "truncated" => source["response"]["rows_truncated"] = json!(true),
+            "missing_columns" => source["response"]["columns"] = json!([]),
+            "short_row" => source["response"]["rows"] = json!([[]]),
+            "missing_rows" => {
+                source["response"].as_object_mut().unwrap().remove("rows");
+            }
+            "client_terminated" => source["outcome"] = json!("client_terminated"),
+            _ => {}
+        }
+        fs::write(
+            temp.path().join("case/dependencies.jsonl"),
+            source.to_string(),
+        )
+        .unwrap();
+        let mut report: Value =
+            serde_json::from_slice(&fs::read(&feedback.replay_report_path).unwrap()).unwrap();
+        report["unmatched_queries"][0]["sql"] = json!(feedback.selector.sql);
+        report["unmatched_queries"][0]["params"][0]["value"] = json!("2026-09-06 12:00:01");
+        if mutation == "stable_filter" {
+            report["unmatched_queries"][0]["params"][1]["value"] = json!(8);
+        }
+        fs::write(&feedback.replay_report_path, report.to_string()).unwrap();
+        let plan = plan_mysql_time_rule(feedback);
+        if mutation == "valid" {
+            plan.unwrap().apply().unwrap();
+        } else {
+            assert!(plan.is_err(), "{mutation}");
+        }
+    }
+}
+
+#[test]
 fn sql_time_plan_validates_evidence_and_preserves_other_policy_sections() {
     let (_temp, feedback) = fixture();
     let path = feedback.policy_path.clone();

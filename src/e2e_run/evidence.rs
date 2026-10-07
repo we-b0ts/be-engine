@@ -419,6 +419,11 @@ pub(crate) fn query_redis_lock_candidates(context: E2eRunContext, api: &str) -> 
     Ok(crate::replay::redis_lock::evidence::discover(&state.replay_report)
         .unwrap_or_else(|_| serde_json::json!({"candidates": [], "omitted_candidates": 0, "requires_fresh_replay": true, "unavailable": "Redis lock evidence is unavailable; rerun Replay"})))
 }
+pub(crate) fn query_redis_publish_candidates(context: E2eRunContext, api: &str) -> Result<Value> {
+    let state = finalized_focused_state(context, api)?;
+    Ok(crate::replay::redis_publish::evidence::discover(&state.replay_report)
+        .unwrap_or_else(|_| serde_json::json!({"candidates": [], "omitted_candidates": 0, "requires_fresh_replay": true, "unavailable": "Redis PUBLISH evidence is unavailable; rerun Replay"})))
+}
 
 pub(crate) fn query_http_unordered_candidates(context: E2eRunContext, api: &str) -> Result<Value> {
     let state = finalized_focused_state(context, api)?;

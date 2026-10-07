@@ -8,13 +8,20 @@ use crate::replay::report::command::CommandMatchDiagnostic;
 
 impl RedisReplayState {
     fn arguments_match(&self, exchange: &ReplayExchange, args: &[Vec<u8>]) -> bool {
-        self.lock_tokens
-            .arguments_match(exchange, &self.exchanges, args)
-            .unwrap_or_else(|| value::arguments_match(exchange, args, &self.value_rules))
+        self.publish_rules
+            .arguments_match(exchange, args)
+            .unwrap_or_else(|| {
+                self.lock_tokens
+                    .arguments_match(exchange, &self.exchanges, args)
+                    .unwrap_or_else(|| value::arguments_match(exchange, args, &self.value_rules))
+            })
     }
 
     pub(in crate::replay) fn configure_lock_tokens(&mut self, rules: &[lock::LockTokenRule]) {
         self.lock_tokens = lock::LockTokens::prepare(&self.exchanges, rules);
+    }
+    pub(in crate::replay) fn configure_publish(&mut self, rules: Vec<publish::PublishRule>) {
+        self.publish_rules.configure(rules);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -53,6 +60,16 @@ impl RedisReplayState {
                 return Err(lane_blocked_diagnostic(&self.exchanges, candidate, blocker));
             }
             PreferredMatch::NotFound => {
+                self.capture_publish_candidates(
+                    active_case_id,
+                    target,
+                    connection,
+                    resp_version,
+                    database,
+                    username,
+                    command,
+                    args,
+                );
                 self.capture_lock_candidates(
                     active_case_id,
                     target,
@@ -122,6 +139,7 @@ impl RedisReplayState {
         };
         let mut rule_ids = value::used_rules(&self.exchanges[index], args, &self.value_rules);
         rule_ids.extend(self.lock_tokens.claim(&self.exchanges[index], args));
+        rule_ids.extend(self.publish_rules.claim(&self.exchanges[index], args));
         let requires_binding =
             self.connection_scopes
                 .claim(&self.exchanges[index], active_case_id, connection);
@@ -261,6 +279,16 @@ impl CommandExchangeScope for ReplayExchange {
 
     fn is_consumed(&self) -> bool {
         self.status.is_consumed() || (self.reusable_snapshot && self.matched_once)
+    }
+
+    fn satisfies_lane_order(&self) -> bool {
+        // A case request has been claimed under the replay mutex before its
+        // response is delivered. A pooled next request may arrive after bytes
+        // reach the client but before delivery bookkeeping reacquires the mutex.
+        // Unclaimed, failed and client-termination exchanges remain blockers.
+        self.is_consumed()
+            || (self.source == ReplaySource::Case
+                && self.status == ReplayExchangeStatus::Responding)
     }
 
     fn preserves_connection_order(&self) -> bool {
