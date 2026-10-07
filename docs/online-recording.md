@@ -6,6 +6,11 @@ reachable HTTP address in coordination Redis after readiness and the existing
 post-ready settle window. It does not load `project.yaml`, inspect Git, apply
 API selectors, or start the rewrite coordinator. Gateway route configuration
 selects traffic; all methods and paths arriving with valid admission are eligible.
+An optional `--source-traffic-policy PATH` /
+`TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY` applies the existing source traffic policy
+overlay at startup, including HTTP case patterns, allowed unused HTTP hosts,
+HTTP response rewrites and process-owned dependency rules. This does not filter
+inbound methods or paths. Without a policy, HTTP cases use their literal URI paths.
 
 Build with the opt-in feature. The gateway SDK uses published
 `brz-http-gateway = 0.1.6`; Redis uses published `brz-redis`.
@@ -54,9 +59,26 @@ original path. There is no duration limit; SIGTERM/SIGINT ends the session.
 | `--data-root` / `TRAFFIC_E2E_DATA_ROOT` | `/data/traffic-e2e` | Persistent evidence, encryption key and CA |
 | `--artifact-owner` / `TRAFFIC_E2E_ARTIFACT_OWNER` | invoking controller owner | Numeric host UID:GID for private storage and finalized runs; explicit values require root |
 | `--source-workdir` / `TRAFFIC_E2E_SOURCE_WORKDIR` | `/app` | Source working directory |
+| `--source-traffic-policy` / `TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY` | unset | Optional policy file, loaded and validated once before Source startup and discovery registration |
 | `--startup-timeout-seconds` | `300` | Startup/readiness deadline |
 | `--request-timeout-seconds` | `30` | Request forwarding/response deadline |
 | `--dns-upstream` / `TRAFFIC_E2E_DNS_UPSTREAM` | first system resolver | Real DNS upstream before fake-IP projection |
+
+Keep project-specific policy outside the image and bind-mount it read-only:
+
+```bash
+--mount "type=bind,src=$PWD/.traffic-e2e/source-traffic-policy.yaml,dst=/etc/traffic-e2e/source-traffic-policy.yaml,readonly" \
+--env TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY=/etc/traffic-e2e/source-traffic-policy.yaml
+```
+
+An explicitly configured missing, non-regular or invalid policy fails startup;
+there is no fallback to literal-path grouping on errors. Policy overlays must
+also be compatible with the standalone Recorder configuration; for example,
+Breeze capture entries require a matching DNS bypass strategy. Restart the
+container after changing policy; files are not watched or reloaded during a run.
+With `/api/teams/*/skills`, requests for different team IDs share the
+`apis/api-teams-wildcard-skills/` group and its case limit. Previously published
+recordings retain their existing groups.
 
 `--no-interception` is for local adapter tests only. HTTP request and response
 bodies are buffered. Primary `text/event-stream` responses use a bounded 50 ms
@@ -107,6 +129,22 @@ cookie request headers are encrypted using a persistent key in
 `<data-root>/.traffic-e2e/local/secrets/traffic-e2e-enc.sec`. Persist the entire
 data root across restarts. Source cannot read private evidence, the encryption
 key, or CA private key.
+
+Recorder state follows the managed project's local layout beneath `<data-root>`:
+the fake DNS registry is `.traffic-e2e/local/artifacts/fake_dns_registry.json`,
+and the recording CA pair is `.traffic-e2e/local/data/traffic-recorder-ca.pem`
+and `traffic-recorder-ca-key.pem`. Existing files are loaded; an absent registry
+or CA pair is initialized by the engine. A partially missing or invalid CA pair
+fails startup. To reuse host project state, mount its `local/data`,
+`local/artifacts` and `local/secrets` directories at these container locations.
+Temporary Source trust and control files live in the container's `runtime/`
+directory and are removed on normal shutdown.
+
+Replay reads `dependencies.jsonl` and the finalized `recording-network.json`
+manifest, creates its own DNS mapping and uses a Replay-session CA. It does not
+read the recording fake DNS registry or require the recording CA private key.
+Sharing Recorder state keeps subsequent recordings consistent; it is not a
+prerequisite for Replay.
 
 For a host bind mount, pass the invoking host user's numeric UID:GID as
 `TRAFFIC_E2E_ARTIFACT_OWNER` when creating the container. The controller stays

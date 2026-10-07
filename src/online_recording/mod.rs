@@ -32,6 +32,13 @@ pub async fn run(options: OnlineRecordingOptions) -> Result<()> {
     );
     process::prepare_fixed_identity()?;
     let config = options.config()?;
+    if let Some(path) = &options.source_traffic_policy {
+        info!(
+            path = %path.display(),
+            case_path_patterns = config.http_gateway.case_path_patterns.len(),
+            "online recording source traffic policy loaded"
+        );
+    }
     let url: hyper::Uri = options
         .advertise_url
         .parse()
