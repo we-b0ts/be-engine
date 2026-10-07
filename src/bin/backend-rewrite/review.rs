@@ -25,7 +25,8 @@ enum ReviewCommand {
         #[arg(
             long,
             conflicts_with = "process_output",
-            required_unless_present_any = ["integration", "process_output"]
+            required_unless_present_any = ["integration", "process_output"],
+            value_parser = super::parse_api_scope
         )]
         api: Option<String>,
         #[arg(long)]
@@ -60,7 +61,7 @@ enum ReviewCommand {
         report: Option<PathBuf>,
         #[arg(long, env = "BACKEND_REWRITE_REVIEW_FINDING")]
         finding: String,
-        /// api:METHOD /path or process-output:ID, selected after checking ownership.
+        /// api:/path or process-output:ID, selected after checking ownership.
         #[arg(long, env = "BACKEND_REWRITE_REVIEW_OWNER")]
         owner: String,
     },
@@ -113,11 +114,13 @@ pub(super) fn run(root: PathBuf, args: ReviewArgs, pretty: bool) -> Result<()> {
             report,
         } => {
             let scope = if let Some(api) = owner.strip_prefix("api:") {
-                RewriteWorkScope::Api { api: api.into() }
+                RewriteWorkScope::Api {
+                    api: super::parse_api_scope(api)?,
+                }
             } else if let Some(id) = owner.strip_prefix("process-output:") {
                 RewriteWorkScope::ProcessOutput { id: id.into() }
             } else {
-                anyhow::bail!("owner must be api:METHOD /path or process-output:ID");
+                anyhow::bail!("owner must be api:/path or process-output:ID");
             };
             super::print_json(
                 &traffic_e2e::rework_rewrite_review_with_report(root, &finding, scope, report)?,

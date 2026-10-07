@@ -225,9 +225,9 @@ pub use replay::{
 };
 pub use rewrite::{
     IntegrationHandoffSelection, JwtRulePlanOptions, RewriteAction, RewriteActionEnvelope,
-    RewriteApiInventoryDetails, RewriteApiInventoryView, RewriteApiProgress, RewriteApiSelector,
-    RewriteApiStatus, RewriteApplicableRulePlanner, RewriteCapturePreview,
-    RewriteCaseDependenciesOptions, RewriteCaseDependenciesReport,
+    RewriteApiInventoryDetails, RewriteApiInventoryItem, RewriteApiInventoryView,
+    RewriteApiProgress, RewriteApiSelector, RewriteApiStatus, RewriteApplicableRulePlanner,
+    RewriteCapturePreview, RewriteCaseDependenciesOptions, RewriteCaseDependenciesReport,
     RewriteCaseDependencyProtocolDetail, RewriteCaseDependencyTarget,
     RewriteCaseDependencyTargetSummary, RewriteCaseGroupRebuildOptions,
     RewriteCaseGroupRebuildReport, RewriteCasePatternApplyOptions, RewriteCommandSpec,

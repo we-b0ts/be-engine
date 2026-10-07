@@ -34,7 +34,7 @@ fn recording_execute_conflict_returns_pollable_wait_report() {
             "/target",
             "status",
             "--api",
-            "GET /api"
+            "/api"
         ]
     );
 }
@@ -120,7 +120,7 @@ fn fresh_request_invalidates_evidence_and_returns_opaque_managed_action() {
     assert!(state.recording_input_case_source.is_none());
     assert_eq!(
         summary,
-        "fresh standard recording requested (user_requested) for GET /api; the request reason requires fresh external live traffic"
+        "fresh standard recording requested (user_requested) for /api; the request reason requires fresh external live traffic"
     );
 }
 
@@ -190,9 +190,18 @@ fn pending_request_is_idempotent_and_requires_explicit_replacement() {
 
 #[test]
 fn omitted_api_requests_all_configured_traffic() {
-    assert!(requested_recording_apis(None).is_empty());
-    let api = "GET /api/widgets/*".parse::<RecordingApi>().unwrap();
-    assert_eq!(requested_recording_apis(Some(&api)), ["GET /api/widgets/*"]);
+    let mut state = crate::rewrite::test_state();
+    inventory::install(
+        &mut state,
+        vec!["GET /api/widgets/*".into(), "PUT /api/widgets/*".into()],
+    )
+    .unwrap();
+    assert!(requested_recording_apis(&state, None).unwrap().is_empty());
+    let api = "/api/widgets/*".parse::<RewriteApiSelector>().unwrap();
+    assert_eq!(
+        requested_recording_apis(&state, Some(&api)).unwrap(),
+        ["GET /api/widgets/*", "PUT /api/widgets/*"]
+    );
 }
 
 #[test]

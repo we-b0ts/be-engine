@@ -4,21 +4,11 @@ use super::*;
 pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
     let route_batch = matches!(options.api, Some(RewriteApiSelector::Route(_)));
     let api = match options.api.as_ref() {
-        Some(RewriteApiSelector::Method(api)) => Some(api.clone()),
+        Some(RewriteApiSelector::Motan(api)) => Some(api.clone()),
         Some(selector @ RewriteApiSelector::Route(_)) => {
             let state = RewriteStore::new(&options.target_root)?.load()?.context(
                 "route selection requires a recorded API inventory; start with next without --api",
             )?;
-            let RewriteApiSelector::Route(path) = selector else {
-                unreachable!()
-            };
-            ensure!(
-                !state
-                    .worker_bindings
-                    .keys()
-                    .any(|key| key.contains(' ') && api_selector::route(key) == path),
-                "route {path} retains legacy method-owned workers; continue with their METHOD API commands without transferring ownership implicitly"
-            );
             Some(api_selector::select(&state, selector)?)
         }
         None => None,
@@ -39,6 +29,18 @@ struct AtomicNextOptions {
     process_output: Option<String>,
     source_route: Option<String>,
     route_batch: bool,
+}
+
+impl AtomicNextOptions {
+    fn uses_route_batch(&self, state: &RewriteState) -> bool {
+        self.route_batch
+            || self.api.is_none()
+                && self.process_output.is_none()
+                && !state.api.is_empty()
+                && !api_selector::work_scope(state, &state.api)
+                    .binding_key()
+                    .contains(' ')
+    }
 }
 
 async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvelope> {
@@ -132,11 +134,6 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
     }
     let mut state = match store.load()? {
         Some(mut state) => {
-            if options.route_batch && !state.route_worker_scopes {
-                state.route_worker_scopes = true;
-                state.bump();
-                store.save(&state)?;
-            }
             let migrated = inventory::initialize_legacy(&mut state);
             if !state.api_inventory.is_empty() {
                 process_outputs::ensure_inventory_matches(&state, &project.process_outputs)?;
@@ -263,14 +260,14 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
                 options.process_output.is_none(),
                 "--process-output requires an initialized workflow"
             );
-            let (api, source_route, recording_apis) = match options.api {
+            let (api, source_route, recording_apis) = match options.api.as_ref() {
                 Some(api) => {
-                    let source_route = match options.source_route {
-                        Some(route) => route,
+                    let source_route = match options.source_route.as_ref() {
+                        Some(route) => route.clone(),
                         None if !api.is_dynamic() => api.path_pattern().to_string(),
-                        None => return Ok(action::source_route_required(&target_root, &api)),
+                        None => return Ok(action::source_route_required(&target_root, api)),
                     };
-                    inventory::validate_source_route(&api, &source_route)?;
+                    inventory::validate_source_route(api, &source_route)?;
                     (api.to_string(), source_route, vec![api.to_string()])
                 }
                 None => {
@@ -428,7 +425,8 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
                 &state,
                 traffic_operation::TrafficOperationKind::Replay,
             )?;
-            run_and_transition(&target_root, &mut state, options.route_batch).await?;
+            let route_batch = options.uses_route_batch(&state);
+            run_and_transition(&target_root, &mut state, route_batch).await?;
             store.save(&state)?;
             Ok(action::for_state(&target_root, &state))
         }
@@ -463,7 +461,8 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
                 &state,
                 traffic_operation::TrafficOperationKind::Replay,
             )?;
-            run_and_transition(&target_root, &mut state, options.route_batch).await?;
+            let route_batch = options.uses_route_batch(&state);
+            run_and_transition(&target_root, &mut state, route_batch).await?;
             store.save(&state)?;
             Ok(action::for_state(&target_root, &state))
         }
@@ -491,7 +490,8 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
                 &state,
                 traffic_operation::TrafficOperationKind::Replay,
             )?;
-            run_and_transition(&target_root, &mut state, options.route_batch).await?;
+            let route_batch = options.uses_route_batch(&state);
+            run_and_transition(&target_root, &mut state, route_batch).await?;
             store.save(&state)?;
             Ok(action::for_state(&target_root, &state))
         }

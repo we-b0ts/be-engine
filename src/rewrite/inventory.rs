@@ -1,8 +1,7 @@
 use anyhow::{Context, Result, ensure};
 
 use super::model::{
-    RewriteApiInventoryDetails, RewriteApiInventoryView, RewriteApiProgress, RewriteApiStatus,
-    RewritePhase, RewriteSliceState, RewriteState,
+    RewriteApiProgress, RewriteApiStatus, RewritePhase, RewriteSliceState, RewriteState,
 };
 use crate::RecordingApi;
 
@@ -10,6 +9,8 @@ mod selection;
 pub(super) use selection::{activate_requested, can_switch_api};
 mod source_route;
 pub(super) use source_route::{bind_options, validate_source_route};
+mod views;
+pub(super) use views::{details, view};
 
 pub(super) const RECORDED_API_INVENTORY_SCOPE: &str = "recorded_api_inventory";
 
@@ -467,70 +468,6 @@ pub(super) fn restore_recorded_progress(
     load_pending(state, active)
 }
 
-fn status_for_view(state: &RewriteState, item: &RewriteApiProgress) -> RewriteApiStatus {
-    if item.status != RewriteApiStatus::Skipped
-        && item.api == state.api
-        && state.phase == RewritePhase::SystemRepairRequired
-    {
-        RewriteApiStatus::SystemRepairRequired
-    } else {
-        item.status
-    }
-}
-
-pub(super) fn view(state: &RewriteState) -> RewriteApiInventoryView {
-    RewriteApiInventoryView {
-        total: state.api_inventory.len(),
-        skipped: state
-            .api_inventory
-            .iter()
-            .filter(|item| item.status == RewriteApiStatus::Skipped)
-            .count(),
-        completed: state
-            .api_inventory
-            .iter()
-            .filter(|item| status_for_view(state, item) == RewriteApiStatus::Complete)
-            .count(),
-        pending: state
-            .api_inventory
-            .iter()
-            .filter(|item| status_for_view(state, item) == RewriteApiStatus::Pending)
-            .count(),
-        active: state
-            .api_inventory
-            .iter()
-            .filter(|item| status_for_view(state, item) == RewriteApiStatus::Active)
-            .count(),
-        implementation_required: state
-            .api_inventory
-            .iter()
-            .filter(|item| status_for_view(state, item) == RewriteApiStatus::ImplementationRequired)
-            .count(),
-        system_repair_required: state
-            .api_inventory
-            .iter()
-            .filter(|item| status_for_view(state, item) == RewriteApiStatus::SystemRepairRequired)
-            .count(),
-        awaiting_recording_refresh: state
-            .api_inventory
-            .iter()
-            .filter(|item| {
-                status_for_view(state, item) == RewriteApiStatus::AwaitingRecordingRefresh
-            })
-            .count(),
-        revalidation_pending: state
-            .api_inventory
-            .iter()
-            .filter(|item| status_for_view(state, item) == RewriteApiStatus::RevalidationPending)
-            .count(),
-        current_index: state.current_api_index,
-        current_api: state
-            .current_api_index
-            .and_then(|index| state.api_inventory.get(index))
-            .map(|item| item.api.clone()),
-    }
-}
-
 pub(super) fn next_pending_api_for_concurrent_work(state: &RewriteState) -> Option<&str> {
     state
         .api_inventory
@@ -545,23 +482,6 @@ pub(super) fn has_unattempted_api(state: &RewriteState) -> bool {
             .api_inventory
             .iter()
             .any(|item| item.status == RewriteApiStatus::Pending && item.attempts == 0)
-}
-
-pub(super) fn details(state: &RewriteState) -> RewriteApiInventoryDetails {
-    let mut items = state.api_inventory.clone();
-    if let Some(index) = state.current_api_index
-        && let Some(current) = items.get_mut(index)
-    {
-        current.status = status_for_view(state, current);
-        current.source_route = (!state.source_route.is_empty()).then(|| state.source_route.clone());
-        current.attempts = state.attempts.len();
-        current.e2e_current = state.e2e_current;
-        current.comparison_current = state.comparison_current;
-    }
-    RewriteApiInventoryDetails {
-        summary: view(state),
-        items,
-    }
 }
 
 fn load_pending(state: &mut RewriteState, index: usize) -> Result<()> {
@@ -663,10 +583,7 @@ mod tests {
 
         assert!(!initialize_legacy(&mut state));
         assert_eq!(state.recording_apis, ["GET /a"]);
-        assert_eq!(
-            crate::rewrite::action::workflow_view(&state).scope,
-            "GET /a"
-        );
+        assert_eq!(crate::rewrite::action::workflow_view(&state).scope, "/a");
     }
 
     #[test]
@@ -691,7 +608,7 @@ mod tests {
         assert_eq!(inventory.pending, 0);
         assert_eq!(inventory.implementation_required, 0);
         assert_eq!(inventory.current_index, Some(1));
-        assert_eq!(inventory.current_api.as_deref(), Some("POST /b"));
+        assert_eq!(inventory.current_api.as_deref(), Some("/b"));
         let serialized = serde_json::to_value(&inventory).unwrap();
         assert!(serialized.get("items").is_none());
 
@@ -805,7 +722,7 @@ mod tests {
         super::super::worker::confirm_current_for_test(&mut state);
         assert!(complete_current_and_advance(&mut state).unwrap());
         assert_eq!(state.api_inventory[0].status, RewriteApiStatus::Complete);
-        assert!(state.worker_bindings.contains_key("GET /a"));
+        assert!(state.worker_bindings.contains_key("/a"));
 
         assert!(defer_completed_for_target_change(&mut state, "target-r1").unwrap());
         assert_eq!(
@@ -820,7 +737,7 @@ mod tests {
                 .as_deref(),
             Some("target-r0")
         );
-        assert!(state.worker_bindings.contains_key("GET /a"));
+        assert!(state.worker_bindings.contains_key("/a"));
 
         state.target_fingerprint = Some("target-r1".to_string());
         state.e2e_current = true;

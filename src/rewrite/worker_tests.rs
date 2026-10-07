@@ -15,7 +15,7 @@ use crate::rewrite::{
 
 fn api_scope(state: &RewriteState) -> RewriteWorkScope {
     RewriteWorkScope::Api {
-        api: state.api.clone(),
+        api: crate::rewrite::api_selector::public_api(&state.api).to_string(),
     }
 }
 
@@ -322,7 +322,7 @@ fn explicit_transfer_replaces_one_owner_and_confirms_the_current_dispatch() {
     state.active_issue = Some(issue("issue-a", 1, "target-a"));
     confirm_current_for_test(&mut state);
     let old_binding_id = binding_id(&state);
-    let old_fingerprint = state.worker_bindings["GET /api"]
+    let old_fingerprint = state.worker_bindings["/api"]
         .agent_handle_fingerprint
         .clone();
 
@@ -339,7 +339,7 @@ fn explicit_transfer_replaces_one_owner_and_confirms_the_current_dispatch() {
         dispatch_view(&state, None).state,
         RewriteWorkerDispatchState::Confirmed
     );
-    let binding = &state.worker_bindings["GET /api"];
+    let binding = &state.worker_bindings["/api"];
     assert_eq!(binding.transfer_generation, 1);
     assert_eq!(binding.agent_name.as_deref(), Some("replacement-worker"));
     let transfer = binding.last_transfer.as_ref().unwrap();
@@ -354,7 +354,7 @@ fn transfer_rejects_a_handle_owned_by_another_api() {
     let other_fingerprint =
         fingerprint::id(&["rewrite-subagent-handle-v1", "other-api-runtime-handle"]);
     state.worker_bindings.insert(
-        "POST /other".to_string(),
+        "/other".to_string(),
         RewriteWorkerBinding {
             review_assignment: None,
             review_report: None,
@@ -394,10 +394,7 @@ fn transfer_entrypoint_requires_approval_and_current_handle() {
     let store = RewriteStore::new(target.path()).unwrap();
     let mut state = implementation_state_with_inventory(false);
     confirm_current_for_test(&mut state);
-    let current_handle = state.worker_bindings["GET /api"]
-        .agent_handle
-        .clone()
-        .unwrap();
+    let current_handle = state.worker_bindings["/api"].agent_handle.clone().unwrap();
     store.save(&state).unwrap();
     let options = |previous_handle: &str, caller_approved| RewriteWorkerTransferOptions {
         target_root: target.path().to_path_buf(),
@@ -412,7 +409,7 @@ fn transfer_entrypoint_requires_approval_and_current_handle() {
     let error = transfer(options(&current_handle, false)).unwrap_err();
     assert!(error.to_string().contains("explicit user approval"));
     assert_eq!(
-        store.load().unwrap().unwrap().worker_bindings["GET /api"].transfer_generation,
+        store.load().unwrap().unwrap().worker_bindings["/api"].transfer_generation,
         0
     );
 
@@ -421,7 +418,7 @@ fn transfer_entrypoint_requires_approval_and_current_handle() {
 
     transfer(options(&current_handle, true)).unwrap();
     let persisted = store.load().unwrap().unwrap();
-    assert_eq!(persisted.worker_bindings["GET /api"].transfer_generation, 1);
+    assert_eq!(persisted.worker_bindings["/api"].transfer_generation, 1);
     assert!(current_is_confirmed(&persisted));
 }
 
@@ -487,7 +484,7 @@ fn confirmed_worker_advances_the_next_pending_api_before_waiting() {
             "/target",
             "next",
             "--api",
-            "POST /other"
+            "/other"
         ]))
     );
 }
@@ -520,7 +517,7 @@ fn status_reconstructs_post_dispatch_pending_api_advance() {
     assert_eq!(status["action"]["kind"], "advance_required");
     assert_eq!(
         status.pointer("/action/commands/advance/argv/5"),
-        Some(&serde_json::json!("POST /other"))
+        Some(&serde_json::json!("/other"))
     );
 }
 
@@ -544,9 +541,7 @@ fn status_recovers_confirmation_and_advance_across_repeated_worker_dispatches() 
         confirm(RewriteWorkerConfirmOptions {
             worktree: Some(target.path().to_path_buf()),
             target_root: target.path().to_path_buf(),
-            work_scope: RewriteWorkScope::Api {
-                api: "GET /api".into(),
-            },
+            work_scope: RewriteWorkScope::Api { api: "/api".into() },
             agent_handle: "persistent-worker".into(),
             agent_name: None,
         })?;
@@ -630,7 +625,7 @@ fn status_recovers_confirmation_and_advance_across_repeated_worker_dispatches() 
             target.path(),
             "next",
             "--api",
-            "POST /other"
+            "/other"
         ])
     );
     assert_eq!(
@@ -669,7 +664,7 @@ fn api_progress(api: &str, status: RewriteApiStatus) -> RewriteApiProgress {
 
 fn assert_confirmation_error(error: anyhow::Error, operation: &str) {
     let message = error.to_string();
-    assert!(message.contains("API GET /api"), "{message}");
+    assert!(message.contains("API /api"), "{message}");
     assert!(message.contains(operation), "{message}");
     assert!(
         message.contains("action.commands.confirm_worker"),

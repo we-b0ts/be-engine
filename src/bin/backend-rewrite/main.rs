@@ -9,9 +9,9 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_e2e::{
-    RecordingApi, ResponseBodyCodec, ResponseBodyJoinedStringPath, ResponseBodyUnorderedPath,
-    ResponseRuleKind, RewriteCaseDependenciesOptions, RewriteCasePatternApplyOptions,
-    RewriteContext, RewriteNextOptions, RewriteRecordingKind, RewriteRecordingReason,
+    ResponseBodyCodec, ResponseBodyJoinedStringPath, ResponseBodyUnorderedPath, ResponseRuleKind,
+    RewriteCaseDependenciesOptions, RewriteCasePatternApplyOptions, RewriteContext,
+    RewriteNextOptions, RewriteRecordingKind, RewriteRecordingReason,
     RewriteRecordingRequestOptions, RewriteRevalidationRequestOptions, RewriteRouteCause,
     RewriteRouteOptions, RewriteRulePlanOptions, RewriteTargetQualityOptions,
     RewriteWorkerConfirmOptions, RewriteWorkerReportOptions, RewriteWorkerTransferOptions,
@@ -159,7 +159,7 @@ enum RewriteCommand {
 #[derive(Debug, Args)]
 struct NextArgs {
     /// Optional canonical API selector; omit at startup to process every API observed through recorder configuration.
-    #[arg(long, value_name = "PATH_OR_PATTERN | METHOD PATH_OR_PATTERN")]
+    #[arg(long, value_name = "PATH_OR_PATTERN")]
     api: Option<traffic_e2e::RewriteApiSelector>,
     /// Process-level output work item returned by the coordinator.
     #[arg(long, conflicts_with = "api")]
@@ -172,7 +172,7 @@ struct NextArgs {
 #[derive(Debug, Args)]
 struct StatusArgs {
     /// API work item whose action should be reconstructed while other AI work proceeds.
-    #[arg(long, value_name = "PATH_OR_PATTERN | METHOD PATH_OR_PATTERN")]
+    #[arg(long, value_name = "PATH_OR_PATTERN")]
     api: Option<traffic_e2e::RewriteApiSelector>,
     /// Process-level output work item whose action should be reconstructed.
     #[arg(long, conflicts_with = "api")]
@@ -440,7 +440,8 @@ struct WorkerConfirmArgs {
     #[arg(
         long,
         conflicts_with = "process_output",
-        required_unless_present = "process_output"
+        required_unless_present = "process_output",
+        value_parser = parse_api_scope
     )]
     api: Option<String>,
     #[arg(long)]
@@ -451,6 +452,12 @@ struct WorkerConfirmArgs {
     /// Optional human-readable subagent name for diagnostics.
     #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_NAME", hide_env_values = true)]
     agent_name: Option<String>,
+}
+
+fn parse_api_scope(value: &str) -> Result<String> {
+    Ok(value
+        .parse::<traffic_e2e::RewriteApiSelector>()?
+        .to_string())
 }
 
 #[derive(Debug, Args)]
@@ -527,8 +534,8 @@ enum VerificationCommand {
 #[derive(Debug, Args)]
 struct VerificationRequestArgs {
     /// API whose old successful evidence should be checked early; repeat for multiple APIs.
-    #[arg(long = "api", required = true, value_name = "METHOD PATH_OR_PATTERN")]
-    apis: Vec<RecordingApi>,
+    #[arg(long = "api", required = true, value_name = "PATH_OR_PATTERN")]
+    apis: Vec<traffic_e2e::RewriteApiSelector>,
     /// Bounded coordinator rationale identifying the shared or global change.
     #[arg(long)]
     reason: String,
@@ -550,8 +557,8 @@ enum TargetQualityCommand {
 struct TargetQualityRunArgs {
     gate_id: String,
     /// API acceptance whose integrated target revision issued this gate.
-    #[arg(long, value_name = "METHOD PATH_OR_PATTERN")]
-    api: RecordingApi,
+    #[arg(long, value_name = "PATH_OR_PATTERN")]
+    api: traffic_e2e::RewriteApiSelector,
     /// Confirm one production-source-proven domain occurrence; repeat per target location.
     #[arg(
         long,
@@ -590,8 +597,8 @@ struct RecordingRequestArgs {
     #[arg(long = "per-api-case-limit", default_value = "100")]
     per_api_case_limit: NonZeroUsize,
     /// Optional API selector; omit to record every API admitted by recorder configuration.
-    #[arg(long, value_name = "METHOD PATH_OR_PATTERN")]
-    api: Option<RecordingApi>,
+    #[arg(long, value_name = "PATH_OR_PATTERN")]
+    api: Option<traffic_e2e::RewriteApiSelector>,
     /// Replace a different pending recording request instead of returning a conflict.
     #[arg(long)]
     replace_pending: bool,

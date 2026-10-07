@@ -68,12 +68,6 @@ impl RewriteStore {
             "unsupported rewrite state version {}",
             state.version
         );
-        // Old snapshots have no route-mode field. Unbound routes can adopt the
-        // new contract while work_scope preserves every historical method owner.
-        let document: serde_json::Value = serde_json::from_slice(&bytes)?;
-        if document.get("route_worker_scopes").is_none() {
-            state.route_worker_scopes = true;
-        }
         super::worker::events::overlay(&self.target_root, &mut state)?;
         if state.api_inventory.is_empty()
             && state.phase != super::model::RewritePhase::RecordingRequired

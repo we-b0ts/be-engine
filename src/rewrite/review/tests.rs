@@ -20,7 +20,7 @@ fn setup() -> (tempfile::TempDir, RewriteWorkScope) {
     git(target.path(), &["switch", "-qc", "coordinator"]);
     let state = implementation_state_with_inventory(false);
     let scope = RewriteWorkScope::Api {
-        api: state.api.clone(),
+        api: crate::rewrite::api_selector::public_api(&state.api).to_string(),
     };
     RewriteStore::new(target.path())
         .unwrap()
@@ -237,7 +237,6 @@ fn assigned_worktree_delivery(route_workers: bool) {
         ],
     );
     let mut state = implementation_state_with_inventory(false);
-    state.route_worker_scopes = route_workers;
     if route_workers {
         let mut sibling = state.active_slice.clone();
         sibling.api = "PUT /api".into();
@@ -454,7 +453,7 @@ fn nested_target_maps_repository_worktree_and_reviews_managed_sibling() {
 
     let state = implementation_state_with_inventory(false);
     let scope = RewriteWorkScope::Api {
-        api: state.api.clone(),
+        api: crate::rewrite::api_selector::public_api(&state.api).to_string(),
     };
     RewriteStore::new(&target).unwrap().save(&state).unwrap();
 
@@ -479,7 +478,7 @@ fn nested_target_maps_repository_worktree_and_reviews_managed_sibling() {
         agent_name: None,
     })
     .unwrap();
-    assert_eq!(envelope.schema_version, 33);
+    assert_eq!(envelope.schema_version, 34);
     let stored = RewriteStore::new(&target).unwrap().load().unwrap().unwrap();
     assert_eq!(
         stored
@@ -779,7 +778,12 @@ fn integrated_and_parked_worker() -> (tempfile::TempDir, RewriteWorkScope) {
         .unwrap()
         .save(&state)
         .unwrap();
-    (target, RewriteWorkScope::Api { api })
+    (
+        target,
+        RewriteWorkScope::Api {
+            api: crate::rewrite::api_selector::public_api(&api).into(),
+        },
+    )
 }
 
 fn failing_integrated_review(root: &Path) -> RewriteReviewReport {

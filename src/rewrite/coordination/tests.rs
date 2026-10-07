@@ -1,6 +1,29 @@
 use crate::rewrite::{self, model::*, store::RewriteStore, worker};
 use worker::tests::{configured_target, implementation_state_with_inventory};
 
+#[test]
+fn multiple_methods_share_one_verification_and_revalidation_work_item() {
+    let mut state = rewrite::test_state();
+    rewrite::inventory::install(&mut state, vec!["GET /api".into(), "PUT /api".into()]).unwrap();
+    let action = RewriteAction::Complete {
+        summary: "test projection".into(),
+        e2e_current: false,
+        comparison_current: false,
+    };
+    let projected = super::details(&state, &action, false);
+    assert_eq!(projected.ready.get("verify_api"), Some(&1));
+    for item in &mut state.api_inventory {
+        item.status = RewriteApiStatus::RevalidationPending;
+    }
+    state.phase = RewritePhase::SliceComplete;
+    let projected = super::details(&state, &action, false);
+    assert_eq!(projected.waiting.get("final_revalidation"), Some(&1));
+    state.api_inventory[0].status = RewriteApiStatus::Complete;
+    assert_eq!(super::details(&state, &action, false).completed, 0);
+    state.api_inventory[1].status = RewriteApiStatus::Complete;
+    assert_eq!(super::details(&state, &action, false).completed, 1);
+}
+
 fn repair_with_workers(revision: String) -> RewriteState {
     let mut state = implementation_state_with_inventory(false);
     for index in 1..=12 {
@@ -56,7 +79,10 @@ fn ready_repair_is_counted_globally_and_selected_before_worker_dispatch() {
     let action = serde_json::to_value(&global).unwrap();
     assert_eq!(action["workflow"].as_object().unwrap().len(), 2);
     assert_eq!(action["action"]["kind"], "system_repair_required");
-    assert_eq!(action["action"]["details"]["work_scope"]["api"], state.api);
+    assert_eq!(
+        action["action"]["details"]["work_scope"]["api"],
+        crate::rewrite::api_selector::public_api(&state.api)
+    );
     assert_eq!(action["action"]["details"]["acceptance_ready"], true);
     assert_eq!(
         action["action"]["commands"]["acceptance"]["argv"][4],

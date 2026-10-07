@@ -17,10 +17,7 @@ fn setup() -> (
     let store = RewriteStore::new(target.path()).unwrap();
     let mut state = implementation_state_with_inventory(false);
     confirm_current_for_test(&mut state);
-    let handle = state.worker_bindings["GET /api"]
-        .agent_handle
-        .clone()
-        .unwrap();
+    let handle = state.worker_bindings["/api"].agent_handle.clone().unwrap();
     store.save(&state).unwrap();
     let options = RewriteWorkerTransferOptions {
         target_root: target.path().into(),
@@ -50,7 +47,7 @@ fn each_authorization_independently_transfers_and_persists_its_basis() {
         let before = store.load().unwrap().unwrap();
         transfer(options).unwrap();
         let after = store.load().unwrap().unwrap();
-        let binding = &after.worker_bindings["GET /api"];
+        let binding = &after.worker_bindings["/api"];
         assert_eq!(binding.agent_handle.as_deref(), Some("replacement-worker"));
         assert_eq!(
             binding.last_transfer.as_ref().unwrap().authorization,
@@ -59,11 +56,11 @@ fn each_authorization_independently_transfers_and_persists_its_basis() {
         assert_eq!(binding.transfer_generation, 1);
         assert_ne!(
             binding.confirmed_dispatch_id,
-            before.worker_bindings["GET /api"].confirmed_dispatch_id
+            before.worker_bindings["/api"].confirmed_dispatch_id
         );
         assert_eq!(
             binding.first_bound_at,
-            before.worker_bindings["GET /api"].first_bound_at
+            before.worker_bindings["/api"].first_bound_at
         );
         assert!(binding.observation.is_none());
         assert!(current_is_confirmed(&after));

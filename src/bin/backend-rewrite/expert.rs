@@ -108,9 +108,9 @@ mod tests {
             "prepare",
             "batch-1",
             "--api",
-            "GET /api/a",
+            "/api/a",
             "--api",
-            "POST /api/b",
+            "/api/b",
         ])
         .unwrap();
         let crate::RewriteCommand::Expert(args) = cli.command else {
@@ -121,7 +121,7 @@ mod tests {
         };
         assert_eq!(
             apis.iter().map(ToString::to_string).collect::<Vec<_>>(),
-            ["GET /api/a", "POST /api/b"]
+            ["/api/a", "/api/b"]
         );
         assert!(
             crate::Cli::try_parse_from([
@@ -132,7 +132,7 @@ mod tests {
                 "--agent-handle",
                 "expert",
                 "--api",
-                "GET /api/a",
+                "/api/a",
                 "--report-id",
                 "report-1",
             ])
@@ -146,7 +146,7 @@ mod tests {
             "--agent-handle",
             "expert",
             "--api",
-            "GET /api/a",
+            "/api/a",
             "--report-id",
             "report-1",
             "--recipient-handle",

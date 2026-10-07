@@ -51,7 +51,7 @@ fn worktree(root: &Path, directory: &Path, name: &str) -> PathBuf {
 fn worker_scope(root: &Path, worktree: &Path) -> RewriteWorkScope {
     let state = RewriteStore::new(root).unwrap().load().unwrap().unwrap();
     let scope = RewriteWorkScope::Api {
-        api: state.api.clone(),
+        api: crate::rewrite::api_selector::public_api(&state.api).to_string(),
     };
     worker::confirm(crate::rewrite::RewriteWorkerConfirmOptions {
         target_root: root.into(),
@@ -414,9 +414,11 @@ fn one_published_batch_review_admits_two_handoffs_independently() {
     let directory = tempfile::tempdir().unwrap();
     let scopes = [
         RewriteWorkScope::Api {
-            api: state.api.clone(),
+            api: crate::rewrite::api_selector::public_api(&state.api).to_string(),
         },
-        RewriteWorkScope::Api { api: second_api },
+        RewriteWorkScope::Api {
+            api: crate::rewrite::api_selector::public_api(&second_api).into(),
+        },
     ];
     let mut handoffs = Vec::new();
     let mut deliveries = Vec::new();

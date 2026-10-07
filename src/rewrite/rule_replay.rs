@@ -17,17 +17,35 @@ pub(super) fn pending(slice: &RewriteSliceState) -> bool {
 }
 
 pub(super) fn ready(state: &RewriteState, scope: &RewriteWorkScope) -> bool {
+    all_ready(state, scope, pending)
+}
+
+pub(super) fn admitted(state: &RewriteState, scope: &RewriteWorkScope) -> bool {
+    all_ready(state, scope, |slice| {
+        pending(slice) || slice.system_repair_accepted
+    })
+}
+
+pub(super) fn all_ready(
+    state: &RewriteState,
+    scope: &RewriteWorkScope,
+    admitted: impl FnMut(&RewriteSliceState) -> bool,
+) -> bool {
     let RewriteWorkScope::Api { api } = scope else {
         return false;
     };
-    if super::regression_scope::is_skipped(state, api) {
-        return false;
-    }
-    if api == &state.api {
-        pending(&state.active_slice)
-    } else {
-        state.parked_slices.get(api).is_some_and(pending)
-    }
+    let mut dirty = std::iter::once(&state.active_slice)
+        .chain(state.parked_slices.values())
+        .filter(|slice| {
+            (if api.contains(' ') {
+                slice.api == *api
+            } else {
+                super::api_selector::public_api(&slice.api) == api
+            }) && !super::regression_scope::is_skipped(state, &slice.api)
+                && slice.phase == RewritePhase::ImplementationRequired
+        })
+        .peekable();
+    dirty.peek().is_some() && dirty.all(admitted)
 }
 
 pub(super) fn any_ready(state: &RewriteState) -> bool {
@@ -37,7 +55,7 @@ pub(super) fn any_ready(state: &RewriteState) -> bool {
             ready(
                 state,
                 &RewriteWorkScope::Api {
-                    api: slice.api.clone(),
+                    api: super::api_selector::public_api(&slice.api).into(),
                 },
             )
         })

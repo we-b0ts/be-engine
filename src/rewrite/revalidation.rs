@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 
+use super::RewriteApiSelector;
 use crate::RecordingApi;
 
 use super::model::{
@@ -17,7 +18,7 @@ const MAX_REASON_BYTES: usize = 512;
 #[derive(Debug, Clone)]
 pub struct RewriteRevalidationRequestOptions {
     pub target_root: PathBuf,
-    pub apis: Vec<RecordingApi>,
+    pub apis: Vec<RewriteApiSelector>,
     pub reason: String,
 }
 
@@ -42,13 +43,6 @@ pub fn request(
         options.reason.len() <= MAX_REASON_BYTES,
         "revalidation reason exceeds {MAX_REASON_BYTES} bytes"
     );
-    let requested = options
-        .apis
-        .into_iter()
-        .map(|api| api.to_string())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
     let (target_root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
     let store = RewriteStore::new(&target_root)?;
     let _lock = store.lock()?;
@@ -65,6 +59,27 @@ pub fn request(
     inventory::initialize_legacy(&mut state);
     let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
     inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
+    let mut requested = BTreeSet::new();
+    for selector in &options.apis {
+        let mut methods = super::api_selector::members(&state, selector);
+        ensure!(
+            !methods.is_empty(),
+            "recorded API inventory does not contain {selector:?}"
+        );
+        if matches!(selector, RewriteApiSelector::Route(_)) {
+            methods.retain(|api| {
+                state.api_inventory.iter().any(|item| {
+                    item.api == *api && item.status == RewriteApiStatus::RevalidationPending
+                })
+            });
+            ensure!(
+                !methods.is_empty(),
+                "API {selector} has no pending revalidation"
+            );
+        }
+        requested.extend(methods);
+    }
+    let requested = requested.into_iter().collect::<Vec<_>>();
     promote(&mut state, &requested, &target_fingerprint)?;
 
     let first = requested
@@ -77,7 +92,12 @@ pub fn request(
     Ok(RewriteRevalidationRequestReport {
         schema_version: ACTION_SCHEMA_VERSION,
         target_fingerprint,
-        requested_apis: requested,
+        requested_apis: requested
+            .iter()
+            .map(|api| super::api_selector::public_api(api).to_string())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
         reason: options.reason,
         next,
     })
@@ -102,7 +122,8 @@ pub(super) fn deferred_status_envelope(
     if !super::coordination::resources_busy(target_root)? {
         let selected = action::for_status(target_root, state)?.action;
         if matches!(selected, RewriteAction::AdvanceRequired { ref command, .. }
-            if command.argv.windows(2).any(|pair| pair[0] == "--api" && pair[1] == requested))
+            if command.argv.windows(2).any(|pair| pair[0] == "--api"
+                && (pair[1] == requested || pair[1] == super::api_selector::public_api(&requested))))
         {
             return Ok(None);
         }
@@ -116,11 +137,15 @@ pub(super) fn deferred_status_envelope(
                 "defer revalidation for {requested} while higher-priority work or verification resources are occupied; global status selects idle revalidation automatically"
             ),
             resource: "rewrite_final_revalidation".to_string(),
-            requested_api: Some(requested.clone()),
-            blocking_api: (!state.api.is_empty()).then(|| state.api.clone()),
+            requested_api: Some(super::api_selector::public_api(&requested).into()),
+            blocking_api: (!state.api.is_empty())
+                .then(|| super::api_selector::public_api(&state.api).into()),
             active_operation: None,
             retry_after_seconds: 5,
-            status: action::status_command_for_api(target_root, Some(&requested)),
+            status: action::status_command_for_api(
+                target_root,
+                Some(super::api_selector::public_api(&requested)),
+            ),
         },
     )))
 }
@@ -251,20 +276,20 @@ mod tests {
 
         let report = request(RewriteRevalidationRequestOptions {
             target_root: target.path().to_path_buf(),
-            apis: vec!["GET /a".parse().unwrap()],
+            apis: vec!["/a".parse().unwrap()],
             reason: "shared response mapper changed".to_string(),
         })
         .unwrap();
 
         let value = serde_json::to_value(&report).unwrap();
-        assert_eq!(value["schema_version"], serde_json::json!(33));
+        assert_eq!(value["schema_version"], serde_json::json!(34));
         assert_eq!(
             value.pointer("/next/action/kind"),
             Some(&serde_json::json!("advance_required"))
         );
         assert_eq!(
             value.pointer("/next/action/commands/advance/argv/5"),
-            Some(&serde_json::json!("GET /a"))
+            Some(&serde_json::json!("/a"))
         );
         let saved = RewriteStore::new(target.path())
             .unwrap()

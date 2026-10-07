@@ -77,7 +77,7 @@ fn coordinator_verified_revision_change_returns_to_the_same_cases() {
     assert!(state.route.is_none());
     assert!(state.target_fingerprint.is_none());
     let scope = super::super::RewriteWorkScope::Api {
-        api: state.api.clone(),
+        api: crate::rewrite::api_selector::public_api(&state.api).to_string(),
     };
     assert!(state.system_repair_accepted);
     assert!(

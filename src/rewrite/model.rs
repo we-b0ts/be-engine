@@ -22,7 +22,7 @@ use crate::{
 };
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 33;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 34;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -98,7 +98,14 @@ pub struct RewriteApiInventoryView {
 pub struct RewriteApiInventoryDetails {
     #[serde(flatten)]
     pub summary: RewriteApiInventoryView,
-    pub items: Vec<RewriteApiProgress>,
+    pub items: Vec<RewriteApiInventoryItem>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteApiInventoryItem {
+    pub api: String,
+    pub status: RewriteApiStatus,
+    pub methods: Vec<RewriteApiProgress>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -416,10 +423,6 @@ pub(super) struct RewriteState {
     pub current_api_index: Option<usize>,
     #[serde(default)]
     pub parked_slices: BTreeMap<String, RewriteSliceState>,
-    /// New workflows bind HTTP workers by route. Absent in legacy snapshots,
-    /// which retain method-owned tasks and their original review identities.
-    #[serde(default)]
-    pub route_worker_scopes: bool,
     #[serde(default)]
     pub worker_bindings: BTreeMap<String, RewriteWorkerBinding>,
     #[serde(default)]

@@ -487,7 +487,7 @@ fn next_command(target_root: &Path, state: &RewriteState) -> super::model::Rewri
         .and_then(|index| state.api_inventory.get(index))
         .map(|item| item.api.as_str())
     {
-        action::next_command_for_api(target_root, api)
+        action::next_command_for_selected_api(target_root, state, api)
     } else {
         action::status_command(target_root)
     }

@@ -4,7 +4,6 @@ use crate::rewrite::{RewritePhase, inventory, test_support::test_state, worker};
 #[test]
 fn route_selector_preserves_method_contracts_and_exact_path_boundaries() {
     let mut state = test_state();
-    state.route_worker_scopes = true;
     inventory::install(
         &mut state,
         vec![
@@ -16,9 +15,10 @@ fn route_selector_preserves_method_contracts_and_exact_path_boundaries() {
     .unwrap();
     let selector = "/api/subscriptions/*".parse().unwrap();
     assert_eq!(members(&state, &selector).len(), 2);
-    assert_eq!(
-        members(&state, &"PUT /api/subscriptions/*".parse().unwrap()),
-        vec!["PUT /api/subscriptions/*"]
+    assert!(
+        "PUT /api/subscriptions/*"
+            .parse::<RewriteApiSelector>()
+            .is_err()
     );
     assert!(
         "GET|PUT /api/subscriptions/*"
@@ -39,7 +39,6 @@ fn route_selector_preserves_method_contracts_and_exact_path_boundaries() {
 #[test]
 fn new_route_worker_reserves_all_methods_and_exposes_one_task() {
     let mut state = worker::tests::implementation_state_with_inventory(false);
-    state.route_worker_scopes = true;
     inventory::install(&mut state, vec!["GET /api".into(), "PUT /api".into()]).unwrap();
     state.phase = RewritePhase::ImplementationRequired;
     state.active_issue = worker::tests::implementation_state_with_inventory(false)
@@ -63,7 +62,7 @@ fn new_route_worker_reserves_all_methods_and_exposes_one_task() {
 }
 
 #[test]
-fn legacy_snapshot_upgrade_keeps_existing_worker_identity_and_method_progress() {
+fn persisted_route_worker_keeps_its_identity_and_method_progress() {
     let target = worker::tests::configured_target();
     let mut state = worker::tests::implementation_state_with_inventory(true);
     worker::confirm_current_for_test(&mut state);
@@ -71,20 +70,11 @@ fn legacy_snapshot_upgrade_keeps_existing_worker_identity_and_method_progress() 
     let before = worker::dispatch_view(&state, scope.clone(), None);
     let store = super::RewriteStore::new(target.path()).unwrap();
     store.save(&state).unwrap();
-    let path = crate::internal_runtime::root(target.path()).join("rewrite/state.json");
-    let mut document: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    document
-        .as_object_mut()
-        .unwrap()
-        .remove("route_worker_scopes");
-    std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
     let restored = store.load().unwrap().unwrap();
-    assert!(restored.route_worker_scopes);
     let after = worker::dispatch_view(&restored, scope, None);
     assert_eq!(before.binding_id, after.binding_id);
     assert_eq!(before.dispatch_id, after.dispatch_id);
-    assert_eq!(after.work_scope.binding_key(), "GET /api");
+    assert_eq!(after.work_scope.binding_key(), "/api");
     assert_eq!(work_scope(&restored, "POST /other").binding_key(), "/other");
     assert_eq!(restored.api_inventory.len(), 2);
 }

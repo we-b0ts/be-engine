@@ -40,7 +40,10 @@ fn assert_advance(action: &RewriteAction, api: &str) {
     let RewriteAction::AdvanceRequired { command, .. } = action else {
         panic!("expected advance to {api}, got {action:?}")
     };
-    assert_eq!(command.argv.last().unwrap(), api);
+    assert_eq!(
+        command.argv.last().unwrap(),
+        crate::rewrite::api_selector::public_api(api)
+    );
 }
 
 #[test]
@@ -134,7 +137,7 @@ fn parked_system_repair_survives_revalidation_and_becomes_resumable_after_revisi
     assert_eq!(blocked.pending, 0);
     assert!(!blocked.terminal_allowed);
     assert!(
-        matches!(blocked.action, RewriteAction::Blocked { ref system_repair_apis, .. } if system_repair_apis == std::slice::from_ref(&original_api))
+        matches!(blocked.action, RewriteAction::Blocked { ref system_repair_apis, .. } if system_repair_apis == &[crate::rewrite::api_selector::public_api(&original_api)])
     );
     assert_eq!(status(target.path()).pending, 0);
     // The stop is projected, not persisted as a terminal workflow phase.
@@ -300,7 +303,7 @@ async fn wait_wakes_for_reported_worker_interruption_before_its_deadline() {
     let store = RewriteStore::new(target.path()).unwrap();
     store.save(&state).unwrap();
     let scope = rewrite::RewriteWorkScope::Api {
-        api: state.api.clone(),
+        api: crate::rewrite::api_selector::public_api(&state.api).to_string(),
     };
     let wait = rewrite::wait_rewrite(rewrite::RewriteWaitOptions {
         target_root: target.path().into(),

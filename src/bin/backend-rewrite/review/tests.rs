@@ -18,7 +18,7 @@ fn exposes_worker_and_integrated_review_commands() {
             "--worktree",
             "/worker",
             "--api",
-            "GET /api",
+            "/api",
             "--evidence",
             "/tmp/evidence.json",
             "--hardcode-ai-verified",
@@ -34,7 +34,7 @@ fn exposes_worker_and_integrated_review_commands() {
             "--worktree",
             "/integration",
             "--api",
-            "GET /api",
+            "/api",
             "--handoff-id",
             "commit",
         ],
@@ -85,7 +85,7 @@ fn exposes_worker_and_integrated_review_commands() {
             "--finding",
             "finding-1",
             "--owner",
-            "api:GET /api",
+            "api:/api",
         ],
         vec![
             "test",
@@ -96,14 +96,14 @@ fn exposes_worker_and_integrated_review_commands() {
             "--finding",
             "finding-1",
             "--owner",
-            "api:GET /api",
+            "api:/api",
         ],
         vec![
             "test",
             "worker",
             "confirm",
             "--api",
-            "GET /api",
+            "/api",
             "--agent-handle",
             "worker",
             "--worktree",
@@ -133,7 +133,7 @@ fn exposes_worker_and_integrated_review_commands() {
             "--worktree",
             "/worker",
             "--api",
-            "GET /api",
+            "/api",
             "--process-output",
             "profile"
         ])
@@ -154,7 +154,7 @@ fn review_requires_a_delivery_worktree_and_worker_scope() {
             "--worktree",
             "/worker",
             "--api",
-            "GET /api",
+            "/api",
             "--handoff-id",
             "commit",
         ],
@@ -167,7 +167,7 @@ fn review_requires_a_delivery_worktree_and_worker_scope() {
 #[test]
 fn integration_review_rejects_incomplete_handoff_identity_before_accessing_state() {
     for identity in [
-        vec!["--api", "GET /api"],
+        vec!["--api", "/api"],
         vec!["--process-output", "profile"],
         vec!["--handoff-id", "commit"],
     ] {

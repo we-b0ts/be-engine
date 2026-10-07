@@ -73,7 +73,7 @@ fn legacy_failure(counter: &Path) -> tempfile::TempDir {
             "pid": u32::MAX,
             "request": {
                 "kind": "target_quality",
-                "api": "GET /api",
+                "api": "/api",
                 "gate_id": "quality-gate-from-old-engine",
                 "hardcode_ai_verified": []
             },

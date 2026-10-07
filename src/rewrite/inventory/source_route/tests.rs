@@ -227,14 +227,18 @@ async fn next_rejects_invalid_source_route_without_persisting_it() {
         let before = serde_json::to_value(store.load().unwrap()).unwrap();
         let error = rewrite::next_rewrite(rewrite::RewriteNextOptions {
             target_root: root.path().into(),
-            api: Some(API.parse().unwrap()),
+            api: Some(API.parse::<crate::RecordingApi>().unwrap().into()),
             process_output: None,
             source_route: Some(LOCAL_ROUTE.into()),
         })
         .await
         .unwrap_err();
         assert!(
-            error.to_string().contains("same segment count"),
+            error.to_string().contains(if initialized {
+                "same segment count"
+            } else {
+                "route selection requires"
+            }),
             "{error:#}"
         );
         assert_eq!(serde_json::to_value(store.load().unwrap()).unwrap(), before);

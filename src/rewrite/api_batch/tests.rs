@@ -44,7 +44,6 @@ fn result(api: &str, passed: bool) -> crate::E2eApiRunResult {
 fn route_transition_preserves_passed_and_skipped_methods_and_one_worker_scope() {
     let target = crate::rewrite::worker::tests::configured_target();
     let mut state = test_state();
-    state.route_worker_scopes = true;
     state.require_comparison = false;
     inventory::install(
         &mut state,
@@ -100,7 +99,6 @@ fn route_comparison_methods_reserve_distinct_recordings() {
 fn route_completion_requires_every_method_and_preserves_method_history() {
     let target = crate::rewrite::worker::tests::configured_target();
     let mut state = test_state();
-    state.route_worker_scopes = true;
     state.require_comparison = false;
     inventory::install(&mut state, vec!["GET /api".into(), "PUT /api".into()]).unwrap();
     apply_results(

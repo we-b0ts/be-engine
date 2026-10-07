@@ -217,18 +217,21 @@ is unclear.
   identity; `worker/model.rs` owns worker serialization, `worker/runtime.rs` validates task
   observations, handoffs and the admitted code-integration clock, and `worker/scheduler.rs` selects executable work
   across current and parked scopes. `worker/events.rs` owns the independent
-  durable feedback transaction; `store.rs` folds newer feedback into coordinator
-  snapshots on both load and save. These modules never manufacture task-runtime
+  durable feedback transaction and normalizes binding keys before merging the
+  newest per-route callback; `store.rs` folds feedback into coordinator snapshots
+  on both load and save. These modules never manufacture task-runtime
   handles or manage worktrees. `model.rs` owns the remaining persisted state and
   public action contract and reexports the worker contract for compatibility.
-  `api_selector` owns route-only worker selectors, exact method compatibility,
+  `api_selector` owns route-only worker selectors, HTTP method-selector rejection,
   and route-to-method inventory projection. `api_batch` owns grouped preparation
   and method-slice transitions for one route acceptance. `e2e_run/focused_batch`
   owns terminal method evidence publication from a shared Replay session; it
   never alters recorded cases or moves rewrite scheduling into E2E execution.
   `inventory.rs` owns the API inventory state machine: stable installation,
-  activation and parking (in `inventory/selection.rs`), deferred revalidation, and summary/detail
-  views. Its `inventory/source_route` child owns source-route binding,
+  activation and parking (in `inventory/selection.rs`) and deferred revalidation.
+  `inventory/views` owns the read-only route summary and route-item projection
+  with per-method verification details; the persisted ledger remains method-keyed.
+  Its `inventory/source_route` child owns source-route binding,
   correction of unused invalid bindings, and validated binding retention across
   recording batches, reusing case-group route validation.
   `case_patterns.rs` owns the low-frequency post-recording pattern

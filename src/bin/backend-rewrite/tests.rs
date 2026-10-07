@@ -2,6 +2,62 @@ use super::*;
 use clap::CommandFactory;
 
 #[test]
+fn http_coordinator_commands_accept_routes_and_reject_method_selectors() {
+    let prefixes = [
+        vec!["test", "next", "--api"],
+        vec!["test", "status", "--api"],
+        vec!["test", "evidence", "--api"],
+        vec![
+            "test",
+            "verification",
+            "request",
+            "--reason",
+            "shared change",
+            "--api",
+        ],
+        vec![
+            "test",
+            "worker",
+            "confirm",
+            "--agent-handle",
+            "worker",
+            "--api",
+        ],
+        vec!["test", "review", "check", "--worktree", "/worker", "--api"],
+        vec![
+            "test",
+            "recording",
+            "request",
+            "--kind",
+            "standard",
+            "--reason",
+            "user-requested",
+            "--api",
+        ],
+    ];
+    for prefix in prefixes {
+        let mut args = prefix.clone();
+        args.push("/api/subscriptions/*");
+        assert!(
+            Cli::try_parse_from(args).is_ok(),
+            "route should be accepted: {prefix:?}"
+        );
+        for method in [
+            "GET /api/subscriptions/*",
+            "PUT /api/subscriptions/*",
+            "GET|PUT /api/subscriptions/*",
+        ] {
+            let mut args = prefix.clone();
+            args.push(method);
+            assert!(
+                Cli::try_parse_from(args).is_err(),
+                "method selector should be rejected: {prefix:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn exposes_only_the_rewrite_coordinator_surface() {
     let command = Cli::command();
     command.clone().debug_assert();
@@ -112,7 +168,7 @@ fn worker_identity_requires_handles_and_rejects_old_id_arguments() {
             "worker",
             "confirm",
             "--api",
-            "GET /api",
+            "/api",
             "--process-output",
             "summary",
             "--agent-handle",
@@ -461,7 +517,7 @@ fn parses_the_bounded_rewrite_surface() {
         Some(project_init::ProjectInitCommand::Preflight(_))
     ));
     assert!(Cli::try_parse_from(["test", "init", "preflight", "--duration-seconds", "0"]).is_err());
-    assert!(Cli::try_parse_from(["test", "init", "preflight", "--api", "GET /business"]).is_err());
+    assert!(Cli::try_parse_from(["test", "init", "preflight", "--api", "/business"]).is_err());
     assert!(
         Cli::try_parse_from([
             "test",
@@ -548,7 +604,7 @@ fn parses_the_bounded_rewrite_surface() {
             "test",
             "next",
             "--api",
-            "GET /api/users/*",
+            "/api/users/*",
             "--source-route",
             "/api/users/:id",
         ])
@@ -587,7 +643,7 @@ fn parses_the_bounded_rewrite_surface() {
             "--reason",
             "user-requested",
             "--api",
-            "GET /api/widgets/*",
+            "/api/widgets/*",
         ])
         .is_ok()
     );
@@ -616,7 +672,7 @@ fn parses_the_bounded_rewrite_surface() {
             "run",
             "target-quality-fnv1a64-0123456789abcdef",
             "--api",
-            "GET /api/widgets/*",
+            "/api/widgets/*",
             "--hardcode-ai-verified",
             "src/client.rs:42:18=legacy@abcdef1:src/main/java/Client.java:96:27",
             "--hardcode-ai-verified",
@@ -634,16 +690,16 @@ fn parses_the_bounded_rewrite_surface() {
         ])
         .is_ok()
     );
-    assert!(Cli::try_parse_from(["test", "status", "--api", "GET /api/widgets/*"]).is_ok());
+    assert!(Cli::try_parse_from(["test", "status", "--api", "/api/widgets/*"]).is_ok());
     assert!(
         Cli::try_parse_from([
             "test",
             "verification",
             "request",
             "--api",
-            "GET /api/widgets/*",
+            "/api/widgets/*",
             "--api",
-            "POST /api/widgets",
+            "/api/widgets",
             "--reason",
             "shared response mapper changed",
         ])
@@ -745,7 +801,7 @@ fn parses_the_bounded_rewrite_surface() {
             "worker",
             "confirm",
             "--api",
-            "GET /api",
+            "/api",
             "--agent-handle",
             "runtime-agent-42",
             "--agent-name",

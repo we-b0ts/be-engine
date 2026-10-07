@@ -22,7 +22,7 @@ fn ready_handoff_with_pending_api() -> RewriteState {
     let mut state = implementation_state_with_inventory(true);
     worker::confirm_current_for_test(&mut state);
     let scope = RewriteWorkScope::Api {
-        api: state.api.clone(),
+        api: crate::rewrite::api_selector::public_api(&state.api).to_string(),
     };
     let observation = state
         .worker_bindings
@@ -49,7 +49,7 @@ fn first_pass_api_verification_preempts_ready_handoff_integration() {
     let RewriteAction::AdvanceRequired { command, .. } = status.action else {
         panic!("unattempted API should be verified before integrating a ready handoff")
     };
-    assert_eq!(command.argv.last().unwrap(), "POST /other");
+    assert_eq!(command.argv.last().unwrap(), "/other");
 
     let inventory = rewrite::inventory_rewrite(RewriteContext {
         target_root: target.path().into(),
@@ -108,7 +108,7 @@ fn worker_dispatch_still_preempts_first_pass_verification() {
     let RewriteAction::ImplementationRequired { worker, .. } = status.action else {
         panic!("worker dispatch must remain ahead of first-pass verification")
     };
-    assert_eq!(worker.work_scope.label(), "API GET /needs-worker");
+    assert_eq!(worker.work_scope.label(), "API /needs-worker");
 }
 
 #[test]
@@ -189,7 +189,7 @@ fn accepted_parked_repair_is_scheduled_without_a_new_worker_handoff() {
     let RewriteAction::AdvanceRequired { command, .. } = status.action else {
         panic!("replay the accepted repair")
     };
-    assert_eq!(command.argv.last().unwrap(), "GET /api-01");
+    assert_eq!(command.argv.last().unwrap(), "/api-01");
     let scoped = rewrite::status_rewrite_for_api(
         RewriteContext {
             target_root: target.path().into(),
@@ -211,7 +211,7 @@ async fn unscoped_next_selects_only_the_parked_integrated_api_and_preserves_qual
     let mut state = many_issues(2);
     worker::confirm_current_for_test(&mut state);
     let scope = rewrite::RewriteWorkScope::Api {
-        api: "GET /api-01".into(),
+        api: "/api-01".into(),
     };
     let mut parked = runtime::scoped(&state, &scope).unwrap();
     worker::integrate_current_for_test(&mut parked);
@@ -237,9 +237,7 @@ async fn unscoped_next_selects_only_the_parked_integrated_api_and_preserves_qual
     assert_eq!(
         runtime::coverage(
             &latest,
-            &rewrite::RewriteWorkScope::Api {
-                api: "GET /api".into()
-            }
+            &rewrite::RewriteWorkScope::Api { api: "/api".into() }
         ),
         Coverage::Running
     );
