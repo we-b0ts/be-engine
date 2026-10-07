@@ -55,7 +55,10 @@ pub(in crate::rewrite) fn overlay(target_root: &Path, state: &mut RewriteState) 
         // A removed item without a retained binding must not be resurrected.
         let retained = state.worker_bindings.contains_key(&key)
             || state.api == key
-            || state.api_inventory.iter().any(|item| item.api == key)
+            || state
+                .api_inventory
+                .iter()
+                .any(|item| item.api == key || super::super::api_selector::route(&item.api) == key)
             || state
                 .process_outputs
                 .inventory

@@ -213,6 +213,15 @@ fn local_review_does_not_mutate_workflow_and_integrated_receipt_survives_resume(
 
 #[test]
 fn assigned_git_worktree_review_is_accepted_and_integrated_without_a_private_workflow() {
+    assigned_worktree_delivery(false);
+}
+
+#[test]
+fn route_worker_reviews_and_integrates_one_handoff_for_both_methods() {
+    assigned_worktree_delivery(true);
+}
+
+fn assigned_worktree_delivery(route_workers: bool) {
     let target = configured_target();
     git(target.path(), &["switch", "-qc", "coordinator"]);
     let directory = tempfile::tempdir().unwrap();
@@ -227,10 +236,19 @@ fn assigned_git_worktree_review_is_accepted_and_integrated_without_a_private_wor
             worktree.to_str().unwrap(),
         ],
     );
-    let state = implementation_state_with_inventory(false);
-    let scope = RewriteWorkScope::Api {
-        api: state.api.clone(),
-    };
+    let mut state = implementation_state_with_inventory(false);
+    state.route_worker_scopes = route_workers;
+    if route_workers {
+        let mut sibling = state.active_slice.clone();
+        sibling.api = "PUT /api".into();
+        sibling.active_issue.as_mut().unwrap().id = "issue-put".into();
+        state.parked_slices.insert(sibling.api.clone(), sibling);
+        let mut progress = state.api_inventory[0].clone();
+        progress.api = "PUT /api".into();
+        progress.status = super::super::RewriteApiStatus::ImplementationRequired;
+        state.api_inventory.push(progress);
+    }
+    let scope = crate::rewrite::api_selector::work_scope(&state, &state.api);
     let store = RewriteStore::new(target.path()).unwrap();
     store.save(&state).unwrap();
     worker::confirm(crate::rewrite::RewriteWorkerConfirmOptions {
@@ -241,6 +259,20 @@ fn assigned_git_worktree_review_is_accepted_and_integrated_without_a_private_wor
         agent_name: None,
     })
     .unwrap();
+    if route_workers {
+        let evidence = crate::rewrite::query_rewrite_evidence_for_scope(
+            crate::rewrite::RewriteContext {
+                target_root: target.path().into(),
+            },
+            &scope,
+        )
+        .unwrap();
+        assert_eq!(
+            evidence.facts["method_apis"],
+            serde_json::json!(["GET /api", "PUT /api"])
+        );
+        assert_eq!(evidence.facts["method_issues"].as_array().unwrap().len(), 2);
+    }
     fs::create_dir_all(worktree.join("src")).unwrap();
     fs::write(
         worktree.join("src/lib.rs"),

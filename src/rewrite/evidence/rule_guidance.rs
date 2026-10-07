@@ -106,6 +106,16 @@ pub(super) fn rule_hints(
             help: super::super::action::command(target_root, vec!["dependency-rule".into(), "plan".into(), "redis".into(), "cross-case".into(), "--help".into()], Vec::new()),
         });
     }
+    if facts["redis_lock_candidates"]["candidates"]
+        .as_array()
+        .is_some_and(|items| !items.is_empty())
+    {
+        hints.push(RewriteRuleHint {
+            capability: "redis_lock".into(), rule: "lock".into(),
+            hint: "Inspect redis_lock_candidates for token-only SET NX or same-key script/DELEX argument differences. Trace source random ownership tokens and conditional release; the command shape does not prove lock semantics. Configure host, port and a bounded key selector through dependency-rule plan redis lock, apply and fresh Replay. One rule preserves token equality across references without configuring a UUID format or script SHA. Keys, expiry/options, scripts, database/authentication and finite exchange consumption remain strict.".into(),
+            help: super::super::action::command(target_root, vec!["dependency-rule".into(),"plan".into(),"redis".into(),"lock".into(),"--help".into()], Vec::new()),
+        });
+    }
     if facts["egress_rejections"]["rejected_packets_in_samples"]
         .as_u64()
         .is_some_and(|count| count > 0)
@@ -146,6 +156,35 @@ pub(super) fn applicable_rule_planners(
     evidence_id: &str,
 ) -> Vec<RewriteApplicableRulePlanner> {
     let mut planners = Vec::new();
+    if query_kind == QUERY_DIRTY_CLUSTERS
+        && matches!(
+            issue_kind,
+            RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
+        )
+        && facts["redis_lock_candidates"]["candidates"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+        && facts["redis_lock_candidates"]["omitted_candidates"] == 0
+    {
+        planners.push(RewriteApplicableRulePlanner {
+            kind: "dependency_value".into(),
+            capability: "redis_lock".into(),
+            evidence_id: evidence_id.into(),
+            command: super::super::action::command(
+                target_root,
+                vec![
+                    "dependency-rule".into(),
+                    "plan".into(),
+                    "redis".into(),
+                    "lock".into(),
+                    "--evidence-id".into(),
+                    evidence_id.into(),
+                    "--help".into(),
+                ],
+                Vec::new(),
+            ),
+        });
+    }
     if query_kind == QUERY_DIRTY_CLUSTERS
         && matches!(
             issue_kind,
@@ -679,6 +718,61 @@ mod redis_unordered_tests {
             )
             .iter()
             .any(|p| p.capability == "redis_value_unordered")
+        );
+    }
+}
+
+#[cfg(test)]
+mod redis_lock_tests {
+    use super::*;
+    #[test]
+    fn lock_hint_requires_witness_and_planner_requires_complete_candidates_for_each_issue_kind() {
+        let root = Path::new("/target");
+        let mut facts =
+            serde_json::json!({"clusters":[{"protocol":"redis","reason":"unmatched_target"}]});
+        assert!(
+            !rule_hints(root, QUERY_DIRTY_CLUSTERS, &facts)
+                .iter()
+                .any(|h| h.rule == "lock")
+        );
+        facts["redis_lock_candidates"] = serde_json::json!({"candidates":[{"selector":{"host":"redis.test","port":6379,"key":"lock:1"}}],"omitted_candidates":0});
+        assert!(
+            rule_hints(root, QUERY_DIRTY_CLUSTERS, &facts)
+                .iter()
+                .any(|h| h.rule == "lock")
+        );
+        for kind in [
+            RewriteIssueKind::Dependency,
+            RewriteIssueKind::Response,
+            RewriteIssueKind::Replay,
+        ] {
+            let planners =
+                applicable_rule_planners(root, kind, QUERY_DIRTY_CLUSTERS, &facts, "current");
+            let planner = planners
+                .iter()
+                .find(|p| p.capability == "redis_lock")
+                .unwrap();
+            assert!(
+                planner.command.argv.contains(&"lock".into())
+                    && planner.command.argv.contains(&"current".into())
+            );
+            assert!(
+                !applicable_rule_planners(root, kind, QUERY_REPRESENTATIVES, &facts, "current")
+                    .iter()
+                    .any(|p| p.capability == "redis_lock")
+            );
+        }
+        facts["redis_lock_candidates"]["omitted_candidates"] = 1.into();
+        assert!(
+            !applicable_rule_planners(
+                root,
+                RewriteIssueKind::Dependency,
+                QUERY_DIRTY_CLUSTERS,
+                &facts,
+                "current"
+            )
+            .iter()
+            .any(|p| p.capability == "redis_lock")
         );
     }
 }

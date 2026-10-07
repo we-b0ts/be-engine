@@ -416,6 +416,10 @@ pub(super) struct RewriteState {
     pub current_api_index: Option<usize>,
     #[serde(default)]
     pub parked_slices: BTreeMap<String, RewriteSliceState>,
+    /// New workflows bind HTTP workers by route. Absent in legacy snapshots,
+    /// which retain method-owned tasks and their original review identities.
+    #[serde(default)]
+    pub route_worker_scopes: bool,
     #[serde(default)]
     pub worker_bindings: BTreeMap<String, RewriteWorkerBinding>,
     #[serde(default)]

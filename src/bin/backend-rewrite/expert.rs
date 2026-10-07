@@ -16,7 +16,7 @@ enum ExpertCommand {
     Prepare {
         expert_id: String,
         #[arg(long = "api", required = true)]
-        apis: Vec<traffic_e2e::RecordingApi>,
+        apis: Vec<traffic_e2e::RewriteApiSelector>,
     },
     /// Confirm the one accepted diagnostic task, including a queued task.
     Confirm(ExpertIdentity),
@@ -31,7 +31,7 @@ enum ExpertCommand {
         #[command(flatten)]
         identity: ExpertIdentity,
         #[arg(long)]
-        api: traffic_e2e::RecordingApi,
+        api: traffic_e2e::RewriteApiSelector,
         #[arg(long, env = "BACKEND_REWRITE_EXPERT_REPORT_ID", hide_env_values = true)]
         report_id: String,
         #[arg(

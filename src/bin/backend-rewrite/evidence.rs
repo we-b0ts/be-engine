@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Args;
 use traffic_e2e::{
-    RecordingApi, RewriteContext, RewriteEvidenceReport, RewriteWorkScope, query_rewrite_evidence,
+    RewriteContext, RewriteEvidenceReport, RewriteWorkScope, query_rewrite_evidence,
     query_rewrite_evidence_for_scope,
 };
 
@@ -11,8 +11,8 @@ pub(super) struct EvidenceArgs {
     /// Current overview or detail-query id returned by the engine.
     query_id: Option<String>,
     /// Fetch this exact API implementer's current issue, identity, and evidence queries.
-    #[arg(long, value_name = "METHOD PATH_OR_PATTERN")]
-    api: Option<RecordingApi>,
+    #[arg(long, value_name = "PATH_OR_PATTERN | METHOD PATH_OR_PATTERN")]
+    api: Option<traffic_e2e::RewriteApiSelector>,
     /// Fetch this process-output worker's current issue and identity.
     #[arg(long, value_name = "ID")]
     process_output: Option<String>,
@@ -47,6 +47,7 @@ mod tests {
         for args in [
             vec!["evq-current-overview"],
             vec!["--api", "GET /api/tasks/*"],
+            vec!["--api", "/api/tasks/*"],
             vec!["--process-output", "metrics"],
         ] {
             let cli = Cli::try_parse_from(["backend-rewrite", "evidence"].into_iter().chain(args))

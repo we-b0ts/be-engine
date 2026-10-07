@@ -203,19 +203,18 @@ pub(super) fn select_group_cases(
     source_route: &str,
     pattern: Option<&str>,
 ) -> Result<Vec<PublishedCase>> {
-    let selected = if let Some(pattern) = pattern {
-        cases
-            .iter()
-            .filter(|case| case.method == method && matches_path_pattern(pattern, &case.path))
-            .cloned()
-            .collect::<Vec<_>>()
-    } else {
-        cases
-            .iter()
-            .filter(|case| case.member_dir == current_dir)
-            .cloned()
-            .collect::<Vec<_>>()
-    };
+    // Membership belongs to cases, not physical directories. Recorder folders
+    // are path-based and may contain several HTTP methods.
+    let selected = cases
+        .iter()
+        .filter(|case| {
+            case.method == method
+                && pattern.map_or(case.path == source_route, |value| {
+                    matches_path_pattern(value, &case.path)
+                })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     ensure!(
         !selected.is_empty(),
         "route selection matched no published cases"
@@ -225,27 +224,6 @@ pub(super) fn select_group_cases(
         "route selection does not include current case directory {}",
         current_dir.display()
     );
-    let members = selected
-        .iter()
-        .map(|case| case.member_dir.clone())
-        .collect::<BTreeSet<_>>();
-    for member in members {
-        let all_member_cases = cases.iter().filter(|case| case.member_dir == member);
-        for case in all_member_cases {
-            let matches = case.method == method
-                && pattern.map_or(case.path == source_route, |value| {
-                    matches_path_pattern(value, &case.path)
-                });
-            ensure!(
-                matches,
-                "mixed-route directory {} contains case {} with {} {}",
-                member.display(),
-                case.id,
-                case.method,
-                case.path
-            );
-        }
-    }
     let mut selected = selected;
     selected.sort_by(|left, right| {
         left.recorded_at

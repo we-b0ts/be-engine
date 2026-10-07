@@ -36,7 +36,7 @@ bypass the returned command.
 
 System-repair actions retain the route, triggering `work_scope`, readiness, and
 available acceptance command as scheduling information. The assigned worker
-fetches any needed diagnostics through `evidence --api '<METHOD pattern>'`
+fetches any needed diagnostics through `evidence --api '<assigned path-or-pattern>'`
 against the canonical target root; status does not embed evidence or its command.
 
 Successful verification chooses the next transition. Replay and external-input
@@ -96,7 +96,7 @@ inspection proves the explicit route inputs.
 
 ## Status And Recovery
 
-Use `backend-rewrite status [--api '<METHOD pattern>']` to reconstruct a lost or
+Use `backend-rewrite status [--api '<assigned path-or-pattern>']` to reconstruct a lost or
 resumed action without advancing state. Depending on current state it returns:
 
 - the original `action.commands.execute` before recording execution;

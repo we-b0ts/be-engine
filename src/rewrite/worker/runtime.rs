@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 
 use super::super::model::{RewriteActionEnvelope, RewritePhase, RewriteState};
 use super::super::process_output_model::{RewriteProcessOutputStatus, RewriteWorkScope};
-use super::super::{action, fingerprint, inventory, process_outputs, store::RewriteStore};
+use super::super::{action, fingerprint, process_outputs, store::RewriteStore};
 use super::model::{RewriteWorkerActivity, RewriteWorkerCoverageState, RewriteWorkerObservation};
 
 pub(in crate::rewrite) const RUNNING_OBSERVATION_SECONDS: i64 = 60 * 60;
@@ -277,9 +277,7 @@ pub(in crate::rewrite) fn scopes(state: &RewriteState) -> Vec<RewriteWorkScope> 
         && !state.system_repair_accepted
         && !super::super::rule_replay::pending(&state.active_slice)
     {
-        scopes.push(RewriteWorkScope::Api {
-            api: state.api.clone(),
-        });
+        scopes.push(super::super::api_selector::work_scope(state, &state.api));
     }
     for (api, slice) in &state.parked_slices {
         if !super::super::regression_scope::is_skipped(state, api)
@@ -289,7 +287,10 @@ pub(in crate::rewrite) fn scopes(state: &RewriteState) -> Vec<RewriteWorkScope> 
             && !slice.system_repair_accepted
             && !super::super::rule_replay::pending(slice)
         {
-            scopes.push(RewriteWorkScope::Api { api: api.clone() });
+            let scope = super::super::api_selector::work_scope(state, api);
+            if !scopes.contains(&scope) {
+                scopes.push(scope);
+            }
         }
     }
     scopes.extend(
@@ -314,7 +315,7 @@ pub(in crate::rewrite) fn scoped(
 ) -> Result<RewriteState> {
     match scope {
         RewriteWorkScope::Api { api } => {
-            let mut selected = inventory::scoped(state, Some(&api.parse()?))?;
+            let mut selected = super::super::api_selector::scoped(state, api)?;
             selected.process_outputs.current_id = None;
             Ok(selected)
         }

@@ -24,13 +24,17 @@ fn resolve_handle(
         scopes.extend(
             std::iter::once(&state.active_slice)
                 .chain(state.parked_slices.values())
-                .map(|slice| RewriteWorkScope::Api {
-                    api: slice.api.clone(),
-                })
+                .map(|slice| super::super::api_selector::work_scope(state, &slice.api))
                 .filter(|scope| super::super::rule_replay::ready(state, scope)),
         );
     }
-    let mut matches = scopes.into_iter().filter(|scope| {
+    let mut unique = Vec::new();
+    for scope in scopes {
+        if !unique.contains(&scope) {
+            unique.push(scope);
+        }
+    }
+    let mut matches = unique.into_iter().filter(|scope| {
         state
             .worker_bindings
             .get(&scope.binding_key())

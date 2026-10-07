@@ -376,33 +376,26 @@ fn ensure_case_group_impl(
     let storage = IndexPathStorage::for_index(&index, &case_source)?;
     validate_index(&index, &storage, &case_source, &cases)?;
 
-    if let Some(existing) = index.groups.iter().find(|group| {
-        group.member_dirs.iter().any(|member| {
-            storage
-                .resolve(member)
-                .is_ok_and(|path| path == current_dir)
-        })
-    }) {
+    if let Some(existing) = index.groups.iter().find(|group| group.group_id == group_id) {
         ensure!(
             existing.method == method
                 && existing.source_route == source_route
-                && existing.pattern == pattern,
-            "case directory {} is already owned by group {}",
-            current_dir.display(),
-            existing.group_id
+                && existing.pattern == pattern
+                && existing.member_dirs.iter().any(|member| {
+                    storage
+                        .resolve(member)
+                        .is_ok_and(|path| path == current_dir)
+                }),
+            "group {group_id} already exists with a different route or membership; the index is stale"
         );
-        let status = if existing.pattern.is_some() {
-            CaseGroupStatus::AlreadyGrouped
-        } else {
+        let status = if existing.group_dir.is_some() {
             CaseGroupStatus::AlreadyCanonical
+        } else {
+            CaseGroupStatus::AlreadyGrouped
         };
         return result_from_record(existing, status, &index.source_revision, &storage, &output);
     }
 
-    ensure!(
-        !index.groups.iter().any(|group| group.group_id == group_id),
-        "group id {group_id} already exists without owning the current directory; the index is stale"
-    );
     reject_route_overlap(&index.groups, &method, &source_route, pattern.as_deref())?;
 
     let selected = select_group_cases(
@@ -422,7 +415,7 @@ fn ensure_case_group_impl(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    reject_membership_overlap(&storage, &index.groups, &case_ids, &member_dirs)?;
+    reject_membership_overlap(&index.groups, &case_ids)?;
     let case_inventory_id = case_inventory_id(&index, &case_source, &selected)?;
     let pattern_outcome = apply_pattern_feedback(
         pattern.as_deref(),
@@ -430,14 +423,20 @@ fn ensure_case_group_impl(
         &options.source_revision,
         options.recorder_config.as_deref(),
     )?;
-    let group_dir = pattern
-        .is_none()
+    let whole_directory = pattern.is_none()
+        && member_dirs.len() == 1
+        && cases
+            .iter()
+            .filter(|case| case.member_dir == current_dir)
+            .count()
+            == selected.len();
+    let group_dir = whole_directory
         .then(|| storage.persist(&current_dir))
         .transpose()?;
-    let status = if pattern.is_some() {
-        CaseGroupStatus::Created
-    } else {
+    let status = if whole_directory {
         CaseGroupStatus::AlreadyCanonical
+    } else {
+        CaseGroupStatus::Created
     };
     let record = CaseGroupRecord {
         status,

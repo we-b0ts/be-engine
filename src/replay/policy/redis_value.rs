@@ -9,8 +9,20 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub(super) enum RedisSelector {
+    Lock(RedisLockConfig),
     Value(RedisValueSelector),
     TimeShift(crate::replay::redis::time_shift::RedisTimeShiftRead),
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RedisLockConfig {
+    pub lock: RedisLockField,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RedisLockField {
+    pub key: RedisValueKeySelector,
+    pub source_evidence: String,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -58,6 +70,18 @@ pub(super) fn validate(rule: &ReplayDependencyRule) -> Result<()> {
         rule.http.is_none() && rule.mysql.is_none() && rule.memcached.is_none(),
         "Redis rule cannot define another protocol selector"
     );
+    if let RedisSelector::Lock(lock) = redis {
+        crate::replay::redis::lock::RedisLockSelector {
+            host: rule.target.host.clone().unwrap_or_default(),
+            port: rule.target.port.unwrap_or_default(),
+            key: lock.lock.key.clone(),
+        }
+        .validate()?;
+        crate::config::process_owned_dependencies::validate_source_evidence(
+            &lock.lock.source_evidence,
+        )?;
+        return Ok(());
+    }
     if let RedisSelector::TimeShift(read) = redis {
         let selector = crate::replay::redis::time_shift::RedisTimeShiftSelector {
             host: rule.target.host.clone().unwrap_or_default(),
@@ -115,6 +139,22 @@ pub(super) fn validate_overlaps(rules: &[ReplayDependencyRule]) -> Result<()> {
                     .is_none_or(|(a, b)| !a.eq_ignore_ascii_case(b))
             {
                 continue;
+            }
+            if let (RedisSelector::Lock(a), RedisSelector::Lock(b)) = (redis, other_redis) {
+                ensure!(
+                    !a.lock.key.overlaps(&b.lock.key),
+                    "Redis lock-token key selectors overlap between rules {:?} and {:?}",
+                    rule.id,
+                    other.id
+                );
+            }
+            if let (RedisSelector::Lock(lock), RedisSelector::Value(value))
+            | (RedisSelector::Value(value), RedisSelector::Lock(lock)) = (redis, other_redis)
+            {
+                ensure!(
+                    !lock.lock.key.overlaps(&value.key),
+                    "Redis lock-token and unordered value selectors overlap"
+                );
             }
             if let (RedisSelector::TimeShift(a), RedisSelector::TimeShift(b)) = (redis, other_redis)
             {

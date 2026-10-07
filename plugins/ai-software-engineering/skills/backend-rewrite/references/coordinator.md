@@ -473,6 +473,16 @@ fingerprint and the final public `progress.yaml` is committed. Use
 
 ## API Inventory And Serialized Traffic
 
+HTTP worker scopes are canonical paths/patterns. The method-keyed API inventory
+is the progress and validation ledger, not a list of worker assignments. Use
+`details.worker.work_scope` and the engine-issued commands when dispatching,
+resuming, integrating or accepting. A route acceptance selects all included
+method cases and runs one Replay/target session; each method keeps its own
+focused evidence and progress. Excluded methods stay skipped. Exact legacy
+`METHOD API` selectors continue to select only that method. Do not reset an
+existing method-owned worker or its receipts to consolidate route ownership.
+
+
 Every initialized action or status includes a bounded `api_inventory` summary:
 `total`, `completed`, `unverified`, `implementation_required`,
 `system_repair_required`, `awaiting_recording_refresh`, `revalidation_pending`, `current_index`, and
@@ -577,3 +587,12 @@ caller-required repository checks and delivery after the engine's final gates.
 A worker's external-input blocker is evidence for the existing route, not
 permission to mark completion. Preserve bindings and evidence when the engine
 returns global `blocked`, and resume through its returned action after repair.
+
+Redis lock token candidates are exposed by current `dirty_clusters` evidence,
+including conditional `redis_lock` hints/planners. Use `dependency-rule plan
+redis lock` with the returned evidence ID, explicit host/port/key scope and
+implementer source proof; review/apply the returned plan and run fresh Replay.
+Do not require UUID formatting, script SHA configuration or a second release
+rule. The engine retains nonce correlation and every other command argument.
+Old reports require fresh Replay to obtain witnesses. Wrong tokens after an
+applied rule remain target defects, not a request to weaken the rule.

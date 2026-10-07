@@ -39,7 +39,7 @@ integrator evidence endpoint or engine integration activity to invent.
    ```bash
    backend-rewrite --target-root /absolute/canonical review check \
      --integration --worktree /absolute/integration \
-     --api 'GET /api' --handoff-id ACCEPTED_HANDOFF_ID
+     --api '/api' --handoff-id ACCEPTED_HANDOFF_ID
    ```
 
    For two or more assigned API handoffs, write a JSON array of their exact
@@ -65,6 +65,11 @@ worker report for integration or a candidate report after subsequent changes.
 When the reviewed handoff needs no code change after input application, the
 candidate may equal the assigned base. Return the identity and checks without
 creating an empty merge or commit.
+
+An HTTP handoff owns one canonical path/pattern and all its included methods.
+Keep that exact scope in candidate reviews and batch handoff entries. Do not
+split one handoff into method deliveries. Formal acceptance remains coordinator
+owned; method progress and failures remain independently visible.
 
 ## Review
 

@@ -7,6 +7,16 @@ use crate::replay::command_matching::{
 use crate::replay::report::command::CommandMatchDiagnostic;
 
 impl RedisReplayState {
+    fn arguments_match(&self, exchange: &ReplayExchange, args: &[Vec<u8>]) -> bool {
+        self.lock_tokens
+            .arguments_match(exchange, &self.exchanges, args)
+            .unwrap_or_else(|| value::arguments_match(exchange, args, &self.value_rules))
+    }
+
+    pub(in crate::replay) fn configure_lock_tokens(&mut self, rules: &[lock::LockTokenRule]) {
+        self.lock_tokens = lock::LockTokens::prepare(&self.exchanges, rules);
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn match_redis(
         &mut self,
@@ -35,7 +45,7 @@ impl RedisReplayState {
                 && normalize_optional(username)
                     == normalize_optional(exchange.record.username.as_deref())
                 && exchange.record.command.eq_ignore_ascii_case(command)
-                && value::arguments_match(exchange, args, &self.value_rules)
+                && self.arguments_match(exchange, args)
         });
         let index = match matched {
             PreferredMatch::Matched(index) => index,
@@ -43,6 +53,16 @@ impl RedisReplayState {
                 return Err(lane_blocked_diagnostic(&self.exchanges, candidate, blocker));
             }
             PreferredMatch::NotFound => {
+                self.capture_lock_candidates(
+                    active_case_id,
+                    target,
+                    connection,
+                    resp_version,
+                    database,
+                    username,
+                    command,
+                    args,
+                );
                 self.capture_value_candidates(
                     active_case_id,
                     target,
@@ -71,8 +91,7 @@ impl RedisReplayState {
                                 database,
                                 username,
                                 command,
-                                args,
-                                &self.value_rules,
+                                self.arguments_match(exchange, args),
                             )
                             .as_slice()
                                 == ["connection"]
@@ -95,14 +114,14 @@ impl RedisReplayState {
                             database,
                             username,
                             command,
-                            args,
-                            &self.value_rules,
+                            self.arguments_match(exchange, args),
                         )
                     },
                 ));
             }
         };
-        let rule_ids = value::used_rules(&self.exchanges[index], args, &self.value_rules);
+        let mut rule_ids = value::used_rules(&self.exchanges[index], args, &self.value_rules);
+        rule_ids.extend(self.lock_tokens.claim(&self.exchanges[index], args));
         let requires_binding =
             self.connection_scopes
                 .claim(&self.exchanges[index], active_case_id, connection);
@@ -258,8 +277,7 @@ fn redis_mismatch_fields(
     database: i64,
     username: Option<&str>,
     command: &str,
-    args: &[Vec<u8>],
-    rules: &[value::ValueRule],
+    arguments_match: bool,
 ) -> Vec<&'static str> {
     let mut fields = Vec::new();
     if !connection_matches {
@@ -289,7 +307,7 @@ fn redis_mismatch_fields(
     if !exchange.record.command.eq_ignore_ascii_case(command) {
         fields.push("command");
     }
-    if !value::arguments_match(exchange, args, rules) {
+    if !arguments_match {
         fields.push("arguments");
     }
     fields

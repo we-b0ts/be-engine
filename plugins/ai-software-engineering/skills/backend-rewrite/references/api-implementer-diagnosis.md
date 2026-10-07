@@ -35,7 +35,7 @@ Start each worker turn by querying the exact assigned scope against the canonica
 target root, even while editing a separate worktree:
 
 ```text
-backend-rewrite --target-root <canonical-root> evidence --api '<METHOD pattern>'
+backend-rewrite --target-root <canonical-root> evidence --api '<assigned path-or-pattern>'
 backend-rewrite --target-root <canonical-root> evidence --process-output <id>
 ```
 
@@ -55,7 +55,13 @@ The overview's `context` contains `target_root`, `workflow_id`, `revision`,
 `recording_run_id`, `require_comparison`, and `worker` with exact scope, binding
 and dispatch identity. Read the complete bounded issue in `facts.issue`,
 including its ID, attempt, observed target fingerprint, possible causes, and
-representative when available. Treat possible causes as hypotheses.
+representative when available. HTTP route overviews also return `facts.method_apis`
+for the complete method contract set and `facts.method_issues` with per-method
+issues and queries. Check each included method, including siblings whose response
+evidence already passed; use the method's returned query IDs for diagnosis and
+retain its recorded method. Do not select only the first directory case or merge
+expected responses between methods. Treat possible causes as hypotheses.
+Use a legacy `METHOD API` entrypoint only when that is the exact returned assignment.
 
 The same context includes `review` with the registered worktree/base and the
 local check command. For a `target_quality` issue, read the assigned findings
@@ -139,6 +145,7 @@ their absence does not mean a documented capability is unavailable.
 | --- | --- |
 | An inbound JWT in a Bearer header or named URL query parameter expired between capture and Replay | JWT `preserve_relative`; inspect the returned `jwt-time-validity` query and prove the exact token location, authentication path, expiry leeway, and signing-key source. |
 | A DOCX download differs because OPC ZIP metadata and `docProps/core.xml` creation time are generated per request | DOCX response-body rule; prove the generated XML timestamp in source, select it explicitly, verify that its source-to-target delta tracks elapsed request time, and keep every other decompressed package part exact. |
+| Random SET NX ownership tokens differ from recordings, or a script/DELEX references that token | Redis `lock`; inspect `redis_lock_candidates`, prove random tokens and conditional release from source, and return host, port, key selector plus source evidence. One rule correlates all supported references; never remove the lock or independently ignore token arguments. |
 | A recorded Redis response timestamp makes an otherwise correct cache expire during Replay, causing extra reads or an error branch | Redis `time-shift`; inspect earlier successfully matched GET/HGET responses, including previous cases, and prove their time semantics. |
 | Shared HTTP initialization was recorded in another case | HTTP `cross-case`; verify same-run request identity and source sharing semantics. |
 | An outbound HTTP array or Redis write collection differs only in order | Protocol-specific `unordered`; prove collection semantics and inspect exact order witnesses. |

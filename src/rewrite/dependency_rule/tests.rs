@@ -411,3 +411,37 @@ fn redis_time_shift_manual_rule_rechecks_evidence_without_requiring_a_hint() {
         );
     }
 }
+
+#[test]
+fn redis_lock_retains_request_ownership_and_rechecks_current_evidence() {
+    let mut state = dependency_state();
+    let spec = RewriteDependencyRuleSpec::RedisLock {
+        selector: crate::RedisLockSelector {
+            host: "redis.test".into(),
+            port: 6379,
+            key: crate::RedisValueKeySelector::Exact {
+                value: "lock:one".into(),
+            },
+        },
+    };
+    assert!(spec.requires_fresh_replay());
+    state.dependency_rule_plan.as_mut().unwrap().spec = spec.clone();
+    for kind in [
+        RewriteIssueKind::Response,
+        RewriteIssueKind::Dependency,
+        RewriteIssueKind::Replay,
+    ] {
+        state.active_issue.as_mut().unwrap().kind = kind;
+        assert!(dependency_issue(&state, &spec).is_ok());
+        assert!(
+            validate_plan_evidence(
+                Path::new("/missing-target"),
+                &state,
+                "issue-dependency",
+                "evidence-dirty-clusters",
+                &spec
+            )
+            .is_err()
+        );
+    }
+}

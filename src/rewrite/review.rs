@@ -61,9 +61,13 @@ fn check_candidate(
     target_root: &Path,
     project: &crate::e2e_run::ResolvedProjectConfig,
     state: &RewriteState,
-    options: RewriteReviewOptions,
+    mut options: RewriteReviewOptions,
     batch: Option<&[IntegrationHandoffSelection]>,
 ) -> Result<RewriteReviewReport> {
+    options.scope = options
+        .scope
+        .as_ref()
+        .map(|scope| super::api_selector::canonical_scope(state, scope));
     let root = source_diff::project_root_in_worktree(
         target_root,
         options.worktree.as_deref().unwrap_or(target_root),

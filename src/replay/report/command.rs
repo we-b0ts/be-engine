@@ -86,6 +86,8 @@ pub(in crate::replay) struct CommandProtocolReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) unordered_value:
         Option<crate::replay::redis::value::evidence::OrderEvidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) lock_tokens: Option<crate::replay::redis::lock::evidence::LockEvidence>,
     pub(in crate::replay) connections: usize,
     pub(in crate::replay) matched_count: usize,
     pub(in crate::replay) matched: Vec<CommandMatchedReport>,

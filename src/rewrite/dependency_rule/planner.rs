@@ -17,6 +17,7 @@ pub(super) enum DependencyRulePlan {
     HttpCrossCase(crate::HttpCrossCasePlan),
     HttpUnordered(crate::HttpUnorderedPlan),
     HttpHeaderTimestamp(crate::HttpHeaderTimestampPlan),
+    RedisLock(crate::RedisLockPlan),
     RedisUnordered(crate::RedisUnorderedPlan),
     RedisTimeShift(crate::RedisTimeShiftPlan),
     MysqlTime(crate::MysqlTimeRulePlan),
@@ -44,6 +45,7 @@ impl DependencyRulePlan {
         match self {
             Self::RedisCrossCase(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::HttpCrossCase(plan) => Ok(serde_json::to_value(plan.report())?),
+            Self::RedisLock(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::RedisUnordered(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::RedisTimeShift(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::HttpUnordered(plan) => Ok(serde_json::to_value(plan.report())?),
@@ -62,6 +64,7 @@ impl DependencyRulePlan {
         match self {
             Self::RedisCrossCase(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::HttpCrossCase(plan) => Ok(serde_json::to_value(plan.apply()?)?),
+            Self::RedisLock(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::RedisUnordered(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::RedisTimeShift(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::HttpUnordered(plan) => Ok(serde_json::to_value(plan.apply()?)?),
@@ -79,6 +82,9 @@ impl DependencyRulePlan {
     pub(super) fn reused_existing(&self) -> Option<&str> {
         match self {
             Self::RedisCrossCase(plan) if plan.report().reused_existing => {
+                Some(&plan.report().effective_rule_id)
+            }
+            Self::RedisLock(plan) if plan.report().reused_existing => {
                 Some(&plan.report().effective_rule_id)
             }
             Self::RedisUnordered(plan) if plan.report().reused_existing => {
@@ -127,6 +133,7 @@ impl DependencyRulePlan {
             Self::HttpCrossCase(plan) => &plan.report().effective_rule_id,
             Self::HttpUnordered(plan) => &plan.report().effective_rule_id,
             Self::HttpHeaderTimestamp(plan) => &plan.report().effective_rule_id,
+            Self::RedisLock(plan) => &plan.report().effective_rule_id,
             Self::RedisUnordered(plan) => &plan.report().effective_rule_id,
             Self::RedisTimeShift(plan) => &plan.report().effective_rule_id,
             Self::MysqlTime(plan) => &plan.report().effective_rule_id,
@@ -146,6 +153,9 @@ pub(super) fn spec_from_selector(
     match selector {
         RewriteDependencyRuleSelector::RedisCrossCase { rule_id } => {
             RewriteDependencyRuleSpec::RedisCrossCase { rule_id }
+        }
+        RewriteDependencyRuleSelector::RedisLock { selector } => {
+            RewriteDependencyRuleSpec::RedisLock { selector }
         }
         RewriteDependencyRuleSelector::RedisUnordered { selector } => {
             RewriteDependencyRuleSpec::RedisUnordered { selector }
@@ -334,6 +344,18 @@ pub(super) fn build_plan(
             })?,
         ));
     }
+    if let RewriteDependencyRuleSpec::RedisLock { selector } = &record.spec {
+        return Ok(DependencyRulePlan::RedisLock(crate::plan_redis_lock(
+            crate::RedisLockFeedback {
+                policy_path: target_root.join(".traffic-e2e/verification.yaml"),
+                case_source,
+                replay_report_path,
+                rule_id: record.name.clone(),
+                selector: selector.clone(),
+                source_evidence: record.source_evidence.clone(),
+            },
+        )?));
+    }
     if let RewriteDependencyRuleSpec::RedisUnordered { selector } = &record.spec {
         return Ok(DependencyRulePlan::RedisUnordered(
             crate::plan_redis_unordered(crate::RedisUnorderedFeedback {
@@ -454,6 +476,7 @@ pub(super) fn build_plan(
         | RewriteDependencyRuleSpec::HttpCrossCase { .. }
         | RewriteDependencyRuleSpec::HttpUnordered { .. }
         | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
+        | RewriteDependencyRuleSpec::RedisLock { .. }
         | RewriteDependencyRuleSpec::RedisUnordered { .. }
         | RewriteDependencyRuleSpec::RedisTimeShift { .. } => {
             unreachable!(

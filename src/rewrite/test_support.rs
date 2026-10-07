@@ -17,6 +17,7 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
         source_route_bindings: std::collections::BTreeMap::new(),
         current_api_index: None,
         parked_slices: std::collections::BTreeMap::new(),
+        route_worker_scopes: false,
         worker_bindings: std::collections::BTreeMap::new(),
         source_review_rework: std::collections::BTreeMap::new(),
         worker_event_revision: 0,

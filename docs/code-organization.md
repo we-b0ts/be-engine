@@ -221,6 +221,11 @@ is unclear.
   snapshots on both load and save. These modules never manufacture task-runtime
   handles or manage worktrees. `model.rs` owns the remaining persisted state and
   public action contract and reexports the worker contract for compatibility.
+  `api_selector` owns route-only worker selectors, exact method compatibility,
+  and route-to-method inventory projection. `api_batch` owns grouped preparation
+  and method-slice transitions for one route acceptance. `e2e_run/focused_batch`
+  owns terminal method evidence publication from a shared Replay session; it
+  never alters recorded cases or moves rewrite scheduling into E2E execution.
   `inventory.rs` owns the API inventory state machine: stable installation,
   activation and parking (in `inventory/selection.rs`), deferred revalidation, and summary/detail
   views. Its `inventory/source_route` child owns source-route binding,
@@ -473,3 +478,12 @@ explicit repository-wide audit.
   `replay/redis/key_selector` owns compact and legacy-compatible key/hash-field
   byte selectors; `replay/redis/json` owns bounded duplicate-rejecting JSON
   decoding shared by request-value comparison and response transformation.
+
+- `replay/redis/lock` owns bounded token positions and case/resource-local nonce
+  bindings. Its evidence child owns token-only witnesses and immutable
+  acquisition/reference validation; script interpretation and target lock
+  behavior remain outside Replay matching. `policy/redis_value` owns the compact
+  `redis.lock` schema and overlap validation, its matcher projects runtime rules,
+  and `policy/feedback/redis_lock` owns stale-safe plan/apply. The Redis lock CLI
+  child projects explicit host/port/key selectors; coordinator evidence exposes
+  conditional hints and fresh-Replay planners through the existing lifecycle.

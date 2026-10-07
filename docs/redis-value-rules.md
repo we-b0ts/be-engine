@@ -91,3 +91,7 @@ dependency_rules:
 In the `all-grouped` capability gap, the Redis value is a department-to-boolean
 JSON object. Automatic JSON object comparison resolves that mismatch; no array
 unordered rule is needed for that object.
+
+Source-proven random ownership tokens use separate [Redis lock rules](redis-lock-rules.md).
+These correlate SET NX values with recorded references while every other argument
+remains exact; they do not use JSON/Protobuf collection normalization.

@@ -7,7 +7,11 @@ use super::model::{
 };
 use super::process_output_model::RewriteWorkScope;
 use super::store::RewriteStore;
-use super::{action, fingerprint, inventory, process_outputs};
+use super::{action, fingerprint, process_outputs};
+
+#[cfg(test)]
+use super::inventory;
+#[cfg(test)]
 use crate::RecordingApi;
 
 pub(super) mod events;
@@ -110,6 +114,7 @@ pub(super) fn dispatch_view(
     scope: RewriteWorkScope,
     requested_scope: Option<RewriteWorkScope>,
 ) -> RewriteWorkerDispatchView {
+    let scope = super::api_selector::canonical_scope(state, &scope);
     let dispatch_id = dispatch_id(state, &scope);
     let dispatch_state = dispatch_state(state, &scope, &dispatch_id);
     let binding_key = scope.binding_key();
@@ -171,11 +176,8 @@ pub(super) fn current_is_confirmed(state: &RewriteState) -> bool {
 }
 
 pub(super) fn ensure_api_confirmed(state: &RewriteState, api: &str, operation: &str) -> Result<()> {
-    let requested_api = api.parse::<RecordingApi>()?;
-    let scoped = inventory::scoped(state, Some(&requested_api))?;
-    let scope = RewriteWorkScope::Api {
-        api: api.to_string(),
-    };
+    let scoped = super::api_selector::scoped(state, api)?;
+    let scope = super::api_selector::work_scope(state, api);
     ensure_scope_confirmed(&scoped, &scope, operation)
 }
 
@@ -184,8 +186,9 @@ pub(super) fn ensure_scope_confirmed(
     scope: &RewriteWorkScope,
     operation: &str,
 ) -> Result<()> {
+    let scope = super::api_selector::canonical_scope(state, scope);
     ensure!(
-        is_confirmed(state, scope),
+        is_confirmed(state, &scope),
         "{} requires a confirmed dedicated subagent dispatch before {operation}; ask the workflow coordinator to inspect scoped status and execute action.commands.confirm_worker, then retry this operation",
         scope.label()
     );
@@ -205,7 +208,7 @@ pub fn confirm(options: RewriteWorkerConfirmOptions) -> Result<RewriteActionEnve
     let mut state = store
         .load()?
         .context("rewrite workflow is not initialized")?;
-    let scope = options.work_scope;
+    let scope = super::api_selector::canonical_scope(&state, &options.work_scope);
     ensure!(
         runtime::scopes(&state).contains(&scope),
         "{} is not implementation_required",
@@ -444,11 +447,32 @@ fn dispatch_id(state: &RewriteState, scope: &RewriteWorkScope) -> String {
     let issue = issue_for_scope(state, scope).expect("implementation phase requires an issue");
     let binding_key = scope.binding_key();
     let attempt = issue.attempt.to_string();
+    let route_issues = match scope {
+        RewriteWorkScope::Api { api } if !api.contains(' ') => {
+            let mut issues = std::iter::once(&state.active_slice)
+                .chain(state.parked_slices.values())
+                .filter(|slice| {
+                    super::api_selector::route(&slice.api) == api
+                        && !super::regression_scope::is_skipped(state, &slice.api)
+                        && slice.phase == RewritePhase::ImplementationRequired
+                })
+                .filter_map(|slice| {
+                    slice
+                        .active_issue
+                        .as_ref()
+                        .map(|issue| (&slice.api, &issue.id))
+                })
+                .collect::<Vec<_>>();
+            issues.sort();
+            serde_json::to_string(&issues).expect("route issues serialize")
+        }
+        _ => issue.id.clone(),
+    };
     let original = fingerprint::id(&[
         "rewrite-worker-dispatch-v1",
         state.workflow_id.as_str(),
         binding_key.as_str(),
-        issue.id.as_str(),
+        route_issues.as_str(),
         attempt.as_str(),
         issue.observed_target_fingerprint.as_str(),
     ]);
@@ -489,11 +513,8 @@ fn dispatch_state(
 
 fn active_scope(state: &RewriteState) -> Option<RewriteWorkScope> {
     process_outputs::active_scope(state).or_else(|| {
-        (state.phase == RewritePhase::ImplementationRequired && state.active_issue.is_some()).then(
-            || RewriteWorkScope::Api {
-                api: state.api.clone(),
-            },
-        )
+        (state.phase == RewritePhase::ImplementationRequired && state.active_issue.is_some())
+            .then(|| super::api_selector::work_scope(state, &state.api))
     })
 }
 
@@ -502,11 +523,29 @@ fn issue_for_scope<'a>(
     scope: &RewriteWorkScope,
 ) -> Option<&'a super::model::RewriteIssue> {
     match scope {
-        RewriteWorkScope::Api { api } if api == &state.api => state.active_issue.as_ref(),
-        RewriteWorkScope::Api { api } => state
-            .parked_slices
-            .get(api)
-            .and_then(|slice| slice.active_issue.as_ref()),
+        RewriteWorkScope::Api { api } => {
+            if api.contains(' ') {
+                return if api == &state.api {
+                    state.active_issue.as_ref()
+                } else {
+                    state
+                        .parked_slices
+                        .get(api)
+                        .and_then(|slice| slice.active_issue.as_ref())
+                };
+            }
+            let mut slices = std::iter::once(&state.active_slice)
+                .chain(state.parked_slices.values())
+                .filter(|slice| {
+                    super::api_selector::route(&slice.api) == api
+                        && !super::regression_scope::is_skipped(state, &slice.api)
+                        && slice.phase == RewritePhase::ImplementationRequired
+                        && slice.active_issue.is_some()
+                })
+                .collect::<Vec<_>>();
+            slices.sort_by(|left, right| left.api.cmp(&right.api));
+            slices.first().and_then(|slice| slice.active_issue.as_ref())
+        }
         RewriteWorkScope::ProcessOutput { .. } => process_outputs::issue_for_scope(state, scope),
     }
 }

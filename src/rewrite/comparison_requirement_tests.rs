@@ -48,7 +48,7 @@ async fn public_status_and_next_skip_requested_api_without_recording_or_dispatch
     );
     let action = super::next_rewrite(super::RewriteNextOptions {
         target_root: target.path().into(),
-        api: Some(api),
+        api: Some(api.into()),
         process_output: None,
         source_route: None,
     })

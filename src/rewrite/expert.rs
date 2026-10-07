@@ -28,18 +28,11 @@ fn batch_id(state: &RewriteState, apis: &[String]) -> String {
 }
 
 fn unfinished(state: &RewriteState, api: &str) -> bool {
-    state
-        .api_inventory
-        .iter()
-        .find(|item| item.api == api)
-        .map_or_else(
-            || {
-                state.api_inventory.is_empty()
-                    && state.api == api
-                    && state.phase != RewritePhase::SliceComplete
-            },
-            |item| !item.status.is_done(),
-        )
+    state.api_inventory.iter().any(|item| {
+        (item.api == api || super::api_selector::route(&item.api) == api) && !item.status.is_done()
+    }) || (state.api_inventory.is_empty()
+        && state.api == api
+        && state.phase != RewritePhase::SliceComplete)
 }
 
 fn eligible_after(binding: &worker::model::RewriteWorkerBinding) -> Option<DateTime<Utc>> {

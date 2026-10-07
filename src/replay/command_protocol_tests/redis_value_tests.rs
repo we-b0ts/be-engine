@@ -49,7 +49,7 @@ pub(super) async fn spawn(
     });
     (addr, state, task)
 }
-async fn request(client: &mut TcpStream, parts: &[&str], expected: &[u8]) {
+pub(super) async fn request(client: &mut TcpStream, parts: &[&str], expected: &[u8]) {
     let mut bytes = format!("*{}\r\n", parts.len()).into_bytes();
     for part in parts {
         bytes.extend_from_slice(format!("${}\r\n{}\r\n", part.len(), part).as_bytes());

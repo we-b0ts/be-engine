@@ -16,11 +16,8 @@ pub fn query_rewrite_evidence_for_scope(
         .context("rewrite workflow has not been initialized")?;
     match scope {
         RewriteWorkScope::Api { api } => {
-            let api = api.parse::<RecordingApi>()?;
-            let scoped = inventory::scoped(&state, Some(&api))?;
-            let scope = RewriteWorkScope::Api {
-                api: api.to_string(),
-            };
+            let scoped = super::super::api_selector::scoped(&state, api)?;
+            let scope = super::super::api_selector::work_scope(&state, api);
             let issue = scoped
                 .active_issue
                 .as_ref()
