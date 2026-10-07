@@ -19,7 +19,7 @@ async fn public_status_and_next_skip_requested_api_without_recording_or_dispatch
     let mut state = super::test_state();
     inventory::install(&mut state, vec!["GET /a".into(), "GET /b".into()]).unwrap();
     store.save(&state).unwrap();
-    policy(target.path(), "only: []\nskip: [GET /a]\n");
+    policy(target.path(), "only: []\nskip: [/a]\n");
     let api = "GET /a".parse().unwrap();
     let status = super::status_rewrite_for_api(
         super::RewriteContext {
@@ -102,7 +102,7 @@ async fn default_requires_comparison_and_current_config_overrides_legacy_batch_f
 async fn scoped_replay_only_completion_is_terminal_and_enabling_comparison_reuses_replay() {
     let target = target();
     git(target.path(), &["switch", "-qc", "rewrite-feature"]);
-    policy(target.path(), "only: [GET /b]\nrequire_comparison: false\n");
+    policy(target.path(), "only: [/b]\nrequire_comparison: false\n");
     let store = RewriteStore::new(target.path()).unwrap();
     let mut state = super::test_state();
     inventory::install(&mut state, vec!["GET /a".into(), "GET /b".into()]).unwrap();
@@ -123,7 +123,7 @@ async fn scoped_replay_only_completion_is_terminal_and_enabling_comparison_reuse
     let before = fingerprint::repository_fingerprint(target.path()).unwrap();
     let attempt_count = store.load().unwrap().unwrap().attempts.len();
 
-    policy(target.path(), "only: [GET /b]\nrequire_comparison: true\n");
+    policy(target.path(), "only: [/b]\nrequire_comparison: true\n");
     assert_eq!(
         fingerprint::repository_fingerprint(target.path()).unwrap(),
         before
@@ -152,7 +152,7 @@ async fn scoped_replay_only_completion_is_terminal_and_enabling_comparison_reuse
 async fn scope_is_terminal_with_required_comparison_and_does_not_disable_global_checks() {
     let target = target();
     git(target.path(), &["switch", "-qc", "rewrite-feature"]);
-    policy(target.path(), "skip: [GET /b]\n");
+    policy(target.path(), "skip: [/b]\n");
     let store = RewriteStore::new(target.path()).unwrap();
     let mut state = super::test_state();
     inventory::install(&mut state, vec!["GET /a".into(), "GET /b".into()]).unwrap();

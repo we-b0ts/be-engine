@@ -106,7 +106,7 @@ async fn next_adopts_pinned_recording_and_filters_its_inventory_without_recaptur
     policy(
         root.path(),
         A,
-        "only: [GET /users/*, GET /orders/*]\nskip: [GET /orders/*]\nrequire_comparison: false\n",
+        "only: [/users/*, /orders/*]\nskip: [/orders/*]\nrequire_comparison: false\n",
     );
     let manifest = artifacts::recording_manifest(root.path(), A);
     let original = fs::read(&manifest).unwrap();
@@ -136,6 +136,46 @@ async fn next_adopts_pinned_recording_and_filters_its_inventory_without_recaptur
             .count(),
         1
     );
+}
+
+#[test]
+fn pinned_recording_accepts_route_selectors_for_its_method_inventory() {
+    let root = target();
+    record(
+        root.path(),
+        A,
+        &["GET /users/*", "PUT /users/*"],
+        &["/users/1", "/users/2"],
+        "completed",
+    );
+    fs::write(
+        artifacts::recording_run(root.path(), A).join("apis/cases/case-1/request.json"),
+        serde_json::to_vec(&serde_json::json!({"method": "PUT", "uri": "/users/2"})).unwrap(),
+    )
+    .unwrap();
+    policy(root.path(), A, "only: [/users/*]\n");
+    let manifest = artifacts::recording_manifest(root.path(), A);
+    let original_manifest = fs::read(&manifest).unwrap();
+    validate_uninitialized(root.path()).unwrap();
+    let mut state = test_support::test_state();
+    assert!(super::super::apply(root.path(), &mut state).unwrap());
+    inventory::install(
+        &mut state,
+        vec!["GET /users/*".into(), "PUT /users/*".into()],
+    )
+    .unwrap();
+    super::super::apply(root.path(), &mut state).unwrap();
+    assert_eq!(inventory::view(&state).total, 1);
+    assert_eq!(inventory::view(&state).skipped, 0);
+    policy(root.path(), A, "skip: [/users/*]\n");
+    super::super::apply(root.path(), &mut state).unwrap();
+    assert!(
+        state
+            .api_inventory
+            .iter()
+            .all(|item| item.status == crate::rewrite::RewriteApiStatus::Skipped)
+    );
+    assert_eq!(fs::read(&manifest).unwrap(), original_manifest);
 }
 
 #[tokio::test]
@@ -208,7 +248,11 @@ fn switching_recordings_resets_verification_and_clearing_pin_keeps_current_basel
         (B, "GET /orders/*"),
         (A, "GET /users/*"),
     ] {
-        policy(root.path(), id, &format!("only: [{api}]\n"));
+        policy(
+            root.path(),
+            id,
+            &format!("only: [{}]\n", crate::recording_api::identity(api)),
+        );
         assert!(super::super::apply(root.path(), &mut state).unwrap());
         assert_eq!(state.recording_run_id, id);
         assert_eq!(state.recording_apis, vec![api]);
@@ -298,7 +342,11 @@ async fn status_and_next_switch_between_existing_recordings_and_clear_passes() {
         (B, "GET /orders/*"),
         (A, "GET /users/*"),
     ] {
-        policy(root.path(), id, &format!("only: [{api}]\n"));
+        policy(
+            root.path(),
+            id,
+            &format!("only: [{}]\n", crate::recording_api::identity(api)),
+        );
         let status = rewrite::status_rewrite(RewriteContext {
             target_root: root.path().into(),
         })
@@ -343,7 +391,7 @@ fn invalid_run_ids_and_new_inventory_selectors_do_not_mutate_state() {
         assert!(super::super::apply(root.path(), &mut state).is_err());
         assert_eq!(serde_json::to_value(&state).unwrap(), original);
     }
-    policy(root.path(), A, "only: [GET /typo]\n");
+    policy(root.path(), A, "only: [/typo]\n");
     assert!(super::super::apply(root.path(), &mut state).is_err());
     assert_eq!(serde_json::to_value(&state).unwrap(), original);
 }

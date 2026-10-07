@@ -223,8 +223,10 @@ is unclear.
   on both load and save. These modules never manufacture task-runtime
   handles or manage worktrees. `model.rs` owns the remaining persisted state and
   public action contract and reexports the worker contract for compatibility.
-  `api_selector` owns route-only worker selectors, HTTP method-selector rejection,
-  and route-to-method inventory projection. `api_batch` owns grouped preparation
+  `recording_api/scope` owns canonical route selector grammar and identity shared
+  by coordinator commands and local regression configuration. `api_selector`
+  owns route-to-method inventory selection and worker scope projection.
+  `api_batch` owns grouped preparation
   and method-slice transitions for one route acceptance. `e2e_run/focused_batch`
   owns terminal method evidence publication from a shared Replay session; it
   never alters recorded cases or moves rewrite scheduling into E2E execution.
@@ -262,7 +264,8 @@ is unclear.
   `comparison` child reuses valid Replay evidence when that requirement changes.
   Its `recording` child validates explicit recording selection and resets batch
   state; `artifacts` retains ownership of manifest and recorded-case validation.
-  `config/regression` owns the separate ignored YAML schema and defaults.
+  `config/regression` owns the separate ignored YAML schema, route-level matching
+  and defaults, using the shared scope grammar without depending on rewrite state.
   `transition.rs` applies the loaded Comparison requirement and leaves parked-slice
   completion scheduling to the root coordinator. `progress_publication.rs` owns
   the final delivery publication gate for the selected regression scope.

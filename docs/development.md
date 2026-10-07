@@ -1762,16 +1762,18 @@ longer control the requirement.
 # recording_run_id: "20260911093000"
 # Omitted or empty only selects every API in the recorded inventory.
 only:
-  - "GET /api/users/*"
-  - "POST /api/users"
+  - "/api/users/*"
+  - "/api/users"
 skip:
-  - "POST /api/users"
+  - "/api/users"
 require_comparison: true
 ```
 
 `only` and `skip` can be combined: first select `only` (or all APIs when absent or empty),
-then remove `skip`. Selectors must be exact canonical API names from `inventory`,
-including the method and recorded path pattern; `*` is part of that inventory
+then remove `skip`. HTTP selectors must be exact canonical routes from `inventory`,
+without a method, and select all recorded methods on that route. Method-prefixed
+HTTP selectors are rejected. Non-HTTP Motan selectors retain `MOTAN /...`.
+The recorded path pattern's `*` is part of that inventory
 identity, not a glob over other APIs. Unknown names, duplicate entries within a
 list and unknown fields are errors. Omitting `only`, `only:`, `only: null` and
 `only: []` all select every recorded API before applying `skip`. An empty `skip`

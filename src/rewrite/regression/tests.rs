@@ -202,7 +202,7 @@ fn new_round_preserves_recording_scope_and_replays_before_workers() {
     let target = fixture();
     fs::write(
         target.path().join(".traffic-e2e/regression.yaml"),
-        "only:\n  - GET /other\nrequire_comparison: false\n",
+        "only:\n  - /other\nrequire_comparison: false\n",
     )
     .unwrap();
     let report = begin(options(target.path())).unwrap();

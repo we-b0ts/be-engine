@@ -44,7 +44,10 @@ pub(super) fn apply(target_root: &Path, state: &mut RewriteState) -> Result<bool
     if !state.api_inventory.is_empty() && state.phase != RewritePhase::RecordingRequired {
         for api in policy.selectors() {
             ensure!(
-                state.api_inventory.iter().any(|item| item.api == *api),
+                state
+                    .api_inventory
+                    .iter()
+                    .any(|item| crate::recording_api::identity(&item.api) == api),
                 "{PATH}: API {api:?} is absent from the recorded inventory; use backend-rewrite inventory"
             );
         }

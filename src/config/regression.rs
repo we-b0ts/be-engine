@@ -40,7 +40,7 @@ impl RegressionScope {
             let mut seen = BTreeSet::new();
             for api in list {
                 let parsed = api
-                    .parse::<crate::RecordingApi>()
+                    .parse::<crate::recording_api::RecordingApiScope>()
                     .with_context(|| format!("{PATH}: invalid API {api:?}"))?;
                 ensure!(
                     parsed.to_string() == *api,
@@ -58,6 +58,7 @@ impl RegressionScope {
     }
 
     pub(crate) fn includes(&self, api: &str) -> bool {
+        let api = crate::recording_api::identity(api);
         self.only
             .as_ref()
             .is_none_or(|apis| apis.is_empty() || apis.iter().any(|item| item == api))
@@ -70,7 +71,7 @@ impl RegressionScope {
 
 pub(crate) const GITIGNORE_RULE: &str = "/.traffic-e2e/regression.yaml";
 pub(crate) const GIT_PATHSPEC: &str = ":(exclude).traffic-e2e/regression.yaml";
-pub(crate) const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# Omitted, null or empty recording_run_id keeps the current recording workflow.\n# recording_run_id: \"20260911093000\"\n# API names must match backend-rewrite inventory exactly.\n# Omitted or empty only selects all APIs; skip takes precedence.\n# only:\n#   - \"GET /api/users/*\"\nonly: []\nskip: []\nrequire_comparison: true\n";
+pub(crate) const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# Omitted, null or empty recording_run_id keeps the current recording workflow.\n# recording_run_id: \"20260911093000\"\n# HTTP API routes must match backend-rewrite inventory exactly, without methods.\n# Each route includes all its recorded methods.\n# Omitted or empty only selects all APIs; skip takes precedence.\n# only:\n#   - \"/api/users/*\"\nonly: []\nskip: []\nrequire_comparison: true\n";
 
 pub(crate) fn default_require_comparison() -> bool {
     true
@@ -134,7 +135,7 @@ mod tests {
         );
         std::fs::write(
             root.path().join(PATH),
-            "require_comparison: false\nskip: [GET /a]\n",
+            "require_comparison: false\nskip: [/a]\n",
         )
         .unwrap();
         initialize(root.path()).unwrap();

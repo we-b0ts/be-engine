@@ -362,7 +362,7 @@ mod tests {
         );
         fs::write(
             &regression,
-            "recording_run_id: \"20260911093000\"\nrequire_comparison: true\nskip: [GET /a]\n",
+            "recording_run_id: \"20260911093000\"\nrequire_comparison: true\nskip: [/a]\n",
         )
         .unwrap();
         assert_eq!(repository_fingerprint(repository.path()).unwrap(), baseline);

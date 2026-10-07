@@ -1,6 +1,4 @@
 //! Worker route selection is separate from method-specific recording contracts.
-use std::{fmt, str::FromStr};
-
 use anyhow::{Context, Result, ensure};
 
 use super::{
@@ -10,59 +8,14 @@ use super::{
 };
 use crate::RecordingApi;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RewriteApiSelector {
-    Route(String),
-    Motan(RecordingApi),
-}
-
-impl FromStr for RewriteApiSelector {
-    type Err = anyhow::Error;
-    fn from_str(value: &str) -> Result<Self> {
-        if value.starts_with('/') {
-            // Reuse the recording path grammar without inventing a wildcard method.
-            let api = format!("GET {value}").parse::<RecordingApi>()?;
-            Ok(Self::Route(api.path_pattern().into()))
-        } else {
-            ensure!(
-                value.starts_with("MOTAN "),
-                "HTTP API selectors must use a path or pattern without a method"
-            );
-            Ok(Self::Motan(value.parse()?))
-        }
-    }
-}
-
-impl fmt::Display for RewriteApiSelector {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Route(route) => formatter.write_str(route),
-            Self::Motan(api) => api.fmt(formatter),
-        }
-    }
-}
-
-impl From<RecordingApi> for RewriteApiSelector {
-    fn from(api: RecordingApi) -> Self {
-        if api.method().as_str() == "MOTAN" {
-            Self::Motan(api)
-        } else {
-            Self::Route(api.path_pattern().into())
-        }
-    }
-}
+pub use crate::recording_api::RecordingApiScope as RewriteApiSelector;
 
 pub(super) fn route(api: &str) -> &str {
     api.split_once(' ').map_or(api, |(_, path)| path)
 }
 
-/// Public HTTP API identity is its route; non-HTTP identities stay qualified.
 pub(super) fn public_api(api: &str) -> &str {
-    if api.starts_with("MOTAN ") {
-        api
-    } else {
-        route(api)
-    }
+    crate::recording_api::identity(api)
 }
 
 pub(super) fn members(state: &RewriteState, selector: &RewriteApiSelector) -> Vec<String> {

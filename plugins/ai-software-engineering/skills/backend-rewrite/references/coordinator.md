@@ -581,7 +581,9 @@ them.
 
 Read `workflow.require_comparison` as the current local regression requirement
 from `.traffic-e2e/regression.yaml` (default true). `only` selects exact inventory
-APIs; omitted, null or empty `only` selects all recorded APIs. `skip` takes
+routes without an HTTP method and includes every recorded method on each route;
+method-prefixed HTTP entries are invalid. A pattern is an exact inventory name,
+not a glob over other routes. Omitted, null or empty `only` selects all recorded APIs. `skip` takes
 precedence; excluded APIs are explicitly `skipped` and do
 not block this run. The file is ignored by Git and does not need a commit or
 change code/target fingerprints. Preserve the user's chosen scope and validation

@@ -59,6 +59,9 @@ identities belong to case/worker diagnostics and the verification ledger.
 A passing method does not complete a failing sibling. HTTP coordinator
 selectors accept only paths/patterns; `METHOD API` and combined method selectors
 are rejected. One API route owns one worker, worktree and delivery.
+The local `.traffic-e2e/regression.yaml` `only` and `skip` lists use the same
+route identities and affect all recorded HTTP methods on each route. `skip`
+takes precedence; use exact inventory patterns and preserve the user's scope.
 
 ## Select Your Agent Role
 
