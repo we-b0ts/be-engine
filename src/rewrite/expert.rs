@@ -35,6 +35,14 @@ fn unfinished(state: &RewriteState, api: &str) -> bool {
         && state.phase != RewritePhase::SliceComplete)
 }
 
+fn last_unfinished_api(state: &RewriteState, api: &str) -> bool {
+    unfinished(state, api)
+        && state
+            .api_inventory
+            .iter()
+            .all(|item| item.status.is_done() || super::api_selector::public_api(&item.api) == api)
+}
+
 fn eligible_after(binding: &worker::model::RewriteWorkerBinding) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(
         binding
@@ -64,9 +72,9 @@ fn state_at(
     }
 }
 
-/// Count actual running API implementers. Unknown/unconfirmed runtime states require
-/// reconciliation before concluding that a worker is alone. Queued and ended
-/// workers do not count as running; delivered historical bindings are ignored.
+/// Assist only the last unfinished API, with one actual running implementer.
+/// Unknown/unconfirmed runtime states require reconciliation first. Queued and
+/// ended workers do not count as running; historical bindings are ignored.
 fn due_api(state: &RewriteState, now: DateTime<Utc>) -> Option<String> {
     use worker::model::{
         RewriteWorkerActivity as Activity, RewriteWorkerCoverageState as Coverage,
@@ -101,6 +109,9 @@ fn due_api(state: &RewriteState, now: DateTime<Utc>) -> Option<String> {
         }
     }
     let api = running?;
+    if !last_unfinished_api(state, &api) {
+        return None;
+    }
     (state_at(state.worker_bindings.get(&api)?, now) == RewriteExpertState::PrepareRequired)
         .then_some(api)
 }
@@ -273,6 +284,8 @@ pub(super) fn inventory(root: &Path, state: &RewriteState) -> Vec<RewriteExpertI
             RewriteExpertState::CloseRequired
         } else if first.agent_handle_fingerprint.is_some() {
             RewriteExpertState::Confirmed
+        } else if !apis.iter().all(|api| last_unfinished_api(state, api)) {
+            RewriteExpertState::NotDue
         } else {
             RewriteExpertState::DispatchRequired
         };
@@ -320,7 +333,7 @@ pub(super) fn required_action(
         })?;
     let summary = match item.expert.state {
         RewriteExpertState::CloseRequired => "the assigned API has passed verification. Do not dispatch or resume an expert. Query the retained expert task; stop it if still running or queued, and confirm it has ended before executing commands.close_expert. If an accepted task was not yet confirmed, recover it and use commands.confirm_expert first; if no task was submitted, close the reservation directly. Retain late findings as reference only; do not forward them as new API work. Closing releases the expert slot and preserves one-time coverage",
-        RewriteExpertState::PrepareRequired => "exactly one API implementer is running and more than two hours have passed since its last integrated code delivery (or first binding before any code integration). Execute commands.prepare to reserve them as one diagnostic batch. Do not create an expert until the reserved batch returns dispatch_required",
+        RewriteExpertState::PrepareRequired => "only one unfinished API remains, its implementer is running, and more than two hours have passed since its last integrated code delivery (or first binding before any code integration). Execute commands.prepare to reserve it as one diagnostic batch. Do not create an expert until the reserved batch returns dispatch_required",
         _ => "dispatch exactly one api-expert for all APIs in details.apis. Recover any existing task for expert_id before submitting; never dispatch twice. The expert uses each API's commands.evidence and worktree read-only and returns per-API findings to the coordinator. Confirm the accepted task, including queued tasks, through commands.confirm_expert. Continue engine work; forward each API's report to its retained implementer and acknowledge each delivery through inventory.experts[].apis[].commands.report_delivered",
     }.to_string();
     Some(RewriteAction::ExpertRequired {
@@ -382,7 +395,7 @@ pub fn prepare(options: RewriteExpertPrepareOptions) -> Result<RewriteActionEnve
         let now = Utc::now();
         ensure!(
             apis.len() == 1 && due_api(&state, now).as_ref() == apis.first(),
-            "expert preparation requires the sole running API implementer to be overdue and not already covered; inspect status"
+            "expert preparation requires the last unfinished API's sole running implementer to be overdue and not already covered; inspect status"
         );
         for api in &apis {
             state.worker_bindings.get_mut(api).unwrap().expert = Some(ExpertAssignment {

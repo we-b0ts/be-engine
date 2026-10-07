@@ -8,7 +8,7 @@ fn bound_state() -> RewriteState {
 }
 
 #[test]
-fn strictly_more_than_two_hours_and_no_convergence_condition() {
+fn strictly_more_than_two_hours_since_the_last_delivery() {
     let mut state = bound_state();
     let start = Utc::now();
     let binding = state.worker_bindings.get_mut("/api").unwrap();
@@ -312,14 +312,14 @@ fn add_api(state: &mut RewriteState, api: &str, overdue: bool) {
 }
 
 #[test]
-fn only_one_running_api_qualifies_and_unknown_status_cannot_prove_it_is_alone() {
+fn another_unfinished_api_blocks_assistance_regardless_of_its_worker_activity() {
     use worker::model::RewriteWorkerActivity as Activity;
     let mut state = overdue_state();
     add_api(&mut state, "GET /second", true);
     assert!(due_api(&state, Utc::now()).is_none());
     let second = state.worker_bindings.get_mut("/second").unwrap();
     second.observation.as_mut().unwrap().activity = Activity::Queued;
-    assert_eq!(due_api(&state, Utc::now()).as_deref(), Some("/api"));
+    assert!(due_api(&state, Utc::now()).is_none());
     for activity in [Activity::Idle, Activity::HandoffReady, Activity::Integrated] {
         state
             .worker_bindings
@@ -329,7 +329,7 @@ fn only_one_running_api_qualifies_and_unknown_status_cannot_prove_it_is_alone() 
             .as_mut()
             .unwrap()
             .activity = activity;
-        assert_eq!(due_api(&state, Utc::now()).as_deref(), Some("/api"));
+        assert!(due_api(&state, Utc::now()).is_none());
     }
     state
         .worker_bindings
@@ -339,6 +339,13 @@ fn only_one_running_api_qualifies_and_unknown_status_cannot_prove_it_is_alone() 
     assert!(due_api(&state, Utc::now()).is_none());
     state.worker_bindings.remove("/second");
     assert!(due_api(&state, Utc::now()).is_none());
+    state.api_inventory[1].status = RewriteApiStatus::Complete;
+    assert_eq!(due_api(&state, Utc::now()).as_deref(), Some("/api"));
+}
+
+#[test]
+fn last_api_requires_a_fresh_running_implementer() {
+    use worker::model::RewriteWorkerActivity as Activity;
     let mut state = overdue_state();
     for activity in [
         Activity::Queued,
@@ -366,6 +373,115 @@ fn only_one_running_api_qualifies_and_unknown_status_cannot_prove_it_is_alone() 
     observation.activity = Activity::Running;
     observation.observed_at = (Utc::now() - Duration::hours(1)).to_rfc3339();
     assert!(due_api(&state, Utc::now()).is_none());
+    state.worker_bindings.get_mut("/api").unwrap().observation = None;
+    assert!(due_api(&state, Utc::now()).is_none());
+    state.worker_bindings.clear();
+    assert!(due_api(&state, Utc::now()).is_none());
+}
+
+#[test]
+fn unfinished_inventory_without_workers_blocks_assistance_until_done() {
+    let mut state = overdue_state();
+    let mut other = state.api_inventory[0].clone();
+    other.api = "POST /other".into();
+    state.api_inventory.push(other);
+    for status in [
+        RewriteApiStatus::Pending,
+        RewriteApiStatus::Active,
+        RewriteApiStatus::ImplementationRequired,
+        RewriteApiStatus::SystemRepairRequired,
+        RewriteApiStatus::AwaitingRecordingRefresh,
+        RewriteApiStatus::RevalidationPending,
+    ] {
+        state.api_inventory[1].status = status;
+        assert!(due_api(&state, Utc::now()).is_none(), "{status:?}");
+    }
+    for status in [RewriteApiStatus::Complete, RewriteApiStatus::Skipped] {
+        state.api_inventory[1].status = status;
+        assert_eq!(due_api(&state, Utc::now()).as_deref(), Some("/api"));
+    }
+}
+
+#[test]
+fn unfinished_methods_on_the_same_route_count_as_one_api() {
+    let mut state = overdue_state();
+    let mut other_method = state.api_inventory[0].clone();
+    other_method.api = "PUT /api".into();
+    other_method.status = RewriteApiStatus::ImplementationRequired;
+    state.api_inventory.push(other_method);
+    assert_eq!(due_api(&state, Utc::now()).as_deref(), Some("/api"));
+    assert_eq!(counts(&state), (1, 0, 0));
+    state.api_inventory.clear(); // Legacy workflows without inventory retain assistance.
+    assert_eq!(due_api(&state, Utc::now()).as_deref(), Some("/api"));
+}
+
+#[tokio::test]
+async fn nineteen_implementation_required_apis_block_public_expert_actions() {
+    let target = configured_target();
+    let mut state = overdue_state();
+    for index in 0..19 {
+        let mut other = state.api_inventory[0].clone();
+        other.api = format!("GET /remaining-{index}");
+        other.status = RewriteApiStatus::ImplementationRequired;
+        state.api_inventory.push(other);
+    }
+    let store = RewriteStore::new(target.path()).unwrap();
+    store.save(&state).unwrap();
+    let lock = store.lock().unwrap();
+    let context = || crate::rewrite::RewriteContext {
+        target_root: target.path().into(),
+    };
+    let status = crate::rewrite::status_rewrite(context()).unwrap();
+    let summary = status.api_inventory.as_ref().unwrap();
+    assert_eq!(summary.active, 1);
+    assert_eq!(summary.implementation_required, 19);
+    assert!(!matches!(
+        status.action,
+        RewriteAction::ExpertRequired { .. }
+    ));
+    let inventory = crate::rewrite::inventory_rewrite(context()).unwrap();
+    assert!(inventory.experts.is_empty());
+    assert!(!inventory.details.ready.contains_key("dispatch_expert"));
+    let next = crate::rewrite::start_rewrite_next(crate::rewrite::RewriteNextOptions {
+        target_root: target.path().into(),
+        api: None,
+        process_output: None,
+        source_route: None,
+    })
+    .unwrap();
+    assert!(!matches!(next.action, RewriteAction::ExpertRequired { .. }));
+    let waited = crate::rewrite::wait_rewrite(crate::rewrite::RewriteWaitOptions {
+        target_root: target.path().into(),
+        seconds: 1,
+    })
+    .await
+    .unwrap();
+    assert!(!matches!(
+        waited.action,
+        RewriteAction::ExpertRequired { .. }
+    ));
+    assert!(
+        prepare(RewriteExpertPrepareOptions {
+            target_root: target.path().into(),
+            expert_id: batch_id(&state, &["/api".into()]),
+            apis: vec!["/api".into()],
+        })
+        .is_err()
+    );
+    drop(lock);
+    let fingerprint = fingerprint::repository_fingerprint(target.path()).unwrap();
+    for item in state.api_inventory.iter_mut().skip(1) {
+        item.status = RewriteApiStatus::Complete;
+        item.e2e_current = true;
+        item.comparison_current = true;
+        item.verified_target_fingerprint = Some(fingerprint.clone());
+    }
+    store.save(&state).unwrap();
+    let status = crate::rewrite::status_rewrite(context()).unwrap();
+    assert!(
+        matches!(status.action, RewriteAction::ExpertRequired { .. }),
+        "{status:?}"
+    );
 }
 
 #[test]
@@ -412,7 +528,7 @@ fn recent_integration_resets_the_timer_but_idle_resume_does_not() {
 }
 
 #[test]
-fn reservations_recheck_running_count_and_serialize_later_experts() {
+fn reservations_recheck_remaining_inventory_and_serialize_later_experts() {
     let target = configured_target();
     let store = RewriteStore::new(target.path()).unwrap();
     let state = overdue_state();
@@ -423,6 +539,7 @@ fn reservations_recheck_running_count_and_serialize_later_experts() {
     };
     let mut concurrent = state.clone();
     add_api(&mut concurrent, "GET /second", true);
+    concurrent.worker_bindings.remove("/second");
     store.save(&concurrent).unwrap();
     assert!(prepare(request.clone()).is_err());
     store.save(&state).unwrap();
@@ -436,7 +553,7 @@ fn reservations_recheck_running_count_and_serialize_later_experts() {
         .observation
         .as_mut()
         .unwrap()
-        .activity = worker::model::RewriteWorkerActivity::HandoffReady;
+        .activity = worker::model::RewriteWorkerActivity::Idle;
     add_api(&mut later, "GET /second", true);
     store.save(&later).unwrap();
     let next = RewriteExpertPrepareOptions {
@@ -457,6 +574,9 @@ fn reservations_recheck_running_count_and_serialize_later_experts() {
         recipient_handle: "test-subagent-handle:/api".into(),
     })
     .unwrap();
+    let mut delivered_state = store.load().unwrap().unwrap();
+    pass_api(target.path(), &mut delivered_state);
+    store.save(&delivered_state).unwrap();
     prepare(next).unwrap();
     prepare(request).unwrap(); // Replayed reservation cannot reopen a delivered task.
     let final_state = store.load().unwrap().unwrap();
@@ -469,6 +589,36 @@ fn reservations_recheck_running_count_and_serialize_later_experts() {
             .delivery
             .is_some()
     );
+}
+
+#[test]
+fn unconfirmed_reservation_waits_for_the_last_unfinished_api() {
+    let target = configured_target();
+    let store = RewriteStore::new(target.path()).unwrap();
+    let state = overdue_state();
+    store.save(&state).unwrap();
+    reserve(target.path(), &state);
+    let mut expanded = store.load().unwrap().unwrap();
+    add_api(&mut expanded, "GET /second", true);
+    store.save(&expanded).unwrap();
+    let item = inventory(target.path(), &expanded).remove(0);
+    assert_eq!(item.expert.state, RewriteExpertState::NotDue);
+    assert!(item.commands.confirm_expert.is_none());
+    assert!(required_action(target.path(), &expanded, None).is_none());
+    assert_eq!(counts(&expanded), (0, 0, 0));
+    expanded.api_inventory[1].status = RewriteApiStatus::Skipped;
+    store.save(&expanded).unwrap();
+    let item = inventory(target.path(), &expanded).remove(0);
+    assert_eq!(item.expert.state, RewriteExpertState::DispatchRequired);
+    assert!(item.commands.confirm_expert.is_some());
+    confirm(options(target.path(), &state)).unwrap();
+    let mut confirmed = store.load().unwrap().unwrap();
+    confirmed.api_inventory[1].status = RewriteApiStatus::ImplementationRequired;
+    assert_eq!(
+        inventory(target.path(), &confirmed)[0].expert.state,
+        RewriteExpertState::Confirmed
+    );
+    assert_eq!(counts(&confirmed), (0, 1, 0));
 }
 
 #[tokio::test]

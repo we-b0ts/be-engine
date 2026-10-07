@@ -152,9 +152,14 @@ Dispatch an expert only when the engine returns `expert_required` with
 `details.state=dispatch_required` after reservation. The coordinator must not
 initiate expert assistance based on elapsed time, difficulty, or its own judgment.
 
-The engine returns `expert_required` when exactly one API implementer is running and
-more than two hours have elapsed since that API's last integrated code delivery
-(or its first binding before any such delivery). Handle the returned action;
+The engine returns `expert_required` when only one unfinished API remains in the
+inventory, its implementer is running, and more than two hours have elapsed since
+that API's last integrated code delivery (or its first binding before any such
+delivery). HTTP methods on one route count as one API; every other API must be
+complete or skipped, including APIs without worker bindings. An unconfirmed
+reservation returns `not_due` without a dispatch command if another unfinished
+API appears; already confirmed experts retain their report and cleanup lifecycle.
+Handle the returned action;
 the coordinator does not report timestamps, runtime duration, or calculate
 eligibility. Empty handoffs and worker resumes do not reset this timer.
 
