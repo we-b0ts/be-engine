@@ -65,6 +65,116 @@ fn relative_age_and_expired_or_future_status_are_preserved_without_changing_cred
         assert_eq!(shifted.render(replayed).unwrap().0, bytes);
     }
 }
+
+#[test]
+fn rfc3339_preserves_relative_expiry_offsets_and_submillisecond_precision() {
+    let captured = record(token()).timestamp.unwrap();
+    for offset in ["Z", "+00:00", "+08:00", "-05:30"] {
+        let timezone = *DateTime::parse_from_rfc3339(&format!("2026-09-07T06:22:26{offset}"))
+            .unwrap()
+            .offset();
+        for lifetime in [-3600, -1, 0, 3600] {
+            let expiry = (captured + chrono::Duration::seconds(lifetime)).with_timezone(&timezone);
+            let text = expiry.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, offset == "Z");
+            let value = json!({"timestamp":text,"token":"private-token","ordered":[2,1]});
+            let recorded = record(value.clone());
+            let mut read = selector().read;
+            read.response_json.get_mut("/timestamp").unwrap().format =
+                RedisTimestampFormat::Rfc3339;
+            let shift = ResponseShift::prepare(&recorded, &[("expiry".into(), read)]).unwrap();
+            for delta in [
+                chrono::Duration::days(1) + chrono::Duration::nanoseconds(123_456_789),
+                -chrono::Duration::days(1) + chrono::Duration::nanoseconds(1),
+            ] {
+                let now = captured + delta;
+                let (wire, _) = shift.render(now).unwrap();
+                let actual = decode_payload(&wire).unwrap();
+                let shifted =
+                    DateTime::parse_from_rfc3339(actual["timestamp"].as_str().unwrap()).unwrap();
+                assert_eq!(
+                    shifted.signed_duration_since(now),
+                    chrono::Duration::seconds(lifetime)
+                );
+                assert_eq!(shifted.offset(), &timezone);
+                assert!(actual["timestamp"].as_str().unwrap().ends_with(offset));
+                assert_eq!(actual["token"], value["token"]);
+                assert_eq!(actual["ordered"], value["ordered"]);
+                assert_eq!(shift.render(now).unwrap().0, wire);
+            }
+            assert_eq!(
+                decode_payload(&recorded.response.decode().unwrap()).unwrap(),
+                value
+            );
+        }
+    }
+}
+
+#[test]
+fn rfc3339_rejects_invalid_types_dates_missing_timezones_and_year_overflow() {
+    let mut read = selector().read;
+    read.response_json.get_mut("/timestamp").unwrap().format = RedisTimestampFormat::Rfc3339;
+    for value in [
+        json!({}),
+        json!({"timestamp":null}),
+        json!({"timestamp":1788761925496_i64}),
+        json!({"timestamp":true}),
+        json!({"timestamp":[]}),
+        json!({"timestamp":"1788761925496"}),
+        json!({"timestamp":"not-a-timestamp"}),
+        json!({"timestamp":"2026-09-07T06:22:26"}),
+        json!({"timestamp":"2026-02-30T06:22:26+00:00"}),
+    ] {
+        assert!(
+            ResponseShift::prepare(&record(value), &[("expiry".into(), read.clone())]).is_err()
+        );
+    }
+    for (text, delta) in [
+        ("9999-12-31T23:59:59+08:00", chrono::Duration::seconds(1)),
+        ("0000-01-01T00:00:00-05:30", -chrono::Duration::seconds(1)),
+    ] {
+        let recorded = record(json!({"timestamp":text}));
+        let shift = ResponseShift::prepare(&recorded, &[("expiry".into(), read.clone())]).unwrap();
+        assert!(shift.render(recorded.timestamp.unwrap() + delta).is_err());
+    }
+}
+
+#[test]
+fn mixed_timestamp_formats_use_one_delivery_anchor() {
+    let captured = record(token()).timestamp.unwrap();
+    let expiry = captured + chrono::Duration::hours(1);
+    let recorded = record(json!({
+        "seconds":expiry.timestamp(),"milliseconds":expiry.timestamp_millis(),
+        "timestamp":expiry.to_rfc3339(),"untouched":"2026-09-07T00:00:00Z"
+    }));
+    let mut read = selector().read;
+    read.response_json = [
+        ("/seconds", RedisTimestampFormat::UnixSeconds),
+        ("/milliseconds", RedisTimestampFormat::UnixMilliseconds),
+        ("/timestamp", RedisTimestampFormat::Rfc3339),
+    ]
+    .into_iter()
+    .map(|(path, format)| {
+        (
+            path.into(),
+            RelativeTimeField {
+                time: RelativeTime::PreserveRelative,
+                format,
+            },
+        )
+    })
+    .collect();
+    let now = captured + chrono::Duration::days(1);
+    let shift = ResponseShift::prepare(&recorded, &[("mixed".into(), read)]).unwrap();
+    let actual = decode_payload(&shift.render(now).unwrap().0).unwrap();
+    assert_eq!(actual["seconds"], now.timestamp() + 3600);
+    assert_eq!(actual["milliseconds"], now.timestamp_millis() + 3_600_000);
+    let shifted = DateTime::parse_from_rfc3339(actual["timestamp"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        shifted.signed_duration_since(now),
+        chrono::Duration::hours(1)
+    );
+    assert_eq!(actual["untouched"], "2026-09-07T00:00:00Z");
+}
 #[test]
 fn compact_key_and_field_patterns_keep_exact_bytes_and_legacy_input() {
     for (yaml, yes, no) in [
@@ -212,6 +322,61 @@ fn manual_plan_uses_previously_matched_response_without_hints_and_rejects_stale_
     )
     .unwrap();
     assert!(plan_redis_time_shift(f).is_err());
+}
+
+#[test]
+fn rfc3339_get_and_hget_plan_apply_validate_and_preserve_recorded_evidence() {
+    for command in ["GET", "HGET"] {
+        let (_temp, mut feedback, path) = fixture();
+        let mut event: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        event["command"] = command.into();
+        feedback.selector.read.command = command.into();
+        if command == "GET" {
+            event["args"].as_array_mut().unwrap().truncate(1);
+            feedback.selector.read.hash_field = None;
+        }
+        feedback
+            .selector
+            .read
+            .response_json
+            .get_mut("/timestamp")
+            .unwrap()
+            .format = RedisTimestampFormat::Rfc3339;
+        feedback.source_evidence =
+            "session.py: expires_at is an unsigned RFC3339 expiry string compared with UTC now"
+                .into();
+        for text in ["2026-09-07T07:22:26.653+00:00", "2026-09-07T07:22:26"] {
+            let body = json!({"timestamp":text,"token":"private-token"}).to_string();
+            event["response"]["data"] = format!("${}\r\n{body}\r\n", body.len()).into();
+            fs::write(&path, event.to_string()).unwrap();
+            if !text.ends_with("+00:00") {
+                assert!(plan_redis_time_shift(feedback.clone()).is_err());
+                continue;
+            }
+            let immutable = fs::read(&path).unwrap();
+            let plan = plan_redis_time_shift(feedback.clone()).unwrap();
+            assert_eq!(plan.report().evidence["matched_in_attempt"], 1);
+            assert!(
+                !serde_json::to_string(plan.report())
+                    .unwrap()
+                    .contains("private-token")
+            );
+            plan.apply().unwrap();
+            assert!(
+                fs::read_to_string(&feedback.policy_path)
+                    .unwrap()
+                    .contains("format: rfc3339")
+            );
+            crate::replay::validate_replay_policy(&feedback.policy_path).unwrap();
+            assert_eq!(fs::read(&path).unwrap(), immutable);
+            assert!(
+                plan_redis_time_shift(feedback.clone())
+                    .unwrap()
+                    .report()
+                    .reused_existing
+            );
+        }
+    }
 }
 
 #[test]
