@@ -3045,16 +3045,23 @@ announcements with `+OK`. Authentication and database selection failures remain
 strict. This exemption requires a well-formed announcement and a complete response;
 it does not bypass unsafe or truncated capture validation.
 
-Redis Pub/Sub support is intentionally bounded to a single RESP2 subscription
-argument for `SUBSCRIBE`, `PSUBSCRIBE`, or `SSUBSCRIBE`. Recorder accepts only
-the exact three-element subscription confirmation (or an ordinary Redis error),
-then tracks that active subscription and transparently forwards matching RESP2
-`message`, `pmessage`, or `smessage` pushes without treating them as ordinary
+Redis Pub/Sub support is intentionally bounded to a single RESP2 subject
+argument for `SUBSCRIBE`, `PSUBSCRIBE`, `SSUBSCRIBE`, `UNSUBSCRIBE`,
+`PUNSUBSCRIBE`, or `SUNSUBSCRIBE`. Recorder accepts only the exact three-element
+confirmation (or an ordinary Redis error): command and binary-safe subject must
+match the request, with a positive subscription count or a nonnegative
+unsubscription count. Successful confirmations add or remove only that channel,
+pattern, or shard channel; errors do not change subscriptions. Recorder forwards
+matching RESP2 `message`, `pmessage`, or `smessage` pushes without treating them as ordinary
 request responses. These process notifications are not semantic Replay evidence;
-Replay returns the recorded subscription confirmation and keeps the connection
-open without synthesizing pushes. A malformed push or one that does not match an
-active subscription remains a capture error. Multiple subscription arguments,
-unsubscribe commands, and RESP3 push frames remain unsupported.
+Replay returns the recorded confirmation and keeps the connection open without
+synthesizing pushes. The entire recorded Pub/Sub lane stays bound to one target
+connection, including ordinary commands after unsubscription. Removing the last
+subscription restores ordinary response handling on the recorded connection.
+A malformed push or one that does not match an active subscription remains a
+capture error. Multiple subject arguments, no-argument unsubscribe-all commands,
+and RESP3 push frames remain unsupported. Re-record cases rejected by an older
+Recorder for unsupported unsubscription; existing failed evidence is immutable.
 
 Case-owned Memcached matching treats recorded physical connections as source
 lanes, not as a required one-to-one connection topology. One target connection

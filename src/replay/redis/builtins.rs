@@ -1,4 +1,4 @@
-use crate::redis::{RedisCommand, is_subscription_command};
+use crate::redis::{RedisCommand, is_pubsub_command};
 
 pub(super) fn redis_builtin(
     command: &RedisCommand,
@@ -87,16 +87,8 @@ pub(super) fn redis_is_builtin(command: &str) -> bool {
 pub(super) fn redis_is_unsupported(command: &RedisCommand) -> bool {
     matches!(
         command.name.as_str(),
-        "UNSUBSCRIBE"
-            | "PUNSUBSCRIBE"
-            | "SUNSUBSCRIBE"
-            | "MONITOR"
-            | "CLUSTER"
-            | "ACL"
-            | "CONFIG"
-            | "MIGRATE"
-            | "SENTINEL"
-    ) || (is_subscription_command(&command.name) && command.args.len() != 1)
+        "MONITOR" | "CLUSTER" | "ACL" | "CONFIG" | "MIGRATE" | "SENTINEL"
+    ) || (is_pubsub_command(&command.name) && command.args.len() != 1)
         || (command.name == "CLIENT"
             && command.args.first().is_some_and(|subcommand| {
                 subcommand.eq_ignore_ascii_case(b"TRACKING")
@@ -134,6 +126,13 @@ mod tests {
             name: "PUNSUBSCRIBE".to_string(),
             args: vec![b"events.*".to_vec()],
         };
-        assert!(redis_is_unsupported(&unsubscribe));
+        assert!(!redis_is_unsupported(&unsubscribe));
+        assert!(!redis_is_builtin(&unsubscribe.name));
+
+        let unsubscribe_all = RedisCommand {
+            name: "UNSUBSCRIBE".to_string(),
+            args: vec![],
+        };
+        assert!(redis_is_unsupported(&unsubscribe_all));
     }
 }

@@ -20,8 +20,8 @@ use crate::recorder::{RecorderEvent, RedisConnectionEvent, RedisExchangeEvent, c
 
 use crate::redis::access::classify_command;
 use crate::redis::{
-    BufferedReader, RedisCommand, RedisFrameKind, frame_kind, is_subscription_command,
-    parse_pubsub_push, read_frame, redis_command, validate_subscription_confirmation,
+    BufferedReader, RedisCommand, RedisFrameKind, frame_kind, is_pubsub_command, parse_pubsub_push,
+    read_frame, redis_command, validate_subscription_confirmation,
 };
 
 mod pubsub;
@@ -707,7 +707,14 @@ async fn record_exchange(
     outcome: DependencyExchangeOutcome,
     max_frame_bytes: usize,
 ) -> Result<()> {
-    let subscription_replay_safe = if is_subscription_command(&pending.command.name) {
+    let subscription_replay_safe = if is_pubsub_command(&pending.command.name)
+        && pending.session.resp_version != 2
+    {
+        pending
+            .warnings
+            .push("Redis Pub/Sub replay requires RESP2".to_string());
+        false
+    } else if is_pubsub_command(&pending.command.name) {
         match response_kind {
             RedisFrameKind::Error => true,
             RedisFrameKind::Array => {
@@ -870,7 +877,8 @@ fn sanitize_and_classify(command: &RedisCommand) -> (Vec<Vec<u8>>, bool, bool, V
             }
             true
         }
-        "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" => {
+        "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" | "UNSUBSCRIBE" | "PUNSUBSCRIBE"
+        | "SUNSUBSCRIBE" => {
             if command.args.len() == 1 {
                 true
             } else {
@@ -880,10 +888,6 @@ fn sanitize_and_classify(command: &RedisCommand) -> (Vec<Vec<u8>>, bool, bool, V
                 ));
                 false
             }
-        }
-        "UNSUBSCRIBE" | "PUNSUBSCRIBE" | "SUNSUBSCRIBE" => {
-            warnings.push(format!("Redis {} mode is unsupported", command.name));
-            false
         }
         "MONITOR" | "CLUSTER" => {
             warnings.push(format!("Redis {} push mode is unsupported", command.name));
@@ -962,7 +966,8 @@ async fn apply_successful_setup(
                 session.database = database;
             }
         }
-        "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" => {
+        "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" | "UNSUBSCRIBE" | "PUNSUBSCRIBE"
+        | "SUNSUBSCRIBE" => {
             session.subscriptions.record_confirmation(command, response);
         }
         _ => {}

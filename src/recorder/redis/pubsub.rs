@@ -47,6 +47,15 @@ impl Subscriptions {
             "SSUBSCRIBE" => {
                 self.shard_channels.insert(subject);
             }
+            "UNSUBSCRIBE" => {
+                self.channels.remove(&subject);
+            }
+            "PUNSUBSCRIBE" => {
+                self.patterns.remove(&subject);
+            }
+            "SUNSUBSCRIBE" => {
+                self.shard_channels.remove(&subject);
+            }
             _ => {}
         }
     }
@@ -96,5 +105,102 @@ mod tests {
 
         assert!(subscriptions.accepts(&matching));
         assert!(!subscriptions.accepts(&other));
+    }
+
+    #[test]
+    fn unsubscription_removes_only_the_confirmed_subject_and_kind() {
+        for (subscribe, unsubscribe, kind) in [
+            ("SUBSCRIBE", "UNSUBSCRIBE", RedisSubscriptionKind::Channel),
+            ("PSUBSCRIBE", "PUNSUBSCRIBE", RedisSubscriptionKind::Pattern),
+            (
+                "SSUBSCRIBE",
+                "SUNSUBSCRIBE",
+                RedisSubscriptionKind::ShardChannel,
+            ),
+        ] {
+            let mut subscriptions = Subscriptions::default();
+            for (subject, count) in [("events", 1), ("other", 2)] {
+                let command = RedisCommand {
+                    name: subscribe.to_string(),
+                    args: vec![subject.as_bytes().to_vec()],
+                };
+                let response = confirmation(subscribe, subject, count);
+                subscriptions.record_confirmation(&command, response.as_bytes());
+            }
+            let command = RedisCommand {
+                name: unsubscribe.to_string(),
+                args: vec![b"events".to_vec()],
+            };
+            // A Redis error or malformed confirmation cannot change active subjects.
+            for response in [
+                "-ERR denied\r\n".to_string(),
+                confirmation(unsubscribe, "other", 1),
+                confirmation(unsubscribe, "events", -1),
+            ] {
+                subscriptions.record_confirmation(&command, response.as_bytes());
+                assert!(subscriptions.accepts(&RedisPubSubPush {
+                    subscription_kind: kind,
+                    subject: b"events".to_vec(),
+                }));
+            }
+            subscriptions
+                .record_confirmation(&command, confirmation(unsubscribe, "events", 1).as_bytes());
+            assert!(!subscriptions.accepts(&RedisPubSubPush {
+                subscription_kind: kind,
+                subject: b"events".to_vec(),
+            }));
+            assert!(subscriptions.accepts(&RedisPubSubPush {
+                subscription_kind: kind,
+                subject: b"other".to_vec(),
+            }));
+            assert!(subscriptions.is_active());
+
+            let command = RedisCommand {
+                name: unsubscribe.to_string(),
+                args: vec![b"other".to_vec()],
+            };
+            subscriptions
+                .record_confirmation(&command, confirmation(unsubscribe, "other", 0).as_bytes());
+            assert!(!subscriptions.is_active());
+        }
+    }
+
+    #[test]
+    fn channel_unsubscription_does_not_remove_the_same_pattern_or_shard_channel() {
+        let mut subscriptions = Subscriptions::default();
+        for (name, count) in [("SUBSCRIBE", 1), ("PSUBSCRIBE", 2), ("SSUBSCRIBE", 1)] {
+            let command = RedisCommand {
+                name: name.to_string(),
+                args: vec![b"events".to_vec()],
+            };
+            subscriptions
+                .record_confirmation(&command, confirmation(name, "events", count).as_bytes());
+        }
+        let command = RedisCommand {
+            name: "UNSUBSCRIBE".to_string(),
+            args: vec![b"events".to_vec()],
+        };
+        subscriptions.record_confirmation(
+            &command,
+            confirmation("UNSUBSCRIBE", "events", 1).as_bytes(),
+        );
+        for kind in [
+            RedisSubscriptionKind::Pattern,
+            RedisSubscriptionKind::ShardChannel,
+        ] {
+            assert!(subscriptions.accepts(&RedisPubSubPush {
+                subscription_kind: kind,
+                subject: b"events".to_vec(),
+            }));
+        }
+    }
+
+    fn confirmation(name: &str, subject: &str, count: i64) -> String {
+        format!(
+            "*3\r\n${}\r\n{}\r\n${}\r\n{subject}\r\n:{count}\r\n",
+            name.len(),
+            name.to_ascii_lowercase(),
+            subject.len()
+        )
     }
 }

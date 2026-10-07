@@ -78,6 +78,106 @@ async fn fixture(
 }
 
 #[tokio::test]
+async fn single_subject_unsubscriptions_replay_exact_confirmations_and_keep_connection_open() {
+    for (subscribe, unsubscribe) in [
+        ("SUBSCRIBE", "UNSUBSCRIBE"),
+        ("PSUBSCRIBE", "PUNSUBSCRIBE"),
+        ("SSUBSCRIBE", "SUNSUBSCRIBE"),
+    ] {
+        let connection = Uuid::new_v4();
+        let subject = "celery-task-meta-task-id";
+        let subscribe_response = format!(
+            "*3\r\n${}\r\n{}\r\n${}\r\n{subject}\r\n:1\r\n",
+            subscribe.len(),
+            subscribe.to_ascii_lowercase(),
+            subject.len()
+        );
+        let unsubscribe_response = format!(
+            "*3\r\n${}\r\n{}\r\n${}\r\n{subject}\r\n:0\r\n",
+            unsubscribe.len(),
+            unsubscribe.to_ascii_lowercase(),
+            subject.len()
+        );
+        let (_temp, report_path, addr, task) = fixture(vec![
+            exchange(
+                connection,
+                1,
+                subscribe,
+                &[subject],
+                subscribe_response.as_bytes(),
+            ),
+            exchange(
+                connection,
+                2,
+                unsubscribe,
+                &[subject],
+                unsubscribe_response.as_bytes(),
+            ),
+            exchange(connection, 3, "GET", &["key"], b"$5\r\nvalue\r\n"),
+        ])
+        .await;
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        assert_reply(
+            &mut client,
+            &[subscribe, subject],
+            subscribe_response.as_bytes(),
+        )
+        .await;
+        assert_reply(
+            &mut client,
+            &[unsubscribe, subject],
+            unsubscribe_response.as_bytes(),
+        )
+        .await;
+        assert_reply(&mut client, &["PING"], b"+PONG\r\n").await;
+        assert_reply(&mut client, &["GET", "key"], b"$5\r\nvalue\r\n").await;
+        let report = wait_for_matched_count(&report_path, "redis", 3).await;
+        for field in ["unsupported", "unmatched", "unsafe_events", "unused_case"] {
+            assert!(
+                report["redis"][field].as_array().unwrap().is_empty(),
+                "{field}"
+            );
+        }
+        task.abort();
+    }
+}
+
+#[tokio::test]
+async fn unsubscription_retains_exact_arguments_and_stateful_lane_ownership() {
+    let connection = Uuid::new_v4();
+    let subscribe = b"*3\r\n$9\r\nsubscribe\r\n$6\r\nevents\r\n:1\r\n";
+    let unsubscribe = b"*3\r\n$11\r\nunsubscribe\r\n$6\r\nevents\r\n:0\r\n";
+    let (_temp, report_path, addr, task) = fixture(vec![
+        exchange(connection, 1, "SUBSCRIBE", &["events"], subscribe),
+        exchange(connection, 2, "UNSUBSCRIBE", &["events"], unsubscribe),
+        exchange(connection, 3, "GET", &["key"], b"$5\r\nvalue\r\n"),
+    ])
+    .await;
+    let mut owner = TcpStream::connect(addr).await.unwrap();
+    let mut other = TcpStream::connect(addr).await.unwrap();
+    assert_reply(&mut owner, &["SUBSCRIBE", "events"], subscribe).await;
+    assert_unmatched(&mut other, &["UNSUBSCRIBE", "events"]).await;
+    assert_unmatched(&mut owner, &["UNSUBSCRIBE", "other"]).await;
+    assert_reply(&mut owner, &["UNSUBSCRIBE", "events"], unsubscribe).await;
+    assert_unmatched(&mut other, &["GET", "key"]).await;
+    assert_reply(&mut owner, &["GET", "key"], b"$5\r\nvalue\r\n").await;
+    let report = wait_for_matched_count(&report_path, "redis", 3).await;
+    assert!(
+        report["redis"]["unused_case"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        report["redis"]["unsupported"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    task.abort();
+}
+
+#[tokio::test]
 async fn devices_style_short_source_connections_replay_on_one_pooled_connection() {
     let mut records = Vec::new();
     let mut expected = Vec::new();
