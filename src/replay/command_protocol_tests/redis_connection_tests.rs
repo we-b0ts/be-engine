@@ -413,7 +413,13 @@ async fn subscription_and_blocking_source_lanes_keep_connection_binding() {
         ),
         ("BLPOP", vec!["queue", "1"], b"*-1\r\n".as_slice()),
         ("WAIT", vec!["1", "10"], b":1\r\n".as_slice()),
-        ("EVAL", vec!["return 1", "0"], b":1\r\n".as_slice()),
+        ("SCRIPT", vec!["DEBUG", "YES"], b"+OK\r\n".as_slice()),
+        (
+            "SCRIPT",
+            vec!["UNKNOWN"],
+            b"-ERR unknown subcommand\r\n".as_slice(),
+        ),
+        ("SCRIPT", vec![], b"-ERR missing subcommand\r\n".as_slice()),
         ("MODULE.UNKNOWN", vec!["value"], b"+OK\r\n".as_slice()),
     ] {
         let source = Uuid::new_v4();
@@ -434,6 +440,155 @@ async fn subscription_and_blocking_source_lanes_keep_connection_binding() {
             report["redis"]["unmatched"][0]["diagnostic"]["fields"],
             serde_json::json!(["connection"]),
             "{command}"
+        );
+        task.abort();
+    }
+}
+
+#[tokio::test]
+async fn script_commands_share_source_lane_across_target_connections() {
+    for (command, args, response) in [
+        ("EVAL", vec!["return 1", "0"], b":1\r\n".as_slice()),
+        ("EVALSHA", vec!["script-sha", "0"], b":1\r\n".as_slice()),
+        ("EVAL_RO", vec!["return 1", "0"], b":1\r\n".as_slice()),
+        ("evalsha_ro", vec!["script-sha", "0"], b":1\r\n".as_slice()),
+        (
+            "script",
+            vec!["load", "return 1"],
+            b"$3\r\nsha\r\n".as_slice(),
+        ),
+        (
+            "SCRIPT",
+            vec!["EXISTS", "script-sha"],
+            b"*1\r\n:1\r\n".as_slice(),
+        ),
+        ("SCRIPT", vec!["FLUSH", "ASYNC"], b"+OK\r\n".as_slice()),
+        ("SCRIPT", vec!["KILL"], b"+OK\r\n".as_slice()),
+        ("SCRIPT", vec!["HELP"], b"*1\r\n$4\r\nhelp\r\n".as_slice()),
+    ] {
+        let source = Uuid::new_v4();
+        let (_temp, report_path, addr, task) = fixture(vec![
+            exchange(source, 1, "GET", &["before"], b"$1\r\n1\r\n"),
+            exchange(source, 2, command, &args, response),
+            exchange(source, 3, "GET", &["after"], b"$1\r\n2\r\n"),
+        ])
+        .await;
+        let mut first = TcpStream::connect(addr).await.unwrap();
+        let mut second = TcpStream::connect(addr).await.unwrap();
+        let mut request_args = args;
+        request_args.insert(0, command);
+        assert_unmatched(&mut second, &request_args).await;
+        let report = wait_for_unmatched_count(&report_path, "redis", 1).await;
+        assert_eq!(
+            report["redis"]["unmatched"][0]["diagnostic"]["kind"],
+            "lane_blocked"
+        );
+        assert_reply(&mut first, &["GET", "before"], b"$1\r\n1\r\n").await;
+        assert_reply(&mut second, &request_args, response).await;
+        drop(first);
+        let mut third = TcpStream::connect(addr).await.unwrap();
+        assert_reply(&mut third, &["GET", "after"], b"$1\r\n2\r\n").await;
+        assert_unmatched(&mut second, &request_args).await;
+        let report = wait_for_unmatched_count(&report_path, "redis", 2).await;
+        assert_eq!(report["redis"]["matched_count"], 3);
+        assert!(
+            report["redis"]["unused_case"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        task.abort();
+    }
+}
+
+#[tokio::test]
+async fn script_cache_miss_load_and_retry_replay_across_connections() {
+    let source = Uuid::new_v4();
+    let script = "return ARGV[1]";
+    let sha = "0123456789abcdef0123456789abcdef0123456789";
+    let loaded = format!("$40\r\n{sha}\r\n");
+    let missing = b"-NOSCRIPT No matching script\r\n";
+    let (_temp, report_path, addr, task) = fixture(vec![
+        exchange(source, 1, "EVALSHA", &[sha, "0", "value"], missing),
+        exchange(source, 2, "SCRIPT", &["LOAD", script], loaded.as_bytes()),
+        exchange(
+            source,
+            3,
+            "EVALSHA",
+            &[sha, "0", "value"],
+            b"$5\r\nvalue\r\n",
+        ),
+    ])
+    .await;
+    let mut first = TcpStream::connect(addr).await.unwrap();
+    let mut loader = TcpStream::connect(addr).await.unwrap();
+    assert_reply(&mut first, &["EVALSHA", sha, "0", "value"], missing).await;
+    assert_unmatched(&mut loader, &["EVALSHA", sha, "0", "value"]).await;
+    assert_unmatched(&mut loader, &["SCRIPT", "LOAD", "return 'changed'"]).await;
+    assert_reply(&mut loader, &["SCRIPT", "LOAD", script], loaded.as_bytes()).await;
+    drop(first);
+    let mut retry = TcpStream::connect(addr).await.unwrap();
+    assert_unmatched(&mut retry, &["EVALSHA", "wrong-sha", "0", "value"]).await;
+    assert_reply(
+        &mut retry,
+        &["EVALSHA", sha, "0", "value"],
+        b"$5\r\nvalue\r\n",
+    )
+    .await;
+    assert_unmatched(&mut loader, &["EVALSHA", sha, "0", "value"]).await;
+    let report = wait_for_unmatched_count(&report_path, "redis", 4).await;
+    assert_eq!(report["redis"]["matched_count"], 3);
+    assert_eq!(
+        report["redis"]["unmatched"][0]["diagnostic"]["kind"],
+        "lane_blocked"
+    );
+    assert!(
+        report["redis"]["unused_case"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn script_commands_in_transaction_lanes_remain_connection_bound() {
+    for command in ["EVAL", "EVALSHA", "EVAL_RO", "EVALSHA_RO"] {
+        let source = Uuid::new_v4();
+        let script = if command.contains("SHA") {
+            "script-sha"
+        } else {
+            "return 1"
+        };
+        let (_temp, report_path, addr, task) = fixture(vec![
+            exchange(source, 1, "WATCH", &["key"], b"+OK\r\n"),
+            exchange(source, 2, "MULTI", &[], b"+OK\r\n"),
+            exchange(source, 3, command, &[script, "1", "key"], b"+QUEUED\r\n"),
+            exchange(source, 4, "EXEC", &[], b"*1\r\n:1\r\n"),
+        ])
+        .await;
+        let mut owner = TcpStream::connect(addr).await.unwrap();
+        let mut other = TcpStream::connect(addr).await.unwrap();
+        assert_reply(&mut owner, &["WATCH", "key"], b"+OK\r\n").await;
+        assert_unmatched(&mut other, &["MULTI"]).await;
+        assert_reply(&mut owner, &["MULTI"], b"+OK\r\n").await;
+        assert_unmatched(&mut other, &[command, script, "1", "key"]).await;
+        assert_reply(&mut owner, &[command, script, "1", "key"], b"+QUEUED\r\n").await;
+        assert_unmatched(&mut other, &["EXEC"]).await;
+        assert_reply(&mut owner, &["EXEC"], b"*1\r\n:1\r\n").await;
+        let report = wait_for_unmatched_count(&report_path, "redis", 3).await;
+        assert_eq!(report["redis"]["matched_count"], 4);
+        for mismatch in report["redis"]["unmatched"].as_array().unwrap() {
+            assert_eq!(
+                mismatch["diagnostic"]["fields"],
+                serde_json::json!(["connection"])
+            );
+        }
+        assert!(
+            report["redis"]["unused_case"]
+                .as_array()
+                .unwrap()
+                .is_empty()
         );
         task.abort();
     }

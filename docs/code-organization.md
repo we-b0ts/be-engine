@@ -92,7 +92,8 @@ is unclear.
 - Replay modules own recorded dependency matching and replay lifecycle.
 - `replay/redis/matching` owns command selection and source-lane order
   diagnostics. `replay/redis/connection_scope` distinguishes ordinary pool
-  reuse from recorded stateful lanes and owns their exclusive target connection
+  reuse (including server-side script execution and cache operations) from
+  recorded stateful lanes and owns their exclusive target connection
   claims; runtime Redis I/O and session setup remain in `replay/redis/mod.rs`.
   `replay/redis/cross_case` owns finite sharing of source-proven Redis reads
   across cases in one completed recording; policy feedback owns promotion of
