@@ -701,6 +701,56 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
     assert!(terminal_current(target.path(), &state));
     assert!(gate(target.path(), &state, "master").unwrap().is_none());
     assert_eq!(fs::read_to_string(&counter).unwrap(), review_invocations);
+
+    // Verification policy edits keep the code receipt and stale prior API results.
+    let policy_path = target.path().join(".traffic-e2e/verification.yaml");
+    let verification = fingerprint::repository_fingerprint(target.path()).unwrap();
+    let policy = fs::read_to_string(&policy_path).unwrap();
+    fs::write(
+        &policy_path,
+        format!("{policy}response_rules:\n  json: {{}}\n"),
+    )
+    .unwrap();
+    let updated = fingerprint::repository_fingerprint(target.path()).unwrap();
+    assert_ne!(updated, verification);
+    assert!(terminal_current(target.path(), &state));
+    let uncommitted = crate::rewrite::status_rewrite(crate::rewrite::RewriteContext {
+        target_root: target.path().into(),
+    })
+    .unwrap();
+    assert!(matches!(
+        uncommitted.action,
+        RewriteAction::InputRequired {
+            reason: crate::rewrite::RewriteInputRequiredReason::ConfigurationCommitRequired,
+            ..
+        }
+    ));
+    git(target.path(), &["add", ".traffic-e2e/verification.yaml"]);
+    git(
+        target.path(),
+        &["commit", "-qm", "update verification policy"],
+    );
+    assert!(terminal_current(target.path(), &state));
+    assert!(gate(target.path(), &state, "master").unwrap().is_none());
+    assert_eq!(fs::read_to_string(&counter).unwrap(), review_invocations);
+    let mut completed = state.clone();
+    let api = &mut completed.api_inventory[0];
+    api.status = crate::rewrite::RewriteApiStatus::Complete;
+    api.verified_target_fingerprint = Some(verification);
+    api.e2e_current = true;
+    api.comparison_current = true;
+    assert!(
+        crate::rewrite::inventory::defer_completed_for_target_change(&mut completed, &updated)
+            .unwrap()
+    );
+    let api = &completed.api_inventory[0];
+    assert_eq!(
+        api.status,
+        crate::rewrite::RewriteApiStatus::RevalidationPending
+    );
+    assert!(!api.e2e_current && !api.comparison_current);
+    assert!(admission_current(target.path(), &completed));
+
     let code = fs::read(target.path().join("lib.rs")).unwrap();
     fs::write(target.path().join("lib.rs"), "pub fn changed() {}\n").unwrap();
     assert!(!terminal_current(target.path(), &state));

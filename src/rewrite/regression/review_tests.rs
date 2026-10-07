@@ -195,7 +195,13 @@ fn changed_purpose_needs_a_fresh_accepted_receipt_and_keeps_rework_gates() {
 }
 
 #[test]
-fn first_case_pattern_policy_update_does_not_require_delivery_review() {
+fn first_traffic_policy_update_does_not_require_delivery_review() {
+    for policy_name in ["source-traffic-policy.yaml", "verification.yaml"] {
+        assert_first_traffic_policy_update(policy_name);
+    }
+}
+
+fn assert_first_traffic_policy_update(policy_name: &str) {
     for record_new_traffic in [false, true] {
         let target = fixture();
         begin(RewriteRegressionBeginOptions {
@@ -208,23 +214,28 @@ fn first_case_pattern_policy_update_does_not_require_delivery_review() {
             .load()
             .unwrap()
             .unwrap();
-        let policy_path = target
-            .path()
-            .join(".traffic-e2e/source-traffic-policy.yaml");
-        let mut policy = crate::config::SourceTrafficPolicyConfig::load(&policy_path).unwrap();
-        policy.http.case_path_patterns = vec!["/api/*".into()];
-        fs::write(&policy_path, policy.render().unwrap()).unwrap();
+        let policy_relative = format!(".traffic-e2e/{policy_name}");
+        let policy_path = target.path().join(&policy_relative);
+        if policy_name == "source-traffic-policy.yaml" {
+            let mut policy = crate::config::SourceTrafficPolicyConfig::load(&policy_path).unwrap();
+            policy.http.case_path_patterns = vec!["/api/*".into()];
+            fs::write(&policy_path, policy.render().unwrap()).unwrap();
+        } else {
+            let policy = fs::read_to_string(&policy_path).unwrap();
+            fs::write(
+                &policy_path,
+                format!("{policy}response_rules:\n  json: {{}}\n"),
+            )
+            .unwrap();
+        }
         assert!(!review::requires_delivery_review(target.path(), &state));
         assert!(
             review::gate(target.path(), &state, "master")
                 .unwrap()
                 .is_none()
         );
-        git(
-            target.path(),
-            &["add", ".traffic-e2e/source-traffic-policy.yaml"],
-        );
-        git(target.path(), &["commit", "-qm", "discover case pattern"]);
+        git(target.path(), &["add", &policy_relative]);
+        git(target.path(), &["commit", "-qm", "update traffic policy"]);
         assert!(!review::requires_delivery_review(target.path(), &state));
         assert!(
             review::gate(target.path(), &state, "master")
