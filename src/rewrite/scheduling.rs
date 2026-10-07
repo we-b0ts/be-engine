@@ -69,7 +69,7 @@ pub(super) fn idle_action(target_root: &Path, state: &RewriteState) -> Option<Re
         })
         .map(|slice| slice.api.as_str());
     if let Some(api) = accepted.or_else(|| inventory::next_pending_api_for_concurrent_work(state)) {
-        return Some(advance(target_root, api, "verify ready API"));
+        return Some(advance(target_root, state, api, "verify ready API"));
     }
     if let Some(id) = process_outputs::next_eligible_id(state) {
         return Some(RewriteAction::AdvanceRequired {
@@ -80,6 +80,7 @@ pub(super) fn idle_action(target_root: &Path, state: &RewriteState) -> Option<Re
     if let Some(api) = revalidation_api(state) {
         return Some(advance(
             target_root,
+            state,
             api,
             "use idle verification capacity to revalidate API",
         ));
@@ -95,7 +96,9 @@ pub(super) fn idle_action(target_root: &Path, state: &RewriteState) -> Option<Re
         // Keep them visible as dependencies of the blocked stop, never completed.
         return Some(RewriteAction::Blocked {
             summary: "stop this coordinator run: remaining APIs require external system repair; preserve bindings and evidence, then resume with global status after repair".into(),
-            system_repair_apis: blocked,
+            system_repair_apis: blocked.iter()
+                .map(|api| super::api_selector::public_api(api).to_string())
+                .collect::<std::collections::BTreeSet<_>>().into_iter().collect(),
             dependent_process_outputs: state.process_outputs.inventory.iter()
                 .filter(|item| item.status != super::process_output_model::RewriteProcessOutputStatus::Complete)
                 .map(|item| item.id.clone()).collect(),
@@ -116,10 +119,10 @@ pub(super) fn idle_action(target_root: &Path, state: &RewriteState) -> Option<Re
     None
 }
 
-fn advance(target_root: &Path, api: &str, purpose: &str) -> RewriteAction {
+fn advance(target_root: &Path, state: &RewriteState, api: &str, purpose: &str) -> RewriteAction {
     RewriteAction::AdvanceRequired {
-        summary: format!("{purpose} {api}"),
-        command: action::next_command_for_api(target_root, api),
+        summary: format!("{purpose} {}", super::api_selector::public_api(api)),
+        command: action::next_command_for_selected_api(target_root, state, api),
     }
 }
 

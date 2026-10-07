@@ -8,7 +8,7 @@ fn setup() -> (tempfile::TempDir, RewriteState, RewriteWorkScope) {
     let target = configured_target();
     let state = implementation_state_with_inventory(false);
     let scope = RewriteWorkScope::Api {
-        api: state.api.clone(),
+        api: crate::rewrite::api_selector::public_api(&state.api).to_string(),
     };
     RewriteStore::new(target.path())
         .unwrap()
@@ -120,7 +120,7 @@ fn handoff_wakes_idle_coordinator_and_only_its_api_becomes_ready_for_acceptance(
     let RewriteAction::AdvanceRequired { command, .. } = integrated.action else {
         panic!("accepted quality receipt should advance verification")
     };
-    assert_eq!(command.argv.last().unwrap(), "GET /api");
+    assert_eq!(command.argv.last().unwrap(), "/api");
     report(handoff).unwrap();
     assert!(acceptance_ready(&store.load().unwrap().unwrap(), &scope));
 }
@@ -638,13 +638,13 @@ fn replacement_handle_cannot_admit_the_previous_workers_report() {
     };
     let store = RewriteStore::new(target.path()).unwrap();
     let assignment = serde_json::to_value(
-        &store.load().unwrap().unwrap().worker_bindings["GET /api"].review_assignment,
+        &store.load().unwrap().unwrap().worker_bindings["/api"].review_assignment,
     )
     .unwrap();
     worker::transfer(transfer.clone()).unwrap();
     assert_eq!(
         serde_json::to_value(
-            &store.load().unwrap().unwrap().worker_bindings["GET /api"].review_assignment,
+            &store.load().unwrap().unwrap().worker_bindings["/api"].review_assignment,
         )
         .unwrap(),
         assignment

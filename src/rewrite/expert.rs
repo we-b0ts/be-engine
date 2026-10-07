@@ -31,7 +31,7 @@ fn unfinished(state: &RewriteState, api: &str) -> bool {
     state.api_inventory.iter().any(|item| {
         (item.api == api || super::api_selector::route(&item.api) == api) && !item.status.is_done()
     }) || (state.api_inventory.is_empty()
-        && state.api == api
+        && super::api_selector::public_api(&state.api) == api
         && state.phase != RewritePhase::SliceComplete)
 }
 
@@ -514,8 +514,8 @@ pub fn delivered(options: RewriteExpertDeliveryOptions) -> Result<RewriteActionE
 }
 
 fn verified(state: &RewriteState, api: &str) -> bool {
-    state
-        .api_inventory
+    super::inventory::details(state)
+        .items
         .iter()
         .any(|item| item.api == api && item.status == RewriteApiStatus::Complete)
 }

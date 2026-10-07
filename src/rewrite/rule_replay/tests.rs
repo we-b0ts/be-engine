@@ -1,4 +1,37 @@
 use super::*;
+
+#[test]
+fn a_rule_for_one_method_does_not_release_the_worker_for_another_dirty_method() {
+    let mut state = crate::rewrite::worker::tests::implementation_state_with_inventory(false);
+    let mut sibling = state.active_slice.clone();
+    sibling.api = "PUT /api".into();
+    sibling.active_issue.as_mut().unwrap().id = "put-issue".into();
+    let mut progress = state.api_inventory[0].clone();
+    progress.api = sibling.api.clone();
+    progress.status = crate::rewrite::model::RewriteApiStatus::ImplementationRequired;
+    state.api_inventory.push(progress);
+    state.parked_slices.insert(sibling.api.clone(), sibling);
+    request(&mut state);
+    let scope = crate::rewrite::api_selector::work_scope(&state, &state.api);
+    assert!(!ready(&state, &scope));
+    assert_eq!(
+        crate::rewrite::worker::runtime::scopes(&state),
+        vec![scope.clone()]
+    );
+    state
+        .parked_slices
+        .get_mut("PUT /api")
+        .unwrap()
+        .rule_replay_pending = true;
+    assert!(ready(&state, &scope));
+    assert!(crate::rewrite::worker::runtime::scopes(&state).is_empty());
+    let put = state.parked_slices.get_mut("PUT /api").unwrap();
+    put.rule_replay_pending = false;
+    put.system_repair_accepted = true;
+    assert!(!ready(&state, &scope));
+    assert!(admitted(&state, &scope));
+    assert!(crate::rewrite::worker::runtime::scopes(&state).is_empty());
+}
 use crate::rewrite::{self, RewriteAction, store::RewriteStore, worker};
 use worker::tests::{configured_target, implementation_state_with_inventory};
 
@@ -8,7 +41,7 @@ fn applied_rule_survives_restart_and_does_not_require_a_worker_handoff() {
     let mut state = implementation_state_with_inventory(false);
     worker::confirm_current_for_test(&mut state);
     let scope = RewriteWorkScope::Api {
-        api: state.api.clone(),
+        api: crate::rewrite::api_selector::public_api(&state.api).to_string(),
     };
     state
         .worker_bindings
@@ -42,7 +75,7 @@ fn applied_rule_survives_restart_and_does_not_require_a_worker_handoff() {
     assert!(!ready(
         &loaded,
         &RewriteWorkScope::Api {
-            api: "GET /other".into()
+            api: "/other".into()
         }
     ));
     assert!(!ready(
@@ -88,10 +121,17 @@ async fn parked_rule_replay_is_selected_and_keeps_the_review_gate() {
     let RewriteAction::AdvanceRequired { command, .. } = selected else {
         panic!("schedule fresh Replay")
     };
-    assert_eq!(command.argv.last().unwrap(), api);
+    assert_eq!(
+        command.argv.last().unwrap(),
+        crate::rewrite::api_selector::public_api(api)
+    );
     let result = rewrite::next_rewrite(crate::RewriteNextOptions {
         target_root: target.path().into(),
-        api: Some(api.parse().unwrap()),
+        api: Some(
+            crate::rewrite::api_selector::public_api(api)
+                .parse()
+                .unwrap(),
+        ),
         process_output: None,
         source_route: None,
     })

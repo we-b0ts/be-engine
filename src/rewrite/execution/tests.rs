@@ -89,7 +89,7 @@ fn failed_execution_waits_for_explicit_retry_while_workers_remain_dispatchable()
         RewriteAction::ImplementationRequired { .. }
     ));
     let scope = super::super::RewriteWorkScope::Api {
-        api: state.api.clone(),
+        api: crate::rewrite::api_selector::public_api(&state.api).to_string(),
     };
     worker::confirm(worker::RewriteWorkerConfirmOptions {
         worktree: Some(target.path().to_path_buf()),

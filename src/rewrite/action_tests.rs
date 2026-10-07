@@ -33,7 +33,7 @@ fn cross_api_non_preemptible_transition_returns_bounded_wait() {
         response["action"]["details"]["resource"],
         "rewrite_api_transition"
     );
-    assert_eq!(response["action"]["details"]["blocking_api"], "GET /api");
+    assert_eq!(response["action"]["details"]["blocking_api"], "/api");
     assert!(
         response
             .pointer("/action/details/active_operation")
@@ -97,7 +97,7 @@ fn status_recovers_the_exact_recording_action_until_a_result_exists() {
             target.path(),
             "next",
             "--api",
-            "GET /api"
+            "/api"
         ]))
     );
 
@@ -231,7 +231,7 @@ fn api_scoped_status_observes_recording_publication() {
                 target.path(),
                 "next",
                 "--api",
-                "GET /api"
+                "/api"
             ])
         );
     }

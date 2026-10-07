@@ -186,7 +186,7 @@ the pushed manifest digest, and pin target Dockerfiles to `tag@sha256`.
 
 ## CLI Boundaries
 
-`backend-rewrite review check --worktree /absolute/worker --api 'GET /api'`
+`backend-rewrite review check --worktree /absolute/worker --api '/api'`
 performs the mandatory worker handoff review. Register the worktree during
 `worker confirm --worktree /absolute/worker`; the engine records the dispatch
 base. Use `--process-output ID` for a process-output worker. After the final
@@ -221,7 +221,7 @@ dispatch ancestry and uses the same full PR diff baseline as integration review.
 See the [API implementer review protocol](../plugins/ai-software-engineering/skills/backend-rewrite/references/api-implementer-review.md).
 
 Code integrators check their committed merged candidate using `review check
---integration --worktree /absolute/integration --api 'GET /api' --handoff-id ID`
+--integration --worktree /absolute/integration --api '/api' --handoff-id ID`
 (or `--process-output ID`). After publishing that exact candidate, the coordinator
 reports `worker report ... --activity integrated --review-report
 /absolute/integration-report.json`. This requires an integration report for the
@@ -234,7 +234,7 @@ paths for returned action commands. Check execution requires an explicit
 delivery worktree; the coordinator validates receipts without rerunning checks.
 
 `review show` reads the current integrated report and `review rework --finding
-ID --owner 'api:GET /api'` (or `process-output:ID`) routes a finding to its
+ID --owner 'api:/api'` (or `process-output:ID`) routes a finding to its
 responsible worker, including a completed retained work item.
 For a failing unpublished integration candidate, add `--report
 /absolute/failed-candidate-report.json` to `review rework`. Routing validates
@@ -292,7 +292,7 @@ mount prefix. For example, `GET /api/attachments/task/*/all` requires
 confirmed `case_path_pattern`; when no more specific source-route binding exists,
 the coordinator uses that pattern as the route specification instead of stopping
 Replay for duplicate route confirmation. If an older engine saved an invalid
-route, repeat `next --api 'GET /api/attachments/task/*/all' --source-route
+route, repeat `next --api '/api/attachments/task/*/all' --source-route
 '/api/attachments/task/{task_id}/all'` with the corrected full route. Correction
 is allowed only while the API is pending, with no group or verification history;
 valid bindings remain fixed. Existing recording and workflow progress are retained.
@@ -1302,11 +1302,11 @@ active issue. Coordinator APIs are the primary interface:
 
 ```bash
 backend-rewrite next
-# Or explicitly narrow the workflow to one API:
-backend-rewrite next --api 'GET /api/widgets/*' \
+# After recording, select one canonical API route:
+backend-rewrite next --api '/api/widgets/*' \
   --source-route '/api/widgets/:id'
 backend-rewrite status
-backend-rewrite status --api 'GET /api/widgets/*'
+backend-rewrite status --api '/api/widgets/*'
 backend-rewrite status --process-output metrics-profile
 backend-rewrite inventory
 backend-rewrite evidence <query-id>
@@ -1324,7 +1324,7 @@ BACKEND_REWRITE_SUBAGENT_HANDLE='<replacement-handle>' \
   --reason 'stored handle is unavailable after session replacement' \
   --approve-ownership-transfer
 backend-rewrite verification request \
-  --api 'GET /api/widgets/*' \
+  --api '/api/widgets/*' \
   --reason 'shared response mapper changed'
 ```
 
@@ -1340,7 +1340,7 @@ process-output scope, canonical target root, and absolute assigned worktree.
 Workers fetch their own current context and evidence:
 
 ```bash
-backend-rewrite --target-root /path/to/target evidence --api 'GET /api/widgets/*'
+backend-rewrite --target-root /path/to/target evidence --api '/api/widgets/*'
 backend-rewrite --target-root /path/to/target evidence --process-output metrics-profile
 ```
 
@@ -1473,6 +1473,13 @@ API inventory from its published cases. `next` and `status` expose only its
 bounded summary (`total`, `completed`, `unverified`, `active`, `implementation_required`,
 `system_repair_required`, `awaiting_recording_refresh`, `revalidation_pending`,
 `current_index`, and `current_api`) so their size does not grow with API count.
+Schema 34 counts HTTP routes rather than method contracts. `current_api` is the
+path/pattern, and `current_index` addresses expanded route `items`; each item
+retains its individual verification entries in `methods`. A route completes
+only when every included method completes, and counts as skipped only when all
+methods are skipped. Stored `.traffic-e2e/progress.yaml` remains method-keyed.
+Normal coordinator commands and unscoped Replay advancement operate on routes;
+HTTP method-qualified selectors are rejected.
 The state-machine coordinator consumes the global action while top-level
 `pending > 0`, executes the indicated command or runtime dispatch, and continues
 from its response. When only asynchronous work remains, `pending=1` selects
@@ -1560,7 +1567,7 @@ Repeated identical commands are idempotent; a second expert handle or conflictin
 delivery is rejected. Expert confirmation persists its runtime handle and fingerprint; status and
 inventory expose the known handle for task recovery and closure.
 
-Worker confirmation uses `worker confirm --api 'GET /api' --agent-handle HANDLE
+Worker confirmation uses `worker confirm --api '/api' --agent-handle HANDLE
 --worktree /absolute/worker` (or `--process-output ID`). The engine persists the
 actual implementation handle and returns `agent_handle` with its work scope in
 status and inventory. Returned commands already include a known handle. First

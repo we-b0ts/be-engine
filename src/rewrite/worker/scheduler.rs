@@ -173,9 +173,7 @@ pub(in crate::rewrite) fn acceptance_gate(
 ) -> Option<RewriteAction> {
     // Rule/system repair permissions belong to an exact method slice. A worker
     // binding may be route-wide, but it must not erase that precise admission.
-    if super::super::rule_replay::ready(state, scope)
-        || super::super::repair::replay_ready(state, scope)
-    {
+    if super::super::rule_replay::admitted(state, scope) {
         return None;
     }
     let scope = super::super::api_selector::canonical_scope(state, scope);

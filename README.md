@@ -56,7 +56,7 @@ migration orchestration:
 
 ```bash
 traffic-e2e config init --source-pod <pod> --namespace <namespace>
-backend-rewrite next --api 'GET /api/widgets/*' \
+backend-rewrite next --api '/api/widgets/*' \
   --source-route '/api/widgets/:id'
 backend-rewrite status
 backend-rewrite inventory

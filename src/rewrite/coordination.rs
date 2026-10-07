@@ -119,24 +119,30 @@ pub(super) fn details(
             Coverage::VerificationRequired => add(&mut result.waiting, "verification_resource", 1),
         }
     }
-    let unverified = state
+    let mut unverified = state
         .api_inventory
         .iter()
         .filter(|item| item.status == RewriteApiStatus::Pending)
-        .count()
-        + usize::from(state.phase == RewritePhase::ApiPending)
-        + usize::from(
-            state.system_repair_accepted || super::rule_replay::pending(&state.active_slice),
-        )
-        + state
+        .map(|item| super::api_selector::public_api(&item.api))
+        .collect::<std::collections::BTreeSet<_>>();
+    if !state.api.is_empty()
+        && (state.phase == RewritePhase::ApiPending
+            || state.system_repair_accepted
+            || super::rule_replay::pending(&state.active_slice))
+    {
+        unverified.insert(super::api_selector::public_api(&state.api));
+    }
+    unverified.extend(
+        state
             .parked_slices
             .values()
             .filter(|slice| {
-                slice.api != state.api
-                    && (slice.system_repair_accepted || super::rule_replay::pending(slice))
+                (slice.system_repair_accepted || super::rule_replay::pending(slice))
                     && !super::regression_scope::is_skipped(state, &slice.api)
             })
-            .count();
+            .map(|slice| super::api_selector::public_api(&slice.api)),
+    );
+    let unverified = unverified.len();
     if !busy && super::inventory::can_switch_api(state) {
         add(&mut result.ready, "verify_api", unverified);
     } else {
@@ -149,13 +155,11 @@ pub(super) fn details(
             .api_inventory
             .iter()
             .filter(|item| item.status == RewriteApiStatus::RevalidationPending)
-            .count(),
+            .map(|item| super::api_selector::public_api(&item.api))
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
     );
-    result.completed = state
-        .api_inventory
-        .iter()
-        .filter(|item| item.status == RewriteApiStatus::Complete)
-        .count();
+    result.completed = super::inventory::view(state).completed;
     match action {
         RewriteAction::SystemRepairRequired { acceptance, .. } => {
             if acceptance.is_some() && !busy {
@@ -274,9 +278,7 @@ pub(super) fn busy_workers(
     api: Option<&crate::RecordingApi>,
 ) -> Result<Option<super::model::RewriteActionEnvelope>> {
     let selected = if let Some(api) = api {
-        let scope = super::RewriteWorkScope::Api {
-            api: api.to_string(),
-        };
+        let scope = super::api_selector::work_scope(state, &api.to_string());
         runtime::scopes(state)
             .contains(&scope)
             .then_some(scope)

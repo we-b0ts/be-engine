@@ -107,9 +107,7 @@ fn status_is_compact_and_overview_preserves_diagnostics_and_confirmation() {
     store.save(&state).unwrap();
     let before = serde_json::to_value(&state).unwrap();
     let api = "GET /api".parse().unwrap();
-    let scope = RewriteWorkScope::Api {
-        api: "GET /api".into(),
-    };
+    let scope = RewriteWorkScope::Api { api: "/api".into() };
     let status =
         serde_json::to_value(status_rewrite_for_api(context(target.path()), None).unwrap())
             .unwrap();
@@ -117,7 +115,7 @@ fn status_is_compact_and_overview_preserves_diagnostics_and_confirmation() {
         serde_json::to_value(status_rewrite_for_api(context(target.path()), Some(&api)).unwrap())
             .unwrap();
     assert_eq!(status, scoped);
-    assert_eq!(status["schema_version"], 33);
+    assert_eq!(status["schema_version"], 34);
     assert_eq!(status["action"]["kind"], "implementation_required");
     assert_eq!(status["api_inventory"]["active"], 1);
     assert_eq!(status["api_inventory"]["total"], 1);
@@ -173,7 +171,7 @@ fn status_is_compact_and_overview_preserves_diagnostics_and_confirmation() {
         overview.facts["issue"],
         serde_json::to_value(state.active_issue.as_ref().unwrap()).unwrap()
     );
-    assert_eq!(overview.facts["work_scope"]["api"], "GET /api");
+    assert_eq!(overview.facts["work_scope"]["api"], "/api");
     assert!(overview.applicable_rule_planners.is_empty());
     let delta = overview
         .queries
@@ -212,9 +210,7 @@ fn overview_follows_parked_api_and_rejects_replaced_evidence() {
     store.save(&state).unwrap();
     let before = serde_json::to_value(&state).unwrap();
     let overview = query_rewrite_evidence(context(target.path()), &original_id).unwrap();
-    let scope = RewriteWorkScope::Api {
-        api: "GET /api".into(),
-    };
+    let scope = RewriteWorkScope::Api { api: "/api".into() };
     let selected = query_rewrite_evidence_for_scope(context(target.path()), &scope).unwrap();
     assert_eq!(
         serde_json::to_value(&selected).unwrap(),
@@ -226,7 +222,7 @@ fn overview_follows_parked_api_and_rejects_replaced_evidence() {
         before
     );
     assert_eq!(overview.issue_id, "issue-a");
-    assert_eq!(overview.facts["work_scope"]["api"], "GET /api");
+    assert_eq!(overview.facts["work_scope"]["api"], "/api");
 
     state
         .parked_slices
@@ -345,7 +341,7 @@ fn scope_queries_reject_unknown_items_and_items_without_issues() {
     for (scope, expected) in [
         (
             RewriteWorkScope::Api {
-                api: "GET /missing".into(),
+                api: "/missing".into(),
             },
             "does not contain",
         ),
@@ -353,7 +349,7 @@ fn scope_queries_reject_unknown_items_and_items_without_issues() {
             RewriteWorkScope::Api {
                 api: "malformed".into(),
             },
-            "recording API must use",
+            "HTTP API selectors must use",
         ),
         (
             RewriteWorkScope::ProcessOutput {
@@ -379,9 +375,7 @@ fn scope_queries_reject_unknown_items_and_items_without_issues() {
     store.save(&state).unwrap();
     let error = query_rewrite_evidence_for_scope(
         context(target.path()),
-        &RewriteWorkScope::Api {
-            api: "GET /api".into(),
-        },
+        &RewriteWorkScope::Api { api: "/api".into() },
     )
     .unwrap_err();
     assert!(error.to_string().contains("no current issue"));
@@ -392,18 +386,12 @@ fn overview_context_tracks_dispatch_without_invalidating_unchanged_evidence() {
     let target = configured_target();
     let store = RewriteStore::new(target.path()).unwrap();
     let mut state = api_state();
-    let scope = RewriteWorkScope::Api {
-        api: "GET /api".into(),
-    };
+    let scope = RewriteWorkScope::Api { api: "/api".into() };
     worker::confirm_current_for_test(&mut state);
     store.save(&state).unwrap();
     let original = query_rewrite_evidence_for_scope(context(target.path()), &scope).unwrap();
     state.bump();
-    state
-        .worker_bindings
-        .get_mut("GET /api")
-        .unwrap()
-        .agent_name = Some("renamed-worker".into());
+    state.worker_bindings.get_mut("/api").unwrap().agent_name = Some("renamed-worker".into());
     store.save(&state).unwrap();
     let refreshed = query_rewrite_evidence_for_scope(context(target.path()), &scope).unwrap();
     assert_eq!(original.evidence_id, refreshed.evidence_id);
@@ -424,7 +412,7 @@ fn overview_context_tracks_dispatch_without_invalidating_unchanged_evidence() {
 
     state
         .worker_bindings
-        .get_mut("GET /api")
+        .get_mut("/api")
         .unwrap()
         .rework_generation += 1;
     store.save(&state).unwrap();

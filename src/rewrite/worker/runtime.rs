@@ -396,8 +396,7 @@ pub(in crate::rewrite) fn record_running_for_test(
 }
 
 pub(in crate::rewrite) fn acceptance_ready(state: &RewriteState, scope: &RewriteWorkScope) -> bool {
-    super::super::rule_replay::ready(state, scope)
-        || super::super::repair::replay_ready(state, scope)
+    super::super::rule_replay::admitted(state, scope)
         || (super::issue_for_scope(state, scope).is_some()
             && coverage(state, scope) == RewriteWorkerCoverageState::VerificationRequired)
 }

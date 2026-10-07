@@ -18,7 +18,7 @@ fn failed_candidate() -> (
     git(target.path(), &["switch", "-qc", "coordinator"]);
     let state = implementation_state_with_inventory(false);
     let scope = RewriteWorkScope::Api {
-        api: state.api.clone(),
+        api: crate::rewrite::api_selector::public_api(&state.api).to_string(),
     };
     RewriteStore::new(target.path())
         .unwrap()

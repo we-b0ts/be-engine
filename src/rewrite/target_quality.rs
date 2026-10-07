@@ -2,8 +2,7 @@
 //! Complete checks run only through delivery-time review; this module reads receipts.
 use super::model::{RewriteAction, RewriteActionEnvelope, RewritePhase, RewriteState};
 use super::store::RewriteStore;
-use super::{action, inventory, review, traffic_operation, worker};
-use crate::RecordingApi;
+use super::{action, review, traffic_operation, worker};
 use anyhow::{Context, Result, ensure};
 use std::path::Path;
 
@@ -11,7 +10,7 @@ use std::path::Path;
 pub struct RewriteTargetQualityOptions {
     pub target_root: std::path::PathBuf,
     pub gate_id: String,
-    pub api: RecordingApi,
+    pub api: super::RewriteApiSelector,
     pub hardcode_ai_verified: Vec<String>,
 }
 
@@ -30,7 +29,7 @@ pub fn run(options: RewriteTargetQualityOptions) -> Result<RewriteActionEnvelope
     let state = store
         .load()?
         .context("rewrite workflow is not initialized")?;
-    let scoped = inventory::scoped(&state, Some(&options.api))?;
+    let scoped = super::api_selector::scoped(&state, &options.api.to_string())?;
     let scope = super::RewriteWorkScope::Api {
         api: scoped.api.clone(),
     };
@@ -66,6 +65,6 @@ pub(super) fn status_action(root: &Path, state: &RewriteState) -> Result<Option<
     Ok(Some(RewriteAction::AdvanceRequired {
         summary: "complete delivery quality receipt is current; advance coordinator verification"
             .into(),
-        command: action::next_command_for_api(root, &state.api),
+        command: action::next_command_for_selected_api(root, state, &state.api),
     }))
 }

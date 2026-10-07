@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 
+use super::RewriteApiSelector;
 use super::action;
 use super::artifacts;
 use super::inventory;
@@ -34,7 +35,7 @@ pub struct RewriteRecordingRequestOptions {
     pub reason: RewriteRecordingReason,
     pub duration_seconds: NonZeroU64,
     pub per_api_case_limit: NonZeroUsize,
-    pub api: Option<RecordingApi>,
+    pub api: Option<RewriteApiSelector>,
     pub replace_pending: bool,
 }
 
@@ -100,7 +101,7 @@ pub fn request_rewrite_recording(
         duration_seconds: options.duration_seconds,
         per_api_case_limit: options.per_api_case_limit,
     };
-    let requested_apis = requested_recording_apis(options.api.as_ref());
+    let requested_apis = requested_recording_apis(&state, options.api.as_ref())?;
     if state.phase == RewritePhase::RecordingRequired {
         let publication =
             artifacts::standard_recording_publication(&target_root, &state.recording_run_id)?;
@@ -142,8 +143,19 @@ pub fn request_rewrite_recording(
     Ok(action::for_state(&target_root, &state))
 }
 
-fn requested_recording_apis(api: Option<&RecordingApi>) -> Vec<String> {
-    api.map(|api| vec![api.to_string()]).unwrap_or_default()
+fn requested_recording_apis(
+    state: &RewriteState,
+    api: Option<&RewriteApiSelector>,
+) -> Result<Vec<String>> {
+    let Some(api) = api else {
+        return Ok(Vec::new());
+    };
+    let methods = super::api_selector::members(state, api);
+    ensure!(
+        !methods.is_empty(),
+        "API {api} has no recorded method inventory; omit --api to record all configured traffic"
+    );
+    Ok(methods)
 }
 
 fn existing_recording_disposition(

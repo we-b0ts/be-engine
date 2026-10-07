@@ -13,22 +13,22 @@ use crate::RecordingApi;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RewriteApiSelector {
     Route(String),
-    Method(RecordingApi),
+    Motan(RecordingApi),
 }
 
 impl FromStr for RewriteApiSelector {
     type Err = anyhow::Error;
     fn from_str(value: &str) -> Result<Self> {
-        ensure!(
-            !value.split(' ').next().unwrap_or("").contains('|'),
-            "select a route or one METHOD API; combined method selectors are not supported"
-        );
         if value.starts_with('/') {
             // Reuse the recording path grammar without inventing a wildcard method.
             let api = format!("GET {value}").parse::<RecordingApi>()?;
             Ok(Self::Route(api.path_pattern().into()))
         } else {
-            Ok(Self::Method(value.parse()?))
+            ensure!(
+                value.starts_with("MOTAN "),
+                "HTTP API selectors must use a path or pattern without a method"
+            );
+            Ok(Self::Motan(value.parse()?))
         }
     }
 }
@@ -37,19 +37,32 @@ impl fmt::Display for RewriteApiSelector {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Route(route) => formatter.write_str(route),
-            Self::Method(api) => api.fmt(formatter),
+            Self::Motan(api) => api.fmt(formatter),
         }
     }
 }
 
 impl From<RecordingApi> for RewriteApiSelector {
     fn from(api: RecordingApi) -> Self {
-        Self::Method(api)
+        if api.method().as_str() == "MOTAN" {
+            Self::Motan(api)
+        } else {
+            Self::Route(api.path_pattern().into())
+        }
     }
 }
 
 pub(super) fn route(api: &str) -> &str {
     api.split_once(' ').map_or(api, |(_, path)| path)
+}
+
+/// Public HTTP API identity is its route; non-HTTP identities stay qualified.
+pub(super) fn public_api(api: &str) -> &str {
+    if api.starts_with("MOTAN ") {
+        api
+    } else {
+        route(api)
+    }
 }
 
 pub(super) fn members(state: &RewriteState, selector: &RewriteApiSelector) -> Vec<String> {
@@ -60,14 +73,14 @@ pub(super) fn members(state: &RewriteState, selector: &RewriteApiSelector) -> Ve
             RewriteApiSelector::Route(path) => {
                 !item.api.starts_with("MOTAN ") && route(&item.api) == path
             }
-            RewriteApiSelector::Method(api) => item.api == api.to_string(),
+            RewriteApiSelector::Motan(api) => item.api == api.to_string(),
         })
         .map(|item| item.api.clone())
         .collect()
 }
 
 pub(super) fn select(state: &RewriteState, selector: &RewriteApiSelector) -> Result<RecordingApi> {
-    if let RewriteApiSelector::Method(api) = selector {
+    if let RewriteApiSelector::Motan(api) = selector {
         return Ok(api.clone());
     }
     let candidates = members(state, selector);
@@ -96,28 +109,21 @@ pub(super) fn select(state: &RewriteState, selector: &RewriteApiSelector) -> Res
     selected.parse()
 }
 
-/// Existing method-owned tasks retain their identity and receipts. New work uses
-/// one path-owned worker; no implicit transfer between historical workers.
-pub(super) fn work_scope(state: &RewriteState, api: &str) -> super::RewriteWorkScope {
-    let path = route(api);
-    if api.starts_with("MOTAN ") || !state.route_worker_scopes && api.contains(' ') {
-        return super::RewriteWorkScope::Api { api: api.into() };
-    }
-    let legacy = state
-        .worker_bindings
-        .keys()
-        .find(|key| key.contains(' ') && route(key) == path);
+/// HTTP workers always own the canonical route, independent of method progress.
+pub(super) fn work_scope(_state: &RewriteState, api: &str) -> super::RewriteWorkScope {
     super::RewriteWorkScope::Api {
-        api: match legacy {
-            Some(key) if !api.contains(' ') => key.as_str(),
-            Some(_) => api,
-            None => path,
-        }
-        .into(),
+        api: public_api(api).into(),
     }
 }
 
 pub(super) fn scoped(state: &RewriteState, api: &str) -> Result<RewriteState> {
+    // Method keys are internal ledger references, never public selectors.
+    if api.contains(' ') {
+        return super::inventory::scoped(state, Some(&api.parse()?));
+    }
+    if state.api_inventory.is_empty() && public_api(&state.api) == api {
+        return Ok(state.clone());
+    }
     let selector = api.parse::<RewriteApiSelector>()?;
     let selected = if matches!(selector, RewriteApiSelector::Route(_)) {
         let mut candidates = members(state, &selector);
@@ -158,7 +164,7 @@ pub fn status_rewrite_for_selector(
     context: RewriteContext,
     selector: &RewriteApiSelector,
 ) -> Result<super::RewriteStatusReport> {
-    if let RewriteApiSelector::Method(api) = selector {
+    if let RewriteApiSelector::Motan(api) = selector {
         return super::status_rewrite_for_api(context, Some(api));
     }
     let state = RewriteStore::new(&context.target_root)?.load()?.context(

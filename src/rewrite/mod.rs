@@ -119,12 +119,12 @@ pub use evidence_model::{
     RewriteApplicableRulePlanner, RewriteEvidenceContext, RewriteEvidenceReport, RewriteRuleHint,
 };
 pub use model::{
-    RewriteAction, RewriteActionEnvelope, RewriteApiInventoryDetails, RewriteApiInventoryView,
-    RewriteApiProgress, RewriteApiStatus, RewriteCommandSpec, RewriteDependencyRuleReport,
-    RewriteEvidenceCommand, RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode,
-    RewriteHttpResponseCaptureReport, RewriteInputRequiredReason, RewriteInventoryReport,
-    RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewritePhase, RewriteRecorderCaptureReport,
-    RewriteRecordingExecutionReport, RewriteRecordingInputCandidate,
+    RewriteAction, RewriteActionEnvelope, RewriteApiInventoryDetails, RewriteApiInventoryItem,
+    RewriteApiInventoryView, RewriteApiProgress, RewriteApiStatus, RewriteCommandSpec,
+    RewriteDependencyRuleReport, RewriteEvidenceCommand, RewriteFocusedE2eExecution,
+    RewriteFocusedE2eExecutionMode, RewriteHttpResponseCaptureReport, RewriteInputRequiredReason,
+    RewriteInventoryReport, RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewritePhase,
+    RewriteRecorderCaptureReport, RewriteRecordingExecutionReport, RewriteRecordingInputCandidate,
     RewriteRecordingInputCandidateDisposition, RewriteRecordingInputDiagnosis,
     RewriteRecordingInputMode, RewriteRecordingInputRejections, RewriteRecordingKind,
     RewriteRecordingReason, RewriteRecordingStartReport, RewriteRecordingStartState,
@@ -344,7 +344,7 @@ pub fn apply_rewrite_dependency_rule(
                         report.evidence_reclassification =
                             Some(background_reclassification::apply(&target_root, state)?);
                         report.next_command =
-                            action::next_command_for_api(&target_root, &state.api);
+                            action::next_command_for_selected_api(&target_root, state, &state.api);
                         return Ok((report, false));
                     }
                     Err(error) => {
@@ -359,7 +359,7 @@ pub fn apply_rewrite_dependency_rule(
                             applied,
                         )?;
                         report.next_command =
-                            action::next_command_for_api(&target_root, &state.api);
+                            action::next_command_for_selected_api(&target_root, state, &state.api);
                         return Ok((report, true));
                     }
                 }
@@ -369,7 +369,8 @@ pub fn apply_rewrite_dependency_rule(
             }
             report.evidence_reclassification =
                 Some(background_reclassification::apply(&target_root, state)?);
-            report.next_command = action::next_command_for_api(&target_root, &state.api);
+            report.next_command =
+                action::next_command_for_selected_api(&target_root, state, &state.api);
             Ok((report, false))
         })?;
     if changes_dependency_matching {
@@ -380,7 +381,8 @@ pub fn apply_rewrite_dependency_rule(
         if !runnable {
             recording::begin_pending_capture_refresh(&target_root, &mut state)?;
         }
-        report.next_command = action::next_command_for_api(&target_root, &owner_api);
+        report.next_command =
+            action::next_command_for_selected_api(&target_root, &state, &owner_api);
     }
     store.save(&state)?;
     Ok(report)

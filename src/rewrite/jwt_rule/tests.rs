@@ -458,7 +458,7 @@ fn global_apply_invalidates_other_completed_api_without_new_recording() {
     assert!(super::super::worker::runtime::acceptance_ready(
         &state,
         &crate::rewrite::RewriteWorkScope::Api {
-            api: state.api.clone()
+            api: crate::rewrite::api_selector::public_api(&state.api).to_string()
         }
     ));
     assert!(state.recording_refresh.is_none());

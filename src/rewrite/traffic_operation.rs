@@ -107,19 +107,31 @@ pub(super) fn wait_action(
     requested_api: Option<String>,
     active: &TrafficOperationMarker,
 ) -> RewriteAction {
-    let active_api = active.api.as_deref().unwrap_or("the workflow");
-    let status_api = active.api.as_ref().and(requested_api.as_deref());
+    let active_api = active
+        .api
+        .as_deref()
+        .map(super::api_selector::public_api)
+        .unwrap_or("the workflow");
+    let status_api = active
+        .api
+        .as_ref()
+        .and(requested_api.as_deref())
+        .map(super::api_selector::public_api);
+    let status = action::status_command_for_api(target_root, status_api);
     RewriteAction::WaitRequired {
         summary: format!(
             "wait for {RESOURCE}; {active_api} is executing {}",
             kind_label(active.kind)
         ),
         resource: RESOURCE.to_string(),
-        requested_api: requested_api.clone(),
-        blocking_api: active.api.clone(),
+        requested_api: requested_api.map(|api| super::api_selector::public_api(&api).into()),
+        blocking_api: active
+            .api
+            .as_deref()
+            .map(|api| super::api_selector::public_api(api).into()),
         active_operation: Some(view(active)),
         retry_after_seconds: RETRY_AFTER_SECONDS,
-        status: action::status_command_for_api(target_root, status_api),
+        status,
     }
 }
 
@@ -147,7 +159,10 @@ pub(super) fn view(marker: &TrafficOperationMarker) -> RewriteTrafficOperationVi
     RewriteTrafficOperationView {
         operation_id: marker.operation_id.clone(),
         kind: marker.kind.into(),
-        api: marker.api.clone(),
+        api: marker
+            .api
+            .as_deref()
+            .map(|api| super::api_selector::public_api(api).into()),
         started_at: marker.started_at.clone(),
     }
 }
@@ -285,7 +300,7 @@ mod tests {
         assert_eq!(value.as_object().unwrap().len(), 4);
         assert_eq!(value["kind"], "wait_required");
         assert_eq!(value["details"]["resource"], RESOURCE);
-        assert_eq!(value["details"]["active_operation"]["api"], "GET /a");
+        assert_eq!(value["details"]["active_operation"]["api"], "/a");
         assert_eq!(
             value["commands"]["wait"]["argv"],
             serde_json::json!([

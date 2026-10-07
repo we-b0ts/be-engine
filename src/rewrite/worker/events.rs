@@ -43,10 +43,14 @@ pub(in crate::rewrite) fn lock(target_root: &Path) -> Result<File> {
 }
 
 pub(in crate::rewrite) fn overlay(target_root: &Path, state: &mut RewriteState) -> Result<()> {
-    let updates = load(target_root)?;
+    // Normalize both sources before merging: a newer route-keyed callback must
+    // replace the same binding in a method-keyed coordinator snapshot.
+    normalize_bindings(state)?;
+    let mut updates = load(target_root)?;
     if updates.workflow_id != state.workflow_id || updates.revision <= state.worker_event_revision {
         return Ok(());
     }
+    normalize_updates(&mut updates)?;
     for (key, update) in updates.bindings {
         if update.revision <= state.worker_event_revision {
             continue;
@@ -54,7 +58,7 @@ pub(in crate::rewrite) fn overlay(target_root: &Path, state: &mut RewriteState) 
         // Retained bindings also carry API expert coverage across recording batches.
         // A removed item without a retained binding must not be resurrected.
         let retained = state.worker_bindings.contains_key(&key)
-            || state.api == key
+            || super::super::api_selector::public_api(&state.api) == key
             || state
                 .api_inventory
                 .iter()
@@ -97,6 +101,7 @@ pub(in crate::rewrite) fn publish_many(
             ..Default::default()
         };
     }
+    normalize_updates(&mut updates)?;
     updates.revision = updates
         .revision
         .max(state.worker_event_revision)
@@ -155,6 +160,49 @@ fn load(target_root: &Path) -> Result<WorkerUpdates> {
         "worker feedback snapshot contains a future binding update"
     );
     Ok(updates)
+}
+
+fn normalize_updates(updates: &mut WorkerUpdates) -> Result<()> {
+    let mut bindings = BTreeMap::<String, BindingUpdate>::new();
+    for (key, update) in std::mem::take(&mut updates.bindings) {
+        let key = super::super::api_selector::public_api(&key).to_string();
+        if let Some(previous) = bindings.get(&key) {
+            if previous.revision == update.revision {
+                ensure!(
+                    previous.binding.agent_handle_fingerprint
+                        == update.binding.agent_handle_fingerprint,
+                    "multiple workers own API {key}; one route requires one worker"
+                );
+            }
+            if previous.revision >= update.revision {
+                continue;
+            }
+        }
+        bindings.insert(key, update);
+    }
+    updates.bindings = bindings;
+    Ok(())
+}
+
+fn normalize_bindings(state: &mut RewriteState) -> Result<()> {
+    let mut bindings = BTreeMap::<String, RewriteWorkerBinding>::new();
+    for (stored_key, binding) in &state.worker_bindings {
+        let key = super::super::api_selector::public_api(stored_key).to_string();
+        if let Some(previous) = bindings.get(&key) {
+            ensure!(
+                previous.agent_handle_fingerprint == binding.agent_handle_fingerprint,
+                "multiple workers own API {key}; one route requires one worker"
+            );
+            // A canonical entry represents the adopted scope; an alias must not
+            // replace its dispatch, review assignment or retained runtime handle.
+            if stored_key != &key {
+                continue;
+            }
+        }
+        bindings.insert(key, binding.clone());
+    }
+    state.worker_bindings = bindings;
+    Ok(())
 }
 
 fn root(target_root: &Path) -> PathBuf {

@@ -30,12 +30,13 @@ API path/pattern or process_output:<id> <-> worker handle <-> worker worktree
 
 Issue IDs, attempts, and workflow revisions can change without changing this
 binding. HTTP scope covers all included recorded methods at that exact canonical
-path/pattern. Match `details.worker.work_scope`, not `api_inventory.current_api`:
-that inventory remains method-specific. Never dispatch separate method workers
+path/pattern. Match `details.worker.work_scope` for task ownership. The API
+inventory summarizes routes and keeps method verification under each item's
+`methods`; its current selection does not assign a worker. Never dispatch separate method workers
 for one route, infer scope from a directory name, or enumerate methods in the
 assignment. The worker obtains `facts.method_apis` and method-bound issue queries
-from scoped evidence. Existing method-owned bindings retain their returned scope;
-resume them without an implicit ownership transfer. The engine persists the actual runtime handle and returns `agent_handle`
+from scoped evidence. HTTP commands always use the canonical route; never send
+`METHOD API`. The engine persists the actual runtime handle and returns `agent_handle`
 with its work scope in status and inventory. Match live runtime entries by that
 handle; do not keep a separate binding/dispatch ID table. Supply the runtime's
 addressable identifier, such as Codex's canonical `agent_name` when its tools

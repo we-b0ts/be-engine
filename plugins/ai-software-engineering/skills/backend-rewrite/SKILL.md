@@ -47,11 +47,18 @@ work into GET/PUT/DELETE workers or construct `GET|PUT /path` selectors.
 `next`, `status`, `evidence`, worker confirmation and review accept route scopes;
 use the exact scope returned by the engine. A route acceptance replays its
 included methods in one session. Each case keeps its recorded method, and
-`.traffic-e2e/progress.yaml` and the API inventory remain keyed by `METHOD API`.
-A passing method does not complete a failing sibling. Explicit `METHOD API`
-selectors retain precise method verification. Existing method-owned worker
-bindings and review receipts retain their scope until that legacy work ends;
-never silently consolidate owners or reset progress to adopt route workers.
+`.traffic-e2e/progress.yaml` and the verification ledger remain keyed by `METHOD API`.
+The public API inventory counts HTTP routes: `current_api` omits the method,
+`current_index` addresses route items, and expanded items retain `methods` with
+each recorded method's verification state. A route is complete only when all
+included methods are complete; it is skipped only when all methods are skipped.
+Normal coordinator commands use the route as the API identity throughout
+dispatch, delivery, acceptance and revalidation. An unscoped `next` also
+verifies the selected route's included methods in one Replay session. Method
+identities belong to case/worker diagnostics and the verification ledger.
+A passing method does not complete a failing sibling. HTTP coordinator
+selectors accept only paths/patterns; `METHOD API` and combined method selectors
+are rejected. One API route owns one worker, worktree and delivery.
 
 ## Select Your Agent Role
 

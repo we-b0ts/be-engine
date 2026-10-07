@@ -11,7 +11,7 @@ pub(super) struct EvidenceArgs {
     /// Current overview or detail-query id returned by the engine.
     query_id: Option<String>,
     /// Fetch this exact API implementer's current issue, identity, and evidence queries.
-    #[arg(long, value_name = "PATH_OR_PATTERN | METHOD PATH_OR_PATTERN")]
+    #[arg(long, value_name = "PATH_OR_PATTERN")]
     api: Option<traffic_e2e::RewriteApiSelector>,
     /// Fetch this process-output worker's current issue and identity.
     #[arg(long, value_name = "ID")]
@@ -46,7 +46,7 @@ mod tests {
     fn evidence_requires_exactly_one_selector() {
         for args in [
             vec!["evq-current-overview"],
-            vec!["--api", "GET /api/tasks/*"],
+            vec!["--api", "/api/tasks/*"],
             vec!["--api", "/api/tasks/*"],
             vec!["--process-output", "metrics"],
         ] {
@@ -56,9 +56,9 @@ mod tests {
         }
         for args in [
             vec![],
-            vec!["evq-id", "--api", "GET /api"],
+            vec!["evq-id", "--api", "/api"],
             vec!["evq-id", "--process-output", "metrics"],
-            vec!["--api", "GET /api", "--process-output", "metrics"],
+            vec!["--api", "/api", "--process-output", "metrics"],
             vec!["--api", "not-an-api"],
         ] {
             assert!(

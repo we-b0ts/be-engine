@@ -130,16 +130,31 @@ fn new_purpose_authorizes_one_first_binding_independently_for_each_api() {
         for (api, handle) in [("GET /api", "new-worker-a"), ("GET /other", "new-worker-b")] {
             // Model a fresh Replay failure for each API in the new workflow.
             let mut state = store.load().unwrap().unwrap();
+            if !state.api_inventory.iter().any(|item| item.api == api) {
+                let mut item = worker::tests::implementation_state_with_inventory(false)
+                    .api_inventory[0]
+                    .clone();
+                item.api = api.into();
+                item.status = rewrite::RewriteApiStatus::ImplementationRequired;
+                state.api_inventory.push(item);
+            }
+            state.active_slice =
+                worker::tests::implementation_state_with_inventory(false).active_slice;
             state.api = api.into();
-            state.phase = RewritePhase::ImplementationRequired;
-            state.active_issue = worker::tests::implementation_state_with_inventory(false)
-                .active_issue
-                .clone();
+            let index = state
+                .api_inventory
+                .iter()
+                .position(|item| item.api == api)
+                .unwrap();
+            state.api_inventory[index].status = rewrite::RewriteApiStatus::ImplementationRequired;
+            state.current_api_index = Some(index);
             store.save(&state).unwrap();
             let confirm = |agent: &str| {
                 worker::confirm(rewrite::RewriteWorkerConfirmOptions {
                     target_root: target.path().into(),
-                    work_scope: rewrite::RewriteWorkScope::Api { api: api.into() },
+                    work_scope: rewrite::RewriteWorkScope::Api {
+                        api: rewrite::api_selector::public_api(api).into(),
+                    },
                     worktree: None,
                     agent_handle: agent.into(),
                     agent_name: None,
@@ -319,9 +334,7 @@ fn previous_workers_are_retired_without_query_and_late_feedback_is_rejected() {
     let target = fixture();
     let store = RewriteStore::new(target.path()).unwrap();
     let mut previous = store.load().unwrap().unwrap();
-    let scope = rewrite::RewriteWorkScope::Api {
-        api: "GET /api".into(),
-    };
+    let scope = rewrite::RewriteWorkScope::Api { api: "/api".into() };
     let binding: worker::model::RewriteWorkerBinding = serde_json::from_value(serde_json::json!({
         "agent_handle":"old-worker", "agent_handle_fingerprint":"old-fingerprint", "confirmed_dispatch_id":"old-dispatch",
         "first_bound_at":"2020-01-01T00:00:00Z",
@@ -455,7 +468,7 @@ async fn every_base_status_requires_purpose_and_next_wait_cannot_resume_old_work
     }
     let report = rewrite::next_rewrite(rewrite::RewriteNextOptions {
         target_root: target.path().into(),
-        api: Some("GET /api".parse().unwrap()),
+        api: Some("/api".parse().unwrap()),
         process_output: None,
         source_route: None,
     })

@@ -482,20 +482,6 @@ pub(super) fn acceptance_ready(target_root: &Path, state: &RewriteState) -> Resu
     Ok(current_revision(target_root, kind)? != observed)
 }
 
-pub(super) fn replay_ready(state: &RewriteState, scope: &super::RewriteWorkScope) -> bool {
-    let super::RewriteWorkScope::Api { api } = scope else {
-        return false;
-    };
-    let slice = if api == &state.api {
-        Some(&state.active_slice)
-    } else {
-        state.parked_slices.get(api)
-    };
-    slice.is_some_and(|slice| {
-        slice.phase == super::RewritePhase::ImplementationRequired && slice.system_repair_accepted
-    })
-}
-
 fn replay_planning_migration_is_available(state: &RewriteState) -> bool {
     state
         .route

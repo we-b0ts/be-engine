@@ -53,7 +53,7 @@ backend-rewrite --target-root /path/to/target rule plan \
   --jwt-leeway-seconds 60 \
   --source-evidence 'auth.rs validates session JWT with SECRET_KEY and 60s expiration leeway'
 backend-rewrite --target-root /path/to/target rule apply <plan-id>
-backend-rewrite --target-root /path/to/target next --api 'GET /api/example'
+backend-rewrite --target-root /path/to/target next --api '/api/example'
 ```
 
 For a source contract that carries the token directly in a URL query parameter,

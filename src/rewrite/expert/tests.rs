@@ -11,7 +11,7 @@ fn bound_state() -> RewriteState {
 fn strictly_more_than_two_hours_and_no_convergence_condition() {
     let mut state = bound_state();
     let start = Utc::now();
-    let binding = state.worker_bindings.get_mut("GET /api").unwrap();
+    let binding = state.worker_bindings.get_mut("/api").unwrap();
     binding.first_bound_at = Some(start.to_rfc3339());
     assert_eq!(
         state_at(binding, start + Duration::seconds(7199)),
@@ -34,7 +34,7 @@ fn overdue_state() -> RewriteState {
     let mut state = bound_state();
     state
         .worker_bindings
-        .get_mut("GET /api")
+        .get_mut("/api")
         .unwrap()
         .first_bound_at = Some((Utc::now() - Duration::hours(3)).to_rfc3339());
     state
@@ -43,7 +43,7 @@ fn overdue_state() -> RewriteState {
 fn options(root: &Path, state: &RewriteState) -> RewriteExpertOptions {
     RewriteExpertOptions {
         target_root: root.into(),
-        expert_id: batch_id(state, &["GET /api".into()]),
+        expert_id: batch_id(state, &["/api".into()]),
         agent_handle: "expert-task-1".into(),
     }
 }
@@ -51,8 +51,8 @@ fn options(root: &Path, state: &RewriteState) -> RewriteExpertOptions {
 fn reserve(root: &Path, state: &RewriteState) {
     prepare(RewriteExpertPrepareOptions {
         target_root: root.into(),
-        expert_id: batch_id(state, &["GET /api".into()]),
-        apis: vec!["GET /api".into()],
+        expert_id: batch_id(state, &["/api".into()]),
+        apis: vec!["/api".into()],
     })
     .unwrap();
 }
@@ -72,17 +72,14 @@ async fn public_status_next_and_wait_expose_deadline_while_verification_is_busy(
     let action = serde_json::to_value(&status.action).unwrap();
     assert_eq!(action["kind"], "expert_required");
     assert_eq!(action["details"]["state"], "prepare_required");
-    assert_eq!(
-        action["details"]["apis"][0]["work_scope"]["api"],
-        "GET /api"
-    );
+    assert_eq!(action["details"]["apis"][0]["work_scope"]["api"], "/api");
     assert_eq!(
         action["details"]["apis"][0]["commands"]["evidence"]["argv"]
             .as_array()
             .unwrap()
             .last()
             .unwrap(),
-        "GET /api"
+        "/api"
     );
     let inventory = crate::rewrite::inventory_rewrite(context()).unwrap();
     assert_eq!(inventory.pending, status.pending);
@@ -120,7 +117,7 @@ async fn public_status_next_and_wait_expose_deadline_while_verification_is_busy(
     // A detached verifier saving its older snapshot must not lose the expert binding.
     store.save(&state).unwrap();
     let loaded = store.load().unwrap().unwrap();
-    assert!(loaded.worker_bindings["GET /api"].expert.is_some());
+    assert!(loaded.worker_bindings["/api"].expert.is_some());
     assert!(required_action(target.path(), &loaded, None).is_none());
 }
 
@@ -142,7 +139,7 @@ fn confirm_is_idempotent_and_rejects_second_expert_wrong_scope_and_early_confirm
     wrong.expert_id = "different-workflow".into();
     assert!(confirm(wrong).is_err());
     let mut same_worker = options(target.path(), &state);
-    same_worker.agent_handle = "test-subagent-handle:GET /api".into();
+    same_worker.agent_handle = "test-subagent-handle:/api".into();
     reserve(target.path(), &state);
     assert!(confirm(same_worker).is_err());
     reserve(target.path(), &state);
@@ -151,7 +148,7 @@ fn confirm_is_idempotent_and_rejects_second_expert_wrong_scope_and_early_confirm
     assert!(
         worker::transfer(worker::RewriteWorkerTransferOptions {
             target_root: target.path().into(),
-            previous_agent_handle: "test-subagent-handle:GET /api".into(),
+            previous_agent_handle: "test-subagent-handle:/api".into(),
             agent_handle: "expert-task-1".into(),
             agent_name: None,
             reason: "expert cannot replace implementer".into(),
@@ -178,7 +175,7 @@ fn rework_transfer_and_revalidation_preserve_first_binding_and_expert() {
     let target = configured_target();
     let store = RewriteStore::new(target.path()).unwrap();
     let state = overdue_state();
-    let first = state.worker_bindings["GET /api"].first_bound_at.clone();
+    let first = state.worker_bindings["/api"].first_bound_at.clone();
     store.save(&state).unwrap();
     reserve(target.path(), &state);
     confirm(options(target.path(), &state)).unwrap();
@@ -186,12 +183,12 @@ fn rework_transfer_and_revalidation_preserve_first_binding_and_expert() {
     resumed.active_issue.as_mut().unwrap().id = "new-issue".into();
     resumed.active_issue.as_mut().unwrap().attempt += 1;
     worker::confirm_current_for_test(&mut resumed);
-    assert_eq!(resumed.worker_bindings["GET /api"].first_bound_at, first);
+    assert_eq!(resumed.worker_bindings["/api"].first_bound_at, first);
     assert!(required_action(target.path(), &resumed, None).is_none());
     store.save(&resumed).unwrap();
     worker::transfer(worker::RewriteWorkerTransferOptions {
         target_root: target.path().into(),
-        previous_agent_handle: "test-subagent-handle:GET /api".into(),
+        previous_agent_handle: "test-subagent-handle:/api".into(),
         agent_handle: "replacement-implementer".into(),
         agent_name: None,
         reason: "test ownership transfer".into(),
@@ -200,15 +197,12 @@ fn rework_transfer_and_revalidation_preserve_first_binding_and_expert() {
     })
     .unwrap();
     let mut transferred = store.load().unwrap().unwrap();
-    assert_eq!(
-        transferred.worker_bindings["GET /api"].first_bound_at,
-        first
-    );
+    assert_eq!(transferred.worker_bindings["/api"].first_bound_at, first);
     transferred.api_inventory[0].status = RewriteApiStatus::RevalidationPending;
     assert!(required_action(target.path(), &transferred, None).is_none());
     assert_eq!(
-        batch_id(&transferred, &["GET /api".into()]),
-        batch_id(&state, &["GET /api".into()])
+        batch_id(&transferred, &["/api".into()]),
+        batch_id(&state, &["/api".into()])
     );
 }
 
@@ -220,9 +214,9 @@ fn delivery_is_bound_to_expert_report_and_retained_implementer() {
     store.save(&state).unwrap();
     let delivery = RewriteExpertDeliveryOptions {
         expert: options(target.path(), &state),
-        api: "GET /api".into(),
+        api: "/api".into(),
         report_id: "runtime-report-1".into(),
-        recipient_handle: "test-subagent-handle:GET /api".into(),
+        recipient_handle: "test-subagent-handle:/api".into(),
     };
     assert!(delivered(delivery.clone()).is_err());
     reserve(target.path(), &state);
@@ -261,7 +255,7 @@ fn legacy_binding_starts_on_normal_feedback_without_a_timestamp_api() {
         "last_integrated_commit",
         "expert",
     ] {
-        value["worker_bindings"]["GET /api"]
+        value["worker_bindings"]["/api"]
             .as_object_mut()
             .unwrap()
             .remove(field);
@@ -271,14 +265,14 @@ fn legacy_binding_starts_on_normal_feedback_without_a_timestamp_api() {
     store.save(&legacy).unwrap();
     worker::runtime::report(worker::runtime::RewriteWorkerReportOptions {
         target_root: target.path().into(),
-        agent_handle: "test-subagent-handle:GET /api".into(),
+        agent_handle: "test-subagent-handle:/api".into(),
         activity: worker::model::RewriteWorkerActivity::Running,
         handoff_id: None,
         review_report: None,
     })
     .unwrap();
     let updated = store.load().unwrap().unwrap();
-    assert!(updated.worker_bindings["GET /api"].first_bound_at.is_some());
+    assert!(updated.worker_bindings["/api"].first_bound_at.is_some());
     assert!(required_action(target.path(), &updated, None).is_none());
 }
 
@@ -288,14 +282,12 @@ fn completed_and_process_output_items_never_dispatch_an_api_expert() {
     state.api_inventory[0].status = RewriteApiStatus::Complete;
     state.worker_bindings.insert(
         "process_output:metrics".into(),
-        state.worker_bindings["GET /api"].clone(),
+        state.worker_bindings["/api"].clone(),
     );
     assert!(required_action(Path::new("/target"), &state, None).is_none());
     assert_eq!(counts(&state), (0, 0, 0));
     // First confirmation alone creates the timestamp, regardless of activity reports.
-    let first = bound_state().worker_bindings["GET /api"]
-        .first_bound_at
-        .clone();
+    let first = bound_state().worker_bindings["/api"].first_bound_at.clone();
     assert!(DateTime::parse_from_rfc3339(first.as_deref().unwrap()).is_ok());
 }
 
@@ -308,13 +300,14 @@ fn add_api(state: &mut RewriteState, api: &str, overdue: bool) {
     scoped.active_slice.api = api.into();
     scoped.worker_bindings.clear();
     worker::confirm_current_for_test(&mut scoped);
+    let key = super::super::api_selector::public_api(api);
     if overdue {
-        scoped.worker_bindings.get_mut(api).unwrap().first_bound_at =
+        scoped.worker_bindings.get_mut(key).unwrap().first_bound_at =
             Some((Utc::now() - Duration::hours(3)).to_rfc3339());
     }
     state
         .worker_bindings
-        .insert(api.into(), scoped.worker_bindings.remove(api).unwrap());
+        .insert(key.into(), scoped.worker_bindings.remove(key).unwrap());
     state.parked_slices.insert(api.into(), scoped.active_slice);
 }
 
@@ -324,27 +317,27 @@ fn only_one_running_api_qualifies_and_unknown_status_cannot_prove_it_is_alone() 
     let mut state = overdue_state();
     add_api(&mut state, "GET /second", true);
     assert!(due_api(&state, Utc::now()).is_none());
-    let second = state.worker_bindings.get_mut("GET /second").unwrap();
+    let second = state.worker_bindings.get_mut("/second").unwrap();
     second.observation.as_mut().unwrap().activity = Activity::Queued;
-    assert_eq!(due_api(&state, Utc::now()).as_deref(), Some("GET /api"));
+    assert_eq!(due_api(&state, Utc::now()).as_deref(), Some("/api"));
     for activity in [Activity::Idle, Activity::HandoffReady, Activity::Integrated] {
         state
             .worker_bindings
-            .get_mut("GET /second")
+            .get_mut("/second")
             .unwrap()
             .observation
             .as_mut()
             .unwrap()
             .activity = activity;
-        assert_eq!(due_api(&state, Utc::now()).as_deref(), Some("GET /api"));
+        assert_eq!(due_api(&state, Utc::now()).as_deref(), Some("/api"));
     }
     state
         .worker_bindings
-        .get_mut("GET /second")
+        .get_mut("/second")
         .unwrap()
         .observation = None;
     assert!(due_api(&state, Utc::now()).is_none());
-    state.worker_bindings.remove("GET /second");
+    state.worker_bindings.remove("/second");
     assert!(due_api(&state, Utc::now()).is_none());
     let mut state = overdue_state();
     for activity in [
@@ -355,7 +348,7 @@ fn only_one_running_api_qualifies_and_unknown_status_cannot_prove_it_is_alone() 
     ] {
         state
             .worker_bindings
-            .get_mut("GET /api")
+            .get_mut("/api")
             .unwrap()
             .observation
             .as_mut()
@@ -365,7 +358,7 @@ fn only_one_running_api_qualifies_and_unknown_status_cannot_prove_it_is_alone() 
     }
     let observation = state
         .worker_bindings
-        .get_mut("GET /api")
+        .get_mut("/api")
         .unwrap()
         .observation
         .as_mut()
@@ -381,20 +374,20 @@ fn recent_integration_resets_the_timer_but_idle_resume_does_not() {
     let store = RewriteStore::new(target.path()).unwrap();
     let mut state = overdue_state();
     let old = (Utc::now() - Duration::hours(3)).to_rfc3339();
-    let binding = state.worker_bindings.get_mut("GET /api").unwrap();
+    let binding = state.worker_bindings.get_mut("/api").unwrap();
     binding.last_integrated_at = Some(Utc::now().to_rfc3339());
     binding.last_integrated_commit = Some("accepted-code-commit".into());
     assert!(due_api(&state, Utc::now()).is_none());
     state
         .worker_bindings
-        .get_mut("GET /api")
+        .get_mut("/api")
         .unwrap()
         .last_integrated_at = Some(old.clone());
-    assert_eq!(due_api(&state, Utc::now()).as_deref(), Some("GET /api"));
+    assert_eq!(due_api(&state, Utc::now()).as_deref(), Some("/api"));
     store.save(&state).unwrap();
     worker::runtime::report(worker::runtime::RewriteWorkerReportOptions {
         target_root: target.path().into(),
-        agent_handle: "test-subagent-handle:GET /api".into(),
+        agent_handle: "test-subagent-handle:/api".into(),
         activity: worker::model::RewriteWorkerActivity::Idle,
         handoff_id: None,
         review_report: None,
@@ -404,18 +397,18 @@ fn recent_integration_resets_the_timer_but_idle_resume_does_not() {
     assert!(due_api(&resumed, Utc::now()).is_none());
     worker::confirm_current_for_test(&mut resumed);
     assert_eq!(
-        resumed.worker_bindings["GET /api"]
+        resumed.worker_bindings["/api"]
             .last_integrated_at
             .as_deref(),
         Some(old.as_str())
     );
     assert_eq!(
-        resumed.worker_bindings["GET /api"]
+        resumed.worker_bindings["/api"]
             .last_integrated_commit
             .as_deref(),
         Some("accepted-code-commit")
     );
-    assert_eq!(due_api(&resumed, Utc::now()).as_deref(), Some("GET /api"));
+    assert_eq!(due_api(&resumed, Utc::now()).as_deref(), Some("/api"));
 }
 
 #[test]
@@ -425,8 +418,8 @@ fn reservations_recheck_running_count_and_serialize_later_experts() {
     let state = overdue_state();
     let request = RewriteExpertPrepareOptions {
         target_root: target.path().into(),
-        expert_id: batch_id(&state, &["GET /api".into()]),
-        apis: vec!["GET /api".into()],
+        expert_id: batch_id(&state, &["/api".into()]),
+        apis: vec!["/api".into()],
     };
     let mut concurrent = state.clone();
     add_api(&mut concurrent, "GET /second", true);
@@ -438,7 +431,7 @@ fn reservations_recheck_running_count_and_serialize_later_experts() {
     let mut later = store.load().unwrap().unwrap();
     later
         .worker_bindings
-        .get_mut("GET /api")
+        .get_mut("/api")
         .unwrap()
         .observation
         .as_mut()
@@ -448,8 +441,8 @@ fn reservations_recheck_running_count_and_serialize_later_experts() {
     store.save(&later).unwrap();
     let next = RewriteExpertPrepareOptions {
         target_root: target.path().into(),
-        expert_id: batch_id(&later, &["GET /second".into()]),
-        apis: vec!["GET /second".into()],
+        expert_id: batch_id(&later, &["/second".into()]),
+        apis: vec!["/second".into()],
     };
     assert!(
         prepare(next.clone())
@@ -459,9 +452,9 @@ fn reservations_recheck_running_count_and_serialize_later_experts() {
     );
     delivered(RewriteExpertDeliveryOptions {
         expert: options(target.path(), &state),
-        api: "GET /api".into(),
+        api: "/api".into(),
         report_id: "findings".into(),
-        recipient_handle: "test-subagent-handle:GET /api".into(),
+        recipient_handle: "test-subagent-handle:/api".into(),
     })
     .unwrap();
     prepare(next).unwrap();
@@ -469,7 +462,7 @@ fn reservations_recheck_running_count_and_serialize_later_experts() {
     let final_state = store.load().unwrap().unwrap();
     assert_eq!(counts(&final_state), (1, 0, 0));
     assert!(
-        final_state.worker_bindings["GET /api"]
+        final_state.worker_bindings["/api"]
             .expert
             .as_ref()
             .unwrap()
@@ -485,7 +478,7 @@ async fn bounded_wait_observes_a_deadline_crossing_without_any_worker_event() {
     let mut state = bound_state();
     state
         .worker_bindings
-        .get_mut("GET /api")
+        .get_mut("/api")
         .unwrap()
         .first_bound_at =
         Some((Utc::now() - Duration::hours(2) + Duration::milliseconds(400)).to_rfc3339());
@@ -524,22 +517,22 @@ fn recording_inventory_changes_keep_covered_apis_and_late_report_delivery() {
     reserve(target.path(), &state);
     confirm(options(target.path(), &state)).unwrap();
     let mut refreshed = store.load().unwrap().unwrap();
-    let first = refreshed.worker_bindings["GET /api"].first_bound_at.clone();
+    let first = refreshed.worker_bindings["/api"].first_bound_at.clone();
     crate::rewrite::inventory::install(&mut refreshed, vec!["GET /other-recording".into()])
         .unwrap();
     store.save(&refreshed).unwrap();
     delivered(RewriteExpertDeliveryOptions {
         expert: options(target.path(), &state),
-        api: "GET /api".into(),
+        api: "/api".into(),
         report_id: "retained-report".into(),
-        recipient_handle: "test-subagent-handle:GET /api".into(),
+        recipient_handle: "test-subagent-handle:/api".into(),
     })
     .unwrap();
     // A late write of the new recording snapshot cannot discard its report.
     store.save(&refreshed).unwrap();
     let mut returned = store.load().unwrap().unwrap();
     crate::rewrite::inventory::install(&mut returned, vec!["GET /api".into()]).unwrap();
-    assert_eq!(returned.worker_bindings["GET /api"].first_bound_at, first);
+    assert_eq!(returned.worker_bindings["/api"].first_bound_at, first);
     assert!(required_action(target.path(), &returned, None).is_none());
     assert_eq!(
         inventory(target.path(), &returned)[0].expert.state,
@@ -567,6 +560,24 @@ fn close_options(root: &Path, state: &RewriteState, confirmed: bool) -> RewriteE
         expert_id: expert.expert_id,
         agent_handle: confirmed.then_some(expert.agent_handle),
     }
+}
+
+#[test]
+fn expert_closure_requires_every_included_method_on_the_route() {
+    let target = configured_target();
+    let mut state = overdue_state();
+    let mut put = state.api_inventory[0].clone();
+    put.api = "PUT /api".into();
+    put.status = RewriteApiStatus::Pending;
+    state.api_inventory.push(put);
+    pass_api(target.path(), &mut state);
+    assert!(!verified(&state, "/api"));
+    state.api_inventory[1].status = RewriteApiStatus::Complete;
+    assert!(verified(&state, "/api"));
+    state.api_inventory[1].status = RewriteApiStatus::Skipped;
+    assert!(verified(&state, "/api"));
+    state.api_inventory[0].status = RewriteApiStatus::Skipped;
+    assert!(!verified(&state, "/api"));
 }
 
 #[test]
@@ -602,15 +613,15 @@ fn api_pass_requests_expert_closure_and_releases_slot_only_after_acknowledgement
     assert_eq!(counts(&passed), (0, 0, 1));
     let next = RewriteExpertPrepareOptions {
         target_root: target.path().into(),
-        expert_id: batch_id(&passed, &["GET /second".into()]),
-        apis: vec!["GET /second".into()],
+        expert_id: batch_id(&passed, &["/second".into()]),
+        apis: vec!["/second".into()],
     };
     assert!(prepare(next.clone()).is_err());
     close(close_options(target.path(), &state, true)).unwrap();
     store.save(&passed).unwrap(); // an older verifier snapshot cannot reopen the expert
     let closed = store.load().unwrap().unwrap();
     assert!(
-        closed.worker_bindings["GET /api"]
+        closed.worker_bindings["/api"]
             .expert
             .as_ref()
             .unwrap()
@@ -622,10 +633,9 @@ fn api_pass_requests_expert_closure_and_releases_slot_only_after_acknowledgement
     prepare(next).unwrap();
     // The original API stays covered even if it later needs repair again.
     let mut repaired = state;
-    repaired.worker_bindings.insert(
-        "GET /api".into(),
-        closed.worker_bindings["GET /api"].clone(),
-    );
+    repaired
+        .worker_bindings
+        .insert("/api".into(), closed.worker_bindings["/api"].clone());
     assert!(due_api(&repaired, Utc::now()).is_none());
 }
 
@@ -642,13 +652,13 @@ fn late_expert_report_cannot_reopen_a_passed_api_or_replace_closure() {
     store.save(&passed).unwrap();
     let late = RewriteExpertDeliveryOptions {
         expert: options(target.path(), &state),
-        api: "GET /api".into(),
+        api: "/api".into(),
         report_id: "late-findings".into(),
-        recipient_handle: "test-subagent-handle:GET /api".into(),
+        recipient_handle: "test-subagent-handle:/api".into(),
     };
     delivered(late.clone()).unwrap();
     assert!(
-        store.load().unwrap().unwrap().worker_bindings["GET /api"]
+        store.load().unwrap().unwrap().worker_bindings["/api"]
             .expert
             .as_ref()
             .unwrap()

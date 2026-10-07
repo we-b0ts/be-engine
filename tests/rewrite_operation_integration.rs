@@ -70,20 +70,29 @@ fn configured_target() -> tempfile::TempDir {
 #[test]
 fn detached_cli_operation_publishes_failure_and_status_does_not_restart_it() {
     let target = configured_target();
+    let runtime = target.path().join(".traffic-e2e/local/runtime/rewrite");
+    fs::create_dir_all(&runtime).unwrap();
+    fs::write(
+        runtime.join("state.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1, "revision": 1, "workflow_id": "rewrite-route-fixture",
+            "recording_run_id": "recording-fixture", "phase": "api_pending",
+            "api": "GET /api", "source_route": "/api", "attempts": [],
+            "e2e_current": false, "comparison_current": false,
+            "api_inventory": [{"api": "GET /api", "status": "active", "source_route": "/api"}],
+            "current_api_index": 0
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     // Deliberately fail Next's source-route validation before target execution.
     // This exercises the real sibling traffic-e2e child and its launch handoff;
     // quality receipt admission itself is synchronous and no longer launches one.
     let launched = command(
         target.path(),
-        &[
-            "next",
-            "--api",
-            "GET /api",
-            "--source-route",
-            "/wrong-route",
-        ],
+        &["next", "--api", "/api", "--source-route", "/wrong-route"],
     );
-    assert_eq!(launched["schema_version"], 33);
+    assert_eq!(launched["schema_version"], 34);
     assert_eq!(
         launched["pending"],
         if launched["action"]["kind"] == "wait_required" {
@@ -160,7 +169,7 @@ fn detached_unscoped_next_activates_idle_revalidation_while_an_api_is_blocked() 
     assert_eq!(before["pending"], 1);
     assert_eq!(
         before["action"]["commands"]["advance"]["argv"][5],
-        "GET /revalidate/*"
+        "/revalidate/*"
     );
     let launched = command(target.path(), &["next"]);
     assert_eq!(launched["action"]["kind"], "wait_required");

@@ -51,10 +51,10 @@ old workflow is unfinished. An explicit user request supplies purpose authorizat
 otherwise ask the user to choose. On a work branch, continue the normal workflow.
 
 Follow the returned action to start an absent rewrite workflow.
-Before the first standard recording, add `--api '<METHOD path-or-pattern>'`
-only when the caller explicitly requests a single-API recording. After the
-engine publishes its stable inventory, select work with the exact
-inventory method/pattern. If an action response was lost or the session is
+Before the first standard recording, omit `--api` and use Recorder configuration
+to bound capture. After the engine publishes its stable inventory, select work
+with the exact API path/pattern. Recording refreshes may select one recorded
+route with `--api '/path-or-pattern'`. If an action response was lost or the session is
 resuming, recover the engine scheduler's current action with unscoped read-only
 `status`; scoped status serves work-item inspection. Execute the returned
 action's command to advance the workflow.
@@ -473,26 +473,44 @@ fingerprint and the final public `progress.yaml` is committed. Use
 
 ## API Inventory And Serialized Traffic
 
-HTTP worker scopes are canonical paths/patterns. The method-keyed API inventory
-is the progress and validation ledger, not a list of worker assignments. Use
+HTTP worker scopes are canonical paths/patterns. The API inventory summarizes
+routes and exposes each route's method-keyed verification ledger in `methods`;
+it is not a list of worker assignments. Use
 `details.worker.work_scope` and the engine-issued commands when dispatching,
 resuming, integrating or accepting. A route acceptance selects all included
 method cases and runs one Replay/target session; each method keeps its own
-focused evidence and progress. Excluded methods stay skipped. Exact legacy
-`METHOD API` selectors continue to select only that method. Do not reset an
-existing method-owned worker or its receipts to consolidate route ownership.
+focused evidence and progress. Excluded methods stay skipped. HTTP coordinator
+selectors accept only the route; `METHOD API` selectors are rejected.
 
 
 Every initialized action or status includes a bounded `api_inventory` summary:
 `total`, `completed`, `unverified`, `implementation_required`,
 `system_repair_required`, `awaiting_recording_refresh`, `revalidation_pending`, `current_index`, and
-`current_api`. The engine owns this inventory. In expanded `inventory`,
+`current_api`. Every count is a route count for HTTP. `current_api` is the
+canonical path/pattern without a method; `current_index` addresses the stable
+route `items` order, determined by each route's first occurrence in the
+recorded method ledger. Expanded `inventory` items contain `api`, aggregate
+`status`, and `methods` with the individual `METHOD API` verification states.
+Only fully skipped routes count as skipped. All included methods must be
+complete before a route counts as completed. Otherwise each route counts once
+under its highest-priority outstanding state: system repair, recording refresh,
+implementation, active verification, revalidation, then unverified. MOTAN
+entries retain their existing protocol-qualified identity.
+The engine owns this read-only projection; it does not change stored progress,
+worker bindings, or receipts. In expanded `inventory`,
 `workflow.scope` is the selector of the shared standard recording and is separate
 from the selected API. An
 omitted selector produces `recorded_api_inventory`: every API that actually
 publishes a case in the selected standard recording enters the inventory, while
 an API with no observed traffic is not required and does not block completion.
 The scope remains stable as selected workers change.
+
+Normal issued API commands use route selectors, including rule/repair Replay,
+comparison continuation and idle revalidation. `verification request --api
+'/path-or-pattern' --reason '<shared change>'` promotes all included stale
+methods on that route without selecting skipped methods. An unscoped `next`
+uses the same route batch as an explicit route command. Methods are implementation
+and verification details, never separate coordinator work items.
 
 Every `implementation_required` action uses a worker. Inventory size controls
 only how much work the engine can make ready. Worker concurrency belongs to
@@ -536,8 +554,8 @@ coordination already uses idle verification capacity without such a request:
 
 ```text
 backend-rewrite verification request \
-  --api 'GET /api/a' \
-  --api 'POST /api/b' \
+  --api '/api/a' \
+  --api '/api/b' \
   --reason 'shared response mapper changed'
 ```
 
