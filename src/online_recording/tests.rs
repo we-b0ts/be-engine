@@ -18,6 +18,7 @@ use tokio::{
     task::JoinHandle,
 };
 
+mod policy;
 mod sse;
 
 #[test]

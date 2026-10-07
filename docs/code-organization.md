@@ -65,8 +65,9 @@ is unclear.
 - `bin/backend-rewrite-admin/` owns explicit administrator repair CLI bootstrap
   only; administrator behavior remains in the library owner for that contract.
 - `bin/recording-online/` owns the optional standalone online CLI bootstrap.
-  `online_recording/options` constructs direct engine configuration without a
-  project loader; `online_recording/proxy` owns reservation validation, forwarding
+  `online_recording/options` constructs direct engine configuration and applies
+  an explicitly supplied source traffic policy without a project loader;
+  `online_recording/proxy` owns reservation validation, forwarding
   and completion, while its parent owns Source/Recorder supervision and address
   heartbeat scheduling. Redis lease primitives stay in the gateway SDK.
 - `local_interception` owns reusable fixed-identity firewall setup/cleanup and

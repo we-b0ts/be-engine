@@ -1,5 +1,6 @@
-//! Parameters for a standalone recording service, without project or API policy files.
+//! Standalone Recorder configuration with an optional source traffic policy overlay.
 
+use crate::config::SourceTrafficPolicyConfig;
 use crate::{
     AppConfig, ArtifactOwner, ArtifactsConfig, HttpGatewayFallbackMode,
     HttpGatewayFixedResponseConfig,
@@ -58,6 +59,9 @@ pub struct OnlineRecordingOptions {
     pub artifact_owner: Option<ArtifactOwner>,
     #[arg(long, env = "TRAFFIC_E2E_SOURCE_WORKDIR", default_value = "/app")]
     pub source_workdir: PathBuf,
+    /// Source traffic policy loaded once at startup; mount read-only in containers.
+    #[arg(long, env = "TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY", value_name = "PATH")]
+    pub source_traffic_policy: Option<PathBuf>,
     #[arg(long, env = "TRAFFIC_E2E_DNS_UPSTREAM")]
     pub dns_upstream: Option<SocketAddr>,
     #[arg(long, default_value = "300", value_parser = clap::value_parser!(u64).range(1..))]
@@ -178,14 +182,28 @@ impl OnlineRecordingOptions {
             vec!["authorization".to_owned(), "cookie".to_owned()];
         config.recording.redact_headers = vec!["proxy-authorization".to_owned()];
         config.recording.shutdown_case_drain_timeout_ms = 60_000;
-        config.tls.ca_cert_path = self.data_root.join("tls/recorder-ca.pem");
-        config.tls.ca_key_path = self.data_root.join("tls/recorder-ca-key.pem");
+        let recorder_data = self.data_root.join(crate::repository::LOCAL_DATA_ROOT);
+        config.tls.ca_cert_path = recorder_data.join("traffic-recorder-ca.pem");
+        config.tls.ca_key_path = recorder_data.join("traffic-recorder-ca-key.pem");
         config.dns_mock.enabled = !self.no_interception;
         config.tcp_gateway.enabled = !self.no_interception;
         config.udp_gateway.enabled = !self.no_interception;
         config.udp_gateway.forward = true;
         config.dns_mock.upstream_dns = self.dns_upstream.unwrap_or_else(system_dns);
-        config.dns_mock.registry_path = self.data_root.join("fake-dns-registry.json");
+        config.dns_mock.registry_path = self
+            .data_root
+            .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
+            .join("fake_dns_registry.json");
+        if let Some(path) = &self.source_traffic_policy {
+            SourceTrafficPolicyConfig::load(path)?
+                .apply_to(&mut config)
+                .with_context(|| {
+                    format!("failed to apply source traffic policy {}", path.display())
+                })?;
+        }
+        config
+            .validate()
+            .context("invalid online recording configuration")?;
         Ok(config)
     }
 
