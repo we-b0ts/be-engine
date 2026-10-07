@@ -3,7 +3,8 @@ use super::*;
 use crate::{RedisLockFeedback, RedisLockSelector, RedisValueKeySelector, plan_redis_lock};
 use redis_value_tests::{request, spawn};
 #[tokio::test]
-async fn redis_lock_discovery_plan_apply_then_actual_set_evalsha_keeps_token_and_script_identity() {
+async fn redis_lock_plan_apply_then_cross_connection_set_mget_evalsha_keeps_nonce_and_script_identity()
+ {
     let temp = tempfile::tempdir().unwrap();
     let case = temp.path().join("apis/delete/case");
     std::fs::create_dir_all(&case).unwrap();
@@ -21,15 +22,23 @@ async fn redis_lock_discovery_plan_apply_then_actual_set_evalsha_keeps_token_and
         &["lock:item:1", "source-opaque-nonce", "NX", "EX", "30"],
         b"+OK\r\n",
     );
-    let release = redis_hash_dependency(
+    let mut read = redis_hash_dependency(
         lane,
         2,
+        "MGET",
+        &["item:online:1", "item:online:legacy"],
+        b"*2\r\n$-1\r\n$-1\r\n",
+    );
+    read["response_kind"] = "array".into();
+    let release = redis_hash_dependency(
+        lane,
+        3,
         "EVALSHA",
         &[sha, "1", "lock:item:1", "source-opaque-nonce"],
         b":1\r\n",
     );
     let dependencies = case.join("dependencies.jsonl");
-    std::fs::write(&dependencies, format!("{set}\n{release}\n")).unwrap();
+    std::fs::write(&dependencies, format!("{set}\n{read}\n{release}\n")).unwrap();
     let immutable = std::fs::read(&dependencies).unwrap();
     std::fs::write(
         case.join("request.json"),
@@ -90,6 +99,8 @@ async fn redis_lock_discovery_plan_apply_then_actual_set_evalsha_keeps_token_and
     .unwrap();
     let (addr, state, task) = spawn(&case, Some(policy)).await;
     let mut client = TcpStream::connect(addr).await.unwrap();
+    let mut reader = TcpStream::connect(addr).await.unwrap();
+    let mut releaser = TcpStream::connect(addr).await.unwrap();
     let error = b"-ERR no recorded Redis dependency matched\r\n";
     request(
         &mut client,
@@ -130,13 +141,20 @@ async fn redis_lock_discovery_plan_apply_then_actual_set_evalsha_keeps_token_and
     )
     .await;
     request(
-        &mut client,
+        &mut reader,
+        &["MGET", "item:online:1", "item:online:legacy"],
+        b"*2\r\n$-1\r\n$-1\r\n",
+    )
+    .await;
+    drop(client);
+    request(
+        &mut releaser,
         &["EVALSHA", sha, "1", "lock:item:1", "wrong-token"],
         error,
     )
     .await;
     request(
-        &mut client,
+        &mut releaser,
         &[
             "EVALSHA",
             "changed-script",
@@ -148,7 +166,7 @@ async fn redis_lock_discovery_plan_apply_then_actual_set_evalsha_keeps_token_and
     )
     .await;
     request(
-        &mut client,
+        &mut releaser,
         &[
             "EVALSHA",
             sha,
@@ -160,7 +178,7 @@ async fn redis_lock_discovery_plan_apply_then_actual_set_evalsha_keeps_token_and
     )
     .await;
     request(
-        &mut client,
+        &mut releaser,
         &[
             "EVALSHA",
             sha,
@@ -172,7 +190,8 @@ async fn redis_lock_discovery_plan_apply_then_actual_set_evalsha_keeps_token_and
     )
     .await;
     let report = serde_json::to_value(state.lock().await.snapshot_report()).unwrap();
-    assert_eq!(report["redis"]["matched_count"], 2);
+    assert_eq!(report["redis"]["matched_count"], 3);
+    assert_eq!(report["redis"]["connections"], 3);
     assert!(
         report["redis"]["unused_case"]
             .as_array()

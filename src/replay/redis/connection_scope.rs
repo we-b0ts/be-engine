@@ -79,10 +79,18 @@ impl ConnectionScopes {
 }
 
 fn pool_compatible(command: &str, args: &[Vec<u8>]) -> bool {
-    // Deliberately list ordinary data commands. Read/write access classification
-    // is insufficient: WAIT, blocking reads and client introspection can depend
-    // on the physical connection. Unknown/module commands stay bound.
+    // Data and script-cache state belongs to the server, not a physical socket.
+    // Read/write access classification is insufficient: WAIT, blocking reads,
+    // client introspection and SCRIPT DEBUG can depend on the connection.
+    // Unknown commands/subcommands stay bound; any retained stateful operation
+    // still binds the whole lane, including these pool-compatible commands.
     match command.to_ascii_uppercase().as_str() {
+        "EVAL" | "EVALSHA" | "EVAL_RO" | "EVALSHA_RO" => true,
+        "SCRIPT" => args.first().is_some_and(|subcommand| {
+            ["LOAD", "EXISTS", "FLUSH", "KILL", "HELP"]
+                .iter()
+                .any(|name| subcommand.eq_ignore_ascii_case(name.as_bytes()))
+        }),
         "GET"
         | "MGET"
         | "GETRANGE"

@@ -164,10 +164,18 @@ username, RESP version, command and arguments. A target connection may consume
 several recorded source lanes; several target connections may consume one lane
 in order. Each ordinary exchange is still consumed once. Source lanes with
 retained session commands, transactions, subscriptions, blocking operations,
-scripts or unknown commands remain bound in their entirety to one target
-connection per active case. Another target connection cannot consume their
+SCRIPT DEBUG or unknown commands/subcommands remain bound in their entirety to
+one target connection per active case. Another target connection cannot consume their
 remaining exchanges. Diagnose these session constraints before changing target
 pooling; do not reproduce short source connections for ordinary GET/MGET calls.
+
+EVAL/EVALSHA and their read-only variants, plus SCRIPT LOAD/EXISTS/FLUSH/KILL/HELP,
+do not require connection binding by themselves. Their script cache belongs to
+the Redis server. Replay preserves exact script identity, session/endpoint
+scope, lock-token correlation and finite source-lane order, including recorded
+NOSCRIPT failures followed by script loading and retries. A retained stateful
+operation in the same lane still binds all of its exchanges.
+
 Redis RESP2 `SUBSCRIBE`, `PSUBSCRIBE`, `SSUBSCRIBE`, `UNSUBSCRIBE`,
 `PUNSUBSCRIBE`, and `SUNSUBSCRIBE` evidence is replayable only when one command
 argument produced one exact three-element confirmation (or an ordinary Redis

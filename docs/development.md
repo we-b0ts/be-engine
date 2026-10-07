@@ -3096,9 +3096,17 @@ requests consume separate recorded exchanges; pool compatibility does not
 make responses reusable or relax case/Global ownership. Successful SDK setup
 and CLIENT SETINFO metadata retain their existing handling.
 
+Ordinary EVAL/EVALSHA and their read-only variants also permit pool reuse.
+SCRIPT LOAD/EXISTS/FLUSH/KILL/HELP operate on the Redis server's script subsystem,
+so they do not by themselves require a physical connection claim. Recorded
+NOSCRIPT failures, script loading and retries remain finite exchanges in source
+lane order; Replay does not simulate a script cache or interpret Lua. Script
+body/SHA, keys and arguments still match exactly unless an explicit dependency
+rule covers a field such as a lock ownership token.
+
 Replay classifies source lanes before serving requests. A lane containing a
 retained session operation, WATCH/MULTI/EXEC, subscription, blocking operation,
-WAIT, script or unknown command conservatively retains connection binding for
+WAIT, SCRIPT DEBUG or unknown command/subcommand retains connection binding for
 the entire lane, including its ordinary-command prefix and suffix. A stateful
 source lane belongs to one target connection within the active case; another
 target connection cannot steal its next exchange. This does not split a

@@ -52,6 +52,13 @@ recorded outcomes and finite consumption remain enforced. Global dependencies
 are not normalized. Unrelated script arguments and unsupported multi-key,
 renewal, hash-based/reentrant lock protocols remain exact.
 
+Lock ownership is correlated by the token and resource identity, independently
+of the physical socket. A lane containing ordinary SET, GET/MGET and EVAL/EVALSHA
+calls can replay in recorded order across multiple target connections, including
+script-cache misses, SCRIPT LOAD and retries. Retained session operations,
+transactions, subscriptions, blocking operations and SCRIPT DEBUG still bind
+the whole lane to one target connection; a lock rule does not waive them.
+
 A changed script does not invalidate this key-scoped rule, but an actual script
 identity difference from the immutable recording still requires refreshed
 recordings. Failed release, contention and expiry behavior must remain genuine
