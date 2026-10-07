@@ -173,6 +173,101 @@ fn malformed_subscription_confirmation_is_rejected() {
     assert!(targets.is_empty());
 }
 
+#[test]
+fn malformed_or_unsupported_unsubscription_evidence_is_rejected_before_replay() {
+    for (args, response_kind, response, resp_version) in [
+        (
+            vec!["events"],
+            "array",
+            "*3\r\n$11\r\nunsubscribe\r\n$5\r\nother\r\n:0\r\n",
+            2,
+        ),
+        (
+            vec!["events"],
+            "array",
+            "*3\r\n$11\r\nunsubscribe\r\n$6\r\nevents\r\n:-1\r\n",
+            2,
+        ),
+        (vec!["events"], "simple_string", "+OK\r\n", 2),
+        (vec!["events"], "error", "+OK\r\n", 2),
+        (
+            vec![],
+            "array",
+            "*3\r\n$11\r\nunsubscribe\r\n$-1\r\n:0\r\n",
+            2,
+        ),
+        (vec!["events", "other"], "error", "-ERR denied\r\n", 2),
+        (vec!["events"], "error", "-ERR denied\r\n", 3),
+    ] {
+        let mut state = RedisReplayState::default();
+        let mut targets = BTreeMap::new();
+        let record = unsubscription_record(&args, response_kind, response, resp_version);
+        assert!(
+            state
+                .register_exchange(record, ReplaySource::Case, Some("case"), &mut targets, &[])
+                .is_err()
+        );
+        assert!(targets.is_empty());
+        assert!(state.exchanges.is_empty());
+    }
+}
+
+#[test]
+fn unsubscription_errors_and_nonzero_remaining_counts_preserve_recorded_responses() {
+    for (kind, response) in [
+        (
+            "array",
+            "*3\r\n$11\r\nunsubscribe\r\n$6\r\nevents\r\n:1\r\n",
+        ),
+        ("error", "-NOPERM permission denied\r\n"),
+    ] {
+        let mut state = RedisReplayState::default();
+        state
+            .register_exchange(
+                unsubscription_record(&["events"], kind, response, 2),
+                ReplaySource::Case,
+                Some("case"),
+                &mut BTreeMap::new(),
+                &[],
+            )
+            .unwrap();
+        let matched = state
+            .match_redis(
+                Some("case"),
+                &TargetKey {
+                    host: "redis.test".to_string(),
+                    port: 6379,
+                },
+                TargetConnection::default(),
+                2,
+                0,
+                None,
+                "UNSUBSCRIBE",
+                &[b"events".to_vec()],
+            )
+            .unwrap();
+        assert_eq!(matched.response, response.as_bytes());
+        assert!(matched.requires_binding);
+        state.complete_exchange(&matched);
+        assert!(state.snapshot().unused_case.is_empty());
+    }
+}
+
+fn unsubscription_record(
+    args: &[&str],
+    kind: &str,
+    response: &str,
+    resp_version: u8,
+) -> RecordedExchange {
+    serde_json::from_value(serde_json::json!({
+        "connection_id":Uuid::new_v4(), "sequence":1, "target_host":"redis.test",
+        "target_port":6379, "resp_version":resp_version, "database":0, "username":null,
+        "command":"UNSUBSCRIBE", "args":args.iter().map(|arg| capture(arg)).collect::<Vec<_>>(),
+        "response_kind":kind, "response":capture(response), "replay_safe":true,
+    }))
+    .unwrap()
+}
+
 fn capture(data: &str) -> RecordedCapture {
     RecordedCapture {
         encoding: "utf8".to_string(),

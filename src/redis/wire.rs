@@ -142,14 +142,17 @@ pub(crate) fn redis_command(raw: &Bytes) -> Result<RedisCommand> {
     Ok(RedisCommand { name, args })
 }
 
-pub(crate) fn is_subscription_command(name: &str) -> bool {
+pub(crate) fn is_pubsub_command(name: &str) -> bool {
     name.eq_ignore_ascii_case("SUBSCRIBE")
         || name.eq_ignore_ascii_case("PSUBSCRIBE")
         || name.eq_ignore_ascii_case("SSUBSCRIBE")
+        || name.eq_ignore_ascii_case("UNSUBSCRIBE")
+        || name.eq_ignore_ascii_case("PUNSUBSCRIBE")
+        || name.eq_ignore_ascii_case("SUNSUBSCRIBE")
 }
 
 pub(crate) fn validate_subscription_confirmation(command: &RedisCommand, raw: &[u8]) -> Result<()> {
-    if !is_subscription_command(&command.name) {
+    if !is_pubsub_command(&command.name) {
         return Err(anyhow!(
             "Redis {} is not a supported subscription command",
             command.name
@@ -209,9 +212,17 @@ pub(crate) fn validate_subscription_confirmation(command: &RedisCommand, raw: &[
             "Redis subscription confirmation count must be an integer"
         ));
     };
-    if count < 1 {
+    let unsubscribing = command.name.eq_ignore_ascii_case("UNSUBSCRIBE")
+        || command.name.eq_ignore_ascii_case("PUNSUBSCRIBE")
+        || command.name.eq_ignore_ascii_case("SUNSUBSCRIBE");
+    if count < 0 || (!unsubscribing && count == 0) {
         return Err(anyhow!(
-            "Redis subscription confirmation count must be positive"
+            "Redis subscription confirmation count must be {}",
+            if unsubscribing {
+                "nonnegative"
+            } else {
+                "positive"
+            }
         ));
     }
     Ok(())
@@ -400,6 +411,57 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("exactly one"));
+    }
+
+    #[test]
+    fn validates_single_unsubscription_confirmations_including_zero_count() {
+        for name in ["UNSUBSCRIBE", "PUNSUBSCRIBE", "SUNSUBSCRIBE"] {
+            let command = RedisCommand {
+                name: name.to_string(),
+                args: vec![b"a\0b".to_vec()],
+            };
+            for count in [0, 1, 2] {
+                let response = format!(
+                    "*3\r\n${}\r\n{}\r\n$3\r\na\0b\r\n:{count}\r\n",
+                    name.len(),
+                    name.to_ascii_lowercase()
+                );
+                validate_subscription_confirmation(&command, response.as_bytes()).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_unsafe_unsubscription_confirmations() {
+        let command = RedisCommand {
+            name: "UNSUBSCRIBE".to_string(),
+            args: vec![b"events".to_vec()],
+        };
+        for response in [
+            b"*3\r\n$11\r\nunsubscribe\r\n$5\r\nother\r\n:0\r\n".as_slice(),
+            b"*3\r\n$12\r\npunsubscribe\r\n$6\r\nevents\r\n:0\r\n",
+            b"*3\r\n$11\r\nunsubscribe\r\n$6\r\nevents\r\n:-1\r\n",
+            b"*3\r\n$11\r\nunsubscribe\r\n$6\r\nevents\r\n$1\r\n0\r\n",
+            b"*3\r\n$11\r\nunsubscribe\r\n$-1\r\n:0\r\n",
+            b"*3\r\n$11\r\nunsubscribe\r\n$6\r\nevents\r\n:0\r\n+OK\r\n",
+            b"*3\r\n$11\r\nunsubscribe\r\n$6\r\nevents\r\n",
+            b">3\r\n$11\r\nunsubscribe\r\n$6\r\nevents\r\n:0\r\n",
+        ] {
+            assert!(validate_subscription_confirmation(&command, response).is_err());
+        }
+        for args in [vec![], vec![b"events".to_vec(), b"other".to_vec()]] {
+            let command = RedisCommand {
+                name: "UNSUBSCRIBE".to_string(),
+                args,
+            };
+            assert!(
+                validate_subscription_confirmation(
+                    &command,
+                    b"*3\r\n$11\r\nunsubscribe\r\n$6\r\nevents\r\n:0\r\n"
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

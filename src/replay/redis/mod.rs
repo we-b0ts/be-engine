@@ -14,7 +14,7 @@ use crate::DependencyExchangeOutcome;
 use crate::config::process_owned_dependencies::redis_rule_matches;
 use crate::redis::{
     BufferedReader as RedisBufferedReader, RedisCommand, RedisFrameKind,
-    frame_kind as redis_frame_kind, is_subscription_command, read_frame as read_redis_frame,
+    frame_kind as redis_frame_kind, is_pubsub_command, read_frame as read_redis_frame,
     redis_command, validate_subscription_confirmation,
 };
 
@@ -670,9 +670,19 @@ fn validate_subscription_exchange(
     args: &[Vec<u8>],
     response: &[u8],
 ) -> Result<()> {
-    if !is_subscription_command(&record.command) {
+    if !is_pubsub_command(&record.command) {
         return Ok(());
     }
+
+    ensure!(
+        record.resp_version == 2,
+        "Redis Pub/Sub replay requires RESP2"
+    );
+    ensure!(
+        args.len() == 1,
+        "Redis {} confirmation replay requires exactly one subscription argument",
+        record.command
+    );
 
     let command = RedisCommand {
         name: record.command.clone(),

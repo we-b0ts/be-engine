@@ -168,15 +168,21 @@ scripts or unknown commands remain bound in their entirety to one target
 connection per active case. Another target connection cannot consume their
 remaining exchanges. Diagnose these session constraints before changing target
 pooling; do not reproduce short source connections for ordinary GET/MGET calls.
-Redis RESP2 `SUBSCRIBE`, `PSUBSCRIBE`, and `SSUBSCRIBE` evidence is replayable
-only when one command argument produced one exact three-element subscription
-confirmation (or an ordinary Redis error). Replay returns that recorded
-confirmation and leaves the connection open. Recorder transparently forwards a
+Redis RESP2 `SUBSCRIBE`, `PSUBSCRIBE`, `SSUBSCRIBE`, `UNSUBSCRIBE`,
+`PUNSUBSCRIBE`, and `SUNSUBSCRIBE` evidence is replayable only when one command
+argument produced one exact three-element confirmation (or an ordinary Redis
+error). Command and binary-safe subject must match; subscription counts must be
+positive, and unsubscription counts may be zero. Successful unsubscription removes
+only the confirmed channel, pattern, or shard channel; errors leave state intact.
+Replay returns that recorded confirmation and leaves the connection open, with
+the entire source lane still bound to one target connection. Recorder forwards a
 subsequent well-formed RESP2 `message`, `pmessage`, or `smessage` only when its
 channel or pattern matches the active subscription; these process notifications
 do not become semantic Replay evidence, and Replay does not synthesize them.
-Malformed or unbound pushes remain dirty. Multiple subscription arguments,
-unsubscribe commands, and RESP3 push frames are unsupported and remain dirty.
+Malformed or unbound pushes remain dirty. Multiple subject arguments,
+no-argument unsubscribe-all commands, and RESP3 push frames remain unsupported.
+Cases rejected by an older Recorder for unsubscription need a new recording;
+never change the existing evidence or its `replay_safe` flag.
 
 Match Case evidence before run-level Global evidence. Consume ordinary
 exchanges once. A marked Redis background cache-snapshot seed is the narrow

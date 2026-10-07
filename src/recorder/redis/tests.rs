@@ -58,8 +58,18 @@ fn only_single_subscription_confirmations_are_classified_as_replay_safe() {
         args: vec![b"events.*".to_vec()],
     };
     let (_, _, replay_safe, warnings) = sanitize_and_classify(&unsubscribe);
-    assert!(!replay_safe);
-    assert!(warnings[0].contains("unsupported"));
+    assert!(replay_safe);
+    assert!(warnings.is_empty());
+
+    for args in [vec![], vec![b"one".to_vec(), b"two".to_vec()]] {
+        let unsubscribe = RedisCommand {
+            name: "UNSUBSCRIBE".to_string(),
+            args,
+        };
+        let (_, _, replay_safe, warnings) = sanitize_and_classify(&unsubscribe);
+        assert!(!replay_safe);
+        assert!(warnings[0].contains("exactly one"));
+    }
 }
 
 #[tokio::test]
@@ -181,6 +191,126 @@ async fn unsubscribed_array_that_looks_like_a_push_remains_a_response() {
         .unwrap()
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn unsubscription_restores_ordinary_responses_and_keeps_case_dependencies_safe() {
+    for (subscribe, unsubscribe) in [
+        ("SUBSCRIBE", "UNSUBSCRIBE"),
+        ("PSUBSCRIBE", "PUNSUBSCRIBE"),
+        ("SSUBSCRIBE", "SUNSUBSCRIBE"),
+    ] {
+        let (state, _temp) = test_state(RecordingAccessPolicy::Unrestricted).await;
+        let case = test_case("celery-trigger");
+        let guard = state.try_reserve_active_case(case.clone()).unwrap();
+        state.activate_case_dependencies(&guard).unwrap();
+        let (mut client, proxy_client) = tcp_pair().await;
+        let (mut upstream, proxy_upstream) = tcp_pair().await;
+        let upstream_addr = upstream.peer_addr().unwrap();
+        let handler = spawn_handler(proxy_client, proxy_upstream, state.clone(), upstream_addr);
+        let subject = "celery-task-meta-task-id";
+
+        for (command, count) in [(subscribe, 1), (unsubscribe, 0)] {
+            let request = format!(
+                "*2\r\n${}\r\n{command}\r\n${}\r\n{subject}\r\n",
+                command.len(),
+                subject.len()
+            );
+            let response = format!(
+                "*3\r\n${}\r\n{}\r\n${}\r\n{subject}\r\n:{count}\r\n",
+                command.len(),
+                command.to_ascii_lowercase(),
+                subject.len()
+            );
+            forward_test_exchange(
+                &mut client,
+                &mut upstream,
+                request.as_bytes(),
+                response.as_bytes(),
+            )
+            .await;
+        }
+
+        // Once the last subscription is removed, this LRANGE array is ordinary
+        // business data even though its shape resembles a Pub/Sub notification.
+        forward_test_exchange(
+            &mut client,
+            &mut upstream,
+            b"*4\r\n$6\r\nLRANGE\r\n$3\r\nkey\r\n$1\r\n0\r\n$2\r\n-1\r\n",
+            b"*3\r\n$7\r\nmessage\r\n$6\r\nevents\r\n$7\r\npayload\r\n",
+        )
+        .await;
+
+        client.shutdown().await.unwrap();
+        drop(client);
+        let mut eof = [0_u8; 1];
+        assert_eq!(upstream.read(&mut eof).await.unwrap(), 0);
+        drop(upstream);
+        tokio::time::timeout(Duration::from_secs(1), handler)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+
+        state.recorder().flush_traffic().await.unwrap();
+        assert_eq!(
+            state
+                .recorder()
+                .case_dependency_safety_issue(&case)
+                .await
+                .unwrap(),
+            None
+        );
+        let semantic = tokio::fs::read_to_string(
+            state
+                .recorder()
+                .case_staging_dir(&case)
+                .join("dependencies.jsonl"),
+        )
+        .await
+        .unwrap();
+        let exchanges = semantic
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .filter(|value| value["event_type"] == "redis_exchange")
+            .collect::<Vec<_>>();
+        assert_eq!(exchanges.len(), 3);
+        assert_eq!(exchanges[0]["command"], subscribe);
+        assert_eq!(exchanges[1]["command"], unsubscribe);
+        assert_eq!(exchanges[2]["command"], "LRANGE");
+        for exchange in exchanges {
+            assert_eq!(exchange["replay_safe"], true);
+            assert_eq!(exchange["parse_warnings"], serde_json::json!([]));
+        }
+    }
+}
+
+async fn forward_test_exchange(
+    client: &mut TcpStream,
+    upstream: &mut TcpStream,
+    request: &[u8],
+    response: &[u8],
+) {
+    client.write_all(request).await.unwrap();
+    let mut received_request = vec![0_u8; request.len()];
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        upstream.read_exact(&mut received_request),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(received_request, request);
+    upstream.write_all(response).await.unwrap();
+    let mut received_response = vec![0_u8; response.len()];
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        client.read_exact(&mut received_response),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(received_response, response);
 }
 
 #[tokio::test]
