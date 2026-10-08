@@ -13,6 +13,7 @@ use uuid::Uuid;
 use super::{MysqlReplayConfig, ReplayRuntime};
 use crate::{BackgroundDependencyRuleConfig, RedisKeyPatternConfig};
 
+mod dynamic_values_tests;
 mod memcached_connection_tests;
 mod motan_concurrency_tests;
 mod redis_authentication_tests;

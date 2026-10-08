@@ -119,14 +119,14 @@ pub fn plan_memcached_timestamp_rule(
             .sort_by(|left, right| left.id.cmp(&right.id));
     }
 
-    let updated = replace_dependency_rules(&original, &loaded.document.dependency_rules)?;
+    let updated = replace_dependency_rules(&original, &loaded.document)?;
     let changed = updated != original;
     let diff = if changed {
         format!(
             "--- {}\n+++ {}\n@@ dependency_rules @@\n{}",
             feedback.policy_path.display(),
             feedback.policy_path.display(),
-            render_dependency_rules(&loaded.document.dependency_rules)?
+            render_dependency_rules(&loaded.document)?
                 .lines()
                 .map(|line| format!("+{line}\n"))
                 .collect::<String>()

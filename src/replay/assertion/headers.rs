@@ -5,6 +5,64 @@ use anyhow::{Result, ensure};
 use super::model::{ResponseAssertionCaseReport, ResponseDifference, ResponseDifferenceKind};
 use crate::http::response_headers::{STANDARD_RESPONSE_HEADERS, X_REQUEST_ID};
 use crate::recorder::HeaderMapSnapshot;
+pub(in crate::replay) mod date;
+
+pub(super) fn compare_with_rules(
+    expected: Option<&HeaderMapSnapshot>,
+    actual: Option<&HeaderMapSnapshot>,
+    expected_request: Option<&HeaderMapSnapshot>,
+    actual_request: Option<&HeaderMapSnapshot>,
+    rules: &crate::replay::policy::response_headers::ResponseHeaderRules,
+    times: super::time::RequestTimes,
+    report: &mut ResponseAssertionCaseReport,
+) -> Result<()> {
+    compare_standard_headers(expected, actual, expected_request, actual_request, report)?;
+    let matching = rules
+        .iter()
+        .filter(|(api, _)| crate::replay::policy::response_headers::matches(api, &report.path))
+        .collect::<Vec<_>>();
+    for (api, entries) in matching {
+        let mut by_header = std::collections::BTreeMap::<String, Vec<_>>::new();
+        for rule in entries {
+            by_header
+                .entry(rule.header.to_ascii_lowercase())
+                .or_default()
+                .push(rule.clone());
+        }
+        for (header, selected) in by_header {
+            let ids = selected.iter().map(|rule| rule.id(api)).collect::<Vec<_>>();
+            let values = expected
+                .and_then(|headers| headers.get(&header))
+                .zip(actual.and_then(|headers| headers.get(&header)));
+            let valid = values.is_some_and(|(source, target)| {
+                !source
+                    .iter()
+                    .chain(target)
+                    .any(|value| value == "<redacted>")
+                    && date::compare(source, target, &selected, times).unwrap_or(false)
+            });
+            if valid {
+                report
+                    .differences
+                    .retain(|difference| difference.pointer != format!("$headers/{header}"));
+                report.applied_header_rule_ids.extend(ids);
+            } else {
+                report.unused_applicable_header_rule_ids.extend(ids);
+                if !report
+                    .differences
+                    .iter()
+                    .any(|difference| difference.pointer == format!("$headers/{header}"))
+                {
+                    report.differences.push(ResponseDifference::header(
+                        &header,
+                        ResponseDifferenceKind::HeaderValueMismatch,
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
 
 pub(super) fn compare_standard_headers(
     expected: Option<&HeaderMapSnapshot>,
@@ -46,6 +104,9 @@ pub(super) fn compare_standard_headers(
                 ensure_values_available(name, expected, "expected")?;
                 ensure_values_available(name, actual, "actual")?;
                 if canonical_values(name, expected) != canonical_values(name, actual) {
+                    report
+                        .header_date_candidates
+                        .extend(date::candidates(name, expected, actual));
                     report.differences.push(ResponseDifference::header(
                         name,
                         ResponseDifferenceKind::HeaderValueMismatch,

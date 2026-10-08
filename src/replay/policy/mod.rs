@@ -1,6 +1,14 @@
 mod config;
+pub(in crate::replay) mod dynamic_values;
+pub use dynamic_values::{
+    DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget,
+};
 mod feedback;
 pub(crate) use feedback::replace_request_rule_section;
+pub use feedback::{
+    DynamicValueRuleFeedback, GeneratedValueRulePlan, GeneratedValueRuleReport,
+    ResponseHeaderDateRuleFeedback, plan_dynamic_value_rule, plan_response_header_date_rule,
+};
 pub use feedback::{
     RedisCrossCaseFeedback, RedisCrossCasePlan, RedisCrossCaseReport, plan_redis_cross_case,
 };
@@ -13,6 +21,8 @@ mod pattern;
 mod protobuf;
 mod report;
 mod response;
+pub(in crate::replay) mod response_headers;
+pub use response_headers::ResponseHeaderDateRule;
 mod sql_template;
 mod value;
 

@@ -144,7 +144,10 @@ impl ReplayState {
         sql: Option<&str>,
         params: Option<&[RecordedMysqlValue]>,
     ) -> Option<MatchedExchange> {
-        let normalized_sql = sql.map(normalize_sql);
+        let observed_sql = sql;
+        let observed_params = params;
+        let baseline_normalized_sql = sql.map(normalize_sql);
+        let mut baseline_semantic_target = None;
         let actual_autocommit = sql
             .and_then(crate::mysql::autocommit::assignment)
             .filter(|_| {
@@ -152,7 +155,6 @@ impl ReplayState {
                     && params.is_none_or(<[_]>::is_empty)
             });
         let active_case_id = self.active_case_id.clone();
-        let mut semantic_target = None;
         for source in [ReplaySource::Case, ReplaySource::Global] {
             // Preserve existing candidate precedence before trying compatible
             // projections, without allowing Global to outrank the active Case.
@@ -166,6 +168,48 @@ impl ReplayState {
                     {
                         continue;
                     }
+                    let dynamic = self.replay_policy.as_ref().and_then(|policy| {
+                        policy.dynamic_values.mysql(&MysqlPolicyContext {
+                            case_id: exchange.case_id.as_deref(),
+                            identity,
+                            command,
+                            recorded_sql: exchange.record.sql.as_deref(),
+                            sql,
+                            recorded: exchange.record.params.as_deref(),
+                            actual: params,
+                        })
+                    });
+                    let dynamic = match dynamic {
+                        Some(Ok(normalized)) => Some(normalized),
+                        Some(Err(_)) => continue,
+                        None => None,
+                    };
+                    let normalized_exchange = dynamic.as_ref().map(|normalized| {
+                        let mut copy = exchange.clone();
+                        copy.record.sql = normalized.source_sql.clone();
+                        copy.record.params = normalized.source_params.clone();
+                        copy
+                    });
+                    let exchange = normalized_exchange.as_ref().unwrap_or(exchange);
+                    let sql = dynamic
+                        .as_ref()
+                        .and_then(|value| value.actual_sql.as_deref())
+                        .or(sql);
+                    let params = dynamic
+                        .as_ref()
+                        .and_then(|value| value.actual_params.as_deref())
+                        .or(params);
+                    let dynamic_normalized_sql =
+                        dynamic.as_ref().and_then(|_| sql.map(normalize_sql));
+                    let normalized_sql = dynamic_normalized_sql
+                        .as_deref()
+                        .or(baseline_normalized_sql.as_deref());
+                    let mut dynamic_semantic_target = None;
+                    let semantic_target = if dynamic.is_some() {
+                        &mut dynamic_semantic_target
+                    } else {
+                        &mut baseline_semantic_target
+                    };
                     let cross_protocol = exchange.record.command != command;
                     let same_autocommit = actual_autocommit.is_some_and(|actual| {
                         matches!(
@@ -282,7 +326,7 @@ impl ReplayState {
                                 actual: params,
                             };
                             if !project_columns
-                                && Some(recorded_sql) != normalized_sql
+                                && Some(recorded_sql.as_str()) != normalized_sql
                                 && !same_autocommit
                                 && !same_prepared_values
                                 && !policy.allows_mysql_sql_difference(&context)
@@ -299,7 +343,7 @@ impl ReplayState {
                                 }
                             }
                         } else if !project_columns
-                            && Some(recorded_sql) != normalized_sql
+                            && Some(recorded_sql.as_str()) != normalized_sql
                             && !same_autocommit
                             && !same_prepared_values
                         {
@@ -342,6 +386,13 @@ impl ReplayState {
                             ReplayExchangeStatus::Responding
                         };
                     if let Some(policy) = &mut self.replay_policy {
+                        if let (Some(case_id), Some(normalized)) =
+                            (active_case_id.as_deref(), dynamic.as_ref())
+                        {
+                            policy
+                                .dynamic_values
+                                .commit(case_id, normalized.decision.clone());
+                        }
                         policy.commit(active_case_id.as_deref(), policy_decision);
                     }
                     let matched = MatchedQueryReport {
@@ -352,8 +403,8 @@ impl ReplayState {
                         source: exchange.source,
                         index,
                         command: command.to_string(),
-                        sql: sql.map(ToOwned::to_owned),
-                        params: params.map(ToOwned::to_owned),
+                        sql: observed_sql.map(ToOwned::to_owned),
+                        params: observed_params.map(ToOwned::to_owned),
                         status: exchange.record.response.status.clone(),
                         target_event_index: None,
                     };

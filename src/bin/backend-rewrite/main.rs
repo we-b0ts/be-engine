@@ -3,17 +3,18 @@ mod review;
 use std::io::Write;
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
+mod rule_args;
+use rule_args::RulePlanArgs;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_e2e::{
-    ResponseBodyCodec, ResponseBodyJoinedStringPath, ResponseBodyUnorderedPath, ResponseRuleKind,
-    RewriteCaseDependenciesOptions, RewriteCasePatternApplyOptions, RewriteContext,
-    RewriteNextOptions, RewriteRecordingKind, RewriteRecordingReason,
-    RewriteRecordingRequestOptions, RewriteRevalidationRequestOptions, RewriteRouteCause,
-    RewriteRouteOptions, RewriteRulePlanOptions, RewriteTargetQualityOptions,
+    ResponseBodyCodec, ResponseRuleKind, RewriteCaseDependenciesOptions,
+    RewriteCasePatternApplyOptions, RewriteContext, RewriteNextOptions, RewriteRecordingKind,
+    RewriteRecordingReason, RewriteRecordingRequestOptions, RewriteRevalidationRequestOptions,
+    RewriteRouteCause, RewriteRouteOptions, RewriteRulePlanOptions, RewriteTargetQualityOptions,
     RewriteWorkerConfirmOptions, RewriteWorkerReportOptions, RewriteWorkerTransferOptions,
     apply_rewrite_case_patterns, apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite,
     plan_rewrite_rule, query_rewrite_case_dependencies, recover_rewrite, report_rewrite_worker,
@@ -236,109 +237,6 @@ enum RuleCommand {
     Plan(Box<RulePlanArgs>),
     /// Atomically apply the persisted, evidence-validated pending plan.
     Apply(RuleApplyArgs),
-}
-
-fn parse_response_body_unordered_path(value: &str) -> Result<ResponseBodyUnorderedPath, String> {
-    serde_json::from_str(value).map_err(|error| format!("invalid unordered path JSON: {error}"))
-}
-
-fn parse_response_body_joined_string_path(
-    value: &str,
-) -> Result<ResponseBodyJoinedStringPath, String> {
-    serde_json::from_str(value).map_err(|error| format!("invalid joined-string path JSON: {error}"))
-}
-
-fn parse_docx_timestamp(value: &str) -> Result<traffic_e2e::DocxTimestampRule, String> {
-    serde_json::from_str(value).map_err(|error| format!("invalid DOCX timestamp JSON: {error}"))
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum ResponseBodyCodecArg {
-    Json,
-    Protobuf,
-    Hessian2,
-    Docx,
-}
-
-impl From<ResponseBodyCodecArg> for ResponseBodyCodec {
-    fn from(value: ResponseBodyCodecArg) -> Self {
-        match value {
-            ResponseBodyCodecArg::Json => Self::Json,
-            ResponseBodyCodecArg::Protobuf => Self::Protobuf,
-            ResponseBodyCodecArg::Hessian2 => Self::Hessian2,
-            ResponseBodyCodecArg::Docx => Self::Docx,
-        }
-    }
-}
-
-#[derive(Debug, Args)]
-struct RulePlanArgs {
-    #[command(flatten)]
-    jwt: jwt_rule::JwtArgs,
-    #[arg(long)]
-    evidence_id: String,
-    /// Body codec. JSON uses --kind, protobuf/Hessian2 use typed paths, and DOCX uses --docx-timestamp.
-    #[arg(long, value_enum, required_unless_present = "request_kind")]
-    body_codec: Option<ResponseBodyCodecArg>,
-    /// JSON response-rule kind. Omit for protobuf and Hessian2 typed-body rules.
-    #[arg(
-        long,
-        value_enum,
-        conflicts_with_all = ["unordered_paths", "unordered_joined_string_paths"]
-    )]
-    kind: Option<RuleKindArg>,
-    #[arg(long, value_enum)]
-    unit: Option<traffic_e2e::ResponseDurationUnit>,
-    #[arg(long, value_enum)]
-    timestamp_format: Option<traffic_e2e::ResponseTimestampFormat>,
-    #[arg(long)]
-    json_pointer: Option<String>,
-    #[arg(long)]
-    source_evidence: Option<String>,
-    #[arg(long)]
-    source_example: Option<String>,
-    #[arg(long)]
-    target_example: Option<String>,
-    #[arg(long, required_if_eq("kind", "unordered-joined-string"))]
-    separator: Option<String>,
-    /// Typed protobuf/Hessian2 unordered selector encoded as one JSON object.
-    #[arg(
-        long = "unordered-path",
-        value_name = "PATH_JSON",
-        value_parser = parse_response_body_unordered_path,
-        conflicts_with_all = [
-            "kind",
-            "json_pointer",
-            "source_evidence",
-            "source_example",
-            "target_example",
-            "separator"
-        ]
-    )]
-    unordered_paths: Vec<ResponseBodyUnorderedPath>,
-    /// Typed protobuf/Hessian2 joined-string selector encoded as one JSON object.
-    #[arg(
-        long = "unordered-joined-string-path",
-        value_name = "PATH_JSON",
-        value_parser = parse_response_body_joined_string_path,
-        conflicts_with_all = [
-            "kind",
-            "json_pointer",
-            "source_evidence",
-            "source_example",
-            "target_example",
-            "separator"
-        ]
-    )]
-    unordered_joined_string_paths: Vec<ResponseBodyJoinedStringPath>,
-    /// DOCX timestamp selector encoded as one JSON object.
-    #[arg(
-        long = "docx-timestamp",
-        value_name = "RULE_JSON",
-        value_parser = parse_docx_timestamp,
-        conflicts_with_all = ["kind", "json_pointer", "unordered_paths", "unordered_joined_string_paths"]
-    )]
-    docx_timestamps: Vec<traffic_e2e::DocxTimestampRule>,
 }
 
 #[derive(Debug, Args)]
@@ -705,6 +603,8 @@ async fn run(cli: Cli) -> Result<()> {
                 &plan_rewrite_rule(
                     RewriteContext { target_root },
                     RewriteRulePlanOptions {
+                        header_dates: args.header_dates,
+                        dynamic_value: args.dynamic_value,
                         evidence_id: args.evidence_id,
                         body_codec: args
                             .body_codec

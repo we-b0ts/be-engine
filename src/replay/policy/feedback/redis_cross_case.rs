@@ -107,12 +107,12 @@ pub fn plan_redis_cross_case(feedback: RedisCrossCaseFeedback) -> Result<RedisCr
         &feedback.replay_report_path,
         &selector,
     )?;
-    let updated = replace_dependency_rules(&original, &document.dependency_rules)?;
+    let updated = replace_dependency_rules(&original, &document)?;
     let changed = original != updated;
     let diff = if changed {
         format!(
             "@@ dependency_rules @@\n{}",
-            render_dependency_rules(&document.dependency_rules)?
+            render_dependency_rules(&document)?
         )
     } else {
         String::new()

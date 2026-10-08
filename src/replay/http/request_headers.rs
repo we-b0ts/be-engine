@@ -102,6 +102,16 @@ fn normalized(headers: &HeaderSnapshot) -> HeaderSnapshot {
     normalized
 }
 
+pub(super) fn exact_contract_match(expected: &HeaderSnapshot, actual: &HeaderSnapshot) -> bool {
+    let filter = |headers: &HeaderSnapshot| {
+        normalized(headers)
+            .into_iter()
+            .filter(|(name, _)| mode(name, &BTreeSet::new()) != Mode::Ignore)
+            .collect::<HeaderSnapshot>()
+    };
+    filter(expected) == filter(actual)
+}
+
 fn mode(name: &str, connection_headers: &BTreeSet<String>) -> Mode {
     if TRANSPORT_HEADERS.contains(&name)
         || name.starts_with("x-recorder-")

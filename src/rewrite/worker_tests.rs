@@ -149,6 +149,8 @@ fn diagnostic_entrypoints_require_worker_confirmation_without_mutating_state() {
         super::super::plan_rewrite_rule(
             context(),
             RewriteRulePlanOptions {
+                header_dates: Vec::new(),
+                dynamic_value: None,
                 time: None,
                 jwt: None,
                 evidence_id: evidence_id.clone(),

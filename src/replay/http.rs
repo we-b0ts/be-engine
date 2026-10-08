@@ -385,6 +385,8 @@ impl ReplayState {
 
         let mut matching_index = None;
         let mut matching_policy_decision = DependencyRuleDecision::default();
+        let mut matching_dynamic_decision =
+            super::policy::dynamic_values::DynamicDecision::default();
         let mut closest_mismatch = None;
         let mut target_fingerprint = None;
         'sources: for source in [ReplaySource::Case, ReplaySource::Global] {
@@ -408,6 +410,55 @@ impl ReplayState {
                     });
                     continue;
                 }
+                let normalized =
+                    if exchange.source == ReplaySource::Case && exchange.shared_origin.is_none() {
+                        self.replay_policy.as_ref().and_then(|policy| {
+                            if !policy.dynamic_values.enabled() {
+                                return None;
+                            }
+                            decode_body(&exchange.record.request_body).ok().and_then(
+                                |source_body| {
+                                    policy.dynamic_values.http(
+                                        exchange.case_id.as_deref(),
+                                        target,
+                                        method.as_str(),
+                                        super::policy::dynamic_values::HttpInput {
+                                            uri: &exchange.record.uri,
+                                            body: &source_body,
+                                        },
+                                        super::policy::dynamic_values::HttpInput {
+                                            uri: &uri.to_string(),
+                                            body,
+                                        },
+                                    )
+                                },
+                            )
+                        })
+                    } else {
+                        None
+                    };
+                let normalized = match normalized {
+                    Some(Ok(value)) => Some(value),
+                    Some(Err(_)) => {
+                        closest_mismatch.get_or_insert(
+                            "HTTP dynamic identity did not match its case binding".into(),
+                        );
+                        continue;
+                    }
+                    None => None,
+                };
+                let normalized_exchange = normalized.as_ref().map(|value| {
+                    let mut copy = exchange.clone();
+                    copy.record.uri = value.source_uri.clone();
+                    copy.record.request_body.encoding = "base64".into();
+                    copy.record.request_body.data = STANDARD.encode(&value.source_body);
+                    copy
+                });
+                let exchange = normalized_exchange.as_ref().unwrap_or(exchange);
+                let uri = normalized.as_ref().map_or(uri, |value| &value.actual_uri);
+                let body = normalized
+                    .as_ref()
+                    .map_or(body, |value| value.actual_body.as_slice());
                 let mut policy_decision = if exchange.shared_origin.is_some() {
                     DependencyRuleDecision::default()
                 } else if let Some(policy) = &self.replay_policy {
@@ -462,11 +513,36 @@ impl ReplayState {
                     mismatch = None;
                 }
                 if let Some(reason) = mismatch {
+                    if reason == "HTTP request body did not match the recorded body"
+                        && exchange.source == ReplaySource::Case
+                        && exchange.shared_origin.is_none()
+                        && request_headers::exact_contract_match(
+                            &exchange.record.request_headers,
+                            headers,
+                        )
+                        && let (Some(policy), Some(case), Ok(source_body)) = (
+                            &self.replay_policy,
+                            active_case_id.as_deref(),
+                            decode_body(&exchange.record.request_body),
+                        )
+                    {
+                        policy.dynamic_values.observe_http(
+                            case,
+                            target,
+                            method.as_str(),
+                            uri.path(),
+                            &source_body,
+                            body,
+                        );
+                    }
                     closest_mismatch.get_or_insert(reason);
                     continue;
                 }
                 matching_index = Some(index);
                 matching_policy_decision = policy_decision;
+                if let Some(normalized) = normalized {
+                    matching_dynamic_decision = normalized.decision;
+                }
                 break 'sources;
             }
         }
@@ -511,6 +587,11 @@ impl ReplayState {
 
         self.audit_http_request_headers(&exchange, index, headers, request_started_at);
         if let Some(policy) = &mut self.replay_policy {
+            if let Some(case) = active_case_id.as_deref() {
+                policy
+                    .dynamic_values
+                    .commit(case, matching_dynamic_decision);
+            }
             policy.commit(active_case_id.as_deref(), matching_policy_decision);
         }
         let detail = MatchedHttpExchangeReport {

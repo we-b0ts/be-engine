@@ -20,6 +20,11 @@ source diagnosis without heuristic hints.
 Source-proven Redis ownership tokens use [Redis lock rules](redis-lock-rules.md),
 with bounded token-only witnesses, explicit endpoint/key scope and fresh Replay.
 
+Source-generated identities shared across decoded SQL, JSON and Redis keys use
+[case-local dynamic values](dynamic-value-rules.md). Generated filename dates
+use [response header date rules](response-header-date-rules.md); both use
+evidence-backed plan/apply and fresh verification with existing recordings.
+
 ## Rust Tooling
 
 Use the standard Cargo workflow:

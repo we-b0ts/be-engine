@@ -137,6 +137,18 @@ document and returns after completing that diagnosis path.
 
 ## Rule Discovery From Source Diagnosis
 
+For a random identity shared across protocols, return one capture (MySQL SQL
+template/value index, Redis SET/HSET value, or HTTP dependency JSON pointer),
+exact allowed host/port
+endpoints and source generator/lifetime proof. `rule plan --dynamic-value`
+correlates later decoded references without enumerating every decoded request reference;
+format is optional. See [dynamic value rules](../../../../../docs/dynamic-value-rules.md).
+For a current-date filename in `Content-Disposition`, return the header parameter,
+calendar format, timezone and exporter proof for `rule plan --header-date`.
+It checks `filename*` too and retains static filename/header/body assertions;
+see [header date rules](../../../../../docs/response-header-date-rules.md).
+Only the coordinator plans/applies these rules, followed by fresh verification.
+
 For API issues, consult these capabilities after tracing source and target
 behavior. Engine hints and mechanical candidates are additional evidence;
 their absence does not mean a documented capability is unavailable.

@@ -1,5 +1,6 @@
 use super::super::evidence_model::{RewriteApplicableRulePlanner, RewriteRuleHint};
 use super::*;
+mod generated_values;
 mod http_header_timestamp;
 
 pub(super) fn http_header_timestamp_candidates(facts: &Value) -> Vec<Value> {
@@ -12,12 +13,13 @@ pub(super) fn rule_hints(
     facts: &Value,
 ) -> Vec<RewriteRuleHint> {
     if query_kind == QUERY_REPRESENTATIVES {
+        let mut hints = generated_values::hints(target_root, query_kind, facts);
         let codecs = response_body::codec_candidates(facts);
         if codecs.is_empty() {
-            return Vec::new();
+            return hints;
         }
         let configured = response_body::configured(facts);
-        return codecs
+        hints.extend(codecs
             .into_iter()
             .map(|codec| {
                 let hint = match (configured, codec) {
@@ -45,7 +47,8 @@ pub(super) fn rule_hints(
                     ),
                 }
             })
-            .collect();
+            );
+        return hints;
     }
     if query_kind == QUERY_IP_CAPTURE {
         return vec![RewriteRuleHint {
@@ -63,7 +66,7 @@ pub(super) fn rule_hints(
         .into_iter()
         .flatten()
         .any(|cluster| cluster.get("protocol").and_then(Value::as_str) == Some("memcached"));
-    let mut hints = Vec::new();
+    let mut hints = generated_values::hints(target_root, query_kind, facts);
     if facts["http_header_timestamp_candidates"]
         .as_array()
         .is_some_and(|items| !items.is_empty())
@@ -165,7 +168,8 @@ pub(super) fn applicable_rule_planners(
     facts: &Value,
     evidence_id: &str,
 ) -> Vec<RewriteApplicableRulePlanner> {
-    let mut planners = Vec::new();
+    let mut planners =
+        generated_values::planners(target_root, issue_kind, query_kind, facts, evidence_id);
     if query_kind == QUERY_DIRTY_CLUSTERS
         && matches!(
             issue_kind,

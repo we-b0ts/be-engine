@@ -2,7 +2,8 @@ mod artifact;
 mod binary_body;
 mod compare;
 pub(in crate::replay) mod docx;
-mod headers;
+pub(in crate::replay) mod headers;
+pub use headers::date::ResponseHeaderDateCandidate;
 pub(in crate::replay) mod hessian2;
 mod joined_string;
 mod model;
@@ -635,11 +636,13 @@ fn evaluate_response(
             actual_sse_observation,
             &mut report,
         );
-        headers::compare_standard_headers(
+        headers::compare_with_rules(
             expected_headers.as_ref(),
             actual_headers.as_ref(),
             expected_request_headers.as_ref(),
             actual_request_headers.as_ref(),
+            &loaded.document.response_rules.headers,
+            times,
             &mut report,
         )?;
     }

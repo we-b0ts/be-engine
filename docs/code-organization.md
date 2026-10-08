@@ -73,11 +73,10 @@ is unclear.
 - `local_interception` owns reusable fixed-identity firewall setup/cleanup and
   diagnostics; CLI entry points delegate to it. `command_output` owns shared
   broken-pipe-safe diagnostic output for those library and CLI callers.
-- `lib.rs` owns application wiring, shared state, and stable exports;
-  it remains one large crate façade within the hard limit because its flat
-  exports and shared application-state composition have the same crate-root
-  compatibility owner. Feature implementations remain in their owned modules;
-  split the façade only when a distinct package or composition lifecycle exists.
+- `lib.rs` owns application wiring, shared state, and crate exports.
+  `replay_exports` owns the public Replay contract façade, separating its growing
+  policy/assertion/diagnostic API from application-state composition. Feature
+  implementations remain in their owned modules.
   `recording_runtime` owns the Recorder application's listener supervision,
   stop triggers, graceful drain, and finalization lifecycle.
 - Proxy and gateway modules own connection and request orchestration.
@@ -90,6 +89,20 @@ is unclear.
 - Recorder event, run, writer, and summary modules own capture, persistence,
   and reporting.
 - Replay modules own recorded dependency matching and replay lifecycle.
+- `replay/policy/config/document.rs` owns the common dependency rule list codec;
+  runtime rule families are partitioned internally without a separate binding section.
+- `replay/policy/dynamic_values` owns bounded case-local MySQL/Redis/HTTP capture and
+  correlation; its SQL, HTTP and string adapters normalize comparison copies.
+  Its audit child owns binding fingerprints and planner reconstruction.
+  `replay/json_order/decode` owns shared bounded, duplicate-rejecting JSON
+  decoding for Redis values and dynamic identities.
+  `replay/policy/response_headers` owns header date selectors and validation;
+  `replay/assertion/headers/date` owns parameter/date comparison and candidates.
+  `replay/policy/feedback/generated_values` owns immutable witness checks and
+  policy edits, with separate identity and header evidence children.
+  `rewrite/rule/generated_values` owns coordinator plan/apply adaptation,
+  `rewrite/evidence/rule_guidance/generated_values` owns diagnostic hints, and
+  `bin/backend-rewrite/rule_args` owns the corresponding CLI inputs.
 - `replay/redis/matching` owns command selection and source-lane order
   diagnostics. `replay/redis/connection_scope` distinguishes ordinary pool
   reuse (including server-side script execution and cache operations) from

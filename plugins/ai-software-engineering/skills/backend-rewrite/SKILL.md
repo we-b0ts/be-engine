@@ -123,6 +123,12 @@ engine roles or action kinds.
   exposes token-only candidates; source diagnosis proves random ownership and
   conditional release. Preserve token correlation, scripts and finite calls;
   never remove locking or independently ignore token arguments.
+- Source-generated identities reused across SQL/JSON and Redis keys use one
+  case-local `dependency_rules` entry with `kind: dynamic_value` and a capture with explicit host/port scope and optional
+  format. Source-generated filename dates use `response_rules.headers` with
+  format/timezone and parameter selection. The worker proves semantics and
+  returns selectors; the coordinator uses current `rule plan` evidence, applies
+  the rule and runs fresh verification. Existing recordings are reusable.
 - Target behavior must use normal product code and configuration, never recorded
   results, expected responses, Replay sessions, reports, or private engine state.
 - Only the coordinator executes workflow mutations and formal acceptance.
