@@ -64,6 +64,8 @@ impl ResponseSettings {
 #[serde(deny_unknown_fields)]
 pub(in crate::replay) struct ResponseRules {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(in crate::replay) headers: super::response_headers::ResponseHeaderRules,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(in crate::replay) json: BTreeMap<String, JsonResponseRules>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(in crate::replay) protobuf: BTreeMap<String, ProtobufResponseRules>,
@@ -191,7 +193,8 @@ pub struct DocxTimestampRule {
 
 impl ResponseRules {
     pub(in crate::replay) fn is_empty(&self) -> bool {
-        self.json.is_empty()
+        self.headers.is_empty()
+            && self.json.is_empty()
             && self.protobuf.is_empty()
             && self.hessian2.is_empty()
             && self.docx.is_empty()
@@ -571,6 +574,7 @@ pub struct ResponseField {
 }
 
 pub(in crate::replay) fn validate_response_rules(rules: &ResponseRules) -> Result<()> {
+    super::response_headers::validate(&rules.headers)?;
     let mut locations = Vec::new();
     validate_json_rule_map(&rules.json, &mut locations)?;
     validate_protobuf_rule_map(&rules.protobuf)?;
@@ -625,6 +629,12 @@ pub(in crate::replay) fn response_rule_ids(rules: &ResponseRules) -> Vec<String>
                 .chain(rules.hessian2.keys())
                 .chain(rules.docx.keys())
                 .map(|api| response_body_rule_id(api)),
+        )
+        .chain(
+            rules
+                .headers
+                .iter()
+                .flat_map(|(api, rules)| rules.iter().map(move |rule| rule.id(api))),
         )
         .collect()
 }

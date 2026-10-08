@@ -1,3 +1,5 @@
+mod replay_exports;
+pub use replay_exports::*;
 mod access_policy;
 mod active_case;
 mod artifact_file;
@@ -191,38 +193,7 @@ pub use recording_control::{
     RecordingReadiness, RecordingWaitConfig, notify_recording_input_complete,
     wait_for_recording_listeners, wait_for_recording_ready,
 };
-pub use replay::{
-    ComparisonResponseRuleFeedback, ComparisonSourceMatch, ComparisonVerificationPolicy,
-    DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS, DocxBodyDifference,
-    DocxBodyDifferenceKind, DocxTimestampRule, Hessian2BodyDifference, Hessian2BodyDifferenceKind,
-    Hessian2JoinedStringCandidate, Hessian2JoinedStringPath, Hessian2UnorderedPath,
-    Hessian2ValuePath, Hessian2ValuePathCandidate, HttpCrossCaseFeedback, HttpCrossCasePlan,
-    HttpCrossCaseReport, HttpCrossCaseSelector, JsonJoinedStringCandidate,
-    MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MemcachedTimestampRuleReport,
-    MysqlReplayConfig, MysqlReplayControlConfig, MysqlTimeRuleFeedback, MysqlTimeRulePlan,
-    MysqlTimeRuleReport, MysqlTimeSelector, MysqlTimeValueSelector, ProfileTargetMissingFeedback,
-    ProfileTargetMissingPlan, ProfileTargetMissingReport, ProtobufBodyDifference,
-    ProtobufBodyDifferenceKind, ProtobufFieldPath, ProtobufFieldPathCandidate,
-    ProtobufJoinedStringCandidate, ProtobufJoinedStringFieldType, ProtobufJoinedStringPath,
-    ProtobufRepeatedElementType, ProtobufUnorderedPath, RedisCrossCaseFeedback, RedisCrossCasePlan,
-    RedisCrossCaseReport, ReplayAggregateOptions, ReplayAggregateReport,
-    ReplayAllowedUnusedHttpConfig, ReplayConfig, ReplayControlConfig, ReplayEgressCounterReader,
-    ReplayEgressCounterSnapshot, ReplayEgressRejections, ReplayLifecycleConfig,
-    ReplayPolicyInitOptions, ReplayPolicyInitResult, ReplayPolicyValidationReport,
-    ResponseAssertionOptions, ResponseBodyAssertionReport, ResponseBodyCodec,
-    ResponseBodyDifferenceDetail, ResponseBodyJoinedStringCandidate, ResponseBodyJoinedStringPath,
-    ResponseBodyRuleEvidence, ResponseBodyRuleEvidenceKind, ResponseBodyRuleFeedback,
-    ResponseBodyRulePlan, ResponseBodyRuleReport, ResponseBodyRuleVerificationOutcome,
-    ResponseBodyUnorderedPath, ResponseBodyUnorderedPathCandidate, ResponseDifference,
-    ResponseDifferenceKind, ResponseDurationUnit, ResponseGatewayProtocol, ResponseRuleFeedback,
-    ResponseRuleKind, ResponseRulePlan, ResponseRuleReport, ResponseTimeRule,
-    ResponseTimestampFormat, aggregate_replay_reports, aggregate_replay_reports_with_options,
-    assert_recorded_response, initialize_replay_policy, plan_comparison_response_rule,
-    plan_http_cross_case, plan_memcached_timestamp_rule, plan_mysql_time_rule,
-    plan_profile_target_missing, plan_redis_cross_case, plan_response_body_rule,
-    plan_response_rule, run_mysql_replay, run_mysql_replay_control, run_replay, run_replay_control,
-    run_replay_with_counters, run_replay_with_lifecycle, validate_replay_policy,
-};
+
 pub use rewrite::{
     IntegrationHandoffSelection, JwtRulePlanOptions, RewriteAction, RewriteActionEnvelope,
     RewriteApiInventoryDetails, RewriteApiInventoryItem, RewriteApiInventoryView,
@@ -959,34 +930,3 @@ fn build_upstream_tls_config(ca: &MitmCa) -> Result<Arc<ClientConfig>> {
 
 #[cfg(test)]
 mod app_state_tests;
-
-pub use replay::HttpUnorderedSelector;
-
-pub use replay::{
-    HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
-};
-
-pub use replay::{
-    RedisTimeShiftFeedback, RedisTimeShiftPlan, RedisTimeShiftRead, RedisTimeShiftReport,
-    RedisTimeShiftSelector, RedisTimestampFormat, RelativeTime, RelativeTimeField,
-    plan_redis_time_shift,
-};
-pub use replay::{RedisUnorderedField, RedisUnorderedSelector, RedisValueKeySelector};
-
-pub use replay::{
-    RedisUnorderedFeedback, RedisUnorderedPlan, RedisUnorderedReport, plan_redis_unordered,
-};
-
-pub use replay::HttpHeaderTimestampSelector;
-
-pub use replay::{
-    HttpHeaderTimestampFeedback, HttpHeaderTimestampPlan, HttpHeaderTimestampReport,
-    plan_http_header_timestamp,
-};
-
-pub use replay::RedisLockSelector;
-pub use replay::{RedisLockFeedback, RedisLockPlan, RedisLockReport, plan_redis_lock};
-pub use replay::{
-    RedisPublishFeedback, RedisPublishPlan, RedisPublishReport, RedisPublishSelector,
-    plan_redis_publish,
-};

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-use super::super::config::{ReplayDependencyRule, ReplayPolicyDocument, validate_document};
+use super::super::config::{BindingEntry, ReplayPolicyDocument, validate_document};
 use super::super::response::ResponseRules;
 
 pub(super) fn replace_response_rules(original: &str, rules: &ResponseRules) -> Result<String> {
@@ -12,9 +12,9 @@ pub(super) fn replace_response_rules(original: &str, rules: &ResponseRules) -> R
 
 pub(super) fn replace_dependency_rules(
     original: &str,
-    dependency_rules: &[ReplayDependencyRule],
+    document: &ReplayPolicyDocument,
 ) -> Result<String> {
-    let rendered = render_dependency_rules(dependency_rules)?;
+    let rendered = render_dependency_rules(document)?;
     replace_root_section(original, "dependency_rules:", &rendered)
 }
 
@@ -62,12 +62,12 @@ pub(crate) fn replace_root_section(
     Ok(updated)
 }
 
-pub(super) fn render_dependency_rules(dependency_rules: &[ReplayDependencyRule]) -> Result<String> {
-    if dependency_rules.is_empty() {
+pub(super) fn render_dependency_rules(document: &ReplayPolicyDocument) -> Result<String> {
+    if document.dependency_rules.is_empty() && document.dynamic_values.is_empty() {
         return Ok("dependency_rules: []\n".into());
     }
     let mut rendered = String::from("dependency_rules:\n");
-    for rule in dependency_rules {
+    for rule in &document.dependency_rules {
         let mut yaml = serde_yaml::to_string(rule)?;
         if let Some(mysql) = &rule.mysql
             && !mysql.sql_values.is_empty()
@@ -87,6 +87,14 @@ pub(super) fn render_dependency_rules(dependency_rules: &[ReplayDependencyRule])
                 &format!("  sql_values: {{{slots}}}\n"),
             );
         }
+        for (index, line) in yaml.lines().enumerate() {
+            rendered.push_str(if index == 0 { "- " } else { "  " });
+            rendered.push_str(line);
+            rendered.push('\n');
+        }
+    }
+    for rule in &document.dynamic_values {
+        let yaml = serde_yaml::to_string(&BindingEntry::DynamicValue(rule.clone()))?;
         for (index, line) in yaml.lines().enumerate() {
             rendered.push_str(if index == 0 { "- " } else { "  " });
             rendered.push_str(line);

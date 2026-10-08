@@ -477,7 +477,7 @@ fn run_status_label(status: RunStatus) -> &'static str {
 
 pub(crate) use evidence::query_http_cross_case_candidates;
 
-pub(crate) use evidence::query_http_unordered_candidates;
+pub(crate) use evidence::{query_dynamic_capture_candidates, query_http_unordered_candidates};
 
 pub(crate) use evidence::query_redis_lock_candidates;
 pub(crate) use evidence::query_redis_publish_candidates;

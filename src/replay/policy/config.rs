@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
+mod document;
+pub(in crate::replay::policy) use document::BindingEntry;
 
 use super::response::{
     ComparisonVerificationPolicy, ResponseRules, ResponseSettings, response_rule_ids,
@@ -16,22 +18,18 @@ const MIN_POLICY_VERSION: u8 = 1;
 const MAX_POLICY_VERSION: u8 = 3;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(
+    try_from = "document::PolicyDocument",
+    into = "document::PolicyDocument"
+)]
 pub(in crate::replay) struct ReplayPolicyDocument {
+    pub(in crate::replay) dynamic_values: Vec<super::dynamic_values::DynamicValueRule>,
     pub(in crate::replay) version: u8,
     pub(in crate::replay) expected_response: ExpectedResponseUsage,
-    #[serde(default)]
     pub(super) dependency_rules: Vec<ReplayDependencyRule>,
-    #[serde(
-        default,
-        skip_serializing_if = "crate::request_rules::RequestRules::is_empty"
-    )]
     pub(crate) request_rules: crate::request_rules::RequestRules,
-    #[serde(default, skip_serializing_if = "ResponseSettings::is_empty")]
     pub(in crate::replay) response_settings: ResponseSettings,
-    #[serde(default, skip_serializing_if = "ResponseRules::is_empty")]
     pub(in crate::replay) response_rules: ResponseRules,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(in crate::replay) process_output_rules:
         BTreeMap<String, crate::ProfileByTypeVerificationRules>,
 }
@@ -257,6 +255,7 @@ pub struct ReplayPolicyValidationReport {
     pub expected_response: ExpectedResponseUsage,
     pub comparison: ComparisonVerificationPolicy,
     pub dependency_rule_ids: Vec<String>,
+    pub dynamic_value_rule_ids: Vec<String>,
     pub response_rule_ids: Vec<String>,
     pub process_output_rules: BTreeMap<String, crate::ProfileByTypeVerificationRules>,
     pub runner_owned_response_assertions: bool,
@@ -279,11 +278,24 @@ pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationRepor
         fingerprint: loaded.fingerprint,
         expected_response: loaded.document.expected_response,
         comparison,
+        dynamic_value_rule_ids: loaded
+            .document
+            .dynamic_values
+            .iter()
+            .map(|rule| rule.id.clone())
+            .collect(),
         dependency_rule_ids: loaded
             .document
             .dependency_rules
             .into_iter()
             .map(|rule| rule.id)
+            .chain(
+                loaded
+                    .document
+                    .dynamic_values
+                    .iter()
+                    .map(|rule| rule.id.clone()),
+            )
             .collect(),
         response_rule_ids,
         process_output_rules: loaded.document.process_output_rules,
@@ -309,6 +321,11 @@ pub(in crate::replay) fn load_replay_policy(path: &Path) -> Result<LoadedReplayP
 }
 
 pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
+    super::dynamic_values::validate(&document.dynamic_values)?;
+    ensure!(
+        document.version >= 3 || document.dynamic_values.is_empty(),
+        "dynamic value rules require policy version 3"
+    );
     ensure!(
         matches!(document.version, MIN_POLICY_VERSION | MAX_POLICY_VERSION),
         "unsupported replay policy version {}; expected {MIN_POLICY_VERSION} or {MAX_POLICY_VERSION}",
@@ -333,7 +350,11 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
     super::redis_value::validate_overlaps(&document.dependency_rules)?;
     super::http_json::validate_overlaps(&document.dependency_rules)?;
     super::http_headers::validate_overlaps(&document.dependency_rules)?;
-    let mut ids = BTreeSet::new();
+    let mut ids = document
+        .dynamic_values
+        .iter()
+        .map(|rule| rule.id.as_str())
+        .collect::<BTreeSet<_>>();
     for rule in &document.dependency_rules {
         ensure!(
             document.version >= 3 || rule.replay_scope == ReplayScope::Case,

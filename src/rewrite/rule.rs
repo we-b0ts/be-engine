@@ -8,6 +8,7 @@ use super::model::{
     RewriteResponseBodyRuleSpec, RewriteRulePlanRecord, RewriteRuleReport, RewriteState,
 };
 use super::{action, evidence};
+mod generated_values;
 use crate::{
     ComparisonResponseRuleFeedback, DocxTimestampRule, E2eRunContext, ResponseBodyCodec,
     ResponseBodyJoinedStringPath, ResponseBodyRuleEvidence, ResponseBodyRuleFeedback,
@@ -18,6 +19,8 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct RewriteRulePlanOptions {
+    pub header_dates: Vec<crate::ResponseHeaderDateRule>,
+    pub dynamic_value: Option<crate::DynamicValueRule>,
     pub evidence_id: String,
     pub jwt: Option<super::jwt_rule::JwtRulePlanOptions>,
     pub body_codec: ResponseBodyCodec,
@@ -34,6 +37,7 @@ pub struct RewriteRulePlanOptions {
 }
 
 enum VerificationRulePlan {
+    Generated(Box<crate::GeneratedValueRulePlan>),
     Response(Box<ResponseRulePlan>),
     Body(Box<ResponseBodyRulePlan>),
 }
@@ -41,6 +45,7 @@ enum VerificationRulePlan {
 impl VerificationRulePlan {
     fn report(&self) -> Result<Value> {
         match self {
+            Self::Generated(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::Response(plan) => project_response_report(plan.report()),
             Self::Body(plan) => Ok(project_body_report(plan.report())),
         }
@@ -48,6 +53,7 @@ impl VerificationRulePlan {
 
     fn apply(self) -> Result<Value> {
         match self {
+            Self::Generated(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::Response(plan) => project_response_report(&plan.apply()?),
             Self::Body(plan) => Ok(project_body_report(&plan.apply()?)),
         }
@@ -59,6 +65,9 @@ pub(super) fn plan(
     state: &mut RewriteState,
     options: RewriteRulePlanOptions,
 ) -> Result<RewriteRuleReport> {
+    if !options.header_dates.is_empty() || options.dynamic_value.is_some() {
+        return generated_values::plan(target_root, state, options);
+    }
     if let Some(jwt) = options.jwt {
         ensure!(
             options.body_codec == ResponseBodyCodec::Json
@@ -127,6 +136,8 @@ fn plan_json(
         })
         .context("rule plan requires a representative JSON Pointer")?;
     let record = RewriteRulePlanRecord {
+        header_dates: Vec::new(),
+        dynamic_value: None,
         id: format!(
             "plan-{}",
             fingerprint::id(&[
@@ -209,6 +220,8 @@ fn plan_response_body(
     };
     let spec_json = serde_json::to_string(&spec)?;
     let record = RewriteRulePlanRecord {
+        header_dates: Vec::new(),
+        dynamic_value: None,
         id: format!(
             "plan-{}",
             fingerprint::id(&[
@@ -271,6 +284,11 @@ fn build_plan(
     state: &RewriteState,
     record: &RewriteRulePlanRecord,
 ) -> Result<VerificationRulePlan> {
+    if record.dynamic_value.is_some() || !record.header_dates.is_empty() {
+        return Ok(VerificationRulePlan::Generated(Box::new(
+            generated_values::build(target_root, state, record)?,
+        )));
+    }
     if let Some(spec) = &record.response_body {
         let evidence = if state
             .active_issue

@@ -78,6 +78,13 @@ pub(super) fn validate(
         "SQL time rule requires finalized replay evidence"
     );
     let s = &feedback.selector;
+    let loaded = load_replay_policy(&feedback.policy_path)?;
+    if !loaded.document.dynamic_values.is_empty() {
+        ensure!(
+            report["replay_policy"]["fingerprint"] == loaded.fingerprint,
+            "dynamic SQL time evidence uses a different policy"
+        );
+    }
     let start = report["started_at"]
         .as_str()
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
@@ -147,6 +154,69 @@ pub(super) fn validate(
             }
             let Some(source) = event_values(s, &event) else {
                 continue;
+            };
+            let (source, actual_values) = if loaded.document.dynamic_values.is_empty() {
+                (source, actual_values.clone())
+            } else {
+                let aliases = crate::replay::policy::dynamic_values::from_report(
+                    &loaded.document.dynamic_values,
+                    &report,
+                    actual["case_id"]
+                        .as_str()
+                        .context("dynamic SQL time evidence has no case")?,
+                    &crate::replay::policy::pattern::uri_path(
+                        request["uri"].as_str().unwrap_or_default(),
+                    ),
+                    &bytes,
+                    &source,
+                    &actual_values,
+                )?;
+                let source_params: Option<Vec<crate::replay::RecordedMysqlValue>> =
+                    serde_json::from_value(event.get("params").cloned().unwrap_or(Value::Null))?;
+                let actual_params: Option<Vec<crate::replay::RecordedMysqlValue>> =
+                    serde_json::from_value(actual.get("params").cloned().unwrap_or(Value::Null))?;
+                let identity = crate::replay::ReplaySessionIdentity {
+                    target: Some(crate::replay::TargetKey {
+                        host: event["target_host"].as_str().unwrap_or_default().into(),
+                        port: event["target_port"]
+                            .as_u64()
+                            .and_then(|port| u16::try_from(port).ok())
+                            .unwrap_or_default(),
+                    }),
+                    database: Some(s.database.clone()),
+                    username: event["username"].as_str().map(str::to_owned),
+                };
+                let normalized =
+                    aliases.mysql(&crate::replay::policy::matcher::MysqlPolicyContext {
+                        case_id: actual["case_id"].as_str(),
+                        identity: &identity,
+                        command: actual["command"].as_str().unwrap_or_default(),
+                        recorded_sql: event["sql"].as_str(),
+                        sql: actual["sql"].as_str(),
+                        recorded: source_params.as_deref(),
+                        actual: actual_params.as_deref(),
+                    });
+                match normalized {
+                    Some(Ok(normalized)) => {
+                        let Ok(source) = values(
+                            &s.sql,
+                            normalized.source_sql.as_deref(),
+                            normalized.source_params.as_deref(),
+                        ) else {
+                            continue;
+                        };
+                        let Ok(actual) = values(
+                            &s.sql,
+                            normalized.actual_sql.as_deref(),
+                            normalized.actual_params.as_deref(),
+                        ) else {
+                            continue;
+                        };
+                        (source, actual)
+                    }
+                    Some(Err(_)) => continue,
+                    None => (source, actual_values.clone()),
+                }
             };
             if source.len() != actual_values.len()
                 || source

@@ -112,6 +112,8 @@ pub(super) fn plan(
     };
     let (_, _, traffic_report) = build(root, state, &spec)?;
     let record = RewriteRulePlanRecord {
+        header_dates: Vec::new(),
+        dynamic_value: None,
         time: None,
         id: format!(
             "plan-{}",

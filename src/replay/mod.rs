@@ -131,6 +131,7 @@ pub struct ReplayControlConfig {
 
 pub type MysqlReplayControlConfig = ReplayControlConfig;
 
+pub use assertion::ResponseHeaderDateCandidate;
 pub(crate) use assertion::hessian2::is_hessian2_body;
 pub(crate) use assertion::protobuf::is_protobuf_body;
 pub(crate) use assertion::{
@@ -147,6 +148,7 @@ pub use assertion::{
     ResponseBodyUnorderedPathCandidate, ResponseDifference, ResponseDifferenceKind,
     ResponseGatewayProtocol, assert_recorded_response,
 };
+pub use policy::ResponseHeaderDateRule;
 pub(crate) use policy::render_validated_replay_policy;
 pub(crate) use policy::response_locations_overlap;
 pub use policy::{
@@ -167,6 +169,11 @@ pub use policy::{
     initialize_replay_policy, plan_comparison_response_rule, plan_http_cross_case,
     plan_memcached_timestamp_rule, plan_mysql_time_rule, plan_profile_target_missing,
     plan_redis_cross_case, plan_response_body_rule, plan_response_rule, validate_replay_policy,
+};
+pub use policy::{DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget};
+pub use policy::{
+    DynamicValueRuleFeedback, GeneratedValueRulePlan, GeneratedValueRuleReport,
+    ResponseHeaderDateRuleFeedback, plan_dynamic_value_rule, plan_response_header_date_rule,
 };
 pub(crate) use redis::snapshot_overlay::inspect_case_source_snapshot_overlay;
 pub(crate) use report::aggregate::aggregate_replay_report_with_options;
@@ -452,6 +459,7 @@ impl ReplayRuntime {
             http::observe_recorded_policy_exchanges(policy, &http_exchanges);
             memcached::observe_recorded_policy_exchanges(policy, &memcached);
             redis.value_rules = policy.redis_value_rules();
+            redis.dynamic_values = policy.dynamic_values.clone();
             redis.configure_lock_tokens(&policy.redis_lock_token_rules());
             redis.configure_publish(policy.redis_publish_rules());
             redis.configure_time_shift(&policy.redis_time_shift_rules())?;

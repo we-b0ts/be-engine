@@ -1,0 +1,200 @@
+//! Bounded, token-free witnesses for one differing Redis or HTTP request value.
+use super::*;
+use crate::replay::policy::config::fingerprint;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(in crate::replay) struct CaptureCandidate {
+    pub case_id: String,
+    pub capture: DynamicValueCapture,
+    pub source_payload_fingerprint: String,
+    pub source_value_fingerprint: String,
+    pub target_value_fingerprint: String,
+    pub target_uuid: bool,
+    pub target_uuid_v4: bool,
+}
+
+impl DynamicValues {
+    pub(in crate::replay) fn capture_candidates(&self) -> Vec<CaptureCandidate> {
+        self.candidates.lock().expect("capture candidates").clone()
+    }
+    fn candidate(
+        &self,
+        case: &str,
+        capture: DynamicValueCapture,
+        payload: &[u8],
+        source: &str,
+        target: &str,
+    ) {
+        if source == target
+            || source.is_empty()
+            || target.is_empty()
+            || source.len() > 1024
+            || target.len() > 1024
+        {
+            return;
+        }
+        let uuid = uuid::Uuid::parse_str(target).ok();
+        let candidate = CaptureCandidate {
+            case_id: case.into(),
+            capture,
+            source_payload_fingerprint: fingerprint(payload),
+            source_value_fingerprint: fingerprint(source.as_bytes()),
+            target_value_fingerprint: fingerprint(target.as_bytes()),
+            target_uuid: uuid.is_some(),
+            target_uuid_v4: uuid.is_some_and(|uuid| uuid.get_version_num() == 4),
+        };
+        let mut items = self.candidates.lock().expect("capture candidates");
+        if !items.contains(&candidate)
+            && items.iter().filter(|item| item.case_id == case).count() < 64
+        {
+            items.push(candidate);
+        }
+    }
+    pub(in crate::replay) fn observe_redis(
+        &self,
+        case: &str,
+        target: &TargetKey,
+        database: i64,
+        command: &str,
+        source: &[Vec<u8>],
+        actual: &[Vec<u8>],
+    ) {
+        if !self.routes.contains_key(case)
+            || source.len() != actual.len()
+            || source.first() != actual.first()
+        {
+            return;
+        }
+        let indexes: Vec<usize> = match command {
+            "SET" => vec![1],
+            "HSET" => (2..source.len().min(130)).step_by(2).collect(),
+            _ => return,
+        };
+        let Some(Ok(key)) = source.first().map(|key| std::str::from_utf8(key)) else {
+            return;
+        };
+        if key.len() > 1024 {
+            return;
+        }
+        for index in indexes {
+            if index >= source.len()
+                || source
+                    .iter()
+                    .zip(actual)
+                    .enumerate()
+                    .any(|(i, (a, b))| i != index && a != b)
+            {
+                continue;
+            }
+            let (pointer, left, right) = if let Some((pointer, left, right)) =
+                json_difference(&source[index], &actual[index])
+            {
+                (Some(pointer), left, right)
+            } else {
+                let (Ok(left), Ok(right)) = (
+                    strings::capture(&source[index], None),
+                    strings::capture(&actual[index], None),
+                ) else {
+                    continue;
+                };
+                (None, left, right)
+            };
+            self.candidate(
+                case,
+                DynamicValueCapture::Redis {
+                    target: DynamicValueTarget {
+                        host: target.host.clone(),
+                        port: target.port,
+                    },
+                    database,
+                    command: command.into(),
+                    key: key.into(),
+                    argument_index: index,
+                    json_pointer: pointer,
+                },
+                &serde_json::to_vec(source).expect("byte vectors serialize"),
+                &left,
+                &right,
+            );
+        }
+    }
+    pub(in crate::replay) fn observe_http(
+        &self,
+        case: &str,
+        target: &TargetKey,
+        method: &str,
+        path: &str,
+        source: &[u8],
+        actual: &[u8],
+    ) {
+        if !self.routes.contains_key(case) {
+            return;
+        }
+        if let Some((pointer, left, right)) = json_difference(source, actual) {
+            self.candidate(
+                case,
+                DynamicValueCapture::Http {
+                    target: DynamicValueTarget {
+                        host: target.host.clone(),
+                        port: target.port,
+                    },
+                    method: method.into(),
+                    path: path.into(),
+                    json_pointer: pointer,
+                },
+                source,
+                &left,
+                &right,
+            );
+        }
+    }
+}
+
+fn json_difference(source: &[u8], target: &[u8]) -> Option<(String, String, String)> {
+    let (source, target) = (
+        crate::replay::json_order::parse(source)?,
+        crate::replay::json_order::parse(target)?,
+    );
+    let mut differences = Vec::new();
+    fn visit(
+        source: &Value,
+        target: &Value,
+        path: String,
+        depth: usize,
+        out: &mut Vec<(String, String, String)>,
+    ) -> Option<()> {
+        if source == target {
+            return Some(());
+        }
+        if depth > 64 || out.len() > 1 {
+            return None;
+        }
+        match (source, target) {
+            (Value::String(left), Value::String(right)) => {
+                out.push((path, left.clone(), right.clone()))
+            }
+            (Value::Object(left), Value::Object(right)) if left.keys().eq(right.keys()) => {
+                for (key, value) in left {
+                    visit(
+                        value,
+                        &right[key],
+                        format!("{path}/{}", key.replace('~', "~0").replace('/', "~1")),
+                        depth + 1,
+                        out,
+                    )?;
+                }
+            }
+            (Value::Array(left), Value::Array(right)) if left.len() == right.len() => {
+                for (i, (left, right)) in left.iter().zip(right).enumerate() {
+                    visit(left, right, format!("{path}/{i}"), depth + 1, out)?;
+                }
+            }
+            _ => return None,
+        }
+        Some(())
+    }
+    visit(&source, &target, String::new(), 0, &mut differences)?;
+    (differences.len() == 1).then(|| differences.remove(0))
+}

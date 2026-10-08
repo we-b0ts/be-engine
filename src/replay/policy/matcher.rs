@@ -44,6 +44,7 @@ pub(in crate::replay) struct DependencyRuleDecision {
 
 #[derive(Debug)]
 pub(in crate::replay) struct ReplayPolicyRuntime {
+    pub(in crate::replay) dynamic_values: super::dynamic_values::DynamicValues,
     loaded: LoadedReplayPolicy,
     cases: BTreeMap<String, CaseIdentity>,
     applicable_dependency_rule_ids: BTreeSet<String>,
@@ -130,13 +131,30 @@ impl ReplayPolicyRuntime {
             .iter()
             .map(|rule| (rule.id.clone(), DependencyRuleUsage::default()))
             .collect();
-        Ok(Self {
+        let runtime = Self {
+            dynamic_values: super::dynamic_values::DynamicValues::new(
+                loaded.document.dynamic_values.clone(),
+                case_identities
+                    .iter()
+                    .filter_map(|(id, case)| {
+                        case.path.as_ref().map(|path| (id.clone(), path.clone()))
+                    })
+                    .collect(),
+            ),
             loaded,
             cases: case_identities,
             applicable_dependency_rule_ids: BTreeSet::new(),
             usage,
             bindings: BTreeMap::new(),
-        })
+        };
+        if runtime.dynamic_values.enabled() {
+            for case in cases.values() {
+                runtime
+                    .dynamic_values
+                    .observe_source(&case.id, &fs::read(case.dir.join("dependencies.jsonl"))?)?;
+            }
+        }
+        Ok(runtime)
     }
 
     pub(in crate::replay) fn observe_recorded_mysql_exchange(
@@ -237,6 +255,7 @@ impl ReplayPolicyRuntime {
     }
 
     pub(in crate::replay) fn begin_case(&mut self, case_id: &str) {
+        self.dynamic_values.begin_case(case_id);
         self.bindings.remove(case_id);
     }
 
@@ -578,6 +597,7 @@ impl ReplayPolicyRuntime {
                 DependencyRuleReport {
                     id: rule.id.clone(),
                     protocol: rule.protocol,
+                    kind: None,
                     applicable: self.applicable_dependency_rule_ids.contains(&rule.id),
                     matches: usage.matches,
                     binds: usage.binds,
@@ -586,6 +606,7 @@ impl ReplayPolicyRuntime {
                     time_validations: usage.time_validations,
                 }
             })
+            .chain(self.dynamic_values.rule_reports())
             .collect::<Vec<_>>();
         let unused_applicable_dependency_rule_ids = dependency_rules
             .iter()
@@ -598,6 +619,8 @@ impl ReplayPolicyRuntime {
             fingerprint: self.loaded.fingerprint.clone(),
             expected_response: self.loaded.document.expected_response,
             dependency_rules,
+            dynamic_bindings: self.dynamic_values.report(),
+            dynamic_capture_candidates: self.dynamic_values.capture_candidates(),
             unused_applicable_dependency_rule_ids,
         }
     }

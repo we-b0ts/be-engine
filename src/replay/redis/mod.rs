@@ -27,8 +27,8 @@ use super::{
 mod builtins;
 mod connection_scope;
 pub(in crate::replay) mod cross_case;
+use crate::replay::json_order as json;
 pub(in crate::replay) use cross_case::load as load_cross_case;
-mod json;
 mod key_selector;
 #[cfg(test)]
 mod lane_tests;
@@ -121,6 +121,7 @@ struct MatchedRedisExchange {
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayState {
+    pub(super) dynamic_values: super::policy::dynamic_values::DynamicValues,
     time_shifts: Vec<time_shift::TimeShiftObservation>,
     connection_scopes: ConnectionScopes,
     pub(super) value_rules: Vec<value::ValueRule>,

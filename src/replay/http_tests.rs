@@ -12,6 +12,8 @@ use tokio_rustls::TlsConnector;
 
 use super::*;
 use crate::replay::{MysqlReplayConfig, ReplayAllowedUnusedHttpConfig, ReplayRuntime};
+#[path = "http_tests/dynamic_values.rs"]
+mod dynamic_values;
 
 #[test]
 fn ignored_query_values_are_still_required_on_both_requests() {

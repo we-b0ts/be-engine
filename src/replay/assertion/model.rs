@@ -353,6 +353,12 @@ impl ResponseDifference {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseAssertionCaseReport {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applied_header_rule_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unused_applicable_header_rule_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub header_date_candidates: Vec<super::headers::date::ResponseHeaderDateCandidate>,
     pub version: u8,
     pub case_id: String,
     pub method: String,
@@ -415,6 +421,9 @@ impl ResponseAssertionCaseReport {
     ) -> Self {
         Self {
             version: 3,
+            applied_header_rule_ids: Vec::new(),
+            unused_applicable_header_rule_ids: Vec::new(),
+            header_date_candidates: Vec::new(),
             case_id,
             method,
             path,
@@ -523,6 +532,7 @@ impl ResponseAssertionCaseReport {
         self.unordered_joined_string_candidates.sort();
         self.unordered_joined_string_candidates.dedup();
         self.passed = self.differences.is_empty()
+            && self.unused_applicable_header_rule_ids.is_empty()
             && self.unused_applicable_generated_rule_ids.is_empty()
             && self.unused_applicable_unordered_rule_ids.is_empty()
             && self

@@ -77,6 +77,12 @@ enabled.
 
 ## Standard HTTP Response Headers
 
+Explicit [response header date rules](response-header-date-rules.md) validate
+current-calendar-date fragments such as `Content-Disposition` filenames while
+preserving static header values. Their selectors are HTTP routes without METHOD.
+Cross-protocol request identities use [case-local dynamic values](dynamic-value-rules.md)
+with one SQL capture, optional format and explicit endpoint scope.
+
 Version 3 Replay and Comparison compare the following HTTP response headers by
 default, without response rules:
 

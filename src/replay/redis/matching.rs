@@ -8,6 +8,31 @@ use crate::replay::report::command::CommandMatchDiagnostic;
 
 impl RedisReplayState {
     fn arguments_match(&self, exchange: &ReplayExchange, args: &[Vec<u8>]) -> bool {
+        if exchange.source == ReplaySource::Case
+            && exchange.shared_rule_id.is_none()
+            && let Some(normalized) = self.dynamic_values.redis(
+                exchange.case_id.as_deref(),
+                &TargetKey {
+                    host: exchange.record.target_host.clone(),
+                    port: exchange.record.target_port,
+                },
+                exchange.record.database,
+                &exchange.record.command,
+                &exchange.args,
+                args,
+            )
+        {
+            let Ok(normalized) = normalized else {
+                return false;
+            };
+            let mut normalized_exchange = exchange.clone();
+            normalized_exchange.args = normalized.source;
+            return self.arguments_match_plain(&normalized_exchange, &normalized.actual);
+        }
+        self.arguments_match_plain(exchange, args)
+    }
+
+    fn arguments_match_plain(&self, exchange: &ReplayExchange, args: &[Vec<u8>]) -> bool {
         self.publish_rules
             .arguments_match(exchange, args)
             .unwrap_or_else(|| {
@@ -60,6 +85,33 @@ impl RedisReplayState {
                 return Err(lane_blocked_diagnostic(&self.exchanges, candidate, blocker));
             }
             PreferredMatch::NotFound => {
+                for exchange in self.exchanges.iter().filter(|exchange| {
+                    exchange.source == ReplaySource::Case
+                        && exchange.shared_rule_id.is_none()
+                        && exchange.case_id.as_deref() == active_case_id
+                        && exchange.status.is_available()
+                        && target_matches(
+                            target,
+                            &exchange.record.target_host,
+                            exchange.record.target_port,
+                        )
+                        && exchange.record.resp_version == resp_version
+                        && exchange.record.database == database
+                        && normalize_optional(username)
+                            == normalize_optional(exchange.record.username.as_deref())
+                        && exchange.record.command == command
+                }) {
+                    if let Some(case) = active_case_id {
+                        self.dynamic_values.observe_redis(
+                            case,
+                            target,
+                            database,
+                            command,
+                            &exchange.args,
+                            args,
+                        );
+                    }
+                }
                 self.capture_publish_candidates(
                     active_case_id,
                     target,
@@ -137,9 +189,38 @@ impl RedisReplayState {
                 ));
             }
         };
-        let mut rule_ids = value::used_rules(&self.exchanges[index], args, &self.value_rules);
-        rule_ids.extend(self.lock_tokens.claim(&self.exchanges[index], args));
-        rule_ids.extend(self.publish_rules.claim(&self.exchanges[index], args));
+        let exchange = &self.exchanges[index];
+        let normalized = (exchange.source == ReplaySource::Case
+            && exchange.shared_rule_id.is_none())
+        .then(|| {
+            self.dynamic_values.redis(
+                exchange.case_id.as_deref(),
+                &TargetKey {
+                    host: exchange.record.target_host.clone(),
+                    port: exchange.record.target_port,
+                },
+                exchange.record.database,
+                &exchange.record.command,
+                &exchange.args,
+                args,
+            )
+        })
+        .flatten()
+        .transpose()
+        .expect("selected Redis arguments were validated");
+        let mut normalized_exchange = exchange.clone();
+        let arguments = if let Some(normalized) = &normalized {
+            normalized_exchange.args = normalized.source.clone();
+            normalized.actual.as_slice()
+        } else {
+            args
+        };
+        let mut rule_ids = value::used_rules(&normalized_exchange, arguments, &self.value_rules);
+        rule_ids.extend(self.lock_tokens.claim(&normalized_exchange, arguments));
+        rule_ids.extend(self.publish_rules.claim(&normalized_exchange, arguments));
+        if let (Some(case), Some(normalized)) = (exchange.case_id.as_deref(), normalized) {
+            self.dynamic_values.commit(case, normalized.decision);
+        }
         let requires_binding =
             self.connection_scopes
                 .claim(&self.exchanges[index], active_case_id, connection);

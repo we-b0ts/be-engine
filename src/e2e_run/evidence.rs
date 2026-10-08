@@ -425,6 +425,17 @@ pub(crate) fn query_redis_publish_candidates(context: E2eRunContext, api: &str) 
         .unwrap_or_else(|_| serde_json::json!({"candidates": [], "omitted_candidates": 0, "requires_fresh_replay": true, "unavailable": "Redis PUBLISH evidence is unavailable; rerun Replay"})))
 }
 
+pub(crate) fn query_dynamic_capture_candidates(context: E2eRunContext, api: &str) -> Result<Value> {
+    let state = finalized_focused_state(context, api)?;
+    let report: Value = serde_json::from_slice(&std::fs::read(&state.replay_report)?)?;
+    Ok(report["replay_policy"]["dynamic_capture_candidates"]
+        .as_array()
+        .map_or_else(
+            || serde_json::json!([]),
+            |items| Value::Array(items.clone()),
+        ))
+}
+
 pub(crate) fn query_http_unordered_candidates(context: E2eRunContext, api: &str) -> Result<Value> {
     let state = finalized_focused_state(context, api)?;
     Ok(crate::replay::http_unordered::evidence::discover(&state.replay_report)

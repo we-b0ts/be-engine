@@ -12,9 +12,14 @@ pub use mysql_time::{
     MysqlTimeRuleFeedback, MysqlTimeRulePlan, MysqlTimeRuleReport, MysqlTimeSelector,
     MysqlTimeValueSelector, plan_mysql_time_rule,
 };
+mod generated_values;
 mod model;
 mod profile_target_missing;
 mod response_body;
+pub use generated_values::{
+    DynamicValueRuleFeedback, GeneratedValueRulePlan, GeneratedValueRuleReport,
+    ResponseHeaderDateRuleFeedback, plan_dynamic_value_rule, plan_response_header_date_rule,
+};
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
