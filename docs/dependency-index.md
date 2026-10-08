@@ -4,8 +4,9 @@ Managed `run` / `run-api` prepare dependency indexes before building the target
 image and starting Replay. The index preparation deadline defaults to 1800s;
 Replay listener readiness retains its separate 60s deadline. Progress reports
 identify index preparation, image build, Replay preparation, target startup,
-case preparation, execution, and finalization. An old recording needs one complete
-read to build its indexes; subsequent runs validate and reuse them.
+execution, and finalization. Per-case dependency preparation is included in replay
+execution progress. An old recording needs one complete read to build its indexes;
+subsequent runs validate and reuse them.
 
 ```yaml
 project:

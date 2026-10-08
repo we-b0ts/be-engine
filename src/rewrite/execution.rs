@@ -392,13 +392,11 @@ fn traffic_summary(
             Some(crate::e2e_run::E2eActiveProgress::StartingTarget) => {
                 "Starting target container".to_string()
             }
-            Some(crate::e2e_run::E2eActiveProgress::PreparingCase { completed, total }) => {
-                format!("Preparing case dependencies {completed}/{total}")
-            }
             Some(crate::e2e_run::E2eActiveProgress::Building) => {
                 format!("building target for {api}")
             }
-            Some(crate::e2e_run::E2eActiveProgress::Replaying { completed, total }) => {
+            Some(crate::e2e_run::E2eActiveProgress::PreparingCase { completed, total })
+            | Some(crate::e2e_run::E2eActiveProgress::Replaying { completed, total }) => {
                 format!("replaying {api} ({completed}/{total})")
             }
             Some(crate::e2e_run::E2eActiveProgress::Finalizing) => {
