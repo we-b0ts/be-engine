@@ -148,6 +148,7 @@ pub use assertion::{
     ResponseBodyUnorderedPathCandidate, ResponseDifference, ResponseDifferenceKind,
     ResponseGatewayProtocol, assert_recorded_response,
 };
+pub(crate) use policy::ReplayEvidencePolicyFreshness;
 pub use policy::ResponseHeaderDateRule;
 pub(crate) use policy::render_validated_replay_policy;
 pub(crate) use policy::response_locations_overlap;

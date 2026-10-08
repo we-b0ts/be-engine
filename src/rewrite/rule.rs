@@ -434,17 +434,18 @@ fn validate_plan_evidence(
         return Ok(());
     }
 
-    let valid = evidence::commands(target_root, state)
-        .into_iter()
-        .any(|command| {
-            evidence::query(target_root, state, &command.query_id)
-                .is_ok_and(|report| report.evidence_id == evidence_id)
-        });
-    ensure!(
-        valid,
-        "evidence id is stale or belongs to another active issue"
-    );
-    Ok(())
+    for command in evidence::commands(target_root, state) {
+        let Ok(report) = evidence::query(target_root, state, &command.query_id) else {
+            continue;
+        };
+        if report.evidence_id == evidence_id {
+            evidence::policy_freshness::ensure_plannable(&report)?;
+            return Ok(());
+        }
+    }
+    anyhow::bail!(
+        "evidence id is stale or belongs to another active issue; query current evidence again. If verification.yaml changed, run fresh Replay using the existing recordings before planning"
+    )
 }
 
 fn validate_response_body_plan_evidence(

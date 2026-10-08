@@ -59,3 +59,9 @@ observation, requires a date difference, checks assertion-detail and response
 fingerprints, and rejects source-change evidence. Apply checks policy and
 evidence are unchanged, then requests fresh verification. Existing recordings
 are reusable. No recorded header or target artifact is modified.
+
+Header rules share the [policy freshness check](replay-policy.md#policy-freshness-before-rule-planning)
+with dependency rules. An earlier run becomes stale after any policy edit;
+follow the evidence's coordinator refresh command, then query new evidence.
+Keep the recording run and header selector unchanged unless source diagnosis
+requires another configuration.

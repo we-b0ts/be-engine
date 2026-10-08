@@ -64,6 +64,14 @@ evidence-driven `apply` validates the resulting policy, and the runner validates
 it again before replay. Retain its canonical path, fingerprint, applicable
 rules, usage, and unused applicable rules from the final report.
 
+Rule planning requires evidence produced under the current policy content
+fingerprint. Backend-rewrite reports `facts.policy_freshness` in dirty-cluster
+and representative queries. If stale or unavailable, use the coordinator's
+returned `refresh_command` through normal gates, reuse the existing recordings,
+and query new evidence; applicable planners resume after fresh verification.
+An unrelated rule or comment edit also changes the fingerprint. See
+[policy freshness](../../../../../docs/replay-policy.md#policy-freshness-before-rule-planning).
+
 ## Assertion And Dependency Boundaries
 
 `expected-response.json` is an assertion oracle only. Target product code, test

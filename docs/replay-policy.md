@@ -81,7 +81,7 @@ Explicit [response header date rules](response-header-date-rules.md) validate
 current-calendar-date fragments such as `Content-Disposition` filenames while
 preserving static header values. Their selectors are HTTP routes without METHOD.
 Cross-protocol request identities use [case-local dynamic values](dynamic-value-rules.md)
-with one SQL capture, optional format and explicit endpoint scope.
+with one MySQL, Redis or HTTP capture, optional format and explicit endpoint scope.
 
 Version 3 Replay and Comparison compare the following HTTP response headers by
 default, without response rules:
@@ -423,6 +423,31 @@ never matches an absolute value. Text protocol arguments and binary protocol
 extras use the same behavior; every non-expiration component remains exact.
 
 ## Evidence And Failure
+
+### Policy freshness before rule planning
+
+Rule evidence is bound to the complete content fingerprint of
+`.traffic-e2e/verification.yaml`. Any edit, including another API's rule or a
+comment, makes earlier Replay or Comparison evidence stale. The recording run
+remains reusable; selecting another evidence ID or changing rule selectors
+does not refresh the run's verification evidence.
+
+Backend-rewrite dirty-cluster and representative queries report
+`facts.policy_freshness` with `status` (`current`, `stale`, or `unavailable`),
+the evidence and current policy fingerprints, and `requires_fresh_replay`.
+Diagnostic facts remain available. When the policy differs or its evidence
+identity is missing, the query returns no `applicable_rule_planners` and offers
+the structured `refresh_command` instead. The coordinator executes this API's
+returned `next` command, follows its review and scheduling gates, and reruns
+verification using the existing recordings. Query new evidence after that run
+before planning. Evidence produced under the current policy restores the
+ordinary planner hints. If report identity cannot be read, `unavailable_reason`
+explains the missing metadata while existing diagnostic facts remain available.
+
+Plan retains the policy check even for manually supplied arguments. Apply also
+rejects a policy changed after planning; obtain fresh verification evidence and
+create a new plan instead of applying the old plan. These checks do not require
+new recordings or a different rule configuration.
 
 Replay reports include the canonical policy path, content fingerprint,
 `assertions_only` declaration, rule applicability, match counts, field

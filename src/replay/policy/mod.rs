@@ -1,4 +1,6 @@
 mod config;
+mod evidence_policy;
+pub(crate) use evidence_policy::ReplayEvidencePolicyFreshness;
 pub(in crate::replay) mod dynamic_values;
 pub use dynamic_values::{
     DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget,

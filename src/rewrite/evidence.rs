@@ -21,6 +21,7 @@ use crate::{
 mod access;
 pub use access::{query_rewrite_evidence, query_rewrite_evidence_for_scope};
 mod overview;
+pub(super) mod policy_freshness;
 mod response_body;
 mod rule_guidance;
 pub(super) use rule_guidance::supports_response_body_codec;
@@ -110,7 +111,11 @@ pub(super) fn query(
         )
     })?;
     let (kind, offset) = requested;
-    let (facts, does_not_prove, next_step) = facts(target_root, state, issue, kind, offset)?;
+    let (mut facts, does_not_prove, mut next_step) =
+        facts(target_root, state, issue, kind, offset)?;
+    if let Some(refresh) = policy_freshness::attach(target_root, state, issue, kind, &mut facts)? {
+        next_step = refresh;
+    }
     let evidence_id = format!(
         "evidence-{}",
         fingerprint::id(&[requested_id, &serde_json::to_string(&facts)?])

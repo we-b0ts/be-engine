@@ -12,6 +12,9 @@ pub(super) fn rule_hints(
     query_kind: &str,
     facts: &Value,
 ) -> Vec<RewriteRuleHint> {
+    if let Some(hint) = super::policy_freshness::refresh_hint(target_root, facts) {
+        return vec![hint];
+    }
     if query_kind == QUERY_REPRESENTATIVES {
         let mut hints = generated_values::hints(target_root, query_kind, facts);
         let codecs = response_body::codec_candidates(facts);
@@ -168,6 +171,9 @@ pub(super) fn applicable_rule_planners(
     facts: &Value,
     evidence_id: &str,
 ) -> Vec<RewriteApplicableRulePlanner> {
+    if facts["policy_freshness"]["requires_fresh_replay"] == true {
+        return Vec::new();
+    }
     let mut planners =
         generated_values::planners(target_root, issue_kind, query_kind, facts, evidence_id);
     if query_kind == QUERY_DIRTY_CLUSTERS

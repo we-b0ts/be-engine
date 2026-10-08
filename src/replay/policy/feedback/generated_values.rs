@@ -60,7 +60,7 @@ impl GeneratedValueRulePlan {
     pub fn apply(self) -> Result<GeneratedValueRuleReport> {
         ensure!(
             fs::read_to_string(&self.policy_path)? == self.original,
-            "verification policy changed after planning"
+            "verification policy changed after planning; the pending plan is stale. Run fresh Replay using the existing recordings and current verification.yaml, query new evidence, and plan again before applying"
         );
         for (path, identity) in &self.witnesses {
             ensure!(
