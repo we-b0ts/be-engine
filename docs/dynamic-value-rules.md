@@ -94,6 +94,12 @@ policy fingerprints and requests fresh Replay. Existing recordings are reusable;
 old reports are not retroactively changed. Other dependency planners preserve
 these entries when editing the common rule list.
 
+If another rule or a comment changed the policy since Replay, follow the
+evidence's coordinator refresh command and obtain new evidence using the same
+recordings before planning. Stale evidence suppresses planner hints and reports
+both policy fingerprints; it does not indicate an unsupported capture or
+recording version. See [policy freshness](replay-policy.md#policy-freshness-before-rule-planning).
+
 ## Runtime contract
 
 - Capture decisions commit only after the exchange matches. A failed candidate

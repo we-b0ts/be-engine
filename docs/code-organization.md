@@ -89,6 +89,10 @@ is unclear.
 - Recorder event, run, writer, and summary modules own capture, persistence,
   and reporting.
 - Replay modules own recorded dependency matching and replay lifecycle.
+- `replay/policy/evidence_policy` owns the shared policy fingerprint check for
+  rule evidence. `e2e_run/evidence` reads runner-selected Replay report identity;
+  `rewrite/evidence/policy_freshness` projects read-only diagnostics and routes
+  refresh through the existing coordinator command and gates.
 - `replay/policy/config/document.rs` owns the common dependency rule list codec;
   runtime rule families are partitioned internally without a separate binding section.
 - `replay/policy/dynamic_values` owns bounded case-local MySQL/Redis/HTTP capture and

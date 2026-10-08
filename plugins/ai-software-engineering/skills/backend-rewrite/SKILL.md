@@ -129,6 +129,11 @@ engine roles or action kinds.
   format/timezone and parameter selection. The worker proves semantics and
   returns selectors; the coordinator uses current `rule plan` evidence, applies
   the rule and runs fresh verification. Existing recordings are reusable.
+- Before rule planning, check `facts.policy_freshness`. Stale or unavailable
+  policy identity retains diagnosis but suppresses applicable planners. Return
+  its `refresh_command` to the coordinator, which follows the normal gates and
+  verifies the existing recordings before obtaining new evidence. Do not treat
+  a policy mismatch as a recording-version or missing-capability diagnosis.
 - Target behavior must use normal product code and configuration, never recorded
   results, expected responses, Replay sessions, reports, or private engine state.
 - Only the coordinator executes workflow mutations and formal acceptance.

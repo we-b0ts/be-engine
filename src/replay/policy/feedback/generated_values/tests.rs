@@ -206,3 +206,47 @@ fn copy_options(options: &ResponseAssertionOptions) -> ResponseAssertionOptions 
         policy: options.policy.clone(),
     }
 }
+
+#[test]
+fn policy_freshness_dynamic_plan_and_apply_explain_how_to_refresh_existing_recordings() {
+    let (_temp, feedback, _) = dynamic_fixture();
+    let old = load_replay_policy(&feedback.policy_path)
+        .unwrap()
+        .fingerprint;
+    let current = format!(
+        "{}# unrelated policy edit\n",
+        fs::read_to_string(&feedback.policy_path).unwrap()
+    );
+    fs::write(&feedback.policy_path, &current).unwrap();
+    let fingerprint = load_replay_policy(&feedback.policy_path)
+        .unwrap()
+        .fingerprint;
+    let path = feedback.policy_path.clone();
+    let error = match plan_dynamic_value_rule(feedback) {
+        Ok(_) => panic!("stale plan accepted"),
+        Err(error) => format!("{error:#}"),
+    };
+    assert!(error.contains(&old) && error.contains(&fingerprint));
+    assert!(
+        error.contains("fresh Replay")
+            && error.contains("existing recordings")
+            && error.contains("query new evidence")
+    );
+    assert_eq!(fs::read_to_string(path).unwrap(), current);
+
+    let (_temp, feedback, _) = dynamic_fixture();
+    let path = feedback.policy_path.clone();
+    let plan = plan_dynamic_value_rule(feedback).unwrap();
+    let current = format!(
+        "{}# changed after planning\n",
+        fs::read_to_string(&path).unwrap()
+    );
+    fs::write(&path, &current).unwrap();
+    let error = plan.apply().unwrap_err().to_string();
+    assert!(
+        error.contains("pending plan is stale")
+            && error.contains("fresh Replay")
+            && error.contains("existing recordings")
+    );
+    assert_eq!(fs::read_to_string(path).unwrap(), current);
+}

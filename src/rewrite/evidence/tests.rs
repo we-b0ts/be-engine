@@ -386,6 +386,13 @@ fn parked_api_evidence_survives_unrelated_api_revisions() {
 #[test]
 fn representatives_return_the_exact_recorded_case_directory_and_response_difference() {
     let target = tempfile::tempdir().unwrap();
+    let policy = target.path().join(".traffic-e2e/verification.yaml");
+    std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
+    std::fs::write(
+        &policy,
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+    )
+    .unwrap();
     let case_source = target.path().join("recording");
     let case_dir = case_source.join("case-status-mismatch");
     std::fs::create_dir_all(&case_dir).unwrap();
@@ -443,6 +450,9 @@ fn representatives_return_the_exact_recorded_case_directory_and_response_differe
     let report = query(target.path(), &state, &command.query_id).unwrap();
 
     assert_eq!(report.query, QUERY_REPRESENTATIVES);
+    assert_eq!(report.facts["policy_freshness"]["status"], "unavailable");
+    assert!(report.facts["policy_freshness"]["unavailable_reason"].is_string());
+    assert!(report.applicable_rule_planners.is_empty());
     assert_eq!(report.facts["pointer_scope"], "response_status");
     assert_eq!(
         report.facts["representative"]["case_dir"],
@@ -471,6 +481,13 @@ fn representatives_return_the_exact_recorded_case_directory_and_response_differe
 #[test]
 fn comparison_representatives_link_the_comparison_case_and_three_way_difference() {
     let target = tempfile::tempdir().unwrap();
+    let policy = target.path().join(".traffic-e2e/verification.yaml");
+    std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
+    std::fs::write(
+        &policy,
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+    )
+    .unwrap();
     let run_id = "20260802120000";
     let case_dir = target
         .path()

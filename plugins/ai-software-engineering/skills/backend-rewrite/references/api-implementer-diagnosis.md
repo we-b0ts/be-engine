@@ -149,6 +149,13 @@ It checks `filename*` too and retains static filename/header/body assertions;
 see [header date rules](../../../../../docs/response-header-date-rules.md).
 Only the coordinator plans/applies these rules, followed by fresh verification.
 
+Check `facts.policy_freshness` before recommending a plan. If it requires fresh
+Replay, keep the source diagnosis and return the structured `refresh_command`
+to the coordinator. Any policy edit can stale earlier evidence, including a
+rule for another API. The coordinator follows normal review/scheduling gates,
+reuses the recording run, and obtains new evidence. Changing evidence IDs or
+selectors cannot fix this mismatch; it does not prove an engine capability gap.
+
 For API issues, consult these capabilities after tracing source and target
 behavior. Engine hints and mechanical candidates are additional evidence;
 their absence does not mean a documented capability is unavailable.

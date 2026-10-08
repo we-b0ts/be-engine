@@ -26,10 +26,11 @@ pub(super) fn dynamic(
         report["finalized"] == true,
         "dynamic value planning requires finalized replay evidence"
     );
-    ensure!(
-        report["replay_policy"]["fingerprint"].as_str() == Some(policy_fingerprint),
-        "dynamic value replay evidence uses a different policy"
-    );
+    crate::replay::ReplayEvidencePolicyFreshness::new(
+        report["replay_policy"]["fingerprint"].as_str(),
+        policy_fingerprint,
+    )
+    .ensure_current("dynamic value replay evidence")?;
     let DynamicValueCapture::Mysql {
         target,
         database,

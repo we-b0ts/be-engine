@@ -436,6 +436,31 @@ pub(crate) fn query_dynamic_capture_candidates(context: E2eRunContext, api: &str
         ))
 }
 
+pub(crate) fn query_rule_policy_freshness(
+    context: E2eRunContext,
+    api: &str,
+    current_fingerprint: &str,
+) -> crate::replay::ReplayEvidencePolicyFreshness {
+    let identity = (|| -> Result<Option<String>> {
+        let evidence = super::resolve_e2e_response_rule_evidence(context, api)?;
+        let report: Value = serde_json::from_slice(&std::fs::read(evidence.replay)?)?;
+        Ok(report["replay_policy"]["fingerprint"]
+            .as_str()
+            .filter(|_| report["finalized"] == true)
+            .map(str::to_owned))
+    })();
+    match identity {
+        Ok(identity) => crate::replay::ReplayEvidencePolicyFreshness::new(
+            identity.as_deref(),
+            current_fingerprint,
+        ),
+        Err(error) => crate::replay::ReplayEvidencePolicyFreshness::unavailable(
+            current_fingerprint,
+            format!("{error:#}"),
+        ),
+    }
+}
+
 pub(crate) fn query_http_unordered_candidates(context: E2eRunContext, api: &str) -> Result<Value> {
     let state = finalized_focused_state(context, api)?;
     Ok(crate::replay::http_unordered::evidence::discover(&state.replay_report)
