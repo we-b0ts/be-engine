@@ -604,7 +604,7 @@ async fn execute_case(
     }
     state.cases[case_index].status = CaseStatus::Running;
 
-    let _ = active_progress::write(layout, state, ActiveProgressPhase::PreparingCase);
+    let _ = active_progress::write(layout, state, ActiveProgressPhase::Replaying);
     let begin = control(state, "begin", Some(case_id), false, false).await;
     if let Err(error) = begin {
         state.cases[case_index].status = CaseStatus::Incomplete;
@@ -619,7 +619,6 @@ async fn execute_case(
         // Optional read-ahead never prepares or changes the next case's inventory.
         let _ = control(state, "prefetch", Some(&next.case_id), false, false).await;
     }
-    let _ = active_progress::write(layout, state, ActiveProgressPhase::Replaying);
     let actual_response = layout
         .active_dir
         .join("reports")
