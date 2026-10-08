@@ -27,10 +27,15 @@ mod command_matching;
 #[cfg(test)]
 mod command_protocol_tests;
 mod control;
+mod deferred;
 mod dependencies;
+mod loading;
+mod loading_config;
+pub use loading_config::ReplayDependencyLoading;
 mod dns;
 mod egress_counter;
 mod exchange;
+mod snapshot;
 pub use egress_counter::{
     ReplayEgressCounterReader, ReplayEgressCounterSnapshot, ReplayEgressRejections,
 };
@@ -101,11 +106,13 @@ pub const DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS: u64 = 10;
 #[derive(Debug, Clone, Copy)]
 pub struct ReplayLifecycleConfig {
     pub case_dependency_post_response_window: std::time::Duration,
+    pub dependency_loading: ReplayDependencyLoading,
 }
 
 impl Default for ReplayLifecycleConfig {
     fn default() -> Self {
         Self {
+            dependency_loading: ReplayDependencyLoading::default(),
             case_dependency_post_response_window: std::time::Duration::from_millis(
                 DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS,
             ),
@@ -246,6 +253,7 @@ pub async fn run_replay_with_counters(
         result = runtime.run_dns(dns_socket) => result,
         result = runtime.run_tcp(tcp_listener) => result,
         result = runtime.run_control() => result,
+        result = deferred::prefetch::run(runtime.state.clone()) => result,
     }
 }
 
@@ -264,256 +272,6 @@ struct ReplayRuntime {
 }
 
 impl ReplayRuntime {
-    #[cfg(test)]
-    async fn load(
-        config: ReplayConfig,
-        dns_listen: SocketAddr,
-        tcp_listen: SocketAddr,
-    ) -> Result<Self> {
-        Self::load_with_lifecycle(
-            config,
-            dns_listen,
-            tcp_listen,
-            ReplayLifecycleConfig::default(),
-        )
-        .await
-    }
-
-    async fn load_with_lifecycle(
-        config: ReplayConfig,
-        dns_listen: SocketAddr,
-        tcp_listen: SocketAddr,
-        lifecycle: ReplayLifecycleConfig,
-    ) -> Result<Self> {
-        clear_report_artifacts(config.report_path.as_deref()).await?;
-        let root_dir = config.case_dir;
-        let process_owned_dependencies = &config.process_owned_dependencies;
-        let replay_artifact_dir = config
-            .report_path
-            .as_ref()
-            .and_then(|path| path.parent())
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| root_dir.join(".replay"));
-        let ca_cert_path = config
-            .ca_cert_path
-            .unwrap_or_else(|| replay_artifact_dir.join("replay-ca.pem"));
-        let ca_key_path = config
-            .ca_key_path
-            .unwrap_or_else(|| replay_artifact_dir.join("replay-ca-key.pem"));
-        let selected_case_ids = config
-            .selected_case_ids
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        let (mode, mut cases, active_case_id) =
-            discover_replay_cases(&root_dir, &selected_case_ids).await?;
-        let ca = Arc::new(MitmCa::load_or_generate(&ca_cert_path, &ca_key_path)?);
-        let (global_path, global_debug_path) = find_run_level_dependencies(&root_dir);
-        let mut mysql = MysqlReplayState::default();
-        let mut http_exchanges = Vec::new();
-        let mut http_blackholes = Vec::new();
-        let mut redis = redis::RedisReplayState::default();
-        let mut memcached = memcached::MemcachedReplayState::default();
-        let mut kafka = kafka::KafkaReplayState::default();
-        let mut motan = motan::MotanReplayState::default();
-        let mut targets = BTreeMap::new();
-        let mut connection_identities = HashMap::new();
-        let fake_cidr = Ipv4Cidr::parse(&config.fake_cidr)?;
-        let total_cases = cases.len();
-        let mut next_progress_percent = 5;
-        info!(
-            loaded_cases = 0,
-            total_cases,
-            progress_percent = 0,
-            case_source = %root_dir.display(),
-            "loading replay case dependencies"
-        );
-
-        if let Some(path) = &global_path {
-            load_dependency_file(
-                path,
-                ReplaySource::Global,
-                None,
-                &mut mysql,
-                &mut http_exchanges,
-                &mut http_blackholes,
-                &mut redis,
-                &mut memcached,
-                &mut kafka,
-                &mut motan,
-                &mut targets,
-                &mut connection_identities,
-                process_owned_dependencies,
-            )
-            .await?;
-        }
-        if let Some(path) = global_debug_path {
-            load_motan_debug_file(&path, &mut motan, &mut targets).await?;
-        }
-        for (index, case) in cases.values().enumerate() {
-            load_dependency_file(
-                &case.dependencies_path,
-                ReplaySource::Case,
-                Some(&case.id),
-                &mut mysql,
-                &mut http_exchanges,
-                &mut http_blackholes,
-                &mut redis,
-                &mut memcached,
-                &mut kafka,
-                &mut motan,
-                &mut targets,
-                &mut connection_identities,
-                process_owned_dependencies,
-            )
-            .await?;
-            load_motan_debug_file(
-                &case.dir.join("dependencies-debug.jsonl"),
-                &mut motan,
-                &mut targets,
-            )
-            .await?;
-            let loaded_cases = index + 1;
-            let progress_percent = loaded_cases.saturating_mul(100) / total_cases.max(1);
-            if progress_percent >= next_progress_percent || loaded_cases == total_cases {
-                info!(
-                    loaded_cases,
-                    total_cases,
-                    progress_percent,
-                    case_source = %root_dir.display(),
-                    "loading replay case dependencies"
-                );
-                next_progress_percent = (progress_percent / 5 + 1).saturating_mul(5);
-            }
-        }
-        let shared_root = root_dir.clone();
-        let shared_policy = config.policy_path.clone();
-        let shared_cases = cases.clone();
-        let (http_exchanges, mut targets) = tokio::task::spawn_blocking(move || -> Result<_> {
-            http_cross_case::load(
-                &shared_root,
-                shared_policy.as_deref(),
-                &shared_cases,
-                &mut http_exchanges,
-                &mut targets,
-            )?;
-            Ok((http_exchanges, targets))
-        })
-        .await
-        .context("HTTP cross-case preload task failed")??;
-        let http_case_exchange_index = http::case_exchange_index(&http_exchanges);
-        let redis_root = root_dir.clone();
-        let redis_policy = config.policy_path.clone();
-        let redis_cases = cases.clone();
-        let redis_process_rules = process_owned_dependencies.to_vec();
-        let (mut redis, mut targets) = tokio::task::spawn_blocking(move || -> Result<_> {
-            redis::load_cross_case(
-                &mut redis,
-                &redis_root,
-                redis_policy.as_deref(),
-                &redis_cases,
-                &mut targets,
-                &redis_process_rules,
-            )?;
-            Ok((redis, targets))
-        })
-        .await
-        .context("Redis cross-case preload task failed")??;
-        redis.apply_snapshot_overlays(&root_dir, process_owned_dependencies);
-
-        let recording_network_path =
-            network_access::apply_recorded_endpoint_allowlist(&root_dir, &mut targets)?;
-        let targets = assign_fake_ips(targets, fake_cidr)?;
-        let occupied_fake_ips = targets.iter().map(|target| target.fake_ip).collect();
-        if let Some(case_id) = &active_case_id
-            && let Some(case) = cases.get_mut(case_id)
-        {
-            case.status = ReplayCaseStatus::Active;
-        }
-
-        let http_ignore_query_params = config
-            .http_ignore_query_params
-            .into_iter()
-            .map(|value| value.to_ascii_lowercase())
-            .collect::<Vec<_>>();
-        let mut replay_policy = config
-            .policy_path
-            .as_deref()
-            .map(|path| ReplayPolicyRuntime::load(path, &cases))
-            .transpose()?;
-        if let Some(policy) = &mut replay_policy {
-            for exchange in mysql
-                .exchanges
-                .iter()
-                .filter(|exchange| exchange.source == ReplaySource::Case)
-            {
-                policy.observe_recorded_mysql_exchange(
-                    exchange.case_id.as_deref(),
-                    &ReplaySessionIdentity {
-                        target: Some(exchange.identity.target.clone()),
-                        database: exchange.identity.database.clone(),
-                        username: exchange.identity.username.clone(),
-                    },
-                    &exchange.record.command,
-                    exchange.record.sql.as_deref(),
-                );
-            }
-            http::observe_recorded_policy_exchanges(policy, &http_exchanges);
-            memcached::observe_recorded_policy_exchanges(policy, &memcached);
-            redis.value_rules = policy.redis_value_rules();
-            redis.dynamic_values = policy.dynamic_values.clone();
-            redis.configure_lock_tokens(&policy.redis_lock_token_rules());
-            redis.configure_publish(policy.redis_publish_rules());
-            redis.configure_time_shift(&policy.redis_time_shift_rules())?;
-            policy.reject_http_ignore_overlap(&http_ignore_query_params)?;
-        }
-
-        let state = ReplayState {
-            egress_counter_reader: None,
-            egress_counter_starts: BTreeMap::new(),
-            egress_rejections: BTreeMap::new(),
-            session_id: Uuid::new_v4(),
-            started_at: Utc::now(),
-            finalized_at: None,
-            dns_listen,
-            tcp_listen,
-            mode,
-            root_dir,
-            cases,
-            active_case_id,
-            case_dependency_post_response_window: lifecycle.case_dependency_post_response_window,
-            global_path,
-            targets,
-            mysql,
-            http_exchanges,
-            http_case_exchange_index,
-            http_blackholes,
-            redis,
-            memcached,
-            kafka,
-            motan,
-            http_events: http::HttpReplayEvents::default(),
-            ca_cert_path,
-            replay_policy,
-            http_ignore_query_params,
-            allowed_unused_http: config.allowed_unused_http,
-            recording_network_path: Some(recording_network_path),
-            fake_cidr,
-            unrecorded_domain_ips: BTreeMap::new(),
-            unrecorded_ip_domains: BTreeMap::new(),
-            occupied_fake_ips,
-            next_unrecorded_fake_offset: 1,
-            unrecorded_targets: Vec::new(),
-            unrecorded_case_ids: BTreeSet::new(),
-        };
-        Ok(Self {
-            state: Arc::new(Mutex::new(state)),
-            ca,
-            report_path: config.report_path,
-            session_path: config.session_path,
-            control_socket_path: config.control_socket_path,
-        })
-    }
-
     async fn run_tcp(&self, listener: TcpListener) -> Result<()> {
         loop {
             let (stream, peer_addr) = accept_replay_tcp_connection(&listener).await?;
@@ -597,6 +355,7 @@ async fn validate_replay_request_headers(config: &ReplayConfig) -> Result<()> {
 
 #[derive(Debug)]
 struct ReplayState {
+    deferred: Option<Arc<deferred::DeferredDependencies>>,
     egress_counter_reader: Option<ReplayEgressCounterReader>,
     egress_counter_starts: BTreeMap<String, egress_counter::Sample>,
     egress_rejections: BTreeMap<String, ReplayEgressRejections>,
@@ -633,97 +392,6 @@ struct ReplayState {
     next_unrecorded_fake_offset: u32,
     unrecorded_targets: Vec<UnrecordedTargetReport>,
     unrecorded_case_ids: BTreeSet<String>,
-}
-
-impl ReplayState {
-    fn snapshot_report(&self) -> ReplayReport {
-        let unused_case_http_exchanges = self.unused_http_exchanges(ReplaySource::Case, false);
-        let allowed_unused_case_http_exchanges =
-            self.unused_http_exchanges(ReplaySource::Case, true);
-        ReplayReport {
-            egress_rejections: self.egress_rejections.values().cloned().collect(),
-            version: 6,
-            session_id: self.session_id.to_string(),
-            started_at: self.started_at,
-            finalized_at: self.finalized_at,
-            finalized: self.finalized_at.is_some(),
-            mode: self.mode,
-            dns_listen: self.dns_listen.to_string(),
-            tcp_listen: self.tcp_listen.to_string(),
-            case_dir: self.root_dir.display().to_string(),
-            case_dependencies_path: self
-                .cases
-                .values()
-                .next()
-                .map(|case| case.dependencies_path.display().to_string())
-                .unwrap_or_default(),
-            active_case_id: self.active_case_id.clone(),
-            cases: self.case_reports(),
-            selected_case_ids: self.cases.keys().cloned().collect(),
-            global_dependencies_path: self
-                .global_path
-                .as_ref()
-                .map(|path| path.display().to_string()),
-            recording_network_path: self
-                .recording_network_path
-                .as_ref()
-                .map(|path| path.display().to_string()),
-            targets: self.targets.clone(),
-            unrecorded_targets: self.unrecorded_targets.clone(),
-            success_detail_limit: SUCCESS_DETAIL_LIMIT,
-            success_detail_scope: SUCCESS_DETAIL_SCOPE,
-            connections: self.mysql.events.connections,
-            connection_events: self.mysql.events.connection_events.clone(),
-            builtin_query_count: self.mysql.events.builtin_query_count,
-            builtin_queries: self.mysql.events.builtin_queries.clone(),
-            matched_query_count: self.mysql.events.matched_query_count,
-            matched_queries: self.mysql.events.matched_queries.clone(),
-            unmatched_queries: self.mysql.events.unmatched_queries.clone(),
-            unsupported_commands: self.mysql.events.unsupported_commands.clone(),
-            metadata_warnings: self.mysql.events.metadata_warnings.clone(),
-            unused_global_exchanges: self.unused_exchanges(ReplaySource::Global),
-            unused_case_exchanges: self.unused_exchanges(ReplaySource::Case),
-            allowed_unused_mysql_rollback_exchanges: self.allowed_unused_rollbacks(),
-            allowed_unused_mysql_autocommit_exchanges: self.allowed_unused_autocommit(),
-            matched_http_exchange_count: self.http_events.matched_count,
-            matched_http_exchanges: self.http_events.matched.clone(),
-            unmatched_http_requests: self.http_events.unmatched.clone(),
-            unsupported_http_exchanges: self.http_events.unsupported.clone(),
-            http_request_header_mismatches: self.http_events.header_mismatches.clone(),
-            http_request_header_observations: self.http_events.header_observations.clone(),
-            http_request_header_observation_count: self.http_events.header_observation_count,
-            unused_global_http_exchanges: self.unused_http_exchanges(ReplaySource::Global, false),
-            unused_case_http_exchanges,
-            allowed_unused_case_http_exchanges,
-            protocols: ProtocolsReport {
-                redis: self.redis.snapshot(),
-                memcached: self.memcached.snapshot(),
-                kafka: self.kafka.snapshot(),
-                motan: self.motan.snapshot(),
-            },
-            ca_cert_path: self.ca_cert_path.display().to_string(),
-            replay_policy: self.replay_policy.as_ref().map(ReplayPolicyRuntime::report),
-            http_ignored_query_params: self.http_ignore_query_params.clone(),
-            allowed_unused_http: self.allowed_unused_http.as_ref().map(|config| {
-                ReplayAllowedUnusedHttpReport {
-                    config: config.config_path.display().to_string(),
-                    hosts: config.hosts.iter().cloned().collect(),
-                }
-            }),
-        }
-    }
-
-    fn case_reports(&self) -> Vec<ReplayCaseReport> {
-        self.cases
-            .values()
-            .map(|case| ReplayCaseReport {
-                case_id: case.id.clone(),
-                case_dir: case.dir.display().to_string(),
-                dependencies_path: case.dependencies_path.display().to_string(),
-                status: case.status,
-            })
-            .collect()
-    }
 }
 
 async fn accept_replay_tcp_connection(listener: &TcpListener) -> Result<(TcpStream, SocketAddr)> {

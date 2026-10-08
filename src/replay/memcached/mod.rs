@@ -908,3 +908,26 @@ fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnus
         })
         .collect()
 }
+
+impl MemcachedReplayState {
+    pub(super) fn release_consumed_payloads(
+        &mut self,
+        cases: &BTreeMap<String, super::ReplayCase>,
+    ) {
+        for exchange in &mut self.exchanges {
+            if exchange.source == ReplaySource::Case
+                && exchange.status.is_consumed()
+                && exchange.case_id.as_ref().is_some_and(|id| {
+                    cases
+                        .get(id)
+                        .is_some_and(|case| case.status == super::ReplayCaseStatus::Ended)
+                })
+            {
+                exchange.response_frames = Vec::new();
+                exchange.record.response_frames = Vec::new();
+                exchange.value = None;
+                exchange.record.value = None;
+            }
+        }
+    }
+}

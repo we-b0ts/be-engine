@@ -12,6 +12,8 @@ pub mod command_output;
 mod comparison_recording;
 mod config;
 mod dependency;
+mod dependency_index;
+pub use dependency_index::{DependencyIndexReport, prepare_dependency_index};
 mod dns_mock;
 mod e2e_run;
 mod engine_binary;

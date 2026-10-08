@@ -45,6 +45,30 @@ pub(super) async fn load_dependency_file(
     let raw = tokio::fs::read_to_string(path)
         .await
         .with_context(|| format!("failed to read dependency replay file {}", path.display()))?;
+    let records = parse_dependency_records(path, &raw)?;
+    register_dependency_records(
+        path,
+        records,
+        &BTreeSet::new(),
+        source,
+        case_id,
+        mysql,
+        http_exchanges,
+        http_blackholes,
+        redis,
+        memcached,
+        kafka,
+        motan,
+        targets,
+        connection_identities,
+        process_owned_dependencies,
+    )
+}
+
+pub(super) fn parse_dependency_records(
+    path: &Path,
+    raw: &str,
+) -> Result<Vec<(usize, DependencyRecord)>> {
     let mut records = Vec::new();
     for (line_index, line) in raw.lines().enumerate() {
         let line = line.trim();
@@ -58,10 +82,34 @@ pub(super) async fn load_dependency_file(
                 path.display()
             )
         })?;
-        records.push(record);
+        records.push((line_index + 1, record));
     }
 
-    for record in &records {
+    Ok(records)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn register_dependency_records(
+    path: &Path,
+    records: Vec<(usize, DependencyRecord)>,
+    skip: &BTreeSet<usize>,
+    source: ReplaySource,
+    case_id: Option<&str>,
+    mysql: &mut MysqlReplayState,
+    http_exchanges: &mut Vec<http::ReplayHttpExchange>,
+    http_blackholes: &mut Vec<http::ReplayHttpBlackhole>,
+    redis: &mut redis::RedisReplayState,
+    memcached: &mut memcached::MemcachedReplayState,
+    kafka: &mut kafka::KafkaReplayState,
+    motan: &mut motan::MotanReplayState,
+    targets: &mut BTreeMap<TargetKey, ReplayTarget>,
+    connection_identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
+    process_owned_dependencies: &[crate::BackgroundDependencyRuleConfig],
+) -> Result<()> {
+    for (line, record) in &records {
+        if skip.contains(line) {
+            continue;
+        }
         match record {
             DependencyRecord::MysqlConnection(connection) => {
                 if let Some(identity) = identity_from_connection(connection) {
@@ -97,8 +145,13 @@ pub(super) async fn load_dependency_file(
         }
     }
 
+    // Classification always sees the complete original case/connection sequence.
+    let (lines, records): (Vec<_>, Vec<_>) = records.into_iter().unzip();
     let optional_sessions = mysql::optional_session::classify(&records);
-    for (record_index, record) in records.into_iter().enumerate() {
+    for (record_index, (line, record)) in lines.into_iter().zip(records).enumerate() {
+        if skip.contains(&line) {
+            continue;
+        }
         match record {
             DependencyRecord::HttpExchange(mut exchange) => {
                 exchange.decrypt_request_headers(path)?;

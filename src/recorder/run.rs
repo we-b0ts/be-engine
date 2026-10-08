@@ -289,6 +289,7 @@ impl Recorder {
                     owner
                 )
             })?;
+            super::summary::refresh_owned_dependency_indexes(&self.run_dir, owner).await?;
             info!(
                 run_dir = %self.run_dir.display(),
                 uid = owner.uid(),
@@ -726,7 +727,21 @@ mod tests {
             .unwrap();
         tokio::fs::write(&artifact, "{}\n").await.unwrap();
 
+        let indexed_case = case("api-index");
+        recorder.publish_case(&indexed_case).await.unwrap();
         recorder.finish_run().await.unwrap();
+
+        let dependency = recorder.case_dir(&indexed_case).join("dependencies.jsonl");
+        let fragment = recorder
+            .case_dir(&indexed_case)
+            .join(crate::dependency_index::FRAGMENT);
+        let index: crate::dependency_index::FileIndex =
+            crate::dependency_index::store::read_json(&fragment).unwrap();
+        assert_eq!(
+            index.stamp,
+            crate::dependency_index::FileStamp::read(&dependency).unwrap()
+        );
+        assert_eq!(std::fs::metadata(&fragment).unwrap().uid(), owner.uid());
 
         for path in [recorder.run_dir.as_ref(), artifact.as_path()] {
             let metadata = std::fs::symlink_metadata(path).unwrap();

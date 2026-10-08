@@ -123,6 +123,8 @@ pub(crate) fn render_project_config(
                 runtime_outputs: Vec::new(),
             },
             replay: ReplayProjectConfig {
+                startup_timeout_seconds: super::model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
+                dependency_loading: crate::replay::ReplayDependencyLoading::managed_default(),
                 policy: options.replay_policy.clone(),
                 case_dependency_post_response_window_ms:
                     crate::replay::DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS,
@@ -269,6 +271,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         );
     }
     let project = ResolvedProjectConfig {
+        replay_loading: config.project.replay.dependency_loading,
         target_dockerfile: resolve_under(&target_root, &config.project.target.dockerfile),
         target_build_contexts: managed.build_contexts,
         target_startup: config.project.target.startup,
@@ -296,9 +299,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
                 .case_dependency_post_response_window_ms,
         ),
         max_failed_cases_per_api: config.project.verification.max_failed_cases_per_api,
-        replay_startup_timeout: Duration::from_secs(
-            super::model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
-        ),
+        replay_startup_timeout: Duration::from_secs(config.project.replay.startup_timeout_seconds),
         pr_base: config.project.delivery.pr_base,
         managed_paths: managed.paths,
         recorder_config,

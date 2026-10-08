@@ -41,6 +41,11 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         &project.target.runtime_outputs,
         &project.target.startup,
     )?;
+    project.replay.dependency_loading.validate()?;
+    ensure!(
+        project.replay.startup_timeout_seconds > 0,
+        "replay.startup_timeout_seconds must be positive"
+    );
     ensure!(
         !project.replay.policy.as_os_str().is_empty(),
         "replay.policy must not be empty"
@@ -118,5 +123,23 @@ mod tests {
 
         let error = validate_project_config(&config).unwrap_err().to_string();
         assert!(error.contains("must be greater than zero"));
+    }
+}
+
+#[cfg(test)]
+mod dependency_loading_defaults {
+    use super::super::model::ReplayProjectConfig;
+    #[test]
+    fn partial_mapping_preserves_managed_lazy_default() {
+        for settings in ["", "dependency_loading: {cache_bytes: 0}\n"] {
+            let config: ReplayProjectConfig =
+                serde_yaml::from_str(&format!("policy: policy.yaml\n{settings}")).unwrap();
+            assert!(config.dependency_loading.lazy_cases);
+            assert_eq!(config.startup_timeout_seconds, 60);
+        }
+        let config: ReplayProjectConfig =
+            serde_yaml::from_str("policy: policy.yaml\ndependency_loading: {lazy_cases: false}\n")
+                .unwrap();
+        assert!(!config.dependency_loading.lazy_cases);
     }
 }

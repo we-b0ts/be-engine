@@ -941,3 +941,25 @@ pub(crate) mod tests;
 #[cfg(test)]
 #[path = "http/cross_case/tests.rs"]
 mod cross_case_tests;
+
+pub(super) fn release_consumed_payloads(
+    exchanges: &mut [ReplayHttpExchange],
+    cases: &BTreeMap<String, super::ReplayCase>,
+) {
+    for exchange in exchanges {
+        if exchange.source == ReplaySource::Case
+            && exchange.status.is_consumed()
+            && !exchange.is_repeatable_preflight_probe()
+            && exchange.case_id.as_ref().is_some_and(|id| {
+                cases
+                    .get(id)
+                    .is_some_and(|case| case.status == super::ReplayCaseStatus::Ended)
+            })
+        {
+            exchange.record.request_body.data = String::new();
+            if let Some(body) = &mut exchange.record.response_body {
+                body.data = String::new();
+            }
+        }
+    }
+}

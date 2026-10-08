@@ -286,6 +286,12 @@ pub(super) async fn handle_control_request(
                 "active_case_id": state.active_case_id,
             })
         }
+        "prefetch" => {
+            match deferred::prefetch::enqueue(state.clone(), request.case_id.as_deref()).await {
+                Ok(queued) => serde_json::json!({"ok": true, "queued": queued}),
+                Err(error) => serde_json::json!({"ok": false, "error": format!("{error:#}")}),
+            }
+        }
         "begin" => begin_case(&request, state.clone()).await,
         "end" => end_case(&request, state.clone()).await,
         "report" => {
@@ -427,6 +433,14 @@ pub(super) async fn begin_case(
     };
     let counter_reader = {
         let state = state.lock().await;
+        if state.deferred.is_some()
+            && state
+                .cases
+                .get(case_id)
+                .is_some_and(|case| case.status == ReplayCaseStatus::Ended)
+        {
+            return serde_json::json!({"ok": false, "error": "ended cases require a fresh Replay session"});
+        }
         if !state.cases.contains_key(case_id) {
             return serde_json::json!({
                 "ok": false,
@@ -445,6 +459,9 @@ pub(super) async fn begin_case(
             .then(|| state.egress_counter_reader.clone())
             .flatten()
     };
+    if let Err(error) = deferred::prepare_case(state.clone(), case_id).await {
+        return serde_json::json!({"ok": false, "error": format!("case dependency preparation failed: {error:#}")});
+    }
     let counter_start = match counter_reader {
         Some(reader) => Some(reader.sample().await),
         None => None,
@@ -464,6 +481,7 @@ pub(super) async fn begin_case(
             .entry(case_id.to_string())
             .or_insert(sample);
     }
+    deferred::release_consumed_payloads(&mut state);
     state.active_case_id = Some(case_id.to_string());
     if let Some(policy) = &mut state.replay_policy {
         policy.begin_case(case_id);
@@ -526,6 +544,7 @@ pub(super) async fn end_case(
         if let Some(case) = state.cases.get_mut(case_id) {
             case.status = ReplayCaseStatus::Ended;
         }
+        deferred::release_consumed_payloads(&mut state);
         sample
     };
     if let Some((before, reader)) = counter_sample {

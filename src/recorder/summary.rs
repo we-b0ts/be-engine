@@ -8,6 +8,9 @@ use serde_json::Value;
 use crate::mysql::maintenance::is_mysql_maintenance_exchange;
 use crate::recorder::RecorderEvent;
 
+mod persistence;
+pub(crate) use persistence::refresh_owned_dependency_indexes;
+use persistence::write_dependency_summary;
 mod kafka;
 mod memcached;
 mod motan;
@@ -59,45 +62,6 @@ pub(crate) fn load_source_process_traffic_summary(
     dir: &Path,
 ) -> Result<Option<source_process::SourceProcessTrafficSummary>> {
     source_process::load(dir)
-}
-
-async fn write_dependency_summary(
-    dir: &Path,
-    dependencies_filename: &str,
-    summary_filename: &str,
-) -> Result<()> {
-    let dependencies_path = dir.join(dependencies_filename);
-    let raw = match super::storage::read_to_string(&dependencies_path).await {
-        Ok(raw) => raw,
-        Err(err)
-            if err
-                .downcast_ref::<std::io::Error>()
-                .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
-        {
-            return Ok(());
-        }
-        Err(err) => {
-            return Err(err).with_context(|| {
-                format!(
-                    "failed to read dependencies file {}",
-                    dependencies_path.display()
-                )
-            });
-        }
-    };
-    let summary = build_dependency_summary(&raw);
-    let mut payload =
-        serde_json::to_vec_pretty(&summary).context("failed to serialize dependency summary")?;
-    payload.push(b'\n');
-    let summary_path = dir.join(summary_filename);
-    super::storage::write(&summary_path, &payload)
-        .await
-        .with_context(|| {
-            format!(
-                "failed to write dependency summary {}",
-                summary_path.display()
-            )
-        })
 }
 
 #[derive(Debug, Serialize)]
@@ -285,6 +249,7 @@ struct ProxyErrorSummary {
     targets: BTreeMap<String, usize>,
 }
 
+#[cfg(test)]
 fn build_dependency_summary(raw_jsonl: &str) -> DependencySummary {
     let mut builder = DependencySummaryBuilder::default();
     for (line_index, line) in raw_jsonl.lines().enumerate() {
@@ -301,40 +266,46 @@ fn build_dependency_summary(raw_jsonl: &str) -> DependencySummary {
                 continue;
             }
         };
+        builder.observe(&value);
+    }
+    builder.finish()
+}
+
+impl DependencySummaryBuilder {
+    fn observe(&mut self, value: &Value) {
         let event_type = value
             .get("event_type")
             .and_then(Value::as_str)
             .unwrap_or("unknown")
             .to_string();
-        if event_type == "mysql_exchange" && is_debug_only_mysql_exchange_value(&value) {
-            continue;
+        if event_type == "mysql_exchange" && is_debug_only_mysql_exchange_value(value) {
+            return;
         }
-        builder.total_events += 1;
-        *builder.event_types.entry(event_type.clone()).or_default() += 1;
+        self.total_events += 1;
+        *self.event_types.entry(event_type.clone()).or_default() += 1;
         match event_type.as_str() {
-            "mysql_connection" => record_mysql_connection_summary(&mut builder.mysql, &value),
-            "mysql_exchange" => record_mysql_summary(&mut builder.mysql, &value),
-            "mysql_tls_rejected" => record_mysql_tls_rejected_summary(&mut builder.mysql, &value),
-            "redis_connection" => builder.redis.record_connection(&value),
-            "redis_exchange" => builder.redis.record_exchange(&value),
-            "memcached_connection" => builder.memcached.record_connection(&value),
-            "memcached_exchange" => builder.memcached.record_exchange(&value),
-            "kafka_connection" => record_kafka_connection_summary(&mut builder.kafka, &value),
-            "kafka_produce" => record_kafka_record_summary(&mut builder.kafka, &value, true),
-            "kafka_fetch" => record_kafka_fetch_summary(&mut builder.kafka, &value),
-            "kafka_delivery" => record_kafka_record_summary(&mut builder.kafka, &value, false),
-            "motan_connection" => builder.motan.record_connection(&value),
-            "motan_exchange" => builder.motan.record_exchange(&value),
-            "http_exchange" => record_http_summary(&mut builder.http, &value),
+            "mysql_connection" => record_mysql_connection_summary(&mut self.mysql, value),
+            "mysql_exchange" => record_mysql_summary(&mut self.mysql, value),
+            "mysql_tls_rejected" => record_mysql_tls_rejected_summary(&mut self.mysql, value),
+            "redis_connection" => self.redis.record_connection(value),
+            "redis_exchange" => self.redis.record_exchange(value),
+            "memcached_connection" => self.memcached.record_connection(value),
+            "memcached_exchange" => self.memcached.record_exchange(value),
+            "kafka_connection" => record_kafka_connection_summary(&mut self.kafka, value),
+            "kafka_produce" => record_kafka_record_summary(&mut self.kafka, value, true),
+            "kafka_fetch" => record_kafka_fetch_summary(&mut self.kafka, value),
+            "kafka_delivery" => record_kafka_record_summary(&mut self.kafka, value, false),
+            "motan_connection" => self.motan.record_connection(value),
+            "motan_exchange" => self.motan.record_exchange(value),
+            "http_exchange" => record_http_summary(&mut self.http, value),
             "tcp_gateway_connection" => {
-                record_tcp_gateway_summary(&mut builder.tcp_gateway, &value);
+                record_tcp_gateway_summary(&mut self.tcp_gateway, value);
             }
-            "udp_datagram" => record_udp_summary(&mut builder.udp, &value),
-            "proxy_error" => record_proxy_error_summary(&mut builder.proxy_errors, &value),
+            "udp_datagram" => record_udp_summary(&mut self.udp, value),
+            "proxy_error" => record_proxy_error_summary(&mut self.proxy_errors, value),
             _ => {}
         }
     }
-    builder.finish()
 }
 
 fn record_mysql_connection_summary(summary: &mut MysqlDependencySummary, value: &Value) {

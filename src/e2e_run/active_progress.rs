@@ -14,6 +14,10 @@ const ACTIVE_PROGRESS_FILE: &str = "progress.json";
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum ActiveProgressPhase {
+    PreparingIndex,
+    PreparingReplay,
+    StartingTarget,
+    PreparingCase,
     Building,
     Replaying,
     Finalizing,
@@ -69,6 +73,13 @@ pub(super) fn read(path: &Path) -> Result<E2eActiveProgress> {
         snapshot.version
     );
     Ok(match snapshot.phase {
+        ActiveProgressPhase::PreparingIndex => E2eActiveProgress::PreparingIndex,
+        ActiveProgressPhase::PreparingReplay => E2eActiveProgress::PreparingReplay,
+        ActiveProgressPhase::StartingTarget => E2eActiveProgress::StartingTarget,
+        ActiveProgressPhase::PreparingCase => E2eActiveProgress::PreparingCase {
+            completed: snapshot.completed,
+            total: snapshot.total,
+        },
         ActiveProgressPhase::Building => E2eActiveProgress::Building,
         ActiveProgressPhase::Replaying => E2eActiveProgress::Replaying {
             completed: snapshot.completed,

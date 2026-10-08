@@ -3,12 +3,7 @@ use super::*;
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{
-    collections::BTreeMap,
-    fs,
-    io::{BufRead, BufReader},
-    path::Path,
-};
+use std::{collections::BTreeMap, fs, path::Path};
 
 fn hash_field(digest: &mut Sha256, bytes: &[u8]) {
     digest.update((bytes.len() as u64).to_be_bytes());
@@ -95,22 +90,18 @@ pub(in crate::replay) fn verify_candidate(
     let mut digest = Sha256::new();
     for file in files {
         let origin = super::super::recording_evidence::case_id(&file)?;
-        let mut lane_counts = BTreeMap::<Uuid, usize>::new();
+        let index = crate::dependency_index::load_file(&file)?;
+        let lane_counts = lane_counts(&index)?;
+        let key = selector_key(selector)?;
+        let mut reader = crate::dependency_index::RecordReader::new(16 * 1024 * 1024);
         let mut selected_lanes = BTreeMap::<Uuid, usize>::new();
         let mut selected_identities = BTreeSet::new();
-        for (line, raw) in BufReader::new(fs::File::open(&file)?).lines().enumerate() {
-            let raw = raw?;
-            if !raw.contains("redis_exchange") {
-                continue;
-            }
-            let value: Value =
-                serde_json::from_str(&raw).context("invalid dependency evidence JSON")?;
-            if value["event_type"] != "redis_exchange" {
-                continue;
-            }
+        for entry in index.redis.iter().filter(|entry| entry.key == key) {
+            let bytes = reader.read(&file, &index.stamp, &entry.location)?;
+            let raw = std::str::from_utf8(&bytes)?.trim_end_matches(['\r', '\n']);
+            let line = entry.location.line - 1;
             let record: RecordedExchange =
-                serde_json::from_value(value).context("invalid Redis exchange evidence")?;
-            *lane_counts.entry(record.connection_id).or_default() += 1;
+                serde_json::from_str(raw).context("invalid Redis exchange evidence")?;
             let args = record
                 .args
                 .iter()
@@ -251,21 +242,18 @@ pub(in crate::replay) fn load(
         if cases.contains_key(&origin) {
             continue;
         }
-        let mut lane_counts = BTreeMap::<Uuid, usize>::new();
+        let index = crate::dependency_index::load_file(&file)?;
+        let lane_counts = lane_counts(&index)?;
+        let keys = rules
+            .iter()
+            .map(|(_, s)| selector_key(s))
+            .collect::<Result<BTreeSet<_>>>()?;
+        let mut reader = crate::dependency_index::RecordReader::new(16 * 1024 * 1024);
         let mut selected = Vec::new();
-        for raw in BufReader::new(fs::File::open(&file)?).lines() {
-            let raw = raw?;
-            if !raw.contains("redis_exchange") {
-                continue;
-            }
-            let value: serde_json::Value =
-                serde_json::from_str(&raw).context("invalid dependency evidence JSON")?;
-            if value["event_type"] != "redis_exchange" {
-                continue;
-            }
+        for entry in index.redis.iter().filter(|entry| keys.contains(&entry.key)) {
+            let raw = reader.read(&file, &index.stamp, &entry.location)?;
             let record: RecordedExchange =
-                serde_json::from_value(value).context("invalid Redis exchange evidence")?;
-            *lane_counts.entry(record.connection_id).or_default() += 1;
+                serde_json::from_slice(&raw).context("invalid Redis exchange evidence")?;
             let args = record
                 .args
                 .iter()
@@ -330,4 +318,30 @@ pub(in crate::replay) fn load(
             .register(exchange.source, exchange.case_id.as_deref(), index);
     }
     Ok(())
+}
+
+fn selector_key(selector: &time_shift::RedisTimeShiftSelector) -> Result<String> {
+    use super::key_selector::RedisValueKeySelector;
+    let RedisValueKeySelector::Exact { value } = &selector.read.key else {
+        anyhow::bail!("cross-case requires exact key");
+    };
+    let mut args = vec![value.as_bytes().to_vec()];
+    if let Some(RedisValueKeySelector::Exact { value }) = &selector.read.hash_field {
+        args.push(value.as_bytes().to_vec());
+    }
+    Ok(crate::dependency_index::redis_key(
+        &selector.host,
+        selector.port,
+        selector.read.database,
+        &selector.read.command,
+        &args,
+    ))
+}
+
+fn lane_counts(index: &crate::dependency_index::FileIndex) -> Result<BTreeMap<Uuid, usize>> {
+    index
+        .redis_lanes
+        .iter()
+        .map(|(id, count)| Ok((id.parse()?, *count)))
+        .collect()
 }
