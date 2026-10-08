@@ -422,11 +422,18 @@ async fn run_active(
     inventory: &CaseGroupInventory,
     state: &mut ActiveRunState,
 ) -> Result<()> {
+    let _ = active_progress::write(layout, state, ActiveProgressPhase::PreparingIndex);
+    crate::dependency_index::store::prepare_with_timeout(
+        layout.case_source.clone(),
+        config.replay_loading.index_timeout_seconds,
+    )
+    .await?;
+    let _ = active_progress::write(layout, state, ActiveProgressPhase::Building);
     let target_image = build_target_image(config, layout).await?;
     let mut replay = spawn_replay(config, layout, inventory, state)?;
     state.replay_pid = replay.id();
     store::write_active(layout, state)?;
-    let _ = active_progress::write(layout, state, ActiveProgressPhase::Replaying);
+    let _ = active_progress::write(layout, state, ActiveProgressPhase::PreparingReplay);
     let outcome =
         run_active_with_replay(config, layout, inventory, state, &target_image, &mut replay).await;
     if outcome.is_err() {
@@ -464,6 +471,7 @@ async fn run_active_with_replay(
     let replay_ca_cert_path = replay_ca_cert_path(&ready)?;
     store::write_active(layout, state)?;
 
+    let _ = active_progress::write(layout, state, ActiveProgressPhase::StartingTarget);
     start_target_with_replay_ca(config, layout, state, target_image, &replay_ca_cert_path).await?;
     super::http_driver::wait_until_ready(config).await?;
     verify_target_runtime_contract(config, layout, state)
@@ -596,6 +604,7 @@ async fn execute_case(
     }
     state.cases[case_index].status = CaseStatus::Running;
 
+    let _ = active_progress::write(layout, state, ActiveProgressPhase::PreparingCase);
     let begin = control(state, "begin", Some(case_id), false, false).await;
     if let Err(error) = begin {
         state.cases[case_index].status = CaseStatus::Incomplete;
@@ -604,6 +613,13 @@ async fn execute_case(
         return;
     }
 
+    if config.replay_loading.lazy_cases
+        && let Some(next) = state.cases.get(position + 1)
+    {
+        // Optional read-ahead never prepares or changes the next case's inventory.
+        let _ = control(state, "prefetch", Some(&next.case_id), false, false).await;
+    }
+    let _ = active_progress::write(layout, state, ActiveProgressPhase::Replaying);
     let actual_response = layout
         .active_dir
         .join("reports")

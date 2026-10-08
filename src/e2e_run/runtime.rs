@@ -69,6 +69,15 @@ pub(super) fn spawn_replay(
                 .as_millis()
                 .to_string(),
         );
+    if config.replay_loading.lazy_cases {
+        command.arg("--lazy-case-dependencies");
+    }
+    command
+        .arg("--dependency-cache-bytes")
+        .arg(config.replay_loading.cache_bytes.to_string());
+    command
+        .arg("--case-prepare-timeout-seconds")
+        .arg(config.replay_loading.case_timeout_seconds.to_string());
     command.args(recorder_config_args(config));
     command.args(replay_api_args(inventory));
     command
@@ -605,6 +614,7 @@ mod tests {
             replay_policy: PathBuf::from("/target/config/replay.yaml"),
             replay_case_dependency_post_response_window: Duration::from_millis(10),
             max_failed_cases_per_api: crate::DEFAULT_MAX_FAILED_CASES_PER_API,
+            replay_loading: crate::replay::ReplayDependencyLoading::default(),
             replay_startup_timeout: Duration::from_secs(1),
             pr_base: "dev-migration".to_string(),
             managed_paths: Vec::new(),

@@ -62,12 +62,24 @@ pub(in crate::replay) fn load(
             exchange.source = ReplaySource::Global;
         }
     }
+    let keys = rules
+        .iter()
+        .map(|(_, selector)| {
+            crate::dependency_index::http_key(
+                &selector.host,
+                selector.port,
+                &selector.method,
+                &selector.path,
+            )
+        })
+        .collect();
+    let mut reader = crate::dependency_index::RecordReader::new(16 * 1024 * 1024);
     for file in files {
         let case_id = recording::case_id(&file)?;
         if cases.contains_key(&case_id) {
             continue;
         }
-        recording::visit(&file, |_, record| {
+        recording::visit_matching(&file, &keys, &mut reader, |_, record| {
             let Some((rule_id, _)) = rules.iter().find(|(_, s)| s.matches(&record)) else {
                 return Ok(());
             };
@@ -91,6 +103,11 @@ pub(in crate::replay) fn load(
             Ok(())
         })?;
     }
+    tracing::info!(
+        source_bytes = reader.source_bytes,
+        cache_hits = reader.hits,
+        "loaded indexed HTTP cross-case dependencies"
+    );
     // Keep ordinary inventory order; shared inventory follows capture time across APIs.
     exchanges.sort_by_key(|exchange| {
         (

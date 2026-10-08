@@ -30,6 +30,14 @@ is unclear.
 
 ## Current Boundaries
 
+- `dependency_index` owns disposable semantic evidence locations, source identity,
+  atomic index persistence, cancellation and immutable byte caching. Protocol
+  matching and sharing eligibility remain in `replay/<protocol>`. Recorder summary
+  persistence builds per-file fragments before publication. `replay/loading` owns
+  startup inventories; `replay/deferred` owns case preparation and immutable reads;
+  `replay/snapshot` projects session state into reports. E2E execution owns the
+  separate index preparation deadline and phase publication.
+
 - Supported dependency protocols are peer domains: MySQL, Redis, Memcached,
   Kafka, and Motan. Do not group protocols by a presumed business use such as
   cache or RPC.

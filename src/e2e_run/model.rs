@@ -26,6 +26,10 @@ pub(super) const DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS: u64 = 30;
 pub(super) const MAX_RESPONSE_DIFFERENCE_INDEX: usize = 256;
 pub const DEFAULT_MAX_FAILED_CASES_PER_API: usize = 10;
 
+fn default_replay_startup_timeout_seconds() -> u64 {
+    DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS
+}
+
 fn default_target_startup_timeout_seconds() -> u64 {
     DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS
 }
@@ -102,6 +106,13 @@ pub(crate) struct TargetQualityGateConfig {
 #[serde(deny_unknown_fields)]
 pub(super) struct ReplayProjectConfig {
     pub policy: PathBuf,
+    #[serde(default = "default_replay_startup_timeout_seconds")]
+    pub startup_timeout_seconds: u64,
+    #[serde(
+        default = "crate::replay::ReplayDependencyLoading::managed_default",
+        deserialize_with = "crate::replay::ReplayDependencyLoading::deserialize_managed"
+    )]
+    pub dependency_loading: crate::replay::ReplayDependencyLoading,
     #[serde(default = "default_replay_case_dependency_post_response_window_ms")]
     pub case_dependency_post_response_window_ms: u64,
 }
@@ -190,6 +201,7 @@ fn default_runtime_root() -> PathBuf {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedProjectConfig {
+    pub(crate) replay_loading: crate::replay::ReplayDependencyLoading,
     pub(crate) target_dockerfile: PathBuf,
     pub(crate) target_build_contexts: Vec<TargetBuildContext>,
     pub(crate) target_startup: crate::startup::StartupConfig,

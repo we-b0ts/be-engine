@@ -105,9 +105,18 @@ enum RecordedCaseKind {
 }
 
 impl ReplayPolicyRuntime {
+    #[cfg(test)]
     pub(in crate::replay) fn load(
         path: &Path,
         cases: &BTreeMap<String, ReplayCase>,
+    ) -> Result<Self> {
+        Self::load_with_sources(path, cases, true)
+    }
+
+    pub(in crate::replay) fn load_with_sources(
+        path: &Path,
+        cases: &BTreeMap<String, ReplayCase>,
+        observe_sources: bool,
     ) -> Result<Self> {
         let loaded = load_replay_policy(path)?;
         let mut case_identities = BTreeMap::new();
@@ -147,7 +156,7 @@ impl ReplayPolicyRuntime {
             usage,
             bindings: BTreeMap::new(),
         };
-        if runtime.dynamic_values.enabled() {
+        if observe_sources && runtime.dynamic_values.enabled() {
             for case in cases.values() {
                 runtime
                     .dynamic_values

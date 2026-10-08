@@ -383,6 +383,18 @@ fn traffic_summary(
             format!("comparing {api}")
         }
         super::traffic_operation::TrafficOperationKind::Replay => match replay_progress {
+            Some(crate::e2e_run::E2eActiveProgress::PreparingIndex) => {
+                "Preparing dependency index".to_string()
+            }
+            Some(crate::e2e_run::E2eActiveProgress::PreparingReplay) => {
+                "Preparing Replay".to_string()
+            }
+            Some(crate::e2e_run::E2eActiveProgress::StartingTarget) => {
+                "Starting target container".to_string()
+            }
+            Some(crate::e2e_run::E2eActiveProgress::PreparingCase { completed, total }) => {
+                format!("Preparing case dependencies {completed}/{total}")
+            }
             Some(crate::e2e_run::E2eActiveProgress::Building) => {
                 format!("building target for {api}")
             }

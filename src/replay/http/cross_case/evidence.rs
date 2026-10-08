@@ -91,9 +91,21 @@ fn discover_selected(
     }
     let mut candidates = Vec::new();
     let mut total = 0usize;
+    let keys = unmatched
+        .iter()
+        .map(|r| {
+            crate::dependency_index::http_key(
+                &r.target.host,
+                r.target.port,
+                &r.method,
+                &uri_path_only(&r.uri),
+            )
+        })
+        .collect();
+    let mut reader = crate::dependency_index::RecordReader::new(16 * 1024 * 1024);
     for file in &files {
         let origin = recording::case_id(file)?;
-        recording::visit(file, |line, record| {
+        recording::visit_matching(file, &keys, &mut reader, |line, record| {
             let identity = identity_from_record(&record)?;
             let relevant: Vec<_> = unmatched
                 .iter()
@@ -175,8 +187,15 @@ pub(crate) fn verify_candidate(
     );
     // Validate all exchanges authorized by the selector, including ones outside the bounded preview.
     let (_, files) = recording::files(source)?;
+    let keys = std::collections::BTreeSet::from([crate::dependency_index::http_key(
+        &selector.host,
+        selector.port,
+        &selector.method,
+        &selector.path,
+    )]);
+    let mut reader = crate::dependency_index::RecordReader::new(16 * 1024 * 1024);
     for file in files {
-        recording::visit(&file, |_, record| {
+        recording::visit_matching(&file, &keys, &mut reader, |_, record| {
             if selector.matches(&record) {
                 require_replayable(&record)?;
             }

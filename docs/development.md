@@ -3212,6 +3212,12 @@ the writer remains available for runtime background matches. The potentially
 large Global summary is generated only when the run finishes; summaries are
 not rebuilt after every cache exchange.
 
+## Dependency preparation
+
+See [dependency-index.md](dependency-index.md) for persistent indexes, case loading,
+cache budgets and the separate index/Replay readiness deadlines. Managed Replay
+uses these defaults for existing version-18 configurations.
+
 ## Testing Guidance
 
 Add unit tests near the parser or module being changed. Add integration tests in

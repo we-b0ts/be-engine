@@ -156,6 +156,10 @@ pub(crate) struct E2eFocusedAttemptSummary {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum E2eActiveProgress {
+    PreparingIndex,
+    PreparingReplay,
+    StartingTarget,
+    PreparingCase { completed: usize, total: usize },
     Building,
     Replaying { completed: usize, total: usize },
     Finalizing,

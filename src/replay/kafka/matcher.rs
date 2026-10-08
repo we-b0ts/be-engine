@@ -705,3 +705,38 @@ fn scope_matches(
         None => source == ReplaySource::Global,
     }
 }
+
+impl KafkaReplayState {
+    pub(in crate::replay) fn release_consumed_payloads(
+        &mut self,
+        cases: &BTreeMap<String, crate::replay::ReplayCase>,
+    ) {
+        for exchange in &mut self.produces {
+            if exchange.source == ReplaySource::Case
+                && exchange.status.is_consumed()
+                && exchange.case_id.as_ref().is_some_and(|id| {
+                    cases
+                        .get(id)
+                        .is_some_and(|case| case.status == crate::replay::ReplayCaseStatus::Ended)
+                })
+            {
+                exchange.record.value = None;
+                exchange.record.key = None;
+                exchange.record.headers = Vec::new();
+            }
+        }
+        for exchange in &mut self.deliveries {
+            if exchange.source == ReplaySource::Case
+                && exchange.status.is_consumed()
+                && exchange.case_id.as_ref().is_some_and(|id| {
+                    cases
+                        .get(id)
+                        .is_some_and(|case| case.status == crate::replay::ReplayCaseStatus::Ended)
+                })
+            {
+                exchange.record.value = None;
+                exchange.record.headers = Vec::new();
+            }
+        }
+    }
+}

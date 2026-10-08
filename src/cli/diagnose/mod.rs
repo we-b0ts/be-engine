@@ -21,6 +21,8 @@ pub(super) struct DiagnoseArgs {
 enum DiagnoseCommand {
     /// Inspect or manage host interception rules.
     Interception(super::interception::InterceptionArgs),
+    /// Build or validate disposable dependency locations for a completed recording.
+    DependencyIndex(DependencyIndexArgs),
     /// Run the low-level recorder service without local interception setup.
     Recorder(RecorderArgs),
     /// Run the low-level dependency replay service without interception setup.
@@ -31,6 +33,12 @@ enum DiagnoseCommand {
     ReplayAggregate(ReplayAggregateArgs),
     /// Persist and validate canonical case grouping evidence.
     CaseGroup(CaseGroupArgs),
+}
+
+#[derive(Debug, Args)]
+struct DependencyIndexArgs {
+    #[arg(long)]
+    case_source: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -157,6 +165,15 @@ enum ReplayControlCommand {
 
 pub(super) async fn run(args: DiagnoseArgs) -> Result<()> {
     match args.command {
+        DiagnoseCommand::DependencyIndex(args) => {
+            let report = tokio::task::spawn_blocking(move || {
+                traffic_e2e::prepare_dependency_index(&args.case_source)
+            })
+            .await??;
+            serde_json::to_writer_pretty(io::stdout(), &report)?;
+            println!();
+            Ok(())
+        }
         DiagnoseCommand::Interception(args) => super::interception::run(args),
         DiagnoseCommand::Recorder(args) => run_recorder(args.config).await,
         DiagnoseCommand::Replay(args) => run_replay_command(args).await,

@@ -1,37 +1,7 @@
 //! HTTP event traversal within immutable recording evidence.
 use super::*;
 pub(super) use crate::replay::recording_evidence::{case_id, files};
-use std::{
-    fs,
-    io::{BufRead, BufReader},
-    path::Path,
-};
-
-pub(super) fn visit(
-    file: &Path,
-    mut visitor: impl FnMut(usize, RecordedHttpExchange) -> Result<()>,
-) -> Result<()> {
-    for (line, raw) in BufReader::new(fs::File::open(file)?).lines().enumerate() {
-        let raw = raw?;
-        if raw.trim().is_empty() {
-            continue;
-        }
-        // Inspect only the event tag before deserializing HTTP evidence.
-        #[derive(Deserialize)]
-        struct Tag {
-            event_type: String,
-        }
-        let tag: Tag = serde_json::from_str(&raw).context("invalid dependency event")?;
-        if tag.event_type != "http_exchange" {
-            continue;
-        }
-        let mut record: RecordedHttpExchange =
-            serde_json::from_str(&raw).context("invalid recorded HTTP exchange")?;
-        record.decrypt_request_headers(file)?;
-        visitor(line + 1, record)?;
-    }
-    Ok(())
-}
+use std::path::Path;
 
 impl RecordedHttpExchange {
     pub(in crate::replay) fn decrypt_request_headers(&mut self, file: &Path) -> Result<()> {
@@ -40,4 +10,38 @@ impl RecordedHttpExchange {
                 .context("failed to decrypt recorded HTTP dependency headers")?;
         Ok(())
     }
+}
+
+/// Read only records addressed by exact endpoint selectors. The index is a
+/// locator; full HTTP deserialization and header decryption remain here.
+pub(super) fn visit_matching(
+    file: &Path,
+    keys: &std::collections::BTreeSet<String>,
+    reader: &mut crate::dependency_index::RecordReader,
+    mut visitor: impl FnMut(usize, RecordedHttpExchange) -> Result<()>,
+) -> Result<()> {
+    let index = crate::dependency_index::load_file(file)?;
+    for entry in index.http.iter().filter(|entry| keys.contains(&entry.key)) {
+        let raw = reader.read(file, &index.stamp, &entry.location)?;
+        let mut record: RecordedHttpExchange = serde_json::from_slice(&raw)?;
+        record.decrypt_request_headers(file)?;
+        visitor(entry.location.line, record)?;
+    }
+    Ok(())
+}
+
+/// Protocol planners that require all HTTP witnesses still avoid unrelated bodies.
+pub(super) fn visit(
+    file: &Path,
+    mut visitor: impl FnMut(usize, RecordedHttpExchange) -> Result<()>,
+) -> Result<()> {
+    let index = crate::dependency_index::load_file(file)?;
+    let mut reader = crate::dependency_index::RecordReader::new(0);
+    for entry in &index.http {
+        let raw = reader.read(file, &index.stamp, &entry.location)?;
+        let mut record: RecordedHttpExchange = serde_json::from_slice(&raw)?;
+        record.decrypt_request_headers(file)?;
+        visitor(entry.location.line, record)?;
+    }
+    Ok(())
 }

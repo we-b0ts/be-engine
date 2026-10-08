@@ -64,6 +64,12 @@ pub(super) struct ReplayArgs {
     /// Keep the active case open for dependencies started just after the primary response.
     #[arg(long)]
     case_dependency_post_response_window_ms: Option<u64>,
+    #[arg(long)]
+    lazy_case_dependencies: bool,
+    #[arg(long)]
+    dependency_cache_bytes: Option<usize>,
+    #[arg(long)]
+    case_prepare_timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -89,9 +95,11 @@ struct ReplayFileValues {
     record_user: Option<serde_yaml::Value>,
     all_users: Option<serde_yaml::Value>,
     case_dependency_post_response_window_ms: Option<u64>,
+    dependency_loading: Option<traffic_e2e::ReplayDependencyLoading>,
 }
 
 struct ResolvedReplay {
+    dependency_loading: traffic_e2e::ReplayDependencyLoading,
     case: PathBuf,
     case_ids: Vec<String>,
     report: PathBuf,
@@ -133,6 +141,7 @@ pub(super) async fn run(args: ReplayArgs) -> Result<()> {
         None
     };
     let lifecycle = ReplayLifecycleConfig {
+        dependency_loading: resolved.dependency_loading,
         case_dependency_post_response_window: std::time::Duration::from_millis(
             resolved.case_dependency_post_response_window_ms,
         ),
@@ -324,7 +333,16 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
         .case_dependency_post_response_window_ms
         .or(file.replay.case_dependency_post_response_window_ms)
         .unwrap_or(traffic_e2e::DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS);
+    let mut dependency_loading = file.replay.dependency_loading.unwrap_or_default();
+    dependency_loading.lazy_cases |= args.lazy_case_dependencies;
+    if let Some(bytes) = args.dependency_cache_bytes {
+        dependency_loading.cache_bytes = bytes;
+    }
+    if let Some(seconds) = args.case_prepare_timeout_seconds {
+        dependency_loading.case_timeout_seconds = seconds;
+    }
     Ok(ResolvedReplay {
+        dependency_loading,
         case,
         case_ids,
         report,
@@ -609,6 +627,9 @@ mod tests {
             ca_key: None,
             http_ignore_query_params: Vec::new(),
             case_dependency_post_response_window_ms: None,
+            lazy_case_dependencies: false,
+            dependency_cache_bytes: None,
+            case_prepare_timeout_seconds: None,
         }
     }
 
