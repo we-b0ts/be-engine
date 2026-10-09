@@ -73,10 +73,10 @@ impl MysqlResponseTracker {
     pub(super) fn observe_packet(
         &mut self,
         packet: &MysqlPacket,
-        info: ServerPacketInfo,
+        message: Option<&MysqlPacket>,
     ) -> Option<MysqlResponseEvent> {
         let active = self.pending.front_mut()?;
-        let complete = active.observe_packet(packet, info, self.max_payload_bytes);
+        let complete = active.observe_packet(packet, message, self.max_payload_bytes);
         complete.then(|| self.finish_active("incomplete")).flatten()
     }
 
@@ -91,7 +91,7 @@ impl MysqlResponseBuilder {
     fn observe_packet(
         &mut self,
         packet: &MysqlPacket,
-        info: ServerPacketInfo,
+        message: Option<&MysqlPacket>,
         max_payload_bytes: usize,
     ) -> bool {
         self.payload_bytes += packet.payload.len();
@@ -101,19 +101,27 @@ impl MysqlResponseBuilder {
             self.payload
                 .extend_from_slice(&packet.payload[..packet.payload.len().min(remaining)]);
         }
-        self.error_code = self.error_code.or(info.error_code);
-        if self.error_message.is_none() {
-            self.error_message = info.error_message.clone();
-        }
-
-        let packet_kind = response_packet_kind(self.phase, &info);
         if self.record_raw_packets {
+            let packet_kind = message.map_or_else(
+                || "continuation".to_string(),
+                |message| response_packet_kind(self.phase, &parse_server_packet(message)),
+            );
             self.packets.push(MysqlResponsePacket {
                 sequence_id: packet.sequence_id,
                 packet_kind,
                 payload_len: packet.payload.len(),
                 payload: capture_body(&packet.payload, max_payload_bytes),
             });
+        }
+
+        // Continuation contents are data, even when they look like EOF or ERR.
+        let Some(packet) = message else {
+            return false;
+        };
+        let info = parse_server_packet(packet);
+        self.error_code = self.error_code.or(info.error_code);
+        if self.error_message.is_none() {
+            self.error_message = info.error_message.clone();
         }
 
         if info.kind == "error" {

@@ -29,6 +29,8 @@ use crate::recorder::{
 use crate::recording_control::RecordingListener;
 
 #[cfg(test)]
+mod continuation_tests;
+#[cfg(test)]
 mod fifo_tests;
 mod ownership;
 mod response;
@@ -443,16 +445,15 @@ pub(crate) async fn handle_connected_mysql(
                 }
             };
             bytes += packet.encoded_len() as u64;
-            let packet_info = parse_server_packet(&packet);
             let authenticating = !s2c_authenticated.load(Ordering::SeqCst);
-            if authenticating && packet_info.kind == "ok" {
+            if authenticating && parse_server_packet(&packet).kind == "ok" {
                 s2c_authenticated.store(true, Ordering::SeqCst);
             }
             let mut completion = if s2c_authenticated.load(Ordering::SeqCst) {
                 s2c_query_tracker
                     .lock()
                     .await
-                    .observe_server_packet(&packet, packet_info)?
+                    .observe_server_packet(&packet)?
             } else {
                 Default::default()
             };

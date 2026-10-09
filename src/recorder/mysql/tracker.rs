@@ -3,7 +3,8 @@ use std::collections::VecDeque;
 use anyhow::{Result, bail, ensure};
 
 use crate::DependencyExchangeOutcome;
-use crate::mysql::wire::{ClientCommand, MysqlPacket, ServerPacketInfo};
+use crate::mysql::wire::continuation::MysqlPacketAssembler;
+use crate::mysql::wire::{ClientCommand, MysqlPacket};
 use crate::recorder::{MysqlExchangeEvent, MysqlResponseEvent};
 
 use super::response::MysqlResponseTracker;
@@ -17,6 +18,7 @@ pub(super) struct MysqlQueryTracker {
     semantic: MysqlSemanticTracker,
     pending_requests: VecDeque<PendingRequest>,
     pending_query_bytes: usize,
+    server_message: MysqlPacketAssembler,
 }
 
 struct PendingRequest {
@@ -41,6 +43,7 @@ impl MysqlQueryTracker {
             semantic: MysqlSemanticTracker::new(max_body_bytes, context),
             pending_requests: VecDeque::new(),
             pending_query_bytes: 0,
+            server_message: MysqlPacketAssembler::default(),
         }
     }
 
@@ -103,10 +106,12 @@ impl MysqlQueryTracker {
     pub(super) fn observe_server_packet(
         &mut self,
         packet: &MysqlPacket,
-        packet_info: ServerPacketInfo,
     ) -> Result<MysqlQueryCompletion> {
-        self.semantic.observe_packet(packet);
-        let response = self.response.observe_packet(packet, packet_info);
+        let message = self.server_message.push(packet)?;
+        if let Some(message) = &message {
+            self.semantic.observe_packet(message);
+        }
+        let response = self.response.observe_packet(packet, message.as_deref());
         let exchange = response
             .as_ref()
             .and_then(|response| self.semantic.finish_from_response(response));
@@ -114,6 +119,9 @@ impl MysqlQueryTracker {
     }
 
     pub(super) fn finish_active(&mut self, status: &str) -> Result<MysqlQueryCompletion> {
+        if let Err(error) = self.server_message.finish() {
+            self.semantic.observe_parse_warning(error.to_string());
+        }
         let response = self.response.finish_active(status);
         let exchange = match response.as_ref() {
             Some(response) if status != "client_terminated" => {
@@ -233,7 +241,7 @@ impl MysqlQueryCompletion {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mysql::wire::{parse_client_command, parse_server_packet};
+    use crate::mysql::wire::parse_client_command;
 
     #[test]
     fn completed_response_is_detached_before_the_next_query_starts() {
@@ -246,9 +254,7 @@ mod tests {
             .unwrap();
 
         let ok = ok_packet();
-        let first_completion = tracker
-            .observe_server_packet(&ok, parse_server_packet(&ok))
-            .unwrap();
+        let first_completion = tracker.observe_server_packet(&ok).unwrap();
         assert_eq!(first_completion.sequences(), (Some(5), Some(5)));
 
         let second = query_packet("SET autocommit=1");
@@ -257,9 +263,7 @@ mod tests {
             .start_query(uuid::Uuid::nil(), 6, &second_command, &second, None)
             .unwrap();
 
-        let second_completion = tracker
-            .observe_server_packet(&ok, parse_server_packet(&ok))
-            .unwrap();
+        let second_completion = tracker.observe_server_packet(&ok).unwrap();
         let (response, exchange) = second_completion.into_parts();
         assert_eq!(response.unwrap().query_sequence, 6);
         let exchange = exchange.unwrap();
@@ -278,9 +282,7 @@ mod tests {
             .unwrap();
 
         let ok = ok_packet();
-        let mut completion = tracker
-            .observe_server_packet(&ok, parse_server_packet(&ok))
-            .unwrap();
+        let mut completion = tracker.observe_server_packet(&ok).unwrap();
         completion.mark_client_terminated();
 
         let (response, exchange) = completion.into_parts();
@@ -317,17 +319,10 @@ mod tests {
             server_packet(3, &[0xfe, 0, 0, 0, 0]),
             server_packet(4, &[1, b'2']),
         ] {
-            assert!(
-                tracker
-                    .observe_server_packet(&packet, parse_server_packet(&packet))
-                    .unwrap()
-                    .is_empty()
-            );
+            assert!(tracker.observe_server_packet(&packet).unwrap().is_empty());
         }
         let eof = server_packet(5, &[0xfe, 0, 0, 0, 0]);
-        let query_completion = tracker
-            .observe_server_packet(&eof, parse_server_packet(&eof))
-            .unwrap();
+        let query_completion = tracker.observe_server_packet(&eof).unwrap();
         let (_, query_exchange) = query_completion.into_parts();
         let query_exchange = query_exchange.unwrap();
         assert_eq!(query_exchange.query_sequence, 10);
@@ -336,9 +331,7 @@ mod tests {
         assert_eq!(query_exchange.response.status, "resultset");
 
         let ok = ok_packet();
-        let ping_completion = tracker
-            .observe_server_packet(&ok, parse_server_packet(&ok))
-            .unwrap();
+        let ping_completion = tracker.observe_server_packet(&ok).unwrap();
         let (_, ping_exchange) = ping_completion.into_parts();
         let ping_exchange = ping_exchange.unwrap();
         assert_eq!(ping_exchange.query_sequence, 11);
@@ -363,9 +356,7 @@ mod tests {
 
         tracker.observe_no_response_command(&close_command, &close);
         let ok = ok_packet();
-        let completion = tracker
-            .observe_server_packet(&ok, parse_server_packet(&ok))
-            .unwrap();
+        let completion = tracker.observe_server_packet(&ok).unwrap();
         assert_eq!(completion.sequences(), (Some(20), Some(20)));
     }
 
