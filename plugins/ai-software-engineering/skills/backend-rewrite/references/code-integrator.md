@@ -42,11 +42,19 @@ integrator evidence endpoint or engine integration activity to invent.
      --api '/api' --handoff-id ACCEPTED_HANDOFF_ID
    ```
 
-   For two or more assigned API handoffs, write a JSON array of their exact
+   For two or more current API handoffs, write a JSON array of their exact
    `scope` and `handoff_id` pairs and replace `--api ... --handoff-id ...` with
    `--batch-handoffs /absolute/handoffs.json`. This one check freezes membership
-   and reviews the complete combined candidate. A later addition requires a
-   new complete review. Use `--process-output ID` for a single process-output
+   and reviews the complete combined candidate. The batch must include at least
+   one `handoff_ready` item; current `integrated` items may be included to bind
+   their retained identities to the new candidate. For six already integrated
+   APIs plus one new API, keep the six in the canonical base and merge only the
+   new delivery. Either review the new handoff alone or review the mixed seven-item
+   batch; both check the complete candidate. The coordinator reports `integrated`
+   only for items still `handoff_ready`, preserving earlier integration states.
+   A later addition requires a new complete review of the resulting candidate,
+   not a replay of already integrated merges or acceptance callbacks.
+   Use `--process-output ID` for a single process-output
    scope. Supply current `--evidence` and
    `--hardcode-ai-verified` mappings when required. Only a `passed` report
    qualifies. Resolve integration-induced failures here; return original
@@ -97,7 +105,10 @@ For an evidence-only candidate or final quality refresh, run `review check
 --integration --worktree /absolute/integration` against the canonical target
 root, with neither a scope nor handoff ID. Return its passing report with the
 exact candidate. The coordinator accepts that report after publication; do not
-invent a worker handoff for global quality work. If required canonical inputs
+include `--batch-handoffs` or invent a worker handoff for global quality work.
+Receipt expiry does not reset handoff integration states. If all retained
+handoffs are already integrated, use this global refresh instead of a batch.
+If required canonical inputs
 are still changing, return them first and recheck against their final state.
 
 A review assignment does not authorize business-code edits. Return concrete

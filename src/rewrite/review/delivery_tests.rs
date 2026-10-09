@@ -1,4 +1,6 @@
 //! Delivery-time checks and coordinator receipt admission across real worktrees.
+#[path = "delivery_tests/batch.rs"]
+mod batch;
 use super::*;
 use crate::rewrite::quality::QualityCommandStatus;
 use crate::rewrite::worker::model::RewriteWorkerActivity;
@@ -395,131 +397,6 @@ fn integration_requires_its_own_review_and_preserves_canonical_private_runtime()
             &store.load().unwrap().unwrap()
         ));
     }
-}
-
-#[test]
-fn one_published_batch_review_admits_two_handoffs_independently() {
-    let target = target();
-    let store = RewriteStore::new(target.path()).unwrap();
-    let mut state = store.load().unwrap().unwrap();
-    let second_api = "GET /batch-two".to_string();
-    let mut second_item = state.api_inventory[0].clone();
-    second_item.api = second_api.clone();
-    state.api_inventory.push(second_item);
-    let mut second_slice = state.active_slice.clone();
-    second_slice.api = second_api.clone();
-    state.parked_slices.insert(second_api.clone(), second_slice);
-    store.save(&state).unwrap();
-
-    let directory = tempfile::tempdir().unwrap();
-    let scopes = [
-        RewriteWorkScope::Api {
-            api: crate::rewrite::api_selector::public_api(&state.api).to_string(),
-        },
-        RewriteWorkScope::Api {
-            api: crate::rewrite::api_selector::public_api(&second_api).into(),
-        },
-    ];
-    let mut handoffs = Vec::new();
-    let mut deliveries = Vec::new();
-    for (index, scope) in scopes.iter().enumerate() {
-        let worker_tree = worktree(
-            target.path(),
-            directory.path(),
-            &format!("batch-worker-{index}"),
-        );
-        let handle = format!("batch-handle-{index}");
-        worker::confirm(crate::rewrite::RewriteWorkerConfirmOptions {
-            target_root: target.path().into(),
-            work_scope: scope.clone(),
-            worktree: Some(worker_tree.clone()),
-            agent_handle: handle.clone(),
-            agent_name: None,
-        })
-        .unwrap();
-        let file = format!("batch-{index}.rs");
-        fs::write(
-            worker_tree.join(&file),
-            format!("pub const BATCH_{index}: u8 = {index};\n"),
-        )
-        .unwrap();
-        git(&worker_tree, &["add", &file]);
-        git(
-            &worker_tree,
-            &["commit", "-qm", &format!("batch delivery {index}")],
-        );
-        let worker_report =
-            check(options(target.path(), &worker_tree, Some(scope.clone()))).unwrap();
-        assert_eq!(worker_report.status, ReviewStatus::Passed);
-        let handoff_id = worker_report.head_revision.clone();
-        worker::runtime::report(RewriteWorkerReportOptions {
-            target_root: target.path().into(),
-            agent_handle: handle.clone(),
-            activity: RewriteWorkerActivity::HandoffReady,
-            handoff_id: Some(handoff_id.clone()),
-            review_report: Some(worker_report.report_path.clone()),
-        })
-        .unwrap();
-        handoffs.push(IntegrationHandoffSelection {
-            scope: scope.clone(),
-            handoff_id: handoff_id.clone(),
-        });
-        deliveries.push((handle, handoff_id, worker_report.head_revision));
-    }
-    let inventory = crate::rewrite::inventory_rewrite(crate::rewrite::RewriteContext {
-        target_root: target.path().into(),
-    })
-    .unwrap();
-    assert_eq!(inventory.details.ready.get("integrate_handoff"), Some(&2));
-
-    let candidate_tree = worktree(target.path(), directory.path(), "batch-candidate");
-    git(&candidate_tree, &["merge", "--ff-only", &deliveries[0].2]);
-    git(&candidate_tree, &["cherry-pick", &deliveries[1].2]);
-    let mut wrong = handoffs.clone();
-    wrong[1].handoff_id = "wrong-handoff".into();
-    assert!(check_batch(options(target.path(), &candidate_tree, None), wrong).is_err());
-    assert!(
-        check_batch(
-            options(target.path(), &candidate_tree, None),
-            vec![handoffs[0].clone(), handoffs[0].clone()],
-        )
-        .is_err()
-    );
-    let report = check_batch(options(target.path(), &candidate_tree, None), handoffs).unwrap();
-    assert_eq!(report.status, ReviewStatus::Passed);
-    assert_eq!(report.integration.as_ref().unwrap().handoffs.len(), 2);
-    git(
-        target.path(),
-        &["merge", "--ff-only", &report.head_revision],
-    );
-    assert!(accept(target.path().into(), report.report_path.clone()).is_err());
-
-    for (index, (handle, handoff_id, _)) in deliveries.iter().enumerate() {
-        let receipt = RewriteWorkerReportOptions {
-            target_root: target.path().into(),
-            agent_handle: handle.clone(),
-            activity: RewriteWorkerActivity::Integrated,
-            handoff_id: Some(handoff_id.clone()),
-            review_report: Some(report.report_path.clone()),
-        };
-        worker::runtime::report(receipt.clone()).unwrap();
-        assert_eq!(
-            worker::runtime::coverage(&store.load().unwrap().unwrap(), &scopes[index]),
-            worker::model::RewriteWorkerCoverageState::VerificationRequired
-        );
-        worker::runtime::report(receipt).unwrap();
-    }
-    assert!(
-        store
-            .load()
-            .unwrap()
-            .unwrap()
-            .worker_bindings
-            .values()
-            .filter(|binding| binding.last_integrated_at.is_some())
-            .count()
-            >= 2
-    );
 }
 
 #[test]
