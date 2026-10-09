@@ -69,6 +69,16 @@ one case across both protocols may own process dependencies at a time; an
 overlapping matched request follows its gateway's configured non-admitted
 response path and does not create another case.
 
+A matched HTTP gateway timeout returns 504 while retaining that slot and the
+Source HTTP operation. Recorder resets its open dependency connections once,
+waits for Source completion, then drains dependencies through a quiet interval.
+The failed case retains recovery diagnostics in `timeout-recovery.json`. Shared
+pool connections, including those carrying process-owned queries, are reset when
+their exclusive ownership cannot be established. An unconfirmed Source completion
+or incomplete recovery stops new case admission for the run. Remove incorrectly
+classified request-owned background rules and record new evidence; never use
+process-owned rules to hide late traffic from a timed-out request.
+
 When request-header encryption is configured, managed operations create and
 reuse the mode-0600 project key at
 `.traffic-e2e/local/secrets/traffic-e2e-enc.sec`; the AI does not provide it.

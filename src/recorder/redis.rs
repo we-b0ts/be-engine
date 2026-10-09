@@ -76,6 +76,9 @@ pub(crate) async fn handle_connected(
     context: ConnectionContext,
 ) -> Result<()> {
     let connection_id = Uuid::new_v4();
+    let _connection = state
+        .dependency_connections()
+        .register("redis", &[&client, &upstream])?;
     let started = Instant::now();
     let session = Arc::new(Mutex::new(RedisSession {
         resp_version: 2,

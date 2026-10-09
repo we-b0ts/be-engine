@@ -13,6 +13,7 @@ pub(super) struct DependencyActivity {
 #[derive(Debug)]
 struct DependencyActivityState {
     in_flight: usize,
+    last_activity: Instant,
 }
 
 pub(super) struct DependencyReservation {
@@ -22,7 +23,10 @@ pub(super) struct DependencyReservation {
 impl Default for DependencyActivity {
     fn default() -> Self {
         Self {
-            state: Mutex::new(DependencyActivityState { in_flight: 0 }),
+            state: Mutex::new(DependencyActivityState {
+                in_flight: 0,
+                last_activity: Instant::now(),
+            }),
             changed: Notify::new(),
         }
     }
@@ -33,6 +37,7 @@ impl DependencyActivity {
         {
             let mut state = self.state.lock().expect("dependency activity poisoned");
             state.in_flight += 1;
+            state.last_activity = Instant::now();
         }
         self.changed.notify_one();
         DependencyReservation {
@@ -77,6 +82,41 @@ impl DependencyActivity {
             }
         }
     }
+
+    pub(super) fn is_quiet(&self, quiet: std::time::Duration) -> bool {
+        let state = self.state.lock().expect("dependency activity poisoned");
+        state.in_flight == 0 && state.last_activity.elapsed() >= quiet
+    }
+
+    pub(super) async fn wait_until_quiet_until(
+        &self,
+        quiet: std::time::Duration,
+        deadline: Instant,
+    ) -> bool {
+        loop {
+            let changed = self.changed.notified();
+            let (in_flight, quiet_at) = {
+                let state = self.state.lock().expect("dependency activity poisoned");
+                (state.in_flight, state.last_activity + quiet)
+            };
+            let now = Instant::now();
+            if in_flight == 0 && now >= quiet_at {
+                return true;
+            }
+            if now >= deadline {
+                return false;
+            }
+            let wake_at = if in_flight == 0 {
+                quiet_at.min(deadline)
+            } else {
+                deadline
+            };
+            tokio::select! {
+                _ = sleep_until(TokioInstant::from_std(wake_at)) => {}
+                _ = changed => {}
+            }
+        }
+    }
 }
 
 impl Clone for DependencyReservation {
@@ -103,6 +143,7 @@ impl Drop for DependencyReservation {
                 .in_flight
                 .checked_sub(1)
                 .expect("dependency reservation underflow");
+            state.last_activity = Instant::now();
         }
         self.activity.changed.notify_one();
     }

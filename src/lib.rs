@@ -78,6 +78,7 @@ use crate::http::rewrite::KubectlProxyManager;
 use crate::recorder::CaseInvalidation;
 use crate::recorder::background::BackgroundDependencyMatcher;
 use crate::recorder::cache_snapshot::{CacheSnapshotReservation, CacheSnapshotStore};
+use crate::recorder::connections::DependencyConnections;
 use crate::recorder::readiness::PostReadyWaitOutcome;
 use crate::recording_control::{RecordingLifecycle, RecordingListener};
 
@@ -297,6 +298,7 @@ struct AppStateInner {
     client: ProxyClient,
     upstream_tls_config: Arc<ClientConfig>,
     active_cases: ActiveCaseRegistry,
+    dependency_connections: DependencyConnections,
     kubectl_proxy_manager: KubectlProxyManager,
     recording_lifecycle: RecordingLifecycle,
     process_owned_dependencies: BackgroundDependencyMatcher,
@@ -405,6 +407,7 @@ impl AppState {
                 client,
                 upstream_tls_config,
                 active_cases: ActiveCaseRegistry::new(case_matching_ready),
+                dependency_connections: DependencyConnections::default(),
                 kubectl_proxy_manager: KubectlProxyManager::default(),
                 recording_lifecycle,
                 process_owned_dependencies,
@@ -781,6 +784,10 @@ impl AppState {
 
     pub(crate) fn capture_dependency_targets(&self) -> DependencyTargets {
         self.inner.active_cases.current_targets_for_event()
+    }
+
+    pub(crate) fn dependency_connections(&self) -> &DependencyConnections {
+        &self.inner.dependency_connections
     }
 
     pub(crate) fn record_event(&self, event: RecorderEvent) {

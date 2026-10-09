@@ -24,6 +24,7 @@ use crate::dns_mock::{FakeDnsEntry, FakeDnsUpstreamProtocol};
 use crate::http::access::classify_method;
 use crate::http::rewrite::{self, RewriteInput};
 use crate::http::termination::{ClientTermination, ObservedClientIo};
+use crate::recorder::connections::DependencyIo;
 use crate::recorder::http::dependency::PendingHttpCapture;
 use crate::recorder::{
     HeaderMapSnapshot, HttpExchangeEvent, ProxyErrorEvent, RecorderEvent,
@@ -70,6 +71,7 @@ async fn serve_http_connection(
     state: AppState,
 ) -> Result<()> {
     let upstream_addr = upstream_addr(&entry, fake_addr.port())?;
+    let client = DependencyIo::new(client, state.dependency_connections(), "http")?;
     let termination = ClientTermination::default();
     let io = TokioIo::new(ObservedClientIo::new(client, termination.clone()));
     let service = service_fn(move |req| {
@@ -116,6 +118,7 @@ async fn serve_https_mitm_connection(
         .server_config_for_host(&entry.domain)
         .with_context(|| format!("failed to create MITM certificate for {}", entry.domain))?;
     let acceptor = TlsAcceptor::from(server_config);
+    let client = DependencyIo::new(client, state.dependency_connections(), "https")?;
     let tls = match acceptor.accept(client).await {
         Ok(tls) => tls,
         Err(err) => {

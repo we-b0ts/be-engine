@@ -93,6 +93,14 @@ is unclear.
   `recording_runtime` owns the Recorder application's listener supervision,
   stop triggers, graceful drain, and finalization lifecycle.
 - Proxy and gateway modules own connection and request orchestration.
+- `recorder/connections` owns registration and snapshot shutdown of live dependency
+  sockets; its transport child retains registration through HTTP upgrades and TLS.
+  Protocol adapters register their connected socket pairs and keep semantic capture
+  responsibilities. `gateway/http/recovery` owns timeout diagnostics, dependency
+  reset and Source completion supervision; the response child preserves the pending
+  upstream operation and the lifecycle child returns the downstream timeout while
+  supervision continues. `active_case/recovery` owns recovery admission, dependency
+  quiet and refusal to admit new cases when recovery cannot finish safely.
 - `http/termination` observes downstream EOF/reset without initiating a close.
   `recorder/http/dependency` retains HTTP evidence and dependency admission
   ownership across service cancellation. `replay/http/transport` owns HTTP/TLS

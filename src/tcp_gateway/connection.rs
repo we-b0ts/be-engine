@@ -415,6 +415,9 @@ async fn proxy_raw_tcp(
             serve_http_connection(client, fake_addr, entry, client_addr, state).await
         }
         DetectedProtocol::Http | DetectedProtocol::Raw => {
+            let _connection = state
+                .dependency_connections()
+                .register("raw_tcp", &[&client, &upstream])?;
             let operation_class = OperationClass::Unknown;
             if state.access_decision(operation_class) == AccessDecision::Reject {
                 state
