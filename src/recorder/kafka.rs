@@ -64,6 +64,9 @@ pub(crate) async fn handle_connected(
     context: KafkaConnectionContext,
 ) -> Result<()> {
     let connection_id = Uuid::new_v4();
+    let _connection = state
+        .dependency_connections()
+        .register("kafka", &[&client, &upstream])?;
     let started = Instant::now();
     let pending = Arc::new(Mutex::new(HashMap::<i32, PendingRequest>::new()));
     let pending_changed = Arc::new(Notify::new());

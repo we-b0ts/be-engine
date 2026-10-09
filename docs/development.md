@@ -796,6 +796,32 @@ dependencies do not complete within
 fails the case instead of publishing incomplete dependency evidence. Matching
 requests continue to use the fallback upstream while the previous case drains.
 
+If a matched HTTP gateway request reaches `http_gateway.request_timeout_ms`
+while waiting for response headers or an ordinary response body, its client
+receives HTTP 504 and the case enters timeout recovery. Recorder retains the
+upstream HTTP operation and the active-case slot, then shuts down the dependency
+connections open at that moment. This covers MySQL (including TLS), Redis,
+Memcached, Kafka, Motan, HTTP/HTTPS proxy connections and raw TCP forwarding.
+Primary HTTP requests, listeners, readiness and control connections are excluded.
+Each case triggers only one reset; later reconnects remain attached to that case
+and are not affected by a delayed second reset.
+
+Query-level process-owned rules cannot prove exclusive ownership of shared pool
+connections. These connections are therefore included in recovery, with protocol
+counts, shutdown errors and `unproven_connection_scope` recorded in the failed
+case's `timeout-recovery.json`. Their normal process-owned event attribution is
+preserved. Recorder waits for the retained Source HTTP response to finish, then
+for in-flight dependencies and an uninterrupted quiet interval of
+`recording.case_dependency_post_response_window_ms`, bounded by
+`recording.case_dependency_drain_timeout_ms`. Only then can a new case be admitted.
+The timed-out case remains failed; late dependencies never make it replayable.
+
+If Source never completes, the active slot stays occupied until recording
+shutdown. If its HTTP transport fails, recovery is cancelled/panics, or dependency
+drain exceeds its deadline, new case admission stops for the run because Source
+completion/isolation cannot be established. Old recordings remain immutable;
+fixing timeout isolation requires recording new evidence.
+
 On recorder shutdown, case matching enters a quiescing phase before run
 finalization. New matching requests use the fallback upstream while the current
 case is allowed to finish for up to

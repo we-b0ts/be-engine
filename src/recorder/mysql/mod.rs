@@ -170,6 +170,9 @@ pub(crate) async fn handle_connected_mysql(
     upstream
         .set_nodelay(true)
         .context("failed to enable TCP_NODELAY for MySQL recording upstream")?;
+    let _connection = state
+        .dependency_connections()
+        .register("mysql", &[&client, &upstream])?;
     let connection_id = Uuid::new_v4();
     let started = Instant::now();
     let route_name = context.route_name.clone();

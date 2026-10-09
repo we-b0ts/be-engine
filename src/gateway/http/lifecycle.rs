@@ -2,6 +2,7 @@ use std::future::Future;
 use std::time::Instant;
 
 use hyper::{Response, StatusCode};
+use tokio::sync::oneshot;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -14,17 +15,28 @@ pub(super) async fn run_matched_request<F>(
     case_id: Uuid,
     active_case_guard: ActiveCaseGuard,
     started: Instant,
+    mut timeout_response: oneshot::Receiver<()>,
     request: F,
 ) -> Response<GatewayBody>
 where
     F: Future<Output = Response<GatewayBody>> + Send + 'static,
 {
+    let timeout_ms = state.config().http_gateway.request_timeout_ms;
     let mut downstream = DownstreamRequest::new(state, case_id, started);
-    let request = tokio::spawn(async move {
+    let mut request = tokio::spawn(async move {
         let _active_case_guard = active_case_guard;
         request.await
     });
-    let result = request.await;
+    let result = tokio::select! {
+        result = &mut request => result,
+        timeout = &mut timeout_response => {
+            if timeout.is_ok() {
+                downstream.complete();
+                return simple_response(StatusCode::GATEWAY_TIMEOUT, &format!("gateway upstream request timed out after {timeout_ms} ms"));
+            }
+            request.await
+        }
+    };
     downstream.complete();
 
     match result {

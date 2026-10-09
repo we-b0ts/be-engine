@@ -21,6 +21,7 @@ pub(crate) mod cache_snapshot;
 mod capture;
 mod capture_health;
 pub(crate) mod case;
+pub(crate) mod connections;
 mod dependencies;
 mod event;
 pub(crate) mod http;

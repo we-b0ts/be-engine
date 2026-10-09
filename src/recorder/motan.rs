@@ -46,6 +46,9 @@ pub(crate) async fn handle_connected(
     context: ConnectionContext,
 ) -> Result<()> {
     let connection_id = Uuid::new_v4();
+    let _connection = state
+        .dependency_connections()
+        .register("motan", &[&client, &upstream])?;
     let started = Instant::now();
     let pending = Arc::new(Mutex::new(HashMap::<u64, PendingRequest>::new()));
     let requests_ended = Arc::new(Notify::new());

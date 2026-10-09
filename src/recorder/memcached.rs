@@ -55,6 +55,9 @@ pub(crate) async fn handle_connected(
     wire_protocol: MemcachedWireProtocol,
 ) -> Result<()> {
     let connection_id = Uuid::new_v4();
+    let _connection = state
+        .dependency_connections()
+        .register("memcached", &[&client, &upstream])?;
     let started = Instant::now();
     record_connection(
         &state,

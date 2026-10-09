@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::recorder::{CaseContext, CaseInvalidation};
 
 mod activity;
+mod recovery;
 
 use activity::{DependencyActivity, DependencyReservation};
 
@@ -31,6 +32,8 @@ struct ActiveCaseRegistration {
     invalidation: Option<CaseInvalidation>,
     accepting_dependencies: bool,
     dependencies: Arc<DependencyActivity>,
+    recovering: bool,
+    source_completed: bool,
 }
 
 pub(crate) struct ActiveCaseGuard {
@@ -119,6 +122,8 @@ impl ActiveCaseRegistry {
             invalidation: None,
             accepting_dependencies: false,
             dependencies: Arc::new(DependencyActivity::default()),
+            recovering: false,
+            source_completed: false,
         });
         self.active_count.send_replace(state.active.len());
         Ok(ActiveCaseGuard {
@@ -143,6 +148,14 @@ impl ActiveCaseRegistry {
 
     fn unregister(&self, case_id: Uuid) {
         let mut state = self.state.lock().expect("active case registry poisoned");
+        // A cancelled or panicked recovery cannot establish that Source has stopped.
+        if state
+            .active
+            .iter()
+            .any(|registration| registration.case.id == case_id && registration.recovering)
+        {
+            state.quiescing = true;
+        }
         state
             .active
             .retain(|registration| registration.case.id != case_id);
@@ -274,6 +287,11 @@ impl ActiveCaseRegistry {
         post_response_window: Duration,
         timeout: Duration,
     ) -> DependencyDrainResult {
+        if self.is_recovering(case_id) {
+            return self
+                .drain_recovering_case(case_id, post_response_window, timeout)
+                .await;
+        }
         if !post_response_window.is_zero() {
             tokio::time::sleep(post_response_window).await;
         }
@@ -514,12 +532,16 @@ mod tests {
                 invalidation: None,
                 accepting_dependencies: true,
                 dependencies: Arc::new(DependencyActivity::default()),
+                recovering: false,
+                source_completed: false,
             });
             state.active.push(ActiveCaseRegistration {
                 case: second,
                 invalidation: None,
                 accepting_dependencies: true,
                 dependencies: Arc::new(DependencyActivity::default()),
+                recovering: false,
+                source_completed: false,
             });
         }
 

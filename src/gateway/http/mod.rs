@@ -28,8 +28,11 @@ use crate::recording_control::RecordingListener;
 mod admission;
 mod lifecycle;
 mod ready;
+mod recovery;
 mod response;
 pub(crate) mod rules;
+#[cfg(test)]
+mod timeout_tests;
 pub(crate) mod transport;
 
 use admission::try_admit_case;
@@ -252,6 +255,17 @@ async fn handle_gateway_request(
 
     let lifecycle_state = state.clone();
     let active_case_id = case.as_ref().map(|case| case.id);
+    let (mut timeout_recovery, timeout_response) = match &case {
+        Some(case) => {
+            let (recovery, receiver) = recovery::TimeoutRecovery::new(
+                state.clone(),
+                case.clone(),
+                u128::from(config.request_timeout_ms),
+            );
+            (Some(recovery), Some(receiver))
+        }
+        None => (None, None),
+    };
     let request = async move {
         if !should_record && config.fallback_mode == HttpGatewayFallbackMode::FixedResponse {
             return build_fixed_response(
@@ -341,6 +355,7 @@ async fn handle_gateway_request(
             outbound,
             request_timeout,
             should_record.then_some(state.config().recording.max_body_bytes),
+            timeout_recovery.as_mut(),
         )
         .await;
 
@@ -383,6 +398,7 @@ async fn handle_gateway_request(
                     } else {
                         StatusCode::BAD_GATEWAY
                     },
+                    timeout_recovery.as_ref().filter(|_| timed_out),
                 )
                 .await;
             }
@@ -517,8 +533,15 @@ async fn handle_gateway_request(
 
     match (case_guard, active_case_id) {
         (Some(case_guard), Some(case_id)) => {
-            lifecycle::run_matched_request(lifecycle_state, case_id, case_guard, started, request)
-                .await
+            lifecycle::run_matched_request(
+                lifecycle_state,
+                case_id,
+                case_guard,
+                started,
+                timeout_response.expect("matched case timeout response"),
+                request,
+            )
+            .await
         }
         _ => request.await,
     }
@@ -543,12 +566,13 @@ struct GatewayErrorContext {
 }
 
 async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody> {
-    record_gateway_error_with_status(ctx, StatusCode::BAD_GATEWAY).await
+    record_gateway_error_with_status(ctx, StatusCode::BAD_GATEWAY, None).await
 }
 
 async fn record_gateway_error_with_status(
     ctx: GatewayErrorContext,
     response_status: StatusCode,
+    recovery: Option<&recovery::TimeoutRecovery>,
 ) -> Response<GatewayBody> {
     let error = format!("{:#}", ctx.err);
     let drain_invalidation = if let Some(case) = &ctx.case {
@@ -556,6 +580,11 @@ async fn record_gateway_error_with_status(
     } else {
         None
     };
+    if let Some(recovery) = recovery {
+        recovery
+            .dependencies_drained(drain_invalidation.as_ref())
+            .await;
+    }
     if let Some(case) = &ctx.case
         && let Err(err) = finalize_http_case(
             ctx.state.recorder(),

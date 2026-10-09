@@ -22,6 +22,7 @@ use crate::http::access::classify_method;
 use crate::http::forward::{HostHeaderPolicy, append_end_to_end_headers};
 use crate::http::rewrite::{self, RewriteInput};
 use crate::http::termination::{ClientTermination, ObservedClientIo};
+use crate::recorder::connections::DependencyIo;
 use crate::recorder::http::dependency::PendingHttpCapture;
 use crate::recorder::{
     HttpExchangeEvent, ProxyErrorEvent, RecorderEvent, capture_body, redact_headers,
@@ -49,6 +50,7 @@ pub async fn run(state: AppState) -> Result<()> {
         stream
             .set_nodelay(true)
             .context("failed to enable TCP_NODELAY for HTTP proxy client")?;
+        let stream = DependencyIo::new(stream, state.dependency_connections(), "http_proxy")?;
         let state = state.clone();
         tokio::spawn(async move {
             let termination = ClientTermination::default();
