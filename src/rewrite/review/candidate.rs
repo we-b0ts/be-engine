@@ -74,8 +74,11 @@ pub(super) fn batch_handoffs(
     state: &RewriteState,
     selections: &[IntegrationHandoffSelection],
 ) -> Result<Vec<IntegrationHandoffReview>> {
+    use worker::model::RewriteWorkerCoverageState as Coverage;
+
     let mut seen = std::collections::BTreeSet::new();
-    selections
+    let mut has_pending_handoff = false;
+    let handoffs = selections
         .iter()
         .map(|selection| {
             ensure!(
@@ -86,12 +89,13 @@ pub(super) fn batch_handoffs(
                 seen.insert(selection.scope.binding_key()),
                 "batch integration contains a duplicate work item"
             );
+            let coverage = worker::runtime::coverage(state, &selection.scope);
             ensure!(
-                worker::runtime::coverage(state, &selection.scope)
-                    == worker::model::RewriteWorkerCoverageState::IntegrationRequired,
-                "batch integration requires a ready, unintegrated handoff for {}",
+                matches!(coverage, Coverage::IntegrationRequired | Coverage::VerificationRequired),
+                "batch integration requires a current handoff_ready or integrated handoff for {}; current coverage is {coverage:?}. Refresh inventory and rebuild the batch from current handoff identities; do not reset integrated handoffs",
                 selection.scope.label()
             );
+            has_pending_handoff |= coverage == Coverage::IntegrationRequired;
             let scoped = worker::runtime::scoped(state, &selection.scope)?;
             ensure!(
                 scoped.rule_plan.is_none()
@@ -108,7 +112,12 @@ pub(super) fn batch_handoffs(
                 handoff_id: selection.handoff_id.clone(),
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    ensure!(
+        has_pending_handoff,
+        "all selected handoffs are already integrated; refresh the complete candidate with review check --integration --worktree <integration-worktree> without --batch-handoffs, a scope or --handoff-id, then publish and use review accept --report <report>. Keep existing handoffs integrated"
+    );
+    Ok(handoffs)
 }
 
 pub(super) fn fresh(
@@ -261,6 +270,16 @@ pub(in crate::rewrite) fn accept_locked(
             "integration report dispatch is stale"
         );
     } else {
+        // A mixed batch binds retained deliveries as well as newly ready ones.
+        // None may be superseded between review and candidate admission.
+        for entry in &integration.handoffs {
+            let dispatch = handoff(state, Some(&entry.scope), Some(&entry.handoff_id))?;
+            ensure!(
+                dispatch.as_deref() == Some(entry.dispatch_id.as_str()),
+                "batch integration report dispatch is stale for {}; refresh inventory and review the current candidate again",
+                entry.scope.label()
+            );
+        }
         let scope = expected_scope.context("batch integration requires a worker scope")?;
         let entry = integration
             .handoffs

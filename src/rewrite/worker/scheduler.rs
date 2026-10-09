@@ -116,7 +116,7 @@ pub(in crate::rewrite) fn scope_action(
         },
         Coverage::IntegrationRequired => RewriteAction::IntegrationRequired {
             summary: format!(
-                "integrate the ready worker handoff for {}, including its coordinator inputs, then report integrated",
+                "integrate the ready worker handoff for {}, including its coordinator inputs, and review the complete candidate before reporting integrated. Keep prior integrated code as the base. For a single new handoff use its scope and handoff ID; a batch may include current integrated handoffs plus ready handoffs, but report integrated only for those still handoff_ready",
                 scope.label()
             ),
             handoff_id: runtime::observation(state, scope)
