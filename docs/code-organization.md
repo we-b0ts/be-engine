@@ -68,6 +68,11 @@ is unclear.
   `replay/<protocol>` owns matching and response behavior for recorded
   evidence. Both may depend on the top-level protocol module, never the
   reverse.
+- `mysql/wire/continuation` owns MySQL logical-message assembly, physical packet
+  splitting and continuation sequence validation. Recorder's query tracker
+  feeds complete messages to semantic parsing and response completion while
+  retaining physical packets for forwarding and debug capture. Replay response
+  delivery advances sequence IDs by the physical packets actually written.
 - `main.rs` owns the `traffic-e2e` engine CLI bootstrap only.
 - `bin/backend-rewrite/` owns the AI-facing coordinator CLI bootstrap only.
 - `bin/backend-rewrite-admin/` owns explicit administrator repair CLI bootstrap

@@ -5,6 +5,17 @@ initialization, prepared statements, cached statement reuse and explicit
 single-connection transactions. Targets retain their driver's normal settings;
 do not turn off `SET NAMES`, SQL mode setup or parameter binding for replay.
 
+Recorder and Replay support text and binary result rows larger than the MySQL
+physical packet limit of `0xFFFFFF` bytes, over both TCP and TLS. Recorder
+validates consecutive continuation sequence IDs and reassembles each logical
+message before semantic parsing or response completion. Forwarding and debug
+capture retain physical packets. Replay splits logical messages, emits an empty
+terminator for exact multiples of the physical limit, and advances subsequent
+row/EOF sequence IDs by the packets sent. Capture-size limits still apply;
+incomplete continuations produce a parse warning. Recordings created without
+continuation support may contain corrupt semantic rows and require fresh
+recording rather than edits to `dependencies.jsonl`.
+
 Text (`COM_QUERY`) and prepared (`COM_STMT_EXECUTE`) evidence can match in either
 direction. Matching checks target host/port, database, username and case scope
 before SQL and parameter values. SQL tokens distinguish identifiers, literals,

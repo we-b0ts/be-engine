@@ -2,6 +2,8 @@ use std::io;
 
 use tokio::io::{AsyncRead, AsyncReadExt};
 
+pub(crate) mod continuation;
+
 pub const CLIENT_SSL: u32 = 0x0000_0800;
 pub const CLIENT_COMPRESS: u32 = 0x0000_0020;
 pub const CLIENT_CONNECT_WITH_DB: u32 = 0x0000_0008;
@@ -55,6 +57,10 @@ impl MysqlPacket {
 
     pub fn to_wire_bytes(&self) -> Vec<u8> {
         let len = self.payload.len();
+        assert!(
+            len <= continuation::MAX_PACKET_PAYLOAD_LEN,
+            "encode logical MySQL messages with continuation::write_message"
+        );
         let mut out = Vec::with_capacity(4 + len);
         out.push((len & 0xff) as u8);
         out.push(((len >> 8) & 0xff) as u8);
@@ -82,11 +88,12 @@ where
     R: AsyncRead + Unpin + ?Sized,
 {
     let mut header = [0_u8; 4];
-    match reader.read_exact(&mut header).await {
+    match reader.read_exact(&mut header[..1]).await {
         Ok(_) => {}
         Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
         Err(err) => return Err(err),
     }
+    reader.read_exact(&mut header[1..]).await?;
 
     let len = header[0] as usize | ((header[1] as usize) << 8) | ((header[2] as usize) << 16);
     let mut payload = vec![0_u8; len];

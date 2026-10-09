@@ -167,6 +167,12 @@ impl MysqlSemanticTracker {
         }
     }
 
+    pub(crate) fn observe_parse_warning(&mut self, warning: String) {
+        if let Some(active) = self.pending.front_mut() {
+            active.parse_warnings.push(warning);
+        }
+    }
+
     pub(crate) fn database(&self) -> Option<&str> {
         self.context.database.as_deref()
     }

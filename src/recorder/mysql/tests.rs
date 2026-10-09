@@ -818,6 +818,5 @@ fn observe_payload(
         sequence_id,
         payload: payload.to_vec(),
     };
-    let info = parse_server_packet(&packet);
-    tracker.observe_packet(&packet, info)
+    tracker.observe_packet(&packet, Some(&packet))
 }
