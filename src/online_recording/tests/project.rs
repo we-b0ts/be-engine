@@ -22,6 +22,7 @@ recorder:
     forward: false
   http_gateway:
     enabled: true
+    record_streaming: false
     request_timeout_ms: 731
     ready:
       enabled: true
@@ -93,6 +94,7 @@ fn project_recording_settings_and_policy_survive_online_routing() {
     assert_eq!(config.recording.encrypt_request_headers, ["authorization"]);
     assert_eq!(config.recording.redact_headers, ["x-private-header"]);
     assert_eq!(config.http_gateway.request_timeout_ms, 731);
+    assert!(!config.http_gateway.record_streaming);
     assert_eq!(config.http_gateway.per_api_case_limits.default, 7);
     assert_eq!(
         config.http_gateway.per_api_case_limits.overrides["/api/teams/*/skills"],
@@ -137,6 +139,15 @@ fn project_recording_settings_and_policy_survive_online_routing() {
     assert_eq!(overridden.http_gateway.ready.path, "/api/ready");
     assert_eq!(overridden.http_gateway.per_api_case_limits.default, 5);
     assert_eq!(overridden.http_gateway.request_timeout_ms, 2000);
+    assert!(!overridden.http_gateway.record_streaming);
+
+    let yaml = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        yaml.replace("record_streaming: false", "record_streaming: true"),
+    )
+    .unwrap();
+    assert!(options.config().unwrap().http_gateway.record_streaming);
 }
 
 #[test]

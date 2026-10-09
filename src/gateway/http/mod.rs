@@ -165,6 +165,17 @@ async fn handle_gateway_request(
         &original_uri,
         &request_headers,
     ) {
+        RuleDecision::Matched(_)
+            if !config.record_streaming
+                && crate::http::sse::accepts_event_stream(&request_headers) =>
+        {
+            info!(
+                method = %method,
+                uri = %original_uri,
+                "HTTP gateway request declares SSE; streaming recording disabled, using fallback"
+            );
+            None
+        }
         RuleDecision::Matched(rule) if state.should_record_api(&method, &original_uri) => {
             Some(rule)
         }

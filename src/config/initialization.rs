@@ -232,6 +232,7 @@ udp_gateway:
   forward: false
 http_gateway:
   enabled: true
+  record_streaming: false
 # Set by `init --http-gateway-port`; this listener receives selected HTTP
 # recording traffic and is distinct from the recorder-owned native HTTP port.
   listen: 0.0.0.0:__HTTP_GATEWAY_PORT__
@@ -305,6 +306,7 @@ mod tests {
 
         let config: AppConfig = serde_yaml::from_str(&raw).unwrap();
         config.validate().unwrap();
+        assert!(!config.http_gateway.record_streaming);
         assert!(config.recording.redact_headers.is_empty());
         assert_eq!(
             config.http_gateway.matched_upstream,
