@@ -23,6 +23,7 @@ mod redis_lane_tests;
 mod redis_lock_tests;
 mod redis_process_owned_tests;
 mod redis_publish_tests;
+mod redis_request_contract_tests;
 mod redis_time_shift_tests;
 mod redis_value_tests;
 

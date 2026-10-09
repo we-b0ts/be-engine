@@ -4,6 +4,96 @@ use crate::{DynamicValueRuleFeedback, plan_dynamic_value_rule};
 use serde_json::json;
 
 #[tokio::test]
+async fn numeric_json_rpc_id_discovery_plan_apply_preserves_business_numbers_and_integer_type() {
+    let temp = tempdir().unwrap();
+    let root = temp.path();
+    let case = root.join("case");
+    let source = r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"user_id":10}}"#;
+    let actual = r#"{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"user_id":10}}"#;
+    write_http_case(
+        &case,
+        "http",
+        "api.example.test",
+        "/rpc",
+        source,
+        "accepted",
+    )
+    .await;
+    std::fs::write(
+        case.join("request.json"),
+        r#"{"method":"GET","uri":"/knowledge/1/nodes"}"#,
+    )
+    .unwrap();
+    std::fs::write(case.join("expected-response.json"), "{}").unwrap();
+    let policy = root.join("verification.yaml");
+    std::fs::write(
+        &policy,
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+    )
+    .unwrap();
+    let (addr, runtime, task) =
+        spawn_http_replay_with_policy(&case, vec![], Some(policy.clone()), None).await;
+    let response = send_request(
+        TokioIo::new(TcpStream::connect(addr).await.unwrap()),
+        "api.example.test",
+        "/rpc",
+        actual,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    response.into_body().collect().await.unwrap();
+    let report = root.join("replay.json");
+    {
+        let mut state = runtime.state.lock().await;
+        state.finalized_at = Some(Utc::now());
+        let value = serde_json::to_value(state.snapshot_report()).unwrap();
+        assert_eq!(
+            value["replay_policy"]["dynamic_capture_candidates"][0]["value_type"],
+            "integer"
+        );
+        std::fs::write(&report, value.to_string()).unwrap();
+    }
+    task.abort();
+    let rule = serde_json::from_value(json!({"id":"rpc-id","api":"/knowledge/*/nodes","value_type":"integer","targets":[{"host":"api.example.test","port":80}],"capture":{"protocol":"http","target":{"host":"api.example.test","port":80},"method":"POST","path":"/rpc","json_pointer":"/id"},"source_evidence":"RpcClient:request assigns a monotonically generated integer correlation id"})).unwrap();
+    plan_dynamic_value_rule(DynamicValueRuleFeedback {
+        policy_path: policy.clone(),
+        rule,
+        replay_report: report,
+    })
+    .unwrap()
+    .apply()
+    .unwrap();
+    let (addr, runtime, task) =
+        spawn_http_replay_with_policy(&case, vec![], Some(policy), None).await;
+    for (body, expected) in [
+        (
+            r#"{"jsonrpc":"2.0","id":"20","method":"tools/call","params":{"user_id":10}}"#,
+            StatusCode::BAD_GATEWAY,
+        ),
+        (
+            r#"{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"user_id":20}}"#,
+            StatusCode::BAD_GATEWAY,
+        ),
+        (actual, StatusCode::OK),
+    ] {
+        let response = send_request(
+            TokioIo::new(TcpStream::connect(addr).await.unwrap()),
+            "api.example.test",
+            "/rpc",
+            body,
+        )
+        .await;
+        assert_eq!(response.status(), expected);
+        response.into_body().collect().await.unwrap();
+    }
+    let state = runtime.state.lock().await;
+    let report = state.replay_policy.as_ref().unwrap().report();
+    assert_eq!(report.dependency_rules[0].matches, 1);
+    assert!(report.unused_applicable_dependency_rule_ids.is_empty());
+    task.abort();
+}
+
+#[tokio::test]
 async fn http_capture_plan_apply_replay_keeps_static_json_and_pending_bindings_strict() {
     let temp = tempdir().unwrap();
     let case = temp.path().join("case");

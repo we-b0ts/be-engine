@@ -298,6 +298,7 @@ fn install(
     );
     state.http_case_exchange_index = http::case_exchange_index(&state.http_exchanges);
     if let Some(policy) = &mut state.replay_policy {
+        policy.request_contracts.observe_source(case_id, raw)?;
         if policy.dynamic_values.enabled() {
             policy.dynamic_values.observe_source(case_id, raw)?;
         }

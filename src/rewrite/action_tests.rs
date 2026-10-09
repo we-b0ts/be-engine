@@ -441,6 +441,7 @@ fn pending_rule_plans_are_recoverable_by_plan_id() {
     state.rule_plan = Some(RewriteRulePlanRecord {
         header_dates: Vec::new(),
         dynamic_value: None,
+        dependency_request: None,
         time: None,
         id: "plan-response".to_string(),
         issue_id: "issue-response".to_string(),

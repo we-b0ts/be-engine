@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub(super) enum RedisSelector {
+    Requests(super::request_contract::config::RedisRequestSelector),
     Lock(RedisLockConfig),
     Publish(RedisPublishConfig),
     Value(RedisValueSelector),
@@ -75,7 +76,7 @@ pub(super) fn validate(rule: &ReplayDependencyRule) -> Result<()> {
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Redis rule requires redis selector"))?;
     ensure!(
-        rule.case_selector.is_none(),
+        rule.case_selector.is_none() || matches!(redis, RedisSelector::Requests(_)),
         "Redis rules cannot select a case"
     );
     ensure!(
@@ -86,6 +87,9 @@ pub(super) fn validate(rule: &ReplayDependencyRule) -> Result<()> {
         rule.http.is_none() && rule.mysql.is_none() && rule.memcached.is_none(),
         "Redis rule cannot define another protocol selector"
     );
+    if let RedisSelector::Requests(request) = redis {
+        return request.validate();
+    }
     if let RedisSelector::Lock(lock) = redis {
         crate::replay::redis::lock::RedisLockSelector {
             host: rule.target.host.clone().unwrap_or_default(),

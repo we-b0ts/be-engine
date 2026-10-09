@@ -143,6 +143,8 @@ pub(super) struct MysqlTimeFieldRule {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct HttpSelector {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) multipart: Option<super::request_contract::config::MultipartRule>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) headers: BTreeMap<String, super::http_headers::HttpHeaderRule>,
     #[serde(
@@ -347,6 +349,7 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
     for (output_id, rules) in &document.process_output_rules {
         crate::process_output::validate_verification_rules(output_id, rules)?;
     }
+    super::request_contract::validate_overlaps(document)?;
     super::redis_value::validate_overlaps(&document.dependency_rules)?;
     super::http_json::validate_overlaps(&document.dependency_rules)?;
     super::http_headers::validate_overlaps(&document.dependency_rules)?;
@@ -365,6 +368,7 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
             "Redis value rules require policy version 3"
         );
         validate_rule(rule)?;
+        super::request_contract::validate(rule)?;
         super::http_json::validate(rule)?;
         super::http_headers::validate(rule)?;
         ensure!(
@@ -456,7 +460,7 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
         }
     } else {
         ensure!(
-            rule.source_evidence.is_empty(),
+            rule.source_evidence.is_empty() || super::request_contract::is_request_rule(rule),
             "dependency source_evidence requires recording_run scope"
         );
     }
@@ -537,6 +541,7 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
                 !http.query.is_empty()
                     || !http.headers.is_empty()
                     || !http.json.is_empty()
+                    || http.multipart.is_some()
                     || rule.replay_scope == ReplayScope::RecordingRun,
                 "HTTP rule {:?} must configure query fields, JSON rules, header rules or recording_run scope",
                 rule.id

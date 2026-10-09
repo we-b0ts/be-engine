@@ -71,10 +71,15 @@ whole objects and arrays cannot be captured as opaque identities. Optional
 must prove generation, lifetime and intended uses. A differing argument alone
 does not prove randomness.
 
+HTTP integer correlation IDs use `value_type: integer` with an exact capture
+JSON pointer. The default remains string. Integer rules preserve type and do
+not infer references outside that selected request location. See the complete
+[dependency request rule examples](dependency-request-rules.md).
+
 ## Authoring and discovery
 
 MySQL `unmatched_target` dirty clusters offer a `dynamic_value` hint. Redis and
-HTTP single-string differences provide `dynamic_capture_candidates` in finalized
+HTTP single-string or integer differences provide `dynamic_capture_candidates` in finalized
 Replay reports and dirty-cluster evidence. These bounded witnesses contain
 selectors and fingerprints, not newly logged token values. They offer the same
 planner hint; source review is still required.

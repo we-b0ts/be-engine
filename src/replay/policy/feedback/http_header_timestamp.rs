@@ -119,6 +119,7 @@ pub fn plan_http_header_timestamp(
             memcached: None,
             redis: None,
             http: Some(HttpSelector {
+                multipart: None,
                 method: feedback.selector.method.clone(),
                 path: feedback.selector.path.clone(),
                 query: Default::default(),

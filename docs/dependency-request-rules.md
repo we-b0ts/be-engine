@@ -1,0 +1,167 @@
+# Generated dependency request fields
+
+These contracts compare request copies while preserving the recordings and
+recorded responses. All entries below belong in version 3 `dependency_rules`.
+Normal protocol rules use `case: {method, path}` for the inbound HTTP API;
+`dynamic_value` retains its existing route-only `api` selector.
+
+## Integer JSON-RPC correlation ID
+
+```yaml
+- id: rpc-correlation
+  kind: dynamic_value
+  api: /knowledge/*/nodes
+  value_type: integer
+  targets: [{host: rpc.internal, port: 443}]
+  capture:
+    protocol: http
+    target: {host: rpc.internal, port: 443}
+    method: POST
+    path: /mcp/knowledge/sse
+    json_pointer: /id
+  source_evidence: 'RpcClient:request increments an integer correlation counter'
+```
+
+The default remains `value_type: string`. Integer captures preserve JSON type
+and bind only the selected pointer on the selected request. They do not infer
+references in other numbers, strings, paths, Redis arguments or response IDs.
+Floats, stringified integers, missing pointers and inconsistent bindings fail.
+Stable JSON members and the original HTTP path/query remain checked.
+
+## Redis SET JSON containing generated JWTs and a timestamp
+
+```yaml
+- id: approved-session
+  protocol: redis
+  case: {method: POST, path: /sessions/*/approve}
+  target: {host: cache.internal, port: 6379}
+  source_evidence: 'Session:approve writes current Unix seconds and two signed tokens'
+  redis:
+    database: 0
+    key: {prefix: 'session:'}
+    commands:
+    - command: SET
+      argument_values:
+        1:
+          json:
+            /approved_at: {time: preserve_relative, format: unix_seconds, tolerance: 5s}
+            /access_token:
+              jwt:
+                signing_key_source: {kind: target_env, name: SECRET_KEY}
+                algorithm: HS256
+                relative_to: /approved_at
+            /refresh_token:
+              jwt:
+                signing_key_source: {kind: target_env, name: SECRET_KEY}
+                algorithm: HS256
+                relative_to: /approved_at
+                dynamic_claims: [/jti]
+```
+
+Argument indices exclude the command: SET key is index 0, value is index 1,
+and options such as `EX 300` remain exact. JSON members use exact, nonoverlapping
+JSON pointers and are validated together. JSON serialization order may differ;
+unselected values, member presence and array order must agree.
+
+Both JWT signatures must verify using the declared target startup input. Keys
+are cached privately for the Replay session and never included in rules,
+plans or diagnostics. `target_file` with `path` and `field` also works through
+the existing read-only startup mount mechanism. Supported algorithms are
+HS256, HS384 and HS512. Header values and stable claims must agree. `exp` is
+required; `exp`, `iat` and `nbf` retain their relative relationship to the
+selected JSON timestamp. Historical tokens are checked at their generation
+time. An explicit `/jti` permits a bijective case-local UUID v4 binding; other
+dynamic claims are rejected. A failed field leaves all bindings uncommitted.
+
+## Redis write timestamps with preserved parameter differences
+
+```yaml
+- id: presence-time
+  protocol: redis
+  case: {method: PUT, path: /presence}
+  target: {host: cache.internal, port: 6379}
+  source_evidence: 'Presence:update uses current time for expiry score and cleanup cutoff'
+  redis:
+    database: 0
+    key: {prefix: 'presence:', numeric: true}
+    commands:
+    - command: ZADD
+      argument_values:
+        1: {time: preserve_relative, format: unix_seconds, tolerance: 5s}
+    - command: ZREMRANGEBYSCORE
+      argument_values:
+        2: {time: preserve_relative, format: unix_seconds, tolerance: 5s}
+```
+
+There is no configured clock or offset. The source anchor is the immutable
+inbound recording timestamp; the target anchor is taken by Replay immediately
+before the engine sends the inbound request. Each selected time preserves its
+distance from its own anchor. Integer and fractional Unix seconds are supported;
+the numeric category is preserved. Tolerance defaults to 5s and cannot exceed 5s.
+
+The command list also preserves order and the recorded parameter difference
+within 1 microsecond. The sequence resets after each complete update, allowing
+later updates on the same key. It does not pin the key to its first update time.
+This initial implementation supports a plain single-member ZADD score and a
+ZREMRANGEBYSCORE maximum. Keys, members, range minimums, extra options, database,
+authentication, connection lanes and finite consumption remain checked.
+
+Managed E2E sends the internal `request_begin` control command after preparing
+the inbound request. For manual low-level Replay, call
+`traffic-e2e diagnose replay-control --session SESSION request-begin CASE_ID`
+immediately before sending that request. Beginning a case alone does not supply
+a time anchor, and missing anchors fail closed.
+
+## HTTP multipart boundary
+
+```yaml
+- id: multipart-upload
+  protocol: http
+  case: {method: POST, path: /attachments/*}
+  target: {host: upload.internal, port: 80}
+  source_evidence: 'Uploader:build generates a fresh multipart boundary'
+  http:
+    method: POST
+    path: /upload
+    multipart: {boundary: normalize}
+```
+
+Only matching multipart delimiters and the Content-Type boundary may differ.
+The parser requires a complete form-data body and matching boundary declaration.
+Part header bytes, field names/values, filenames, content types, ordering,
+multiplicity and file bytes remain exact. Other Content-Type parameters,
+non-transport identity headers, path and query remain checked. Truncation,
+duplicate boundary declarations, malformed delimiters or trailing bytes fail.
+Bodies are bounded to 16 MiB, 128 parts and 16 KiB of headers per part.
+
+## Existing discovery and authoring workflow
+
+1. Run focused Replay, then query `dirty_clusters` evidence. Integer differences
+   appear in `dynamic_capture_candidates`; the other contracts appear in
+   `dependency_request_candidates`. Review the source generator before selecting
+   locations. JWT candidates also expose the existing `signing_key_discovery`
+   projection of startup variable names and mount paths.
+2. Use `backend-rewrite rule plan --evidence-id ID --dynamic-value RULE_JSON`
+   for the integer rule, or `--dependency-request RULE_JSON` for the other three.
+   Supply `--source-evidence 'file:function explains generation and semantics'`.
+   The coordinator supplies the active inbound API scope. Plan one family at a
+   time; no response body codec is needed.
+3. Apply with `backend-rewrite rule apply --plan-id ID`, then run fresh Replay
+   using the existing recordings. Usage and unused applicable rules are reported
+   through the existing policy gates.
+
+Planning requires a finalized report under the current policy and complete,
+same-case immutable dependency witnesses. A failed first Redis command may
+prevent later target commands; every configured command must nevertheless be
+present for the same key in the source recording. Runtime verifies the complete
+target sequence after apply.
+
+Target witnesses are bounded to 64 candidates and 1 MiB each, authenticated and
+encrypted with the existing managed recording key. Discovery removes encrypted
+payloads and exposes metadata only. Multipart witnesses use SHA-256 digests of
+complete part bytes, so larger file content does not inflate the protected report.
+Witness encryption also authenticates the
+endpoint, command, case and request-time anchor. A missing key prevents witness
+capture; initialize the managed key or provide `TRAFFIC_E2E_ENCRYPTION_KEY_B64`
+for external recordings before fresh Replay. Plans reject changed policy,
+report or source witnesses, and applying a rule never marks old Replay as passed.

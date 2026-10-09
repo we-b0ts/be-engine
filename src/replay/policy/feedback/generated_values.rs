@@ -1,4 +1,5 @@
 //! Evidence-backed policy edits for captured identities and response header dates.
+mod dependency_request;
 mod evidence;
 mod header_evidence;
 mod request_evidence;
@@ -12,6 +13,7 @@ use super::{
     response_body::ResponseBodyRuleEvidence,
 };
 use anyhow::{Context, Result, ensure};
+pub use dependency_request::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
 use serde::Serialize;
 use std::{fs, path::PathBuf};
 
@@ -50,6 +52,7 @@ pub struct GeneratedValueRulePlan {
     original: String,
     updated: String,
     witnesses: Vec<(PathBuf, String)>,
+    key_witnesses: Vec<crate::request_rules::keys::ResolvedSigningKey>,
     report: GeneratedValueRuleReport,
 }
 
@@ -70,6 +73,9 @@ impl GeneratedValueRulePlan {
                 )?) == *identity,
                 "generated value evidence changed after planning"
             );
+        }
+        for key in &self.key_witnesses {
+            key.ensure_current()?;
         }
         if self.original != self.updated {
             crate::config::edit::write_atomic(&self.policy_path, self.updated.as_bytes())?;
@@ -120,6 +126,7 @@ pub fn plan_dynamic_value_rule(
         original,
         updated,
         witnesses,
+        key_witnesses: vec![],
     })
 }
 
@@ -173,5 +180,6 @@ pub fn plan_response_header_date_rule(
         original,
         updated,
         witnesses,
+        key_witnesses: vec![],
     })
 }

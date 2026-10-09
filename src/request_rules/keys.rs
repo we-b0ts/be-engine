@@ -12,6 +12,44 @@ pub enum SigningKeySource {
     TargetFile { path: PathBuf, field: String },
 }
 
+/// Private, immutable key snapshot. It is deliberately neither Debug nor Serialize.
+#[derive(Clone)]
+pub(crate) struct ResolvedSigningKey {
+    root: PathBuf,
+    source: SigningKeySource,
+    value: Vec<u8>,
+}
+
+impl ResolvedSigningKey {
+    pub(crate) fn resolve(root: &Path, source: &SigningKeySource) -> Result<Self> {
+        Ok(Self {
+            root: root.into(),
+            source: source.clone(),
+            value: resolve_source(root, source)?,
+        })
+    }
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.value
+    }
+    pub(crate) fn ensure_current(&self) -> Result<()> {
+        ensure!(
+            resolve_source(&self.root, &self.source)? == self.value,
+            "JWT signing input changed after planning; obtain fresh evidence and plan again"
+        );
+        Ok(())
+    }
+    #[cfg(test)]
+    pub(crate) fn for_test(value: &[u8]) -> Self {
+        Self {
+            root: PathBuf::new(),
+            source: SigningKeySource::TargetEnv {
+                name: "TEST_KEY".into(),
+            },
+            value: value.into(),
+        }
+    }
+}
+
 pub(crate) fn validate_reference(reference: &str) -> Result<()> {
     ensure!(
         !reference.is_empty()

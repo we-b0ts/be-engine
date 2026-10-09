@@ -309,6 +309,14 @@ impl RequestHeaderCipher {
     }
 }
 
+/// Reuse the managed authenticated cipher for private dependency request witnesses.
+pub(crate) fn encrypt_evidence(path: &Path, label: &str, bytes: &[u8]) -> Result<String> {
+    RequestHeaderCipher::from_environment_or_request_path(Some(path))?.encrypt(label, bytes)
+}
+pub(crate) fn decrypt_evidence(path: &Path, label: &str, value: &str) -> Result<Vec<u8>> {
+    RequestHeaderCipher::from_environment_or_request_path(Some(path))?.decrypt(label, value)
+}
+
 pub(crate) fn generate_encryption_key() -> Result<String> {
     let mut key = [0_u8; AES_256_KEY_BYTES];
     getrandom::fill(&mut key).map_err(|error| {

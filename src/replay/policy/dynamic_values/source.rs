@@ -11,6 +11,7 @@ pub(in crate::replay) struct SourceCapture {
 
 pub(in crate::replay) fn from_event(
     capture: &DynamicValueCapture,
+    value_type: DynamicValueType,
     event: &Value,
 ) -> Result<Option<SourceCapture>> {
     if event
@@ -79,7 +80,7 @@ pub(in crate::replay) fn from_event(
             decode(&event["response_body"])?;
             let payload = decode(&event["request_body"])?;
             Ok(Some(SourceCapture {
-                value: strings::capture(&payload, Some(json_pointer))?,
+                value: super::http::capture(&payload, json_pointer, value_type)?,
                 payload,
             }))
         }
@@ -97,10 +98,16 @@ fn http_target(event: &Value, target: &DynamicValueTarget) -> bool {
         .or_else(|| uri.as_ref().and_then(|uri| uri.authority().cloned()));
     authority.is_some_and(|authority| {
         authority.host().eq_ignore_ascii_case(&target.host)
-            && authority
-                .port_u16()
-                .unwrap_or(if event["scheme"] == "https" { 443 } else { 80 })
-                == target.port
+            && authority.port_u16().unwrap_or(
+                if matches!(
+                    event["scheme"].as_str(),
+                    Some("https" | "fake_ip_https" | "intercepted_https")
+                ) {
+                    443
+                } else {
+                    80
+                },
+            ) == target.port
     })
 }
 

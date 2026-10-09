@@ -7,6 +7,8 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(in crate::replay) struct CaptureCandidate {
     pub case_id: String,
+    #[serde(default)]
+    pub value_type: DynamicValueType,
     pub capture: DynamicValueCapture,
     pub source_payload_fingerprint: String,
     pub source_value_fingerprint: String,
@@ -26,6 +28,7 @@ impl DynamicValues {
         payload: &[u8],
         source: &str,
         target: &str,
+        value_type: DynamicValueType,
     ) {
         if source == target
             || source.is_empty()
@@ -38,6 +41,7 @@ impl DynamicValues {
         let uuid = uuid::Uuid::parse_str(target).ok();
         let candidate = CaptureCandidate {
             case_id: case.into(),
+            value_type,
             capture,
             source_payload_fingerprint: fingerprint(payload),
             source_value_fingerprint: fingerprint(source.as_bytes()),
@@ -88,9 +92,12 @@ impl DynamicValues {
             {
                 continue;
             }
-            let (pointer, left, right) = if let Some((pointer, left, right)) =
+            let (pointer, left, right) = if let Some((pointer, left, right, value_type)) =
                 json_difference(&source[index], &actual[index])
             {
+                if value_type != DynamicValueType::String {
+                    continue;
+                }
                 (Some(pointer), left, right)
             } else {
                 let (Ok(left), Ok(right)) = (
@@ -117,6 +124,7 @@ impl DynamicValues {
                 &serde_json::to_vec(source).expect("byte vectors serialize"),
                 &left,
                 &right,
+                DynamicValueType::String,
             );
         }
     }
@@ -132,7 +140,7 @@ impl DynamicValues {
         if !self.routes.contains_key(case) {
             return;
         }
-        if let Some((pointer, left, right)) = json_difference(source, actual) {
+        if let Some((pointer, left, right, value_type)) = json_difference(source, actual) {
             self.candidate(
                 case,
                 DynamicValueCapture::Http {
@@ -147,12 +155,16 @@ impl DynamicValues {
                 source,
                 &left,
                 &right,
+                value_type,
             );
         }
     }
 }
 
-fn json_difference(source: &[u8], target: &[u8]) -> Option<(String, String, String)> {
+fn json_difference(
+    source: &[u8],
+    target: &[u8],
+) -> Option<(String, String, String, DynamicValueType)> {
     let (source, target) = (
         crate::replay::json_order::parse(source)?,
         crate::replay::json_order::parse(target)?,
@@ -163,7 +175,7 @@ fn json_difference(source: &[u8], target: &[u8]) -> Option<(String, String, Stri
         target: &Value,
         path: String,
         depth: usize,
-        out: &mut Vec<(String, String, String)>,
+        out: &mut Vec<(String, String, String, DynamicValueType)>,
     ) -> Option<()> {
         if source == target {
             return Some(());
@@ -173,7 +185,17 @@ fn json_difference(source: &[u8], target: &[u8]) -> Option<(String, String, Stri
         }
         match (source, target) {
             (Value::String(left), Value::String(right)) => {
-                out.push((path, left.clone(), right.clone()))
+                out.push((path, left.clone(), right.clone(), DynamicValueType::String))
+            }
+            (Value::Number(left), Value::Number(right))
+                if (left.is_i64() || left.is_u64()) && (right.is_i64() || right.is_u64()) =>
+            {
+                out.push((
+                    path,
+                    left.to_string(),
+                    right.to_string(),
+                    DynamicValueType::Integer,
+                ))
             }
             (Value::Object(left), Value::Object(right)) if left.keys().eq(right.keys()) => {
                 for (key, value) in left {

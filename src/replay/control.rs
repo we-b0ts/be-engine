@@ -292,6 +292,26 @@ pub(super) async fn handle_control_request(
                 Err(error) => serde_json::json!({"ok": false, "error": format!("{error:#}")}),
             }
         }
+        "request_begin" => {
+            let state = state.lock().await;
+            if let Some(case) = request
+                .case_id
+                .as_deref()
+                .filter(|case| state.active_case_id.as_deref() == Some(*case))
+            {
+                match state
+                    .replay_policy
+                    .as_ref()
+                    .map(|policy| policy.request_contracts.request_begin(case))
+                    .transpose()
+                {
+                    Ok(_) => serde_json::json!({"ok":true}),
+                    Err(error) => serde_json::json!({"ok":false,"error":error.to_string()}),
+                }
+            } else {
+                serde_json::json!({"ok":false,"error":"request_begin requires the active case"})
+            }
+        }
         "begin" => begin_case(&request, state.clone()).await,
         "end" => end_case(&request, state.clone()).await,
         "report" => {

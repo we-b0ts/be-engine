@@ -322,3 +322,51 @@ fn redis_and_http_audits_restore_only_proven_same_case_sql_references() {
         assert!(from_report(&[rule], &report, "case", "/items", &bytes, &left, &right).is_err());
     }
 }
+
+#[test]
+fn integer_http_identity_preserves_type_and_only_normalizes_the_declared_pointer() {
+    let rule: DynamicValueRule = serde_json::from_value(json!({"id":"rpc-id","api":"/items","value_type":"integer","targets":[{"host":"service.test","port":80}],"capture":{"protocol":"http","target":{"host":"service.test","port":80},"method":"POST","path":"/rpc","json_pointer":"/id"},"source_evidence":"RpcClient:counter generates an integer correlation id"})).unwrap();
+    rule.validate().unwrap();
+    let runtime = DynamicValues::new(
+        vec![rule],
+        BTreeMap::from([("case".into(), "/items".into())]),
+    );
+    let source = br#"{"id":10,"business_id":10,"text":"10","method":"list"}"#;
+    let actual = br#"{"id":20,"business_id":10,"text":"10","method":"list"}"#;
+    let compare = |actual: &[u8]| {
+        runtime
+            .http(
+                Some("case"),
+                &endpoint(80),
+                "POST",
+                HttpInput {
+                    uri: "/rpc",
+                    body: source,
+                },
+                HttpInput {
+                    uri: "/rpc",
+                    body: actual,
+                },
+            )
+            .unwrap()
+    };
+    let normalized = compare(actual).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&normalized.source_body).unwrap(),
+        serde_json::from_slice::<serde_json::Value>(&normalized.actual_body).unwrap()
+    );
+    runtime.commit("case", normalized.decision);
+    let normalized = compare(br#"{"id":20,"business_id":20,"text":"20","method":"list"}"#).unwrap();
+    assert_ne!(
+        serde_json::from_slice::<serde_json::Value>(&normalized.source_body).unwrap(),
+        serde_json::from_slice::<serde_json::Value>(&normalized.actual_body).unwrap()
+    );
+    assert!(compare(br#"{"id":"20","business_id":10,"text":"10","method":"list"}"#).is_err());
+    assert!(compare(br#"{"id":20.0,"business_id":10,"text":"10","method":"list"}"#).is_err());
+    assert!(compare(br#"{"id":21,"business_id":10,"text":"10","method":"list"}"#).is_err());
+    runtime.observe_http("case", &endpoint(80), "POST", "/rpc", source, actual);
+    assert_eq!(
+        runtime.capture_candidates()[0].value_type,
+        DynamicValueType::Integer
+    );
+}

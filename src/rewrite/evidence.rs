@@ -275,6 +275,10 @@ fn facts(
         QUERY_DIRTY_CLUSTERS => {
             let counts = query_e2e_dirty_counts(e2e_context(target_root, state)?, group_id(state)?)?;
             let mut facts = dirty_cluster_facts(target_root, counts);
+            facts["dependency_request_candidates"] = crate::e2e_run::query_dependency_request_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
+            if facts["dependency_request_candidates"].as_array().is_some_and(|items| items.iter().any(|item| item["capability"] == "redis_json_request")) {
+                facts["signing_key_discovery"] = super::jwt_rule::signing_key_discovery(target_root);
+            }
             facts["dynamic_capture_candidates"] = crate::e2e_run::query_dynamic_capture_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
             facts["http_header_timestamp_candidates"] = serde_json::to_value(rule_guidance::http_header_timestamp_candidates(&facts))?;
             if facts["clusters"].as_array().is_some_and(|clusters| clusters.iter().any(|c| c["protocol"] == "http" && c["reason"] == "unmatched_target")) {

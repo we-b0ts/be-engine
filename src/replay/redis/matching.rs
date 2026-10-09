@@ -10,6 +10,23 @@ impl RedisReplayState {
     fn arguments_match(&self, exchange: &ReplayExchange, args: &[Vec<u8>]) -> bool {
         if exchange.source == ReplaySource::Case
             && exchange.shared_rule_id.is_none()
+            && let Some(case) = exchange.case_id.as_deref()
+            && let Some(result) = self.request_contracts.preview_redis(
+                case,
+                &TargetKey {
+                    host: exchange.record.target_host.clone(),
+                    port: exchange.record.target_port,
+                },
+                exchange.record.database,
+                &exchange.record.command,
+                &exchange.args,
+                args,
+            )
+        {
+            return result.is_ok();
+        }
+        if exchange.source == ReplaySource::Case
+            && exchange.shared_rule_id.is_none()
             && let Some(normalized) = self.dynamic_values.redis(
                 exchange.case_id.as_deref(),
                 &TargetKey {
@@ -102,6 +119,14 @@ impl RedisReplayState {
                         && exchange.record.command == command
                 }) {
                     if let Some(case) = active_case_id {
+                        self.request_contracts.observe_redis(
+                            case,
+                            target,
+                            database,
+                            command,
+                            &exchange.args,
+                            args,
+                        );
                         self.dynamic_values.observe_redis(
                             case,
                             target,
@@ -190,6 +215,23 @@ impl RedisReplayState {
             }
         };
         let exchange = &self.exchanges[index];
+        let request_decision = (exchange.source == ReplaySource::Case
+            && exchange.shared_rule_id.is_none())
+        .then(|| {
+            exchange.case_id.as_deref().and_then(|case| {
+                self.request_contracts.preview_redis(
+                    case,
+                    target,
+                    database,
+                    command,
+                    &exchange.args,
+                    args,
+                )
+            })
+        })
+        .flatten()
+        .transpose()
+        .expect("selected Redis request contract was validated");
         let normalized = (exchange.source == ReplaySource::Case
             && exchange.shared_rule_id.is_none())
         .then(|| {
@@ -220,6 +262,9 @@ impl RedisReplayState {
         rule_ids.extend(self.publish_rules.claim(&normalized_exchange, arguments));
         if let (Some(case), Some(normalized)) = (exchange.case_id.as_deref(), normalized) {
             self.dynamic_values.commit(case, normalized.decision);
+        }
+        if let Some(decision) = request_decision {
+            self.request_contracts.commit(decision);
         }
         let requires_binding =
             self.connection_scopes

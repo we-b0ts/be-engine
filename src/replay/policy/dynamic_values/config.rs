@@ -157,9 +157,25 @@ pub enum DynamicValueFormat {
     UuidV4,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DynamicValueType {
+    #[default]
+    String,
+    Integer,
+}
+
+impl DynamicValueType {
+    fn is_string(&self) -> bool {
+        *self == Self::String
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DynamicValueRule {
+    #[serde(default, skip_serializing_if = "DynamicValueType::is_string")]
+    pub value_type: DynamicValueType,
     pub id: String,
     #[serde(default)]
     pub api: String,
@@ -198,6 +214,12 @@ impl DynamicValueRule {
             target.validate()?;
         }
         self.capture.validate()?;
+        ensure!(
+            self.value_type == DynamicValueType::String
+                || matches!(self.capture, DynamicValueCapture::Http { .. })
+                    && self.format.is_none(),
+            "integer dynamic values require an HTTP JSON capture without a string format"
+        );
         let target = self.capture.target();
         ensure!(
             self.targets.iter().any(|endpoint| endpoint == target),
@@ -208,6 +230,14 @@ impl DynamicValueRule {
     }
 
     pub(in crate::replay) fn validate_value(&self, value: &str) -> Result<()> {
+        if self.value_type == DynamicValueType::Integer {
+            let value: serde_json::Value = serde_json::from_str(value)?;
+            ensure!(
+                value.is_i64() || value.is_u64(),
+                "dynamic identity must be a JSON integer"
+            );
+            return Ok(());
+        }
         ensure!(
             !value.is_empty() && value.len() <= 1024,
             "dynamic identities must be nonempty strings of at most 1024 bytes"

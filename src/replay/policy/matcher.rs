@@ -44,6 +44,7 @@ pub(in crate::replay) struct DependencyRuleDecision {
 
 #[derive(Debug)]
 pub(in crate::replay) struct ReplayPolicyRuntime {
+    pub(in crate::replay) request_contracts: super::request_contract::RequestContracts,
     pub(in crate::replay) dynamic_values: super::dynamic_values::DynamicValues,
     loaded: LoadedReplayPolicy,
     cases: BTreeMap<String, CaseIdentity>,
@@ -141,6 +142,11 @@ impl ReplayPolicyRuntime {
             .map(|rule| (rule.id.clone(), DependencyRuleUsage::default()))
             .collect();
         let runtime = Self {
+            request_contracts: super::request_contract::RequestContracts::load(
+                &loaded.document.dependency_rules,
+                path,
+                cases,
+            )?,
             dynamic_values: super::dynamic_values::DynamicValues::new(
                 loaded.document.dynamic_values.clone(),
                 case_identities
@@ -156,11 +162,13 @@ impl ReplayPolicyRuntime {
             usage,
             bindings: BTreeMap::new(),
         };
-        if observe_sources && runtime.dynamic_values.enabled() {
+        if observe_sources
+            && (runtime.dynamic_values.enabled() || runtime.request_contracts.enabled())
+        {
             for case in cases.values() {
-                runtime
-                    .dynamic_values
-                    .observe_source(&case.id, &fs::read(case.dir.join("dependencies.jsonl"))?)?;
+                let bytes = fs::read(case.dir.join("dependencies.jsonl"))?;
+                runtime.dynamic_values.observe_source(&case.id, &bytes)?;
+                runtime.request_contracts.observe_source(&case.id, &bytes)?;
             }
         }
         Ok(runtime)
@@ -265,6 +273,7 @@ impl ReplayPolicyRuntime {
 
     pub(in crate::replay) fn begin_case(&mut self, case_id: &str) {
         self.dynamic_values.begin_case(case_id);
+        self.request_contracts.begin_case(case_id);
         self.bindings.remove(case_id);
     }
 
@@ -601,6 +610,7 @@ impl ReplayPolicyRuntime {
             .document
             .dependency_rules
             .iter()
+            .filter(|rule| !super::request_contract::is_request_rule(rule))
             .map(|rule| {
                 let usage = self.usage.get(&rule.id).cloned().unwrap_or_default();
                 DependencyRuleReport {
@@ -616,6 +626,7 @@ impl ReplayPolicyRuntime {
                 }
             })
             .chain(self.dynamic_values.rule_reports())
+            .chain(self.request_contracts.reports())
             .collect::<Vec<_>>();
         let unused_applicable_dependency_rule_ids = dependency_rules
             .iter()
@@ -630,6 +641,7 @@ impl ReplayPolicyRuntime {
             dependency_rules,
             dynamic_bindings: self.dynamic_values.report(),
             dynamic_capture_candidates: self.dynamic_values.capture_candidates(),
+            request_contract_candidates: self.request_contracts.candidates(),
             unused_applicable_dependency_rule_ids,
         }
     }

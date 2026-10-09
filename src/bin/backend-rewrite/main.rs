@@ -605,6 +605,7 @@ async fn run(cli: Cli) -> Result<()> {
                     RewriteRulePlanOptions {
                         header_dates: args.header_dates,
                         dynamic_value: args.dynamic_value,
+                        dependency_request: args.dependency_request,
                         evidence_id: args.evidence_id,
                         body_codec: args
                             .body_codec

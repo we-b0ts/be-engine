@@ -3,10 +3,10 @@ pub use crate::replay::{
     ComparisonResponseRuleFeedback, ComparisonSourceMatch, ComparisonVerificationPolicy,
     DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS, DocxBodyDifference,
     DocxBodyDifferenceKind, DocxTimestampRule, DynamicValueCapture, DynamicValueFormat,
-    DynamicValueRule, DynamicValueTarget, Hessian2BodyDifference, Hessian2BodyDifferenceKind,
-    Hessian2JoinedStringCandidate, Hessian2JoinedStringPath, Hessian2UnorderedPath,
-    Hessian2ValuePath, Hessian2ValuePathCandidate, HttpCrossCaseFeedback, HttpCrossCasePlan,
-    HttpCrossCaseReport, HttpCrossCaseSelector, JsonJoinedStringCandidate,
+    DynamicValueRule, DynamicValueTarget, DynamicValueType, Hessian2BodyDifference,
+    Hessian2BodyDifferenceKind, Hessian2JoinedStringCandidate, Hessian2JoinedStringPath,
+    Hessian2UnorderedPath, Hessian2ValuePath, Hessian2ValuePathCandidate, HttpCrossCaseFeedback,
+    HttpCrossCasePlan, HttpCrossCaseReport, HttpCrossCaseSelector, JsonJoinedStringCandidate,
     MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MemcachedTimestampRuleReport,
     MysqlReplayConfig, MysqlReplayControlConfig, MysqlTimeRuleFeedback, MysqlTimeRulePlan,
     MysqlTimeRuleReport, MysqlTimeSelector, MysqlTimeValueSelector, ProfileTargetMissingFeedback,
@@ -72,3 +72,5 @@ pub use crate::replay::{
     RedisPublishFeedback, RedisPublishPlan, RedisPublishReport, RedisPublishSelector,
     plan_redis_publish,
 };
+
+pub use crate::replay::{DependencyRequestRuleFeedback, plan_dependency_request_rule};

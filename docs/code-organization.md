@@ -50,6 +50,15 @@ is unclear.
 - Top-level `http` owns reusable HTTP forwarding policy. `proxy/http` and
   `gateway/http` own their respective runtimes, while `recorder/http` owns
   recorded HTTP case persistence.
+- `replay/policy/request_contract` owns explicit dependency request selectors,
+  atomic comparison decisions, case-local time/nonce state and protected failed
+  request witnesses. Its config and overlap children validate ownership; its
+  evidence child validates immutable recording witnesses. Redis matching and
+  HTTP matching call it only for case-owned exchanges. `replay/http/multipart`
+  owns bounded multipart parsing; `replay/http/matching` owns HTTP selection.
+  Generated-value feedback and coordinator adapters keep the existing
+  evidence/plan/apply/fresh-Replay transaction. Replay control supplies an
+  independent inbound request anchor; protocol arguments cannot choose it.
 - `replay/assertion/time` owns the shared timestamp formats and fixed request
   time windows consumed by response assertions and dependency-header rules.
   `replay/policy/http_headers` owns typed selectors/schema validation, its
