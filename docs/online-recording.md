@@ -49,6 +49,12 @@ and post-ready observation, are reused. HTTP include/exclude rules are cleared
 to admit every valid gateway request. Online deployment still supplies its
 internal listener, Source origin, fixed 404 fallback and persistent mount paths;
 explicit readiness, request-timeout and case-limit options override project values.
+The project setting `recorder.http_gateway.record_streaming` is also retained;
+there is no separate CLI override. Its default is `false`. With `false`, any
+request whose `Accept` includes `text/event-stream` returns the online fixed
+404 before Source dispatch, including mixed JSON/SSE MCP requests. The adapter
+releases the reservation on this response, allowing the gateway to use its
+original path. See [SSE recording selection](http-sse.md).
 Without project configuration the per-API default is `usize::MAX`
 (`u64::MAX` on the supported 64-bit deployment). `--case-limit N` or
 `TRAFFIC_E2E_CASE_LIMIT=N` applies a smaller positive limit. After an API hits
@@ -102,8 +108,9 @@ With `/api/teams/*/skills`, requests for different team IDs share the
 recordings retain their existing groups.
 
 `--no-interception` is for local adapter tests only. HTTP request and response
-bodies are buffered. Primary `text/event-stream` responses use a bounded 50 ms
-observation after receiving Source headers, then Recorder ends the upstream
+bodies are buffered. When streaming recording is explicitly enabled, primary
+`text/event-stream` responses use a bounded 50 ms observation after receiving
+Source headers, then Recorder ends the upstream
 response and finalizes the case. The adapter forwards this finite response and
 releases admission after finalization. See [bounded SSE support](http-sse.md)
 for the recording/replay contract. HTTP upgrade and indefinite streaming sessions

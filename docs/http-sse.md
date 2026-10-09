@@ -1,5 +1,31 @@
 # Bounded primary HTTP SSE recording and replay
 
+`recorder.http_gateway.record_streaming` controls request admission for both
+ordinary and online recording. It defaults to `false`, bypassing requests
+declaring SSE before any case is created or Source request is dispatched.
+The setting can be made explicit in project YAML:
+
+```yaml
+recorder:
+  http_gateway:
+    record_streaming: false
+```
+
+With `false`, any `Accept` field containing a `text/event-stream` media range
+uses the configured fallback. Matching is case-insensitive and checks all
+repeated fields and comma-separated ranges, including parameters and `q=0`;
+this is conservative selection, not content negotiation. Mixed
+`application/json, text/event-stream` requests also bypass recording, including
+MCP initialization POSTs. No response headers or request JSON are needed for
+this decision. Requests without an explicit SSE media range keep their existing
+behavior; `*/*` alone does not trigger the bypass.
+
+`fixed_response` returns the configured status, headers and body; a configured
+404 lets the upstream recording gateway retry its original Python path.
+`upstream` forwards to `fallback_upstream`. Bypassed requests do not occupy a
+case slot or count toward API case limits. Enabling the switch retains the
+bounded observation below; it does not enable long-lived stream forwarding.
+
 For admitted recording requests, the HTTP gateway recognizes `Content-Type: text/event-stream`
 (case-insensitive, with optional parameters). After receiving the upstream
 response headers, it observes the response body for **50 ms**. It collects all

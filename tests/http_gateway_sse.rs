@@ -36,6 +36,7 @@ impl Gateway {
         config.http.enabled = false;
         config.mysql.enabled = false;
         config.http_gateway.enabled = true;
+        config.http_gateway.record_streaming = true;
         config.http_gateway.listen = address;
         config.http_gateway.matched_upstream = format!("http://{upstream}");
         config.http_gateway.fallback_upstream = format!("http://{upstream}");
@@ -70,7 +71,7 @@ impl Gateway {
         let mut stream = TcpStream::connect(self.address).await.unwrap();
         stream
             .write_all(
-                format!("GET {path} HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")
+                format!("GET {path} HTTP/1.1\r\nHost: example.com\r\nAccept: text/event-stream\r\nConnection: close\r\n\r\n")
                     .as_bytes(),
             )
             .await

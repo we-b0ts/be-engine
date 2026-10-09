@@ -25,7 +25,12 @@ mod sse;
 
 #[test]
 fn bounded_sse_finalizes_through_relay_and_releases_admission() {
-    runtime().block_on(sse::bounded_sse_finalizes_through_relay_and_releases_admission());
+    runtime().block_on(sse::recording_policy_through_relay(true));
+}
+
+#[test]
+fn disabled_streaming_returns_404_through_relay_and_releases_admission() {
+    runtime().block_on(sse::recording_policy_through_relay(false));
 }
 
 #[derive(Parser)]
@@ -270,11 +275,24 @@ impl Fixture {
         token: Option<&str>,
         body: &'static str,
     ) -> (StatusCode, Bytes) {
+        self.request_with_accept(method, token, body, None).await
+    }
+
+    async fn request_with_accept(
+        &self,
+        method: &str,
+        token: Option<&str>,
+        body: &'static str,
+        accept: Option<&str>,
+    ) -> (StatusCode, Bytes) {
         let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
         let mut request = Request::builder()
             .method(method)
             .uri(format!("{}/api/example?q=x", self.url))
             .header("host", "original.example");
+        if let Some(accept) = accept {
+            request = request.header("accept", accept);
+        }
         if let Some(token) = token {
             request = request
                 .header("x-breeze-admission-scope", "all-apis")

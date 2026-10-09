@@ -173,5 +173,17 @@ mod tests {
         );
         assert_eq!(config.http_gateway.fixed_response.unwrap().status, 200);
         assert_eq!(config.http_gateway.request_timeout_ms, 15_000);
+        assert!(!config.http_gateway.record_streaming);
+    }
+
+    #[test]
+    fn streaming_recording_can_be_enabled_and_round_trips() {
+        let config: crate::AppConfig =
+            toml::from_str("[http_gateway]\nrecord_streaming = true\n").unwrap();
+        config.validate().unwrap();
+        assert!(config.http_gateway.record_streaming);
+        let yaml = serde_yaml::to_string(&config).unwrap();
+        let reloaded: crate::AppConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert!(reloaded.http_gateway.record_streaming);
     }
 }

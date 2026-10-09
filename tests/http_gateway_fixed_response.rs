@@ -191,6 +191,143 @@ fn fixed_response_config(
     config
 }
 
+#[tokio::test]
+async fn disabled_streaming_uses_fixed_fallback_before_dispatch_and_keeps_case_capacity() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let temp = tempdir().unwrap();
+    let source = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway_addr = free_addr();
+    let mut config = fixed_response_config(
+        &temp,
+        gateway_addr,
+        source.local_addr().unwrap(),
+        404,
+        r#"{"code":"not_recorded"}"#,
+    );
+    config.http.enabled = false;
+    assert!(!config.http_gateway.record_streaming);
+    config.http_gateway.per_api_case_limits.default = 1;
+    config.recording.case_dependency_post_response_window_ms = 0;
+    let state = AppState::new(config).await.unwrap();
+    let gateway = tokio::spawn(async move { state.run().await });
+    wait_for_port(gateway_addr).await;
+
+    for (method, accept) in [
+        ("GET", "text/event-stream"),
+        ("POST", "application/json, text/event-stream"),
+        ("POST", "Text/Event-Stream; q=0"),
+    ] {
+        let response = raw_http_request(
+            gateway_addr,
+            method,
+            "/api/mcp/knowledge/sse",
+            &format!("Accept: {accept}\r\n"),
+            r#"{"jsonrpc":"2.0","method":"initialize","id":1}"#,
+        )
+        .await;
+        assert!(response.contains("404 Not Found"), "{response}");
+        assert!(
+            response
+                .to_ascii_lowercase()
+                .contains("x-recorder-fallback: fixed")
+        );
+        assert!(response.contains(r#"{"code":"not_recorded"}"#));
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), source.accept())
+            .await
+            .is_err()
+    );
+    let run_dir = std::fs::read_dir(temp.path().join("recordings"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert!(!run_dir.join("apis").exists());
+    assert!(!run_dir.join("staging").exists());
+    assert!(!run_dir.join("failed").exists());
+
+    let normal_source = tokio::spawn(async move {
+        let (mut stream, _) = source.accept().await.unwrap();
+        let mut request = [0; 2048];
+        let size = stream.read(&mut request).await.unwrap();
+        assert!(
+            String::from_utf8_lossy(&request[..size])
+                .to_ascii_lowercase()
+                .contains("accept: application/json")
+        );
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+            .await
+            .unwrap();
+    });
+    let response = raw_http_request(
+        gateway_addr,
+        "POST",
+        "/api/mcp/knowledge/sse",
+        "Accept: application/json\r\n",
+        "{}",
+    )
+    .await;
+    assert!(response.contains("200 OK"), "{response}");
+    assert!(run_dir.join("apis/api-mcp-knowledge-sse").is_dir());
+    normal_source.await.unwrap();
+    gateway.abort();
+}
+
+#[tokio::test]
+async fn disabled_streaming_uses_configured_fallback_upstream_without_recording() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let temp = tempdir().unwrap();
+    let source = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let fallback = spawn_http_upstream("fallback", "200 OK", Duration::ZERO, Some(1)).await;
+    let gateway_addr = free_addr();
+    let mut config = fixed_response_config(
+        &temp,
+        gateway_addr,
+        source.local_addr().unwrap(),
+        404,
+        "unused",
+    );
+    config.http.enabled = false;
+    config.http_gateway.record_streaming = false;
+    config.http_gateway.fallback_mode = HttpGatewayFallbackMode::Upstream;
+    config.http_gateway.fixed_response = None;
+    config.http_gateway.fallback_upstream = format!("http://{fallback}");
+    let state = AppState::new(config).await.unwrap();
+    let gateway = tokio::spawn(async move { state.run().await });
+    wait_for_port(gateway_addr).await;
+    let response = raw_http_request(
+        gateway_addr,
+        "GET",
+        "/api/events",
+        "Accept: text/event-stream\r\n",
+        "",
+    )
+    .await;
+    assert!(
+        response.contains("200 OK") && response.ends_with("fallback"),
+        "{response}"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), source.accept())
+            .await
+            .is_err()
+    );
+    let run_dir = std::fs::read_dir(temp.path().join("recordings"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert!(!run_dir.join("apis").exists());
+    assert!(!run_dir.join("failed").exists());
+    gateway.abort();
+}
+
 async fn spawn_http_upstream(
     body: &'static str,
     status: &'static str,
@@ -223,11 +360,27 @@ async fn spawn_http_upstream(
 }
 
 async fn raw_http_get(addr: SocketAddr, path: &str) -> String {
+    raw_http_request(addr, "GET", path, "", "").await
+}
+
+async fn raw_http_request(
+    addr: SocketAddr,
+    method: &str,
+    path: &str,
+    headers: &str,
+    body: &str,
+) -> String {
     let mut client = TcpStream::connect(addr).await.unwrap();
-    let request = format!("GET {path} HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n");
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n{headers}Content-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
     client.write_all(request.as_bytes()).await.unwrap();
     let mut response = Vec::new();
-    client.read_to_end(&mut response).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), client.read_to_end(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
     String::from_utf8(response).unwrap()
 }
 

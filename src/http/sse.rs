@@ -4,7 +4,11 @@
 use anyhow::{Context, Result, ensure};
 use bytes::Bytes;
 use http_body_util::BodyExt as _;
-use hyper::{HeaderMap, body::Incoming, header::CONTENT_TYPE};
+use hyper::{
+    HeaderMap,
+    body::Incoming,
+    header::{ACCEPT, CONTENT_TYPE},
+};
 use serde::{Deserialize, Serialize};
 use tokio::time::{Duration, Instant, sleep_until};
 
@@ -61,6 +65,21 @@ pub(crate) fn is_event_stream(headers: &HeaderMap) -> bool {
         })
 }
 
+/// Conservative recording selection, not Accept quality-value negotiation.
+/// Even mixed JSON/SSE offers and `q=0` declare SSE for this policy.
+pub(crate) fn accepts_event_stream(headers: &HeaderMap) -> bool {
+    headers.get_all(ACCEPT).iter().any(|value| {
+        value.to_str().is_ok_and(|value| {
+            value.split(',').any(|range| {
+                range
+                    .split(';')
+                    .next()
+                    .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("text/event-stream"))
+            })
+        })
+    })
+}
+
 /// Starts after receipt of the response head. Dropping an unfinished Incoming
 /// at the deadline cancels the upstream response; no synthetic EOF is recorded.
 pub(crate) async fn observe(
@@ -96,4 +115,32 @@ pub(crate) async fn observe(
             end,
         },
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn streaming_selection_includes_mixed_and_zero_quality_accept_offers() {
+        for (accept, expected) in [
+            ("application/json", false),
+            ("*/*", false),
+            ("text/event-stream", true),
+            ("application/json, text/event-stream", true),
+            (" Text/Event-Stream ; charset=utf-8, application/json", true),
+            ("application/json, text/event-stream;q=0", true),
+            ("application/x-text/event-stream", false),
+            ("text/event-stream-extra", false),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(ACCEPT, accept.parse().unwrap());
+            assert_eq!(accepts_event_stream(&headers), expected, "{accept}");
+        }
+        let mut headers = HeaderMap::new();
+        assert!(!accepts_event_stream(&headers));
+        headers.append(ACCEPT, "application/json".parse().unwrap());
+        headers.append(ACCEPT, "text/event-stream".parse().unwrap());
+        assert!(accepts_event_stream(&headers));
+    }
 }
