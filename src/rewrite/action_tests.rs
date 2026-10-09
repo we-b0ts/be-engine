@@ -141,6 +141,12 @@ fn api_scoped_status_observes_recording_publication() {
         state.target_fingerprint =
             Some(super::super::fingerprint::repository_fingerprint(target.path()).unwrap());
         let (manifest, pending_kind) = if comparison {
+            fs::write(
+                target.path().join(crate::config::regression::PATH),
+                "require_comparison: true\n",
+            )
+            .unwrap();
+            state.require_comparison = true;
             state.phase = RewritePhase::ComparisonRecordingRequired;
             state.comparison_run_id = Some("20260802000001".into());
             state.e2e_current = true;

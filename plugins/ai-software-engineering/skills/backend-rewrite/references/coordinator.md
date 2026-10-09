@@ -580,7 +580,7 @@ and worktree until `terminal_allowed=true` and final delivery no longer needs
 them.
 
 Read `workflow.require_comparison` as the current local regression requirement
-from `.traffic-e2e/regression.yaml` (default true). `only` selects exact inventory
+from `.traffic-e2e/regression.yaml` (default false). `only` selects exact inventory
 routes without an HTTP method and includes every recorded method on each route;
 method-prefixed HTTP entries are invalid. A pattern is an exact inventory name,
 not a glob over other routes. Omitted, null or empty `only` selects all recorded APIs. `skip` takes

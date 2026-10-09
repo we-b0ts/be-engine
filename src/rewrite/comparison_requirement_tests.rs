@@ -66,10 +66,10 @@ async fn public_status_and_next_skip_requested_api_without_recording_or_dispatch
 }
 
 #[tokio::test]
-async fn default_requires_comparison_and_current_config_overrides_legacy_batch_flags() {
+async fn default_skips_comparison_and_current_config_overrides_legacy_batch_flags() {
     let target = target();
     assert!(
-        next(target.path())
+        !next(target.path())
             .await
             .workflow
             .unwrap()
@@ -77,6 +77,7 @@ async fn default_requires_comparison_and_current_config_overrides_legacy_batch_f
     );
     let store = RewriteStore::new(target.path()).unwrap();
     let mut state = store.load().unwrap().unwrap();
+    state.require_comparison = true;
     inventory::install(&mut state, vec!["GET /a".into()]).unwrap();
     pass_api(target.path(), &mut state);
     assert_eq!(state.phase, RewritePhase::ComparisonRecordingRequired);
@@ -87,7 +88,7 @@ async fn default_requires_comparison_and_current_config_overrides_legacy_batch_f
     state = serde_json::from_value(legacy).unwrap();
     store.save(&state).unwrap();
 
-    policy(target.path(), "require_comparison: false\n");
+    policy(target.path(), "only: []\n");
     next(target.path()).await;
     let state = store.load().unwrap().unwrap();
     assert!(!state.require_comparison);
@@ -152,7 +153,7 @@ async fn scoped_replay_only_completion_is_terminal_and_enabling_comparison_reuse
 async fn scope_is_terminal_with_required_comparison_and_does_not_disable_global_checks() {
     let target = target();
     git(target.path(), &["switch", "-qc", "rewrite-feature"]);
-    policy(target.path(), "skip: [/b]\n");
+    policy(target.path(), "skip: [/b]\nrequire_comparison: true\n");
     let store = RewriteStore::new(target.path()).unwrap();
     let mut state = super::test_state();
     inventory::install(&mut state, vec!["GET /a".into(), "GET /b".into()]).unwrap();

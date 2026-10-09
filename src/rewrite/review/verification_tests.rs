@@ -15,6 +15,12 @@ fn target(phase: RewritePhase) -> (tempfile::TempDir, RewriteState) {
     state.delivery_review_required = true;
     state.target_fingerprint = Some(fingerprint::repository_fingerprint(root.path()).unwrap());
     if phase == RewritePhase::ComparisonRecordingRequired {
+        fs::write(
+            root.path().join(crate::config::regression::PATH),
+            "require_comparison: true\n",
+        )
+        .unwrap();
+        state.require_comparison = true;
         state.comparison_run_id = Some("20260909010000".into());
     }
     RewriteStore::new(root.path())

@@ -71,10 +71,10 @@ impl RegressionScope {
 
 pub(crate) const GITIGNORE_RULE: &str = "/.traffic-e2e/regression.yaml";
 pub(crate) const GIT_PATHSPEC: &str = ":(exclude).traffic-e2e/regression.yaml";
-pub(crate) const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# Omitted, null or empty recording_run_id keeps the current recording workflow.\n# recording_run_id: \"20260911093000\"\n# HTTP API routes must match backend-rewrite inventory exactly, without methods.\n# Each route includes all its recorded methods.\n# Omitted or empty only selects all APIs; skip takes precedence.\n# only:\n#   - \"/api/users/*\"\nonly: []\nskip: []\nrequire_comparison: true\n";
+pub(crate) const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# Omitted, null or empty recording_run_id keeps the current recording workflow.\n# recording_run_id: \"20260911093000\"\n# HTTP API routes must match backend-rewrite inventory exactly, without methods.\n# Each route includes all its recorded methods.\n# Omitted or empty only selects all APIs; skip takes precedence.\n# only:\n#   - \"/api/users/*\"\nonly: []\nskip: []\nrequire_comparison: false\n";
 
 pub(crate) fn default_require_comparison() -> bool {
-    true
+    false
 }
 
 impl Default for RegressionScope {
@@ -83,7 +83,7 @@ impl Default for RegressionScope {
             recording_run_id: None,
             only: None,
             skip: None,
-            require_comparison: true,
+            require_comparison: default_require_comparison(),
         }
     }
 }
@@ -124,23 +124,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn initialization_is_idempotent_preserves_local_choices_and_defaults_true() {
+    fn initialization_is_idempotent_preserves_local_choices_and_defaults_false() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join(".gitignore"), "/target/").unwrap();
         initialize(root.path()).unwrap();
         assert!(
-            RegressionScope::load(root.path())
+            !RegressionScope::load(root.path())
                 .unwrap()
                 .require_comparison
         );
         std::fs::write(
             root.path().join(PATH),
-            "require_comparison: false\nskip: [/a]\n",
+            "require_comparison: true\nskip: [/a]\n",
         )
         .unwrap();
         initialize(root.path()).unwrap();
         assert!(
-            !RegressionScope::load(root.path())
+            RegressionScope::load(root.path())
                 .unwrap()
                 .require_comparison
         );
@@ -154,9 +154,15 @@ mod tests {
                 1
             );
         }
+        std::fs::write(root.path().join(PATH), "only: []\n").unwrap();
+        assert!(
+            !RegressionScope::load(root.path())
+                .unwrap()
+                .require_comparison
+        );
         std::fs::remove_file(root.path().join(PATH)).unwrap();
         assert!(
-            RegressionScope::load(root.path())
+            !RegressionScope::load(root.path())
                 .unwrap()
                 .require_comparison
         );
