@@ -205,6 +205,7 @@ fn route_patterns_are_exact_inventory_names_and_do_not_select_motan() {
 fn config_changes_wait_for_the_active_traffic_operation() {
     let root = target();
     let mut state = state();
+    state.require_comparison = true;
     use crate::rewrite::traffic_operation::{
         TrafficOperationClaim, TrafficOperationKind, claim_current,
     };

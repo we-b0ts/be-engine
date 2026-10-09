@@ -687,7 +687,7 @@ mod tests {
 
         assert_eq!(result.generated.len(), 12);
         assert!(
-            crate::config::regression::RegressionScope::load(target.path())
+            !crate::config::regression::RegressionScope::load(target.path())
                 .unwrap()
                 .require_comparison
         );

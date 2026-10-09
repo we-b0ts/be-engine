@@ -122,6 +122,7 @@ fn clean_reclassification_advances_without_replacing_standard_recording() {
         response_incomplete: 0,
     };
     let mut state = test_state();
+    state.require_comparison = true;
     state.phase = RewritePhase::ImplementationRequired;
     state.recording_run_id = "20260803023812".to_string();
     state.case_source = Some(PathBuf::from("recording-cases"));

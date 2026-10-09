@@ -1782,10 +1782,10 @@ either one bounded implementation issue or the next validation action.
 
 Regression settings are local to the target repository in
 `.traffic-e2e/regression.yaml`. Initialization generates this file with
-`require_comparison: true` and adds it to `.gitignore` and `.dockerignore`.
+`require_comparison: false` and adds it to `.gitignore` and `.dockerignore`.
 It does not need a commit and is explicitly excluded from code and target
 fingerprints, even if manually tracked. Existing projects without the file use
-all recorded APIs and require Comparison; old workflow latch/batch fields no
+all recorded APIs with Comparison disabled; old workflow latch/batch fields no
 longer control the requirement.
 
 ```yaml
@@ -1797,7 +1797,7 @@ only:
   - "/api/users"
 skip:
   - "/api/users"
-require_comparison: true
+require_comparison: false
 ```
 
 `only` and `skip` can be combined: first select `only` (or all APIs when absent or empty),
@@ -1808,7 +1808,7 @@ The recorded path pattern's `*` is part of that inventory
 identity, not a glob over other APIs. Unknown names, duplicate entries within a
 list and unknown fields are errors. Omitting `only`, `only:`, `only: null` and
 `only: []` all select every recorded API before applying `skip`. An empty `skip`
-list excludes nothing. Removing the file restores all APIs and Comparison=true.
+list excludes nothing. Removing the file restores all APIs and Comparison=false.
 
 Set `recording_run_id` to a 14-digit standard recording ID under
 `.traffic-e2e/local/artifacts/recordings/`. The coordinator directly validates
