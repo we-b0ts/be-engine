@@ -137,6 +137,10 @@ struct ReplayAggregateArgs {
 
 #[derive(Debug, Subcommand)]
 enum ReplayControlCommand {
+    /// Anchor the active inbound request immediately before sending it.
+    RequestBegin {
+        case_id: String,
+    },
     WaitReady,
     Status,
     Cases,
@@ -298,6 +302,9 @@ fn replay_control_config(args: ReplayControlArgs) -> Result<ReplayControlConfig>
         ReplayControlCommand::WaitReady => ("wait_ready".to_string(), None, false, false),
         ReplayControlCommand::Status => ("status".to_string(), None, false, false),
         ReplayControlCommand::Cases => ("cases".to_string(), None, false, false),
+        ReplayControlCommand::RequestBegin { case_id } => {
+            ("request_begin".into(), Some(case_id), false, false)
+        }
         ReplayControlCommand::Begin { case_id } => {
             ("begin".to_string(), Some(case_id), false, false)
         }

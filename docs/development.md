@@ -24,6 +24,8 @@ Source-generated identities shared across decoded SQL, JSON and Redis keys use
 [case-local dynamic values](dynamic-value-rules.md). Generated filename dates
 use [response header date rules](response-header-date-rules.md); both use
 evidence-backed plan/apply and fresh verification with existing recordings.
+[Dependency request rules](dependency-request-rules.md) cover integer JSON-RPC
+IDs, signed Redis JSON writes, correlated write times and multipart boundaries.
 
 ## Rust Tooling
 

@@ -1,0 +1,216 @@
+//! Redis request discovery, protected planning and finite Replay over actual TCP.
+use super::*;
+use crate::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
+use serde_json::json;
+
+fn token(claims: Value) -> String {
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::default(),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(b"test-key"),
+    )
+    .unwrap()
+}
+fn session(now: i64, nonce: &str) -> String {
+    json!({"approved_at":now,"access_token":token(json!({"sub":"user","exp":now+3600})),"refresh_token":token(json!({"sub":"user","exp":now+7200,"jti":nonce})),"status":"approved"}).to_string()
+}
+fn rule(jwt: bool) -> Value {
+    let redis = if jwt {
+        let jwt = json!({"jwt":{"signing_key_source":{"kind":"target_env","name":"SECRET_KEY"},"algorithm":"HS256","relative_to":"/approved_at"}});
+        let mut refresh = jwt.clone();
+        refresh["jwt"]["dynamic_claims"] = json!(["/jti"]);
+        json!({"key":{"prefix":"session:"},"commands":[{"command":"SET","argument_values":{"1":{"json":{"/approved_at":{"time":"preserve_relative","format":"unix_seconds"},"/access_token":jwt,"/refresh_token":refresh}}}}]})
+    } else {
+        json!({"key":{"prefix":"presence:","numeric":true},"commands":[{"command":"ZADD","argument_values":{"1":{"time":"preserve_relative","format":"unix_seconds"}}},{"command":"ZREMRANGEBYSCORE","argument_values":{"2":{"time":"preserve_relative","format":"unix_seconds"}}}]})
+    };
+    json!({"id":"request-contract","protocol":"redis","target":{"host":"redis.internal","port":6379},"case":{"method":"PUT","path":"/scenario"},"source_evidence":"Service:update generates current timestamps and signed JWTs using the startup key","redis":redis})
+}
+
+#[tokio::test]
+async fn redis_request_contracts_discover_plan_apply_and_verify_json_jwts_and_fractional_time_sequence()
+ {
+    for jwt in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let local = root.join(".traffic-e2e/local");
+        let case = local.join("recordings/run/case");
+        std::fs::create_dir_all(&case).unwrap();
+        let key_path = local.join(crate::repository::LOCAL_ENCRYPTION_KEY_FROM_LOCAL);
+        std::fs::create_dir_all(key_path.parent().unwrap()).unwrap();
+        let key = std::env::var(crate::request_headers::ENCRYPTION_KEY_ENV)
+            .unwrap_or_else(|_| STANDARD.encode([7u8; 32]));
+        std::fs::write(key_path, key).unwrap();
+        std::fs::write(local.join("target.env"), "SECRET_KEY=test-key\n").unwrap();
+        std::fs::write(
+            case.join("request.json"),
+            r#"{"method":"PUT","uri":"/scenario","timestamp":"1970-01-01T00:16:40Z"}"#,
+        )
+        .unwrap();
+        std::fs::write(case.join("expected-response.json"), "{}").unwrap();
+        let connection = Uuid::new_v4();
+        let records = if jwt {
+            vec![redis_hash_dependency(
+                connection,
+                1,
+                "SET",
+                &[
+                    "session:1",
+                    &session(1000, "d9428888-122b-4d10-9c62-0b7bdca327a1"),
+                    "EX",
+                    "300",
+                ],
+                b"+OK\r\n",
+            )]
+        } else {
+            vec![
+                redis_hash_dependency(
+                    connection,
+                    1,
+                    "ZADD",
+                    &["presence:1", "1090.25", "active"],
+                    b":1\r\n",
+                ),
+                redis_hash_dependency(
+                    connection,
+                    2,
+                    "ZREMRANGEBYSCORE",
+                    &["presence:1", "-inf", "1000.25"],
+                    b":0\r\n",
+                ),
+            ]
+        };
+        let immutable = records
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let dependencies = case.join("dependencies.jsonl");
+        std::fs::write(&dependencies, &immutable).unwrap();
+        let policy = root.join(".traffic-e2e/verification.yaml");
+        std::fs::write(
+            &policy,
+            "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+        )
+        .unwrap();
+        let make_request = || {
+            let now = Utc::now();
+            if jwt {
+                vec![
+                    "SET".into(),
+                    "session:1".into(),
+                    session(now.timestamp(), "bf54c745-3da7-4ebc-9c32-fda7fd5a9bd2"),
+                    "EX".into(),
+                    "300".into(),
+                ]
+            } else {
+                vec![
+                    "ZADD".into(),
+                    "presence:1".into(),
+                    format!(
+                        "{}",
+                        now.timestamp() as f64
+                            + f64::from(now.timestamp_subsec_nanos()) / 1e9
+                            + 90.0
+                    ),
+                    "active".into(),
+                ]
+            }
+        };
+        let (addr, state, task) = redis_value_tests::spawn(&case, Some(policy.clone())).await;
+        state
+            .lock()
+            .await
+            .replay_policy
+            .as_ref()
+            .unwrap()
+            .request_contracts
+            .request_begin("case")
+            .unwrap();
+        let actual = make_request();
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        redis_value_tests::request(
+            &mut client,
+            &actual.iter().map(String::as_str).collect::<Vec<_>>(),
+            b"-ERR no recorded Redis dependency matched\r\n",
+        )
+        .await;
+        let report = root.join("replay.json");
+        let report_bytes = {
+            let mut state = state.lock().await;
+            state.finalized_at = Some(Utc::now());
+            serde_json::to_vec(&state.snapshot_report()).unwrap()
+        };
+        assert!(!String::from_utf8_lossy(&report_bytes).contains("test-key"));
+        if jwt {
+            assert!(!String::from_utf8_lossy(&report_bytes).contains(&actual[2]));
+        }
+        std::fs::write(&report, &report_bytes).unwrap();
+        task.abort();
+        let plan = || {
+            plan_dependency_request_rule(DependencyRequestRuleFeedback {
+                policy_path: policy.clone(),
+                rule: rule(jwt),
+                replay_report: report.clone(),
+            })
+        };
+        let mut tampered: Value = serde_json::from_slice(&report_bytes).unwrap();
+        tampered["replay_policy"]["request_contract_candidates"][0]["actual_anchor"] =
+            json!("2020-01-01T00:00:00Z");
+        std::fs::write(&report, tampered.to_string()).unwrap();
+        assert!(plan().is_err());
+        std::fs::write(&report, &report_bytes).unwrap();
+        if jwt {
+            std::fs::write(local.join("target.env"), "SECRET_KEY=wrong-key\n").unwrap();
+            assert!(plan().is_err());
+            std::fs::write(local.join("target.env"), "SECRET_KEY=test-key\n").unwrap();
+        }
+        if jwt {
+            let pending = plan().unwrap();
+            std::fs::write(local.join("target.env"), "SECRET_KEY=changed-after-plan\n").unwrap();
+            assert!(pending.apply().is_err());
+            std::fs::write(local.join("target.env"), "SECRET_KEY=test-key\n").unwrap();
+        }
+        plan().unwrap().apply().unwrap();
+        let (addr, state, task) = redis_value_tests::spawn(&case, Some(policy.clone())).await;
+        state
+            .lock()
+            .await
+            .replay_policy
+            .as_ref()
+            .unwrap()
+            .request_contracts
+            .request_begin("case")
+            .unwrap();
+        let actual = make_request();
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        redis_value_tests::request(
+            &mut client,
+            &actual.iter().map(String::as_str).collect::<Vec<_>>(),
+            if jwt { b"+OK\r\n" } else { b":1\r\n" },
+        )
+        .await;
+        if !jwt {
+            let cutoff = (actual[2].parse::<f64>().unwrap() - 90.0).to_string();
+            redis_value_tests::request(
+                &mut client,
+                &["ZREMRANGEBYSCORE", "presence:1", "-inf", &cutoff],
+                b":0\r\n",
+            )
+            .await;
+        }
+        let replay = state.lock().await;
+        assert!(!replay.snapshot_report().is_dirty());
+        let usage = replay.replay_policy.as_ref().unwrap().report();
+        assert_eq!(usage.dependency_rules[0].matches, if jwt { 1 } else { 2 });
+        assert!(usage.unused_applicable_dependency_rule_ids.is_empty());
+        drop(replay);
+        redis_value_tests::request(
+            &mut client,
+            &actual.iter().map(String::as_str).collect::<Vec<_>>(),
+            b"-ERR no recorded Redis dependency matched\r\n",
+        )
+        .await;
+        assert_eq!(std::fs::read_to_string(&dependencies).unwrap(), immutable);
+        task.abort();
+    }
+}

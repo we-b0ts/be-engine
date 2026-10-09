@@ -702,7 +702,10 @@ fn read_regular(path: &Path, label: &str) -> Result<Vec<u8>> {
     read_regular_at(path, path, label)
 }
 
-fn read_published_report(path: &Path, label: &str) -> Result<Vec<u8>> {
+pub(in crate::replay::policy) fn read_published_report(
+    path: &Path,
+    label: &str,
+) -> Result<Vec<u8>> {
     let resolved = resolve_published_report_path(path);
     read_regular_at(&resolved, path, label)
 }
@@ -783,3 +786,5 @@ mod redis_publish;
 pub use redis_publish::{
     RedisPublishFeedback, RedisPublishPlan, RedisPublishReport, plan_redis_publish,
 };
+
+pub use generated_values::{DependencyRequestRuleFeedback, plan_dependency_request_rule};

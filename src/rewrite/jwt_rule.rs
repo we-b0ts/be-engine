@@ -18,9 +18,13 @@ use std::collections::BTreeMap;
 
 mod discovery;
 
+pub(super) fn signing_key_discovery(root: &Path) -> Value {
+    discovery::query(root)
+}
+
 pub(super) fn evidence_facts(root: &Path, state: &RewriteState) -> Result<Value> {
     let mut result = serde_json::to_value(facts(root, state)?)?;
-    result["signing_key_discovery"] = discovery::query(root);
+    result["signing_key_discovery"] = signing_key_discovery(root);
     Ok(result)
 }
 
@@ -114,6 +118,7 @@ pub(super) fn plan(
     let record = RewriteRulePlanRecord {
         header_dates: Vec::new(),
         dynamic_value: None,
+        dependency_request: None,
         time: None,
         id: format!(
             "plan-{}",

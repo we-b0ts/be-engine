@@ -10,7 +10,9 @@ mod strings;
 pub(in crate::replay) use audit::{DynamicBindingReport, from_report};
 pub(in crate::replay) use candidates::CaptureCandidate;
 pub(in crate::replay) use config::validate;
-pub use config::{DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget};
+pub use config::{
+    DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget, DynamicValueType,
+};
 pub(in crate::replay) use http::HttpInput;
 pub(in crate::replay) use source::from_event as recorded_capture;
 pub(in crate::replay) use strings::capture as capture_string;
@@ -105,6 +107,7 @@ impl DynamicValues {
         let bindings = self.bindings.lock().expect("dynamic bindings");
         self.selected(case_id, target)
             .iter()
+            .filter(|rule| rule.value_type == DynamicValueType::String)
             .flat_map(|rule| {
                 bindings
                     .get(case_id)

@@ -22,7 +22,10 @@ pub(super) fn plan(
         "generated value rules cannot carry request/body rule options"
     );
     ensure!(
-        options.dynamic_value.is_none() || options.header_dates.is_empty(),
+        (usize::from(options.dynamic_value.is_some())
+            + usize::from(options.dependency_request.is_some())
+            + usize::from(!options.header_dates.is_empty()))
+            == 1,
         "plan one generated value rule family at a time"
     );
     let issue = state
@@ -45,6 +48,23 @@ pub(super) fn plan(
             rule.source_evidence = options.source_evidence.clone().unwrap_or_default();
         }
     }
+    if let Some(rule) = &mut options.dependency_request {
+        ensure!(
+            issue.kind != super::super::model::RewriteIssueKind::Comparison,
+            "dependency requests require Replay evidence"
+        );
+        let api = &state.api;
+        let (method, path) = api
+            .split_once(' ')
+            .context("dependency request scope requires HTTP method and path")?;
+        let object = rule
+            .as_object_mut()
+            .context("dependency request rule requires an object")?;
+        object.insert("case".into(), json!({"method":method,"path":path}));
+        object
+            .entry("source_evidence")
+            .or_insert_with(|| json!(options.source_evidence.clone().unwrap_or_default()));
+    }
     for rule in &mut options.header_dates {
         if rule.source_evidence.is_empty() {
             rule.source_evidence = options.source_evidence.clone().unwrap_or_default();
@@ -52,11 +72,16 @@ pub(super) fn plan(
     }
     let kind = if options.dynamic_value.is_some() {
         "dynamic_value"
+    } else if options.dependency_request.is_some() {
+        "dependency_request"
     } else {
         "response_header_date"
     };
-    let selection =
-        serde_json::to_string(&(options.dynamic_value.as_ref(), &options.header_dates))?;
+    let selection = serde_json::to_string(&(
+        options.dynamic_value.as_ref(),
+        &options.header_dates,
+        &options.dependency_request,
+    ))?;
     let record = RewriteRulePlanRecord {
         id: format!(
             "plan-{}",
@@ -81,6 +106,7 @@ pub(super) fn plan(
         jwt: None,
         evidence_id: options.evidence_id,
         dynamic_value: options.dynamic_value,
+        dependency_request: options.dependency_request,
         header_dates: options.header_dates,
     };
     let report = build(target_root, state, &record)?.report().clone();
@@ -134,6 +160,13 @@ pub(super) fn build(
                 .as_deref()
                 .context("generated rule requires a prepared group")?,
         )?;
+        if let Some(rule) = &record.dependency_request {
+            return crate::plan_dependency_request_rule(crate::DependencyRequestRuleFeedback {
+                policy_path,
+                rule: rule.clone(),
+                replay_report: evidence.replay,
+            });
+        }
         if let Some(rule) = &record.dynamic_value {
             return crate::plan_dynamic_value_rule(DynamicValueRuleFeedback {
                 policy_path,

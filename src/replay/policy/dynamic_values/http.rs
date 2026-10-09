@@ -1,5 +1,7 @@
 //! Automatic references in decoded HTTP paths, query values and JSON bodies.
-use super::{DynamicDecision, DynamicValueCapture, DynamicValues, IdentityPair, strings};
+use super::{
+    DynamicDecision, DynamicValueCapture, DynamicValueType, DynamicValues, IdentityPair, strings,
+};
 use crate::replay::TargetKey;
 use anyhow::{Context, Result};
 
@@ -38,6 +40,7 @@ impl DynamicValues {
         }
         Some((|| {
             let mut decision = DynamicDecision::default();
+            let mut integer_body = None;
             for rule in self.selected(case, target) {
                 let DynamicValueCapture::Http {
                     target: endpoint,
@@ -59,10 +62,18 @@ impl DynamicValues {
                     continue;
                 }
                 let pair = IdentityPair {
-                    source: strings::capture(source_body, Some(json_pointer))?,
-                    target: strings::capture(actual_body, Some(json_pointer))?,
+                    source: capture(source_body, json_pointer, rule.value_type)?,
+                    target: capture(actual_body, json_pointer, rule.value_type)?,
                 };
                 self.check_pair(case, rule, &pair, &decision)?;
+                if rule.value_type == DynamicValueType::Integer {
+                    let body = integer_body.get_or_insert_with(|| {
+                        crate::replay::json_order::parse(actual_body)
+                            .expect("validated JSON capture")
+                    });
+                    *body.pointer_mut(json_pointer).expect("validated pointer") =
+                        serde_json::from_str(&pair.source)?;
+                }
                 decision.pairs.push((rule.id.clone(), pair));
             }
             let pairs = self.pairs(case, target, &decision);
@@ -70,11 +81,34 @@ impl DynamicValues {
                 source_uri: uri(source_uri, &pairs, false)?,
                 actual_uri: uri(&actual_uri.to_string(), &pairs, true)?.parse()?,
                 source_body: strings::normalize(source_body, &pairs, false)?,
-                actual_body: strings::normalize(actual_body, &pairs, true)?,
+                actual_body: strings::normalize(
+                    &integer_body
+                        .map(|body| serde_json::to_vec(&body))
+                        .transpose()?
+                        .unwrap_or_else(|| actual_body.to_vec()),
+                    &pairs,
+                    true,
+                )?,
                 decision,
             })
         })())
     }
+}
+
+pub(super) fn capture(body: &[u8], pointer: &str, value_type: DynamicValueType) -> Result<String> {
+    if value_type == DynamicValueType::String {
+        return strings::capture(body, Some(pointer));
+    }
+    let body = crate::replay::json_order::parse(body)
+        .context("dynamic integer requires complete unique-member JSON")?;
+    let value = body
+        .pointer(pointer)
+        .context("dynamic integer pointer is absent")?;
+    anyhow::ensure!(
+        value.is_i64() || value.is_u64(),
+        "dynamic identity must be a JSON integer"
+    );
+    Ok(value.to_string())
 }
 
 fn uri(value: &str, pairs: &[IdentityPair], actual: bool) -> Result<String> {

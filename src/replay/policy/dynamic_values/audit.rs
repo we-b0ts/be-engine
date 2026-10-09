@@ -60,7 +60,7 @@ impl DynamicValues {
                                     })
                             })
                     }
-                    _ => source::from_event(&rule.capture, &event)
+                    _ => source::from_event(&rule.capture, rule.value_type, &event)
                         .ok()
                         .flatten()
                         .is_some(),
@@ -299,7 +299,7 @@ fn restore_request_binding(
 ) -> Result<()> {
     let mut captured = None;
     for event in events {
-        if let Some(source) = source::from_event(&rule.capture, event)?
+        if let Some(source) = source::from_event(&rule.capture, rule.value_type, event)?
             && fingerprint(source.value.as_bytes()) == proof["source_fingerprint"]
         {
             captured = Some(source.value);

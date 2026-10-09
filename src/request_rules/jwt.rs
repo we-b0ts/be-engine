@@ -64,6 +64,12 @@ impl Token {
         }))
     }
 
+    pub(crate) fn header_value(&self) -> Result<Value> {
+        Ok(serde_json::from_slice(
+            &URL_SAFE_NO_PAD.decode(&self.header)?,
+        )?)
+    }
+
     pub(crate) fn verify(&self, key: &[u8]) -> bool {
         let input = format!("{}.{}", self.header, self.payload);
         macro_rules! verify {

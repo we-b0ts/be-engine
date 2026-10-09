@@ -1,9 +1,10 @@
 mod config;
 mod evidence_policy;
+pub(in crate::replay) mod request_contract;
 pub(crate) use evidence_policy::ReplayEvidencePolicyFreshness;
 pub(in crate::replay) mod dynamic_values;
 pub use dynamic_values::{
-    DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget,
+    DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget, DynamicValueType,
 };
 mod feedback;
 pub(crate) use feedback::replace_request_rule_section;
@@ -153,3 +154,5 @@ pub use feedback::{RedisLockFeedback, RedisLockPlan, RedisLockReport, plan_redis
 pub use feedback::{
     RedisPublishFeedback, RedisPublishPlan, RedisPublishReport, plan_redis_publish,
 };
+
+pub use feedback::{DependencyRequestRuleFeedback, plan_dependency_request_rule};

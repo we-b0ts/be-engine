@@ -178,7 +178,9 @@ pub use policy::{
     plan_memcached_timestamp_rule, plan_mysql_time_rule, plan_profile_target_missing,
     plan_redis_cross_case, plan_response_body_rule, plan_response_rule, validate_replay_policy,
 };
-pub use policy::{DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget};
+pub use policy::{
+    DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget, DynamicValueType,
+};
 pub use policy::{
     DynamicValueRuleFeedback, GeneratedValueRulePlan, GeneratedValueRuleReport,
     ResponseHeaderDateRuleFeedback, plan_dynamic_value_rule, plan_response_header_date_rule,
@@ -645,3 +647,7 @@ pub(crate) use redis::lock as redis_lock;
 pub use redis::lock::RedisLockSelector;
 pub(crate) use redis::publish as redis_publish;
 pub use redis::publish::RedisPublishSelector;
+
+pub use policy::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
+
+pub(crate) use policy::request_contract::discover as discover_dependency_request_candidates;

@@ -18,7 +18,7 @@ pub(super) fn validate(
         .flatten()
     {
         let candidate: CaptureCandidate = serde_json::from_value(item.clone())?;
-        if !selected(&rule.capture, &candidate.capture) {
+        if !selected(&rule.capture, &candidate.capture) || rule.value_type != candidate.value_type {
             continue;
         }
         if rule.format.is_some_and(|format| match format {
@@ -62,6 +62,7 @@ pub(super) fn validate(
             }
             let Some(source) = crate::replay::policy::dynamic_values::recorded_capture(
                 &candidate.capture,
+                rule.value_type,
                 &event,
             )?
             else {

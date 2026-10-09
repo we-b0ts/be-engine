@@ -625,16 +625,19 @@ async fn execute_case(
         .join(format!("actual-response-{:04}.json", position + 1));
     let case_view = RequestCaseView::prepare(case_dir);
     let assertion_command = match &case_view {
-        Ok(case_view) => {
-            super::http_driver::capture_case(
-                config,
-                case_view.request_path(),
-                case_view.replay_request(),
-                &actual_response,
-                runtime.request_rules.clone(),
-            )
-            .await
-        }
+        Ok(case_view) => match control(state, "request_begin", Some(case_id), false, false).await {
+            Err(error) => Err(error),
+            Ok(_) => {
+                super::http_driver::capture_case(
+                    config,
+                    case_view.request_path(),
+                    case_view.replay_request(),
+                    &actual_response,
+                    runtime.request_rules.clone(),
+                )
+                .await
+            }
+        },
         Err(error) => Err(anyhow::anyhow!(
             "failed to prepare replay request for case {case_id}: {error:#}"
         )),

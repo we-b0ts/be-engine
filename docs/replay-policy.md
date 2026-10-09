@@ -82,6 +82,8 @@ current-calendar-date fragments such as `Content-Disposition` filenames while
 preserving static header values. Their selectors are HTTP routes without METHOD.
 Cross-protocol request identities use [case-local dynamic values](dynamic-value-rules.md)
 with one MySQL, Redis or HTTP capture, optional format and explicit endpoint scope.
+[Dependency request rules](dependency-request-rules.md) extend these with integer
+HTTP captures, atomic Redis JSON/JWT writes, related write times and multipart boundaries.
 
 Version 3 Replay and Comparison compare the following HTTP response headers by
 default, without response rules:

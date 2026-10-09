@@ -21,6 +21,7 @@ use crate::{
 pub struct RewriteRulePlanOptions {
     pub header_dates: Vec<crate::ResponseHeaderDateRule>,
     pub dynamic_value: Option<crate::DynamicValueRule>,
+    pub dependency_request: Option<Value>,
     pub evidence_id: String,
     pub jwt: Option<super::jwt_rule::JwtRulePlanOptions>,
     pub body_codec: ResponseBodyCodec,
@@ -65,7 +66,10 @@ pub(super) fn plan(
     state: &mut RewriteState,
     options: RewriteRulePlanOptions,
 ) -> Result<RewriteRuleReport> {
-    if !options.header_dates.is_empty() || options.dynamic_value.is_some() {
+    if !options.header_dates.is_empty()
+        || options.dynamic_value.is_some()
+        || options.dependency_request.is_some()
+    {
         return generated_values::plan(target_root, state, options);
     }
     if let Some(jwt) = options.jwt {
@@ -138,6 +142,7 @@ fn plan_json(
     let record = RewriteRulePlanRecord {
         header_dates: Vec::new(),
         dynamic_value: None,
+        dependency_request: None,
         id: format!(
             "plan-{}",
             fingerprint::id(&[
@@ -222,6 +227,7 @@ fn plan_response_body(
     let record = RewriteRulePlanRecord {
         header_dates: Vec::new(),
         dynamic_value: None,
+        dependency_request: None,
         id: format!(
             "plan-{}",
             fingerprint::id(&[
@@ -284,7 +290,10 @@ fn build_plan(
     state: &RewriteState,
     record: &RewriteRulePlanRecord,
 ) -> Result<VerificationRulePlan> {
-    if record.dynamic_value.is_some() || !record.header_dates.is_empty() {
+    if record.dependency_request.is_some()
+        || record.dynamic_value.is_some()
+        || !record.header_dates.is_empty()
+    {
         return Ok(VerificationRulePlan::Generated(Box::new(
             generated_values::build(target_root, state, record)?,
         )));

@@ -38,6 +38,9 @@ impl From<ResponseBodyCodecArg> for ResponseBodyCodec {
 
 #[derive(Debug, Args)]
 pub(super) struct RulePlanArgs {
+    /// Source-proven Redis argument or HTTP multipart dependency contract.
+    #[arg(long, value_name = "RULE_JSON", conflicts_with_all = ["dynamic_value", "header_dates", "request_kind", "kind", "json_pointer", "unordered_paths", "unordered_joined_string_paths", "docx_timestamps"])]
+    pub(super) dependency_request: Option<serde_json::Value>,
     /// Source-proven captured identity rule; references are automatic across scoped endpoints.
     #[arg(long, value_name = "RULE_JSON", value_parser = parse_dynamic_value, conflicts_with_all = ["header_dates", "request_kind", "kind", "json_pointer", "unordered_paths", "unordered_joined_string_paths", "docx_timestamps"])]
     pub(super) dynamic_value: Option<traffic_e2e::DynamicValueRule>,
@@ -49,7 +52,7 @@ pub(super) struct RulePlanArgs {
     #[arg(long)]
     pub(super) evidence_id: String,
     /// Body codec. JSON uses --kind, protobuf/Hessian2 use typed paths, and DOCX uses --docx-timestamp.
-    #[arg(long, value_enum, required_unless_present_any = ["request_kind", "header_dates", "dynamic_value"])]
+    #[arg(long, value_enum, required_unless_present_any = ["request_kind", "header_dates", "dynamic_value", "dependency_request"])]
     pub(super) body_codec: Option<ResponseBodyCodecArg>,
     /// JSON response-rule kind. Omit for protobuf and Hessian2 typed-body rules.
     #[arg(
@@ -126,9 +129,14 @@ mod generated_tests {
     use clap::Parser;
     #[test]
     fn generated_value_rules_do_not_require_a_body_codec_and_reject_mixed_families() {
+        let dependency = r#"{"id":"write-contract","protocol":"redis","target":{"host":"redis","port":6379},"redis":{"key":"one","commands":[{"command":"SET","argument_values":{"1":{"json":{"/at":{"time":"preserve_relative","format":"unix_seconds"}}}}}]}}"#;
         let header = r#"{"header":"content-disposition","parameter":"filename","format":"%Y-%m-%d","timezone":"+00:00"}"#;
         let dynamic = r#"{"id":"name","targets":[{"host":"db","port":3306}],"capture":{"protocol":"mysql","target":{"host":"db","port":3306},"database":"app","sql":"SELECT id FROM t WHERE name=?","value_index":0}}"#;
-        for (flag, spec) in [("--header-date", header), ("--dynamic-value", dynamic)] {
+        for (flag, spec) in [
+            ("--header-date", header),
+            ("--dynamic-value", dynamic),
+            ("--dependency-request", dependency),
+        ] {
             assert!(
                 super::super::Cli::try_parse_from([
                     "backend-rewrite",

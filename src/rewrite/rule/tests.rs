@@ -22,6 +22,7 @@ fn response_state() -> RewriteState {
     state.rule_plan = Some(RewriteRulePlanRecord {
         header_dates: Vec::new(),
         dynamic_value: None,
+        dependency_request: None,
         time: None,
         id: "plan-response".to_string(),
         issue_id: "issue-response".to_string(),

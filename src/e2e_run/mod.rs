@@ -487,3 +487,5 @@ pub(crate) use evidence::{query_dynamic_capture_candidates, query_http_unordered
 pub(crate) use evidence::query_redis_lock_candidates;
 pub(crate) use evidence::query_redis_publish_candidates;
 pub(crate) use evidence::query_redis_unordered_candidates;
+
+pub(crate) use evidence::query_dependency_request_candidates;

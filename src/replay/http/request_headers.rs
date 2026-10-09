@@ -102,7 +102,10 @@ fn normalized(headers: &HeaderSnapshot) -> HeaderSnapshot {
     normalized
 }
 
-pub(super) fn exact_contract_match(expected: &HeaderSnapshot, actual: &HeaderSnapshot) -> bool {
+pub(in crate::replay) fn exact_contract_match(
+    expected: &HeaderSnapshot,
+    actual: &HeaderSnapshot,
+) -> bool {
     let filter = |headers: &HeaderSnapshot| {
         normalized(headers)
             .into_iter()

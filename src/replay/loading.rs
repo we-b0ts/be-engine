@@ -266,6 +266,7 @@ impl ReplayRuntime {
             memcached::observe_recorded_policy_exchanges(policy, &memcached);
             redis.value_rules = policy.redis_value_rules();
             redis.dynamic_values = policy.dynamic_values.clone();
+            redis.request_contracts = policy.request_contracts.clone();
             redis.configure_lock_tokens(&policy.redis_lock_token_rules());
             redis.configure_publish(policy.redis_publish_rules());
             redis.configure_time_shift(&policy.redis_time_shift_rules())?;
