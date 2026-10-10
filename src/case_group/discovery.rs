@@ -98,7 +98,6 @@ fn walk_case_directories(root: &Path, directory: &Path, cases: &mut Vec<RawCase>
     if directory != root && ignored_directory(directory) {
         return Ok(());
     }
-    crate::case_kind::reject_comparison_recording(directory)?;
     let request = directory.join("request.json");
     let expected_hyphen = directory.join("expected-response.json");
     let expected_underscore = directory.join("expected_response.json");
@@ -282,26 +281,4 @@ fn inventory_id_with_paths<'a>(
         }
     }
     format!("fnv1a64:{hash:016x}")
-}
-
-#[cfg(test)]
-mod comparison_recording_tests {
-    use super::*;
-
-    #[test]
-    fn rejects_comparison_recording_artifacts_explicitly() {
-        let root = tempfile::tempdir().unwrap();
-        let case = root.path().join("case");
-        std::fs::create_dir(&case).unwrap();
-        std::fs::write(
-            case.join("case-kind.json"),
-            r#"{"version":1,"kind":"comparison_recording"}"#,
-        )
-        .unwrap();
-        std::fs::write(case.join("request.json"), r#"{"method":"GET","uri":"/"}"#).unwrap();
-        let error = discover_published_cases(root.path())
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("comparison recording artifacts are not replay cases"));
-    }
 }

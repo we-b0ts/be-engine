@@ -225,7 +225,7 @@ the pushed manifest digest, and pin target Dockerfiles to `tag@sha256`.
 `backend-rewrite review check --worktree /absolute/worker --api '/api'`
 performs the mandatory worker handoff review. Register the worktree during
 `worker confirm --worktree /absolute/worker`; the engine records the dispatch
-base. Use `--process-output ID` for a process-output worker. After the final
+base. After the final
 edit and commit, supply the returned report through `worker report ...
 --activity handoff_ready --review-report /absolute/report.json`.
 
@@ -258,7 +258,7 @@ See the [API implementer review protocol](../plugins/ai-software-engineering/ski
 
 Code integrators check their committed merged candidate using `review check
 --integration --worktree /absolute/integration --api '/api' --handoff-id ID`
-(or `--process-output ID`). After publishing that exact candidate, the coordinator
+After publishing that exact candidate, the coordinator
 reports `worker report ... --activity integrated --review-report
 /absolute/integration-report.json`. This requires an integration report for the
 original accepted handoff, not its earlier worker report. Global evidence-only
@@ -279,7 +279,7 @@ paths for returned action commands. Check execution requires an explicit
 delivery worktree; the coordinator validates receipts without rerunning checks.
 
 `review show` reads the current integrated report and `review rework --finding
-ID --owner 'api:/api'` (or `process-output:ID`) routes a finding to its
+ID --owner 'api:/api'` routes a finding to its
 responsible worker, including a completed retained work item.
 For a failing unpublished integration candidate, add `--report
 /absolute/failed-candidate-report.json` to `review rework`. Routing validates
@@ -293,8 +293,7 @@ Checks and evidence reports are not traffic evidence and never change recordings
 Quality results are bound to candidate code, canonical check configuration,
 runtime inputs, rules and the diff base. Publication admission matches actual
 code content without substituting a worker's private runtime fingerprint for the
-canonical identity. Code or input changes invalidate the report. Old workflow
-states remain readable but old source-only reports do not waive full checks.
+canonical identity. Code or input changes invalidate the report. Source-only reports do not waive full checks.
 Admission requires the exact reviewed commit. After admission, an ordinary
 progress-only commit may retain that receipt: the reviewed commit must remain
 an ancestor, with code, canonical inputs, rules and the diff base unchanged,
@@ -306,7 +305,7 @@ Changes confined to `.traffic-e2e/source-traffic-policy.yaml` or
 `.traffic-e2e/verification.yaml` preserve an accepted code review receipt when
 its other freshness conditions still hold. These files are excluded from review
 code identity and the purpose baseline comparison, but remain part of the traffic
-verification fingerprint: policy edits invalidate prior E2E/Comparison evidence
+verification fingerprint: policy edits invalidate prior E2E evidence
 and require fresh verification. The persistent-configuration commit gate still
 requires these edits to be committed before continuing verification. Receipts
 created before this verification-policy exclusion may need one replacement
@@ -324,7 +323,7 @@ can finish publication or reconcile a changed base instead of repeating checks.
 
 Use `traffic-e2e config ... init` for one-time target configuration and
 `traffic-e2e prepare|run-api|run|status|recover|abort` for the standard
-workflow. Use `traffic-e2e config recorder|replay|comparison plan|apply` for
+workflow. Use `traffic-e2e config recorder|replay plan|apply` for
 evidence-driven managed rule changes. Use `traffic-e2e diagnose ...` only for
 recorder development or focused low-level diagnosis. Managed record, replay,
 target isolation, and host interception are implemented in the `traffic-e2e`
@@ -367,25 +366,6 @@ the coordinator session does not clear bindings.
 
 ## Running Locally
 
-Record baseline/candidate responses from live frontend traffic with:
-
-```bash
-traffic-e2e record-comparison \
-  --target-root /path/to/initialized-target
-traffic-e2e record-comparison \
-  --target-root /path/to/initialized-target \
-  --duration-seconds 60 \
-  --api 'GET /api/widgets/*' \
-  --per-api-case-limit 250
-traffic-e2e record-comparison \
-  --target-root /path/to/initialized-target \
-  --baseline-recheck
-```
-
-The default comparison recording duration is 60 seconds. AI and automated
-invocations must pass `--duration-seconds 60` or another positive integer
-explicitly.
-
 Recording defaults to `redact_headers: []` so authentication and session headers
 remain available for Replay. Redaction irreversibly replaces values with
 `<redacted>` and can break authenticated requests. Existing projects with an
@@ -410,7 +390,7 @@ for the coordinator evidence, plan/apply, target key sources, and replay-only
 revalidation flow. No new standard recording is required for this rule.
 
 Header-name matching is case-insensitive, so this protects `Authorization` as
-well. Managed preflight, recording, Comparison, and Replay create and reuse one
+well. Managed preflight, recording, and Replay create and reuse one
 project key at `.traffic-e2e/local/secrets/traffic-e2e-enc.sec`. The ignored
 directory is mode `0700` and the strict Base64-encoded 32-byte key is mode
 `0600`. An explicitly supplied `TRAFFIC_E2E_ENCRYPTION_KEY_B64` is imported
@@ -420,180 +400,8 @@ The configured request header value is written only as versioned ciphertext in
 `request.json`. Request encryption takes precedence over any explicitly configured
 redaction; response headers follow `redact_headers`. Missing,
 invalid, or wrong managed key material blocks Replay. The system passes the key
-only to Recorder and Comparison processes; it is never injected into source,
+only to Recorder processes; it is never injected into source,
 target, Breeze, commands, or policy.
-
-Comparison recording returns the baseline response and records the request
-plus baseline and candidate responses under
-`<artifacts.root_dir>/comparison-recordings/<run-id>/`. It uses
-`http_gateway.matched_upstream` as the baseline unless
-`comparison_recording.baseline_upstream` is explicitly set. It does not load
-response rules in the capture path, publish dependencies, or initialize a MITM
-CA. Managed recording evaluates published cases under the verification policy
-for its online failure limit; file-only comparison reports the finalized verdict. Managed comparison installs only the cache-port interception needed for
-configured Redis process-owned rules; source and candidate share a new run-local
-first-value snapshot independent of standard Replay evidence. It validates the
-verification policy; source rechecks are enabled only by explicit recorder
-configuration or `--baseline-recheck`. The policy defaults to `verification.yaml`
-next to the recorder config and may be provided explicitly with `--policy`.
-Response bodies are decoded according to their own `Content-Encoding` before
-being stored for
-semantic comparison, while the baseline response returned to the frontend
-retains its original encoding. Comparison request and response bodies each
-default to a 64 MiB limit.
-Explicit named HTTP gateway rules are required. Empty method filters admit all
-methods. Comparison recording accepts methods selected by the gateway rule and
-sends each admitted request to both upstreams without a separate read-only
-method restriction. Reaching an API case limit stops later requests for that
-API from reaching either upstream.
-
-Managed comparison waits for the cache-snapshot recorder to report ready
-before it opens case admission. Recorder readiness includes a 15-second quiet
-window after its readiness probe succeeds: every configured background Redis
-request restarts that window, and a 180-second hard deadline prevents a
-periodic task from blocking the run forever. The comparison snapshot probes
-the candidate, which starts after the source, so this boundary means both are
-ready. Standalone Source recording uses the same barrier after source readiness.
-
-Comparison recording requires
-`http_gateway.fallback_mode = "fixed_response"`. A request is admitted only
-when it is selected, both upstreams are ready, the single managed case slot is available,
-and its API still has case quota. An admitted request reaches both source and
-candidate and creates one case. A request that is unselected, excluded,
-unmatched, not ready, overloaded, or over quota reaches neither upstream and
-receives the configured fixed response. The runtime never intentionally
-forwards comparison traffic only to the source.
-
-By default the source baseline is requested once. Set
-`comparison_recording.baseline_recheck: true` or use the enable-only
-`--baseline-recheck` flag to capture a second source response for diagnosis.
-The first source and candidate dispatches use the run's pair-balanced random
-schedule; the source recheck follows both. The frontend receives the first
-source response after the complete comparison case is captured and published.
-The recheck adds `expected-response-after.json` and reports source changes,
-but never supplies an alternate acceptance oracle. It runs only for admitted
-cases.
-
-Comparison always checks the candidate against the first source response under
-the active response rules. `response_settings.comparison.source_match` supports
-only `before` (the default). The removed `before_or_after` value is rejected;
-existing configurations must remove that setting or change it to `before`.
-A difference still requires source-code diagnosis even when source-after changes
-at the same location or matches the candidate. Standard Replay ignores this
-comparison-only setting.
-
-Comparison recording artifacts carry `case-kind.json` with
-`kind = comparison_recording` and are not replay inputs. `prepare`, case
-grouping, and replay reject them explicitly. The process creates one run for
-its lifetime; start it again or provide a new `--run-id` to reset case quotas.
-With `--duration-seconds`, the timer begins only after both configured
-readiness probes succeed, then shutdown finalizes
-`comparison-recording-run.json`. Archive and remove old runs externally.
-When one or more APIs are selected explicitly, reaching every selected API's
-case limit finalizes the run early and records
-`completion_reason = per_api_case_limit_reached`; the duration remains the
-upper bound. Managed comparison can instead reuse a finite
-standard-recording request source. For that finite-input mode only, the HTTP
-comparison gateway reuses the configured gateway port but binds it to
-`127.0.0.1`; environment traffic sent to the host address cannot enter the
-comparison run. The input driver sends the recorded requests serially over
-that loopback listener. API selection includes matching cases across all
-recorded member directories, filters by method and path, and sends overlapping
-selections only once. If the input process fails, managed comparison stops and
-cleans up immediately instead of waiting for the recording duration.
-After the final comparison case is published, it
-keeps source, candidate, and the cache snapshot alive for a three-second final
-quiet period before recording `completion_reason = input_exhausted`. The run
-becomes `completed_with_errors` if the number of delivered templates differs
-from the number of published cases. Comparison without finite managed input
-continues to use the configured listener and observe the full duration.
-
-The target repository provides no recording or comparison wrapper.
-`traffic-e2e record-comparison` owns the adapted source application,
-optional Breeze runtime and candidate Breeze mounts, the candidate's fixed
-start/stop contract, recording, signals, finalization, and cleanup. The source
-keeps the host recording namespace while the candidate runs in a run-owned
-bridge namespace, so both applications use their native HTTP and Motan ports
-without a host bind conflict. The managed Breeze shares the candidate namespace
-so Breeze registry endpoints that advertise `127.0.0.1:<port>` retain their
-normal meaning. A namespace-scoped ingress mapping sends connections to the
-candidate bridge IP into that loopback, so the adapted source reaches the same
-Breeze without knowing its dynamic ports. A run-scoped forwarding and
-masquerade guard gives the candidate namespace its normal dependency network
-even on Docker hosts configured with `iptables=false`. The candidate's bridge
-IP and comparison origin exist only for that run and are never persisted in
-`project.yaml` or recording artifacts. AI and
-automated invocations pass an explicit duration, run ID, and API scope.
-
-Each published comparison recording case contains:
-
-```text
-request.json
-expected-response.json        # source baseline before candidate
-response.json                 # candidate
-expected-response-after.json  # optional source baseline recheck
-```
-
-After the run finalizes, compare all cases offline with the same verification
-policy already used by E2E:
-
-```bash
-traffic-e2e compare \
-  .traffic-e2e/local/artifacts/comparison-recordings/<run-id> \
-  --policy .traffic-e2e/verification.yaml
-```
-
-The command writes `comparison-report.json` in the run directory by default
-and exits non-zero when a candidate response differs from the first source
-response under the active rules, an applicable response rule is unused, or a
-case cannot be evaluated. Source-before/source-after drift is diagnostic and
-never makes a differing candidate pass. The field rules under `response_rules`
-participate in this phase; dependency matching rules remain
-replay-only. Comparison applies JSON `timestamp`, `duration`, `uuid`, `random`,
-`unordered`, and `counter` rules plus configured protobuf, Hessian2, and DOCX rules. A failed response report includes one
-top-level `representative_difference` with the API, case ID, Pointer,
-difference kind, and bounded source-before/candidate/source-after values. A
-response-rule applicability failure appears in
-`representative_policy_mismatch`. The report records
-`matched_source` for a passing case and groups cases by the recorded
-`METHOD + api_pattern`; `apis_passed` is the current validation-success count,
-while both stage progress files use the generic `passed` wording. Generated-scalar
-and unordered candidates, plus source-proven live counters, can be fed back through the
-evidence-validating response-rule workflow:
-
-```bash
-traffic-e2e config replay plan response-rule \
-  --kind uuid \
-  --source-evidence 'src/token.rs:issue_token UUID generation' \
-  --source-example '<redacted UUID from source>' \
-  --target-example '<redacted UUID from target>' \
-  --api "GET /api/token" \
-  --json-pointer /token \
-  --comparison-run .traffic-e2e/local/artifacts/comparison-recordings/<run-id>
-```
-
-`compare` is file-only. Managed `record-comparison` uses the fixed traffic UID
-and cache-port-only interception when Redis process-owned rules are configured;
-target bridge traffic is added to that same run-local Redis snapshot by a
-source-IP-scoped `PREROUTING` rule. Comparison does not enable DNS interception,
-fake-IP routing, MITM, or dependency Replay. Standard Replay retains its
-host-network target and existing fixed-user DNS/fake-IP/egress interception;
-the comparison namespace does not change recorded fake IPs or replay lookup.
-
-AI must diagnose a failed comparison before changing code or policy. A stable
-source recheck plus a candidate mismatch is stronger implementation-defect
-evidence. A changed source recheck is `source_change` only for candidate
-differences at the same response location; unrelated candidate differences
-remain target behavior. Ordinary mutable business data must be re-recorded in
-a quieter or snapshot-consistent window, not exempted. Only source-proven
-current-time/random scalar fields or order-insensitive arrays may use concrete
-generated-scalar/unordered rules. A live count may use
-`config comparison ... --kind counter` only with exact API/Pointer,
-comparison-report evidence, source ownership evidence, and two different
-observations. The resulting `response_rules.json.<API>.counter` rule checks
-presence and representation class only during comparison; standard replay
-remains exact. Number matches only number, string matches only string, and an
-empty string does not match a nonempty string.
 
 Run the service with:
 
@@ -728,19 +536,12 @@ This typed update is for an already initialized repository. It changes only
 the recorder file referenced by the project: `motan_gateway.listen` is set from
 `--gateway-port`, while the existing `motan_gateway.matched_upstream` remains
 the sole native Motan service endpoint. Configure that recorder endpoint before
-enabling the gateway when the default is not correct. Source and target use the
-same native port because managed Comparison isolates the target network
-namespace; the gateway port must remain distinct from that native port.
+enabling the gateway when the default is not correct. The gateway port must remain distinct from the native service port.
 Repeating the same command returns `status: unchanged`; changing the gateway
 port updates only owned keys and preserves the native endpoint, Motan rules,
 and recorder comments. Its result uses `validation_status: not_run`:
 configuration alone does not claim that real Motan traffic has been validated.
 Set `motan_gateway.enabled = false` to keep HTTP-only recording temporarily.
-
-Motan has no `candidate_upstream` setting. Comparison's candidate is an HTTP
-primary-request endpoint; Motan gateway traffic is recorded/replayed through
-`listen` and `matched_upstream`, and the system does not expose a second Motan
-primary-request dispatcher.
 
 ```toml
 [motan_gateway]
@@ -805,17 +606,6 @@ later matching requests use the configured fallback strategy without creating
 a case. Failed cases do not consume the limit, and restarting Recorder starts
 a new run with fresh counts.
 
-`record-comparison` accepts a positive `--per-api-case-limit N` for one
-run. When present, it replaces both the configured default and every
-pattern-specific override in memory, so every resolved API or static path uses
-`N`; it is not a run-wide total when multiple APIs are recorded, and it never
-rewrites the project or coordinator YAML documents.
-For explicitly selected APIs, both recording modes stop admission and finalize
-normally after all selected APIs reach `N`. Standard managed recording also
-ends its outer Platform lifecycle at that point instead of waiting out the
-remaining duration. Without explicit selectors, the limit continues to
-suppress over-quota cases but never shortens the recording window.
-
 After an upstream HTTP response completes, Recorder continues accepting new
 case dependencies for the fixed
 `recording.case_dependency_post_response_window_ms` interval. This captures
@@ -863,8 +653,7 @@ case is allowed to finish for up to
 remaining staging case is retained under `failed/` with
 `recording_incomplete_at_shutdown`.
 
-`recording.max_body_bytes` is the system-wide body limit. It bounds comparison
-requests and responses, recorded wire bodies and dependency captures, and
+`recording.max_body_bytes` is the system-wide body limit. It bounds recorded wire bodies and dependency captures, and
 managed replay target responses.
 `recording.max_decoded_body_bytes` may independently allow a larger decoded
 HTTP case body, such as compressed JSON; when omitted it inherits
@@ -1355,15 +1144,8 @@ modifies recordings or existing case directories.
 A focused action with no `--pattern` is valid and returns
 `no_candidates: true` with no config diff.
 
-To narrow one recording invocation, repeat
-`--api 'METHOD /path-or-pattern'` on `record` or `record-comparison`. The
-selectors are run-local and intersect the configured HTTP rules. They are
-persisted in the run summary and used as the selected cases' `api_pattern`, but
-never rewrite `.traffic-e2e/project.yaml` or
-`.traffic-e2e/source-traffic-policy.yaml`; no plan/apply workflow is needed for a temporary
-recording scope. Use `--per-api-case-limit N` when the same positive run-local case
-limit must apply to every selected API. Explicitly selected runs finalize when
-all selectors reach `N`; runs without selectors continue for the full duration.
+Select Source recording traffic at ingress. `record` preserves configured
+include/exclude rules and has no per-invocation API selector.
 
 Do not send target E2E requests before replay is ready. Replay startup, port
 binding, DNS redirect, or stale-process failures are replay lifecycle/setup
@@ -1382,7 +1164,6 @@ backend-rewrite next --api '/api/widgets/*' \
   --source-route '/api/widgets/:id'
 backend-rewrite status
 backend-rewrite status --api '/api/widgets/*'
-backend-rewrite status --process-output metrics-profile
 backend-rewrite inventory
 backend-rewrite evidence <query-id>
 BACKEND_REWRITE_CASE_PATH_PATTERNS_JSON='["/api/tasks/*/tree"]' \
@@ -1407,13 +1188,11 @@ Rewrite action schema v35 always returns `action.kind`, `action.summary`,
 Unscoped and scoped `status` and `next` expose scheduling state and short issue
 summaries. They contain neither diagnostics nor an evidence command.
 
-The coordinator dispatches the implementation-worker role, exact API or
-process-output scope, canonical target root, and absolute assigned worktree.
+The coordinator dispatches the implementation-worker role, exact API scope, canonical target root, and absolute assigned worktree.
 Workers fetch their own current context and evidence:
 
 ```bash
 backend-rewrite --target-root /path/to/target evidence --api '/api/widgets/*'
-backend-rewrite --target-root /path/to/target evidence --process-output metrics-profile
 ```
 
 Exactly one selector or opaque query ID is required. These read-only selectors
@@ -1422,10 +1201,9 @@ including parked APIs. Unknown items and items with no current issue fail
 explicitly. Dispatch confirmation still gates evidence; workers wait for the
 coordinator to confirm and retry the same query if they start too early.
 Evidence schema v4 overviews include `context` with canonical target root,
-workflow/recording identity, revision, comparison requirement, and the worker's
+workflow/recording identity, revision, and the worker's
 binding/dispatch identity. `facts.issue` retains the complete bounded issue.
-API overviews supply further exact commands in `queries`; process-output
-overviews expose `facts.issue.comparison_observation` and no API queries.
+API overviews supply further exact commands in `queries`.
 Workers retain the initial identity in their returned handoff along with
 supporting proof, tests, commit/patch and necessary coordinator inputs. The
 coordinator gets current acceptance commands from the engine; workers do not
@@ -1478,7 +1256,7 @@ The binary writes one compact JSON object per command by default. Pass global
 atomic and avoids reconstructing one response with `head` and `tail`.
 
 Worker transfer is an exceptional compare-and-swap ownership change. It is
-valid for an unresolved `implementation_required` API or process-output
+valid for an unresolved `implementation_required` API
 work item, including a parked item, and requires its
 current `--previous-agent-handle`, a replacement `--agent-handle`, a bounded
 reason, and either of two equal authorization bases: `user_approved` or
@@ -1527,8 +1305,7 @@ directory and bounded candidate/rejection diagnostics under
 `action.details.recording_input_diagnosis`; there is no capture execution command.
 A selected unfinished manifest returns `recording_in_progress` and a wait command.
 External recording ownership remains outside rewrite, including on recovery.
-For deterministic selection use local `recording_run_id`; Comparison uses the
-separate `comparison_run_id` when enabled. Runs are never copied, split or merged
+For deterministic selection use local `recording_run_id`. Runs are never copied, split or merged
 into fabricated capture batches. The coordinator derives its stable API inventory
 from the adopted cases.
 `next` and `status` expose only its
@@ -1557,7 +1334,7 @@ activity observations still expire at 60 minutes. `terminal_allowed` is the
 separate successful completion gate.
 A global `blocked` action has `pending=0` and stops this run after eligible
 revalidation drains and remaining APIs require external system repair. Repair
-APIs and dependent process outputs remain incomplete, with bindings/evidence
+APIs remain incomplete, with bindings/evidence
 retained. Resume with global status after repair; the engine cannot wake a
 stopped AI session. Other explicit failures retain their recovery/retry contracts.
 The engine selects across the whole inventory, including parked implementation
@@ -1636,7 +1413,7 @@ delivery is rejected. Expert confirmation persists its runtime handle and finger
 inventory expose the known handle for task recovery and closure.
 
 Worker confirmation uses `worker confirm --api '/api' --agent-handle HANDLE
---worktree /absolute/worker` (or `--process-output ID`). The engine persists the
+--worktree /absolute/worker`. The engine persists the
 actual implementation handle and returns `agent_handle` with its work scope in
 status and inventory. Returned commands already include a known handle. First
 binding and a binding whose raw handle is not yet recorded require the actual
@@ -1693,108 +1470,8 @@ retrying. A stopped executor requires recovery. Neither condition is completion.
 Quality gates execute during worker and integration review before delivery.
 The coordinator admits version-bound integration reports; the legacy
 `target-quality run` entry point only validates an existing receipt.
-One admitted integrated API handoff schedules that API's Replay and the
-current batch's required Comparison. Final unified verification handles shared
+One admitted integrated API handoff schedules that API's Replay. Final unified verification handles shared
 changes after ordinary work drains.
-
-An enabled `project.process_outputs` entry records the supported metrics
-profile during each API comparison:
-
-```yaml
-process_outputs:
-- id: metrics-profile
-  path: /data1/weibo/logs/profile.log
-  enabled: true
-```
-
-The comparison contract is engine-owned rather than business configuration.
-It starts fresh source and target containers for each API comparison, waits
-`comparison_recording.process_output_flush_after_last_case_ms` after its final
-case (15 seconds by default), captures both files, and makes the result part of
-that API's comparison gate. Focused Replay does not capture the profile.
-A missing source output rejects the owning recording as an engine input
-problem. A missing target output becomes a target-code
-`implementation_required` work item. `enabled: false` retains the stable
-project entry without capturing or comparing it.
-
-The fixed profile comparator reads timestamp-prefixed JSON records by record
-`type` and `name`. Each selected record's `total_count`
-and `slowThreshold` accepts either a JSON unsigned integer or its decimal
-string representation. Comparison starts at a 60-second recording duration;
-shorter diagnostic recordings may capture the file but do not validate its
-presence or metrics. The fixed policies are `exact_total_count` for
-`RPC_SERVICE_WHOLE`, and `source_positive_exists` for `HTTP` and the logical
-Motan client group `RPC_SERVICE_CLIENT`.
-
-`exact_total_count` sums every `total_count` in each `(type, name)` group and
-requires equal sums, treating a group absent from one side as a numeric zero.
-Consequently, a zero-count group present on only one side is equal to absence,
-while a positive-count group present on only one side remains a mismatch. When
-a group is present on both sides, their sets of `slowThreshold` values must
-share at least one value; the individual records do not need to align. Records
-without a source `slowThreshold` are ignored by both policies; this excludes
-non-latency rows that reuse a selected type, such as MC socket-pool snapshots.
-`source_positive_exists` is one-way: for every
-source `(type, name)` group whose summed `total_count` is greater than zero, the
-target must contain that type/name group. It intentionally ignores target
-counts and extra target groups. `RPC_SERVICE_CLIENT` expands internally to
-`RPC_SERVICE_CLIENT`, `RPC_SERVICE_CLIENT_V2`, `RPC_SERVICE_CLIENT_REAL`, and
-`RPC_SERVICE_CLIENT_REAL_V2`; they are checked independently but reported as
-one logical type with one representative example. For HTTP only,
-`all_http://x` and `http://x` (likewise HTTPS) share one logical allowance,
-while their observed counts remain separate.
-
-An implementation may allow one source-positive metric to be absent from the
-target only when source revision evidence proves that an indirect dependency
-emits it independently. Before returning rule inputs, the target AI must inspect
-the relevant source startup/configuration and dependency-emitter paths and
-confirm both that source code does not start the interaction and that the
-interaction does not affect source behavior. Either finding requires target
-implementation. These conclusions are eligibility preconditions, not persisted
-booleans. Add an allowance with the evidence-validating plan/apply workflow; do
-not hand-edit the policy:
-
-```bash
-traffic-e2e config comparison plan allow-target-missing \
-  --target-root <target> \
-  --process-output metrics-profile \
-  --metric 'HTTP.http://telemetry.example/ping' \
-  --source-revision 0123456789abcdef \
-  --dependency-path 'com.example:client:1.0.0' \
-  --dependency-path 'com.vendor:telemetry:2.0.0' \
-  --emitter-evidence '{"inspected_paths":["pom.xml","vendor/src/com/vendor/TelemetryInitializer.java"],"description":"TelemetryInitializer independently emits /ping without affecting source behavior"}' \
-  --comparison-run <exact-finalized-comparison-run>
-```
-
-The command writes target-specific policy under
-`.traffic-e2e/verification.yaml`:
-
-```yaml
-process_output_rules:
-  metrics-profile:
-    allow_target_missing:
-    - metric: HTTP.http://telemetry.example/ping
-      source_revision: 0123456789abcdef
-      dependency_path:
-      - com.example:client:1.0.0
-      - com.vendor:telemetry:2.0.0
-      emitter_evidence:
-        inspected_paths:
-        - pom.xml
-        - vendor/src/com/vendor/TelemetryInitializer.java
-        description: TelemetryInitializer independently emits /ping without affecting source behavior
-```
-
-The plan proves that the exact finalized capture has a positive source metric
-and that the entire logical metric is absent on target. Apply is rejected if
-project configuration, verification policy, or either capture changes after
-planning. An allowance cannot apply to an exact-count metric. A failed profile
-comparison reports the number
-of compared and mismatched types, the total number of mismatched `(type, name)`
-groups, and one deterministic example for every mismatched type. Each per-type
-entry identifies its policy and full difference count. The example includes
-the relevant counts or thresholds and is selected by name order, so evidence is
-stable and bounded by the maximum number of configured profile types.
 
 After status returns
 `advance_required`, the returned `next` validates the
@@ -1802,12 +1479,10 @@ adopted external run, prepares the current API, runs focused E2E, and returns
 either one bounded implementation issue or the next validation action.
 
 Regression settings are local to the target repository in
-`.traffic-e2e/regression.yaml`. Initialization generates this file with
-`require_comparison: false` and adds it to `.gitignore` and `.dockerignore`.
+`.traffic-e2e/regression.yaml`. Initialization generates this file and adds it to `.gitignore` and `.dockerignore`.
 It does not need a commit and is explicitly excluded from code and target
 fingerprints, even if manually tracked. Existing projects without the file use
-all recorded APIs with Comparison disabled; old workflow latch/batch fields no
-longer control the requirement.
+all recorded APIs.
 
 ```yaml
 # Optional: directly reuse this completed standard recording.
@@ -1818,7 +1493,6 @@ only:
   - "/api/users"
 skip:
   - "/api/users"
-require_comparison: false
 ```
 
 `only` and `skip` can be combined: first select `only` (or all APIs when absent or empty),
@@ -1829,7 +1503,7 @@ The recorded path pattern's `*` is part of that inventory
 identity, not a glob over other APIs. Unknown names, duplicate entries within a
 list and unknown fields are errors. Omitting `only`, `only:`, `only: null` and
 `only: []` all select every recorded API before applying `skip`. An empty `skip`
-list excludes nothing. Removing the file restores all APIs and Comparison=false.
+list excludes nothing. Removing the file restores all APIs.
 
 Set `recording_run_id` to a 14-digit standard recording ID under
 `.traffic-e2e/local/artifacts/recordings/`. The coordinator directly validates
@@ -1837,9 +1511,9 @@ and uses that recording as the regression baseline. It does not start a source
 recording or use the historical requests to collect a replacement. Missing,
 unfinished, failed, empty or unusable recordings block `status` / `next`; no
 other recording is selected as a fallback. `only` / `skip` select APIs from this
-recording's inventory. Comparison remains controlled by `require_comparison`.
+recording's inventory.
 
-Switching the ID resets current API and process-output verification and retains
+Switching the ID resets current API verification and retains
 historical artifacts and cumulative progress. Returning to an earlier ID starts
 a separate progress epoch. The YAML edit still does not change code or target
 fingerprints, but verification must run against the selected recording. Remove
@@ -1875,7 +1549,7 @@ backend-rewrite purpose confirm --purpose record --user-approved
 live traffic and continues to Replay after publication and normal case preparation.
 The latter can initialize a workflow without prior recordings. It supersedes the
 old local recording pin for this workflow; a later explicit pin change is still
-honored. `only`/`skip` and Comparison policy continue to apply.
+honored. `only`/`skip` continue to apply.
 
 The coordinator only confirms purpose. The engine generates a unique
 `replay/yyyyMMdd-<seq>` or `record/yyyyMMdd-<seq>` branch, creates and switches to it,
@@ -1922,23 +1596,9 @@ with an explicit skipped explanation and false current-verification flags.
 Global completion is restricted to the selected scope, with separate verified
 and skipped counts; skips never become passing traffic observations.
 
-`workflow.require_comparison` exposes the current local requirement. When false,
-a passing Replay completes the API without generating Comparison evidence.
-When switched to true, selected APIs missing valid Comparison become pending;
-still-current Replay evidence is reused. Turning it off removes Comparison-only
-blocking without changing historical traffic results. Running traffic finishes
-before new settings apply. Requirements are not frozen into recording batches,
-and there is no automatic change after first completion.
-
-Both modes can return `terminal_allowed=true` once selected APIs and the existing
-process-output, quality-review and delivery-publication gates are satisfied.
-Changing this local policy does not invalidate code or Replay fingerprints;
-newly selected APIs and newly required Comparison are scheduled explicitly.
-
-When Comparison is required, passing Replay requests Comparison; once it
-passes, the following `next` prepares the next inventory item from the same
-standard recording. A repository or policy content change makes prior
-E2E/comparison evidence stale. Completed APIs become `revalidation_pending`
+Passing Replay completes the API. The following `next` prepares the next inventory
+item from the same standard recording. A repository or policy content change makes prior
+E2E evidence stale. Completed APIs become `revalidation_pending`
 and receive lower scheduling priority than executable ordinary work. When
 ordinary actions are waiting and verification resources are free, the engine
 selects one stale API in inventory order. Worker execution and API-scoped system
@@ -1950,12 +1610,9 @@ preserves the effective worktree content does not change the fingerprint.
 `verification request` remains available for an explicit caller request to
 verify selected stale APIs early; ordinary coordination already uses idle
 verification capacity; the returned advance command starts
-their normal Replay/comparison flow, and final whole-inventory coverage remains
+their normal Replay flow, and final whole-inventory coverage remains
 mandatory. `terminal_allowed` is false until every API inventory item has
-passing E2E and, when required by its batch, comparison evidence, and every process output has passing
-evidence for the same target content fingerprint. A process-output repair can
-invalidate completed APIs, so the final epoch reruns stale APIs before the
-process output is compared again.
+passing E2E evidence for the same target content fingerprint.
 
 After a finalized unscoped standard recording, the coordinator compares its
 concrete APIs with a persistent historical API catalog canonicalized by current
@@ -1968,7 +1625,7 @@ managed source traffic policy and the catalog, while existing recording files
 remain immutable. The current recording inventory is then derived again under
 the updated policy.
 
-Recording, focused Replay, and comparison share one serialized traffic-runtime
+Recording and focused Replay share one serialized traffic-runtime
 lease. Global status first returns any executable worker dispatch or feedback
 action. When resources or running workers are the only remaining activity,
 schema v30 returns `wait_required` with
@@ -1979,7 +1636,7 @@ orchestrator may run Replay for API B and dispatch worker B. No worker may start
 a traffic operation. If code changes during Replay, that result is discarded;
 later code changes defer already-completed API evidence to the final epoch.
 
-`status [--api | --process-output]` is read-only and returns the selected work
+`status [--api]` is read-only and returns the selected work
 item's `action` from the persisted workflow revision. Before execution starts
 it reconstructs the same
 run ID and argv; owner status for a live detached worker may return
@@ -2008,8 +1665,7 @@ completed Source recordings under `.traffic-e2e/local/artifacts/recordings/<run-
 and optionally pin `recording_run_id` in the local regression configuration.
 Without a pin, `next` selects one completed batch and retains its identity.
 Fresh-capture requirements wait for a newer externally produced batch without
-modifying old evidence. If Comparison is required, supply finalized evidence in
-`comparison-recordings/<run-id>/` and select `comparison_run_id` in the same file.
+modifying old evidence.
 Missing evidence returns `input_required` with no recording execution command.
 See [standalone recording and handoff](recording.md).
 
@@ -2021,8 +1677,7 @@ previous/current attempt numbers, and whether the latest attempt passed. It
 describes the latest completed attempt, so a repeated `next` with no target
 change returns the same evidence without claiming another replay occurred.
 
-Workers fetch the overview through `backend-rewrite evidence --api` or
-`--process-output`, bound to their canonical target root. Further gate and
+Workers fetch the overview through `backend-rewrite evidence --api`, bound to their canonical target root. Further gate and
 aggregate facts use only the returned `backend-rewrite evidence <query-id>`
 commands.
 For a response issue, `facts.issue.response_diagnosis` in that overview
@@ -2040,10 +1695,9 @@ failure, both the representative and evidence page include an
 `target_connection_failed`, or `target_request_timed_out`.
 When more are available it returns the next opaque evidence command instead of
 an open cursor. The `representatives` result includes the representative case
-ID, its exact immutable standard or comparison `case_dir`, and a structured
+ID, its exact immutable standard `case_dir`, and a structured
 response difference. A focused E2E difference contains expected and actual
-observations; a comparison difference contains source-before, candidate, and
-source-after observations. It does not duplicate the complete Replay response
+observations. It does not duplicate the complete Replay response
 or expose a Replay-local result directory. The AI may inspect all persisted
 files under `.traffic-e2e/local/artifacts/`, starting with the representative case for
 efficiency. Artifacts remain read-only, and coordinator results remain
@@ -2197,7 +1851,7 @@ From the target root, `--target-root` is unnecessary. Defaults are backend HTTP
 port `8080`, Recorder HTTP gateway port `4080`, readiness `/healthz` with fixed
 success status `200`, and upstream DNS `10.10.10.11:53`. The backend port is
 shared by the source and target processes and drives the generated Recorder
-upstream, managed Comparison candidate, target readiness endpoint, and Replay
+upstream, target readiness endpoint, and Replay
 request destination. It must differ from the gateway listener port.
 Initialization accepts a readiness path but no readiness status argument;
 generated `project.yaml` retains the explicit `success_status: 200` contract.
@@ -2262,7 +1916,7 @@ target files are preserved.
 `source-traffic-policy.yaml` is wholly AI/coordinator managed. Project settings
 have explicit source, target, replay, verification, recording,
 delivery, and state sections. `verification.max_failed_cases_per_api` defaults
-to `10`; Replay and Comparison stop admitting additional cases for an API once
+to `10`; Replay stops admitting additional cases for an API once
 that many cases have not passed. Remaining Replay cases stay unexecuted rather
 than being reported as failed. A typical
 target section is:
@@ -2309,11 +1963,9 @@ context into an image automatically.
 Target readiness path and status come from the project document's
 `recorder.http_gateway.ready` section. Target startup readiness uses
 `project.target.startup_timeout_seconds`, which defaults to 180 seconds when
-omitted and accepts values through 1800 seconds. Target request timeout comes
-from `comparison_recording.upstream_timeout_ms`; the Replay service startup
+omitted and accepts values through 1800 seconds. The target request timeout is 30 seconds; the Replay service startup
 timeout remains a coordinator-owned default. The target's native HTTP port is the port in
-`recorder.http_gateway.matched_upstream`; Replay uses it on loopback and Comparison uses
-it on the run-owned target bridge IP.
+`recorder.http_gateway.matched_upstream`; Replay uses it on loopback.
 
 `review check` owns the quality standard; `project.yaml` has no configurable
 quality-command field. For each Rust target, it runs format, workspace tests,
@@ -2429,10 +2081,8 @@ copies are removed after their owning container or managed run stops.
 
 `target.runtime_outputs` is a separate output-only contract. Every configured
 container path is mounted read-write from an engine-created, run-scoped host
-directory below `.traffic-e2e/local/runtime-outputs/`. Managed `record` mounts
-the path into the source container. Managed `record-comparison` mounts separate
-`source/<id>` and `target/<id>` directories into the source and target
-containers, respectively; Replay mounts only `target/<id>`. Replay uses the
+directory below `.traffic-e2e/local/runtime-outputs/`. Diagnostic preflight mounts
+the source role; Replay mounts the target role. Replay uses the
 logical run and sequence in its host path, while managed recording uses the
 recording run ID. The resolved paths and their roles are printed when a
 container starts and returned by run/status or managed recording results.
@@ -2475,10 +2125,9 @@ change reruns the relevant Cargo build layer, but cached registry, git, and
 target artifacts prevent downloading the dependency graph again when the
 builder identity and cache IDs are unchanged.
 
-For managed comparison and diagnostic preflight, the runtime keeps a target-scoped
+For diagnostic preflight, the runtime keeps a target-scoped
 source-adaptor cache image. `.traffic-e2e/local/source/` is authoritative for
-the immutable local image ID and captured Kubernetes runtime inputs; preflight,
-and comparison do not contact the original Pod. The target repository
+the immutable local image ID and captured Kubernetes runtime inputs; preflight does not contact the original Pod. The target repository
 owns the reviewed `.traffic-e2e/Dockerfile.source` build contract. Adaptor
 build binds the exact image ID through a deterministic temporary local alias
 and labels the resulting adaptor with that ID. A missing adaptor or one labeled
@@ -2490,9 +2139,7 @@ non-recursive build context from regular files at the top of `.traffic-e2e`, so
 The adaptor image's own `USER`, working directory, entrypoint, and command are
 used at runtime; the manager does not regenerate a Dockerfile or infer launch
 from `RUN_COMMAND`. Cleanup removes run-private containers but retains the
-matching adaptor image. Comparison recording uses the adaptor image,
-snapshotted runtime inputs, and fixed `998:998` source identity so cache-only
-interception observes both source and target traffic. Standard recording uses
+matching adaptor image. Standard recording uses
 the separate project-owned `.traffic-e2e/Dockerfile.recording`; its caller owns builds and
 container startup, and `traffic-e2e record` supervises Source/Recorder inside it.
 Initialization and managed runtime do not provision a Breeze sidecar, inject
@@ -2526,9 +2173,7 @@ added-line gate.
 
 The runner sends HTTP requests itself; the target image does not read cases or
 write response reports. The configured port is shared by the image
-environment, readiness, replay requests, and comparison requests. Comparison
-keeps source in the host recording namespace and places the target in one
-run-owned bridge namespace. Replay starts the target once for
+environment, readiness, replay requests. Replay starts the target once for
 the selected cases, intercepts dependency traffic by fixed UID, and prevents
 uncontrolled external egress.
 
@@ -2553,8 +2198,7 @@ evidence, and block direct external egress for UID `998`.
 Source-local port `880` is not a preflight dependency and receives no managed
 switch commands; the configured HTTP Gateway readiness contract remains
 authoritative. The HTTPS probe runs before the one-case readiness request. The
-Java probe command has a 10-second execution bound. Ordinary recording and
-comparison do not repeat this initialization gate, and Motan business traffic
+Java probe command has a 10-second execution bound. Ordinary recording does not repeat this initialization gate, and Motan business traffic
 is not requested or evaluated during initialization preflight.
 
 Later, `traffic-e2e record` applies the Motan gateway failure check. Its result
@@ -2629,8 +2273,7 @@ Run the current complete API group only until it passes, then stop. Focused
 attempts replace the selected API's terminal contribution to the current
 logical recording run. `.traffic-e2e/progress.yaml` is the single public
 business ledger for standard live-traffic recording batches. Only copying one
-new standard batch from live traffic increases run and case coverage. Replay,
-comparison recording, and any retries only settle that standard batch's current
+new standard batch from live traffic increases run and case coverage. Replay and any retries only settle that standard batch's current
 result; even one hundred verification attempts never add another run or case.
 
 Progress is published in two steps. Recording completion immediately increases
@@ -2643,7 +2286,7 @@ the same batch starts at one run and that batch's successful case count. A
 retry never increases `executed`.
 
 The committed file contains only business aggregates and the latest batch
-summary. Replay/comparison provenance, pending state, failure barriers,
+summary. Replay provenance, pending state, failure barriers,
 idempotency keys, and ordered observations remain in the ignored
 `.traffic-e2e/local/artifacts/progress/counted-runs.yaml` ledger. That local
 ledger is runtime authority and can reconstruct a reset public snapshot.
@@ -2655,9 +2298,8 @@ observations remain in the local ledger and global run/case totals are retained;
 member counters are not added to pattern counters because historical coverage
 may overlap. Every publication, including reconstruction and epoch transitions,
 uses the same projection, so old member entries cannot reappear after Replay.
-Existing `replay-progress.yaml` coverage is migrated once and both split files
-are removed after `progress.yaml` is durably published. Historical comparison
-counters are execution detail, so they are not added to business coverage.
+Existing `replay-progress.yaml` coverage is migrated once and that file is
+removed after `progress.yaml` is durably published.
 
 ```yaml
 version: 3
@@ -2706,9 +2348,7 @@ The full command uses the same single target lifetime for the complete round,
 atomically publishes runner-owned evidence, and updates
 `.traffic-e2e/progress.yaml`.
 
-The current logical run passes only with complete response, replay, and
-dependency gates. When a rewrite batch requires Comparison, Replay success
-does not replace its Comparison evidence.
+The current logical run passes only with complete response, Replay, and dependency gates.
 Use `status`, `abort`, and `recover` for interrupted global rounds; never repair
 runner state through filesystem edits.
 
@@ -2785,19 +2425,12 @@ Generated runtime artifacts are ignored by git:
 Do not commit generated CA files, traffic recordings, test captures, or local
 swap files.
 
-New recorder configurations use one shared artifact root. Standard and
-comparison recording runs are kept in sibling directories so a target
-repository needs only one generated-data directory:
+New recorder configurations use one artifact root for standard recording batches:
 
 ```text
 <artifacts.root_dir>/
   recordings/<run-id>/
-  comparison-recordings/<run-id>/
 ```
-
-Existing configurations without `[artifacts]` remain supported:
-`recording.output_dir` is the recording run root and its
-`comparison-recordings/` subdirectory is the comparison recording run root.
 
 Each recorder process creates one run directory under
 `<artifacts.root_dir>/recordings/` named `YYYYMMDDHHMMSS`. Valid case output is
@@ -2938,7 +2571,7 @@ The coordinator also detects an already-finalized attempt whose effective
 dependency view is clean but whose persisted errors still contain the obsolete
 strict dirty-finalize result. `backend-rewrite next` removes only that
 dependency-derived error, preserves genuine lifecycle errors, revises the same
-attempt, and resumes at comparison without rerunning E2E.
+attempt, and completes the API without rerunning E2E.
 
 Use a finalized replay report to create the AI-managed rule instead of editing
 the table directly:

@@ -30,17 +30,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn comparison_preserves_duplicates_and_empty_elements() {
-        assert!(equal("alice,,bob,alice", "alice,bob,alice,", ","));
-        assert!(!equal("alice,,bob", "alice,bob", ","));
-    }
-
-    #[test]
     fn discovery_requires_a_present_separator() {
         assert!(matching_discovery_separators("alice", "alice").is_empty());
         assert_eq!(
             matching_discovery_separators("alice,bob", "bob,alice"),
             vec![",".to_string()]
         );
+    }
+
+    #[test]
+    fn comparison_preserves_duplicates_and_empty_elements() {
+        assert!(equal("alice,,bob,alice", "alice,bob,alice,", ","));
+        assert!(!equal("alice,,bob", "alice,bob", ","));
     }
 }

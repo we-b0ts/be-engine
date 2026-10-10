@@ -87,7 +87,6 @@ async fn public_status_next_and_wait_expose_deadline_while_verification_is_busy(
     let next = crate::rewrite::start_rewrite_next(crate::rewrite::RewriteNextOptions {
         target_root: target.path().into(),
         api: None,
-        process_output: None,
         source_route: None,
     })
     .unwrap();
@@ -277,13 +276,9 @@ fn legacy_binding_starts_on_normal_feedback_without_a_timestamp_api() {
 }
 
 #[test]
-fn completed_and_process_output_items_never_dispatch_an_api_expert() {
+fn completed_items_never_dispatch_an_api_expert() {
     let mut state = overdue_state();
     state.api_inventory[0].status = RewriteApiStatus::Complete;
-    state.worker_bindings.insert(
-        "process_output:metrics".into(),
-        state.worker_bindings["/api"].clone(),
-    );
     assert!(required_action(Path::new("/target"), &state, None).is_none());
     assert_eq!(counts(&state), (0, 0, 0));
     // First confirmation alone creates the timestamp, regardless of activity reports.
@@ -445,7 +440,6 @@ async fn nineteen_implementation_required_apis_block_public_expert_actions() {
     let next = crate::rewrite::start_rewrite_next(crate::rewrite::RewriteNextOptions {
         target_root: target.path().into(),
         api: None,
-        process_output: None,
         source_route: None,
     })
     .unwrap();
@@ -473,7 +467,6 @@ async fn nineteen_implementation_required_apis_block_public_expert_actions() {
     for item in state.api_inventory.iter_mut().skip(1) {
         item.status = RewriteApiStatus::Complete;
         item.e2e_current = true;
-        item.comparison_current = true;
         item.verified_target_fingerprint = Some(fingerprint.clone());
     }
     store.save(&state).unwrap();
@@ -696,9 +689,7 @@ fn pass_api(root: &Path, state: &mut RewriteState) {
     state.target_fingerprint = Some(fingerprint);
     state.api_inventory[0].status = RewriteApiStatus::Complete;
     state.api_inventory[0].e2e_current = true;
-    state.api_inventory[0].comparison_current = true;
     state.e2e_current = true;
-    state.comparison_current = true;
     state.phase = RewritePhase::SliceComplete;
     state.active_issue = None;
 }

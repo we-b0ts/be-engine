@@ -50,8 +50,6 @@ pub(super) struct ProjectConfig {
 #[serde(deny_unknown_fields)]
 pub(super) struct ProjectSettings {
     pub source: SourceProjectConfig,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub process_outputs: Vec<ProcessOutputSettings>,
     pub target: TargetProjectConfig,
     pub replay: ReplayProjectConfig,
     #[serde(default)]
@@ -59,23 +57,6 @@ pub(super) struct ProjectSettings {
     pub recording: RecordingProjectConfig,
     pub delivery: DeliveryProjectConfig,
     pub state: StateProjectConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct ProcessOutputSettings {
-    pub(super) id: String,
-    pub(super) path: PathBuf,
-    pub(super) enabled: bool,
-}
-
-impl ProcessOutputSettings {
-    pub(super) fn config(&self) -> crate::process_output::ProcessOutputConfig {
-        crate::process_output::ProcessOutputConfig::profile_by_type(
-            self.id.clone(),
-            self.path.clone(),
-        )
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,8 +200,6 @@ pub(crate) struct ResolvedProjectConfig {
     pub(crate) target_request_timeout: Duration,
     pub(crate) target_quality_gates: Vec<TargetQualityGateConfig>,
     pub(crate) target_max_response_bytes: usize,
-    pub(crate) process_outputs: Vec<crate::process_output::ProcessOutputConfig>,
-    pub(crate) process_output_rules: BTreeMap<String, crate::ProfileByTypeVerificationRules>,
     pub(crate) replay_policy: PathBuf,
     pub(crate) replay_case_dependency_post_response_window: Duration,
     pub(crate) max_failed_cases_per_api: usize,

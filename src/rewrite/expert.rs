@@ -81,9 +81,7 @@ fn due_api(state: &RewriteState, now: DateTime<Utc>) -> Option<String> {
     };
     let mut running = None;
     for scope in worker::runtime::scopes(state) {
-        let RewriteWorkScope::Api { ref api } = scope else {
-            continue;
-        };
+        let RewriteWorkScope::Api { ref api } = scope;
         if !unfinished(state, api) {
             continue;
         }
@@ -242,10 +240,7 @@ fn view(
 
 pub(super) fn inventory(root: &Path, state: &RewriteState) -> Vec<RewriteExpertInventoryItem> {
     let mut batches = BTreeMap::new();
-    for (api, binding) in &state.worker_bindings {
-        if api.starts_with("process_output:") {
-            continue;
-        }
+    for binding in state.worker_bindings.values() {
         if let Some(expert) = &binding.expert {
             batches
                 .entry(expert.id.clone())

@@ -16,7 +16,6 @@ pub(super) struct RecordedRequest {
     #[serde(default)]
     pub(super) headers: Option<HeaderMapSnapshot>,
     pub(super) protocol_version: Option<String>,
-    pub(super) body: Option<ResponseBody>,
 }
 
 impl RecordedRequest {
@@ -73,20 +72,6 @@ impl RecordedStatus {
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct ComparisonResponse {
-    pub(super) timestamp: Option<chrono::DateTime<chrono::Utc>>,
-    pub(super) version: u8,
-    pub(super) status: Option<u16>,
-    pub(super) headers: Option<HeaderMapSnapshot>,
-    pub(super) body: Option<ResponseBody>,
-    pub(super) error: Option<String>,
-    pub(super) protocol_version: Option<String>,
-    pub(super) serialization: Option<u8>,
-    pub(super) rpc_status: Option<String>,
-    pub(super) rpc_body_decoded: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ActualResponse {
     #[serde(default)]
@@ -109,9 +94,6 @@ pub(super) struct ResponseBody {
     pub(super) encoding: String,
     pub(super) data: String,
     pub(super) truncated: bool,
-    pub(super) limit_bytes: Option<usize>,
-    pub(super) decoded: Option<bool>,
-    pub(super) content_encoding: Option<String>,
     pub(super) decode_error: Option<String>,
 }
 

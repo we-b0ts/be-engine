@@ -23,7 +23,6 @@ pub(crate) fn recording_files(source: &Path) -> Result<(PathBuf, Vec<PathBuf>)> 
         manifest["status"] == "completed",
         "cross-case requires a completed standard recording run"
     );
-    crate::case_kind::reject_comparison_recording(&root)?;
     let mut pending = vec![root.clone()];
     let mut files = Vec::new();
     while let Some(dir) = pending.pop() {

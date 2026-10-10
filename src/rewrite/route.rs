@@ -35,9 +35,6 @@ pub enum RewriteRouteCause {
     ExternalDataBlocker {
         required_change: String,
     },
-    SourceChange {
-        required_change: String,
-    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -134,7 +131,6 @@ fn system_repair(cause: RewriteRouteCause) -> (&'static str, String) {
         RewriteRouteCause::ExternalDataBlocker { required_change } => {
             ("external_data_blocker", required_change)
         }
-        RewriteRouteCause::SourceChange { required_change } => ("source_change", required_change),
         RewriteRouteCause::MissingRecordedResource { .. }
         | RewriteRouteCause::UnrecordedIp { .. } => {
             unreachable!("missing recorded resources are handled before system repair")
@@ -381,7 +377,6 @@ mod tests {
             possible_causes: Vec::new(),
             observed_target_fingerprint: state.target_fingerprint.clone().unwrap(),
             attempt: 2,
-            comparison_observation: None,
         });
         let query_id = evidence::commands(target.path(), &state)
             .into_iter()

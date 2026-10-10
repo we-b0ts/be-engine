@@ -56,20 +56,10 @@ pub(super) fn plan(
             "case {:?} has an unused applicable response rule",
             case.case_id
         );
-        ensure!(
-            case.source_change_pointers.is_empty(),
-            "case {:?} has source changes and cannot authorize a DOCX response rule",
-            case.case_id
-        );
         if case.passed {
             continue;
         }
         difference_cases += 1;
-        ensure!(
-            case.candidate_only,
-            "case {:?} is not a candidate-only response difference",
-            case.case_id
-        );
         let response = case
             .response
             .as_ref()

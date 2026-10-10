@@ -615,7 +615,6 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
     api.status = crate::rewrite::RewriteApiStatus::Complete;
     api.verified_target_fingerprint = Some(verification);
     api.e2e_current = true;
-    api.comparison_current = true;
     assert!(
         crate::rewrite::inventory::defer_completed_for_target_change(&mut completed, &updated)
             .unwrap()
@@ -625,7 +624,6 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
         api.status,
         crate::rewrite::RewriteApiStatus::RevalidationPending
     );
-    assert!(!api.e2e_current && !api.comparison_current);
     assert!(admission_current(target.path(), &completed));
 
     let code = fs::read(target.path().join("lib.rs")).unwrap();

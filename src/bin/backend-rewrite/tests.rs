@@ -134,8 +134,8 @@ fn worker_identity_requires_handles_and_rejects_old_id_arguments() {
             "test",
             "worker",
             "confirm",
-            "--process-output",
-            "summary",
+            "--api",
+            "/api",
             "--agent-handle",
             "runtime-worker"
         ])
@@ -146,20 +146,6 @@ fn worker_identity_requires_handles_and_rejects_old_id_arguments() {
             "test",
             "worker",
             "confirm",
-            "--agent-handle",
-            "runtime-worker"
-        ])
-        .is_err()
-    );
-    assert!(
-        Cli::try_parse_from([
-            "test",
-            "worker",
-            "confirm",
-            "--api",
-            "/api",
-            "--process-output",
-            "summary",
             "--agent-handle",
             "runtime-worker"
         ])

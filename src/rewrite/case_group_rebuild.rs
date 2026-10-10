@@ -285,7 +285,6 @@ mod tests {
             status: RewriteApiStatus::Pending,
             attempts: 0,
             e2e_current: false,
-            comparison_current: false,
             verified_target_fingerprint: None,
         }
     }

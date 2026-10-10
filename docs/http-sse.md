@@ -84,6 +84,6 @@ contract. A malformed/incomplete HTTP body, a read error or a body-limit
 violation is an acquisition failure, not successful deadline completion.
 
 Long-lived streaming to clients, HTTP dependency SSE, WebSocket/Socket.IO,
-multi-request MCP sessions and `record-comparison` SSE acquisition are outside
-this initial support. Existing cases without request execution metadata keep
-their ordinary HTTP behavior and need re-recording to use bounded SSE replay.
+and multi-request MCP sessions are outside this initial support. Existing cases
+without request execution metadata keep their ordinary HTTP behavior and need
+re-recording to use bounded SSE replay.

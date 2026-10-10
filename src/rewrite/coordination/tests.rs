@@ -8,7 +8,6 @@ fn multiple_methods_share_one_verification_and_revalidation_work_item() {
     let action = RewriteAction::Complete {
         summary: "test projection".into(),
         e2e_current: false,
-        comparison_current: false,
     };
     let projected = super::details(&state, &action, false);
     assert_eq!(projected.ready.get("verify_api"), Some(&1));

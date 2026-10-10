@@ -45,12 +45,9 @@ pub(super) fn synchronize_if_complete(target_root: &Path, state: &RewriteState) 
 fn workflow_complete(state: &RewriteState) -> bool {
     state.phase == RewritePhase::SliceComplete
         && !state.api_inventory.is_empty()
-        && super::process_outputs::all_complete(state)
         && state.api_inventory.iter().all(|item| {
             item.status == RewriteApiStatus::Skipped
-                || (item.status == RewriteApiStatus::Complete
-                    && item.e2e_current
-                    && (!state.require_comparison || item.comparison_current))
+                || (item.status == RewriteApiStatus::Complete && item.e2e_current)
         })
 }
 
@@ -118,7 +115,7 @@ mod tests {
         git(target.path(), &["config", "user.email", "test@example.com"]);
         git(target.path(), &["config", "user.name", "Traffic E2E Test"]);
         fs::write(target.path().join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();
-        write_progress(target.path(), &["replay-1", "comparison-1"]);
+        write_progress(target.path(), &["replay-1", "replay-retry-1"]);
         git(target.path(), &["add", "."]);
         git(target.path(), &["commit", "-m", "baseline progress"]);
 
@@ -128,7 +125,7 @@ mod tests {
             Some(PublicationState::Published)
         );
 
-        write_progress(target.path(), &["replay-1", "comparison-1", "replay-2"]);
+        write_progress(target.path(), &["replay-1", "replay-retry-1", "replay-2"]);
         assert_eq!(
             super::state(target.path(), &state),
             Some(PublicationState::CommitRequired(vec![
@@ -191,12 +188,12 @@ mod tests {
         git(target.path(), &["config", "user.name", "Traffic E2E Test"]);
         fs::write(target.path().join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();
         write_managed_delivery_files(target.path(), "baseline");
-        write_progress(target.path(), &["replay-1", "comparison-1"]);
+        write_progress(target.path(), &["replay-1", "replay-retry-1"]);
         git(target.path(), &["add", "."]);
         git(target.path(), &["commit", "-m", "baseline delivery files"]);
 
         write_managed_delivery_files(target.path(), "updated");
-        write_progress(target.path(), &["replay-1", "comparison-1", "replay-2"]);
+        write_progress(target.path(), &["replay-1", "replay-retry-1", "replay-2"]);
         let state = complete_state();
         let expected = managed_delivery_paths()
             .iter()
@@ -225,10 +222,8 @@ mod tests {
         super::super::inventory::install(&mut state, vec!["GET /api".to_string()]).unwrap();
         state.api_inventory[0].status = RewriteApiStatus::Complete;
         state.api_inventory[0].e2e_current = true;
-        state.api_inventory[0].comparison_current = true;
         state.phase = RewritePhase::SliceComplete;
         state.e2e_current = true;
-        state.comparison_current = true;
         state
     }
 

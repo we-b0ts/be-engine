@@ -39,7 +39,7 @@ backend-rewrite --target-root /path/to/target rule apply <plan-id>
 ```
 
 The planner verifies both source and target signatures, stable claims and time
-relationships against complete, current-policy focused-E2E or Comparison
+relationships against complete, current-policy focused-E2E
 evidence. Every selected rule needs an observed token difference. Unrelated
 response differences remain failures. Source changes cannot authorize a rule.
 Apply rechecks the policy, referenced artifacts and private signing input;
@@ -47,7 +47,7 @@ changes require fresh evidence and planning. The workflow invalidates previous
 acceptance and requires fresh execution using existing recordings. Offline
 planning does not turn old failed responses into successful runs.
 
-## Comparison contract
+## Response assertion contract
 
 - HS256, HS384 and HS512 compact JWS are supported. Both signatures must verify
   with the declared startup key and algorithm. Unsupported algorithms,
@@ -61,7 +61,7 @@ planning does not turn old failed responses into successful runs.
   within an inclusive five-second tolerance. There is no wall-clock fallback,
   configurable tolerance or rewriting of tokens. NumericDate claims must be
   integers. Replay uses recorded `request.json.timestamp` and actual
-  `request_sent_at`; Comparison uses each capture's request-start `timestamp`.
+  `request_sent_at`.
 - `dynamic_claims: [/jti]` explicitly permits a UUID v4 nonce. Repeated selected
   values retain one consistent bijective source/target mapping inside each
   response; array selectors such as `/items/*/access_token` share that mapping.

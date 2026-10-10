@@ -1,7 +1,6 @@
 # API Implementer Diagnosis
 
-Audience: API implementers assigned an `implementation_required` work item,
-including legacy process-output assignments. Read before work-item diagnosis
+Audience: API implementers assigned an `implementation_required` work item. Read before work-item diagnosis
 or code changes. Before edits, read
 [target-code-rules.md](target-code-rules.md).
 For a proven environment override, mount, or writable-directory requirement,
@@ -13,13 +12,8 @@ the evidence overview.
 
 ## Diagnosis Routing
 
-Read the work-scope contract below, query the assigned scope, and then select
-the relevant diagnosis path from the current issue and evidence. For
-`work_scope.kind=process_output`, read
-[process-output diagnosis](api-implementer-process-output.md) and return through
-the common handoff contract below. For `work_scope.kind=api`, use the API
-evidence queries, rule discovery, response and comparison sections below. Read
-only the relevant specialty document when its signal appears:
+Query the assigned API scope, then select the diagnosis path from the current
+issue and evidence. Read only the relevant specialty document when its signal appears:
 
 | Current issue or evidence | Specialty diagnosis |
 | --- | --- |
@@ -36,7 +30,6 @@ target root, even while editing a separate worktree:
 
 ```text
 backend-rewrite --target-root <canonical-root> evidence --api '<assigned path-or-pattern>'
-backend-rewrite --target-root <canonical-root> evidence --process-output <id>
 ```
 
 Choose the entrypoint matching the assigned scope. Do not query a worker-local rewrite
@@ -52,7 +45,7 @@ An unknown scope or a scope with no current issue is an explicit error; report i
 to the coordinator instead of implementing from a previous issue.
 
 The overview's `context` contains `target_root`, `workflow_id`, `revision`,
-`recording_run_id`, `require_comparison`, and `worker` with exact scope, binding
+`recording_run_id` and `worker` with exact scope, binding
 and dispatch identity. Read the complete bounded issue in `facts.issue`,
 including its ID, attempt, observed target fingerprint, possible causes, and
 representative when available. HTTP route overviews also return `facts.method_apis`
@@ -100,7 +93,7 @@ report; no artificial patch or new commit is needed.
 
 For `work_scope.kind=api`, exact further evidence-query argv are under the
 overview's `queries`. Traffic facts come only from the overview, returned queries
-and immutable artifacts. Standard and comparison artifacts are readable,
+and immutable artifacts. Standard artifacts are readable,
 read-only diagnostic evidence. Start from the representative `case_dir`
 returned by the engine and inspect its complete contents. Inspect other
 cases under `.traffic-e2e/local/artifacts/` only when they help distinguish
@@ -130,10 +123,6 @@ verification policy and the relevant response or dependency `unordered` rule
 before proposing target changes; return exact selectors and source proof to the
 coordinator to reuse or plan a supported rule. If order is contractual or the
 contents differ, repair the target behavior instead.
-
-The API evidence, rule discovery, response, and comparison sections below apply
-only to API work items. A process-output worker follows the routed specialty
-document and returns after completing that diagnosis path.
 
 ## Rule Discovery From Source Diagnosis
 
@@ -221,8 +210,7 @@ query ID.
   another target abort. Execute the first page before changing target code.
   When more differences are needed to distinguish a coherent cause, execute
   only the exact `facts.next_page.command`; never construct a cursor;
-- `representatives`: the representative case ID, exact immutable standard or
-  comparison `case_dir`, and bounded structured response or dependency
+- `representatives`: the representative case ID, exact immutable standard `case_dir`, and bounded structured response or dependency
   difference; it does not prove the cause;
 - `source_variation`: source values across recorded cases; variation alone
   does not prove nondeterminism or cache ownership;
@@ -336,8 +324,6 @@ Classify exactly one cause:
   derived scalar uses its root mechanism with the derivation in source evidence;
 - `unordered_contract`: source collection type and API contract prove order is
   irrelevant and bounded evidence proves equal contents;
-- `comparison_counter`: source ownership and type prove a live counter that is
-  valid only for comparison policy;
 - `missing_external_evidence`: one exact required external value or exchange is
   absent and cannot be derived without invention.
 
@@ -351,39 +337,13 @@ mapping, boot/request context, and dependency-driven branches before inspecting
 body-field policy. For array order, prove both equal contents and a source
 ordering contract; map/set iteration is a hypothesis, not proof.
 
-## Comparison Issues
-
-For one representative comparison difference, distinguish:
-
-- candidate-only stable difference: target behavior;
-- source-before/source-after change at the same Pointer: source change or
-  possible nondeterminism requiring source proof;
-- proven generated scalar: concrete `timestamp`, `duration`, `uuid`, or
-  `random` rule candidate;
-- proven equal-content unordered array: unordered rule candidate;
-- proven live numeric counter: comparison-only counter candidate;
-- cache hit/miss/staleness/warmup: prove whether target behavior differs;
-  response assertion rules cannot hide these differences. Recording-to-Replay
-  time drift follows the explicit input/Redis response transformation path above.
-
-JSON time rules support array Pointers such as `/data/*/generated_at`.
-Timestamp plans require `--timestamp-format unix-seconds`, `unix-milliseconds`,
-or `rfc3339`; each value must fall within five seconds of its own captured
-request start. Duration plans require `--unit milliseconds`, `seconds`,
-`minutes`, or `hours`; the duration increase must equal the request-start time
-increase within five seconds. These rules validate parsed values, not just
-JSON types, and cannot exempt complete time-derived signatures or URLs.
-
-A target or response-policy change invalidates comparison evidence. Return your
-result and end the turn; do not run replacement acceptance.
-
 ## Return The Proven Cause
 
 Return one supported result with the original evidence/dispatch identity:
 
-- Target API, cache, startup, or process-output generation defect: make one
+- Target API, cache, or startup defect: make one
   coherent repair, run focused tests, and complete [api-implementer-review.md](api-implementer-review.md).
-- Supported nondeterminism/order/counter: return source proof and exact typed
+- Supported nondeterminism/order: return source proof and exact typed
   rule inputs. Do not apply the rule.
 - Source-proven omitted dependency: return evidence ID, `hostname[:port]`,
   source reference, and the missing resource proof.

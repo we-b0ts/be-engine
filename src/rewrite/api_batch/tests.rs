@@ -44,7 +44,6 @@ fn result(api: &str, passed: bool) -> crate::E2eApiRunResult {
 fn route_transition_preserves_passed_and_skipped_methods_and_one_worker_scope() {
     let target = crate::rewrite::worker::tests::configured_target();
     let mut state = test_state();
-    state.require_comparison = false;
     inventory::install(
         &mut state,
         vec!["GET /api".into(), "PUT /api".into(), "PATCH /api".into()],
@@ -69,35 +68,9 @@ fn route_transition_preserves_passed_and_skipped_methods_and_one_worker_scope() 
 }
 
 #[test]
-fn route_comparison_methods_wait_for_external_recordings() {
-    let target = crate::rewrite::worker::tests::configured_target();
-    let mut state = test_state();
-    inventory::install(&mut state, vec!["GET /api".into(), "PUT /api".into()]).unwrap();
-    state.require_comparison = true;
-    apply_results(
-        target.path(),
-        &mut state,
-        &[result("GET /api", true), result("PUT /api", true)],
-        None,
-    )
-    .unwrap();
-    assert_eq!(state.phase, RewritePhase::ComparisonRecordingRequired);
-    assert!(state.comparison_run_id.is_none());
-    assert!(state.parked_slices["PUT /api"].comparison_run_id.is_none());
-    assert!(state.api_inventory.iter().all(|item| item.e2e_current));
-    assert!(
-        state
-            .api_inventory
-            .iter()
-            .all(|item| item.status != RewriteApiStatus::Complete)
-    );
-}
-
-#[test]
 fn route_completion_requires_every_method_and_preserves_method_history() {
     let target = crate::rewrite::worker::tests::configured_target();
     let mut state = test_state();
-    state.require_comparison = false;
     inventory::install(&mut state, vec!["GET /api".into(), "PUT /api".into()]).unwrap();
     apply_results(
         target.path(),

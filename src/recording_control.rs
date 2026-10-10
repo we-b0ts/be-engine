@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
@@ -24,11 +23,6 @@ const PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 pub struct RecordingWaitConfig {
     pub control_socket_path: PathBuf,
     pub timeout: Duration,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RecordingInputCompletion {
-    pub(crate) delivered: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -117,35 +111,6 @@ impl RecordingLifecycle {
             config.http_gateway.enabled && config.http_gateway.ready.enabled,
             config.motan_gateway.enabled,
         );
-        let source_ready = expected_upstreams.is_empty();
-        Self {
-            inner: Arc::new(Mutex::new(RecordingLifecycleState {
-                expected,
-                listening: BTreeSet::new(),
-                expected_upstreams,
-                ready_upstreams: BTreeSet::new(),
-                source_settling: false,
-                source_ready,
-                stopping: false,
-                error: None,
-            })),
-        }
-    }
-
-    pub(crate) fn for_comparison_gateway(
-        http_enabled: bool,
-        http_readiness_enabled: bool,
-        motan_enabled: bool,
-    ) -> Self {
-        let mut expected = BTreeSet::new();
-        if http_enabled {
-            expected.insert(RecordingListener::HttpGateway);
-        }
-        if motan_enabled {
-            expected.insert(RecordingListener::MotanGateway);
-        }
-        let expected_upstreams =
-            expected_upstreams(http_enabled && http_readiness_enabled, motan_enabled);
         let source_ready = expected_upstreams.is_empty();
         Self {
             inner: Arc::new(Mutex::new(RecordingLifecycleState {
@@ -282,23 +247,10 @@ pub(crate) struct RecordingControlServer {
 
 impl RecordingControlServer {
     pub(crate) async fn start(lifecycle: RecordingLifecycle, path: PathBuf) -> Result<Self> {
-        Self::start_inner(lifecycle, path, None).await
+        Self::start_inner(lifecycle, path).await
     }
 
-    pub(crate) async fn start_for_comparison(
-        lifecycle: RecordingLifecycle,
-        path: PathBuf,
-    ) -> Result<(Self, watch::Receiver<Option<RecordingInputCompletion>>)> {
-        let (input_completion, receiver) = watch::channel(None);
-        let server = Self::start_inner(lifecycle, path, Some(input_completion)).await?;
-        Ok((server, receiver))
-    }
-
-    async fn start_inner(
-        lifecycle: RecordingLifecycle,
-        path: PathBuf,
-        input_completion: Option<watch::Sender<Option<RecordingInputCompletion>>>,
-    ) -> Result<Self> {
+    async fn start_inner(lifecycle: RecordingLifecycle, path: PathBuf) -> Result<Self> {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await.with_context(|| {
                 format!(
@@ -326,7 +278,7 @@ impl RecordingControlServer {
             control_socket = %path.display(),
             "recording control listening"
         );
-        let task = tokio::spawn(run_server(listener, lifecycle, input_completion));
+        let task = tokio::spawn(run_server(listener, lifecycle));
         Ok(Self { path, task })
     }
 
@@ -353,15 +305,9 @@ impl RecordingControlServer {
 #[derive(Debug, Deserialize)]
 struct RecordingControlRequest {
     command: String,
-    #[serde(default)]
-    delivered: Option<usize>,
 }
 
-async fn run_server(
-    listener: UnixListener,
-    lifecycle: RecordingLifecycle,
-    input_completion: Option<watch::Sender<Option<RecordingInputCompletion>>>,
-) {
+async fn run_server(listener: UnixListener, lifecycle: RecordingLifecycle) {
     loop {
         let (stream, _) = match listener.accept().await {
             Ok(accepted) => accepted,
@@ -370,12 +316,7 @@ async fn run_server(
                 return;
             }
         };
-        match tokio::time::timeout(
-            CONTROL_IO_TIMEOUT,
-            handle_stream(stream, &lifecycle, input_completion.as_ref()),
-        )
-        .await
-        {
+        match tokio::time::timeout(CONTROL_IO_TIMEOUT, handle_stream(stream, &lifecycle)).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 warn!(error = %format!("{error:#}"), "recording control request failed");
@@ -387,11 +328,7 @@ async fn run_server(
     }
 }
 
-async fn handle_stream(
-    stream: UnixStream,
-    lifecycle: &RecordingLifecycle,
-    input_completion: Option<&watch::Sender<Option<RecordingInputCompletion>>>,
-) -> Result<()> {
+async fn handle_stream(stream: UnixStream, lifecycle: &RecordingLifecycle) -> Result<()> {
     let (read_half, mut write_half) = stream.into_split();
     let mut request_bytes = Vec::new();
     read_half
@@ -407,7 +344,6 @@ async fn handle_stream(
         .context("failed to parse recording control request")?;
     let response = match request.command.as_str() {
         "status" => status_response(lifecycle.snapshot()),
-        "input-complete" => input_complete_response(input_completion, request.delivered),
         other => serde_json::json!({
             "ok": false,
             "error": format!("unknown recording control command {other}"),
@@ -437,34 +373,6 @@ fn status_response(status: RecordingReadiness) -> Value {
         "ok": true,
         "status": status,
     })
-}
-
-fn input_complete_response(
-    input_completion: Option<&watch::Sender<Option<RecordingInputCompletion>>>,
-    delivered: Option<usize>,
-) -> Value {
-    let Some(input_completion) = input_completion else {
-        return serde_json::json!({
-            "ok": false,
-            "error": "recording control does not accept finite input completion",
-        });
-    };
-    let Some(delivered) = delivered.filter(|value| *value > 0) else {
-        return serde_json::json!({
-            "ok": false,
-            "error": "recording input completion requires a positive delivered count",
-        });
-    };
-    if input_completion
-        .send(Some(RecordingInputCompletion { delivered }))
-        .is_err()
-    {
-        return serde_json::json!({
-            "ok": false,
-            "error": "comparison recording no longer accepts input completion",
-        });
-    }
-    serde_json::json!({ "ok": true })
 }
 
 async fn remove_stale_socket(path: &Path) -> Result<()> {
@@ -623,22 +531,6 @@ async fn request_status(path: &Path) -> Result<RecordingReadiness> {
     response
         .status
         .context("recording control status response omitted status")
-}
-
-pub async fn notify_recording_input_complete(path: &Path, delivered: usize) -> Result<()> {
-    ensure!(
-        delivered > 0,
-        "recording input completion requires a positive delivered count"
-    );
-    request_control(
-        path,
-        &serde_json::json!({
-            "command": "input-complete",
-            "delivered": delivered,
-        }),
-    )
-    .await?;
-    Ok(())
 }
 
 async fn request_control(path: &Path, request: &Value) -> Result<RecordingControlResponse> {
@@ -824,50 +716,6 @@ mod tests {
         .await
         .unwrap_err();
         assert!(error.to_string().contains("listener bind failed"));
-        server.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn comparison_control_accepts_finite_input_completion() {
-        let temp = tempfile::tempdir().unwrap();
-        let socket = temp.path().join("comparison.sock");
-        let lifecycle = RecordingLifecycle::for_comparison_gateway(true, false, false);
-        lifecycle.mark_listener_ready(RecordingListener::HttpGateway);
-        let (server, mut completion) =
-            RecordingControlServer::start_for_comparison(lifecycle, socket.clone())
-                .await
-                .unwrap();
-
-        notify_recording_input_complete(&socket, 7).await.unwrap();
-        completion.changed().await.unwrap();
-
-        assert_eq!(
-            *completion.borrow_and_update(),
-            Some(RecordingInputCompletion { delivered: 7 })
-        );
-        server.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn ordinary_recording_control_rejects_input_completion() {
-        let temp = tempfile::tempdir().unwrap();
-        let socket = temp.path().join("recording.sock");
-        let server = RecordingControlServer::start(
-            RecordingLifecycle::from_config(&test_config()),
-            socket.clone(),
-        )
-        .await
-        .unwrap();
-
-        let error = notify_recording_input_complete(&socket, 1)
-            .await
-            .unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("does not accept finite input completion")
-        );
         server.shutdown().await.unwrap();
     }
 

@@ -4,10 +4,9 @@ use std::process::Command;
 use std::time::Duration;
 
 use super::model::{
-    DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS, DeliveryProjectConfig, ProcessOutputSettings,
-    ProjectConfig, ProjectSettings, RecordingProjectConfig, ReplayProjectConfig,
-    ResolvedProjectConfig, RunLayout, SourceProjectConfig, StateProjectConfig, TargetProjectConfig,
-    VerificationProjectConfig,
+    DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS, DeliveryProjectConfig, ProjectConfig, ProjectSettings,
+    RecordingProjectConfig, ReplayProjectConfig, ResolvedProjectConfig, RunLayout,
+    SourceProjectConfig, StateProjectConfig, TargetProjectConfig, VerificationProjectConfig,
 };
 use super::project_validation::validate_project_config;
 use super::target_quality_config::inferred_target_quality_gates;
@@ -115,7 +114,6 @@ pub(crate) fn render_project_config(
             source: SourceProjectConfig {
                 snapshot: PathBuf::from(crate::repository::LOCAL_SOURCE_ROOT),
             },
-            process_outputs: Vec::new(),
             target: TargetProjectConfig {
                 dockerfile: options.target_dockerfile.clone(),
                 startup_timeout_seconds: DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS,
@@ -226,13 +224,8 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         !recorder.http_gateway.enabled || recorder.http_gateway.ready.enabled,
         "managed project replay with http_gateway.enabled requires an enabled http_gateway.ready probe"
     );
-    let target_request_timeout = recorder
-        .comparison_recording
-        .as_ref()
-        .map(|comparison| Duration::from_millis(comparison.upstream_timeout_ms))
-        .unwrap_or_else(|| {
-            Duration::from_secs(super::model::DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS)
-        });
+    let target_request_timeout =
+        Duration::from_secs(super::model::DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS);
     let target_max_response_bytes = recorder.recording.max_body_bytes;
     let target_port = recorder_target_http_port(&recorder.http_gateway.matched_upstream)?;
     let target_http_readiness_enabled = recorder.http_gateway.enabled;
@@ -257,19 +250,6 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         })
         .transpose()?;
     let target_quality_gates = inferred_target_quality_gates(&target_root, &managed.paths);
-    let process_outputs = config
-        .project
-        .process_outputs
-        .iter()
-        .filter(|output| output.enabled)
-        .map(ProcessOutputSettings::config)
-        .collect::<Vec<_>>();
-    for output_id in policy.process_output_rules.keys() {
-        ensure!(
-            process_outputs.iter().any(|output| output.id == *output_id),
-            "verification process_output_rules references disabled or unknown process output {output_id:?}"
-        );
-    }
     let project = ResolvedProjectConfig {
         replay_loading: config.project.replay.dependency_loading,
         target_dockerfile: resolve_under(&target_root, &config.project.target.dockerfile),
@@ -289,8 +269,6 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         target_request_timeout,
         target_quality_gates,
         target_max_response_bytes,
-        process_outputs,
-        process_output_rules: policy.process_output_rules,
         replay_policy: policy_path,
         replay_case_dependency_post_response_window: Duration::from_millis(
             config
@@ -631,54 +609,6 @@ mod tests {
             config.project.state.runtime_root,
             PathBuf::from(DEFAULT_RUNTIME_ROOT)
         );
-    }
-
-    #[test]
-    fn process_output_project_setting_only_exposes_enabled() {
-        let setting: ProcessOutputSettings = serde_yaml::from_str(
-            "id: metrics-profile\npath: /data1/weibo/logs/profile.log\nenabled: true\n",
-        )
-        .unwrap();
-        let config = setting.config();
-
-        assert_eq!(config.id, "metrics-profile");
-        assert_eq!(config.path, PathBuf::from("/data1/weibo/logs/profile.log"));
-        assert_eq!(
-            config.observation,
-            crate::process_output::ProcessOutputObservation::Comparison
-        );
-        assert_eq!(config.max_bytes, 8 * 1024 * 1024);
-        assert_eq!(
-            config.comparison,
-            crate::process_output::ProcessOutputComparison::ProfileByType {
-                min_recording_duration_seconds: 60,
-            }
-        );
-
-        let error = serde_yaml::from_str::<ProcessOutputSettings>(
-            "id: metrics-profile\npath: /data1/weibo/logs/profile.log\nenabled: true\nkind: profile_by_type\n",
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("unknown field `kind`"));
-    }
-
-    #[test]
-    fn disabled_process_output_is_valid_but_not_resolved() {
-        let target = target();
-        initialize(options(target.path())).unwrap();
-        let config_path = target.path().join(".traffic-e2e/project.yaml");
-        let mut project: ProjectConfig =
-            serde_yaml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
-        project.project.process_outputs = vec![ProcessOutputSettings {
-            id: "metrics-profile".to_string(),
-            path: PathBuf::from("/data1/weibo/logs/profile.log"),
-            enabled: false,
-        }];
-        fs::write(config_path, serde_yaml::to_string(&project).unwrap()).unwrap();
-
-        let (_, resolved) = resolve_project(target.path()).unwrap();
-
-        assert!(resolved.process_outputs.is_empty());
     }
 
     #[test]

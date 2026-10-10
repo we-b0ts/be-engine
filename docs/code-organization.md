@@ -206,7 +206,7 @@ is unclear.
   stable host-location projection for retained, run-scoped writable output
   mounts. `target_container/runtime_outputs.rs` prepares Replay-owned host
   directories, while `platform/runtime_outputs.rs` projects the same validated
-  contract into diagnostic-preflight source and Comparison source/target runtimes.
+  contract into diagnostic-preflight source runtime.
   Runtime outputs are never startup inputs or image build inputs.
 - `target_container/build.rs` owns target Dockerfile validation, projection of
   configured managed directories into BuildKit named contexts, Docker build
@@ -215,10 +215,10 @@ is unclear.
   stale-agent recovery, default-identity loading, and projection of that exact
   socket into BuildKit. It never owns or persists private-key material.
 - `rewrite` owns migration sequencing, the single coordinator state with
-  API-scoped AI work slices, the serialized Replay/comparison verification
+  API-scoped AI work slices, the serialized Replay verification
   lease, bounded action/evidence projection, rule routing, and the whole-target
   completion gate. It consumes public traffic operations and must not move
-  rewrite state or completion semantics into Recorder, Replay, comparison, or
+  rewrite state or completion semantics into Recorder, Replay, or
   `e2e_run`.
 - `e2e_run/result.rs` owns the one terminal E2E result contract: verification
   gates, response-difference clustering, representative selection, and bounded
@@ -285,10 +285,7 @@ is unclear.
   `case_patterns.rs` owns the low-frequency post-recording pattern
   identification gate, persistent canonical API catalog, and add-only policy
   application; it does not mutate recorded cases or delegate this gate to API
-  workers. `process_output_model.rs` and `process_outputs.rs` own the separate
-  process-output inventory, comparison scheduling, issue projection, and final
-  target-fingerprint revalidation. Root `process_output.rs` owns validated
-  capture configuration and immutable source/target file evidence.
+  workers. `work_scope.rs` owns the API worker scope identity.
   `revalidation.rs` owns the coordinator's explicit early-validation
   request boundary and projection for deferred API status, including eligibility
   of the engine-selected idle revalidation item.
@@ -304,18 +301,17 @@ is unclear.
   this is independent of engine bindings and historical sessions. Old-worker
   cleanup is not an entry prerequisite. Each API can bind once in the new workflow;
   subsequent worker transfer retains its separate authorization contract. `e2e_run/branch` requires a work branch.
-  `regression_scope` owns selected recording adoption, reversible API exclusion and current Comparison
-  requirement reconciliation at coordinator load/advance boundaries; its
-  `comparison` child reuses valid Replay evidence when that requirement changes.
+  `regression_scope` owns selected recording adoption and reversible API exclusion
+  at coordinator load/advance boundaries.
   Its `recording` child validates explicit recording selection and resets batch
   state; `artifacts` retains ownership of manifest and recorded-case validation.
   `config/regression` owns the separate ignored YAML schema, route-level matching
   and defaults, using the shared scope grammar without depending on rewrite state.
-  `transition.rs` applies the loaded Comparison requirement and leaves parked-slice
-  completion scheduling to the root coordinator. `progress_publication.rs` owns
+  `transition.rs` classifies Replay results and leaves parked-slice completion
+  scheduling to the root coordinator. `progress_publication.rs` owns
   the final delivery publication gate for the selected regression scope.
   `evidence/overview` owns issue overview identity and projection, including
-  process-output diagnostics and current worker context outside evidence hashes.
+  current worker context outside evidence hashes.
   `evidence/access` owns read-only assignment/opaque-query resolution and
   worker-confirmation checks; `evidence` owns bounded API diagnostic queries.
   `bin/backend-rewrite/evidence` owns CLI selector parsing for that read-only
@@ -358,7 +354,7 @@ is unclear.
   publication.
   Review fingerprints use the same policy exclusion; traffic verification
   fingerprints continue to include both traffic policies. `repair`
-  returns quality findings to existing API/process-output worker ownership,
+  returns quality findings to existing API worker ownership,
   including fresh unpublished candidate reports without admitting failed code.
   Review does not create traffic failures or a second migration state machine.
 - `config/source_traffic_policy.rs` owns the canonical, whole-file YAML contract

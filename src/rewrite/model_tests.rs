@@ -18,7 +18,6 @@ fn older_state_uses_bounded_recording_defaults() {
         "current_api_index",
         "parked_slices",
         "worker_bindings",
-        "process_outputs",
         "api_catalog_initialized",
         "api_catalog",
         "case_pattern_identification",
@@ -39,7 +38,6 @@ fn older_state_uses_bounded_recording_defaults() {
     assert!(state.current_api_index.is_none());
     assert!(state.parked_slices.is_empty());
     assert!(state.worker_bindings.is_empty());
-    assert!(state.process_outputs.inventory.is_empty());
     assert!(!state.api_catalog_initialized);
     assert!(state.api_catalog.is_empty());
     assert!(state.case_pattern_identification.is_none());
@@ -81,7 +79,6 @@ fn implementation_action_has_one_stable_public_shape() {
             possible_causes: vec!["target behavior differs".to_string()],
             observed_target_fingerprint: "fnv1a64:target".to_string(),
             attempt: 2,
-            comparison_observation: None,
         },
         worker: RewriteWorkerDispatchView {
             first_bound_at: None,
@@ -122,12 +119,7 @@ fn implementation_action_has_one_stable_public_shape() {
         value.pointer("/details/work_scope/kind"),
         Some(&serde_json::json!("api"))
     );
-    for field in [
-        "possible_causes",
-        "response_diagnosis",
-        "representative",
-        "comparison_observation",
-    ] {
+    for field in ["possible_causes", "response_diagnosis", "representative"] {
         assert!(value["details"].get(field).is_none());
     }
     assert!(value["commands"].get("evidence").is_none());
@@ -149,10 +141,8 @@ fn implementation_action_has_one_stable_public_shape() {
         initialized: true,
         workflow: None,
         api_inventory: None,
-        process_output_inventory: None,
         latest_focused_e2e: None,
         e2e_current: false,
-        comparison_current: false,
         terminal_allowed: false,
         action,
     })

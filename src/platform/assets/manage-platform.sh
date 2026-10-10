@@ -10,26 +10,14 @@ required_environment=(
     TRAFFIC_E2E_TARGET_ROOT
     TRAFFIC_E2E_SOURCE_RUNTIME
     TRAFFIC_E2E_TARGET_STARTUP_MOUNTS_FILE
-    TRAFFIC_E2E_TARGET_STARTUP_ENV_FILE
     TRAFFIC_E2E_TARGET_RUNTIME_OUTPUTS_FILE
-    TRAFFIC_E2E_TARGET_PORT
-    TRAFFIC_E2E_TARGET_READY_PATH
-    TRAFFIC_E2E_TARGET_READY_STATUS
-    TRAFFIC_E2E_TARGET_STARTUP_TIMEOUT_SECONDS
     TRAFFIC_E2E_HTTP_RECORDING_ENABLED
-    TRAFFIC_E2E_SOURCE_ORIGIN
-    TRAFFIC_E2E_SOURCE_HOST
-    TRAFFIC_E2E_SOURCE_PORT
     TRAFFIC_E2E_RECORDING_ORIGIN
     TRAFFIC_E2E_SOURCE_READY_PATH
     TRAFFIC_E2E_SOURCE_READY_STATUS
     TRAFFIC_E2E_RECORDER_CONFIG
     TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY
-    TRAFFIC_E2E_REPLAY_POLICY
-    TRAFFIC_E2E_MAX_FAILED_CASES_PER_API
     TRAFFIC_E2E_PLATFORM_ASSETS
-    TRAFFIC_E2E_COMPARISON_PROCESS_OUTPUTS_ENABLED
-    TRAFFIC_E2E_COMPARISON_PROCESS_OUTPUT_FLUSH_AFTER_LAST_CASE_MS
 )
 for name in "${required_environment[@]}"; do
     [[ -n "${!name-}" ]] || {
@@ -46,11 +34,9 @@ case "$TRAFFIC_E2E_HTTP_RECORDING_ENABLED" in
 esac
 http_recording_enabled=$TRAFFIC_E2E_HTTP_RECORDING_ENABLED
 source "$TRAFFIC_E2E_PLATFORM_ASSETS/preflight-readiness.sh"
-source "$TRAFFIC_E2E_PLATFORM_ASSETS/comparison-process-outputs.sh"
-validate_comparison_process_output_environment
 
 case "$operation" in
-    record-comparison|preflight) ;;
+    preflight) ;;
     *)
         printf 'error: unsupported managed recording operation %s\n' "$operation" >&2
         exit 1
@@ -62,7 +48,7 @@ unset TRAFFIC_E2E_ENCRYPTION_KEY_B64
 
 run_id=""
 duration_seconds=""
-baseline_recheck=false
+
 per_api_case_limit=""
 api_selectors=()
 while (($# > 0)); do
@@ -77,11 +63,7 @@ while (($# > 0)); do
             duration_seconds=$2
             shift 2
             ;;
-        --baseline-recheck)
-            "$baseline_recheck" && exit 2
-            baseline_recheck=true
-            shift
-            ;;
+
         --api)
             (($# >= 2)) || exit 2
             api_selectors+=("$2")
@@ -103,10 +85,6 @@ done
     printf 'error: duration must be a positive integer\n' >&2
     exit 2
 }
-[[ "$TRAFFIC_E2E_MAX_FAILED_CASES_PER_API" =~ ^[1-9][0-9]*$ ]] || {
-    printf 'error: max failed cases per API must be a positive integer\n' >&2
-    exit 2
-}
 if [[ -z "$run_id" ]]; then
     run_id=$(date -u +%Y%m%d%H%M%S)
 fi
@@ -114,24 +92,8 @@ fi
     printf 'error: run ID must contain 14 digits\n' >&2
     exit 2
 }
-if [[ "$operation" != record-comparison && "$baseline_recheck" == true ]]; then
-    printf 'error: baseline recheck is comparison-only\n' >&2
-    exit 2
-fi
-[[ "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true || \
-   "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == false ]] || {
-    printf 'error: TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED must be true or false\n' >&2
-    exit 2
-}
-if [[ "$operation" == record-comparison && \
-      "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true ]]; then
-    [[ -n "${TRAFFIC_E2E_TARGET_MOTAN_PORT-}" ]] || {
-        printf 'error: missing comparison target Motan port\n' >&2
-        exit 2
-    }
-fi
 
-for command_name in docker jq curl nc timeout base64 id date find awk wc tr rm tar mktemp chown; do
+for command_name in docker jq curl timeout base64 id date find awk wc tr rm tar mktemp chown; do
     command -v "$command_name" >/dev/null 2>&1 || {
         printf 'error: required command not found: %s\n' "$command_name" >&2
         exit 1
@@ -141,22 +103,13 @@ done
     printf 'error: traffic-e2e binary is not executable\n' >&2
     exit 1
 }
-if [[ "$operation" == record-comparison ]]; then
-    [[ "${TRAFFIC_E2E_TARGET_IMAGE_ID-}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-        printf 'error: comparison requires an immutable target image ID\n' >&2
-        exit 1
-    }
-fi
+
 [[ -f "$TRAFFIC_E2E_RECORDER_CONFIG" ]] || {
     printf 'error: recorder config is missing\n' >&2
     exit 1
 }
 [[ -f "$TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY" ]] || {
     printf 'error: source traffic policy is missing\n' >&2
-    exit 1
-}
-[[ -f "$TRAFFIC_E2E_REPLAY_POLICY" ]] || {
-    printf 'error: replay policy is missing\n' >&2
     exit 1
 }
 valid_encryption_key() {
@@ -213,13 +166,6 @@ prefix="traffic-e2e-${repo_name}-${operation}-${token}"
 anchor_name="${prefix}-anchor"
 recorder_name="${prefix}-recorder"
 source_name="${prefix}-source"
-target_name="${prefix}-target"
-target_anchor_name="${prefix}-target-anchor"
-target_network_name="${prefix}-target-network"
-target_network_ip=""
-target_network_gateway=""
-target_origin=""
-target_motan_upstream=""
 adapter_image="traffic-e2e/${recording_image_project}-recording:cache"
 adapter_image_id=""
 adapter_contract_revision=""
@@ -265,13 +211,9 @@ fi
 anchor_started=false
 recorder_started=false
 source_started=false
-target_started=false
-target_anchor_started=false
-target_network_started=false
+
 recorder_finalized=false
-comparison_pid=""
-comparison_socket_dir=""
-input_pid=""
+
 source "$TRAFFIC_E2E_PLATFORM_ASSETS/platform-mounts.sh"
 source "$TRAFFIC_E2E_PLATFORM_ASSETS/container-runtime.sh"
 
@@ -287,12 +229,12 @@ stop_container() {
     fi
     docker rm "$name" >/dev/null 2>&1 || true
 }
-source "$TRAFFIC_E2E_PLATFORM_ASSETS/comparison-target-network.sh"
+
 source "$TRAFFIC_E2E_PLATFORM_ASSETS/recorder-runtime.sh"
 
 capture_diagnostics() {
     local name
-    for name in "$recorder_name" "$source_name" "$target_name"; do
+    for name in "$recorder_name" "$source_name"; do
         if container_exists "$name"; then
             docker logs "$name" >"$diagnostics_dir/${name}.log" 2>&1 || true
         fi
@@ -311,11 +253,7 @@ remove_private_runtime_dir() {
 
 normalize_retained_ownership() {
     local recording_result_dir path mismatched
-    if [[ "$operation" == record-comparison ]]; then
-        recording_result_dir="$artifacts_dir/comparison-recordings/$run_id"
-    else
-        recording_result_dir="$artifacts_dir/recordings/$run_id"
-    fi
+    recording_result_dir="$artifacts_dir/recordings/$run_id"
     local -a retained_paths=("$data_dir" "$recording_result_dir" "$diagnostics_dir")
     [[ "$operation" != preflight ]] || retained_paths+=("$preflight_root")
     for path in "${retained_paths[@]}"; do
@@ -338,42 +276,16 @@ normalize_retained_ownership() {
 cleanup() {
     local status=$?
     trap - EXIT INT TERM
-    if [[ -n "$comparison_pid" ]] && kill -0 "$comparison_pid" >/dev/null 2>&1; then
-        kill -INT "$comparison_pid" >/dev/null 2>&1 || true
-        wait "$comparison_pid" || true
-    fi
-    if [[ -n "$input_pid" ]] && kill -0 "$input_pid" >/dev/null 2>&1; then
-        kill -TERM "$input_pid" >/dev/null 2>&1 || true
-        wait "$input_pid" || status=1
-        input_pid=""
-    fi
-    if [[ "$operation" == record-comparison ]]; then
-        if "$target_started"; then
-            stop_target || status=1
-        fi
-        if "$source_started"; then
-            stop_container "$source_name"
-            source_started=false
-        fi
-    fi
+
     if "$recorder_started" && ! "$recorder_finalized"; then
         finalize_recorder || status=1
-    fi
-    if "$target_started"; then
-        stop_target || status=1
     fi
     capture_diagnostics
     "$source_started" && stop_container "$source_name"
     "$recorder_started" && stop_container "$recorder_name"
-    "$target_started" && stop_container "$target_name"
-    remove_comparison_target_network || status=1
     "$anchor_started" && stop_container "$anchor_name"
-    normalize_cache_snapshot_ownership || status=1
     normalize_retained_ownership || status=1
-    if [[ -n "$comparison_socket_dir" ]]; then
-        remove_private_runtime_dir "$comparison_socket_dir" /tmp || status=1
-        comparison_socket_dir=""
-    fi
+
     remove_private_runtime_dir "$control_dir" "$local_dir/control" || status=1
     remove_platform_mounts || status=1
     exit "$status"
@@ -381,117 +293,6 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-
-wait_port() {
-    wait_host_port 127.0.0.1 "$@"
-}
-
-wait_host_port() {
-    local host=$1
-    local port=$2
-    local label=$3
-    local owner=${4-}
-    local deadline=$((SECONDS + 300))
-    while ((SECONDS < deadline)); do
-        if nc -z -w 1 "$host" "$port" >/dev/null 2>&1; then
-            return 0
-        fi
-        if [[ -n "$owner" ]] && ! container_is_running "$owner"; then
-            printf 'error: %s exited before port %s became ready\n' "$label" "$port" >&2
-            return 1
-        fi
-        sleep 1
-    done
-    printf 'error: timed out waiting for %s on %s:%s\n' "$label" "$host" "$port" >&2
-    return 1
-}
-
-container_is_running() {
-    [[ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null || true)" == true ]]
-}
-
-require_container_running() {
-    local name=$1
-    local label=$2
-    container_is_running "$name" || {
-        printf 'error: %s container %s is not running after startup\n' "$label" "$name" >&2
-        return 1
-    }
-}
-
-port_is_open() {
-    nc -z -w 1 "$1" "$2" >/dev/null 2>&1
-}
-
-require_port_available() {
-    local host=$1
-    local port=$2
-    local label=$3
-    ! port_is_open "$host" "$port" || {
-        printf 'error: refusing to start %s: %s:%s is already accepting TCP connections\n' \
-            "$label" "$host" "$port" >&2
-        return 1
-    }
-}
-
-require_port_open() {
-    local host=$1
-    local port=$2
-    local label=$3
-    port_is_open "$host" "$port" || {
-        printf 'error: %s did not open expected TCP endpoint %s:%s after startup\n' \
-            "$label" "$host" "$port" >&2
-        return 1
-    }
-}
-
-wait_http() {
-    local origin=$1
-    local path=$2
-    local expected=$3
-    local label=$4
-    local owner=${5-}
-    local timeout_seconds=${6:-300}
-    local deadline=$((SECONDS + timeout_seconds))
-    local status
-    while ((SECONDS < deadline)); do
-        status=$(curl -sS -o /dev/null -w '%{http_code}' "${origin}${path}" 2>/dev/null || true)
-        [[ "$status" == "$expected" ]] && return 0
-        if [[ -n "$owner" ]] && ! container_is_running "$owner"; then
-            printf 'error: %s exited before HTTP readiness\n' "$label" >&2
-            return 1
-        fi
-        sleep 1
-    done
-    printf 'error: timed out waiting for %s HTTP readiness\n' "$label" >&2
-    return 1
-}
-
-start_comparison_source() {
-    local network=$1
-    load_source_runtime_spec "$TRAFFIC_E2E_SOURCE_RUNTIME"
-    if "$http_recording_enabled"; then
-        require_port_available "$TRAFFIC_E2E_SOURCE_HOST" "$TRAFFIC_E2E_SOURCE_PORT" source
-    fi
-    docker run --detach --name "$source_name" --network "$network" \
-        "${runtime_args[@]}" "$adapter_image_id" "${runtime_command[@]}" >/dev/null
-    source_started=true
-    if "$http_recording_enabled"; then
-        wait_http "$TRAFFIC_E2E_SOURCE_ORIGIN" "$TRAFFIC_E2E_SOURCE_READY_PATH" \
-            "$TRAFFIC_E2E_SOURCE_READY_STATUS" source "$source_name"
-    fi
-    require_container_running "$source_name" source
-    if "$http_recording_enabled"; then
-        require_port_open "$TRAFFIC_E2E_SOURCE_HOST" "$TRAFFIC_E2E_SOURCE_PORT" source
-    fi
-    docker exec "$source_name" /bin/sh -ec '
-        test "$(awk "/^Uid:/{print \$2}" /proc/1/status)" = 998
-        test "$(awk "/^Gid:/{print \$2}" /proc/1/status)" = 998
-    ' || {
-        printf 'error: adapted comparison source entrypoint must run as 998:998\n' >&2
-        return 1
-    }
-}
 
 recording_adapter_contract_revision() {
     (
@@ -640,42 +441,6 @@ run_preflight_https_probe() {
     fi
 }
 
-start_recording_input() {
-    local completion_control_socket="${1-}"
-    [[ -n "${TRAFFIC_E2E_REQUEST_SOURCE-}" ]] || return 0
-    [[ -d "$TRAFFIC_E2E_REQUEST_SOURCE" ]] || {
-        printf 'error: managed recording request source is missing\n' >&2
-        return 1
-    }
-    local -a input_command=(internal recording-input \
-        --case-source "$TRAFFIC_E2E_REQUEST_SOURCE" \
-        --origin "$TRAFFIC_E2E_RECORDING_ORIGIN")
-    if [[ -n "${TRAFFIC_E2E_MOTAN_RECORDING_UPSTREAM-}" ]]; then
-        input_command+=(--motan-upstream "$TRAFFIC_E2E_MOTAN_RECORDING_UPSTREAM")
-    fi
-    [[ -z "$completion_control_socket" ]] || \
-        input_command+=(--completion-control-socket "$completion_control_socket")
-    comparison_process_output_completion_args input_command "$completion_control_socket"
-    if [[ -n "$completion_control_socket" ]]; then
-        local selector
-        for selector in "${api_selectors[@]}"; do input_command+=(--api "$selector"); done
-    fi
-    TRAFFIC_E2E_ENCRYPTION_KEY_B64=$encryption_key_b64 \
-        "$TRAFFIC_E2E_BIN" "${input_command[@]}" &
-    input_pid=$!
-}
-
-stop_recording_input() {
-    local status=0
-    [[ -n "$input_pid" ]] || return 0
-    if kill -0 "$input_pid" >/dev/null 2>&1; then
-        kill -TERM "$input_pid" >/dev/null 2>&1 || true
-    fi
-    wait "$input_pid" || status=$?
-    input_pid=""
-    ((status == 0))
-}
-
 run_preflight() {
     local artifact_owner control_socket truststore
     artifact_owner="$runtime_uid:$runtime_gid"
@@ -734,129 +499,16 @@ run_preflight() {
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-ready --control-socket "$control_socket"
     run_preflight_https_probe
     record_preflight_readiness
-    start_recording_input
+
     wait_for_recorder_or_duration
-    stop_recording_input
+
     finalize_recorder
-    "$TRAFFIC_E2E_BIN" internal process-output-capture --target-root "$TRAFFIC_E2E_TARGET_ROOT" \
-        --container "$source_name" --side source \
-        --observation before-shutdown \
-        --output-root "$artifacts_dir/recordings/$run_id/process-outputs"
+
     local manifest_filter='.status == "completed" and .failed_cases == 0 and (.errors | length == 0) and .published_cases > 0'
     jq -e "$manifest_filter" "$artifacts_dir/recordings/$run_id/recording-run.json" >/dev/null
 }
 
-wait_for_comparison_ready() {
-    local control_socket=$1
-    local readiness_pid status
-    "$TRAFFIC_E2E_BIN" recording wait-ready --control-socket "$control_socket" &
-    readiness_pid=$!
-    while kill -0 "$comparison_pid" >/dev/null 2>&1 &&
-        kill -0 "$readiness_pid" >/dev/null 2>&1; do
-        sleep 0.1
-    done
-    if ! kill -0 "$comparison_pid" >/dev/null 2>&1; then
-        status=0
-        wait "$comparison_pid" || status=$?
-        comparison_pid=""
-        if kill -0 "$readiness_pid" >/dev/null 2>&1; then
-            kill -TERM "$readiness_pid" >/dev/null 2>&1 || true
-        fi
-        wait "$readiness_pid" >/dev/null 2>&1 || true
-        if ((status == 0)); then
-            printf 'error: comparison recording exited before readiness\n' >&2
-            return 1
-        fi
-        return "$status"
-    fi
-    wait "$readiness_pid"
-}
-
-wait_for_comparison_exit() {
-    local status=0
-    while kill -0 "$comparison_pid" >/dev/null 2>&1; do
-        if [[ -n "$input_pid" ]] && ! kill -0 "$input_pid" >/dev/null 2>&1; then
-            wait "$input_pid" || status=$?
-            input_pid=""
-            if ((status != 0)); then
-                printf 'error: managed comparison request input exited with status %s\n' "$status" >&2
-                # Keep comparison_pid for the EXIT trap to stop and drain it.
-                return "$status"
-            fi
-        fi
-        sleep 0.1
-    done
-    wait "$comparison_pid" || status=$?
-    comparison_pid=""
-    return "$status"
-}
-
-run_comparison_recording() {
-    local comparison_control_socket
-    [[ ! -e "$artifacts_dir/comparison-recordings/$run_id" ]] || {
-        printf 'error: comparison run already exists: %s\n' "$run_id" >&2
-        return 1
-    }
-    comparison_socket_dir=$(mktemp -d /tmp/trp-e2e-cmp.XXXXXX)
-    comparison_control_socket="$comparison_socket_dir/control.sock"
-    resolve_or_build_recording_adapter
-    docker pull "$anchor_image" >/dev/null
-    docker run --detach --name "$anchor_name" --platform linux/amd64 --network host \
-        --label com.weibo.traffic-e2e.managed=true \
-        --label com.weibo.traffic-e2e.role=target-network-anchor \
-        --label "com.weibo.traffic-e2e.operation=${operation}" \
-        --label "com.weibo.traffic-e2e.run-id=${run_id}" \
-        "$anchor_image" >/dev/null
-    anchor_started=true
-    start_comparison_target_network
-    start_cache_snapshot
-    start_comparison_source "container:${anchor_name}"
-    start_target
-    if "$http_recording_enabled"; then
-        wait_http "$target_origin" "$TRAFFIC_E2E_TARGET_READY_PATH" \
-            "$TRAFFIC_E2E_TARGET_READY_STATUS" target "$target_name" \
-            "$TRAFFIC_E2E_TARGET_STARTUP_TIMEOUT_SECONDS"
-    fi
-    require_container_running "$target_name" target
-    if "$http_recording_enabled"; then
-        require_port_open "$target_network_ip" "$TRAFFIC_E2E_TARGET_PORT" target
-    fi
-    # The comparison runtime owns candidate Motan readiness through a protocol
-    # heartbeat and waits for every enabled upstream before recording input.
-    # A one-shot TCP check here races the target container's normal startup.
-    docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-ready --control-socket /workspace/control/cache-snapshot.sock
-    local -a comparison_command=(internal comparison-run --config "$TRAFFIC_E2E_RECORDER_CONFIG" --candidate-upstream "$target_origin" --policy "$TRAFFIC_E2E_REPLAY_POLICY" --run-id "$run_id" --duration-seconds "$duration_seconds" --max-failed-cases-per-api "$TRAFFIC_E2E_MAX_FAILED_CASES_PER_API" --control-socket "$comparison_control_socket")
-    [[ -z "${TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN-}" ]] || comparison_command+=(--listen "$TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN")
-    [[ -z "${TRAFFIC_E2E_MANAGED_COMPARISON_MOTAN_LISTEN-}" ]] || comparison_command+=(--motan-listen "$TRAFFIC_E2E_MANAGED_COMPARISON_MOTAN_LISTEN")
-    if [[ "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true ]]; then
-        comparison_command+=(--candidate-motan-upstream "$target_motan_upstream")
-    fi
-    "$baseline_recheck" && comparison_command+=(--baseline-recheck)
-    local selector
-    for selector in "${api_selectors[@]}"; do comparison_command+=(--api "$selector"); done
-    [[ -z "$per_api_case_limit" ]] || comparison_command+=(--per-api-case-limit "$per_api_case_limit")
-    (
-        cd "$TRAFFIC_E2E_TARGET_ROOT"
-        export TRAFFIC_E2E_ENCRYPTION_KEY_B64="$encryption_key_b64"
-        exec "$TRAFFIC_E2E_BIN" "${comparison_command[@]}"
-    ) &
-    comparison_pid=$!
-    wait_for_comparison_ready "$comparison_control_socket"
-    start_recording_input "$comparison_control_socket"
-    local status=0
-    wait_for_comparison_exit || status=$?
-    stop_recording_input || status=1
-    ((status == 0)) || return "$status"
-    capture_comparison_process_outputs
-    stop_target
-    stop_container "$source_name"
-    source_started=false
-    finalize_recorder
-    jq -e '.status == "completed"' \
-        "$artifacts_dir/comparison-recordings/$run_id/comparison-recording-run.json" >/dev/null
-}
-
 case "$operation" in
-    record-comparison) run_comparison_recording ;;
+
     preflight) run_preflight ;;
 esac

@@ -13,7 +13,6 @@ fn marker(target: &Path, pid: u32, finished: bool, error: Option<String>) {
             pid,
             request: Request::Next {
                 api: Some("GET /api".into()),
-                process_output: None,
                 source_route: None,
             },
             finished,

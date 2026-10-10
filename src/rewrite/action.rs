@@ -10,8 +10,8 @@ use super::model::{
     RewritePhase, RewriteState, RewriteWorkflowView,
 };
 use super::{
-    case_patterns, inventory, process_outputs, progress_publication, recorder_capture,
-    recording_action, repair, target_quality, worker,
+    case_patterns, inventory, progress_publication, recorder_capture, recording_action, repair,
+    target_quality, worker,
 };
 
 pub(super) fn for_state(target_root: &Path, state: &RewriteState) -> RewriteActionEnvelope {
@@ -52,9 +52,7 @@ pub(super) fn status_base(target_root: &Path, state: &RewriteState) -> Result<Re
     }
     let target_change = target_quality::status_action(target_root, state)?;
     Ok(match state.phase {
-        RewritePhase::RecordingRequired | RewritePhase::ComparisonRecordingRequired
-            if recording_status.is_some() =>
-        {
+        RewritePhase::RecordingRequired if recording_status.is_some() => {
             recording_status.expect("recording status was checked")
         }
         _ if target_change.is_some() => target_change.expect("target change was checked"),
@@ -140,11 +138,7 @@ pub(super) fn for_scoped_status(
         .into_iter()
         .find(|scope| match scope {
             super::RewriteWorkScope::Api { api } => {
-                state.process_outputs.current_id.is_none()
-                    && api == &super::api_selector::work_scope(state, &state.api).binding_key()
-            }
-            super::RewriteWorkScope::ProcessOutput { id } => {
-                state.process_outputs.current_id.as_ref() == Some(id)
+                api == &super::api_selector::work_scope(state, &state.api).binding_key()
             }
         })
         && state.rule_plan.is_none()
@@ -251,7 +245,6 @@ pub(super) fn uninitialized_coordinator_wait_envelope(
         pending: 1,
         workflow: None,
         api_inventory: None,
-        process_output_inventory: None,
         latest_focused_e2e: None,
         terminal_allowed: false,
         action: RewriteAction::WaitRequired {
@@ -288,7 +281,6 @@ pub(super) fn envelope(
         .pending(),
         workflow,
         api_inventory: Some(inventory::view(state)),
-        process_output_inventory: process_outputs::optional_view(state),
         latest_focused_e2e: latest_focused_e2e(state),
         terminal_allowed: super::expert::counts(state).2 == 0
             && super::review::admission_current(target_root, state)
@@ -332,9 +324,6 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
             };
         }
         Some(progress_publication::PublicationState::Published) | None => {}
-    }
-    if process_outputs::active_scope(state).is_some() {
-        return worker::implementation_action(target_root, state, None);
     }
     if super::rule_replay::pending(&state.active_slice) {
         return advance_required(
@@ -404,8 +393,17 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
     match state.phase {
         RewritePhase::RecordingRequired => RewriteAction::InputRequired {
             reason: super::model::RewriteInputRequiredReason::RecordingEvidenceRequired,
-            summary: format!("{}; place a completed external recording under the conventional recording directory, then run next", recording_summary(state)),
-            required: vec![target_root.join(crate::repository::LOCAL_ARTIFACTS_ROOT).join("recordings").display().to_string()],
+            summary: format!(
+                "{}; place a completed external recording under the conventional recording directory, then run next",
+                recording_summary(state)
+            ),
+            required: vec![
+                target_root
+                    .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
+                    .join("recordings")
+                    .display()
+                    .to_string(),
+            ],
             recording_input_diagnosis: state.recording_input_diagnosis.clone(),
         },
         RewritePhase::ApiPending => advance_required(
@@ -413,16 +411,12 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
             Some(&selected_api),
             format!("continue with the next recorded API {display_api}"),
         ),
-        RewritePhase::ImplementationRequired => worker::implementation_action(target_root, state, None),
+        RewritePhase::ImplementationRequired => {
+            worker::implementation_action(target_root, state, None)
+        }
         RewritePhase::AwaitingRecordingRefresh => {
             recorder_capture::pending_refresh_action(target_root, state)
         }
-        RewritePhase::ComparisonRecordingRequired => RewriteAction::InputRequired {
-            reason: super::model::RewriteInputRequiredReason::ComparisonEvidenceRequired,
-            summary: state.comparison_rejection.clone().unwrap_or_else(|| format!("provide completed external comparison evidence for {display_api}; select comparison_run_id in .traffic-e2e/regression.yaml")),
-            required: vec![target_root.join(crate::repository::LOCAL_ARTIFACTS_ROOT).join("comparison-recordings").display().to_string()],
-            recording_input_diagnosis: None,
-        },
         RewritePhase::SystemRepairRequired => RewriteAction::SystemRepairRequired {
             work_scope: super::api_selector::work_scope(state, &state.api),
             issue: state
@@ -432,28 +426,25 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
             route: state.route.clone(),
             acceptance: repair::pending_command(target_root, state),
         },
-        RewritePhase::SliceComplete => {
-            if let Some(id) = process_outputs::next_eligible_id(state) {
-                return RewriteAction::AdvanceRequired {
-                    summary: format!(
-                        "all API work items were traversed; verify process output {id}"
-                    ),
-                    command: next_command_for_process_output(target_root, id),
-                };
-            }
-            RewriteAction::Complete {
-            summary: if super::regression_scope::has_skips(state) && state.api_inventory.iter().all(|item| item.status.is_done()) {
+        RewritePhase::SliceComplete => RewriteAction::Complete {
+            summary: if super::regression_scope::has_skips(state)
+                && state.api_inventory.iter().all(|item| item.status.is_done())
+            {
                 let summary = inventory::view(state);
-                format!("regression scope complete: {} API(s) verified, {} skipped by {}; {} process output(s) verified", summary.completed, summary.skipped, super::regression_scope::PATH, state.process_outputs.inventory.len())
+                format!(
+                    "regression scope complete: {} API(s) verified, {} skipped by {}",
+                    summary.completed,
+                    summary.skipped,
+                    super::regression_scope::PATH
+                )
             } else if state
                 .api_inventory
                 .iter()
                 .all(|item| item.status == super::model::RewriteApiStatus::Complete)
             {
                 format!(
-                    "all {} API(s) in the current recording and {} process output(s) have current evidence",
+                    "all {} API(s) in the current recording have current evidence",
                     inventory::view(state).total,
-                    state.process_outputs.inventory.len()
                 )
             } else {
                 format!(
@@ -462,9 +453,7 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
                 )
             },
             e2e_current: state.e2e_current,
-            comparison_current: state.comparison_current,
-            }
-        }
+        },
     }
 }
 
@@ -518,7 +507,6 @@ pub(super) fn input_required(target_root: &Path) -> RewriteActionEnvelope {
         pending: 1,
         workflow: None,
         api_inventory: None,
-        process_output_inventory: None,
         latest_focused_e2e: None,
         action: advance_required(
             target_root,
@@ -538,7 +526,6 @@ pub(super) fn source_route_required(
         pending: 1,
         workflow: None,
         api_inventory: None,
-        process_output_inventory: None,
         latest_focused_e2e: None,
         action: RewriteAction::InputRequired {
             reason: RewriteInputRequiredReason::SourceRouteRequired,
@@ -558,7 +545,6 @@ pub(super) fn recovery_required(target_root: &Path) -> RewriteActionEnvelope {
         pending: 1,
         workflow: None,
         api_inventory: None,
-        process_output_inventory: None,
         latest_focused_e2e: None,
         action: RewriteAction::RecoveryRequired {
             summary: "rewrite workflow is locked; execute the recovery command before retrying"
@@ -606,10 +592,8 @@ pub(super) fn workflow_view(state: &RewriteState) -> RewriteWorkflowView {
         phase: state.phase,
         scope: workflow_scope(state),
         recording_run_id: state.recording_run_id.clone(),
-        require_comparison: state.require_comparison,
-        work_scope: process_outputs::selected_scope(state).or_else(|| {
-            (!state.api.is_empty()).then(|| super::api_selector::work_scope(state, &state.api))
-        }),
+        work_scope: (!state.api.is_empty())
+            .then(|| super::api_selector::work_scope(state, &state.api)),
     }
 }
 
@@ -666,18 +650,6 @@ pub(super) fn next_command_for_selected_api(
     )
 }
 
-pub(super) fn next_command_for_process_output(target_root: &Path, id: &str) -> RewriteCommandSpec {
-    command(
-        target_root,
-        vec![
-            "next".to_string(),
-            "--process-output".to_string(),
-            id.to_string(),
-        ],
-        Vec::new(),
-    )
-}
-
 fn next_command_with_optional_api(target_root: &Path, api: Option<&str>) -> RewriteCommandSpec {
     let mut arguments = vec!["next".to_string()];
     if let Some(api) = api.filter(|api| !api.is_empty()) {
@@ -702,31 +674,6 @@ pub(super) fn status_command_for_api(target_root: &Path, api: Option<&str>) -> R
         ]);
     }
     command(target_root, arguments, Vec::new())
-}
-
-pub(super) fn status_command_for_process_output(
-    target_root: &Path,
-    id: &str,
-) -> RewriteCommandSpec {
-    command(
-        target_root,
-        vec![
-            "status".to_string(),
-            "--process-output".to_string(),
-            id.to_string(),
-        ],
-        Vec::new(),
-    )
-}
-
-pub(super) fn retarget_wait_status_for_process_output(
-    envelope: &mut RewriteActionEnvelope,
-    target_root: &Path,
-    id: &str,
-) {
-    if let RewriteAction::WaitRequired { status, .. } = &mut envelope.action {
-        *status = status_command_for_process_output(target_root, id);
-    }
 }
 
 pub(super) fn rule_apply_command(target_root: &Path, plan_id: &str) -> RewriteCommandSpec {

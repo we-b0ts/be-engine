@@ -1,8 +1,8 @@
 //! Resolve runtime handles without requiring coordinator-owned engine IDs.
 use anyhow::{Context, Result, ensure};
 
-use super::super::process_output_model::RewriteWorkScope;
 use super::super::review::RewriteReviewReport;
+use super::super::work_scope::RewriteWorkScope;
 use super::super::{fingerprint, model::RewriteState};
 use super::model::RewriteWorkerActivity;
 use super::runtime::{self, RewriteWorkerReportOptions};

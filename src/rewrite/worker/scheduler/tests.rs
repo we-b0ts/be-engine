@@ -220,7 +220,6 @@ async fn unscoped_next_selects_only_the_parked_integrated_api_and_preserves_qual
     let envelope = rewrite::next_rewrite(RewriteNextOptions {
         target_root: target.path().into(),
         api: None,
-        process_output: None,
         source_route: None,
     })
     .await

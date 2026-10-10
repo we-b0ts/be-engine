@@ -3,7 +3,7 @@ use super::*;
 use crate::replay::{
     assertion::{jwt::JwtComparison, read_replay_request_times},
     policy::response::{ResponseJwtRule, validate_response_rules},
-    read_actual_response_body, read_comparison_response_observation, read_expected_response_body,
+    read_actual_response_body, read_expected_response_body,
 };
 use crate::request_rules::keys::ResolvedSigningKey;
 
@@ -100,20 +100,6 @@ pub fn plan_response_jwt_rule(feedback: ResponseJwtRuleFeedback) -> Result<Gener
                 read_actual_response_body(&actual, observation.gateway_protocol)?,
                 read_replay_request_times(&request, &actual)?,
             ),
-            ResponseBodyRuleEvidence::Comparison { .. } => {
-                let source =
-                    read_comparison_response_observation(&request, &expected, "source response")?;
-                let target =
-                    read_comparison_response_observation(&request, &actual, "target response")?;
-                (
-                    source.body,
-                    target.body,
-                    crate::replay::assertion::RequestTimes {
-                        source: source.timestamp,
-                        target: target.timestamp,
-                    },
-                )
-            }
         };
         let source = crate::json_value::parse(&source_body)
             .context("source JWT response requires complete unique-member JSON")?;

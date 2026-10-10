@@ -98,25 +98,13 @@ pub(in crate::rewrite) fn required_action(
 ) -> Result<Option<RewriteAction>> {
     let terminal = state.phase == RewritePhase::SliceComplete
         && !state.api_inventory.is_empty()
-        && state.api_inventory.iter().all(|a| a.status.is_done())
-        && crate::rewrite::process_outputs::all_complete(state);
+        && state.api_inventory.iter().all(|a| a.status.is_done());
     let ready = super::super::rule_replay::any_ready(state)
         || worker::runtime::scopes(state)
             .iter()
             .any(|scope| worker::runtime::acceptance_ready(state, scope));
     let review_required = requires_delivery_review(root, state);
-    let comparison_ready = review_required
-        && state.phase == RewritePhase::ComparisonRecordingRequired
-        && matches!(
-            crate::rewrite::recording_action::status_action(root, state)?,
-            Some(RewriteAction::AdvanceRequired { .. })
-        )
-        && crate::rewrite::artifacts::validate_comparison_recording(root, state).is_ok();
-    let process_output_ready = review_required
-        && crate::rewrite::inventory::can_switch_api(state)
-        && crate::rewrite::process_outputs::next_eligible_id(state).is_some();
-    let revalidation = review_required
-        && (state.phase == RewritePhase::ApiPending || comparison_ready || process_output_ready);
+    let revalidation = review_required && (state.phase == RewritePhase::ApiPending);
     if !terminal && !ready && !revalidation && state.source_review_rework.is_empty() {
         return Ok(None);
     }

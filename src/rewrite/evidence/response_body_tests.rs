@@ -4,20 +4,20 @@ use super::*;
 fn exact_hessian2_body_offers_response_body_codec_configuration() {
     let target = tempfile::tempdir().unwrap();
     let facts = serde_json::json!({
-        "comparison_observation": {
+        "representative": {"response_difference": {
             "pointer": "$body",
             "body_diagnosis": {
                 "codec": "hessian2",
                 "codec_candidates": ["hessian2"],
                 "configured": false
             }
-        }
+        }}
     });
 
     let hints = rule_hints(target.path(), QUERY_REPRESENTATIVES, &facts);
     let planners = applicable_rule_planners(
         target.path(),
-        RewriteIssueKind::Comparison,
+        RewriteIssueKind::Response,
         QUERY_REPRESENTATIVES,
         &facts,
         "evidence-current",
@@ -36,14 +36,14 @@ fn exact_hessian2_body_offers_response_body_codec_configuration() {
 fn exact_body_offers_each_supported_codec_candidate() {
     let target = tempfile::tempdir().unwrap();
     let facts = serde_json::json!({
-        "comparison_observation": {
+        "representative": {"response_difference": {
             "pointer": "$body",
             "body_diagnosis": {
                 "codec": "protobuf",
                 "codec_candidates": ["protobuf", "hessian2"],
                 "configured": false
             }
-        }
+        }}
     });
 
     let hints = rule_hints(target.path(), QUERY_REPRESENTATIVES, &facts);
@@ -78,14 +78,14 @@ fn exact_body_offers_each_supported_codec_candidate() {
 fn docx_candidate_points_to_the_reviewed_timestamp_planner() {
     let target = tempfile::tempdir().unwrap();
     let facts = serde_json::json!({
-        "comparison_observation": {
+        "representative": {"response_difference": {
             "pointer": "$body",
             "body_diagnosis": {
                 "codec": "docx",
                 "codec_candidates": ["docx"],
                 "configured": false
             }
-        }
+        }}
     });
     let hints = rule_hints(target.path(), QUERY_REPRESENTATIVES, &facts);
     let planners = applicable_rule_planners(

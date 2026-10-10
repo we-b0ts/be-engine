@@ -19,7 +19,6 @@ fn dependency_state() -> RewriteState {
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target".to_string(),
         attempt: 1,
-        comparison_observation: None,
     });
     state.dependency_rule_plan = Some(RewriteDependencyRulePlanRecord {
         review_fingerprint: None,

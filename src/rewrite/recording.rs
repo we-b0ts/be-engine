@@ -31,8 +31,6 @@ pub(super) fn reset_for_fresh_recording(
     state.recording_rejection = None;
     state.recording_settings = settings;
     state.recording_request_reason = Some(reason);
-    state.comparison_run_id = None;
-    state.comparison_rejection = None;
     state.case_source = None;
     state.case_inventory_id = None;
     state.source_revision = None;
@@ -47,7 +45,6 @@ pub(super) fn reset_for_fresh_recording(
     state.recorder_capture_plan = None;
     state.route = None;
     state.e2e_current = false;
-    state.comparison_current = false;
     state.bump();
     Ok(())
 }

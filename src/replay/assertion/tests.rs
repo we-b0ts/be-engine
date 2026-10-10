@@ -747,21 +747,6 @@ fn exact_mismatch_surfaces_a_dynamic_candidate() {
 }
 
 #[test]
-fn comparison_counter_rules_do_not_relax_standard_replay() {
-    let (_temp, options) = write_case(
-        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      counter:\n        - pointer: /content\n          source_evidence: src/counter.rs:load current count\n          source_example: '100'\n          target_example: '101'\n",
-        json!(100),
-        json!(101),
-    );
-
-    let report = assert_recorded_response(options).unwrap();
-
-    assert!(!report.passed);
-    assert!(report.applied_counter_rule_ids.is_empty());
-    assert_eq!(report.generated_scalar_candidates, vec!["/content"]);
-}
-
-#[test]
 fn dynamic_field_still_requires_the_same_scalar_type() {
     let (_temp, options) = write_case(
         "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      uuid:\n        - pointer: /content\n          source_evidence: src/token.rs:issue_token\n          source_example: <redacted source UUID>\n          target_example: <redacted target UUID>\n",

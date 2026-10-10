@@ -141,11 +141,6 @@ pub type MysqlReplayControlConfig = ReplayControlConfig;
 pub use assertion::ResponseHeaderDateCandidate;
 pub(crate) use assertion::hessian2::is_hessian2_body;
 pub(crate) use assertion::protobuf::is_protobuf_body;
-pub(crate) use assertion::{
-    ComparisonResponseAssertionOptions, ComparisonResponseObservation, ResponseAssertionRuntime,
-    assert_comparison_response, read_actual_response_body, read_comparison_response_observation,
-    read_expected_response_body,
-};
 pub use assertion::{
     DocxBodyDifference, DocxBodyDifferenceKind, Hessian2BodyDifference, Hessian2BodyDifferenceKind,
     Hessian2JoinedStringCandidate, Hessian2ValuePathCandidate, JsonJoinedStringCandidate,
@@ -155,17 +150,17 @@ pub use assertion::{
     ResponseBodyUnorderedPathCandidate, ResponseDifference, ResponseDifferenceKind,
     ResponseGatewayProtocol, assert_recorded_response,
 };
+pub(crate) use assertion::{
+    ResponseAssertionRuntime, read_actual_response_body, read_expected_response_body,
+};
 pub(crate) use policy::ReplayEvidencePolicyFreshness;
 pub use policy::ResponseHeaderDateRule;
 pub(crate) use policy::render_validated_replay_policy;
-pub(crate) use policy::response_locations_overlap;
 pub use policy::{
-    ComparisonResponseRuleFeedback, ComparisonSourceMatch, ComparisonVerificationPolicy,
     DocxTimestampRule, Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath,
     HttpCrossCaseFeedback, HttpCrossCasePlan, HttpCrossCaseReport, MemcachedTimestampRuleFeedback,
     MemcachedTimestampRulePlan, MemcachedTimestampRuleReport, MysqlTimeRuleFeedback,
     MysqlTimeRulePlan, MysqlTimeRuleReport, MysqlTimeSelector, MysqlTimeValueSelector,
-    ProfileTargetMissingFeedback, ProfileTargetMissingPlan, ProfileTargetMissingReport,
     ProtobufFieldPath, ProtobufJoinedStringFieldType, ProtobufJoinedStringPath,
     ProtobufRepeatedElementType, ProtobufUnorderedPath, RedisCrossCaseFeedback, RedisCrossCasePlan,
     RedisCrossCaseReport, ReplayPolicyInitOptions, ReplayPolicyInitResult,
@@ -174,9 +169,9 @@ pub use policy::{
     ResponseBodyRulePlan, ResponseBodyRuleReport, ResponseBodyRuleVerificationOutcome,
     ResponseBodyUnorderedPath, ResponseDurationUnit, ResponseRuleFeedback, ResponseRuleKind,
     ResponseRulePlan, ResponseRuleReport, ResponseTimeRule, ResponseTimestampFormat,
-    initialize_replay_policy, plan_comparison_response_rule, plan_http_cross_case,
-    plan_memcached_timestamp_rule, plan_mysql_time_rule, plan_profile_target_missing,
-    plan_redis_cross_case, plan_response_body_rule, plan_response_rule, validate_replay_policy,
+    initialize_replay_policy, plan_http_cross_case, plan_memcached_timestamp_rule,
+    plan_mysql_time_rule, plan_redis_cross_case, plan_response_body_rule, plan_response_rule,
+    validate_replay_policy,
 };
 pub use policy::{
     DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget,

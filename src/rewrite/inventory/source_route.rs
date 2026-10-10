@@ -139,8 +139,7 @@ pub(in crate::rewrite) fn bind_options(
                 && state.phase == RewritePhase::ApiPending
                 && state.group_id.is_none()
                 && state.attempts.is_empty()
-                && !state.e2e_current
-                && !state.comparison_current,
+                && !state.e2e_current,
             "active rewrite source route is {:?}; refusing a different --source-route unless it is a recorded-pattern fallback or invalid binding with no group or verification history",
             state.source_route
         );
@@ -159,7 +158,6 @@ pub(in crate::rewrite) fn bind_options(
     ensure!(
         current.attempts == 0
             && !current.e2e_current
-            && !current.comparison_current
             && current.verified_target_fingerprint.is_none(),
         "cannot replace a source route with inventory verification history"
     );

@@ -54,8 +54,7 @@ integrator evidence endpoint or engine integration activity to invent.
    only for items still `handoff_ready`, preserving earlier integration states.
    A later addition requires a new complete review of the resulting candidate,
    not a replay of already integrated merges or acceptance callbacks.
-   Use `--process-output ID` for a single process-output
-   scope. Supply current `--evidence` and
+   Supply current `--evidence` and
    `--hardcode-ai-verified` mappings when required. Only a `passed` report
    qualifies. Resolve integration-induced failures here; return original
    implementation defects with exact findings to their responsible worker.
@@ -92,7 +91,7 @@ carry old integration history forward. If the retained branch has diverged,
 preserve its work and identify any undelivered changes before preparing a clean
 branch at the assigned base in the retained worktree.
 Trace affected callers and commit provenance to supply current evidence or the
-responsible API/process-output owner. Do not assign a shared defect to the
+responsible API owner. Do not assign a shared defect to the
 currently selected API merely because that API exposed it.
 
 For a public-domain hardcode finding, read

@@ -24,13 +24,10 @@ enum ReviewCommand {
         integration: bool,
         #[arg(
             long,
-            conflicts_with = "process_output",
-            required_unless_present_any = ["integration", "process_output"],
+            required_unless_present = "integration",
             value_parser = super::parse_api_scope
         )]
         api: Option<String>,
-        #[arg(long)]
-        process_output: Option<String>,
         /// Accepted worker handoff; pair with its scope for an integration delivery.
         #[arg(long, requires = "integration")]
         handoff_id: Option<String>,
@@ -38,7 +35,7 @@ enum ReviewCommand {
         /// one handoff_ready item; integrated items may be retained in the batch.
         /// Review checks the whole candidate. For receipt refresh only, omit this
         /// option and all scope/handoff selectors, then use review accept.
-        #[arg(long, requires = "integration", conflicts_with_all = ["api", "process_output", "handoff_id"])]
+        #[arg(long, requires = "integration", conflicts_with_all = ["api", "handoff_id"])]
         batch_handoffs: Option<PathBuf>,
         /// JSON document containing spawn ownership and code evidence.
         #[arg(long)]
@@ -57,14 +54,14 @@ enum ReviewCommand {
     },
     /// Read the current integrated findings without advancing the workflow.
     Show,
-    /// Route a current quality finding to its original API/process-output worker.
+    /// Route a current quality finding to its original API worker.
     Rework {
         /// Failed unpublished integration report; omit to use current canonical findings.
         #[arg(long)]
         report: Option<PathBuf>,
         #[arg(long, env = "BACKEND_REWRITE_REVIEW_FINDING")]
         finding: String,
-        /// api:/path or process-output:ID, selected after checking ownership.
+        /// api:/path, selected after checking ownership.
         #[arg(long, env = "BACKEND_REWRITE_REVIEW_OWNER")]
         owner: String,
     },
@@ -76,15 +73,12 @@ pub(super) fn run(root: PathBuf, args: ReviewArgs, pretty: bool) -> Result<()> {
             worktree,
             integration,
             api,
-            process_output,
             handoff_id,
             batch_handoffs,
             evidence,
             hardcode_ai_verified,
         } => {
-            let scope = api
-                .map(|api| RewriteWorkScope::Api { api })
-                .or_else(|| process_output.map(|id| RewriteWorkScope::ProcessOutput { id }));
+            let scope = api.map(|api| RewriteWorkScope::Api { api });
             ensure!(
                 !integration || scope.is_some() == handoff_id.is_some(),
                 "integration review requires both a work-item selector and --handoff-id, or neither for a global candidate"
@@ -120,10 +114,8 @@ pub(super) fn run(root: PathBuf, args: ReviewArgs, pretty: bool) -> Result<()> {
                 RewriteWorkScope::Api {
                     api: super::parse_api_scope(api)?,
                 }
-            } else if let Some(id) = owner.strip_prefix("process-output:") {
-                RewriteWorkScope::ProcessOutput { id: id.into() }
             } else {
-                anyhow::bail!("owner must be api:/path or process-output:ID");
+                anyhow::bail!("owner must be api:/path");
             };
             super::print_json(
                 &traffic_e2e::rework_rewrite_review_with_report(root, &finding, scope, report)?,

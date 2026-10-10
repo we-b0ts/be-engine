@@ -4,8 +4,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 use super::super::response::{
-    ResponseBodyCodec, ResponseRuleKind, ResponseRules, response_locations_overlap,
-    response_pointer_matches,
+    ResponseBodyCodec, ResponseRuleKind, ResponseRules, response_pointer_matches,
 };
 use crate::replay::JsonJoinedStringCandidate;
 use crate::replay::ResponseGatewayProtocol;
@@ -21,28 +20,10 @@ pub(super) struct AssertionEvidence {
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct ComparisonEvidence {
-    pub(super) version: u8,
-    pub(super) kind: String,
-    pub(super) expected_response: String,
-    pub(super) assertion_mode: String,
-    pub(super) baseline_recheck: String,
-    pub(super) policy_fingerprint: String,
-    pub(super) complete: bool,
-    pub(super) cases: Vec<AssertionCaseEvidence>,
-}
-
-#[derive(Debug, Deserialize)]
 pub(super) struct AssertionCaseEvidence {
     pub(super) case_id: String,
     #[serde(default)]
     pub(super) passed: bool,
-    #[serde(default)]
-    pub(super) classification: Option<String>,
-    #[serde(default)]
-    pub(super) matched_source: Option<String>,
-    #[serde(default)]
-    pub(super) source_change_pointers: Vec<String>,
     #[serde(default)]
     pub(super) policy_mismatch_rule_ids: Vec<String>,
     pub(super) response: Option<ResponseCaseEvidence>,
@@ -86,8 +67,6 @@ pub(super) struct ResponseCaseEvidence {
     unordered_joined_string_candidates: Vec<JsonJoinedStringCandidate>,
     #[serde(default)]
     applied_unordered_joined_string_rule_ids: Vec<String>,
-    #[serde(default)]
-    applied_counter_rule_ids: Vec<String>,
 }
 
 impl ResponseCaseEvidence {
@@ -113,7 +92,6 @@ impl ResponseCaseEvidence {
                     response_pointer_matches(pointer, &candidate.pointer)
                         && separator.is_some_and(|separator| candidate.separator == separator)
                 }),
-            ResponseRuleKind::Counter => false,
             _ => unreachable!("all response rule kinds are covered"),
         }
     }
@@ -125,7 +103,6 @@ impl ResponseCaseEvidence {
             ResponseRuleKind::UnorderedJoinedString => {
                 &self.applied_unordered_joined_string_rule_ids
             }
-            ResponseRuleKind::Counter => &self.applied_counter_rule_ids,
             _ => unreachable!("all response rule kinds are covered"),
         }
     }
@@ -177,14 +154,6 @@ pub(super) fn difference_supports_rule(
                 && difference.expected_type.as_deref() == Some("string")
                 && difference.actual_type.as_deref() == Some("string")
         }
-        ResponseRuleKind::Counter => {
-            difference.kind == "value_mismatch"
-                && difference.expected_type == difference.actual_type
-                && difference
-                    .expected_type
-                    .as_deref()
-                    .is_some_and(|kind| matches!(kind, "string" | "number"))
-        }
         _ => unreachable!("all response rule kinds are covered"),
     }
 }
@@ -213,21 +182,6 @@ pub(super) fn response_rule_exists(
                     && separator.is_some_and(|separator| field.separator == separator)
             })
         }
-        ResponseRuleKind::Counter => api_rules
-            .counter
-            .iter()
-            .any(|field| field.pointer == pointer),
         _ => unreachable!("all response rule kinds are covered"),
     }
-}
-
-pub(super) fn source_change_overlaps(
-    case: &AssertionCaseEvidence,
-    requested: &BTreeSet<String>,
-) -> bool {
-    case.source_change_pointers.iter().any(|source| {
-        requested
-            .iter()
-            .any(|pointer| response_locations_overlap(source, pointer))
-    })
 }

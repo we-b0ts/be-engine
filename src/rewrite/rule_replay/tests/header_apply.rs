@@ -93,7 +93,6 @@ async fn header_apply_and_reused_rule_schedule_the_owner_api_without_reclassifyi
     state.case_source = Some(source.clone());
     state.group_id = Some(state.api.clone());
     state.source_revision = Some("source".into());
-    state.require_comparison = false;
     worker::confirm_current_for_test(&mut state);
     let store = RewriteStore::new(target.path()).unwrap();
     let context = || crate::RewriteContext {

@@ -84,10 +84,8 @@ recording verification before escalating a remaining engine defect. Rejection
 counts alone establish neither IP origin nor a missing capture mechanism.
 
 Use `recorder-capability-gap` only when the recorder lacks a required mechanism.
-A comparison issue owned by `traffic_e2e_system` uses
-`replay-capability-gap`: response decoding, semantic assertion, and comparison
-verification are part of the same traffic-e2e verification revision. Do not
-route an ordinary complete comparison difference this way.
+Use `replay-capability-gap` for a proven response decoding or semantic assertion
+capability gap.
 A configured Breeze resource bypassed during recording is reported as
 `missing-recorded-resource` and becomes an API-scoped recorder-capture refresh,
 not system repair. Follow

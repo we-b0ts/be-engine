@@ -727,40 +727,6 @@ fn completed_api_quality_rework_reuses_worker_and_duplicate_route_is_idempotent(
     assert_eq!(store.load().unwrap().unwrap().revision, saved.revision);
 }
 
-#[test]
-fn process_output_review_uses_its_own_dispatch_and_blocks_integrated_acceptance() {
-    let (target, _) = setup();
-    let store = RewriteStore::new(target.path()).unwrap();
-    let mut state = store.load().unwrap().unwrap();
-    let scope = RewriteWorkScope::ProcessOutput {
-        id: "startup-profile".into(),
-    };
-    state.process_outputs.inventory = vec![crate::rewrite::RewriteProcessOutputProgress {
-        id: "startup-profile".into(),
-        status: crate::rewrite::RewriteProcessOutputStatus::ImplementationRequired,
-        attempts: 1,
-        verified_target_fingerprint: None,
-        issue: state.active_issue.clone(),
-    }];
-    state.process_outputs.current_id = Some("startup-profile".into());
-    worker::integrate_current_for_test(&mut state);
-    bind(target.path(), &mut state, &scope, Some(target.path()), true).unwrap();
-    store.save(&state).unwrap();
-    let report = check(options(target.path(), scope.clone())).unwrap();
-    assert_eq!(report.scope, Some(scope.clone()));
-    assert!(accept_handoff(target.path(), &state, &scope, Some(&report.report_path)).is_ok());
-    fs::create_dir_all(target.path().join("src")).unwrap();
-    fs::write(target.path().join("src/bad.rs"), "fn bad(\n").unwrap();
-    assert!(matches!(
-        gate(target.path(), &state, "master").unwrap(),
-        Some(RewriteAction::SourceReviewRequired { .. })
-    ));
-    assert_eq!(
-        store.load().unwrap().unwrap().process_outputs.inventory[0].status,
-        crate::rewrite::RewriteProcessOutputStatus::ImplementationRequired
-    );
-}
-
 fn integrated_and_parked_worker() -> (tempfile::TempDir, RewriteWorkScope) {
     let target = configured_target();
     git(target.path(), &["switch", "-qc", "coordinator"]);

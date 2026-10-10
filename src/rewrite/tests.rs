@@ -50,87 +50,6 @@ fn incomplete_work_never_allows_terminal_output() {
 }
 
 #[test]
-fn clean_reclassification_advances_without_replacing_standard_recording() {
-    let target = tempfile::tempdir().unwrap();
-    fs::write(
-        target.path().join("Cargo.toml"),
-        "[package]\nname='target'\n",
-    )
-    .unwrap();
-    git_ok(target.path(), &["init"]);
-    git_ok(target.path(), &["config", "user.email", "test@example.com"]);
-    git_ok(target.path(), &["config", "user.name", "Traffic E2E Test"]);
-    git_ok(target.path(), &["add", "."]);
-    git_ok(target.path(), &["commit", "-m", "baseline"]);
-
-    let counts = crate::E2eDiagnosisCounts {
-        selected: 10,
-        executed: 10,
-        response_passed: 10,
-        response_nonpassing: 0,
-        response_incomplete: 0,
-    };
-    let mut state = test_state();
-    state.require_comparison = true;
-    state.phase = RewritePhase::ImplementationRequired;
-    state.recording_run_id = "20260803023812".to_string();
-    state.case_source = Some(PathBuf::from("recording-cases"));
-    state.group_id = Some("GET /api".to_string());
-    state.attempts.push(model::RewriteAttemptSummary {
-        attempt: 3,
-        passed: false,
-        gates: crate::E2eVerificationGates {
-            responses: crate::E2eResponseGate::Passed,
-            replay: crate::E2eReplayGate::Complete,
-            dependencies: crate::E2eDependencyGate::Dirty,
-        },
-        counts: counts.clone(),
-    });
-    let result = crate::E2eApiRunResult {
-        run_key: "20260803023812".to_string(),
-        api: "GET /api".to_string(),
-        attempt: 3,
-        status: "successful".to_string(),
-        passed: true,
-        gates: crate::E2eVerificationGates {
-            responses: crate::E2eResponseGate::Passed,
-            replay: crate::E2eReplayGate::Complete,
-            dependencies: crate::E2eDependencyGate::Clean,
-        },
-        diagnosis: crate::E2eDiagnosis {
-            egress_rejections: None,
-            counts,
-            response_differences: crate::E2eResponseDifferenceDiagnosis {
-                total_differences: 0,
-                indexed_differences: 0,
-                omitted_differences: 0,
-                failure_clusters: Vec::new(),
-                omitted_failure_clusters: 0,
-            },
-            representative: None,
-            lifecycle_errors: Vec::new(),
-        },
-        progress: PathBuf::from("replay-progress.yaml"),
-        runtime_outputs: Vec::new(),
-    };
-
-    transition::from_e2e_result(
-        target.path(),
-        &mut state,
-        &result,
-        transition::AttemptTransition::ReclassifyCurrent,
-    )
-    .unwrap();
-
-    assert_eq!(state.phase, RewritePhase::ComparisonRecordingRequired);
-    assert_eq!(state.recording_run_id, "20260803023812");
-    assert_eq!(state.recording_request_reason, None);
-    assert_eq!(state.attempts.len(), 1);
-    assert!(state.attempts[0].passed);
-    assert!(state.comparison_run_id.is_none());
-}
-
-#[test]
 fn stale_workflow_returns_only_a_public_recovery_command() {
     let target = Path::new("/target");
     let value = serde_json::to_value(action::recovery_required(target)).unwrap();
@@ -191,4 +110,83 @@ fn git_ok(repository: &Path, args: &[&str]) {
         .status()
         .unwrap();
     assert!(status.success(), "git command failed: {args:?}");
+}
+
+#[test]
+fn clean_reclassification_advances_without_replacing_standard_recording() {
+    let target = tempfile::tempdir().unwrap();
+    fs::write(
+        target.path().join("Cargo.toml"),
+        "[package]\nname='target'\n",
+    )
+    .unwrap();
+    git_ok(target.path(), &["init"]);
+    git_ok(target.path(), &["config", "user.email", "test@example.com"]);
+    git_ok(target.path(), &["config", "user.name", "Traffic E2E Test"]);
+    git_ok(target.path(), &["add", "."]);
+    git_ok(target.path(), &["commit", "-m", "baseline"]);
+
+    let counts = crate::E2eDiagnosisCounts {
+        selected: 10,
+        executed: 10,
+        response_passed: 10,
+        response_nonpassing: 0,
+        response_incomplete: 0,
+    };
+    let mut state = test_state();
+    state.phase = RewritePhase::ImplementationRequired;
+    state.recording_run_id = "20260803023812".to_string();
+    state.case_source = Some(PathBuf::from("recording-cases"));
+    state.group_id = Some("GET /api".to_string());
+    state.attempts.push(model::RewriteAttemptSummary {
+        attempt: 3,
+        passed: false,
+        gates: crate::E2eVerificationGates {
+            responses: crate::E2eResponseGate::Passed,
+            replay: crate::E2eReplayGate::Complete,
+            dependencies: crate::E2eDependencyGate::Dirty,
+        },
+        counts: counts.clone(),
+    });
+    let result = crate::E2eApiRunResult {
+        run_key: "20260803023812".to_string(),
+        api: "GET /api".to_string(),
+        attempt: 3,
+        status: "successful".to_string(),
+        passed: true,
+        gates: crate::E2eVerificationGates {
+            responses: crate::E2eResponseGate::Passed,
+            replay: crate::E2eReplayGate::Complete,
+            dependencies: crate::E2eDependencyGate::Clean,
+        },
+        diagnosis: crate::E2eDiagnosis {
+            egress_rejections: None,
+            counts,
+            response_differences: crate::E2eResponseDifferenceDiagnosis {
+                total_differences: 0,
+                indexed_differences: 0,
+                omitted_differences: 0,
+                failure_clusters: Vec::new(),
+                omitted_failure_clusters: 0,
+            },
+            representative: None,
+            lifecycle_errors: Vec::new(),
+        },
+        progress: PathBuf::from("replay-progress.yaml"),
+        runtime_outputs: Vec::new(),
+    };
+
+    transition::from_e2e_result(
+        target.path(),
+        &mut state,
+        &result,
+        transition::AttemptTransition::ReclassifyCurrent,
+    )
+    .unwrap();
+
+    assert_eq!(state.phase, RewritePhase::SliceComplete);
+    assert_eq!(state.recording_run_id, "20260803023812");
+    assert_eq!(state.recording_request_reason, None);
+    assert_eq!(state.attempts.len(), 1);
+    assert!(state.attempts[0].passed);
 }

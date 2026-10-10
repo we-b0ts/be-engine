@@ -11,13 +11,6 @@ pub(crate) async fn flush_and_evict(file: &mut File, offset: u64) -> Result<u64>
     evict_after_sync(file, offset).await
 }
 
-pub(crate) async fn flush_all_and_evict(file: &mut File, offset: u64) -> Result<u64> {
-    file.sync_all()
-        .await
-        .context("failed to sync artifact file and metadata")?;
-    evict_after_sync(file, offset).await
-}
-
 async fn evict_after_sync(file: &File, offset: u64) -> Result<u64> {
     let length = file
         .metadata()
@@ -86,27 +79,6 @@ mod tests {
             .unwrap();
 
         let evicted_until = flush_and_evict(&mut file, 0).await.unwrap();
-
-        assert_eq!(evicted_until, page_size * 2);
-    }
-
-    #[tokio::test]
-    async fn full_sync_flush_cursor_advances_only_through_complete_pages() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("comparison.json");
-        let page_size = page_size().unwrap();
-        let payload = vec![b'x'; usize::try_from(page_size * 2 + 1).unwrap()];
-        let mut file = tokio::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(path)
-            .await
-            .unwrap();
-        tokio::io::AsyncWriteExt::write_all(&mut file, &payload)
-            .await
-            .unwrap();
-
-        let evicted_until = flush_all_and_evict(&mut file, 0).await.unwrap();
 
         assert_eq!(evicted_until, page_size * 2);
     }

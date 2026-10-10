@@ -40,7 +40,7 @@ own integrated report is accepted; it is never consumed by selection alone.
 ## Dispatch
 
 For `integration_required`, first match the accepted handoff to its original
-API/process-output binding and dispatch. Record the canonical commit and
+API binding and dispatch. Record the canonical commit and
 relevant content/configuration state. Create or mechanically synchronize the
 integration worktree without discarding existing work. Delegate source conflicts.
 
@@ -152,7 +152,7 @@ review report. A successful duplicate is harmless; after interruption, inspect
 inventory and report only the remaining ready handoffs. The engine verifies
 the candidate's original handoff, published code and quality inputs before
 admission; a stale or failing report requires integrator recheck. Then refresh
-global status and execute the returned Replay/Comparison acceptance action.
+global status and execute the returned Replay acceptance action.
 The coordinator validates receipts without executing quality checks again.
 
 For a source-evidence-only review candidate, publish the exact evidence commit

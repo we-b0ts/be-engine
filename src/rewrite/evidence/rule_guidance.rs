@@ -29,8 +29,8 @@ pub(super) fn rule_hints(
                 let hint = match (configured, codec) {
                     (true, "protobuf") => "The response body codec is protobuf. Review unordered_path_candidates as mechanical candidates; they do not authorize order-insensitive comparison. Apply only fields whose order is irrelevant in the source contract, with field_path, semantic display_path, explicit element_type, and source_evidence.",
                     (true, "hessian2") => "The response body codec is Hessian2. Candidates identify lists or joined strings but do not authorize order-insensitive comparison. Apply only source-proven sets; joined strings also require the reviewed separator.",
-                    (false, "protobuf") => "The exact response body is a protobuf candidate. The response rule planner can configure the codec and verify the existing focused-E2E or comparison artifacts offline without recording new traffic.",
-                    (false, "hessian2") => "The exact response body is a Hessian2 candidate. The response rule planner can configure the codec and verify the existing focused-E2E or comparison artifacts offline without recording new traffic.",
+                    (false, "protobuf") => "The exact response body is a protobuf candidate. The response rule planner can configure the codec and verify the existing focused-E2E artifacts offline without recording new traffic.",
+                    (false, "hessian2") => "The exact response body is a Hessian2 candidate. The response rule planner can configure the codec and verify the existing focused-E2E artifacts offline without recording new traffic.",
                     (_, "docx") => "Both response bodies are DOCX OPC packages. Review package-part differences and add only source-proven dynamic XML timestamps; ZIP entry timestamps and compression metadata are container metadata, while every decompressed part remains exact.",
                     _ => "The exact response body has a supported codec candidate. Review the body evidence before applying a response rule.",
                 };
@@ -428,12 +428,7 @@ pub(super) fn applicable_rule_planners(
             });
         }
     }
-    if query_kind == QUERY_REPRESENTATIVES
-        && matches!(
-            issue_kind,
-            RewriteIssueKind::Response | RewriteIssueKind::Comparison
-        )
-    {
+    if query_kind == QUERY_REPRESENTATIVES && matches!(issue_kind, RewriteIssueKind::Response) {
         let configured = response_body::configured(facts);
         planners.extend(
             response_body::codec_candidates(facts)

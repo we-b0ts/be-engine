@@ -24,7 +24,7 @@ pub async fn next_rewrite(mut options: RewriteNextOptions) -> Result<RewriteActi
     if let Some(envelope) = pending(&target_root)? {
         return Ok(envelope);
     }
-    if options.api.is_none() && options.process_output.is_none() && options.source_route.is_none() {
+    if options.api.is_none() && options.source_route.is_none() {
         let status = super::status_rewrite(super::RewriteContext {
             target_root: target_root.clone(),
         })?;
@@ -34,9 +34,6 @@ pub async fn next_rewrite(mut options: RewriteNextOptions) -> Result<RewriteActi
                 for pair in command.argv.windows(2) {
                     if pair[0] == "--api" {
                         options.api = Some(pair[1].parse()?);
-                    }
-                    if pair[0] == "--process-output" {
-                        options.process_output = Some(pair[1].clone());
                     }
                 }
             } else {
@@ -57,11 +54,9 @@ pub(super) fn status(target_root: &Path) -> Result<Option<RewriteStatusReport>> 
         initialized: envelope.workflow.is_some(),
         workflow: envelope.workflow,
         api_inventory: envelope.api_inventory,
-        process_output_inventory: envelope.process_output_inventory,
         latest_focused_e2e: envelope.latest_focused_e2e,
         // Uncommitted configuration cannot certify the next validation baseline.
         e2e_current: false,
-        comparison_current: false,
         terminal_allowed: false,
         action: envelope.action,
     }))

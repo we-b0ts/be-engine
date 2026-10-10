@@ -26,21 +26,6 @@ pub fn query_rewrite_evidence_for_scope(
             let query_id = overview::query_id(&scoped, &scope, issue);
             overview::report(&target_root, &scoped, scope, issue, &query_id)
         }
-        RewriteWorkScope::ProcessOutput { id } => {
-            let item = state
-                .process_outputs
-                .inventory
-                .iter()
-                .find(|item| item.id == *id)
-                .with_context(|| format!("process-output inventory does not contain {id:?}"))?;
-            let issue = item
-                .issue
-                .as_ref()
-                .with_context(|| format!("{} has no current issue to diagnose", scope.label()))?;
-            worker::ensure_scope_confirmed(&state, scope, "querying evidence")?;
-            let query_id = overview::query_id(&state, scope, issue);
-            overview::report(&target_root, &state, scope.clone(), issue, &query_id)
-        }
     }
 }
 
@@ -53,9 +38,6 @@ pub fn query_rewrite_evidence(
     let state = RewriteStore::new(&target_root)?
         .load()?
         .context("rewrite workflow has not been initialized")?;
-    if let Some(report) = overview::query_process_output(&target_root, &state, query_id)? {
-        return Ok(report);
-    }
     let api = inventory::api_for_evidence_query(&state, query_id)
         .context("evidence query is stale or belongs to no concurrent API work item")?;
     worker::ensure_api_confirmed(&state, &api, "querying evidence")?;

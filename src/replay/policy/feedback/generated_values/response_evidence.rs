@@ -64,33 +64,6 @@ pub(super) fn collect(
                 observations.push(detail);
             }
         }
-        ResponseBodyRuleEvidence::Comparison { comparison_report } => {
-            let report: crate::comparison_recording::ComparisonVerificationReport =
-                serde_json::from_slice(&read(comparison_report.clone(), witnesses)?)?;
-            ensure!(
-                report.complete
-                    && matches!(report.version, 3..=5)
-                    && report.kind == "comparison_recording_verification"
-                    && report.assertion_mode == "comparison_recording"
-                    && report.baseline_recheck == "optional_source_consistency"
-                    && report.policy_fingerprint == policy
-                    && report.expected_response == "assertions_only",
-                "response rule comparison evidence is incomplete or stale"
-            );
-            for case in report.cases {
-                let Some(response) = case.response else {
-                    continue;
-                };
-                if !matches(api, &response.method, &response.path) {
-                    continue;
-                }
-                ensure!(
-                    case.source_change_pointers.is_empty(),
-                    "source changes cannot authorize response rules"
-                );
-                observations.push(response);
-            }
-        }
     }
     Ok(observations)
 }

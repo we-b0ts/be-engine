@@ -12,7 +12,6 @@ response rules.
 - Generated scalar response fields
 - Unordered response arrays
 - Structured response-body rules
-- Comparison-only response fields
 
 ## Ownership
 
@@ -34,9 +33,6 @@ Use version three when the standard runner owns response assertions:
 version: 3
 expected_response: assertions_only
 dependency_rules: []
-response_settings:
-  comparison:
-    source_match: before
 response_rules:
   json: {}
   protobuf: {}
@@ -47,17 +43,8 @@ response_rules:
 Response field rules are grouped by body codec, canonical API, and then
 concrete rule kind. Standard replay loads JSON `timestamp`, `duration`, `uuid`,
 `random`, `jwt`, and `unordered` rules plus configured protobuf, Hessian2, and DOCX rules.
-Comparison also loads JSON `counter` rules. Replay and comparison-only rules
-must select disjoint JSON subtrees;
+Rules must select disjoint JSON subtrees;
 overlapping strategies are rejected rather than ordered by precedence.
-
-Comparison always checks the candidate against the first source response under
-all active response rules. `response_settings.comparison.source_match` accepts
-only `before` (the default); removed `before_or_after` configurations are
-rejected and must omit that setting or use `before`. Source-after evidence is
-optional and diagnostic only. Source changes and a candidate matching source-after
-do not authorize acceptance or response rules; investigate the source code.
-Standard Replay ignores this setting.
 
 Signed HTTP JSON tokens use explicit `jwt` rules, not whole-token `random`
 exemptions. Prove source issuance and key precedence, then use the coordinator's
@@ -262,7 +249,7 @@ reads `request.json`, sends the genuine request to the managed target HTTP
 endpoint, and writes the actual-response artifact. The target MUST NOT read
 `request.json` or `expected-response.json`.
 
-Replay and Comparison automatically compare these end-to-end HTTP response headers:
+Replay automatically compares these end-to-end HTTP response headers:
 
 ```text
 access-control-allow-credentials
@@ -293,9 +280,6 @@ response `x-request-id` imposes no target requirement. A present source value
 requires target presence. When the source response echoes the source request,
 the target response must echo the request actually sent to the target; otherwise
 the trimmed source and target response values must have equal byte length.
-Comparison uses the request forwarded symmetrically to source and candidate.
-Comparison checks headers, status, and body against the first complete source
-observation under the active response rules.
 
 An older artifact with no `headers` member has unavailable header evidence and
 retains its existing status/body verdict. Do not treat a missing snapshot as an
@@ -339,7 +323,7 @@ source review, unit tests, or real-traffic integration tests.
 JSON response Pointers also support a whole `*` segment for array elements,
 for example `/data/*/created_at` or `/data/*/items/*/id`. This is shared by
 `timestamp`, `duration`, `uuid`, `random`, `unordered`,
-`unordered_joined_string`, and Comparison-only `counter` rules. A numeric
+and `unordered_joined_string` rules. A numeric
 segment still selects one exact index; `/*` selects each element of a root
 array. Object keys remain exact (including a literal `*` key); `*` does not
 expand object members. Standard `~0` and `~1` escaping still applies.
@@ -357,7 +341,7 @@ same subtree.
 
 Time rules use a fixed ±5 second tolerance and the engine's captured request
 start times. Replay reads source `request.json.timestamp` and target
-`request_sent_at`; Comparison uses each capture's request-start `timestamp`.
+`request_sent_at`.
 No current wall-clock fallback or configurable tolerance is allowed.
 
 - `timestamp` requires `format: unix_seconds`, `unix_milliseconds`, or
@@ -464,7 +448,7 @@ response_rules:
 For a response pair, the rule applies only when the selected field exists in
 both responses and both values are arrays. A Pointer omitted by both response
 shapes does not participate; a one-sided omission remains an exact
-structural difference. Comparison preserves length, exact JSON elements, and
+structural difference. Matching preserves length, exact JSON elements, and
 duplicate counts while ignoring only the outer array order. Other response
 locations remain exact. Response strategies cannot overlap the same JSON
 subtree.
@@ -545,7 +529,7 @@ backend-rewrite rule plan \
   --body-codec protobuf
 ```
 
-Motan1 `value` is protocol-defined as Hessian2. Replay and comparison remove
+Motan1 `value` is protocol-defined as Hessian2. Replay removes
 its Java ObjectStream wrapper and use Hessian2 semantic equality by default;
 map wire order is ignored, while list order and business values remain exact.
 Explicit body-codec rules still take priority, and other Motan1 response kinds
@@ -641,9 +625,9 @@ is intentionally unsupported.
 Only selected collection order is ignored. Presence, types, contents,
 duplicate multiplicity, status, envelope, and undeclared paths remain exact.
 
-Use current focused E2E or comparison evidence and the current policy
+Use current focused E2E evidence and the current policy
 fingerprint. Plan first, review the exact selectors and source citations, apply
-atomically, then rerun the affected E2E/comparison group. Planning rejects stale
+atomically, then rerun the affected E2E group. Planning rejects stale
 reports, source changes, unused applicable dependency rules, selectors absent
 from typed diagnostics, and any selected location whose exact values still
 differ after its reviewed normalization. It does not require selecting every
@@ -651,51 +635,8 @@ mechanical candidate or resolving unrelated body differences in the same plan.
 The report records residual difference cases, which remain exact failing gates
 after apply.
 
-## Comparison Counter Fields
-
-`response_rules.json.<API>.counter` is ignored by standard replay and loaded
-only by comparison verification. Never infer it from a Pointer name. After
-source implementation evidence proves a selected scalar is a count that may
-change between valid observations, use
-`traffic-e2e config comparison plan|apply response-rule --kind counter` with an
-exact finalized comparison run, the exact API and Pointer, a source path/symbol or
-equivalent runtime artifact, and differing source and candidate examples.
-Source-before and source-after may be equal; their equality does not make the
-rule inapplicable.
-
-The selected Pointer must exist on both sides. Any JSON number matches another
-number. A string matches another string only when both are empty or both are
-nonempty. Number/string changes, one-sided omission, empty/nonempty string
-changes, null, boolean, arrays, and objects remain failures. The report records
-the applied counter rule ID. This comparison relaxation never weakens replay
-E2E, which remains the exact target-behavior gate.
-
-After every policy change, revalidate and rerun the entire affected API group.
-Earlier replay and aggregate artifacts are stale. A response rule participates
-only in response pairs where its Pointer resolves on both sides; absence from
-the sampled response shapes does not affect case or API completion. Completion
-requires zero unused applicable rules and a direct audit proving the expected
-response and dependency recordings did not flow into actual behavior.
-
-## Process-output target-missing allowances
-
-Use `traffic-e2e config comparison plan|apply allow-target-missing` for a
-source-positive profile interaction only when source-revision evidence proves
-that an indirect dependency independently emits it. The target AI must inspect
-the relevant source startup/configuration and dependency-emitter paths before
-returning the canonical metric, dependency path, and structured emitter
-evidence. If source code starts the interaction or the interaction affects
-source behavior, it must be implemented in the target. These eligibility
-conclusions are not persisted as boolean rule fields. The structured rule belongs under
-`process_output_rules.<output-id>.allow_target_missing` in
-`.traffic-e2e/verification.yaml` and records the canonical metric, source
-revision, ordered dependency path, and emitter evidence with the inspected
-source paths and one description. Planning validates the exact finalized
-source/target captures; apply is bound to unchanged project, policy, and
-capture evidence.
-
-One HTTP allowance covers `all_http://x` and `http://x` (and the HTTPS pair)
-only when the entire logical interaction is target-missing. One canonical
-`RPC_SERVICE_CLIENT` allowance covers its CLIENT/V2/REAL/REAL_V2 aliases, which
-remain independently compared but produce one logical evidence item. Exact
-count metrics and target-only extras cannot be suppressed.
+After every policy change, revalidate and rerun the affected API group.
+Earlier Replay and aggregate artifacts are stale. A response rule participates
+only where its Pointer resolves on both sides; absence from sampled response
+shapes does not affect completion. Audit that expected responses and dependency
+recordings did not flow into target behavior.

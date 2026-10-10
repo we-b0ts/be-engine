@@ -8,20 +8,6 @@ use crate::{
 };
 
 #[test]
-fn traffic_system_comparison_issue_accepts_replay_capability_repair() {
-    let mut issue = repair_state("fnv1a64:old".to_string())
-        .active_issue
-        .clone()
-        .unwrap();
-    issue.kind = RewriteIssueKind::Comparison;
-
-    validate_route_kind(&issue, "replay_capability_gap").unwrap();
-
-    issue.owner = RewriteIssueOwner::SourceInvestigation;
-    assert!(validate_route_kind(&issue, "replay_capability_gap").is_err());
-}
-
-#[test]
 fn response_replay_repair_requires_dirty_evidence_and_reuses_the_recording() {
     let mut state = repair_state("fnv1a64:old".into());
     state.active_issue.as_mut().unwrap().kind = RewriteIssueKind::Response;
@@ -119,38 +105,6 @@ fn legacy_external_data_response_blocker_resumes_replay_planning_without_revisio
 }
 
 #[test]
-fn administrator_can_cancel_a_misrouted_source_change_repair() {
-    let target = tempfile::tempdir().unwrap();
-    let mut state = repair_state("source-revision".to_string());
-    state.active_issue.as_mut().unwrap().kind = RewriteIssueKind::Comparison;
-    state.active_issue.as_mut().unwrap().owner = RewriteIssueOwner::SourceInvestigation;
-    state.route.as_mut().unwrap().kind = "source_change".to_string();
-    state.route.as_mut().unwrap().acceptance_kind =
-        Some(RewriteRepairAcceptanceKind::SourceRevisionChanged);
-    let revision = state.revision;
-
-    let action = cancel_misroute(
-        target.path(),
-        &mut state,
-        "repair-current",
-        "comparison evidence was misclassified",
-    )
-    .unwrap();
-
-    assert_eq!(state.phase, RewritePhase::ImplementationRequired);
-    assert_eq!(
-        state.active_issue.as_ref().map(|issue| issue.owner),
-        Some(RewriteIssueOwner::TargetCode)
-    );
-    assert!(state.route.is_none());
-    assert_eq!(state.revision, revision + 1);
-    assert!(matches!(
-        action.action,
-        super::super::model::RewriteAction::AdvanceRequired { .. }
-    ));
-}
-
-#[test]
 fn administrator_can_cancel_a_misrouted_capability_repair() {
     let target = tempfile::tempdir().unwrap();
     for (route_kind, issue_kind) in [
@@ -224,7 +178,6 @@ fn administrator_can_rearm_replay_after_a_matching_out_of_band_run() {
 
     assert!(state.target_fingerprint.is_none());
     assert!(!state.e2e_current);
-    assert!(!state.comparison_current);
     assert!(matches!(
         action.action,
         super::super::model::RewriteAction::AdvanceRequired { .. }
@@ -275,7 +228,6 @@ fn repair_state(observed_revision: String) -> RewriteState {
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target".to_string(),
         attempt: 1,
-        comparison_observation: None,
     });
     state.route = Some(RewriteRouteRecord {
         kind: "replay_capability_gap".to_string(),
@@ -326,7 +278,6 @@ fn out_of_band_retry_state(target_fingerprint: &str) -> RewriteState {
         possible_causes: vec!["response_assertion_evaluation_or_evidence_failure".to_string()],
         observed_target_fingerprint: target_fingerprint.to_string(),
         attempt: 12,
-        comparison_observation: None,
     });
     state
 }

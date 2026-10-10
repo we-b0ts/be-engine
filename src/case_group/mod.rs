@@ -234,16 +234,6 @@ fn resolve_recording_api_members(
         .collect())
 }
 
-pub(crate) fn resolve_recording_api_case_dirs(
-    case_source: &Path,
-    api: &crate::RecordingApi,
-) -> Result<Vec<PathBuf>> {
-    Ok(resolve_recording_api_cases(case_source, api)?
-        .into_iter()
-        .map(|case| case.dir)
-        .collect())
-}
-
 fn resolve_recording_api_cases(
     case_source: &Path,
     api: &crate::RecordingApi,

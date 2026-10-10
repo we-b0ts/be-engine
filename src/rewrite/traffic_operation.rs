@@ -27,14 +27,12 @@ pub(super) struct TrafficOperationMarker {
 #[serde(rename_all = "snake_case")]
 pub(super) enum TrafficOperationKind {
     Replay,
-    Comparison,
 }
 
 impl From<TrafficOperationKind> for RewriteTrafficOperationKind {
     fn from(value: TrafficOperationKind) -> Self {
         match value {
             TrafficOperationKind::Replay => Self::Replay,
-            TrafficOperationKind::Comparison => Self::Comparison,
         }
     }
 }
@@ -148,7 +146,6 @@ pub(super) fn clear_stale(target_root: &Path) -> Result<bool> {
 fn kind_label(kind: TrafficOperationKind) -> &'static str {
     match kind {
         TrafficOperationKind::Replay => "replay",
-        TrafficOperationKind::Comparison => "comparison",
     }
 }
 
@@ -252,73 +249,5 @@ impl Drop for TrafficOperationGuard {
         if self.armed {
             let _ = clear(&self.target_root, &self.operation_id);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn live_operation_is_serialized_and_projects_wait_action() {
-        let target = tempfile::tempdir().unwrap();
-        let claim = claim_current(
-            target.path(),
-            "replay-a".to_string(),
-            TrafficOperationKind::Replay,
-            Some("GET /a".to_string()),
-        )
-        .unwrap();
-        let TrafficOperationClaim::Acquired(_guard) = claim else {
-            panic!("first operation was not acquired");
-        };
-        let busy = claim_current(
-            target.path(),
-            "comparison-b".to_string(),
-            TrafficOperationKind::Comparison,
-            Some("GET /b".to_string()),
-        )
-        .unwrap();
-        let TrafficOperationClaim::Busy(active) = busy else {
-            panic!("second operation did not observe the live owner");
-        };
-        let action = wait_action(target.path(), Some("GET /b".to_string()), &active);
-        let value = serde_json::to_value(action).unwrap();
-        assert_eq!(value.as_object().unwrap().len(), 4);
-        assert_eq!(value["kind"], "wait_required");
-        assert_eq!(value["details"]["resource"], RESOURCE);
-        assert_eq!(value["details"]["active_operation"]["api"], "/a");
-        assert_eq!(
-            value["commands"]["wait"]["argv"],
-            serde_json::json!([
-                "backend-rewrite",
-                "--target-root",
-                target.path(),
-                "wait",
-                "--seconds",
-                "5"
-            ])
-        );
-
-        let mut workflow_owner = active;
-        workflow_owner.kind = TrafficOperationKind::Comparison;
-        workflow_owner.api = None;
-        let action = wait_action(
-            target.path(),
-            Some("GET /not-installed-yet".to_string()),
-            &workflow_owner,
-        );
-        let value = serde_json::to_value(action).unwrap();
-        assert_eq!(
-            value["commands"]["wait"]["argv"],
-            serde_json::json!([
-                "backend-rewrite",
-                "--target-root",
-                target.path(),
-                "wait",
-                "--seconds",
-                "5"
-            ])
-        );
     }
 }

@@ -372,8 +372,6 @@ mod tests {
             target_startup_timeout: Duration::from_secs(1),
             target_request_timeout: Duration::from_secs(1),
             target_quality_gates: Vec::new(),
-            process_outputs: Vec::new(),
-            process_output_rules: Default::default(),
             target_max_response_bytes: 1024,
             replay_policy: PathBuf::from("replay.yaml"),
             replay_case_dependency_post_response_window: Duration::from_millis(10),
@@ -410,7 +408,7 @@ mod tests {
 
         let result =
             RecordedHttpClient::new(format!("http://{address}"), Duration::from_secs(2), 1024)
-                .send(&request_path)
+                .send_bytes(&std::fs::read(&request_path).unwrap(), "recorded request")
                 .await;
         let error = match result {
             Ok(_) => panic!("target close must fail the recorded HTTP request"),

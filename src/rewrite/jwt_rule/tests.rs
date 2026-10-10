@@ -119,12 +119,6 @@ fn fixture() -> Fixture {
     state.case_source = Some(source);
     state.group_id = Some("GET /api".into());
     state.e2e_current = false;
-    state.require_comparison = false;
-    fs::write(
-        root.join(crate::config::regression::PATH),
-        "require_comparison: false\n",
-    )
-    .unwrap();
     state.active_issue = Some(RewriteIssue {
         id: "issue-jwt".into(),
         kind: RewriteIssueKind::Response,
@@ -138,7 +132,6 @@ fn fixture() -> Fixture {
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target".into(),
         attempt: 1,
-        comparison_observation: None,
     });
     Fixture {
         target,

@@ -117,7 +117,6 @@ pub(super) fn from_e2e(
         possible_causes,
         observed_target_fingerprint: target_fingerprint,
         attempt: result.attempt,
-        comparison_observation: None,
     }
 }
 
@@ -229,8 +228,6 @@ fn kind_name(kind: RewriteIssueKind) -> &'static str {
         RewriteIssueKind::TargetRuntime => "target_runtime",
         RewriteIssueKind::Replay => "replay",
         RewriteIssueKind::Dependency => "dependency",
-        RewriteIssueKind::Comparison => "comparison",
-        RewriteIssueKind::ProcessOutput => "process_output",
     }
 }
 

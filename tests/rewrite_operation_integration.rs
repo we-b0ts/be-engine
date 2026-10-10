@@ -78,7 +78,7 @@ fn detached_cli_operation_publishes_failure_and_status_does_not_restart_it() {
             "version": 1, "revision": 1, "workflow_id": "rewrite-route-fixture",
             "recording_run_id": "recording-fixture", "phase": "api_pending",
             "api": "GET /api", "source_route": "/api", "attempts": [],
-            "e2e_current": false, "comparison_current": false,
+            "e2e_current": false,
             "api_inventory": [{"api": "GET /api", "status": "active", "source_route": "/api"}],
             "current_api_index": 0
         }))
@@ -145,7 +145,7 @@ fn detached_unscoped_next_activates_idle_revalidation_while_an_api_is_blocked() 
         "version": 1, "revision": 1, "workflow_id": "rewrite-idle-fixture",
         "recording_run_id": "recording-fixture", "phase": "system_repair_required",
         "api": "GET /repair", "source_route": "/repair", "attempts": [],
-        "e2e_current": false, "comparison_current": false,
+        "e2e_current": false,
         "active_issue": {
             "id": "fixture-issue", "kind": "dependency", "owner": "traffic_e2e_system",
             "summary": "fixture external repair", "observed_target_fingerprint": "old-target", "attempt": 1

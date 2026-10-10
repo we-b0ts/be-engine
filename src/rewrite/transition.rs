@@ -42,7 +42,6 @@ pub(super) fn from_e2e_result(
     state.attempt_delta = current_attempt_delta(&state.attempts);
     state.target_fingerprint = Some(target_fingerprint.clone());
     state.e2e_current = result.passed;
-    state.comparison_current = false;
     state.route = None;
     state.system_repair_accepted = false;
     state.rule_replay_pending = false;
@@ -51,16 +50,7 @@ pub(super) fn from_e2e_result(
     state.recorder_capture_plan = None;
     if result.passed {
         state.active_issue = None;
-        if state.require_comparison {
-            state.phase = RewritePhase::ComparisonRecordingRequired;
-            state.comparison_run_id = None;
-        } else {
-            state.comparison_run_id = None;
-            state.comparison_rejection = None;
-            // Reclassification can run on a temporarily selected parked slice.
-            // Inventory scheduling must wait for the root coordinator transition.
-            state.phase = RewritePhase::SliceComplete;
-        }
+        state.phase = RewritePhase::SliceComplete;
     } else {
         state.active_issue = Some(issue::from_e2e(&state.api, result, target_fingerprint));
         state.phase = RewritePhase::ImplementationRequired;
@@ -70,11 +60,7 @@ pub(super) fn from_e2e_result(
 }
 
 pub(super) fn replay_completion_pending(state: &RewriteState) -> bool {
-    !state.require_comparison
-        && matches!(
-            state.phase,
-            RewritePhase::SliceComplete | RewritePhase::ComparisonRecordingRequired
-        )
+    state.phase == RewritePhase::SliceComplete
         && state.current_api_index.is_some_and(|index| {
             state.api_inventory[index].status != super::model::RewriteApiStatus::Complete
         })
@@ -88,8 +74,6 @@ pub(super) fn complete_replay_if_ready(
         return Ok(false);
     }
     let current = fingerprint::repository_fingerprint(target_root)?;
-    state.comparison_run_id = None;
-    state.comparison_rejection = None;
     if !state.e2e_current || state.target_fingerprint.as_deref() != Some(current.as_str()) {
         state.phase = RewritePhase::ApiPending;
         state.e2e_current = false;

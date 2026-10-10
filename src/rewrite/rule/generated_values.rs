@@ -50,10 +50,6 @@ pub(super) fn plan(
         }
     }
     if let Some(rule) = &mut options.dependency_request {
-        ensure!(
-            issue.kind != super::super::model::RewriteIssueKind::Comparison,
-            "dependency requests require Replay evidence"
-        );
         let api = &state.api;
         let (method, path) = api
             .split_once(' ')
@@ -138,24 +134,7 @@ pub(super) fn build(
     record: &RewriteRulePlanRecord,
 ) -> Result<GeneratedValueRulePlan> {
     let policy_path = target_root.join(".traffic-e2e/verification.yaml");
-    let evidence = if state
-        .active_issue
-        .as_ref()
-        .is_some_and(|issue| issue.kind == super::super::model::RewriteIssueKind::Comparison)
-    {
-        ResponseBodyRuleEvidence::Comparison {
-            comparison_report: target_root
-                .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
-                .join("comparison-recordings")
-                .join(
-                    state
-                        .comparison_run_id
-                        .as_ref()
-                        .context("header date plan requires a comparison run")?,
-                )
-                .join("comparison-report.json"),
-        }
-    } else {
+    let evidence = {
         let evidence = resolve_e2e_response_rule_evidence(
             E2eRunContext {
                 target_root: target_root.into(),

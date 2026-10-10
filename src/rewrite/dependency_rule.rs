@@ -433,7 +433,6 @@ pub(super) fn apply(
         super::rule_replay::request(state);
     }
     state.e2e_current = false;
-    state.comparison_current = false;
     state.bump();
     Ok(RewriteDependencyRuleReport {
         plan_id: record.id,
@@ -668,7 +667,6 @@ pub(super) fn schedule_cache_snapshot_refresh(
     state.route = None;
     state.phase = RewritePhase::AwaitingRecordingRefresh;
     state.e2e_current = false;
-    state.comparison_current = false;
     state.bump();
     Ok(())
 }
@@ -679,11 +677,9 @@ mod tests;
 /// Endpoint value/scope rules can affect dependencies from any API.
 pub(super) fn invalidate_dependency_matching_validation(state: &mut RewriteState) {
     state.e2e_current = false;
-    state.comparison_current = false;
     state.target_quality_fingerprint = None;
     for item in &mut state.api_inventory {
         item.e2e_current = false;
-        item.comparison_current = false;
         item.verified_target_fingerprint = None;
         if item.status == super::model::RewriteApiStatus::Complete {
             item.status = super::model::RewriteApiStatus::RevalidationPending;
@@ -691,7 +687,6 @@ pub(super) fn invalidate_dependency_matching_validation(state: &mut RewriteState
     }
     for slice in state.parked_slices.values_mut() {
         slice.e2e_current = false;
-        slice.comparison_current = false;
         slice.target_fingerprint = None;
     }
 }

@@ -121,7 +121,7 @@ fn persisted_invalid_source_route_can_be_corrected_and_group_existing_cases() {
 
 #[test]
 fn source_route_repair_cannot_change_grouped_or_verified_work() {
-    for protection in 0..9 {
+    for protection in [0, 1, 2, 4, 5, 7, 8] {
         let mut state = pending();
         state.source_route = LOCAL_ROUTE.into();
         state.api_inventory[0].source_route = Some(LOCAL_ROUTE.into());
@@ -129,10 +129,8 @@ fn source_route_repair_cannot_change_grouped_or_verified_work() {
             0 => state.group_id = Some(API.into()),
             1 => state.phase = RewritePhase::ImplementationRequired,
             2 => state.e2e_current = true,
-            3 => state.comparison_current = true,
             4 => state.api_inventory[0].attempts = 1,
             5 => state.api_inventory[0].e2e_current = true,
-            6 => state.api_inventory[0].comparison_current = true,
             7 => state.api_inventory[0].verified_target_fingerprint = Some("verified".into()),
             8 => state.attempts.push(rewrite::model::RewriteAttemptSummary {
                 attempt: 1,
@@ -228,7 +226,6 @@ async fn next_rejects_invalid_source_route_without_persisting_it() {
         let error = rewrite::next_rewrite(rewrite::RewriteNextOptions {
             target_root: root.path().into(),
             api: Some(API.parse::<crate::RecordingApi>().unwrap().into()),
-            process_output: None,
             source_route: Some(LOCAL_ROUTE.into()),
         })
         .await

@@ -12,40 +12,13 @@ pub(super) fn attach(
     if !matches!(query, QUERY_DIRTY_CLUSTERS | QUERY_REPRESENTATIVES)
         || !matches!(
             issue.kind,
-            RewriteIssueKind::Response
-                | RewriteIssueKind::Replay
-                | RewriteIssueKind::Dependency
-                | RewriteIssueKind::Comparison
+            RewriteIssueKind::Response | RewriteIssueKind::Replay | RewriteIssueKind::Dependency
         )
     {
         return Ok(None);
     }
     let current = crate::validate_replay_policy(&root.join(".traffic-e2e/verification.yaml"))?;
-    let freshness = if issue.kind == RewriteIssueKind::Comparison {
-        let report_path = root
-            .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
-            .join("comparison-recordings")
-            .join(
-                state
-                    .comparison_run_id
-                    .as_ref()
-                    .context("comparison evidence has no run")?,
-            )
-            .join("comparison-report.json");
-        match std::fs::read(report_path)
-            .map_err(anyhow::Error::from)
-            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).map_err(anyhow::Error::from))
-        {
-            Ok(report) => ReplayEvidencePolicyFreshness::new(
-                report["policy_fingerprint"].as_str(),
-                &current.fingerprint,
-            ),
-            Err(error) => ReplayEvidencePolicyFreshness::unavailable(
-                &current.fingerprint,
-                format!("{error:#}"),
-            ),
-        }
-    } else {
+    let freshness = {
         match e2e_context(root, state).and_then(|context| {
             Ok(crate::e2e_run::query_rule_policy_freshness(
                 context,

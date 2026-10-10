@@ -39,7 +39,7 @@ snapshots, reconnect to the source Pod, or replace a file with invented env vars
 When the application only needs an empty writable directory for logs, caches,
 PID files, or temporary state, do not propose a startup mount. Inspect the
 actual build and update `.traffic-e2e/Dockerfile.source` for source-adaptor
-needs in managed comparison/diagnostics, `.traffic-e2e/Dockerfile.target` for target
+needs in diagnostic preflight, `.traffic-e2e/Dockerfile.target` for target
 needs, or both when proven. Independent standard capture uses `.traffic-e2e/Dockerfile.recording`
 owned by its deployment caller.
 

@@ -7,8 +7,7 @@ sections below; the common evidence and handoff contracts still apply.
 
 ## Missing Recorded Dependency Evidence
 
-Treat a recording omission as a bounded hypothesis when a response, Replay, or
-comparison difference traces through source code to one exact response-driving
+Treat a recording omission as a bounded hypothesis when a response or Replay difference traces through source code to one exact response-driving
 backend endpoint, but the representative recording contains no corresponding
 dependency target or exchange. The absence alone is not proof of Breeze bypass,
 an external-data blocker, or a Recorder capability gap.

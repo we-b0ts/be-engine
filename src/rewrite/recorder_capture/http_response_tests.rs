@@ -75,7 +75,6 @@ fn fixture() -> (tempfile::TempDir, tempfile::TempDir, RewriteState) {
         possible_causes: vec![],
         observed_target_fingerprint: fingerprint::repository_fingerprint(target.path()).unwrap(),
         attempt: 2,
-        comparison_observation: None,
     });
     (target, recording, state)
 }

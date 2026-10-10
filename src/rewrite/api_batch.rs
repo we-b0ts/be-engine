@@ -107,7 +107,6 @@ pub(super) fn apply_results(
             .unwrap();
         item.attempts = slice.attempts.len();
         item.e2e_current = slice.e2e_current;
-        item.comparison_current = slice.comparison_current;
         item.status = if slice.phase == RewritePhase::SliceComplete {
             item.verified_target_fingerprint = slice.target_fingerprint.clone();
             RewriteApiStatus::Complete

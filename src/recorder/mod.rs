@@ -1,3 +1,4 @@
+pub(crate) mod cache_snapshot;
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,7 +17,6 @@ use crate::recording_network::RecordedEndpoint;
 use crate::request_headers::RequestHeaderCapture;
 
 pub(crate) mod background;
-pub(crate) mod cache_snapshot;
 mod capture;
 mod capture_health;
 pub(crate) mod case;

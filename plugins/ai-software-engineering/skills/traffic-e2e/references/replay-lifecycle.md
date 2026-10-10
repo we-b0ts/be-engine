@@ -33,8 +33,6 @@ surfaces:
   in-process target command;
 - `traffic-e2e config replay plan|apply response-rule` for evidence-driven
   replay response-rule maintenance;
-- `traffic-e2e config comparison plan|apply response-rule` for
-  comparison-only response-rule maintenance;
 - `traffic-e2e diagnose replay-control` for readiness, case lifecycle,
   finalization, and cleanup;
 - `traffic-e2e diagnose replay-aggregate` for final multi-case or multi-session

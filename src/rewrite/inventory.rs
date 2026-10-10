@@ -31,7 +31,6 @@ pub(super) fn initialize_legacy(state: &mut RewriteState) -> bool {
             },
             attempts: state.attempts.len(),
             e2e_current: state.e2e_current,
-            comparison_current: state.comparison_current,
             verified_target_fingerprint: state.target_fingerprint.clone(),
         });
         state.current_api_index = (!complete).then_some(0);
@@ -93,7 +92,6 @@ pub(super) fn install(state: &mut RewriteState, apis: Vec<String>) -> Result<boo
                 },
                 attempts: 0,
                 e2e_current: false,
-                comparison_current: false,
                 verified_target_fingerprint: None,
             })
         })
@@ -110,9 +108,7 @@ pub(super) fn install(state: &mut RewriteState, apis: Vec<String>) -> Result<boo
         .map(|item| item.api.clone())
         .collect::<Vec<_>>();
     state.worker_bindings.retain(|api, binding| {
-        installed_apis.contains(api)
-            || !api.starts_with("process_output:")
-                && (binding.first_bound_at.is_some() || binding.expert.is_some())
+        installed_apis.contains(api) || binding.first_bound_at.is_some() || binding.expert.is_some()
     });
     state.parked_slices.clear();
     state.current_api_index = Some(0);
@@ -264,7 +260,6 @@ pub(super) fn complete_current_and_advance(state: &mut RewriteState) -> Result<b
         .context("completed API has no inventory index")?;
     let attempts = state.attempts.len();
     let e2e_current = state.e2e_current;
-    let comparison_current = state.comparison_current;
     let target_fingerprint = state.target_fingerprint.clone();
     let current = state
         .api_inventory
@@ -273,7 +268,6 @@ pub(super) fn complete_current_and_advance(state: &mut RewriteState) -> Result<b
     current.status = RewriteApiStatus::Complete;
     current.attempts = attempts;
     current.e2e_current = e2e_current;
-    current.comparison_current = comparison_current;
     current.verified_target_fingerprint = target_fingerprint;
     let mut completed = state.active_slice.clone();
     completed.phase = RewritePhase::SliceComplete;
@@ -323,7 +317,6 @@ pub(super) fn mark_awaiting_recording_refresh(state: &mut RewriteState, api: &st
         item.attempts = attempts;
     }
     item.e2e_current = false;
-    item.comparison_current = false;
     item.verified_target_fingerprint = None;
 
     if state.current_api_index == Some(index) {
@@ -391,7 +384,6 @@ fn next_runnable_index(state: &RewriteState) -> Option<usize> {
 
 pub(super) fn reset_for_recording(state: &mut RewriteState) {
     source_route::retain_bindings(state);
-    super::process_outputs::reset(state);
     state.api_inventory.clear();
     state.skipped_api_statuses.clear();
     state.current_api_index = None;
@@ -423,7 +415,6 @@ pub(super) fn defer_completed_for_target_change(
             state.parked_slices.remove(&item.api);
             item.status = RewriteApiStatus::RevalidationPending;
             item.e2e_current = false;
-            item.comparison_current = false;
             changed = true;
         }
     }
@@ -523,7 +514,6 @@ pub(super) fn completed_slice(current: &RewriteApiProgress) -> Result<RewriteSli
     slice.phase = RewritePhase::SliceComplete;
     slice.target_fingerprint = current.verified_target_fingerprint.clone();
     slice.e2e_current = current.e2e_current;
-    slice.comparison_current = current.comparison_current;
     Ok(slice)
 }
 
@@ -596,7 +586,6 @@ mod tests {
         )
         .unwrap();
         state.e2e_current = true;
-        state.comparison_current = true;
 
         assert!(complete_current_and_advance(&mut state).unwrap());
         assert_eq!(state.api, "POST /b");
@@ -673,7 +662,6 @@ mod tests {
             possible_causes: Vec::new(),
             observed_target_fingerprint: target_fingerprint.to_string(),
             attempt: 1,
-            comparison_observation: None,
         }
     }
 
@@ -693,13 +681,11 @@ mod tests {
 
         state.api_inventory[1].status = RewriteApiStatus::Complete;
         state.api_inventory[1].e2e_current = true;
-        state.api_inventory[1].comparison_current = true;
         state.api_inventory[1].verified_target_fingerprint = Some("target-b".to_string());
         let complete = scoped(&state, Some(&api_b)).unwrap();
         assert_eq!(complete.phase, RewritePhase::SliceComplete);
         assert_eq!(complete.target_fingerprint.as_deref(), Some("target-b"));
         assert!(complete.e2e_current);
-        assert!(complete.comparison_current);
         assert!(
             !super::super::action::for_state(std::path::Path::new("/target"), &complete)
                 .terminal_allowed
@@ -716,7 +702,6 @@ mod tests {
         .unwrap();
         state.target_fingerprint = Some("target-r0".to_string());
         state.e2e_current = true;
-        state.comparison_current = true;
         state.phase = RewritePhase::ImplementationRequired;
         state.active_issue = Some(test_issue("issue-a", "target-r0"));
         super::super::worker::confirm_current_for_test(&mut state);
@@ -730,7 +715,6 @@ mod tests {
             RewriteApiStatus::RevalidationPending
         );
         assert!(!state.api_inventory[0].e2e_current);
-        assert!(!state.api_inventory[0].comparison_current);
         assert_eq!(
             state.api_inventory[0]
                 .verified_target_fingerprint
@@ -741,7 +725,6 @@ mod tests {
 
         state.target_fingerprint = Some("target-r1".to_string());
         state.e2e_current = true;
-        state.comparison_current = true;
         assert!(complete_current_and_advance(&mut state).unwrap());
         assert_eq!(state.api, "GET /a");
         assert_eq!(state.phase, RewritePhase::ApiPending);
@@ -760,7 +743,6 @@ mod tests {
         for item in &mut state.api_inventory {
             item.status = RewriteApiStatus::Complete;
             item.e2e_current = true;
-            item.comparison_current = true;
             item.verified_target_fingerprint = Some("target-r0".to_string());
         }
         state.phase = RewritePhase::SliceComplete;

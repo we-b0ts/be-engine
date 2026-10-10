@@ -7,7 +7,6 @@ use super::model::{RewritePhase, RewriteSliceState, RewriteState};
 pub(super) fn request(state: &mut RewriteState) {
     state.rule_replay_pending = true;
     state.e2e_current = false;
-    state.comparison_current = false;
 }
 
 pub(super) fn pending(slice: &RewriteSliceState) -> bool {
@@ -31,9 +30,7 @@ pub(super) fn all_ready(
     scope: &RewriteWorkScope,
     admitted: impl FnMut(&RewriteSliceState) -> bool,
 ) -> bool {
-    let RewriteWorkScope::Api { api } = scope else {
-        return false;
-    };
+    let RewriteWorkScope::Api { api } = scope;
     let mut dirty = std::iter::once(&state.active_slice)
         .chain(state.parked_slices.values())
         .filter(|slice| {

@@ -18,14 +18,13 @@ impl Serialize for RewriteAction {
                 details: expert,
                 commands,
             }.serialize(serializer),
-            Self::Blocked { summary, system_repair_apis, dependent_process_outputs, resume } => RewriteActionView {
+            Self::Blocked { summary, system_repair_apis,  resume } => RewriteActionView {
                 kind: "blocked",
                 summary,
                 details: serde_json::json!({
                     "reason": "system_repair_required",
                     "system_repair_apis": system_repair_apis,
-                    "dependent_process_outputs": dependent_process_outputs,
-                }),
+                        }),
                 commands: serde_json::json!({"resume": resume}),
             }.serialize(serializer),
             Self::WorkerEventsRequired { summary, inventory, status } => RewriteActionView {
@@ -270,13 +269,11 @@ impl Serialize for RewriteAction {
             Self::Complete {
                 summary,
                 e2e_current,
-                comparison_current,
             } => RewriteActionView {
                 kind: "complete",
                 summary,
                 details: RewriteCompleteDetails {
                     e2e_current: *e2e_current,
-                    comparison_current: *comparison_current,
                 },
                 commands: RewriteNoCommands {},
             }
@@ -362,7 +359,7 @@ struct RewriteIssueDetails<'a> {
 struct RewriteImplementationDetails<'a> {
     #[serde(flatten)]
     issue: RewriteIssueDetails<'a>,
-    work_scope: &'a super::process_output_model::RewriteWorkScope,
+    work_scope: &'a super::work_scope::RewriteWorkScope,
     worker: &'a RewriteWorkerDispatchView,
 }
 
@@ -398,7 +395,6 @@ struct RewriteSystemRepairDetails<'a> {
 #[derive(Serialize)]
 struct RewriteCompleteDetails {
     e2e_current: bool,
-    comparison_current: bool,
 }
 
 #[derive(Serialize)]

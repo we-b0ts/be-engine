@@ -17,7 +17,6 @@ fn response_state() -> RewriteState {
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target".to_string(),
         attempt: 1,
-        comparison_observation: None,
     });
     state.rule_plan = Some(RewriteRulePlanRecord {
         response_jwts: Vec::new(),

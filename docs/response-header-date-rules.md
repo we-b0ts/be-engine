@@ -53,10 +53,9 @@ backend-rewrite rule plan --evidence-id CURRENT_EVIDENCE_ID \
 backend-rewrite rule apply --plan-id RETURNED_PLAN_ID
 ```
 
-Plan uses completed focused Replay assertion/aggregate artifacts or completed
-Comparison evidence under the current policy. It validates every selected
+Plan uses completed focused Replay assertion/aggregate artifacts under the current policy. It validates every selected
 observation, requires a date difference, checks assertion-detail and response
-fingerprints, and rejects source-change evidence. Apply checks policy and
+fingerprints. Apply checks policy and
 evidence are unchanged, then requests fresh verification. Existing recordings
 are reusable. No recorded header or target artifact is modified.
 

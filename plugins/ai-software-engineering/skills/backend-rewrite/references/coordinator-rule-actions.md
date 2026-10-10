@@ -2,7 +2,7 @@
 
 Audience: the workflow coordinator. Read only after the assigned worker is
 confirmed and returns source-proven inputs for a response rule, recorder capture, process-owned
-dependency rule, or process-output rule, or when the current action exposes one
+dependency rule, or when the current action exposes one
 of those planners. Workers may run returned read-only help commands but never
 execute the state-mutating commands here. Require worker-provided semantic
 conclusions, selectors, and source proof. Return missing diagnosis to that
@@ -13,7 +13,6 @@ worker; do not trace source or execute diagnostic evidence queries yourself.
 - Recorder-capture planning and refresh
 - Typed response-rule planning
 - Process-owned dependency-rule planning and reclassification
-- Process-output target-missing planning
 - Evidence gate and ownership invariants
 - Bootstrap dependency overlays
 
@@ -21,7 +20,7 @@ worker; do not trace source or execute diagnostic evidence queries yourself.
 
 The target never receives a response-rule selector. A worker returns the
 codec-specific path plus source proof; the workflow coordinator plans and applies
-the rule. Replay and comparison load the applied selector from
+the rule. Replay loads the applied selector from
 `.traffic-e2e/verification.yaml` and normalize source and target observations
 without changing target code, configuration, or RPC signatures.
 
@@ -75,11 +74,7 @@ differences at that location fail closed. Plan and apply reports expose the
 residual case count or unselected JSON Pointers, and those residuals continue
 to block API completion.
 
-Planning requires complete current comparison or focused-E2E evidence. An
-`unevaluable` comparison is a verification-system issue, not authorization to
-apply a selector or change the target. Preserve its bounded error, route the
-reported issue with `--cause replay-capability-gap`, repair traffic-e2e, and
-regenerate the comparison result before planning.
+Planning requires complete current focused-E2E evidence under the current policy.
 
 ## Recorder Capture
 
@@ -107,7 +102,7 @@ successful route returns the ordinary recorder-capture plan report and does not
 enter `system_repair_required`.
 
 Execute the exact returned apply argv. Apply is immediate, add-only, atomic,
-and stale-safe. If serialized Replay or comparison verification is live, inspect
+and stale-safe. If serialized Replay verification is live, inspect
 `status` and wait before retrying. A successful apply reports
 `recording_refresh_pending=true`, lists waiting APIs, and returns either another
 API's next command or the consolidated external recording requirement. For a
@@ -165,24 +160,6 @@ Pending capture plans and unresolved supported candidates block capability-gap
 submission. If a matching rule already exists, inspect its activation and fresh
 recording evidence before reporting the exact remaining engine defect; do not
 keep creating duplicate rules or modify historical recordings.
-
-## Process-Output Target-Missing Rules
-
-Use this route only when a confirmed process-output worker returns the exact
-`metric`, `dependency_path`, and structured `emitter_evidence` requested by
-`comparison_observation.rule_candidate`. The worker must have inspected the
-listed source paths and proved both that source code does not start the
-interaction and that the interaction does not affect source behavior. Either
-contrary finding requires target implementation and forbids this rule.
-
-The workflow coordinator supplies the current process-output ID, source revision,
-and finalized comparison run to `traffic-e2e config comparison plan
-allow-target-missing`, then reviews the preview and repeats the same arguments
-with `apply`. Do not hand-edit `.traffic-e2e/verification.yaml`. The structured
-emitter evidence is JSON with exactly `inspected_paths` and `description`.
-Applying the policy changes the repository fingerprint; resume only through the
-coordinator, which reruns the normal quality, Replay, and comparison flow. One
-passing post-apply workflow is sufficient.
 
 ## Unordered HTTP Dependency JSON
 
@@ -282,7 +259,7 @@ revised focused result.
 An ownership change alone is not a fresh-recording condition. The engine
 keeps capture artifacts immutable, recomputes the effective case/global ownership
 view, rebuilds dependency evidence, and revises the same progress-ledger attempt.
-Clean evidence advances to comparison;
+Clean evidence completes the API;
 residual case-scoped dirty evidence remains in repair. Apply returns `next`.
 Redis rules that additionally require reusable snapshot seeds first try to
 derive them from complete, consistent immutable bootstrap evidence. If that
@@ -306,9 +283,7 @@ Evaluate gates in this order:
 responses -> replay completeness -> dependency cleanliness
 ```
 
-Dirty dependencies cannot preempt a response mismatch. A repository change
-after a comparison mismatch returns through focused E2E before another
-comparison recording.
+Dirty dependencies cannot preempt a response mismatch.
 
 Dependency cleanliness is evaluated per active case. Clusters contain
 case-scoped unmatched, unsupported, unsafe, and unused-case events grouped by

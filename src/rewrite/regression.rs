@@ -9,7 +9,7 @@ use super::{
     model::{
         ACTION_SCHEMA_VERSION, RewriteActionEnvelope, RewritePhase, RewriteSliceState, RewriteState,
     },
-    process_outputs, regression_scope, source_diff,
+    regression_scope, source_diff,
     store::RewriteStore,
     traffic_operation, worker,
 };
@@ -155,7 +155,6 @@ pub fn begin(options: RewriteRegressionBeginOptions) -> Result<RewriteRegression
                 .filter(|id| Some(id) == policy.recording_run_id.as_ref())
         },
     });
-    process_outputs::install(&mut state, &project.process_outputs);
     regression_scope::apply(&target_root, &mut state)?;
     require_base(&target_root, &project.pr_base)?;
     let archive = previous

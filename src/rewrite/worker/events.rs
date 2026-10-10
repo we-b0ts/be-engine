@@ -10,7 +10,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::super::model::RewriteState;
-use super::super::process_output_model::RewriteWorkScope;
+use super::super::work_scope::RewriteWorkScope;
 use super::model::RewriteWorkerBinding;
 
 #[derive(Default, Serialize, Deserialize)]
@@ -62,12 +62,7 @@ pub(in crate::rewrite) fn overlay(target_root: &Path, state: &mut RewriteState) 
             || state
                 .api_inventory
                 .iter()
-                .any(|item| item.api == key || super::super::api_selector::route(&item.api) == key)
-            || state
-                .process_outputs
-                .inventory
-                .iter()
-                .any(|item| key == format!("process_output:{}", item.id));
+                .any(|item| item.api == key || super::super::api_selector::route(&item.api) == key);
         if retained {
             state.worker_bindings.insert(key, update.binding);
         }

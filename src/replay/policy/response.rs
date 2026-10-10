@@ -30,42 +30,6 @@ pub use joined_string::{
     ResponseBodyJoinedStringPath,
 };
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ComparisonSourceMatch {
-    #[default]
-    Before,
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct ComparisonVerificationPolicy {
-    #[serde(default)]
-    pub source_match: ComparisonSourceMatch,
-}
-
-impl ComparisonVerificationPolicy {
-    fn is_empty(&self) -> bool {
-        self.source_match == ComparisonSourceMatch::Before
-    }
-}
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(in crate::replay) struct ResponseSettings {
-    #[serde(
-        default,
-        skip_serializing_if = "ComparisonVerificationPolicy::is_empty"
-    )]
-    pub(in crate::replay) comparison: ComparisonVerificationPolicy,
-}
-
-impl ResponseSettings {
-    pub(in crate::replay) fn is_empty(&self) -> bool {
-        self.comparison.is_empty()
-    }
-}
-
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::replay) struct ResponseRules {
@@ -98,8 +62,6 @@ pub(in crate::replay) struct JsonResponseRules {
     pub(in crate::replay) unordered: Vec<JsonUnorderedResponseRule>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) unordered_joined_string: Vec<JsonJoinedStringResponseRule>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(in crate::replay) counter: Vec<CounterResponseRule>,
 }
 
 impl JsonResponseRules {
@@ -111,7 +73,6 @@ impl JsonResponseRules {
             && self.random.is_empty()
             && self.unordered.is_empty()
             && self.unordered_joined_string.is_empty()
-            && self.counter.is_empty()
     }
 
     pub(in crate::replay) fn generated(
@@ -144,8 +105,7 @@ impl JsonResponseRules {
             ResponseRuleKind::Random => Some(&self.random),
             ResponseRuleKind::Jwt
             | ResponseRuleKind::Unordered
-            | ResponseRuleKind::UnorderedJoinedString
-            | ResponseRuleKind::Counter => None,
+            | ResponseRuleKind::UnorderedJoinedString => None,
         }
     }
 
@@ -160,8 +120,7 @@ impl JsonResponseRules {
             ResponseRuleKind::Random => Some(&mut self.random),
             ResponseRuleKind::Jwt
             | ResponseRuleKind::Unordered
-            | ResponseRuleKind::UnorderedJoinedString
-            | ResponseRuleKind::Counter => None,
+            | ResponseRuleKind::UnorderedJoinedString => None,
         }
     }
 }
@@ -245,23 +204,6 @@ impl ResponseRules {
                         )
                     }))
             })
-            .collect()
-    }
-
-    pub(in crate::replay) fn matching_comparison_fields(
-        &self,
-        method: &str,
-        path: &str,
-    ) -> Vec<ResponseField> {
-        self.matching_replay_fields(method, path)
-            .into_iter()
-            .chain(
-                matching_json_rules(&self.json, method, path).flat_map(|(api, rules)| {
-                    rules.counter.iter().map(move |field| {
-                        response_field(ResponseRuleKind::Counter, api, &field.pointer, None)
-                    })
-                }),
-            )
             .collect()
     }
 
@@ -538,7 +480,6 @@ pub enum ResponseRuleKind {
     Jwt,
     Unordered,
     UnorderedJoinedString,
-    Counter,
 }
 
 impl ResponseRuleKind {
@@ -568,15 +509,6 @@ pub(in crate::replay) struct GeneratedResponseRule {
 pub(in crate::replay) struct JsonUnorderedResponseRule {
     pub(in crate::replay) pointer: String,
     pub(in crate::replay) source_evidence: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(in crate::replay) struct CounterResponseRule {
-    pub(in crate::replay) pointer: String,
-    pub(in crate::replay) source_evidence: String,
-    pub(in crate::replay) source_example: String,
-    pub(in crate::replay) target_example: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -639,9 +571,6 @@ pub(in crate::replay) fn response_rule_ids(rules: &ResponseRules) -> Vec<String>
                 .chain(rules.unordered_joined_string.iter().map(move |field| {
                     response_rule_id(ResponseRuleKind::UnorderedJoinedString, api, &field.pointer)
                 }))
-                .chain(rules.counter.iter().map(move |field| {
-                    response_rule_id(ResponseRuleKind::Counter, api, &field.pointer)
-                }))
         })
         .chain(
             rules
@@ -677,7 +606,6 @@ pub(in crate::replay) fn response_rule_id(
         ResponseRuleKind::Jwt => ("response", "jwt"),
         ResponseRuleKind::Unordered => ("response", "unordered"),
         ResponseRuleKind::UnorderedJoinedString => ("response", "unordered_joined_string"),
-        ResponseRuleKind::Counter => ("response:comparison", "counter"),
     };
     format!("{namespace}:{kind}:{api}:{pointer}")
 }
@@ -748,35 +676,6 @@ fn validate_rule_api(api: &str) -> Result<(&str, &str)> {
         "response rule API method must use uppercase canonical form: {api:?}"
     );
     Ok((method, path))
-}
-
-fn validate_generated_rule(kind: ResponseRuleKind, rule: &GeneratedResponseRule) -> Result<()> {
-    ResponseTimeRule::from_options(Some(kind), rule.unit, rule.format)?;
-    ensure!(
-        kind.is_generated(),
-        "generated response rule has an invalid kind"
-    );
-    validate_audit_text(&rule.source_evidence, "source_evidence", 512)?;
-    validate_audit_text(&rule.source_example, "source_example", 1024)?;
-    validate_audit_text(&rule.target_example, "target_example", 1024)?;
-    ensure!(
-        rule.source_example != rule.target_example,
-        "{kind:?} response rule {} requires different source and target examples",
-        rule.pointer
-    );
-    Ok(())
-}
-
-fn validate_counter_rule(rule: &CounterResponseRule) -> Result<()> {
-    validate_audit_text(&rule.source_evidence, "source_evidence", 512)?;
-    validate_audit_text(&rule.source_example, "source_example", 1024)?;
-    validate_audit_text(&rule.target_example, "target_example", 1024)?;
-    ensure!(
-        rule.source_example != rule.target_example,
-        "counter response rule {} requires different source and target examples",
-        rule.pointer
-    );
-    Ok(())
 }
 
 fn validate_audit_text(value: &str, label: &str, max_len: usize) -> Result<()> {
@@ -855,3 +754,20 @@ mod response_body_tests;
 #[cfg(test)]
 #[path = "response/tests.rs"]
 mod tests;
+
+fn validate_generated_rule(kind: ResponseRuleKind, rule: &GeneratedResponseRule) -> Result<()> {
+    ResponseTimeRule::from_options(Some(kind), rule.unit, rule.format)?;
+    ensure!(
+        kind.is_generated(),
+        "generated response rule has an invalid kind"
+    );
+    validate_audit_text(&rule.source_evidence, "source_evidence", 512)?;
+    validate_audit_text(&rule.source_example, "source_example", 1024)?;
+    validate_audit_text(&rule.target_example, "target_example", 1024)?;
+    ensure!(
+        rule.source_example != rule.target_example,
+        "{kind:?} response rule {} requires different source and target examples",
+        rule.pointer
+    );
+    Ok(())
+}
