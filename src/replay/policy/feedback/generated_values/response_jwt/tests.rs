@@ -4,6 +4,8 @@ use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde_json::{Value, json};
 use std::path::Path;
 
+mod url;
+
 const KEY: &str = "response-jwt-test-signing-key";
 const SOURCE: i64 = 1_700_000_000;
 const TARGET: i64 = SOURCE + 86_400;

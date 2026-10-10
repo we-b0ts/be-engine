@@ -469,14 +469,20 @@ explicit repository-wide audit.
   child projects existing startup inspection contracts without secret values.
   These modules never make expected responses available to request execution.
   Its pure `jwt/contract` child compares signed headers, stable claims,
-  request-relative NumericDate offsets and explicitly selected UUID nonces;
+  request-relative NumericDate offsets and explicitly selected nonces;
   response assertions and Redis write assertions share that validator.
+  Its `nonce` child owns legacy/typed nonce declarations and bounded canonical
+  UUID/base64url representation checks. Its `url_query` child owns bounded URL
+  validation, raw query-value extraction and format-only candidate discovery;
+  it never resolves signing inputs or rewrites recorded requests.
 - `json_value` owns bounded strict JSON decoding with duplicate-member
   rejection. Replay JSON normalization and signed-token validation share it;
   selector expansion and collection normalization stay in Replay.
 - `replay/policy/response/jwt` owns explicit JWT response selectors and startup
   key references. `replay/assertion/jwt` resolves private signing inputs and
-  enforces per-response nonce consistency. Generated-value feedback's
+  enforces per-response nonce consistency and signed-expiry relationships.
+  The JSON comparator selects both owned fields of a composite JWT rule;
+  related array indexes stay scoped to the same response item. Generated-value feedback's
   `response_evidence` child owns protected response observation admission;
   `response_jwt` owns signed witness validation and atomic plan/apply through
   the existing coordinator rule transaction. JSON subtree ownership remains

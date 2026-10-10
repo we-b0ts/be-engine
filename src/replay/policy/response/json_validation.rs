@@ -25,6 +25,9 @@ pub(super) fn validate_json_rule_map<'a>(
         for rule in &rules.jwt {
             rule.validate()?;
             locations.push((method, path, &rule.pointer, ResponseRuleKind::Jwt));
+            if let Some(pointer) = &rule.expires_at {
+                locations.push((method, path, pointer, ResponseRuleKind::Jwt));
+            }
         }
         let mut unique_unordered = BTreeSet::new();
         for field in &rules.unordered {

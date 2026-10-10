@@ -18,12 +18,13 @@ pub(crate) struct Contract<'a> {
     pub key: &'a [u8],
     pub anchors: [i128; 2],
     pub tolerance: i128,
-    pub dynamic_claims: &'a [String],
+    pub dynamic_claims: &'a [super::nonce::DynamicClaim],
 }
 
 pub(crate) struct Validated {
     pub nonces: Vec<Nonce>,
     pub time_validations: usize,
+    pub exp: [i64; 2],
 }
 
 pub(crate) struct Nonce {
@@ -66,6 +67,11 @@ pub(crate) fn compare(
         return Err(Failure::Claims);
     }
     let mut time_validations = 0;
+    let exp = [source.integer_claim("exp"), target.integer_claim("exp")]
+        .map(|value| value.ok().flatten());
+    let [Some(source_exp), Some(target_exp)] = exp else {
+        return Err(Failure::Time);
+    };
     for name in ["exp", "iat", "nbf"] {
         let left = source.integer_claim(name).map_err(|_| Failure::Time)?;
         let right = target.integer_claim(name).map_err(|_| Failure::Time)?;
@@ -93,33 +99,30 @@ pub(crate) fn compare(
     }
     let mut nonces = Vec::new();
     for claim in contract.dynamic_claims {
-        // Configuration admission permits only this explicitly declared claim.
-        if claim != "/jti" {
-            return Err(Failure::Nonce);
-        }
+        claim.validate().map_err(|_| Failure::Nonce)?;
+        let pointer = claim.pointer();
         let left = source
             .claims
-            .pointer(claim)
+            .pointer(pointer)
             .and_then(Value::as_str)
             .ok_or(Failure::Nonce)?;
         let right = target
             .claims
-            .pointer(claim)
+            .pointer(pointer)
             .and_then(Value::as_str)
             .ok_or(Failure::Nonce)?;
         for value in [left, right] {
-            let id = uuid::Uuid::parse_str(value).map_err(|_| Failure::Nonce)?;
-            if id.get_version_num() != 4 || id.get_variant() != uuid::Variant::RFC4122 {
+            if !claim.accepts(value) {
                 return Err(Failure::Nonce);
             }
         }
         nonces.push(Nonce {
-            claim: claim.clone(),
+            claim: pointer.into(),
             source: left.into(),
             target: right.into(),
         });
-        source.claims.as_object_mut().unwrap().remove("jti");
-        target.claims.as_object_mut().unwrap().remove("jti");
+        source.claims.as_object_mut().unwrap().remove(&pointer[1..]);
+        target.claims.as_object_mut().unwrap().remove(&pointer[1..]);
     }
     if source.claims != target.claims {
         return Err(Failure::Claims);
@@ -127,5 +130,6 @@ pub(crate) fn compare(
     Ok(Validated {
         nonces,
         time_validations,
+        exp: [source_exp, target_exp],
     })
 }

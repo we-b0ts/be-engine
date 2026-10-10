@@ -240,7 +240,12 @@ impl RequestContracts {
                 key,
                 anchors: [(a * 1e9).round() as i128, (b * 1e9).round() as i128],
                 tolerance: (config::tolerance(&config.tolerance)? * 1e9).round() as i128,
-                dynamic_claims: &config.dynamic_claims,
+                dynamic_claims: &config
+                    .dynamic_claims
+                    .iter()
+                    .cloned()
+                    .map(crate::request_rules::JwtDynamicClaim::Legacy)
+                    .collect::<Vec<_>>(),
             },
         )
         .map_err(|error| anyhow::anyhow!("JWT contract failed: {error:?}"))?;

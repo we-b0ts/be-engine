@@ -50,7 +50,13 @@ Signed HTTP JSON tokens use explicit `jwt` rules, not whole-token `random`
 exemptions. Prove source issuance and key precedence, then use the coordinator's
 `rule plan --response-jwt` with current evidence and a private startup-key
 reference. Plan verifies both signatures, exact stable claims and relative
-`exp`/`iat`/`nbf` offsets within five seconds; optional `/jti` must be UUID v4.
+`exp`/`iat`/`nbf` offsets within five seconds. Optional `url_query_param` selects
+one token in an HTTP(S) URL while retaining all unselected URL bytes. Legacy
+`dynamic_claims: [/jti]` retains UUID v4 semantics; typed `/jti` or `/nonce`
+entries support UUID v4 or canonical unpadded base64url with explicit
+`decoded_bytes`. Optional `expires_at` owns an RFC3339 field whose floored Unix
+seconds must equal that side's signed `exp`; array scopes must match. Never
+exempt an entire signed URL with a random rule.
 Apply rechecks artifacts, policy and key, then requires fresh Replay. See
 [JWT response rules](../../../../../docs/jwt-response-rules.md).
 

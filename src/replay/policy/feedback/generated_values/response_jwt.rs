@@ -105,7 +105,7 @@ pub fn plan_response_jwt_rule(feedback: ResponseJwtRuleFeedback) -> Result<Gener
             .context("source JWT response requires complete unique-member JSON")?;
         let target = crate::json_value::parse(&target_body)
             .context("target JWT response requires complete unique-member JSON")?;
-        let mut comparison = JwtComparison::load(&fields, &feedback.policy_path);
+        let mut comparison = JwtComparison::load(&fields, &feedback.policy_path, &source, &target);
         let mut changed = false;
         let mut selected = false;
         for field in &fields {
@@ -120,11 +120,9 @@ pub fn plan_response_jwt_rule(feedback: ResponseJwtRuleFeedback) -> Result<Gener
                 let right = target
                     .pointer(&pointer)
                     .context("target JWT field is absent")?;
-                comparison
-                    .compare(field, left, right, times)
-                    .map_err(|kind| {
-                        anyhow::anyhow!("JWT response contract failed at {pointer}: {kind:?}")
-                    })?;
+                comparison.compare(field, &pointer, times).map_err(|kind| {
+                    anyhow::anyhow!("JWT response contract failed at {pointer}: {kind:?}")
+                })?;
                 selected = true;
                 changed |= left != right;
                 if left != right {

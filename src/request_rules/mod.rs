@@ -5,6 +5,9 @@
 pub(crate) mod jwt;
 pub mod keys;
 pub use jwt::Algorithm as JwtAlgorithm;
+pub use jwt::nonce::{
+    DynamicClaim as JwtDynamicClaim, NonceClaim as JwtNonceClaim, NonceFormat as JwtNonceFormat,
+};
 pub(crate) mod policy;
 
 use std::borrow::Cow;
