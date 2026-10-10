@@ -92,10 +92,8 @@ fn loaded_policy_groups_team_ids_and_shares_the_case_limit() {
         std::fs::write(&path, POLICY).unwrap();
         let source = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let source_address = source.local_addr().unwrap();
-        let gateway_address = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap();
+        let gateway_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let gateway_address = gateway_listener.local_addr().unwrap();
         let mut options = options(&path);
         options.source_origin = format!("http://{source_address}");
         options.recorder_listen = gateway_address;
@@ -135,10 +133,13 @@ fn loaded_policy_groups_team_ids_and_shares_the_case_limit() {
                 .fake_ip,
             alias.fake_ip
         );
-        state.close_bootstrap("policy test ready").await.unwrap();
+        assert!(state.close_bootstrap("policy test ready").await.unwrap());
         let running = state.clone();
-        let gateway =
-            tokio::spawn(async move { crate::gateway::http::run(running).await.unwrap() });
+        let gateway = tokio::spawn(async move {
+            crate::gateway::http::run_with_listener(running, gateway_listener)
+                .await
+                .unwrap()
+        });
         let source = tokio::spawn(async move {
             for _ in 0..3 {
                 let (mut stream, _) = source.accept().await.unwrap();
@@ -151,16 +152,6 @@ fn loaded_policy_groups_team_ids_and_shares_the_case_limit() {
                     .unwrap();
             }
         });
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while tokio::net::TcpStream::connect(gateway_address)
-                .await
-                .is_err()
-            {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .unwrap();
         let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
         for (request_path, expected_status) in [
             ("/api/teams/110467/skills", StatusCode::OK),
@@ -176,8 +167,9 @@ fn loaded_policy_groups_team_ids_and_shares_the_case_limit() {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(response.status(), expected_status, "{request_path}");
-            response.into_body().collect().await.unwrap();
+            let status = response.status();
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            assert_eq!(status, expected_status, "{request_path}: {body:?}");
         }
         source.await.unwrap();
         gateway.abort();
