@@ -26,6 +26,8 @@ use [response header date rules](response-header-date-rules.md); both use
 evidence-backed plan/apply and fresh verification with existing recordings.
 [Dependency request rules](dependency-request-rules.md) cover integer JSON-RPC
 IDs, signed Redis JSON writes, correlated write times and multipart boundaries.
+[JWT response rules](jwt-response-rules.md) validate signatures, stable claims
+and request-relative validity for freshly issued HTTP JSON tokens.
 
 ## Rust Tooling
 

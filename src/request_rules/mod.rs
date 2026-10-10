@@ -1,5 +1,6 @@
 //! Explicit, engine-owned transformations of recorded inbound requests.
-//! Never consumes assertion or dependency response values.
+//! Request execution never consumes assertion or dependency response values.
+//! Pure JWT primitives are also reused by isolated assertion comparators.
 
 pub(crate) mod jwt;
 pub mod keys;

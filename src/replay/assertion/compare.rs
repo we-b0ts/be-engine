@@ -28,7 +28,9 @@ pub(super) fn compare_json(
             selected.insert(pointer, field);
         }
     }
-    compare_value("", expected, actual, &selected, report, times);
+    let mut jwt =
+        super::jwt::JwtComparison::load(fields, std::path::Path::new(&report.policy_path));
+    compare_value("", expected, actual, &selected, report, times, &mut jwt);
     for ids in [
         &mut report.applied_generated_rule_ids,
         &mut report.applied_unordered_rule_ids,
@@ -48,9 +50,18 @@ fn compare_value(
     fields: &BTreeMap<String, &ResponseField>,
     report: &mut ResponseAssertionCaseReport,
     times: RequestTimes,
+    jwt: &mut super::jwt::JwtComparison,
 ) {
     if let Some(field) = fields.get(pointer) {
         match field.kind {
+            ResponseRuleKind::Jwt => match jwt.compare(field, expected, actual, times) {
+                Ok(()) => report.applied_generated_rule_ids.push(field.id.clone()),
+                Err(kind) => {
+                    report
+                        .differences
+                        .push(difference(pointer, kind, Some(expected), Some(actual)))
+                }
+            },
             ResponseRuleKind::Timestamp | ResponseRuleKind::Duration => {
                 match time::compare(
                     field.time.expect("validated time rule"),
@@ -182,7 +193,7 @@ fn compare_value(
                 let child = child_pointer(pointer, key);
                 match (expected.get(key), actual.get(key)) {
                     (Some(expected), Some(actual)) => {
-                        compare_value(&child, expected, actual, fields, report, times)
+                        compare_value(&child, expected, actual, fields, report, times, jwt)
                     }
                     (Some(expected), None) => report.differences.push(difference(
                         &child,
@@ -226,6 +237,7 @@ fn compare_value(
                     fields,
                     report,
                     times,
+                    jwt,
                 );
             }
         }

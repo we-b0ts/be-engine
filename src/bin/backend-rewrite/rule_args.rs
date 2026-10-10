@@ -38,6 +38,9 @@ impl From<ResponseBodyCodecArg> for ResponseBodyCodec {
 
 #[derive(Debug, Args)]
 pub(super) struct RulePlanArgs {
+    /// Signed JWT in a JSON HTTP response. Declares algorithm, key source and optional UUID v4 jti.
+    #[arg(long = "response-jwt", value_name = "RULE_JSON", value_parser = parse_response_jwt, conflicts_with_all = ["header_dates", "dynamic_value", "dependency_request", "request_kind", "kind", "json_pointer", "unordered_paths", "unordered_joined_string_paths", "docx_timestamps"])]
+    pub(super) response_jwts: Vec<traffic_e2e::ResponseJwtRule>,
     /// Source-proven Redis argument or HTTP multipart dependency contract.
     #[arg(long, value_name = "RULE_JSON", conflicts_with_all = ["dynamic_value", "header_dates", "request_kind", "kind", "json_pointer", "unordered_paths", "unordered_joined_string_paths", "docx_timestamps"])]
     pub(super) dependency_request: Option<serde_json::Value>,
@@ -52,7 +55,7 @@ pub(super) struct RulePlanArgs {
     #[arg(long)]
     pub(super) evidence_id: String,
     /// Body codec. JSON uses --kind, protobuf/Hessian2 use typed paths, and DOCX uses --docx-timestamp.
-    #[arg(long, value_enum, required_unless_present_any = ["request_kind", "header_dates", "dynamic_value", "dependency_request"])]
+    #[arg(long, value_enum, required_unless_present_any = ["request_kind", "header_dates", "dynamic_value", "dependency_request", "response_jwts"])]
     pub(super) body_codec: Option<ResponseBodyCodecArg>,
     /// JSON response-rule kind. Omit for protobuf and Hessian2 typed-body rules.
     #[arg(
@@ -124,6 +127,10 @@ fn parse_header_date(value: &str) -> Result<traffic_e2e::ResponseHeaderDateRule,
         .map_err(|error| format!("invalid response header date rule: {error}"))
 }
 
+fn parse_response_jwt(value: &str) -> Result<traffic_e2e::ResponseJwtRule, String> {
+    serde_json::from_str(value).map_err(|_| "invalid JWT response rule JSON".into())
+}
+
 #[cfg(test)]
 mod generated_tests {
     use clap::Parser;
@@ -132,7 +139,9 @@ mod generated_tests {
         let dependency = r#"{"id":"write-contract","protocol":"redis","target":{"host":"redis","port":6379},"redis":{"key":"one","commands":[{"command":"SET","argument_values":{"1":{"json":{"/at":{"time":"preserve_relative","format":"unix_seconds"}}}}}]}}"#;
         let header = r#"{"header":"content-disposition","parameter":"filename","format":"%Y-%m-%d","timezone":"+00:00"}"#;
         let dynamic = r#"{"id":"name","targets":[{"host":"db","port":3306}],"capture":{"protocol":"mysql","target":{"host":"db","port":3306},"database":"app","sql":"SELECT id FROM t WHERE name=?","value_index":0}}"#;
+        let response_jwt = r#"{"pointer":"/access_token","algorithm":"HS256","signing_key_source":{"kind":"target_env","name":"SECRET_KEY"},"source_evidence":"Connector:issue"}"#;
         for (flag, spec) in [
+            ("--response-jwt", response_jwt),
             ("--header-date", header),
             ("--dynamic-value", dynamic),
             ("--dependency-request", dependency),
@@ -150,6 +159,28 @@ mod generated_tests {
                     "Generator:current value"
                 ])
                 .is_ok()
+            );
+        }
+        for conflicting in [
+            "--kind",
+            "--request-kind",
+            "--dynamic-value",
+            "--dependency-request",
+            "--header-date",
+        ] {
+            assert!(
+                super::super::Cli::try_parse_from([
+                    "backend-rewrite",
+                    "rule",
+                    "plan",
+                    "--evidence-id",
+                    "current",
+                    "--response-jwt",
+                    response_jwt,
+                    conflicting,
+                    "jwt"
+                ])
+                .is_err()
             );
         }
         assert!(

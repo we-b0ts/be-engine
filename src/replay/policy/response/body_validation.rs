@@ -4,7 +4,8 @@ use anyhow::{Result, ensure};
 
 use super::{
     Hessian2ResponseRules, Hessian2ValuePath, ProtobufFieldPath, ProtobufResponseRules,
-    validate_audit_text, validate_rule_api, validate_separator,
+    ResponseRules, parse_api, path_patterns_overlap, validate_audit_text, validate_rule_api,
+    validate_separator,
 };
 
 const MAX_FIELD_NUMBER: u32 = (1 << 29) - 1;
@@ -157,5 +158,33 @@ fn validate_semantic_display_path(api: &str, display_path: &str, codec: &str) ->
             .any(|character| character.is_alphabetic() || character == '_'),
         "{codec} response rule API {api:?} requires a semantic display_path"
     );
+    Ok(())
+}
+
+pub(super) fn validate_body_codec_routes(rules: &ResponseRules) -> Result<()> {
+    let routes = rules
+        .json
+        .keys()
+        .map(|api| ("json", api))
+        .chain(rules.protobuf.keys().map(|api| ("protobuf", api)))
+        .chain(rules.hessian2.keys().map(|api| ("hessian2", api)))
+        .chain(rules.docx.keys().map(|api| ("docx", api)))
+        .map(|(codec, api)| {
+            let (method, path) = parse_api(api)?;
+            Ok((codec, api.as_str(), method, path))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for (index, (left_codec, left_api, left_method, left_path)) in routes.iter().enumerate() {
+        for (right_codec, right_api, right_method, right_path) in routes.iter().skip(index + 1) {
+            if *left_codec == "json" && *right_codec == "json" {
+                continue;
+            }
+            ensure!(
+                !left_method.eq_ignore_ascii_case(right_method)
+                    || !path_patterns_overlap(left_path, right_path),
+                "overlapping body codec response rules select the same API: {left_codec} {left_api:?} and {right_codec} {right_api:?}"
+            );
+        }
+    }
     Ok(())
 }

@@ -2,6 +2,7 @@ use super::super::evidence_model::{RewriteApplicableRulePlanner, RewriteRuleHint
 use super::*;
 mod generated_values;
 mod http_header_timestamp;
+pub(super) use generated_values::has_response_jwt;
 
 pub(super) fn http_header_timestamp_candidates(facts: &Value) -> Vec<Value> {
     http_header_timestamp::candidates(facts)

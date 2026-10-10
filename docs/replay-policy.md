@@ -45,7 +45,7 @@ response_rules:
 ```
 
 Rules are grouped by body codec, canonical API, and concrete rule kind.
-Standard replay loads JSON `timestamp`, `duration`, `uuid`, `random`, and
+Standard replay loads JSON `timestamp`, `duration`, `uuid`, `random`, `jwt`, and
 `unordered` rules plus configured protobuf, Hessian2, and DOCX rules. Comparison also
 loads JSON `counter` rules. Rule kinds selecting JSON must use disjoint
 subtrees.

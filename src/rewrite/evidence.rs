@@ -192,15 +192,15 @@ fn facts(
             let (pointer_scope, representative) =
                 representative_facts(target_root, state, issue)?;
             let (does_not_prove, next_step) = representative_guidance(issue.kind);
-            Ok((
-                json!({
+            let mut facts = json!({
                     "pointer_scope": pointer_scope,
                     "representative": representative,
                     "comparison_observation": issue.comparison_observation,
-                }),
-                does_not_prove,
-                next_step,
-            ))
+                });
+            if rule_guidance::has_response_jwt(&facts) {
+                facts["signing_key_discovery"] = super::jwt_rule::signing_key_discovery(target_root);
+            }
+            Ok((facts, does_not_prove, next_step))
         }
         QUERY_SOURCE_VARIATION => {
             let representative = issue

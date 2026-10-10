@@ -52,7 +52,7 @@ impl<'de> Deserialize<'de> for Strict {
         d.deserialize_any(JsonVisitor)
     }
 }
-pub(in crate::replay) fn parse(bytes: &[u8]) -> Option<Value> {
+pub(crate) fn parse(bytes: &[u8]) -> Option<Value> {
     if bytes.len() > 1024 * 1024 {
         return None;
     }
