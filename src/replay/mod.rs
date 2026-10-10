@@ -179,7 +179,8 @@ pub use policy::{
     plan_redis_cross_case, plan_response_body_rule, plan_response_rule, validate_replay_policy,
 };
 pub use policy::{
-    DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget, DynamicValueType,
+    DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget,
+    DynamicValueType, PathSegmentCapture, PathSegmentField,
 };
 pub use policy::{
     DynamicValueRuleFeedback, GeneratedValueRulePlan, GeneratedValueRuleReport,

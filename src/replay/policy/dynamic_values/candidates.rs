@@ -15,6 +15,8 @@ pub(in crate::replay) struct CaptureCandidate {
     pub target_value_fingerprint: String,
     pub target_uuid: bool,
     pub target_uuid_v4: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_witness: Option<super::path_candidates::PathRequestWitness>,
 }
 
 impl DynamicValues {
@@ -48,6 +50,7 @@ impl DynamicValues {
             target_value_fingerprint: fingerprint(target.as_bytes()),
             target_uuid: uuid.is_some(),
             target_uuid_v4: uuid.is_some_and(|uuid| uuid.get_version_num() == 4),
+            path_witness: None,
         };
         let mut items = self.candidates.lock().expect("capture candidates");
         if !items.contains(&candidate)
@@ -150,7 +153,8 @@ impl DynamicValues {
                     },
                     method: method.into(),
                     path: path.into(),
-                    json_pointer: pointer,
+                    json_pointer: Some(pointer),
+                    path_segment: None,
                 },
                 source,
                 &left,

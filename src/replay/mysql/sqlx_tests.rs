@@ -15,6 +15,7 @@ mod distinct_tests;
 mod dynamic_values_tests;
 mod large_predicate_tests;
 mod or_tests;
+mod path_capture_tests;
 mod predicate_tests;
 mod projection_tests;
 mod rollback_tests;

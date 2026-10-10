@@ -191,10 +191,12 @@ fn http_paths_queries_and_json_share_the_case_binding() {
             &endpoint(80),
             "POST",
             HttpInput {
+                request_started_at: None,
                 uri: "/items/old-name?name=old-name&stable=1",
                 body: br#"{"name":"old-name"}"#,
             },
             HttpInput {
+                request_started_at: None,
                 uri: &actual_uri.to_string(),
                 body: br#"{"name":"new-name"}"#,
             },
@@ -340,10 +342,12 @@ fn integer_http_identity_preserves_type_and_only_normalizes_the_declared_pointer
                 &endpoint(80),
                 "POST",
                 HttpInput {
+                    request_started_at: None,
                     uri: "/rpc",
                     body: source,
                 },
                 HttpInput {
+                    request_started_at: None,
                     uri: "/rpc",
                     body: actual,
                 },

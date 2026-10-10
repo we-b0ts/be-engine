@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 pub(in crate::replay) struct HttpInput<'a> {
     pub uri: &'a str,
     pub body: &'a [u8],
+    pub request_started_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub(in crate::replay) struct HttpNormalization {
@@ -41,12 +42,14 @@ impl DynamicValues {
         Some((|| {
             let mut decision = DynamicDecision::default();
             let mut integer_body = None;
+            let mut path_capture = false;
             for rule in self.selected(case, target) {
                 let DynamicValueCapture::Http {
                     target: endpoint,
                     method: expected_method,
                     path,
                     json_pointer,
+                    path_segment,
                 } = &rule.capture
                 else {
                     continue;
@@ -61,9 +64,29 @@ impl DynamicValues {
                 {
                     continue;
                 }
-                let pair = IdentityPair {
-                    source: capture(source_body, json_pointer, rule.value_type)?,
-                    target: capture(actual_body, json_pointer, rule.value_type)?,
+                let pair = if let Some(segment) = path_segment {
+                    path_capture = true;
+                    let pair = IdentityPair {
+                        source: segment.extract(source_uri)?,
+                        target: segment.extract(actual.uri)?,
+                    };
+                    segment.compare(
+                        &pair.source,
+                        &pair.target,
+                        crate::replay::assertion::time::RequestTimes {
+                            source: source.request_started_at,
+                            target: actual.request_started_at,
+                        },
+                    )?;
+                    pair
+                } else {
+                    let pointer = json_pointer
+                        .as_deref()
+                        .context("HTTP capture pointer absent")?;
+                    IdentityPair {
+                        source: capture(source_body, pointer, rule.value_type)?,
+                        target: capture(actual_body, pointer, rule.value_type)?,
+                    }
                 };
                 self.check_pair(case, rule, &pair, &decision)?;
                 if rule.value_type == DynamicValueType::Integer {
@@ -71,8 +94,9 @@ impl DynamicValues {
                         crate::replay::json_order::parse(actual_body)
                             .expect("validated JSON capture")
                     });
-                    *body.pointer_mut(json_pointer).expect("validated pointer") =
-                        serde_json::from_str(&pair.source)?;
+                    *body
+                        .pointer_mut(json_pointer.as_deref().expect("integer capture pointer"))
+                        .expect("validated pointer") = serde_json::from_str(&pair.source)?;
                 }
                 decision.pairs.push((rule.id.clone(), pair));
             }
@@ -80,15 +104,23 @@ impl DynamicValues {
             Ok(HttpNormalization {
                 source_uri: uri(source_uri, &pairs, false)?,
                 actual_uri: uri(&actual_uri.to_string(), &pairs, true)?.parse()?,
-                source_body: strings::normalize(source_body, &pairs, false)?,
-                actual_body: strings::normalize(
-                    &integer_body
-                        .map(|body| serde_json::to_vec(&body))
-                        .transpose()?
-                        .unwrap_or_else(|| actual_body.to_vec()),
-                    &pairs,
-                    true,
-                )?,
+                source_body: if path_capture {
+                    source_body.to_vec()
+                } else {
+                    strings::normalize(source_body, &pairs, false)?
+                },
+                actual_body: if path_capture {
+                    actual_body.to_vec()
+                } else {
+                    strings::normalize(
+                        &integer_body
+                            .map(|body| serde_json::to_vec(&body))
+                            .transpose()?
+                            .unwrap_or_else(|| actual_body.to_vec()),
+                        &pairs,
+                        true,
+                    )?
+                },
                 decision,
             })
         })())
@@ -141,7 +173,7 @@ fn uri(value: &str, pairs: &[IdentityPair], actual: bool) -> Result<String> {
     Ok(out)
 }
 
-fn percent_decode(value: &str) -> Result<Vec<u8>> {
+pub(super) fn percent_decode(value: &str) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     let mut index = 0;
     while index < value.len() {

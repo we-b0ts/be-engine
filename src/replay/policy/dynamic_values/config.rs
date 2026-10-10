@@ -1,4 +1,5 @@
 //! One source-proven capture location and explicit endpoints for automatic references.
+pub use super::path_segment::{PathSegmentCapture, PathSegmentField};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
@@ -49,7 +50,10 @@ pub enum DynamicValueCapture {
         target: DynamicValueTarget,
         method: String,
         path: String,
-        json_pointer: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        json_pointer: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path_segment: Option<PathSegmentCapture>,
     },
 }
 
@@ -125,6 +129,7 @@ impl DynamicValueCapture {
                 method,
                 path,
                 json_pointer,
+                path_segment,
                 ..
             } => {
                 ensure!(
@@ -134,7 +139,16 @@ impl DynamicValueCapture {
                     "dynamic HTTP capture requires an uppercase method"
                 );
                 crate::path_pattern::validate_path_pattern(path)?;
-                validate_pointer(json_pointer)?;
+                ensure!(
+                    json_pointer.is_some() != path_segment.is_some(),
+                    "HTTP capture requires exactly one json_pointer or path_segment"
+                );
+                if let Some(pointer) = json_pointer {
+                    validate_pointer(pointer)?;
+                }
+                if let Some(segment) = path_segment {
+                    segment.validate(path)?;
+                }
             }
         }
         Ok(())
@@ -217,6 +231,13 @@ impl DynamicValueRule {
         ensure!(
             self.value_type == DynamicValueType::String
                 || matches!(self.capture, DynamicValueCapture::Http { .. })
+                    && matches!(
+                        &self.capture,
+                        DynamicValueCapture::Http {
+                            json_pointer: Some(_),
+                            ..
+                        }
+                    )
                     && self.format.is_none(),
             "integer dynamic values require an HTTP JSON capture without a string format"
         );
@@ -262,6 +283,35 @@ pub(in crate::replay) fn validate(rules: &[DynamicValueRule]) -> Result<()> {
     for (index, rule) in rules.iter().enumerate() {
         rule.validate()?;
         ensure!(ids.insert(&rule.id), "duplicate dynamic value rule id");
+        for other in &rules[..index] {
+            if let (
+                DynamicValueCapture::Http {
+                    target: a,
+                    method: am,
+                    path: ap,
+                    path_segment: Some(ac),
+                    ..
+                },
+                DynamicValueCapture::Http {
+                    target: b,
+                    method: bm,
+                    path: bp,
+                    path_segment: Some(bc),
+                    ..
+                },
+            ) = (&rule.capture, &other.capture)
+            {
+                ensure!(
+                    !(a.host.eq_ignore_ascii_case(&b.host)
+                        && a.port == b.port
+                        && am == bm
+                        && ac.index == bc.index
+                        && crate::path_pattern::path_patterns_overlap(&rule.api, &other.api)
+                        && crate::path_pattern::path_patterns_overlap(ap, bp)),
+                    "overlapping dynamic path capture location"
+                );
+            }
+        }
         ensure!(
             !rules[..index]
                 .iter()

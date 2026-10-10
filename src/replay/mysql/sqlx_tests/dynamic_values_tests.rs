@@ -75,7 +75,7 @@ async fn capture_then_sql_json_and_redis_key_preserve_fixed_values_times_and_con
     }).await.expect("cross-protocol dynamic replay timed out");
 }
 
-async fn endpoint_listener(
+pub(super) async fn endpoint_listener(
     runtime: Arc<ReplayRuntime>,
     redis: bool,
 ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
