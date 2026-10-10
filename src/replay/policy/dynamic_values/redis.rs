@@ -22,8 +22,28 @@ impl DynamicValues {
         if rules.is_empty() {
             return None;
         }
-        let captures = rules.iter().any(|rule| matches!(&rule.capture,DynamicValueCapture::Redis{target:endpoint,database:db,command:cmd,key,..} if endpoint.matches(target) && *db == database && cmd == command && source.first().is_some_and(|value|value == key.as_bytes()) && actual.first().is_some_and(|value|value == key.as_bytes())));
-        if !captures {
+        let captures = rules
+            .into_iter()
+            .filter(|rule| {
+                let DynamicValueCapture::Redis {
+                    target: endpoint,
+                    database: db,
+                    command: cmd,
+                    key,
+                    ..
+                } = &rule.capture
+                else {
+                    return false;
+                };
+                endpoint.matches(target)
+                    && *db == database
+                    && cmd == command
+                    && source
+                        .first()
+                        .is_some_and(|value| value.len() <= 1024 && key.matches(value))
+            })
+            .collect::<Vec<_>>();
+        if captures.is_empty() {
             return self
                 .normalize_arguments(Some(case), target, source, actual)
                 .map(|result| {
@@ -35,27 +55,20 @@ impl DynamicValues {
                 });
         }
         Some((|| {
+            ensure!(
+                source.first() == actual.first(),
+                "dynamic Redis capture key changed"
+            );
             let mut decision = DynamicDecision::default();
-            for rule in rules {
+            for rule in captures {
                 let DynamicValueCapture::Redis {
-                    target: endpoint,
-                    database: db,
-                    command: cmd,
-                    key,
                     argument_index,
                     json_pointer,
+                    ..
                 } = &rule.capture
                 else {
                     continue;
                 };
-                if !endpoint.matches(target)
-                    || *db != database
-                    || cmd != command
-                    || source.first().is_none_or(|value| value != key.as_bytes())
-                    || actual.first().is_none_or(|value| value != key.as_bytes())
-                {
-                    continue;
-                }
                 let source_value = source
                     .get(*argument_index)
                     .ok_or_else(|| anyhow::anyhow!("source Redis capture argument is absent"))?;
@@ -77,11 +90,25 @@ impl DynamicValues {
             Ok(ArgumentNormalization {
                 source: source
                     .iter()
-                    .map(|value| strings::normalize(value, &pairs, false))
+                    .enumerate()
+                    .map(|(index, value)| {
+                        if index == 0 {
+                            Ok(value.clone())
+                        } else {
+                            strings::normalize(value, &pairs, false)
+                        }
+                    })
                     .collect::<Result<_>>()?,
                 actual: actual
                     .iter()
-                    .map(|value| strings::normalize(value, &pairs, true))
+                    .enumerate()
+                    .map(|(index, value)| {
+                        if index == 0 {
+                            Ok(value.clone())
+                        } else {
+                            strings::normalize(value, &pairs, true)
+                        }
+                    })
                     .collect::<Result<_>>()?,
                 decision,
             })

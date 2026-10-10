@@ -128,6 +128,9 @@ is unclear.
   runtime rule families are partitioned internally without a separate binding section.
 - `replay/policy/dynamic_values` owns bounded case-local MySQL/Redis/HTTP capture and
   correlation; its SQL, HTTP and string adapters normalize comparison copies.
+  Redis captures reuse `replay/redis/key_selector` for exact/affix/numeric key
+  schema and matching; capture comparison retains complete key equality, while
+  generated-value feedback selects exact recording witnesses for broad rules.
   Its audit child owns binding fingerprints and planner reconstruction.
   Its `path_segment` child owns bounded HTTP path templates, shaped fields and
   shared timestamp validation; `path_candidates` owns mechanical path witnesses.

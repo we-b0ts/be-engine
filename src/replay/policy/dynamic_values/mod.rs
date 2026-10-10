@@ -203,4 +203,6 @@ impl DynamicValues {
 #[cfg(test)]
 mod path_tests;
 #[cfg(test)]
+mod redis_tests;
+#[cfg(test)]
 mod tests;

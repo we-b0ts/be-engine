@@ -47,7 +47,10 @@ pub(in crate::replay) fn from_event(
                 .iter()
                 .map(decode)
                 .collect::<Result<Vec<_>>>()?;
-            if args.first().is_none_or(|value| value != key.as_bytes()) {
+            if args
+                .first()
+                .is_none_or(|value| value.len() > 1024 || !key.matches(value))
+            {
                 return Ok(None);
             }
             Ok(Some(SourceCapture {

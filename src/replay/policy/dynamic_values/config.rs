@@ -1,5 +1,6 @@
 //! One source-proven capture location and explicit endpoints for automatic references.
 pub use super::path_segment::{PathSegmentCapture, PathSegmentField};
+use crate::replay::RedisValueKeySelector;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
@@ -41,7 +42,7 @@ pub enum DynamicValueCapture {
         target: DynamicValueTarget,
         database: i64,
         command: String,
-        key: String,
+        key: RedisValueKeySelector,
         argument_index: usize,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         json_pointer: Option<String>,
@@ -110,9 +111,10 @@ impl DynamicValueCapture {
                 ..
             } => {
                 ensure!(
-                    *database >= 0 && !key.is_empty() && key.len() <= 1024,
-                    "dynamic Redis capture requires a database and exact key"
+                    *database >= 0,
+                    "dynamic Redis capture requires a nonnegative database"
                 );
+                key.validate()?;
                 ensure!(
                     command == "SET" && *argument_index == 1
                         || command == "HSET"
@@ -284,6 +286,41 @@ pub(in crate::replay) fn validate(rules: &[DynamicValueRule]) -> Result<()> {
         rule.validate()?;
         ensure!(ids.insert(&rule.id), "duplicate dynamic value rule id");
         for other in &rules[..index] {
+            if let (
+                DynamicValueCapture::Redis {
+                    target: a,
+                    database: ad,
+                    command: am,
+                    key: ak,
+                    argument_index: ai,
+                    json_pointer: ap,
+                },
+                DynamicValueCapture::Redis {
+                    target: b,
+                    database: bd,
+                    command: bm,
+                    key: bk,
+                    argument_index: bi,
+                    json_pointer: bp,
+                },
+            ) = (&rule.capture, &other.capture)
+            {
+                let fields_overlap = match (ap, bp) {
+                    (Some(a), Some(b)) => super::super::response_locations_overlap(a, b),
+                    _ => true,
+                };
+                ensure!(
+                    !(a.host.eq_ignore_ascii_case(&b.host)
+                        && a.port == b.port
+                        && ad == bd
+                        && am == bm
+                        && ai == bi
+                        && fields_overlap
+                        && ak.overlaps(bk)
+                        && crate::path_pattern::path_patterns_overlap(&rule.api, &other.api)),
+                    "overlapping dynamic Redis capture location"
+                );
+            }
             if let (
                 DynamicValueCapture::Http {
                     target: a,
