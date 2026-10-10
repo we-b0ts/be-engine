@@ -69,7 +69,11 @@ revision containing only ASCII letters, digits, `.`, `_`, `+`, or `-`.
 
 The script builds all three release binaries once, verifies their revision,
 stages only those executables, builds the image and pushes it to
-`registry.api.demo.test/weibo_rd_if/traffic-e2e-engine:git-<revision>`.
+`registry.api.demo.test/weibo_rd_if/traffic-e2e-engine:<version>`.
+The image version is recorded in `docker/engine/VERSION`, starting at `0.0.1`;
+increment the patch version for each new release. Git revision remains in the
+binary version output and OCI image labels. Local dirty builds use a `-dev`
+suffix; publication requires committed changes.
 Use `--skip-build` to package matching binaries already built for the current
 revision, or `--tag <image>` to choose another image reference. No project
 configuration, credentials or recordings enter the engine image.

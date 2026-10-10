@@ -10,7 +10,11 @@ Run from any directory. Docker receives only the staged executables.
 
   --publish     Push after a successful image build; requires a clean checkout.
   --skip-build  Package existing release binaries after checking their revision.
-  --tag IMAGE   Override the default registry/repository:git-<revision> tag.
+  --tag IMAGE   Override the default registry/repository:<version> tag.
+
+Image versions come from docker/engine/VERSION. Increment its 0.0.x patch
+version before each new release. Git revision remains embedded in the binaries
+and image metadata.
 
 Environment:
   ENGINE_IMAGE_REPOSITORY  Default: registry.api.demo.test/weibo_rd_if/traffic-e2e-engine
@@ -56,7 +60,13 @@ if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
   revision+='-dirty'
 fi
 repository="${ENGINE_IMAGE_REPOSITORY:-registry.api.demo.test/weibo_rd_if/traffic-e2e-engine}"
-image_tag="${image_tag:-$repository:git-$revision}"
+image_version="$(cat "$repo_root/docker/engine/VERSION")"
+[[ "$image_version" =~ ^0\.0\.[1-9][0-9]*$ ]] ||
+  fail 'docker/engine/VERSION must contain a version such as 0.0.1.'
+if [[ "$revision" == *-dirty ]]; then
+  image_version+='-dev'
+fi
+image_tag="${image_tag:-$repository:$image_version}"
 command -v docker >/dev/null 2>&1 || fail 'Docker is required.'
 
 cargo_target_dir="${CARGO_TARGET_DIR:-$repo_root/target}"
@@ -80,6 +90,7 @@ done
 docker buildx build --load --platform linux/amd64 --network none \
   --file "$repo_root/docker/engine/Dockerfile" \
   --build-arg "ENGINE_REVISION=$revision" \
+  --build-arg "ENGINE_VERSION=$image_version" \
   --tag "$image_tag" "$staging_dir"
 if [[ "$publish" == true ]]; then
   docker push "$image_tag"

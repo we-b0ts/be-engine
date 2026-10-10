@@ -4,7 +4,9 @@ ARG RUNTIME_IMAGE=be-engine-recorder-runtime:local
 FROM ${RUNTIME_IMAGE}
 
 ARG ENGINE_REVISION=unknown
+ARG ENGINE_VERSION=unknown
 LABEL org.opencontainers.image.title="traffic-e2e engine" \
+      org.opencontainers.image.version="${ENGINE_VERSION}" \
       org.opencontainers.image.revision="${ENGINE_REVISION}"
 
 USER 0:0
