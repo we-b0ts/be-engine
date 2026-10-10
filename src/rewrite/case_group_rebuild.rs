@@ -319,7 +319,7 @@ mod tests {
         )
         .unwrap();
         fs::write(
-            target.path().join(".traffic-e2e/Dockerfile.e2e"),
+            target.path().join(".traffic-e2e/Dockerfile.target"),
             "FROM scratch\n",
         )
         .unwrap();
@@ -410,7 +410,11 @@ mod tests {
             "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
         )
         .unwrap();
-        fs::write(target.join(".traffic-e2e/Dockerfile.e2e"), "FROM scratch\n").unwrap();
+        fs::write(
+            target.join(".traffic-e2e/Dockerfile.target"),
+            "FROM scratch\n",
+        )
+        .unwrap();
         git(&target, &["init", "-q", "-b", "master"]);
         git(&target, &["config", "user.name", "Test"]);
         git(&target, &["config", "user.email", "test@example.com"]);

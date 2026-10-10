@@ -29,8 +29,8 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         "target.dockerfile must not be empty"
     );
     ensure!(
-        project.target.dockerfile == Path::new(".traffic-e2e/Dockerfile.e2e"),
-        "target.dockerfile must be .traffic-e2e/Dockerfile.e2e"
+        project.target.dockerfile == Path::new(".traffic-e2e/Dockerfile.target"),
+        "target.dockerfile must be .traffic-e2e/Dockerfile.target"
     );
     ensure!(
         (1..=MAX_TARGET_STARTUP_TIMEOUT_SECONDS).contains(&project.target.startup_timeout_seconds),

@@ -13,7 +13,7 @@ Read this reference for every replay execution.
 
 ## Target Isolation
 
-Inspect `.traffic-e2e/Dockerfile.e2e`, the OCI entrypoint, startup
+Inspect `.traffic-e2e/Dockerfile.target`, the OCI entrypoint, startup
 configuration, and dependency endpoints. Reuse the target's existing framework
 and add only the smallest missing runtime integration.
 

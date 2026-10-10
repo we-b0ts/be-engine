@@ -15,7 +15,7 @@ interception, trust, readiness, shutdown and finalization.
 
 ## Deployment
 
-The project owns `Docker.recording`. Build it from the real Source image, install
+The project owns `.traffic-e2e/Dockerfile.recording`. Build it from the real Source image, install
 the engine and its interception tools (`setpriv`, `iptables`, `ip`, and CA
 certificates), and use `traffic-e2e record` as the container entrypoint. The
 controller runs as root and starts the real foreground Source command as 998:998.
@@ -23,7 +23,7 @@ Its deployment caller owns image builds, container startup, ports and mounts;
 record does not build images or manage Docker. A typical deployment is:
 
 ```bash
-docker build -f Docker.recording -t source-recording .
+docker build -f .traffic-e2e/Dockerfile.recording -t source-recording .
 docker run --rm --cap-add NET_ADMIN --cap-add NET_RAW \
   -p 4080:4080 -v /absolute/recording-data:/data/traffic-e2e \
   source-recording --data-root /data/traffic-e2e --source-workdir /app \

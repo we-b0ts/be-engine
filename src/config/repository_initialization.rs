@@ -19,8 +19,8 @@ const TARGET_CARGO_PATH: &str = "Cargo.toml";
 const TARGET_CARGO_LOCK_PATH: &str = "Cargo.lock";
 const TARGET_MAIN_PATH: &str = "src/main.rs";
 const TARGET_STARTUP_PROBE_PATH: &str = "src/startup_probe.rs";
-const RECORDING_DOCKERFILE_PATH: &str = ".traffic-e2e/Dockerfile.recording";
-const TARGET_DOCKERFILE_PATH: &str = ".traffic-e2e/Dockerfile.e2e";
+const SOURCE_DOCKERFILE_PATH: &str = ".traffic-e2e/Dockerfile.source";
+const TARGET_DOCKERFILE_PATH: &str = ".traffic-e2e/Dockerfile.target";
 const TARGET_GITIGNORE_PATH: &str = ".gitignore";
 const TARGET_DOCKERIGNORE_PATH: &str = ".dockerignore";
 const LOCAL_DIR: &str = crate::repository::LOCAL_ROOT;
@@ -29,9 +29,8 @@ const TARGET_CARGO_TEMPLATE: &str = include_str!("templates/target/Cargo.toml");
 const TARGET_CARGO_LOCK_TEMPLATE: &str = include_str!("templates/target/Cargo.lock");
 const TARGET_MAIN_TEMPLATE: &str = include_str!("templates/target/src/main.rs");
 const TARGET_STARTUP_PROBE_TEMPLATE: &str = include_str!("templates/target/src/startup_probe.rs");
-const RECORDING_DOCKERFILE_TEMPLATE: &str =
-    include_str!("templates/recording/Dockerfile.recording");
-const TARGET_DOCKERFILE_TEMPLATE: &str = include_str!("templates/target/Dockerfile.e2e");
+const SOURCE_DOCKERFILE_TEMPLATE: &str = include_str!("templates/source/Dockerfile.source");
+const TARGET_DOCKERFILE_TEMPLATE: &str = include_str!("templates/target/Dockerfile.target");
 const TARGET_TEMPLATE_PACKAGE: &str = "traffic-e2e-target-template";
 const TARGET_TEMPLATE_CACHE_ID: &str = "traffic-e2e-template-target";
 const TARGET_GITIGNORE_RULES: &[&str] = &[
@@ -94,7 +93,7 @@ pub struct RepositoryConfigInitResult {
     pub dockerignore: PathBuf,
     pub dockerignore_updated: bool,
     pub startup: crate::startup::StartupSnapshotReport,
-    pub recording_dockerfile: PathBuf,
+    pub source_dockerfile: PathBuf,
     pub target_dockerfile: PathBuf,
     pub target_image_tag: String,
     pub target_runtime_contract: &'static str,
@@ -217,10 +216,10 @@ fn initialize_repository_config_with(
         dockerignore,
         dockerignore_updated,
         startup,
-        recording_dockerfile: PathBuf::from(RECORDING_DOCKERFILE_PATH),
+        source_dockerfile: PathBuf::from(SOURCE_DOCKERFILE_PATH),
         target_dockerfile: PathBuf::from(TARGET_DOCKERFILE_PATH),
         target_image_tag,
-        target_runtime_contract: "traffic-e2e builds Dockerfile.e2e, runs its OCI entrypoint as \
+        target_runtime_contract: "traffic-e2e builds Dockerfile.target, runs its OCI entrypoint as \
                                   998:998 with the captured source application environment plus \
                                   target.env overrides and source-compatible startup mounts, \
                                   and owns readiness, signals, network namespace, and cleanup",
@@ -257,12 +256,12 @@ fn render_missing_target_delivery(
     let cargo = target_root.join(TARGET_CARGO_PATH);
     let cargo_lock = target_root.join(TARGET_CARGO_LOCK_PATH);
     let main = target_root.join(TARGET_MAIN_PATH);
-    let recording_dockerfile = target_root.join(RECORDING_DOCKERFILE_PATH);
+    let source_dockerfile = target_root.join(SOURCE_DOCKERFILE_PATH);
     let dockerfile = target_root.join(TARGET_DOCKERFILE_PATH);
     let cargo_exists = path_exists(&cargo)?;
     let cargo_lock_exists = path_exists(&cargo_lock)?;
     let main_exists = path_exists(&main)?;
-    let recording_dockerfile_exists = path_exists(&recording_dockerfile)?;
+    let source_dockerfile_exists = path_exists(&source_dockerfile)?;
     let dockerfile_exists = path_exists(&dockerfile)?;
 
     let template_target = !cargo_exists && !cargo_lock_exists && !main_exists;
@@ -282,13 +281,13 @@ fn render_missing_target_delivery(
     validate_target_binary_name(&binary)?;
 
     let mut files = Vec::new();
-    if !recording_dockerfile_exists {
+    if !source_dockerfile_exists {
         files.push((
-            recording_dockerfile,
-            RECORDING_DOCKERFILE_TEMPLATE.as_bytes().to_vec(),
+            source_dockerfile,
+            SOURCE_DOCKERFILE_TEMPLATE.as_bytes().to_vec(),
         ));
     } else {
-        require_regular_file(&recording_dockerfile, "recording Dockerfile")?;
+        require_regular_file(&source_dockerfile, "source Dockerfile")?;
     }
     if template_target {
         files.push((
@@ -377,7 +376,7 @@ fn target_binary_name(cargo_path: &Path) -> Result<String> {
         .with_context(|| format!("failed to parse {}", cargo_path.display()))?;
     let package = manifest
         .package
-        .context("target Cargo.toml must contain [package] when Dockerfile.e2e is generated")?;
+        .context("target Cargo.toml must contain [package] when Dockerfile.target is generated")?;
     if let Some(default_run) = package.default_run {
         return Ok(default_run);
     }
@@ -731,12 +730,12 @@ mod tests {
         );
         assert_eq!(result.preflight_command, "traffic-e2e diagnose preflight");
         assert_eq!(
-            result.recording_dockerfile,
-            PathBuf::from(".traffic-e2e/Dockerfile.recording")
+            result.source_dockerfile,
+            PathBuf::from(".traffic-e2e/Dockerfile.source")
         );
         assert_eq!(
             result.target_dockerfile,
-            PathBuf::from(".traffic-e2e/Dockerfile.e2e")
+            PathBuf::from(".traffic-e2e/Dockerfile.target")
         );
         assert!(result.target_image_tag.ends_with("-target:cache"));
         assert!(target.path().join(PROJECT_CONFIG_PATH).is_file());
@@ -746,7 +745,7 @@ mod tests {
         assert!(target.path().join(TARGET_CARGO_LOCK_PATH).is_file());
         assert!(target.path().join(TARGET_MAIN_PATH).is_file());
         assert!(target.path().join(TARGET_STARTUP_PROBE_PATH).is_file());
-        assert!(target.path().join(RECORDING_DOCKERFILE_PATH).is_file());
+        assert!(target.path().join(SOURCE_DOCKERFILE_PATH).is_file());
         assert!(target.path().join(TARGET_DOCKERFILE_PATH).is_file());
         let cargo = fs::read_to_string(target.path().join(TARGET_CARGO_PATH)).unwrap();
         assert!(cargo.contains("brz-logs = { version = \"=0.0.6\""));
@@ -768,12 +767,12 @@ mod tests {
         let probe = fs::read_to_string(target.path().join(TARGET_STARTUP_PROBE_PATH)).unwrap();
         assert!(probe.contains(crate::network_probe::ORIGIN_HEADER));
         assert!(probe.contains(crate::network_probe::TARGET_ORIGIN));
-        let recording_dockerfile =
-            fs::read_to_string(target.path().join(RECORDING_DOCKERFILE_PATH)).unwrap();
-        assert!(recording_dockerfile.contains("ARG SOURCE_IMAGE"));
-        assert!(recording_dockerfile.contains("FROM ${SOURCE_IMAGE}"));
-        assert!(recording_dockerfile.contains("USER 998:998"));
-        assert!(!recording_dockerfile.contains("java"));
+        let source_dockerfile =
+            fs::read_to_string(target.path().join(SOURCE_DOCKERFILE_PATH)).unwrap();
+        assert!(source_dockerfile.contains("ARG SOURCE_IMAGE"));
+        assert!(source_dockerfile.contains("FROM ${SOURCE_IMAGE}"));
+        assert!(source_dockerfile.contains("USER 998:998"));
+        assert!(!source_dockerfile.contains("java"));
         let dockerfile = fs::read_to_string(target.path().join(TARGET_DOCKERFILE_PATH)).unwrap();
         assert!(dockerfile.contains("COPY Cargo.toml Cargo.lock ./"));
         assert!(dockerfile.contains("COPY src ./src"));
@@ -802,7 +801,7 @@ mod tests {
         );
         let project = fs::read_to_string(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
         assert!(project.contains("version: 18"));
-        assert!(project.contains("dockerfile: .traffic-e2e/Dockerfile.e2e"));
+        assert!(project.contains("dockerfile: .traffic-e2e/Dockerfile.target"));
         assert!(project.contains("success_status: 200"));
         assert!(!project.contains("http_host:"));
         assert!(!project.contains("motan_port:"));
@@ -880,10 +879,10 @@ mod tests {
     fn target_delivery_preserves_existing_dockerfiles() {
         let target = tempdir().unwrap();
         let dockerfile = target.path().join(TARGET_DOCKERFILE_PATH);
-        let recording_dockerfile = target.path().join(RECORDING_DOCKERFILE_PATH);
+        let source_dockerfile = target.path().join(SOURCE_DOCKERFILE_PATH);
         fs::create_dir_all(dockerfile.parent().unwrap()).unwrap();
         fs::write(&dockerfile, "FROM existing\n").unwrap();
-        fs::write(&recording_dockerfile, "FROM existing-recording\n").unwrap();
+        fs::write(&source_dockerfile, "FROM existing-source\n").unwrap();
         let files = render_missing_target_delivery(
             target.path(),
             &RepositoryConfigInitOptions {
@@ -900,12 +899,12 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&dockerfile).unwrap(), "FROM existing\n");
         assert_eq!(
-            fs::read_to_string(&recording_dockerfile).unwrap(),
-            "FROM existing-recording\n"
+            fs::read_to_string(&source_dockerfile).unwrap(),
+            "FROM existing-source\n"
         );
         assert_eq!(files.len(), 4);
         assert!(files.iter().all(|(path, _)| path != &dockerfile));
-        assert!(files.iter().all(|(path, _)| path != &recording_dockerfile));
+        assert!(files.iter().all(|(path, _)| path != &source_dockerfile));
         let main = files
             .iter()
             .find(|(path, _)| path.ends_with(TARGET_MAIN_PATH))

@@ -455,7 +455,7 @@ pub(crate) fn copy_path(target_root: &Path, path: &Path, destination: &Path) -> 
     {
         if matches!(mount.projection, SourceMountProjection::Empty) {
             anyhow::bail!(
-                "source path {} belongs to runtime-only mount {}; its content was not captured; create required empty writable target directories in Dockerfile.e2e",
+                "source path {} belongs to runtime-only mount {}; its content was not captured; create required empty writable target directories in Dockerfile.target",
                 path.display(),
                 mount.path.display()
             );

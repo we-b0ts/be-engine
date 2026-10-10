@@ -28,7 +28,11 @@ fn fixture() -> Fixture {
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
     .unwrap();
-    fs::write(root.join(".traffic-e2e/Dockerfile.e2e"), "FROM scratch\n").unwrap();
+    fs::write(
+        root.join(".traffic-e2e/Dockerfile.target"),
+        "FROM scratch\n",
+    )
+    .unwrap();
     fs::write(root.join(".gitignore"), ".traffic-e2e/local/\n").unwrap();
     for args in [
         vec!["init", "-q", "-b", "master"],

@@ -706,7 +706,7 @@ mod tests {
 
     #[test]
     fn standard_runner_passes_recorder_config_and_rule_to_replay() {
-        let mut config = resolved_project(PathBuf::from("/target/.traffic-e2e/Dockerfile.e2e"));
+        let mut config = resolved_project(PathBuf::from("/target/.traffic-e2e/Dockerfile.target"));
         config.replay_startup_timeout = Duration::from_secs(60);
         config.pr_base = "integration".to_string();
         config.recorder_config = PathBuf::from("/target/config/project.yaml");

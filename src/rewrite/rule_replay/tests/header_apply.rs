@@ -37,7 +37,7 @@ async fn request(addr: std::net::SocketAddr) {
 async fn header_apply_and_reused_rule_schedule_the_owner_api_without_reclassifying_old_evidence() {
     let target = configured_target();
     fs::write(
-        target.path().join(".traffic-e2e/Dockerfile.e2e"),
+        target.path().join(".traffic-e2e/Dockerfile.target"),
         "FROM scratch\n",
     )
     .unwrap();

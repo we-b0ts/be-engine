@@ -3,7 +3,7 @@
 The target repository exposes one conventional build contract:
 
 ```text
-.traffic-e2e/Dockerfile.e2e
+.traffic-e2e/Dockerfile.target
 ```
 
 The Dockerfile is a BuildKit multi-stage build. Its final image must declare a

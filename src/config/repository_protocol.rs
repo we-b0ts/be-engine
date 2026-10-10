@@ -283,7 +283,7 @@ mod tests {
         );
         crate::e2e_run::initialize_e2e_run(crate::E2eRunInitOptions {
             target_root: root.to_path_buf(),
-            target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
+            target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.target"),
             target_startup: crate::StartupConfig::default(),
             replay_policy: PathBuf::from(".traffic-e2e/verification.yaml"),
             pr_base: "integration".to_string(),

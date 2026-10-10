@@ -32,11 +32,11 @@ listener, lifecycle, startup, or configuration contract. Load only affected SDKs
 - Do not silently convert an existing repository to another Cargo workspace or
   package shape. Initialization and explicitly scoped architecture migrations
   own those changes.
-- `.traffic-e2e/Dockerfile.recording` and `.traffic-e2e/Dockerfile.e2e` remain
+- `.traffic-e2e/Dockerfile.source` and `.traffic-e2e/Dockerfile.target` remain
   target-owned build contracts. Change either when the current work scope
   requires source-adaptor integration for managed comparison/diagnostics or
   target-runtime integration; the assigned code author owns their contents.
-  Standalone standard capture uses the separate project-owned `Docker.recording`.
+  Standalone standard capture uses the separate project-owned `.traffic-e2e/Dockerfile.recording`.
 - A `project.delivery.managed_paths` object with `build_context` exposes its
   declared directory as a BuildKit named context. Use that exact name through
   `COPY --from` or `RUN --mount=from`; never use `COPY ../...` or assume that an

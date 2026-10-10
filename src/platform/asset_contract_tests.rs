@@ -95,7 +95,7 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(!MANAGER.contains("TRAFFIC_E2E_PROJECT_CLI"));
     assert!(!MANAGER.contains("start --e2e"));
     assert!(MANAGER.contains(
-        "adapter_dockerfile=\"$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/Dockerfile.recording\""
+        "adapter_dockerfile=\"$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/Dockerfile.source\""
     ));
     assert!(MANAGER.contains("--build-arg \"SOURCE_IMAGE=${source_image_alias}\""));
     assert!(MANAGER.contains("docker image tag \"$source_image_id\" \"$source_image_alias\""));
@@ -107,7 +107,7 @@ fn embedded_platform_manager_is_valid_bash() {
     );
     assert!(MANAGER.contains("recording_adapter_contract_revision"));
     assert!(MANAGER.contains("find . -mindepth 1 -maxdepth 1 -type f -print0"));
-    assert!(MANAGER.contains("--file Dockerfile.recording -"));
+    assert!(MANAGER.contains("--file Dockerfile.source -"));
     assert!(!MANAGER.contains("MeshConnectUtil.class"));
     assert!(MANAGER.contains(
         "recording_image_project=$(printf '%s' \"$repo_name\" | tr '[:upper:]' '[:lower:]')"

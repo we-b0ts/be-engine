@@ -473,7 +473,7 @@ mod tests {
         fs::write(root.join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();
         fs::create_dir_all(root.join(".traffic-e2e")).unwrap();
         fs::write(
-            root.join(".traffic-e2e/Dockerfile.e2e"),
+            root.join(".traffic-e2e/Dockerfile.target"),
             "FROM scratch\nUSER 998:998\nENTRYPOINT [\"/target\"]\n",
         )
         .unwrap();
@@ -558,7 +558,7 @@ mod tests {
     fn options(target_root: &Path) -> E2eRunInitOptions {
         E2eRunInitOptions {
             target_root: target_root.to_path_buf(),
-            target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
+            target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.target"),
             target_startup: crate::startup::StartupConfig::default(),
             replay_policy: PathBuf::from("config/replay.yaml"),
             pr_base: "integration".to_string(),
@@ -588,7 +588,7 @@ mod tests {
         );
         assert_eq!(
             config.project.target.dockerfile,
-            PathBuf::from(".traffic-e2e/Dockerfile.e2e")
+            PathBuf::from(".traffic-e2e/Dockerfile.target")
         );
         assert_eq!(
             config.project.target.startup_timeout_seconds,

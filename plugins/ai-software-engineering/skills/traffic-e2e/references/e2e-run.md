@@ -33,7 +33,7 @@ API after that many non-passing cases; remaining cases are left unexecuted.
 AI-managed source-traffic evidence
 acquisition and classification policy is kept in the separate
 `.traffic-e2e/source-traffic-policy.yaml` document.
-Relevant target fields are `.traffic-e2e/Dockerfile.e2e`, startup mount paths,
+Relevant target fields are `.traffic-e2e/Dockerfile.target`, startup mount paths,
 and `startup_timeout_seconds` (180 by default, at most 1800). Quality gates are
 an engine standard rather than project configuration. The timeout bounds the interval from
 target launch until every enabled endpoint passes readiness. Native HTTP port,
@@ -47,7 +47,7 @@ implementation begins, as directed by the generated comments.
 
 Before a run, the runner requires:
 
-- a regular `.traffic-e2e/Dockerfile.e2e` and a root `.dockerignore` that
+- a regular `.traffic-e2e/Dockerfile.target` and a root `.dockerignore` that
   excludes `.git/`, `.traffic-e2e/local/`, and `target/`;
 - a required BuildKit SSH mount in the target Dockerfile and at least one
   default OpenSSH identity loadable by the repository-local managed agent;
@@ -86,7 +86,7 @@ traffic-e2e run-api --target-root <target> \
 One attempt:
 
 1. starts Replay and loads the selected cases;
-2. builds `.traffic-e2e/Dockerfile.e2e`, validates its immutable image, and
+2. builds `.traffic-e2e/Dockerfile.target`, validates its immutable image, and
    starts its OCI entrypoint once as `998:998` in a system-owned namespace;
 3. waits for configured HTTP readiness;
 4. decrypts request headers into a private temporary view when required;

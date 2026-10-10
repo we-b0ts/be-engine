@@ -25,10 +25,10 @@ do not emulate that coordinator by composing low-level engine commands.
 - traffic-e2e owns Recorder/Replay, target process orchestration, HTTP request
   execution, assertions, aggregation, comparison, and generated local state.
 - Standard Source recording uses only `traffic-e2e record`. The project supplies
-  `Docker.recording`; its deployment caller builds and starts the container.
+  `.traffic-e2e/Dockerfile.recording`; its deployment caller builds and starts the container.
   Inside it, record owns Source/Recorder readiness, interception and finalization.
   Redis coordination is optional; without it the service waits for direct traffic.
-- The target repository supplies `.traffic-e2e/Dockerfile.e2e`; traffic-e2e
+- The target repository supplies `.traffic-e2e/Dockerfile.target`; traffic-e2e
   owns its build, immutable image selection, lifecycle, namespace, readiness,
   signals, and cleanup. See
   [target-integration.md](references/target-integration.md).
