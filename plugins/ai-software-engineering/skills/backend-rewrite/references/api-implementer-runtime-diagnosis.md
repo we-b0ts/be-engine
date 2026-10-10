@@ -83,7 +83,7 @@ then the normal target boundary:
    for source proof and the affected image's directory contract.
 
 Repair product startup, composition, configuration loading, or
-`.traffic-e2e/Dockerfile.e2e`. Do not add case execution, report parsing,
+`.traffic-e2e/Dockerfile.target`. Do not add case execution, report parsing,
 Replay control, or expected-response access to the target repository.
 
 ## Replay Issues

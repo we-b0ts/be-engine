@@ -57,6 +57,30 @@ revision containing only ASCII letters, digits, `.`, `_`, `+`, or `-`.
 
 ## Shared Container Images
 
+### Engine binary image
+
+`docker/engine/Dockerfile` packages the prebuilt Linux/amd64 `traffic-e2e`,
+`backend-rewrite`, and `backend-rewrite-admin` executables together under
+`/usr/local/bin/`. Build and publish from a clean engine checkout:
+
+```bash
+./scripts/build-engine.sh --publish
+```
+
+The script builds all three release binaries once, verifies their revision,
+stages only those executables, builds the image and pushes it to
+`registry.api.demo.test/weibo_rd_if/traffic-e2e-engine:git-<revision>`.
+Use `--skip-build` to package matching binaries already built for the current
+revision, or `--tag <image>` to choose another image reference. No project
+configuration, credentials or recordings enter the engine image.
+
+Project recording images use `FROM <engine-image>@sha256:<digest> AS engine`
+and `COPY --from=engine /usr/local/bin/traffic-e2e /usr/local/bin/traffic-e2e`.
+Their normal Source image supplies application code and system libraries;
+recording image builds do not need an engine checkout, Cargo or SSH access.
+
+### Runtime images
+
 The repository owns Dockerfiles for project-independent recording and target
 runtime images:
 
@@ -2224,7 +2248,7 @@ The bootstrap also includes a temporary `src/startup_probe.rs` initialization
 module. Keep that module and its
 `src/main.rs` call through initialization preflight, then delete the module,
 declaration, and call when real target implementation begins. It generates
-`.traffic-e2e/Dockerfile.e2e` only when absent and creates or safely extends the
+`.traffic-e2e/Dockerfile.target` only when absent and creates or safely extends the
 root `.gitignore` and `.dockerignore` with canonical local-state, Rust build,
 recording, data, credential, and environment-file exclusions; existing regular
 target files are preserved.
@@ -2239,7 +2263,7 @@ target section is:
 
 ```yaml
 target:
-  dockerfile: .traffic-e2e/Dockerfile.e2e
+  dockerfile: .traffic-e2e/Dockerfile.target
   # Maximum time from target launch until every enabled endpoint is ready.
   startup_timeout_seconds: 180
   startup: {}
@@ -2270,7 +2294,7 @@ single-target behavior of version-18 configuration.
 The string form, such as `- ../docs`, adds review and delivery scope only. The
 object form additionally exposes that exact directory to the target Docker
 build under its explicit `build_context` name. The target remains the default
-Docker context; consume an additional context explicitly in `Dockerfile.e2e`,
+Docker context; consume an additional context explicitly in `Dockerfile.target`,
 for example `COPY --from=sibling-backend src /build/backend-rs/src`. Context
 names must be unique lowercase Docker identifiers of at most 64 ASCII
 characters. The engine does not infer repository layout or copy an additional
@@ -2364,7 +2388,7 @@ checks, or adds a missing source-compatible absolute path while preserving
 existing captured content. Replacing or refreshing content remains
 administrator-owned.
 
-The initialized target repository contains `.traffic-e2e/Dockerfile.e2e`. It
+The initialized target repository contains `.traffic-e2e/Dockerfile.target`. It
 is a BuildKit multi-stage build whose final image has a non-empty OCI entrypoint
 and defaults to `USER 998:998`. Every target build requires a BuildKit SSH
 mount. traffic-e2e manages its agent at
@@ -2449,7 +2473,7 @@ For managed comparison and diagnostic preflight, the runtime keeps a target-scop
 source-adaptor cache image. `.traffic-e2e/local/source/` is authoritative for
 the immutable local image ID and captured Kubernetes runtime inputs; preflight,
 and comparison do not contact the original Pod. The target repository
-owns the reviewed `.traffic-e2e/Dockerfile.recording` build contract. Adaptor
+owns the reviewed `.traffic-e2e/Dockerfile.source` build contract. Adaptor
 build binds the exact image ID through a deterministic temporary local alias
 and labels the resulting adaptor with that ID. A missing adaptor or one labeled
 for another source image or build-contract revision triggers a build/refresh.
@@ -2463,12 +2487,12 @@ from `RUN_COMMAND`. Cleanup removes run-private containers but retains the
 matching adaptor image. Comparison recording uses the adaptor image,
 snapshotted runtime inputs, and fixed `998:998` source identity so cache-only
 interception observes both source and target traffic. Standard recording uses
-the separate project-owned `Docker.recording`; its caller owns builds and
+the separate project-owned `.traffic-e2e/Dockerfile.recording`; its caller owns builds and
 container startup, and `traffic-e2e record` supervises Source/Recorder inside it.
 Initialization and managed runtime do not provision a Breeze sidecar, inject
 Mesh connection settings, or ship Java class patches. Existing projects must
 remove the retired `project.breeze` setting and any obsolete patch-copy steps
-from `Dockerfile.recording`. Application-specific startup inputs use the normal
+from `Dockerfile.source`. Application-specific startup inputs use the normal
 startup declarations; Breeze SDK use and Vintage response rewrite rules remain
 independent of this startup contract.
 
@@ -2503,7 +2527,7 @@ the selected cases, intercepts dependency traffic by fixed UID, and prevents
 uncontrolled external egress.
 
 After initialization has generated the target template and the initialization
-AI has reviewed and completed the generated `Dockerfile.recording` scaffold,
+AI has reviewed and completed the generated `Dockerfile.source` scaffold,
 run the authoritative preflight:
 
 ```bash

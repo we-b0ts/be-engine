@@ -224,7 +224,7 @@ adapter_image="traffic-e2e/${recording_image_project}-recording:cache"
 adapter_image_id=""
 adapter_contract_revision=""
 source_uses_java=false
-adapter_dockerfile="$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/Dockerfile.recording"
+adapter_dockerfile="$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/Dockerfile.source"
 
 effective_uid=$(id -u)
 effective_gid=$(id -g)
@@ -527,7 +527,7 @@ build_recording_adapter() {
         --label com.weibo.traffic-e2e.role=source-adapter \
         --label "com.weibo.traffic-e2e.source-image-id=${source_image_id}" \
         --label "com.weibo.traffic-e2e.adapter-contract-revision=${adapter_contract_revision}" \
-        --tag "$adapter_image" --file Dockerfile.recording - \
+        --tag "$adapter_image" --file Dockerfile.source - \
         && build_status=0 || build_status=$?
     docker image rm "$source_image_alias" >/dev/null 2>&1 || true
     ((build_status == 0)) || return "$build_status"

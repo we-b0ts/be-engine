@@ -135,11 +135,28 @@ path. SIGTERM/SIGINT withdraws admission, drains requests and finalizes the run;
 only completed runs are suitable for rewrite. Failed capture returns a nonzero
 exit status. There is no separate start command or per-invocation API selector.
 
-The project owns its `Docker.recording`, using the example in
+The project owns its `.traffic-e2e/Dockerfile.recording`, using the example in
 [`docker/record/Dockerfile.example`](../docker/record/Dockerfile.example).
 Build and container lifecycle belong to the deployment caller. The controller
 runs as root for interception and launches Source as 998:998; pass exit signals
 to the controller. Persist the entire data root, including private keys.
+Use a published engine image as a build stage and copy
+`/usr/local/bin/traffic-e2e` into the Source image. See the
+[engine image build and publication](development.md#engine-binary-image)
+instructions; project recording builds do not compile the engine or need SSH.
+
+Project Dockerfiles have separate roles:
+
+| File under `.traffic-e2e/` | Role |
+| --- | --- |
+| `Dockerfile.recording` | Standalone Source/Recorder service running `traffic-e2e record`; owned by the deployment caller. |
+| `Dockerfile.source` | Source adaptor used by managed Comparison and diagnostic preflight; scaffolded during project initialization. |
+| `Dockerfile.target` | Target application used by Replay, Comparison and diagnostic preflight; scaffolded during project initialization. |
+
+For existing projects, rename the managed Source adaptor from
+`Dockerfile.recording` to `Dockerfile.source` before giving the standalone
+recording image the `Dockerfile.recording` name. Rename `Dockerfile.e2e` to
+`Dockerfile.target` and update `project.target.dockerfile` accordingly.
 
 ## Redis lifecycle
 

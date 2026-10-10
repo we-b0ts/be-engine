@@ -18,7 +18,7 @@ use the same repeatable `--api` input; protocol adapters own discovery,
 transport, and comparison behavior. Motan inventory entries use an opaque
 engine-generated `MOTAN /rpc/<api-id>` canonical value.
 
-traffic-e2e builds `.traffic-e2e/Dockerfile.e2e` and owns source and target
+traffic-e2e builds `.traffic-e2e/Dockerfile.target` and owns source and target
 containers, their managed network namespaces, readiness, comparison recorder,
 finalization, signals, and cleanup. The source keeps the host recording
 namespace, while the target uses a run-owned bridge namespace. A run-scoped
@@ -27,12 +27,12 @@ cache snapshot. The target receives its declared startup mounts and environment.
 Do not generate or invoke repository comparison wrappers.
 
 Managed comparison runs source through the reviewed
-`.traffic-e2e/Dockerfile.recording` adaptor, also used by diagnostic preflight. The
+`.traffic-e2e/Dockerfile.source` adaptor, also used by diagnostic preflight. The
 adaptor owns the source command and fixed `998:998` identity required by
 cache-only interception; callers do not adapt or configure the source UID.
 Comparison reads runtime inputs from the local source snapshot and starts the
 adapted, run-private source container. The initialization Pod is not required.
-This managed adaptor is separate from the project-owned `Docker.recording`
+This managed adaptor is separate from the project-owned `.traffic-e2e/Dockerfile.recording`
 used to deploy standalone `traffic-e2e record`.
 
 When the recorder config contains Redis process-owned rules, managed comparison

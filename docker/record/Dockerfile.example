@@ -1,11 +1,13 @@
-# Copy this file to the Source project as Docker.recording and review its launch contract.
+# Copy this file to the Source project as .traffic-e2e/Dockerfile.recording and review its launch contract.
 # SOURCE_IMAGE must contain the real Source and the project's normal business configuration.
 # It also needs setpriv (util-linux), iptables, iproute2, and its normal CA bundle.
 ARG SOURCE_IMAGE
+ARG ENGINE_IMAGE
+FROM ${ENGINE_IMAGE} AS engine
 FROM ${SOURCE_IMAGE}
 
-# Supply the matching prebuilt Linux traffic-e2e executable in the build context.
-COPY --chmod=0755 traffic-e2e /usr/local/bin/traffic-e2e
+# Supply an immutable published engine image; no Rust build or SSH is needed here.
+COPY --from=engine /usr/local/bin/traffic-e2e /usr/local/bin/traffic-e2e
 
 # Controller owns interception and private evidence; it launches Source as 998:998.
 USER 0:0

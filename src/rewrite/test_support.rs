@@ -68,7 +68,7 @@ pub(in crate::rewrite) fn install_project_config(
     _quality_gates: Option<serde_json::Value>,
 ) {
     let target = serde_json::json!({
-        "dockerfile": ".traffic-e2e/Dockerfile.e2e",
+        "dockerfile": ".traffic-e2e/Dockerfile.target",
         "startup": {},
     });
     let document = serde_json::json!({

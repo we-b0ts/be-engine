@@ -527,7 +527,7 @@ mod tests {
     fn dockerfile_contract_requires_pinned_images_and_stable_caches() {
         let config = TargetContainerConfig {
             target_root: Path::new("/tmp/service").to_path_buf(),
-            dockerfile: Path::new("/tmp/service/.traffic-e2e/Dockerfile.e2e").to_path_buf(),
+            dockerfile: Path::new("/tmp/service/.traffic-e2e/Dockerfile.target").to_path_buf(),
             build_contexts: Vec::new(),
             startup: crate::startup::StartupConfig::default(),
             port: 8081,
@@ -552,7 +552,7 @@ mod tests {
     fn dockerfile_contract_requires_declared_build_contexts_to_be_consumed() {
         let mut config = TargetContainerConfig {
             target_root: Path::new("/tmp/service").to_path_buf(),
-            dockerfile: Path::new("/tmp/service/.traffic-e2e/Dockerfile.e2e").to_path_buf(),
+            dockerfile: Path::new("/tmp/service/.traffic-e2e/Dockerfile.target").to_path_buf(),
             build_contexts: vec![crate::e2e_run::TargetBuildContext {
                 name: "shared-source".to_string(),
                 root: PathBuf::from("/tmp/shared"),

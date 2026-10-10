@@ -17,7 +17,7 @@ pub(crate) use runtime::{
     verify_target_identity,
 };
 
-pub(crate) const TARGET_DOCKERFILE_RELATIVE: &str = ".traffic-e2e/Dockerfile.e2e";
+pub(crate) const TARGET_DOCKERFILE_RELATIVE: &str = ".traffic-e2e/Dockerfile.target";
 pub(crate) const TARGET_REPLAY_CA_PATH: &str = "/traffic-e2e/trust/replay-ca.pem";
 pub(crate) const TARGET_USER: &str = TRAFFIC_PROCESS_USER;
 

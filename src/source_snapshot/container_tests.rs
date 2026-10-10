@@ -244,11 +244,7 @@ fn docker_provider_initializes_running_and_stopped_containers() {
         })
         .unwrap();
         assert!(temp.path().join(".traffic-e2e/project.yaml").is_file());
-        assert!(
-            temp.path()
-                .join(".traffic-e2e/Dockerfile.recording")
-                .is_file()
-        );
+        assert!(temp.path().join(".traffic-e2e/Dockerfile.source").is_file());
         let report = initialized.source_snapshot;
         fixture.images.push(report.image.local_id.clone());
         assert_eq!(report.status, "captured");

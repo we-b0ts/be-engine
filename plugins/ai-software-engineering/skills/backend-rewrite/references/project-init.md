@@ -83,16 +83,16 @@ add framework-specific port or trust mappings during initialization.
 
 ## Complete The Build Contracts
 
-`.traffic-e2e/Dockerfile.recording` and `.traffic-e2e/Dockerfile.e2e` are
+`.traffic-e2e/Dockerfile.source` and `.traffic-e2e/Dockerfile.target` are
 target-owned build contracts. During initialization, complete either file as
 required by the source adaptor for managed comparison/diagnostic preflight or
 the target runtime contract. Independent standard recording uses a separate
-project-owned `Docker.recording`, built and started by its deployment caller.
+project-owned `.traffic-e2e/Dockerfile.recording`, built and started by its deployment caller.
 Both managed final processes must run in the
 foreground as UID/GID `998:998`; neither image may contain credentials,
 recordings, generated trust, build cache, or `.traffic-e2e/local/` content.
 
-Before completing `Dockerfile.e2e`, inspect `project.delivery.managed_paths`.
+Before completing `Dockerfile.target`, inspect `project.delivery.managed_paths`.
 An object entry with `path` and `build_context` makes that managed directory
 available as a BuildKit named context. Consume only the required files with
 `COPY --from=<build_context>` or `RUN --mount=from=<build_context>` and preserve

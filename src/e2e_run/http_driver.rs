@@ -356,7 +356,7 @@ mod tests {
             stream.write_all(&response).await.unwrap();
         });
         let config = ResolvedProjectConfig {
-            target_dockerfile: PathBuf::from("Dockerfile.e2e"),
+            target_dockerfile: PathBuf::from("Dockerfile.target"),
             target_build_contexts: Vec::new(),
             target_startup: crate::startup::StartupConfig::default(),
             target_runtime_outputs: Vec::new(),
