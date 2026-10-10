@@ -140,8 +140,10 @@ mod generated_tests {
         let header = r#"{"header":"content-disposition","parameter":"filename","format":"%Y-%m-%d","timezone":"+00:00"}"#;
         let dynamic = r#"{"id":"name","targets":[{"host":"db","port":3306}],"capture":{"protocol":"mysql","target":{"host":"db","port":3306},"database":"app","sql":"SELECT id FROM t WHERE name=?","value_index":0}}"#;
         let response_jwt = r#"{"pointer":"/access_token","algorithm":"HS256","signing_key_source":{"kind":"target_env","name":"SECRET_KEY"},"source_evidence":"Connector:issue"}"#;
+        let response_url_jwt = r#"{"pointer":"/downloadUrl","url_query_param":"token","expires_at":"/expiresAt","algorithm":"HS256","signing_key_source":{"kind":"target_env","name":"SECRET_KEY"},"dynamic_claims":[{"pointer":"/nonce","format":"base64url","decoded_bytes":16}],"source_evidence":"Download:descriptor"}"#;
         for (flag, spec) in [
             ("--response-jwt", response_jwt),
+            ("--response-jwt", response_url_jwt),
             ("--header-date", header),
             ("--dynamic-value", dynamic),
             ("--dependency-request", dependency),

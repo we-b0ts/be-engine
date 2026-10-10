@@ -25,11 +25,25 @@ pub(super) fn compare_json(
             applicable.push(field.clone());
         }
         for pointer in pointers {
+            if let Some(expiry) = field
+                .jwt
+                .as_ref()
+                .and_then(|rule| rule.expires_at.as_deref())
+            {
+                selected.insert(
+                    crate::replay::policy::ResponseJwtRule::concrete_pointer(expiry, &pointer),
+                    field,
+                );
+            }
             selected.insert(pointer, field);
         }
     }
-    let mut jwt =
-        super::jwt::JwtComparison::load(fields, std::path::Path::new(&report.policy_path));
+    let mut jwt = super::jwt::JwtComparison::load(
+        fields,
+        std::path::Path::new(&report.policy_path),
+        expected,
+        actual,
+    );
     compare_value("", expected, actual, &selected, report, times, &mut jwt);
     for ids in [
         &mut report.applied_generated_rule_ids,
@@ -49,11 +63,11 @@ fn compare_value(
     fields: &BTreeMap<String, &ResponseField>,
     report: &mut ResponseAssertionCaseReport,
     times: RequestTimes,
-    jwt: &mut super::jwt::JwtComparison,
+    jwt: &mut super::jwt::JwtComparison<'_>,
 ) {
     if let Some(field) = fields.get(pointer) {
         match field.kind {
-            ResponseRuleKind::Jwt => match jwt.compare(field, expected, actual, times) {
+            ResponseRuleKind::Jwt => match jwt.compare(field, pointer, times) {
                 Ok(()) => report.applied_generated_rule_ids.push(field.id.clone()),
                 Err(kind) => {
                     report

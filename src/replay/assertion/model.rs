@@ -242,6 +242,8 @@ pub enum ResponseDifferenceKind {
     JwtClaimsMismatch,
     JwtTimeMismatch,
     JwtNonceMismatch,
+    JwtUrlMismatch,
+    JwtExpiryMismatch,
     JwtSigningKeyUnavailable,
     ResponseUnavailable,
     StatusMismatch,

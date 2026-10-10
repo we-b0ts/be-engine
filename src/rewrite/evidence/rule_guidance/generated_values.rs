@@ -32,10 +32,13 @@ pub(in crate::rewrite::evidence) fn has_response_jwt(value: &Value) -> bool {
             return false;
         }
         match value {
-            Value::String(raw) => crate::request_rules::jwt::Token::parse(raw)
-                .ok()
-                .flatten()
-                .is_some(),
+            Value::String(raw) => {
+                crate::request_rules::jwt::Token::parse(raw)
+                    .ok()
+                    .flatten()
+                    .is_some()
+                    || crate::request_rules::jwt::url_query::has_candidate(raw)
+            }
             Value::Object(fields) => fields.values().any(|value| contains(value, depth + 1)),
             Value::Array(items) => items.iter().any(|value| contains(value, depth + 1)),
             _ => false,
@@ -49,7 +52,7 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
     if query == QUERY_REPRESENTATIVES && has_response_jwt(facts) {
         hints.push(RewriteRuleHint {
             capability: "response_jwt".into(), rule: "response-jwt".into(),
-            hint: "Response observations contain a compact HMAC JWT candidate; decoding alone does not prove generation or a valid signature. Trace source issuance, signing algorithm/key precedence and stable claims. Inspect signing_key_discovery, then use rule plan --response-jwt with pointer, algorithm, signing_key_source, source_evidence and only an explicitly source-proven UUID v4 dynamic_claims: [/jti]. Plan verifies both signatures, exact headers/stable claims and exp/iat/nbf relative to each request within five seconds. Do not exempt a JWT with random or timestamp. Apply and fresh Replay; recordings and authentication remain unchanged.".into(),
+            hint: "Response observations contain a compact HMAC JWT candidate, directly or inside an HTTP(S) URL query; decoding alone does not prove generation or a valid signature. Trace source issuance, key precedence, nonce generation and expiry derivation. Use rule plan --response-jwt with pointer, algorithm, signing_key_source and source_evidence. An explicit url_query_param extracts one unique query value and keeps all other URL bytes exact. dynamic_claims supports legacy UUID v4 [/jti] or typed /jti and /nonce formats (uuid_v4, or base64url with decoded_bytes). Optional expires_at selects an RFC3339 response field whose floored Unix seconds must equal the same token's exp. Inspect signing_key_discovery; plan verifies both signatures, stable claims, nonce consistency and request-relative times within five seconds. Do not exempt whole URLs or tokens with random. Apply and fresh Replay; recordings and authentication remain unchanged.".into(),
             help: super::super::super::action::command(root, vec!["rule".into(), "plan".into(), "--help".into()], Vec::new()),
         });
     }
@@ -143,6 +146,14 @@ mod tests {
         assert!(!serde_json::to_string(&hints).unwrap().contains(&raw));
         assert!(hints[0].hint.contains("does not prove"));
         assert!(!has_response_jwt(&json!({"value":"opaque-access-token"})));
+        let url = format!("/api/download?other=a%2Fb&token={raw}#content");
+        let facts = json!({"representative":{"response_difference":{"actual":{"value":url}}}});
+        let hints = super::hints(Path::new("/target"), QUERY_REPRESENTATIVES, &facts);
+        assert_eq!(hints[0].capability, "response_jwt");
+        assert!(hints[0].hint.contains("url_query_param"));
+        let rendered = serde_json::to_string(&hints).unwrap();
+        assert!(!rendered.contains(&raw));
+        assert!(!rendered.contains(&url));
     }
 
     #[test]
