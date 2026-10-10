@@ -43,10 +43,16 @@ use transport::{
 };
 
 pub async fn run(state: AppState) -> Result<()> {
-    let config = state.config().http_gateway.clone();
-    let listener = TcpListener::bind(config.listen)
+    let listen = state.config().http_gateway.listen;
+    let listener = TcpListener::bind(listen)
         .await
-        .with_context(|| format!("failed to bind HTTP gateway {}", config.listen))?;
+        .with_context(|| format!("failed to bind HTTP gateway {listen}"))?;
+    run_with_listener(state, listener).await
+}
+
+// Keep ownership of ephemeral listeners through startup in concurrent tests.
+pub(crate) async fn run_with_listener(state: AppState, listener: TcpListener) -> Result<()> {
+    let config = state.config().http_gateway.clone();
     state.mark_recording_listener_ready(RecordingListener::HttpGateway);
     info!(
         listen = %config.listen,

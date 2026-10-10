@@ -78,6 +78,53 @@ pub(super) fn validate(
                 continue;
             }
             rule.validate_value(&value)?;
+            if let DynamicValueCapture::Http {
+                path_segment: Some(segment),
+                target,
+                method,
+                ..
+            } = &rule.capture
+            {
+                let Some(proof) = &candidate.path_witness else {
+                    continue;
+                };
+                let Some(actual) = report["unmatched_http_requests"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|actual| {
+                        actual["case_id"] == candidate.case_id
+                            && actual["method"] == *method
+                            && actual["target"]["host"]
+                                .as_str()
+                                .is_some_and(|host| host.eq_ignore_ascii_case(&target.host))
+                            && actual["target"]["port"] == target.port
+                            && actual["uri"].as_str().is_some_and(|uri| {
+                                fingerprint(uri.as_bytes()) == proof.target_path_fingerprint
+                            })
+                    })
+                else {
+                    continue;
+                };
+                let target_value =
+                    segment.extract(actual["uri"].as_str().context("target path absent")?)?;
+                if fingerprint(target_value.as_bytes()) != candidate.target_value_fingerprint {
+                    continue;
+                }
+                rule.validate_value(&target_value)?;
+                let record: crate::replay::http::RecordedHttpExchange =
+                    serde_json::from_value(event)?;
+                segment.compare(
+                    &value,
+                    &target_value,
+                    crate::replay::assertion::time::RequestTimes {
+                        source: crate::replay::http::request_headers::time_reference::source(
+                            &record,
+                        ),
+                        target: Some(proof.target_request_started_at),
+                    },
+                )?;
+            }
             return Ok(witnesses);
         }
     }
@@ -94,17 +141,24 @@ fn selected(rule: &DynamicValueCapture, candidate: &DynamicValueCapture) -> bool
                 method,
                 path,
                 json_pointer,
+                path_segment,
             },
             DynamicValueCapture::Http {
                 target: other,
                 method: other_method,
                 path: other_path,
                 json_pointer: other_pointer,
+                path_segment: other_segment,
             },
         ) => {
             target == other
                 && method == other_method
                 && json_pointer == other_pointer
+                && match (path_segment, other_segment) {
+                    (Some(a), Some(b)) => a.index == b.index,
+                    (None, None) => true,
+                    _ => false,
+                }
                 && path_pattern_matches(path, other_path)
         }
         _ => rule == candidate,

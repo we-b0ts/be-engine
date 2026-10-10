@@ -42,7 +42,7 @@ Choose one of these capture locations:
   `HSET` values are even indices starting at 2. An optional JSON pointer selects
   a string inside that value. Other arguments and options remain checked.
 - **HTTP dependency**: select method, dependency path/pattern and exact JSON
-  pointer in its request body. This method identifies the outbound capture;
+  pointer in its request body, or an explicit `path_segment` template. This method identifies the outbound capture;
   the enclosing inbound `api` remains route-only.
 
 Alternative capture examples (include their targets in `targets`):
@@ -75,6 +75,85 @@ HTTP integer correlation IDs use `value_type: integer` with an exact capture
 JSON pointer. The default remains string. Integer rules preserve type and do
 not infer references outside that selected request location. See the complete
 [dependency request rule examples](dependency-request-rules.md).
+
+## HTTP path-segment capture
+
+An object-store key can first appear in an HTTP PUT path before it is written
+to SQL. Select its decoded filename segment and declare which components are
+source-proven dynamic. The complete segment becomes one identity, so later
+SQL JSON values such as `attachments/<filename>` must reuse the same binding.
+
+```yaml
+dependency_rules:
+  - kind: dynamic_value
+    id: attachment-storage-key
+    api: /api/attachments/upload
+    targets:
+      - {host: storage.example.test, port: 9100}
+      - {host: db.example.test, port: 3306}
+    capture:
+      protocol: http
+      target: {host: storage.example.test, port: 9100}
+      method: PUT
+      path: /bucket/attachments/*
+      path_segment:
+        index: 2
+        template: "{nonce}_{created_at}_{user_id}_{attachment_id}"
+        fields:
+          nonce: {kind: random, format: hex, length: 12}
+          created_at:
+            kind: timestamp
+            format: "%Y%m%d%H%M%S"
+            timezone: UTC
+          user_id: {kind: exact}
+          attachment_id: {kind: exact}
+    source_evidence: >-
+      Storage:generate_key uses UUID hex[:12], current UTC time, owner ID and
+      the inserted attachment ID, then reuses that key in storage and SQL.
+```
+
+`index` is zero-based after the leading `/`: `bucket` is 0, `attachments` is 1,
+and the filename is 2. It must select a whole-segment `*` in `capture.path`.
+HTTP captures require exactly one of `json_pointer` and `path_segment`;
+integer captures remain JSON-only. Overlapping path captures for the same
+endpoint, method, API and segment are rejected.
+
+Every template field must be declared once. Fields require nonempty values;
+adjacent or repeated placeholders are invalid. Literal separators use `_`,
+`-`, `.` or `:`. Templates and decoded identities are limited to 1024 bytes,
+32 fields and path indices below 64. Invalid escapes, non-UTF-8 segments,
+decoded slashes, backslashes and control characters are rejected.
+
+- `exact` requires equal source and target components.
+- `random` currently requires `format: hex` and an explicit length (1–1024);
+  both values must have that shape. Shape alone does not prove randomness.
+- `timestamp` currently requires the strict 14-digit UTC format
+  `%Y%m%d%H%M%S` and `timezone: UTC`. Both values must be within the shared
+  inclusive ±5-second window of their own dependency HTTP request start.
+  This is independent of the inbound API clock. For older recordings, a
+  missing request start can be estimated from that exchange's completion
+  timestamp minus integral nonnegative `duration_ms`, as with header rules.
+  Missing clocks, invalid dates and out-of-window values fail even when the
+  source and target literals are equal. There is no configurable tolerance.
+
+Capture changes only the declared path identity. Uploaded bodies retain
+ordinary strict comparison, including text that contains the filename.
+Surrounding path segments, queries, headers and finite exchange inventory keep
+their existing checks. HTTP signing-time headers require their own existing
+header rules. Bindings commit only after the complete request matches and stay
+within the current case; subsequent SQL must use the filename bound by PUT.
+Include every allowed reference endpoint in `targets`.
+
+Path-only failures produce mechanical `dynamic_capture_candidates` when exactly
+one segment differs and body bytes and query contracts agree. The witness
+contains the segment index, selectors, fingerprints and target request clock;
+it does not infer nonce fields, timestamp semantics or generation. Selected
+token values are not added to the candidate. Plan verifies the target path
+against the existing unmatched HTTP observation and the immutable source
+exchange, then validates the proposed template, fixed fields and time windows.
+Header differences are audited independently after a matching Replay; a path
+rule does not grant a header exemption. Use the same `rule plan --dynamic-value`
+and `rule apply` workflow below, followed by fresh Replay.
 
 ## Authoring and discovery
 

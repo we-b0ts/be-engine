@@ -1,6 +1,6 @@
 //! Post-match HTTP request-header auditing and protected difference evidence.
 use super::*;
-mod time_reference;
+pub(in crate::replay) mod time_reference;
 pub(in crate::replay) mod timestamp;
 pub(crate) mod timestamp_evidence;
 

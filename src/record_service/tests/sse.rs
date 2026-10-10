@@ -5,10 +5,8 @@ pub(super) async fn recording_policy_through_relay(record_streaming: bool) {
     let temp = tempfile::tempdir().unwrap();
     let source = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let source_address = source.local_addr().unwrap();
-    let gateway_address = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
+    let gateway_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway_address = gateway_listener.local_addr().unwrap();
     let mut config = crate::AppConfig::default();
     config.http.enabled = false;
     config.http_gateway.enabled = true;
@@ -34,17 +32,11 @@ pub(super) async fn recording_policy_through_relay(record_streaming: bool) {
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
     let state = crate::AppState::new(config).await.unwrap();
-    let gateway = tokio::spawn(async move { state.run().await.unwrap() });
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while tokio::net::TcpStream::connect(gateway_address)
+    let gateway = tokio::spawn(async move {
+        crate::gateway::http::run_with_listener(state, gateway_listener)
             .await
-            .is_err()
-        {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await
-    .unwrap();
+            .unwrap()
+    });
     let mut fixture = Fixture::new(
         format!("http://{gateway_address}").parse().unwrap(),
         Duration::from_secs(2),

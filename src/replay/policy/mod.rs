@@ -4,7 +4,8 @@ pub(in crate::replay) mod request_contract;
 pub(crate) use evidence_policy::ReplayEvidencePolicyFreshness;
 pub(in crate::replay) mod dynamic_values;
 pub use dynamic_values::{
-    DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget, DynamicValueType,
+    DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget,
+    DynamicValueType, PathSegmentCapture, PathSegmentField,
 };
 mod feedback;
 pub(crate) use feedback::replace_request_rule_section;

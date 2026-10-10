@@ -4,6 +4,8 @@ mod candidates;
 mod config;
 mod http;
 mod mysql;
+mod path_candidates;
+mod path_segment;
 mod redis;
 mod source;
 mod strings;
@@ -11,7 +13,8 @@ pub(in crate::replay) use audit::{DynamicBindingReport, from_report};
 pub(in crate::replay) use candidates::CaptureCandidate;
 pub(in crate::replay) use config::validate;
 pub use config::{
-    DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget, DynamicValueType,
+    DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget,
+    DynamicValueType, PathSegmentCapture, PathSegmentField,
 };
 pub(in crate::replay) use http::HttpInput;
 pub(in crate::replay) use source::from_event as recorded_capture;
@@ -197,5 +200,7 @@ impl DynamicValues {
     }
 }
 
+#[cfg(test)]
+mod path_tests;
 #[cfg(test)]
 mod tests;

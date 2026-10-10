@@ -129,6 +129,8 @@ is unclear.
 - `replay/policy/dynamic_values` owns bounded case-local MySQL/Redis/HTTP capture and
   correlation; its SQL, HTTP and string adapters normalize comparison copies.
   Its audit child owns binding fingerprints and planner reconstruction.
+  Its `path_segment` child owns bounded HTTP path templates, shaped fields and
+  shared timestamp validation; `path_candidates` owns mechanical path witnesses.
   `replay/json_order/decode` owns shared bounded, duplicate-rejecting JSON
   decoding for Redis values and dynamic identities.
   `replay/policy/response_headers` owns header date selectors and validation;

@@ -107,7 +107,22 @@ impl DynamicValues {
                     binds,
                     references: 0,
                     validations: binds,
-                    time_validations: 0,
+                    time_validations: match &rule.capture {
+                        DynamicValueCapture::Http {
+                            path_segment: Some(segment),
+                            ..
+                        } => {
+                            binds
+                                * segment
+                                    .fields
+                                    .values()
+                                    .filter(|field| {
+                                        matches!(field, PathSegmentField::Timestamp { .. })
+                                    })
+                                    .count()
+                        }
+                        _ => 0,
+                    },
                 }
             })
             .collect()

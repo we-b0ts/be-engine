@@ -30,7 +30,6 @@ async fn capture_timeout(tls: bool) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let proxy_addr = listener.local_addr().unwrap();
     config.http.listen = proxy_addr;
-    drop(listener);
     let state = AppState::new(config).await.unwrap();
     let case = crate::recorder::CaseContext {
         id: Uuid::new_v4(),
@@ -50,17 +49,8 @@ async fn capture_timeout(tls: bool) {
         // HTTP waits for headers; HTTPS waits for an upstream TLS handshake.
         std::future::pending::<()>().await;
     });
-    let proxy_task = tokio::spawn(run(state.clone()));
-    let mut stream = tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            if let Ok(stream) = TcpStream::connect(proxy_addr).await {
-                break stream;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await
-    .unwrap();
+    let proxy_task = tokio::spawn(run_with_listener(state.clone(), listener));
+    let mut stream = TcpStream::connect(proxy_addr).await.unwrap();
     let mut client: Box<dyn TestStream> = if tls {
         stream
             .write_all(

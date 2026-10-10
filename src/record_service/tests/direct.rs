@@ -151,10 +151,8 @@ fn configured_include_and_exclude_rules_apply_before_source_dispatch_in_direct_m
         let mut options = super::project::options(&path);
         let source = TcpListener::bind("127.0.0.1:0").await.unwrap();
         options.source_origin = format!("http://{}", source.local_addr().unwrap());
-        options.recorder_listen = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap();
+        let gateway_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        options.recorder_listen = gateway_listener.local_addr().unwrap();
         options.data_root = temp.path().join("data");
         options.no_interception = true;
         let mut config = options.config().unwrap();
@@ -170,18 +168,11 @@ fn configured_include_and_exclude_rules_apply_before_source_dispatch_in_direct_m
             .await
             .unwrap();
         let running = state.clone();
-        let gateway =
-            tokio::spawn(async move { crate::gateway::http::run(running).await.unwrap() });
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while tokio::net::TcpStream::connect(options.recorder_listen)
+        let gateway = tokio::spawn(async move {
+            crate::gateway::http::run_with_listener(running, gateway_listener)
                 .await
-                .is_err()
-            {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
+                .unwrap()
+        });
         let fixture = DirectFixture::new(
             format!("http://{}", options.recorder_listen)
                 .parse()

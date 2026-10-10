@@ -64,6 +64,7 @@ pub(in crate::replay) fn from_event(
             method,
             path,
             json_pointer,
+            path_segment,
         } => {
             if event["event_type"] != "http_exchange"
                 || event["method"] != *method
@@ -80,12 +81,36 @@ pub(in crate::replay) fn from_event(
             decode(&event["response_body"])?;
             let payload = decode(&event["request_body"])?;
             Ok(Some(SourceCapture {
-                value: super::http::capture(&payload, json_pointer, value_type)?,
-                payload,
+                value: if let Some(segment) = path_segment {
+                    segment.extract(event["uri"].as_str().context("source URI absent")?)?
+                } else {
+                    super::http::capture(
+                        &payload,
+                        json_pointer
+                            .as_deref()
+                            .context("source capture pointer absent")?,
+                        value_type,
+                    )?
+                },
+                payload: if path_segment.is_some() {
+                    path_payload(
+                        event["uri"].as_str().context("source URI absent")?,
+                        &payload,
+                    )?
+                } else {
+                    payload
+                },
             }))
         }
         _ => Ok(None),
     }
+}
+
+pub(super) fn path_payload(uri: &str, body: &[u8]) -> Result<Vec<u8>> {
+    let mut payload = (u64::try_from(uri.len())?).to_be_bytes().to_vec();
+    payload.extend_from_slice(uri.as_bytes());
+    payload.extend_from_slice(body);
+    Ok(payload)
 }
 
 fn http_target(event: &Value, target: &DynamicValueTarget) -> bool {

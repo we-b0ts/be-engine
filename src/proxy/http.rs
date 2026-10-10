@@ -39,6 +39,11 @@ pub async fn run(state: AppState) -> Result<()> {
     let listener = TcpListener::bind(state.config().http.listen)
         .await
         .with_context(|| format!("failed to bind HTTP proxy {}", state.config().http.listen))?;
+    run_with_listener(state, listener).await
+}
+
+// Keep ownership of ephemeral listeners through startup in concurrent tests.
+pub(crate) async fn run_with_listener(state: AppState, listener: TcpListener) -> Result<()> {
     state.mark_recording_listener_ready(RecordingListener::HttpProxy);
     info!(listen = %state.config().http.listen, "HTTP/HTTPS proxy listening");
 

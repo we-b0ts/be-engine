@@ -53,33 +53,38 @@ impl ReplayState {
                     });
                     continue;
                 }
-                let normalized =
-                    if exchange.source == ReplaySource::Case && exchange.shared_origin.is_none() {
-                        self.replay_policy.as_ref().and_then(|policy| {
-                            if !policy.dynamic_values.enabled() {
-                                return None;
-                            }
-                            decode_body(&exchange.record.request_body).ok().and_then(
-                                |source_body| {
-                                    policy.dynamic_values.http(
-                                        exchange.case_id.as_deref(),
-                                        target,
-                                        method.as_str(),
-                                        crate::replay::policy::dynamic_values::HttpInput {
-                                            uri: &exchange.record.uri,
-                                            body: &source_body,
-                                        },
-                                        crate::replay::policy::dynamic_values::HttpInput {
-                                            uri: &uri.to_string(),
-                                            body,
-                                        },
-                                    )
-                                },
-                            )
-                        })
-                    } else {
-                        None
-                    };
+                let normalized = if exchange.source == ReplaySource::Case
+                    && exchange.shared_origin.is_none()
+                {
+                    self.replay_policy.as_ref().and_then(|policy| {
+                        if !policy.dynamic_values.enabled() {
+                            return None;
+                        }
+                        decode_body(&exchange.record.request_body)
+                            .ok()
+                            .and_then(|source_body| {
+                                policy.dynamic_values.http(
+                                    exchange.case_id.as_deref(),
+                                    target,
+                                    method.as_str(),
+                                    crate::replay::policy::dynamic_values::HttpInput {
+                                        uri: &exchange.record.uri,
+                                        body: &source_body,
+                                        request_started_at: request_headers::time_reference::source(
+                                            &exchange.record,
+                                        ),
+                                    },
+                                    crate::replay::policy::dynamic_values::HttpInput {
+                                        uri: &uri.to_string(),
+                                        body,
+                                        request_started_at: Some(request_started_at),
+                                    },
+                                )
+                            })
+                    })
+                } else {
+                    None
+                };
                 let normalized = match normalized {
                     Some(Ok(value)) => Some(value),
                     Some(Err(_)) => {
@@ -207,6 +212,33 @@ impl ReplayState {
                     }
                 }
                 if let Some(reason) = mismatch {
+                    if exchange.source == ReplaySource::Case
+                        && exchange.shared_origin.is_none()
+                        && exchange.record.method.eq_ignore_ascii_case(method.as_str())
+                        && let (Some(policy), Some(case), Ok(source_body)) = (
+                            &self.replay_policy,
+                            active_case_id.as_deref(),
+                            decode_body(&exchange.record.request_body),
+                        )
+                    {
+                        policy.dynamic_values.observe_http_path(
+                            case,
+                            target,
+                            method.as_str(),
+                            crate::replay::policy::dynamic_values::HttpInput {
+                                uri: &exchange.record.uri,
+                                body: &source_body,
+                                request_started_at: request_headers::time_reference::source(
+                                    &exchange.record,
+                                ),
+                            },
+                            crate::replay::policy::dynamic_values::HttpInput {
+                                uri: &uri.to_string(),
+                                body,
+                                request_started_at: Some(request_started_at),
+                            },
+                        );
+                    }
                     if reason == "HTTP request body did not match the recorded body"
                         && exchange.source == ReplaySource::Case
                         && exchange.shared_origin.is_none()
