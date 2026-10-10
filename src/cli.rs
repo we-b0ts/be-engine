@@ -12,7 +12,6 @@ mod output;
 mod platform;
 mod record;
 mod record_comparison;
-mod record_source;
 mod recording;
 mod replay;
 mod signal;
@@ -44,10 +43,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Record source traffic through the repository's managed recording configuration.
-    Record(platform::RecordArgs),
-    /// Start a local Source process and record it without Docker.
-    RecordSource(record_source::RecordSourceArgs),
+    /// Start Source and Recorder; optionally coordinate gateway traffic through Redis.
+    Record(traffic_e2e::record_service::RecordOptions),
     /// Record source and target responses through the managed comparison runtime.
     RecordComparison(platform::RecordComparisonArgs),
     /// Compare a finalized comparison recording with replay response rules.
@@ -79,24 +76,44 @@ enum Command {
     Internal(internal::InternalArgs),
 }
 
-pub(crate) async fn run() -> Result<()> {
+pub(crate) fn run() -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    if let Command::Record(options) = &mut cli.command {
+        let key = options.initialize_storage()?;
+        // CLI bootstrap runs before the Tokio runtime or logging starts threads.
+        unsafe {
+            std::env::set_var("TRAFFIC_E2E_ENCRYPTION_KEY_B64", key);
+        }
+    }
     let log_filter = if std::env::var_os("RUST_LOG").is_some() {
         EnvFilter::try_from_default_env()?
     } else {
         EnvFilter::try_new(&cli.log_level)?
     };
-    tracing_subscriber::fmt()
-        .with_env_filter(log_filter)
-        .with_writer(output::TracingWriter)
-        .init();
+    if matches!(cli.command, Command::Record(_)) {
+        tracing_subscriber::fmt()
+            .with_env_filter(log_filter)
+            .with_writer(std::io::stderr)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(log_filter)
+            .with_writer(output::TracingWriter)
+            .init();
+    }
 
-    match cli.command {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(dispatch(cli.command))
+}
+
+async fn dispatch(command: Command) -> Result<()> {
+    match command {
         Command::RecordComparison(args) => platform::run_record_comparison(args).await,
         Command::Compare(args) => compare::run(args).await,
-        Command::Record(args) => platform::run_record(args).await,
-        Command::RecordSource(args) => record_source::run(args).await,
+        Command::Record(args) => traffic_e2e::record_service::run(args).await,
         Command::Recording(args) => recording::run(args).await,
         Command::Replay(args) => replay::run(args).await,
         Command::Target(args) => target::run(args).await,
@@ -142,7 +159,6 @@ mod tests {
             names,
             [
                 "record",
-                "record-source",
                 "record-comparison",
                 "compare",
                 "recording",
@@ -157,6 +173,39 @@ mod tests {
                 "abort",
                 "diagnose"
             ]
+        );
+    }
+
+    #[test]
+    fn standalone_record_is_the_only_public_source_entrypoint() {
+        assert!(Cli::try_parse_from(["traffic-e2e", "record", "--", "/app/source"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["traffic-e2e", "record-source", "--", "/app/source"]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "traffic-e2e",
+                "record",
+                "--api",
+                "GET /api",
+                "--",
+                "/app/source"
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["traffic-e2e", "record", "--target-root", "/target"]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "traffic-e2e",
+                "record",
+                "--run-id",
+                "20260230120000",
+                "--",
+                "/app/source"
+            ])
+            .is_err()
         );
     }
 
@@ -423,8 +472,8 @@ mod tests {
             "--log-level",
             "warn",
             "record",
-            "--target-root",
-            ".",
+            "--",
+            "/app/source",
         ])
         .unwrap();
 

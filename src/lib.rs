@@ -26,12 +26,11 @@ mod memcached;
 mod motan;
 mod mysql;
 mod network_probe;
-#[cfg(feature = "online-recording")]
-pub mod online_recording;
 mod path_pattern;
 mod platform;
 mod process_output;
 mod proxy;
+pub mod record_service;
 mod recorded_request;
 mod recorder;
 mod recording_api;
@@ -46,7 +45,6 @@ mod request_headers;
 pub mod request_rules;
 mod rewrite;
 mod runtime_output;
-mod source_recording;
 mod source_snapshot;
 mod startup;
 mod target_container;
@@ -162,15 +160,15 @@ pub use e2e_run::{
 pub use mysql::operation::MysqlWriteOperation;
 pub use network_probe::PreflightProbeKind;
 pub use platform::{
-    ManagedMotanRecordingResult, ManagedRecordingInputCompletion, ManagedRecordingInputOptions,
-    ManagedRecordingInputResult, ManagedRecordingOperation, ManagedRecordingOptions,
-    ManagedRecordingPreflightOptions, ManagedRecordingPreflightRecordingResult,
-    ManagedRecordingPreflightResult, ManagedRecordingRecoveryResult, ManagedRecordingResult,
-    ManagedReplayNetworkPreflightResult, ManagedTargetImagePreflightChecks,
-    ManagedTargetImagePreflightResult, ManagedTargetRuntimePreflightChecks,
-    ManagedTargetRuntimePreflightResult, MotanPreflightStatus, ReplayDirectEgressProbeResult,
-    ReplayNegativeProbeResult, ReplayPositiveProbeResult, drive_managed_recording_input,
-    recover_managed_recording, run_managed_recording, run_managed_recording_preflight,
+    ManagedRecordingInputCompletion, ManagedRecordingInputOptions, ManagedRecordingInputResult,
+    ManagedRecordingOperation, ManagedRecordingOptions, ManagedRecordingPreflightOptions,
+    ManagedRecordingPreflightRecordingResult, ManagedRecordingPreflightResult,
+    ManagedRecordingRecoveryResult, ManagedRecordingResult, ManagedReplayNetworkPreflightResult,
+    ManagedTargetImagePreflightChecks, ManagedTargetImagePreflightResult,
+    ManagedTargetRuntimePreflightChecks, ManagedTargetRuntimePreflightResult,
+    ReplayDirectEgressProbeResult, ReplayNegativeProbeResult, ReplayPositiveProbeResult,
+    drive_managed_recording_input, recover_managed_recording, run_managed_recording,
+    run_managed_recording_preflight,
 };
 pub use process_output::{
     ProcessOutputCaptureReport, ProcessOutputCaptureSide, ProcessOutputObservation,
@@ -220,17 +218,15 @@ pub use rewrite::{
     RewriteMysqlOperationDetail, RewriteMysqlParameterDetail, RewriteNextOptions, RewritePhase,
     RewriteProcessOutputInventoryDetails, RewriteProcessOutputInventoryView,
     RewriteProcessOutputProgress, RewriteProcessOutputStatus, RewriteRecorderCapturePlanOptions,
-    RewriteRecorderCaptureReport, RewriteRecordingExecutionReport, RewriteRecordingInputCandidate,
+    RewriteRecorderCaptureReport, RewriteRecordingInputCandidate,
     RewriteRecordingInputCandidateDisposition, RewriteRecordingInputDiagnosis,
-    RewriteRecordingInputMode, RewriteRecordingInputRejections, RewriteRecordingKind,
-    RewriteRecordingReason, RewriteRecordingRequestOptions, RewriteRecordingStartReport,
-    RewriteRecordingStartState, RewriteRecoveryReport, RewriteRedisExchangeDetail,
-    RewriteRedisOperationDetail, RewriteRegressionBeginOptions, RewriteRegressionBeginReport,
-    RewriteRepairAcceptanceKind, RewriteRepairCancelOptions, RewriteReplayRetryOptions,
-    RewriteRevalidationRequestOptions, RewriteRevalidationRequestReport, RewriteReviewOptions,
-    RewriteReviewReport, RewriteRouteCause, RewriteRouteOptions, RewriteRouteOutcome,
-    RewriteRouteReport, RewriteRuleHint, RewriteRulePlanOptions, RewriteRuleReport,
-    RewriteSourceProcessObservationView, RewriteSourceProcessOwnedRuleView,
+    RewriteRecordingInputRejections, RewriteRecordingReason, RewriteRecoveryReport,
+    RewriteRedisExchangeDetail, RewriteRedisOperationDetail, RewriteRegressionBeginOptions,
+    RewriteRegressionBeginReport, RewriteRepairAcceptanceKind, RewriteRepairCancelOptions,
+    RewriteReplayRetryOptions, RewriteRevalidationRequestOptions, RewriteRevalidationRequestReport,
+    RewriteReviewOptions, RewriteReviewReport, RewriteRouteCause, RewriteRouteOptions,
+    RewriteRouteOutcome, RewriteRouteReport, RewriteRuleHint, RewriteRulePlanOptions,
+    RewriteRuleReport, RewriteSourceProcessObservationView, RewriteSourceProcessOwnedRuleView,
     RewriteSourceProcessOwnedView, RewriteSourceProcessRedisSnapshotEndpointView,
     RewriteSourceProcessRedisSnapshotView, RewriteSourceProcessTrafficScopeView,
     RewriteSourceProcessTrafficView, RewriteStatusReport, RewriteTargetQualityOptions,
@@ -242,22 +238,20 @@ pub use rewrite::{
     apply_rewrite_case_patterns, apply_rewrite_dependency_rule, apply_rewrite_recorder_capture,
     apply_rewrite_rule, begin_rewrite_regression, cancel_misrouted_rewrite_repair,
     check_batch_rewrite_review, check_rewrite_review, close_rewrite_expert, confirm_rewrite_expert,
-    confirm_rewrite_worker, execute_rewrite_operation, execute_rewrite_recording_worker,
-    inventory_rewrite, next_rewrite, plan_rewrite_dependency_payload_rule,
-    plan_rewrite_dependency_rule, plan_rewrite_http_response_capture,
-    plan_rewrite_recorder_capture, plan_rewrite_rule, prepare_rewrite_expert,
-    query_rewrite_case_dependencies, query_rewrite_evidence, query_rewrite_evidence_for_scope,
-    rebuild_rewrite_case_groups, recover_rewrite, report_rewrite_expert_delivery,
-    report_rewrite_worker, request_rewrite_recording, request_rewrite_revalidation,
+    confirm_rewrite_worker, execute_rewrite_operation, inventory_rewrite, next_rewrite,
+    plan_rewrite_dependency_payload_rule, plan_rewrite_dependency_rule,
+    plan_rewrite_http_response_capture, plan_rewrite_recorder_capture, plan_rewrite_rule,
+    prepare_rewrite_expert, query_rewrite_case_dependencies, query_rewrite_evidence,
+    query_rewrite_evidence_for_scope, rebuild_rewrite_case_groups, recover_rewrite,
+    report_rewrite_expert_delivery, report_rewrite_worker, request_rewrite_revalidation,
     resume_rewrite_replay_planning, retry_rewrite_operation,
     retry_rewrite_replay_after_out_of_band_run, rework_rewrite_review,
     rework_rewrite_review_with_report, route_rewrite, run_rewrite_target_quality,
-    show_rewrite_review, start_rewrite_next, start_rewrite_recording, start_rewrite_target_quality,
-    status_rewrite, status_rewrite_for_api, status_rewrite_for_process_output,
-    status_rewrite_for_selector, transfer_rewrite_worker, verify_rewrite_repair, wait_rewrite,
+    show_rewrite_review, start_rewrite_next, start_rewrite_target_quality, status_rewrite,
+    status_rewrite_for_api, status_rewrite_for_process_output, status_rewrite_for_selector,
+    transfer_rewrite_worker, verify_rewrite_repair, wait_rewrite,
 };
 pub use runtime_output::RuntimeOutputLocation;
-pub use source_recording::{SourceRecordingOptions, SourceRecordingResult, run_source_recording};
 pub use source_snapshot::{
     ContainerSourceOptions, KubernetesSourceOptions, SourceIgnoredMount, SourceImage,
     SourceOptions, SourceProviderEvidence, SourceSnapshotReport,

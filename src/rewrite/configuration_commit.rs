@@ -138,6 +138,7 @@ pub(super) fn pending_locked(target_root: &Path) -> Result<Option<RewriteActionE
             target_root.display()
         ),
         required,
+        recording_input_diagnosis: None,
     };
     let mut envelope = match RewriteStore::new(&target_root)?.load()? {
         Some(state) => {

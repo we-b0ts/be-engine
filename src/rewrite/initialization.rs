@@ -1,11 +1,7 @@
 //! Construction of a new workflow before its first standard recording.
-use super::{
-    artifacts,
-    model::{
-        RewritePhase, RewriteRecordingSettings, RewriteSliceState, RewriteState, STATE_VERSION,
-    },
+use super::model::{
+    RewritePhase, RewriteRecordingSettings, RewriteSliceState, RewriteState, STATE_VERSION,
 };
-use crate::ManagedRecordingOperation;
 use anyhow::Result;
 use std::path::Path;
 
@@ -15,8 +11,7 @@ pub(super) fn new_state(
     source_route: String,
     recording_apis: Vec<String>,
 ) -> Result<RewriteState> {
-    let recording_run_id =
-        artifacts::allocate_run_id(target_root, ManagedRecordingOperation::Record)?;
+    let recording_run_id = String::new();
     Ok(RewriteState {
         version: STATE_VERSION,
         revision: 1,
@@ -38,6 +33,7 @@ pub(super) fn new_state(
         target_quality_fingerprint: None,
         delivery_review_required: false,
         recording_run_id,
+        recording_after_run_id: None,
         require_comparison: crate::config::regression::RegressionScope::load(target_root)?
             .require_comparison,
         recording_rejection: None,

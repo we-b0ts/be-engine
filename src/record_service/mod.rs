@@ -1,17 +1,18 @@
-//! Online Source/Recorder composition with no rewrite orchestration or API selectors.
+//! Standalone Source/Recorder service with optional gateway coordination.
 
+mod coordination;
 mod options;
 mod proxy;
+mod source;
 #[cfg(test)]
 mod tests;
-pub use options::OnlineRecordingOptions;
+pub use options::{CoordinationBackend, RecordOptions};
 
-use crate::source_recording::process;
+use self::source as process;
 use crate::{
     AppState, RecordingWaitConfig, wait_for_recording_listeners, wait_for_recording_ready,
 };
 use anyhow::{Context, Result, bail, ensure};
-use brz_http_gateway::redis_admission::{RecorderRegistration, RedisAdmissionProvider};
 use std::{path::Path, time::Duration};
 use tokio::{
     net::TcpListener,
@@ -21,14 +22,14 @@ use tracing::{info, warn};
 
 /// Initializes Recorder and Source, registers only after readiness, and serves
 /// until shutdown or loss of either the Source process or registration lease.
-pub async fn run(options: OnlineRecordingOptions) -> Result<()> {
+pub async fn run(options: RecordOptions) -> Result<()> {
     ensure!(
         crate::local_interception::effective_uid() != crate::TRAFFIC_PROCESS_UID,
-        "online recording controller cannot use the reserved Source UID"
+        "recording service controller cannot use the reserved Source UID"
     );
     ensure!(
         options.no_interception || crate::local_interception::effective_uid() == 0,
-        "online recording with interception requires a root controller"
+        "recording service with interception requires a root controller"
     );
     process::prepare_fixed_identity()?;
     let config = options.config()?;
@@ -36,39 +37,23 @@ pub async fn run(options: OnlineRecordingOptions) -> Result<()> {
         info!(path = %path.display(), case_path_patterns = config.http_gateway.case_path_patterns.len(),
             post_ready_settle_ms = config.recording.post_ready_settle_ms,
             post_ready_max_wait_ms = config.recording.post_ready_max_wait_ms,
-            "online recording project Recorder configuration loaded");
+            "recording service project Recorder configuration loaded");
     }
     if let Some(path) = &options.source_traffic_policy {
         info!(
             path = %path.display(),
             case_path_patterns = config.http_gateway.case_path_patterns.len(),
-            "online recording source traffic policy loaded"
+            "recording service source traffic policy loaded"
         );
     }
-    let url: hyper::Uri = options
-        .advertise_url
-        .parse()
-        .context("invalid advertised HTTP origin")?;
-    let redis = options.redis().await?;
-    let registration = RecorderRegistration::new(
-        redis.clone(),
-        options.discovery_key(),
-        url,
-        Duration::from_secs(30),
-    )?;
-    let reservations =
-        RedisAdmissionProvider::new(redis, &options.prefix, options.discovery_key())?;
+    let coordination = coordination::Coordination::connect(&options).await?;
     let program =
         process::resolve_source_program(&options.source_command[0], &options.source_workdir)?;
     process::verify_fixed_identity_access(&options.source_workdir, &program)?;
-    let runtime = options
-        .data_root
-        .join("runtime")
-        .join(uuid::Uuid::new_v4().to_string());
-    std::fs::create_dir_all(&runtime)?;
+    let runtime = process::RuntimeDirectory::create(&options.data_root)?;
     let state = AppState::new_with_recording_apis_and_artifact_owner(
         config.clone(),
-        None,
+        options.run_id.clone(),
         Vec::new(),
         Some(options.storage_owner()?),
     )
@@ -90,14 +75,14 @@ pub async fn run(options: OnlineRecordingOptions) -> Result<()> {
             },
         )?)
     };
-    let control = runtime.join("recorder.sock");
+    let control = runtime.path.join("recorder.sock");
     let (stop_recorder, stopped_recorder) = oneshot::channel();
     let mut recorder = tokio::spawn(state.clone().run_until(Some(control.clone()), async {
         let _ = stopped_recorder.await;
         Ok(())
     }));
     let relay = proxy::Relay::new(
-        reservations,
+        coordination.reservations.clone(),
         format!("http://{}", options.recorder_listen).parse()?,
         options.scope.clone(),
         Duration::from_millis(config.http_gateway.request_timeout_ms),
@@ -115,8 +100,8 @@ pub async fn run(options: OnlineRecordingOptions) -> Result<()> {
             ready = wait_startup(&control, options.startup_timeout_seconds, false, &mut recorder, &mut recorder_finished) => ready?,
             signal = &mut shutdown => { signal?; return Ok(()); }
         }
-        crate::source_recording::verify_sensitive_state_isolated(&options.data_root, &options.data_root.join(crate::repository::LOCAL_ARTIFACTS_ROOT).join("recordings"), &config.tls.ca_key_path)?;
-        let trust = process::prepare_source_trust(&runtime, &config.tls.ca_cert_path, &options.source_workdir, &program)?;
+        source::verify_sensitive_state_isolated(&options.data_root, &options.data_root.join(crate::repository::LOCAL_ARTIFACTS_ROOT).join("recordings"), &config.tls.ca_key_path)?;
+        let trust = process::prepare_source_trust(&runtime.path, &config.tls.ca_cert_path, &options.source_workdir, &program)?;
         source = Some(process::spawn_source(&program, &options.source_command[1..], &options.source_workdir, &trust)?);
         let source = source.as_mut().unwrap();
         tokio::select! {
@@ -127,9 +112,11 @@ pub async fn run(options: OnlineRecordingOptions) -> Result<()> {
         let listener = TcpListener::bind(options.listen).await?;
         adapter = Some(tokio::spawn(proxy::serve(listener, relay.clone(), adapter_stopped)));
         // Cleanup always tries token-checked unregister, even if SET timed out.
-        ensure!(registration.register().await?, "another recorder already owns the discovery key");
+        coordination.register().await?;
         relay.open();
-        info!(listen = %options.listen, "online recording ready; discovery registration published");
+        info!(listen = %options.listen, run_id = %state.recorder().run_dir.file_name().unwrap().to_string_lossy(),
+            manifest = %state.recorder().run_dir.join("recording-run.json").display(),
+            coordination = ?options.coordination, "recording ready; waiting for requests");
         let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         heartbeat.tick().await;
@@ -139,12 +126,12 @@ pub async fn run(options: OnlineRecordingOptions) -> Result<()> {
                 status = source.wait() => break Err(anyhow::anyhow!("Source exited: {}", status?)),
                 result = &mut recorder => { recorder_finished = true; result.context("Recorder task failed")??; break Err(anyhow::anyhow!("Recorder stopped unexpectedly")); }
                 result = adapter.as_mut().unwrap() => { adapter_finished = true; result.context("adapter task failed")??; break Err(anyhow::anyhow!("adapter stopped unexpectedly")); }
-                _ = heartbeat.tick() => { ensure!(registration.renew().await?, "recorder registration was lost"); }
+                _ = heartbeat.tick() => { coordination.renew().await?; }
             }
         }
     }.await;
     relay.close();
-    if let Err(error) = registration.unregister().await {
+    if let Err(error) = coordination.unregister().await {
         warn!(%error, "recorder unregister failed; address TTL will expire");
     }
     let _ = stop_adapter.send(true);
@@ -152,7 +139,7 @@ pub async fn run(options: OnlineRecordingOptions) -> Result<()> {
         .await
         .is_err()
     {
-        warn!("online recording request drain timed out");
+        warn!("recording service request drain timed out");
     }
     let _ = stop_recorder.send(());
     let recorder_cleanup = if recorder_finished {
@@ -182,11 +169,25 @@ pub async fn run(options: OnlineRecordingOptions) -> Result<()> {
         adapter.abort();
     }
     drop(guard);
-    let _ = std::fs::remove_dir_all(&runtime);
     result?;
     recorder_cleanup?;
     source_cleanup?;
-    Ok(())
+    let manifest = state.recorder().run_dir.join("recording-run.json");
+    let report: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest)?)?;
+    ensure!(
+        report["status"] == "completed"
+            && report["failed_cases"] == 0
+            && report["errors"].as_array().is_some_and(Vec::is_empty),
+        "recording finalized with errors; inspect {}",
+        manifest.display()
+    );
+    crate::command_output::stdout_line(format_args!(
+        "{}",
+        serde_json::json!({
+            "status": "completed", "run_id": report["run_id"], "manifest": manifest,
+            "published_cases": report["published_cases"]
+        })
+    ))
 }
 
 async fn wait_startup(

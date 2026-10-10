@@ -31,7 +31,7 @@ Execute the exact `action.commands.acceptance` returned then. New repairs use
 `repair verify <repair-id>`. A legacy Response `external_data_blocker` now
 expressible by bootstrap Replay planning instead receives
 `repair resume-replay-planning <repair-id>`; that migration does not require a
-runtime-input revision change. Neither `next` nor `recording request` may
+runtime-input revision change. `next` cannot
 bypass the returned command.
 
 System-repair actions retain the route, triggering `work_scope`, readiness, and
@@ -42,7 +42,7 @@ against the canonical target root; status does not embed evidence or its command
 Successful verification chooses the next transition. Replay and external-input
 repairs authorize Replay for the same owning API and immutable cases without a
 new implementation handoff; target quality gates still apply. Recorder or
-source-baseline repairs allocate fresh standard traffic. The AI never chooses
+source-baseline repairs require fresh external standard traffic. The AI never chooses
 between those transitions.
 
 For an accepted `source_change` caused by an upgraded source image, an
@@ -99,19 +99,17 @@ inspection proves the explicit route inputs.
 Use `backend-rewrite status [--api '<assigned path-or-pattern>']` to reconstruct a lost or
 resumed action without advancing state. Depending on current state it returns:
 
-- the original `action.commands.execute` before recording execution;
 - exact `action.commands.apply` for a pending plan;
-- `action.commands.wait` while a detached recording executor is live;
+- `action.commands.wait` while selected external evidence is being published;
 - `action.commands.advance` after a finalized manifest or target change is
   ready; or
 - the engine-issued system-repair acceptance.
 
-A running manifest whose owner exited returns `recovery_required`. Execute only
-its exact `action.commands.recover`. Recovery rejects a live engine executor,
-removes the matching stale lock, stops only the orphaned focused target/Replay
-attempt or managed recording, publishes interrupted state, and returns the next
-engine-issued command. It may allocate a replacement recording run; never rebuild
-the prior argv or start a second executor manually.
+`recovery_required` concerns rewrite-owned workers, locks, and focused Replay
+attempts. Execute its exact `action.commands.recover`; a live executor prevents
+recovery. External recording processes and containers remain owned by their
+deployment caller. An unfinished external manifest stays an input wait and
+cannot authorize rewriting evidence or allocating a replacement run.
 
 `wait_required` is not recovery. It proves that a live or non-preemptible owner
 blocks the requested transition or a worker handoff is pending, and supplies a

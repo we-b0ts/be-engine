@@ -231,15 +231,15 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(!MANAGER.contains("run_no_fallback"));
     assert!(!MANAGER.contains("brz-no-fallback.sh"));
     assert!(!MANAGER.contains("wait_port 880 source"));
-    let standard_recording = MANAGER
-        .split_once("run_standard_recording()")
+    let preflight_runtime = MANAGER
+        .split_once("run_preflight()")
         .unwrap()
         .1
         .split_once("wait_for_comparison_ready()")
         .unwrap()
         .0;
     assert_in_order(
-        standard_recording,
+        preflight_runtime,
         &[
             "start_recording_source \"$truststore\"",
             "recording wait-ready",
@@ -330,10 +330,10 @@ fn embedded_platform_manager_is_valid_bash() {
             "remove_platform_mounts",
         ],
     );
-    assert!(MANAGER.contains("record|record-comparison|preflight"));
+    assert!(MANAGER.contains("record-comparison|preflight"));
     assert!(MANAGER.contains("preflight_root=\"$runtime_root/preflight/$run_id\""));
     assert!(MANAGER.contains("[[ \"$operation\" == preflight ]]"));
-    assert!(MANAGER.contains("manifest_filter+=' and .published_cases > 0'"));
+    assert!(MANAGER.contains("and .published_cases > 0'"));
     assert!(MANAGER.contains("run_preflight_https_probe"));
     assert!(!MANAGER.contains("recorder_command+=(--full-traffic-jsonl)"));
     assert!(!MANAGER.contains("recorder_command+=(--breeze)"));
@@ -360,15 +360,15 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(!MANAGER.contains("TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED"));
     assert!(!PREFLIGHT_READINESS.contains("business"));
     assert!(MANAGER.contains("wait_for_recorder_or_duration"));
-    let standard_recording = MANAGER
-        .split("run_standard_recording() {")
+    let preflight_runtime = MANAGER
+        .split("run_preflight() {")
         .nth(1)
         .unwrap()
         .split("wait_for_comparison_ready() {")
         .next()
         .unwrap();
     assert_in_order(
-        standard_recording,
+        preflight_runtime,
         &[
             "finalize_recorder",
             "internal process-output-capture",

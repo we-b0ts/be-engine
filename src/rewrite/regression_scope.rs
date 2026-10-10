@@ -15,7 +15,7 @@ pub(super) use config::PATH;
 mod comparison;
 mod recording;
 pub(super) use comparison::start_if_required;
-pub(super) use recording::{ensure_fresh_allowed, validate_uninitialized};
+pub(super) use recording::{ensure_fresh_allowed, has_active_pin, validate_uninitialized};
 
 pub(super) fn is_skipped(state: &RewriteState, api: &str) -> bool {
     state
@@ -41,6 +41,7 @@ pub(super) fn apply(target_root: &Path, state: &mut RewriteState) -> Result<bool
         return Ok(false);
     }
     let mut changed = recording::apply(target_root, state, &policy)?;
+    changed |= comparison::bind_selected(state, &policy);
     if !state.api_inventory.is_empty() && state.phase != RewritePhase::RecordingRequired {
         for api in policy.selectors() {
             ensure!(

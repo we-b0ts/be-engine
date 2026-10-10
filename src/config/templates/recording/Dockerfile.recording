@@ -1,5 +1,5 @@
 # Initialization scaffold: review and adapt this file to the inspected source
-# image before running `backend-rewrite init preflight`.
+# image before running `traffic-e2e diagnose preflight`.
 ARG SOURCE_IMAGE
 FROM ${SOURCE_IMAGE}
 

@@ -84,10 +84,6 @@ pub(super) fn apply_results(
         return Ok(());
     }
     let mut slices = Vec::new();
-    let mut comparison_runs = std::iter::once(&state.active_slice)
-        .chain(state.parked_slices.values())
-        .filter_map(|slice| slice.comparison_run_id.clone())
-        .collect::<Vec<_>>();
     for result in results {
         let mut selected = inventory::scoped(state, Some(&result.api.parse()?))?;
         if let Some(slice) = prepared.and_then(|batch| batch.slices.get(&result.api)) {
@@ -99,19 +95,6 @@ pub(super) fn apply_results(
             result,
             transition::AttemptTransition::Append,
         )?;
-        if selected.phase == RewritePhase::ComparisonRecordingRequired {
-            let excluded = comparison_runs
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>();
-            let run_id = super::artifacts::allocate_run_id_excluding(
-                target_root,
-                crate::ManagedRecordingOperation::RecordComparison,
-                &excluded,
-            )?;
-            selected.comparison_run_id = Some(run_id.clone());
-            comparison_runs.push(run_id);
-        }
         slices.push(selected.active_slice);
     }
     // Publish every method before choosing the next slice so a route worker sees

@@ -113,7 +113,10 @@ async fn next_adopts_pinned_recording_and_filters_its_inventory_without_recaptur
     let action = next(root.path()).await.unwrap();
     assert!(!matches!(
         action.action,
-        RewriteAction::RecordingRequired { .. }
+        RewriteAction::InputRequired {
+            reason: crate::rewrite::RewriteInputRequiredReason::RecordingEvidenceRequired,
+            ..
+        }
     ));
     let state = RewriteStore::new(root.path())
         .unwrap()
@@ -269,15 +272,15 @@ fn switching_recordings_resets_verification_and_clearing_pin_keeps_current_basel
         inventory::complete_current_and_advance(&mut state).unwrap();
         store.save(&state).unwrap();
     }
-    assert!(ensure_fresh_allowed(root.path()).is_err());
+    assert!(ensure_fresh_allowed(root.path(), &crate::rewrite::test_state()).is_err());
     fs::remove_file(root.path().join(PATH)).unwrap();
-    ensure_fresh_allowed(root.path()).unwrap();
+    ensure_fresh_allowed(root.path(), &crate::rewrite::test_state()).unwrap();
     let reloaded = store.load().unwrap().unwrap();
     assert_eq!(reloaded.recording_run_id, A);
     assert_eq!(reloaded.phase, RewritePhase::SliceComplete);
     assert!(reloaded.e2e_current && reloaded.comparison_current);
     policy(root.path(), "", "");
-    ensure_fresh_allowed(root.path()).unwrap();
+    ensure_fresh_allowed(root.path(), &crate::rewrite::test_state()).unwrap();
     assert_eq!(
         serde_json::to_value(store.load().unwrap().unwrap()).unwrap(),
         serde_json::to_value(&reloaded).unwrap()
@@ -397,7 +400,7 @@ fn invalid_run_ids_and_new_inventory_selectors_do_not_mutate_state() {
 }
 
 #[tokio::test]
-async fn omitted_null_and_empty_recording_ids_keep_automatic_recording_available() {
+async fn omitted_null_and_empty_recording_ids_wait_for_external_evidence() {
     for config in [
         "only: []\n",
         "recording_run_id:\n",
@@ -406,7 +409,7 @@ async fn omitted_null_and_empty_recording_ids_keep_automatic_recording_available
     ] {
         let root = target();
         fs::write(root.path().join(PATH), config).unwrap();
-        ensure_fresh_allowed(root.path()).unwrap();
+        ensure_fresh_allowed(root.path(), &crate::rewrite::test_state()).unwrap();
         let status = rewrite::status_rewrite(RewriteContext {
             target_root: root.path().into(),
         })
@@ -415,7 +418,10 @@ async fn omitted_null_and_empty_recording_ids_keep_automatic_recording_available
         let action = next(root.path()).await.unwrap();
         assert!(matches!(
             action.action,
-            RewriteAction::RecordingRequired { .. }
+            RewriteAction::InputRequired {
+                reason: crate::rewrite::RewriteInputRequiredReason::RecordingEvidenceRequired,
+                ..
+            }
         ));
         let state = RewriteStore::new(root.path())
             .unwrap()
@@ -423,12 +429,6 @@ async fn omitted_null_and_empty_recording_ids_keep_automatic_recording_available
             .unwrap()
             .unwrap();
         assert_eq!(state.phase, RewritePhase::RecordingRequired);
-        assert_eq!(state.recording_run_id.len(), 14);
-        assert!(
-            state
-                .recording_run_id
-                .bytes()
-                .all(|byte| byte.is_ascii_digit())
-        );
+        assert!(state.recording_run_id.is_empty());
     }
 }

@@ -284,10 +284,7 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
             let mut state =
                 initialization::new_state(&target_root, api, source_route, recording_apis)?;
             regression_scope::apply(&target_root, &mut state)?;
-            if crate::config::regression::RegressionScope::load(&target_root)?
-                .recording_run_id
-                .is_none()
-            {
+            if !regression_scope::has_active_pin(&target_root, &state)? {
                 let excluded_run_id = state.recording_run_id.clone();
                 recording_input::bind(&target_root, &mut state, Some(&excluded_run_id))?;
             }
@@ -309,14 +306,20 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
     }
 
     if state.phase == RewritePhase::RecordingRequired
-        && crate::config::regression::RegressionScope::load(&target_root)?
-            .recording_run_id
-            .is_none()
-        && recording::standard_recording_input_source(&state).is_none()
-        && !recording::requires_external_live_traffic(&state)
+        && !regression_scope::has_active_pin(&target_root, &state)?
     {
-        let excluded_run_id = state.recording_run_id.clone();
-        if recording_input::bind(&target_root, &mut state, Some(&excluded_run_id))? {
+        let excluded_run_id = state
+            .recording_input_case_source
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|id| id.to_string_lossy().into_owned())
+            .or_else(|| {
+                state
+                    .recording_rejection
+                    .as_ref()
+                    .map(|_| state.recording_run_id.clone())
+            });
+        if recording_input::bind(&target_root, &mut state, excluded_run_id.as_deref())? {
             state.bump();
             store.save(&state)?;
         }
@@ -342,13 +345,10 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
                 artifacts::RecordingPublication::Finalized => {}
             }
             if let Err(error) = artifacts::validate_standard_recording(&target_root, &state) {
-                regression_scope::ensure_fresh_allowed(&target_root).context(error.to_string())?;
+                regression_scope::ensure_fresh_allowed(&target_root, &state)
+                    .context(error.to_string())?;
                 state.recording_rejection = Some(artifacts::recording_rejection(&error));
-                state.recording_run_id =
-                    artifacts::allocate_run_id(&target_root, ManagedRecordingOperation::Record)?;
-                if let Some(refresh) = state.recording_refresh.as_mut() {
-                    refresh.recording_run_id = Some(state.recording_run_id.clone());
-                }
+                state.recording_after_run_id = Some(state.recording_run_id.clone());
                 state.bump();
                 store.save(&state)?;
                 return Ok(action::for_state(&target_root, &state));
@@ -362,16 +362,10 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
             let apis = match artifacts::standard_recording_apis(&target_root, &state) {
                 Ok(apis) => apis,
                 Err(error) => {
-                    regression_scope::ensure_fresh_allowed(&target_root)
+                    regression_scope::ensure_fresh_allowed(&target_root, &state)
                         .context(error.to_string())?;
                     state.recording_rejection = Some(artifacts::recording_rejection(&error));
-                    state.recording_run_id = artifacts::allocate_run_id(
-                        &target_root,
-                        ManagedRecordingOperation::Record,
-                    )?;
-                    if let Some(refresh) = state.recording_refresh.as_mut() {
-                        refresh.recording_run_id = Some(state.recording_run_id.clone());
-                    }
+                    state.recording_after_run_id = Some(state.recording_run_id.clone());
                     state.bump();
                     store.save(&state)?;
                     return Ok(action::for_state(&target_root, &state));
@@ -496,10 +490,15 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
             Ok(action::for_state(&target_root, &state))
         }
         RewritePhase::ComparisonRecordingRequired => {
-            let run_id = state
-                .comparison_run_id
-                .clone()
-                .context("comparison phase has no allocated run id")?;
+            if state.comparison_run_id.is_none() {
+                state.comparison_run_id =
+                    crate::config::regression::RegressionScope::load(&target_root)?
+                        .comparison_run_id;
+                store.save(&state)?;
+            }
+            let Some(run_id) = state.comparison_run_id.clone() else {
+                return Ok(action::for_state(&target_root, &state));
+            };
             match artifacts::comparison_recording_publication(&target_root, &run_id)? {
                 artifacts::RecordingPublication::Missing => {
                     return Ok(action::for_state(&target_root, &state));
@@ -511,10 +510,6 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
             }
             if let Err(error) = artifacts::validate_comparison_recording(&target_root, &state) {
                 state.comparison_rejection = Some(artifacts::comparison_rejection(&error));
-                state.comparison_run_id = Some(artifacts::allocate_run_id(
-                    &target_root,
-                    ManagedRecordingOperation::RecordComparison,
-                )?);
                 state.bump();
                 store.save(&state)?;
                 return Ok(action::for_state(&target_root, &state));
@@ -555,7 +550,6 @@ fn claim_traffic_operation(
             &state.workflow_id,
             &state.api,
             match kind {
-                traffic_operation::TrafficOperationKind::Recording => "recording",
                 traffic_operation::TrafficOperationKind::Replay => "replay",
                 traffic_operation::TrafficOperationKind::Comparison => "comparison",
             },

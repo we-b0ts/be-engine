@@ -1,9 +1,42 @@
 //! Fixed-identity Source processes, CA trust and graceful process-group cleanup.
 
-use super::*;
+use crate::{ArtifactOwner, TRAFFIC_PROCESS_GID, TRAFFIC_PROCESS_UID};
+use anyhow::{Context, Result, bail, ensure};
+use std::collections::BTreeSet;
+use std::ffi::{OsStr, OsString};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::os::fd::FromRawFd;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::process::CommandExt;
+use std::path::{Component, Path, PathBuf};
+use std::process::{Command as StdCommand, Stdio};
+use std::time::Duration;
+use tokio::process::{Child, Command};
+use tracing::warn;
 
 const SOURCE_STOP_TIMEOUT: Duration = Duration::from_secs(15);
 const JAVA_TRUSTSTORE_PASSWORD: &str = "changeit";
+
+pub(super) struct RuntimeDirectory {
+    pub(super) path: PathBuf,
+}
+
+impl RuntimeDirectory {
+    pub(super) fn create(data_root: &Path) -> Result<Self> {
+        let path = data_root
+            .join("runtime")
+            .join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir_all(&path)?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for RuntimeDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
 
 pub(crate) fn spawn_source(
     program: &Path,
@@ -70,7 +103,7 @@ pub(crate) fn prepare_fixed_identity() -> Result<()> {
         .context("failed to check non-interactive sudo permission")?;
     ensure!(
         status.success(),
-        "record-source requires root or non-interactive sudo permission"
+        "record requires root or non-interactive sudo permission"
     );
     Ok(())
 }
@@ -344,4 +377,79 @@ pub(crate) fn system_program(name: &str) -> Result<PathBuf> {
         .map(|directory| Path::new(directory).join(name))
         .find(|path| path.is_file())
         .with_context(|| format!("required system command not found: {name}"))
+}
+
+pub(crate) fn prepare_recordings_root(target_root: &Path, owner: ArtifactOwner) -> Result<PathBuf> {
+    let recordings_root = target_root
+        .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
+        .join("recordings");
+    fs::create_dir_all(&recordings_root).with_context(|| {
+        format!(
+            "failed to create canonical recordings root {}",
+            recordings_root.display()
+        )
+    })?;
+    let metadata = fs::symlink_metadata(&recordings_root)?;
+    ensure!(
+        metadata.is_dir() && !metadata.file_type().is_symlink(),
+        "canonical recordings root must be a directory and not a symlink: {}",
+        recordings_root.display()
+    );
+    fs::set_permissions(&recordings_root, fs::Permissions::from_mode(0o700)).with_context(
+        || {
+            format!(
+                "failed to protect canonical recordings root {}",
+                recordings_root.display()
+            )
+        },
+    )?;
+    if unsafe { libc::geteuid() } == 0 {
+        owner.assign_path_to(&recordings_root)?;
+    }
+    verify_fixed_identity_denied("-x", &recordings_root, "recording artifacts")?;
+    Ok(recordings_root)
+}
+
+pub(crate) fn verify_sensitive_state_isolated(
+    target_root: &Path,
+    recordings_root: &Path,
+    recorder_ca_key: &Path,
+) -> Result<()> {
+    let encryption_key = target_root.join(crate::repository::LOCAL_ENCRYPTION_KEY_PATH);
+    for (path, label) in [
+        (encryption_key.as_path(), "request-header encryption key"),
+        (recorder_ca_key, "Recorder CA private key"),
+    ] {
+        ensure!(
+            path.is_file(),
+            "{label} was not initialized before Source startup: {}",
+            path.display()
+        );
+        verify_fixed_identity_denied("-r", path, label)?;
+    }
+    verify_fixed_identity_denied("-x", recordings_root, "recording artifacts")
+}
+
+fn resolve_from(base: &Path, path: &Path) -> PathBuf {
+    normalize_path(if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
+    })
+}
+
+fn normalize_path(path: PathBuf) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(Path::new("/")),
+            Component::Normal(value) => normalized.push(value),
+        }
+    }
+    normalized
 }

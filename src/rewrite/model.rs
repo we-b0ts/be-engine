@@ -22,7 +22,7 @@ use crate::{
 };
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 34;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 35;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -131,12 +131,6 @@ pub enum RewriteIssueOwner {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum RewriteRecordingKind {
-    Standard,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum RewriteRecordingReason {
     UserRequested,
     RecorderContractChanged,
@@ -157,15 +151,6 @@ impl fmt::Display for RewriteRecordingReason {
             Self::RecorderContractChanged => "recorder_contract_changed",
             Self::SourceBaselineChanged => "source_baseline_changed",
         })
-    }
-}
-
-impl RewriteRecordingReason {
-    pub(super) fn requires_external_live_traffic(self) -> bool {
-        matches!(
-            self,
-            Self::UserRequested | Self::RecorderContractChanged | Self::SourceBaselineChanged
-        )
     }
 }
 
@@ -449,6 +434,8 @@ pub(super) struct RewriteState {
     #[serde(default)]
     pub delivery_review_required: bool,
     pub recording_run_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording_after_run_id: Option<String>,
     /// Last observed local policy; reloaded between operations, never frozen per batch.
     #[serde(default = "crate::config::regression::default_require_comparison")]
     pub require_comparison: bool,
@@ -533,16 +520,11 @@ pub struct RewriteCommandSpec {
 #[serde(rename_all = "snake_case")]
 pub enum RewriteInputRequiredReason {
     WorkflowNotInitialized,
+    RecordingEvidenceRequired,
+    ComparisonEvidenceRequired,
     SourceRouteRequired,
     VerificationProgressCommitRequired,
     ConfigurationCommitRequired,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RewriteRecordingInputMode {
-    ReusedAtomicRecording,
-    ExternalLiveTraffic,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -588,7 +570,6 @@ pub enum RewriteRecordingInputCandidateDisposition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RewriteTrafficOperationKind {
-    Recording,
     Replay,
     Comparison,
 }
@@ -625,6 +606,7 @@ pub enum RewriteAction {
         reason: RewriteInputRequiredReason,
         summary: String,
         required: Vec<String>,
+        recording_input_diagnosis: Option<RewriteRecordingInputDiagnosis>,
     },
     RecoveryRequired {
         summary: String,
@@ -638,13 +620,6 @@ pub enum RewriteAction {
         active_operation: Option<RewriteTrafficOperationView>,
         retry_after_seconds: u64,
         status: RewriteCommandSpec,
-    },
-    RecordingRequired {
-        summary: String,
-        run_id: String,
-        input_mode: RewriteRecordingInputMode,
-        recording_input_diagnosis: Option<RewriteRecordingInputDiagnosis>,
-        command: RewriteCommandSpec,
     },
     RecordingInProgress {
         summary: String,
@@ -710,11 +685,6 @@ pub enum RewriteAction {
     },
     AdvanceRequired {
         summary: String,
-        command: RewriteCommandSpec,
-    },
-    ComparisonRecordingRequired {
-        summary: String,
-        run_id: String,
         command: RewriteCommandSpec,
     },
     SystemRepairRequired {
@@ -814,49 +784,7 @@ pub struct RewriteRecoveryReport {
     pub recovered_stale_lock: bool,
     pub recovered_stale_traffic_operation: bool,
     pub recovered_focused_attempt: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub recovered_recording_run: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub replacement_recording_run: Option<String>,
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub removed_managed_containers: usize,
     pub next: RewriteCommandSpec,
-}
-
-fn is_zero(value: &usize) -> bool {
-    *value == 0
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RewriteRecordingExecutionReport {
-    pub action_id: String,
-    pub run_id: String,
-    pub operation: String,
-    pub already_completed: bool,
-    pub manifest: PathBuf,
-    pub next: RewriteCommandSpec,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RewriteRecordingStartState {
-    Started,
-    AlreadyRunning,
-    AlreadyCompleted,
-    WaitingForTrafficRuntime,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RewriteRecordingStartReport {
-    pub action_id: String,
-    pub run_id: String,
-    pub operation: String,
-    pub execution_state: RewriteRecordingStartState,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status_poll_after_seconds: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub waiting_on: Option<RewriteTrafficOperationView>,
-    pub status: RewriteCommandSpec,
 }
 
 #[derive(Debug, Clone, Serialize)]

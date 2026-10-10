@@ -19,6 +19,8 @@ pub(super) struct DiagnoseArgs {
 
 #[derive(Debug, Subcommand)]
 enum DiagnoseCommand {
+    /// Diagnose source recording and target replay environments without rewrite orchestration.
+    Preflight(PreflightArgs),
     /// Inspect or manage host interception rules.
     Interception(super::interception::InterceptionArgs),
     /// Build or validate disposable dependency locations for a completed recording.
@@ -33,6 +35,14 @@ enum DiagnoseCommand {
     ReplayAggregate(ReplayAggregateArgs),
     /// Persist and validate canonical case grouping evidence.
     CaseGroup(CaseGroupArgs),
+}
+
+#[derive(Debug, Args)]
+struct PreflightArgs {
+    #[arg(long, default_value = ".")]
+    target_root: PathBuf,
+    #[arg(long, default_value = "30")]
+    duration_seconds: std::num::NonZeroU64,
 }
 
 #[derive(Debug, Args)]
@@ -169,6 +179,16 @@ enum ReplayControlCommand {
 
 pub(super) async fn run(args: DiagnoseArgs) -> Result<()> {
     match args.command {
+        DiagnoseCommand::Preflight(args) => {
+            let report = traffic_e2e::run_managed_recording_preflight(
+                traffic_e2e::ManagedRecordingPreflightOptions {
+                    target_root: args.target_root,
+                    duration_seconds: args.duration_seconds,
+                },
+            )
+            .await?;
+            super::output::stdout_line(format_args!("{}", serde_json::to_string(&report)?))
+        }
         DiagnoseCommand::DependencyIndex(args) => {
             let report = tokio::task::spawn_blocking(move || {
                 traffic_e2e::prepare_dependency_index(&args.case_source)

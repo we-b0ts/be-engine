@@ -138,7 +138,10 @@ async fn scoped_replay_only_completion_is_terminal_and_enabling_comparison_reuse
     assert!(
         matches!(
             envelope.action,
-            super::RewriteAction::ComparisonRecordingRequired { .. }
+            super::RewriteAction::InputRequired {
+                reason: super::RewriteInputRequiredReason::ComparisonEvidenceRequired,
+                ..
+            }
         ),
         "{envelope:?}"
     );

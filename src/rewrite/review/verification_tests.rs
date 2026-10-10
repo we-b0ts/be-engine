@@ -3,7 +3,7 @@ use super::*;
 use crate::rewrite::model::RewriteApiStatus;
 use crate::rewrite::{
     RewriteContext, RewriteNextOptions, RewriteProcessOutputProgress, RewriteProcessOutputStatus,
-    artifacts, recording_action, recording_execution, traffic_operation,
+    artifacts, traffic_operation,
 };
 
 fn target(phase: RewritePhase) -> (tempfile::TempDir, RewriteState) {
@@ -93,19 +93,6 @@ fn review_admission_does_not_block_comparison_recording_or_its_recovery() {
     comparison_manifest(root.path(), &state, false);
     assert!(required_action(root.path(), &state).unwrap().is_none());
     comparison_manifest(root.path(), &state, true);
-    let action_id = recording_action::recording_action_id(&state, true);
-    recording_execution::publish(
-        root.path(),
-        &recording_execution::RecordingExecutionMarker {
-            action_id: action_id.clone(),
-            run_id: state.comparison_run_id.clone().unwrap(),
-            operation: "record-comparison".into(),
-            pid: std::process::id(),
-        },
-    )
-    .unwrap();
-    assert!(required_action(root.path(), &state).unwrap().is_none());
-    recording_execution::clear(root.path(), &action_id).unwrap();
     assert!(matches!(
         required_action(root.path(), &state).unwrap(),
         Some(RewriteAction::SourceReviewRequired { .. })

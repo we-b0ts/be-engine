@@ -97,6 +97,7 @@ pub(super) fn apply(
     inventory::reset_for_recording(state);
     state.recording_apis = selection.scope;
     state.recording_run_id = selection.run_id;
+    state.recording_after_run_id = None;
     state.recording_rejection = None;
     state.recording_request_reason = None;
     state.recording_input_case_source = None;
@@ -107,11 +108,21 @@ pub(super) fn apply(
     Ok(true)
 }
 
-pub(in crate::rewrite) fn ensure_fresh_allowed(target_root: &Path) -> Result<()> {
+pub(in crate::rewrite) fn has_active_pin(target_root: &Path, state: &RewriteState) -> Result<bool> {
+    let policy = RegressionScope::load(target_root)?;
+    Ok(policy.recording_run_id.is_some()
+        && !state.regression.as_ref().is_some_and(|origin| {
+            origin.superseded_recording_run_id.is_some()
+                && origin.superseded_recording_run_id == policy.recording_run_id
+        }))
+}
+
+pub(in crate::rewrite) fn ensure_fresh_allowed(
+    target_root: &Path,
+    state: &RewriteState,
+) -> Result<()> {
     ensure!(
-        RegressionScope::load(target_root)?
-            .recording_run_id
-            .is_none(),
+        !has_active_pin(target_root, state)?,
         "{PATH}: recording_run_id selects existing evidence; remove it before requesting a fresh standard recording"
     );
     Ok(())

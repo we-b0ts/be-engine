@@ -33,9 +33,9 @@ mod startup;
 use assets::{stage_assets, write_asset};
 
 pub use preflight::{
-    ManagedMotanRecordingResult, ManagedRecordingPreflightOptions,
-    ManagedRecordingPreflightRecordingResult, ManagedRecordingPreflightResult,
-    ManagedTargetImagePreflightChecks, ManagedTargetImagePreflightResult, MotanPreflightStatus,
+    ManagedRecordingPreflightOptions, ManagedRecordingPreflightRecordingResult,
+    ManagedRecordingPreflightResult, ManagedTargetImagePreflightChecks,
+    ManagedTargetImagePreflightResult,
 };
 pub use recording_input::{
     ManagedRecordingInputCompletion, ManagedRecordingInputOptions, ManagedRecordingInputResult,
@@ -59,14 +59,12 @@ const HTTPS_PROBE: &[u8] = include_bytes!("assets/HttpsProbe.class");
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ManagedRecordingOperation {
-    Record,
     RecordComparison,
 }
 
 impl ManagedRecordingOperation {
     pub(crate) fn script_name(self) -> &'static str {
         match self {
-            Self::Record => "record",
             Self::RecordComparison => "record-comparison",
         }
     }
@@ -74,26 +72,21 @@ impl ManagedRecordingOperation {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ManagedRuntimeOperation {
-    Recording(ManagedRecordingOperation),
+    Comparison,
     Preflight,
 }
 
 impl ManagedRuntimeOperation {
     fn script_name(self) -> &'static str {
         match self {
-            Self::Recording(operation) => operation.script_name(),
+            Self::Comparison => "record-comparison",
             Self::Preflight => "preflight",
         }
     }
 
     fn manifest(self, target_root: &Path, run_id: &str) -> PathBuf {
         match self {
-            Self::Recording(ManagedRecordingOperation::Record) => target_root
-                .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
-                .join("recordings")
-                .join(run_id)
-                .join("recording-run.json"),
-            Self::Recording(ManagedRecordingOperation::RecordComparison) => target_root
+            Self::Comparison => target_root
                 .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
                 .join("comparison-recordings")
                 .join(run_id)
@@ -109,14 +102,13 @@ impl ManagedRuntimeOperation {
     }
 
     fn requires_listener_preflight(self) -> bool {
-        self != Self::Recording(ManagedRecordingOperation::RecordComparison)
+        self == Self::Preflight
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct ManagedRecordingOptions {
     pub target_root: PathBuf,
-    pub operation: ManagedRecordingOperation,
     pub run_id: Option<String>,
     pub duration_seconds: NonZeroU64,
     pub baseline_recheck: bool,
@@ -134,8 +126,6 @@ pub struct ManagedRecordingResult {
     pub manifest: PathBuf,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub runtime_outputs: Vec<crate::RuntimeOutputLocation>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub motan: Option<ManagedMotanRecordingResult>,
     pub managed_by: &'static str,
 }
 
@@ -145,36 +135,19 @@ struct ManagedRuntimeResult {
     source_snapshot_id: String,
     manifest: PathBuf,
     runtime_outputs: Vec<crate::RuntimeOutputLocation>,
-    motan: Option<MotanRuntimeContext>,
 }
-
-#[derive(Debug, Clone)]
-struct MotanRuntimeContext;
 
 pub async fn run_managed_recording(
     options: ManagedRecordingOptions,
 ) -> Result<ManagedRecordingResult> {
-    ensure!(
-        options.operation == ManagedRecordingOperation::RecordComparison
-            || !options.baseline_recheck,
-        "--baseline-recheck is valid only for record-comparison"
-    );
-    let operation = options.operation;
-    let result =
-        run_managed_runtime(options, ManagedRuntimeOperation::Recording(operation)).await?;
-    let motan = result
-        .motan
-        .as_ref()
-        .map(|_| preflight::validate_motan_recording(&result.manifest))
-        .transpose()?;
+    let result = run_managed_runtime(options, ManagedRuntimeOperation::Comparison).await?;
     Ok(ManagedRecordingResult {
-        operation,
+        operation: ManagedRecordingOperation::RecordComparison,
         run_id: result.run_id,
         target_root: result.target_root,
         source_snapshot_id: result.source_snapshot_id,
         manifest: result.manifest,
         runtime_outputs: result.runtime_outputs,
-        motan,
         managed_by: "traffic-e2e",
     })
 }
@@ -203,7 +176,6 @@ pub async fn run_managed_recording_preflight(
     let runtime = run_managed_runtime(
         ManagedRecordingOptions {
             target_root,
-            operation: ManagedRecordingOperation::Record,
             run_id: None,
             duration_seconds: options.duration_seconds,
             baseline_recheck: false,
@@ -277,22 +249,8 @@ async fn run_managed_runtime(
         recorder_config,
         Some(&managed_candidate),
     )?;
-    let motan = if recorder.motan_gateway.enabled
-        && runtime_operation
-            == ManagedRuntimeOperation::Recording(ManagedRecordingOperation::Record)
-    {
-        ensure!(
-            recorder.recording.traffic_jsonl != crate::config::TrafficJsonlMode::Off,
-            "managed Motan recording requires recording.traffic_jsonl to be errors or full so \
-             gateway failures remain verifiable"
-        );
-        Some(MotanRuntimeContext)
-    } else {
-        None
-    };
     let comparison_motan_port = if recorder.motan_gateway.enabled
-        && runtime_operation
-            == ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
+        && runtime_operation == ManagedRuntimeOperation::Comparison
     {
         Some(endpoint_port(
             &recorder.motan_gateway.matched_upstream,
@@ -312,9 +270,7 @@ async fn run_managed_runtime(
     if runtime_operation.requires_listener_preflight() && recorder.http_gateway.enabled {
         listen_preflight::require_available(recorder.http_gateway.listen).await?;
     }
-    let target_image = if runtime_operation
-        == ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
-    {
+    let target_image = if runtime_operation == ManagedRuntimeOperation::Comparison {
         crate::startup::load_startup_snapshot(&target_root, &config.target_startup)?;
         Some(
             crate::target_container::build_image(
@@ -371,9 +327,8 @@ async fn run_managed_runtime(
             crate::repository::LOCAL_ARTIFACTS_ROOT
         );
     }
-    let finite_input_comparison = runtime_operation
-        == ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
-        && request_source.is_some();
+    let finite_input_comparison =
+        runtime_operation == ManagedRuntimeOperation::Comparison && request_source.is_some();
     let managed_comparison_listen = listen_preflight::managed_finite_comparison(
         finite_input_comparison && recorder.http_gateway.enabled,
         recorder.http_gateway.listen,
@@ -407,9 +362,7 @@ async fn run_managed_runtime(
         "source",
         &config.target_runtime_outputs,
     );
-    if runtime_operation
-        == ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
-    {
+    if runtime_operation == ManagedRuntimeOperation::Comparison {
         runtime_output_locations.extend(crate::runtime_output::locations(
             &runtime_output_root.join("target"),
             "target",
@@ -560,7 +513,6 @@ async fn run_managed_runtime(
         source_snapshot_id,
         manifest,
         runtime_outputs: runtime_output_locations,
-        motan,
     })
 }
 

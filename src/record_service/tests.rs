@@ -1,4 +1,4 @@
-use super::{OnlineRecordingOptions, proxy};
+use super::{RecordOptions, proxy};
 use brz_http_gateway::redis_admission::RedisAdmissionProvider;
 use brz_redis::{RedisService, RedisServiceOptions};
 use bytes::Bytes;
@@ -18,6 +18,7 @@ use tokio::{
     task::JoinHandle,
 };
 
+mod direct;
 mod policy;
 mod project;
 mod readiness;
@@ -36,19 +37,12 @@ fn disabled_streaming_returns_404_through_relay_and_releases_admission() {
 #[derive(Parser)]
 struct OptionsCli {
     #[command(flatten)]
-    options: OnlineRecordingOptions,
+    options: RecordOptions,
 }
 
 #[test]
 fn standalone_options_keep_case_limits_without_project_or_api_filters() {
-    let cli = OptionsCli::try_parse_from([
-        "recording-online",
-        "--advertise-url",
-        "http://127.0.0.1:4080",
-        "--",
-        "true",
-    ])
-    .unwrap();
+    let cli = OptionsCli::try_parse_from(["traffic-e2e record", "--", "true"]).unwrap();
     let config = cli.options.config().unwrap();
     assert_eq!(config.http_gateway.per_api_case_limits.default, usize::MAX);
     assert!(config.http_gateway.rules.is_empty());
@@ -58,16 +52,8 @@ fn standalone_options_keep_case_limits_without_project_or_api_filters() {
         config.recording.access_policy,
         crate::RecordingAccessPolicy::Unrestricted
     );
-    let cli = OptionsCli::try_parse_from([
-        "recording-online",
-        "--advertise-url",
-        "http://127.0.0.1:4080",
-        "--case-limit",
-        "5",
-        "--",
-        "true",
-    ])
-    .unwrap();
+    let cli = OptionsCli::try_parse_from(["traffic-e2e record", "--case-limit", "5", "--", "true"])
+        .unwrap();
     assert_eq!(
         cli.options
             .config()
@@ -79,7 +65,7 @@ fn standalone_options_keep_case_limits_without_project_or_api_filters() {
     );
     assert!(
         OptionsCli::try_parse_from([
-            "recording-online",
+            "traffic-e2e record",
             "--advertise-url",
             "http://127.0.0.1:4080",
             "--case-limit",
@@ -92,11 +78,44 @@ fn standalone_options_keep_case_limits_without_project_or_api_filters() {
 }
 
 #[test]
+fn redis_coordination_is_explicit_and_requires_both_address_and_redis_url() {
+    let direct = OptionsCli::try_parse_from(["test", "--", "true"]).unwrap();
+    assert!(direct.options.coordination.is_none());
+    assert!(direct.options.redis_url.is_none());
+    assert!(direct.options.advertise_url.is_none());
+    assert!(direct.options.config().is_ok());
+    let incomplete =
+        OptionsCli::try_parse_from(["test", "--coordination", "redis", "--", "true"]).unwrap();
+    assert!(incomplete.options.config().is_err());
+    let configured = OptionsCli::try_parse_from([
+        "test",
+        "--coordination",
+        "redis",
+        "--redis-url",
+        "redis://127.0.0.1:6379/0",
+        "--advertise-url",
+        "http://recorder:4080",
+        "--",
+        "true",
+    ])
+    .unwrap();
+    assert!(configured.options.config().is_ok());
+    assert!(
+        OptionsCli::try_parse_from([
+            "test",
+            "--redis-url",
+            "redis://127.0.0.1:6379/0",
+            "--",
+            "true"
+        ])
+        .is_err()
+    );
+}
+
+#[test]
 fn standalone_artifact_owner_uses_numeric_ids_and_excludes_source_identity() {
     let cli = OptionsCli::try_parse_from([
-        "recording-online",
-        "--advertise-url",
-        "http://127.0.0.1:4080",
+        "traffic-e2e record",
         "--artifact-owner",
         "1115:1116",
         "--",
@@ -109,7 +128,7 @@ fn standalone_artifact_owner_uses_numeric_ids_and_excludes_source_identity() {
     );
     assert!(
         OptionsCli::try_parse_from([
-            "recording-online",
+            "traffic-e2e record",
             "--advertise-url",
             "http://127.0.0.1:4080",
             "--artifact-owner",
@@ -120,9 +139,7 @@ fn standalone_artifact_owner_uses_numeric_ids_and_excludes_source_identity() {
         .is_err()
     );
     let cli = OptionsCli::try_parse_from([
-        "recording-online",
-        "--advertise-url",
-        "http://127.0.0.1:4080",
+        "traffic-e2e record",
         "--artifact-owner",
         "998:998",
         "--",
@@ -250,7 +267,13 @@ impl Fixture {
         .unwrap();
         let provider =
             RedisAdmissionProvider::new(redis, "online-test", "online-test:url").unwrap();
-        let relay = proxy::Relay::new(provider, origin, "all-apis".to_owned(), timeout, max_body);
+        let relay = proxy::Relay::new(
+            Some(provider),
+            origin,
+            "all-apis".to_owned(),
+            timeout,
+            max_body,
+        );
         relay.open();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());

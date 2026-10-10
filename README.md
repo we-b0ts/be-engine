@@ -6,9 +6,10 @@ diagnostics; `backend-rewrite` owns the AI-facing migration workflow and uses
 the same `traffic_e2e` crate; `backend-rewrite-admin` owns explicit
 administrator repair outside ordinary AI workflows.
 
-The optional [`recording-online`](docs/online-recording.md) application starts
-Source and Recorder directly, with Redis discovery and reservation completion,
-without project YAML or rewrite orchestration. Enable `online-recording` to build it.
+[`traffic-e2e record`](docs/recording.md) starts Source and Recorder directly.
+With optional Redis coordination it registers for gateway traffic; without it,
+it waits for direct requests. Projects own recording containers. Backend rewrite
+consumes finalized recordings from the conventional artifact directory.
 
 ## Features
 
@@ -46,7 +47,7 @@ cargo build --release --bins
 
 This produces sibling `traffic-e2e`, `backend-rewrite`, and
 `backend-rewrite-admin` executables. Keep them together when installing or
-packaging them: detached rewrite recording actions delegate engine work to the
+packaging them: detached rewrite verification actions delegate engine work to the
 sibling `traffic-e2e` binary.
 
 ## Command Model
@@ -61,8 +62,6 @@ backend-rewrite next --api '/api/widgets/*' \
 backend-rewrite status
 backend-rewrite inventory
 backend-rewrite evidence <query-id>
-backend-rewrite recording request --kind standard \
-  --reason user-requested --duration-seconds 60 --per-api-case-limit 100
 traffic-e2e record ...
 traffic-e2e record-comparison ...
 traffic-e2e compare ... --policy .traffic-e2e/verification.yaml
@@ -87,17 +86,12 @@ transitions, and exposes only bounded evidence queries. Direct `prepare`,
 `run-api`, `compare`, and report-oriented commands remain available to traffic
 operators and system maintainers.
 
-Nonpassing focused E2E attempts reuse the active immutable standard cases;
-passing attempts advance to fresh comparison recording. An explicit
-`backend-rewrite recording request --kind standard` transition replaces the standard
-evidence chain only after explicit user authorization. The coordinator, not
-the caller, allocates the run ID and returns
-the exact recording argv. Omitting `--api` on that request resets any prior
-single-API scope and records every API admitted by recorder configuration;
-provide `--api` only for an explicitly narrowed fresh recording. Executing the
-returned action starts a detached coordinator worker and returns immediately;
-poll `backend-rewrite status` until it reports `advance_required`, then execute
-the exact `action.commands.advance` command once.
+Nonpassing focused E2E attempts reuse the active immutable standard cases.
+Recording is external to rewrite. Place completed batches in
+`.traffic-e2e/local/artifacts/recordings/<run-id>/`; use `recording_run_id` in
+`.traffic-e2e/regression.yaml` to pin a batch. When comparison is required,
+provide completed comparison evidence and select `comparison_run_id` there.
+Missing evidence returns an input requirement, never a recording executor.
 
 Process-owned dependency rules are evidence-ownership rules, not fresh-capture
 contracts. `backend-rewrite dependency-rule apply <plan-id>` preserves the
@@ -137,14 +131,11 @@ interpreted or returned.
 
 Evidence-driven recorder and verification-policy changes live under
 `traffic-e2e config ... plan|apply`; low-level grouping and report commands live
-under `traffic-e2e diagnose`. Managed recording, replay, fixed-user target
+under `traffic-e2e diagnose`. Standalone recording, managed comparison, replay, fixed-user target
 isolation, and host interception are implemented by the same Rust binary.
 
-Comparison recording accepts only explicitly configured `GET`, `HEAD`, and
-`OPTIONS` methods. Its managed runtime isolates the candidate in a run-owned
-bridge namespace, allowing source and candidate to use the same native service
-ports. It normally captures one source
-response and one candidate response. Set
+Comparison recording accepts all HTTP methods by default and retains configured
+method filters. Each admitted request reaches both upstreams. Set
 `comparison_recording.baseline_recheck = true` to additionally capture a
 source response after the candidate for source-drift diagnosis. Passing
 `record-comparison --baseline-recheck` enables it for one run without changing
@@ -152,7 +143,7 @@ the configuration. Comparison recording defaults to 60 seconds; automated
 calls pass `--duration-seconds 60` or another positive integer explicitly. An
 explicitly scoped recording may finish earlier when every selected API reaches
 its per-API case limit; an unscoped recording retains the complete window for
-low-frequency API discovery. Backend-rewrite's finite-input comparison binds
+low-frequency API discovery. Finite-input comparison binds
 the gateway to loopback for that run, so concurrent environment traffic cannot
 be published as managed comparison evidence.
 Offline `compare` reuses
@@ -166,49 +157,23 @@ cargo run -- --help
 cargo run -- diagnose recorder --config config/project.example.yaml
 ```
 
-Install all binaries and run managed recording from an initialized target
-repository:
+Install the binaries and start Source recording in the prepared Source environment:
 
 ```bash
 cargo install --path .
-traffic-e2e record --target-root /path/to/target
-traffic-e2e record --target-root /path/to/target \
-  --api 'GET /api/widgets/*'
+traffic-e2e record --source-workdir /app --data-root /data/traffic-e2e \
+  -- ./source --port 8080
 ```
 
-To run Recorder and a locally installed Source in the current host or
-container network namespace without Docker:
+Source runs as 998:998 after Recorder listeners are ready. The controller needs
+root and interception capabilities. Without coordination it waits for direct
+requests. Add `--coordination redis --advertise-url http://recorder-host:4080`
+and supply `TRAFFIC_E2E_RECORDING_REDIS_URL` for gateway coordination.
 
-```bash
-traffic-e2e record-source --target-root /path/to/target \
-  --duration-seconds 60 -- ./source --port 7171
-```
-
-Source runs as numeric UID/GID `998:998`, starts only after Recorder listeners
-are ready, and is stopped after Recorder finalizes. Its configured port must
-match `recorder.http_gateway.matched_upstream` and differ from the gateway
-listen port. Omit `--api` to record the configured full scope for the complete
-duration. Output is written to
-`<target>/.traffic-e2e/local/artifacts/recordings/<run-id>`; no Docker daemon is
-used by this command.
-
-Automation can reserve the recording directory name with an explicit UTC run
-identifier: `traffic-e2e record --target-root ... --run-id YYYYMMDDHHMMSS`.
-Repeat `--api 'METHOD /path-or-pattern'` to restrict only that run; omission
-uses the YAML rules unchanged. A supplied selector is also the case's
-`api_pattern`, so wildcard traffic stays grouped under the requested API.
-Source, optional Breeze, Recorder, interception, readiness, finalization, and
-cleanup are owned by traffic-e2e. Use `diagnose recorder` only for low-level
-Recorder development; its process-level lifecycle commands are internal.
-
-The default example listens on:
-
-- DNS mock: `127.0.0.153:4053`
-- TCP fake-IP gateway: `127.0.0.1:4001`
-- UDP fake-IP gateway: `127.0.0.1:4002`
-- HTTP gateway for tcpcopy traffic: `0.0.0.0:18084`
-- JSONL output: `./.traffic-e2e/local/artifacts/recordings/<run-id>/traffic.jsonl`
-- Generated CA: `./.traffic-e2e/local/data/traffic-recorder-ca.pem`
+One process owns one run; an optional `--run-id YYYYMMDDHHMMSS` overrides the
+automatically generated ID. Stop the container normally to finalize evidence.
+See [the recording guide](docs/recording.md) for container setup, persistent
+storage, rules and rewrite handoff.
 
 For dependency replay, install the binary and pass the case directory directly:
 
@@ -350,11 +315,10 @@ keeps the original `Host` header when forwarding. Recording access policy is
 evaluated before both rule sets, so exclusion rules do not bypass
 `block_known_writes`.
 
-Use repeatable `record --api 'METHOD /path-or-pattern'` arguments to narrow one
-recording run without editing project YAML. Runtime selectors are intersected
-with `recorder.http_gateway.rules`; they never widen the configured recording scope.
-They also define the selected cases' API grouping. Omitting `--api` preserves
-the configured behavior.
+Select Source recording traffic at ingress. `record` preserves configured
+include/exclude rules and has no per-invocation API selector. The default rule
+matches every method and path. `record-comparison --api 'METHOD /path-or-pattern'`
+continues to support explicit comparison selection.
 
 `[http_gateway.ready]` is an optional active readiness probe against
 `matched_upstream`. When enabled, the recorder sends `GET path` every

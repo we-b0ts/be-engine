@@ -8,6 +8,13 @@ description: "Orchestrate, verify, and deliver backend rewrites from source beha
 Use `backend-rewrite` as the authority for workflow state, legal actions,
 verification, and completion. The target is the service being rewritten.
 
+Recording runs independently. The deployment caller runs `traffic-e2e record`
+and supplies completed immutable batches under the target's
+`.traffic-e2e/local/artifacts/recordings/<run-id>/`. Backend rewrite discovers
+or selects that evidence; it does not start recording, allocate capture IDs,
+import batches, or manage recording containers. For missing evidence and capture
+refreshes, read [external recording evidence](references/coordinator-recording.md).
+
 ## Actor Model
 
 The workflow has one engine and four agent roles. The task runtime is execution

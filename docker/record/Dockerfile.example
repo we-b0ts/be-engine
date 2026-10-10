@@ -1,0 +1,15 @@
+# Copy this file to the Source project as Docker.recording and review its launch contract.
+# SOURCE_IMAGE must contain the real Source and the project's normal business configuration.
+# It also needs setpriv (util-linux), iptables, iproute2, and its normal CA bundle.
+ARG SOURCE_IMAGE
+FROM ${SOURCE_IMAGE}
+
+# Supply the matching prebuilt Linux traffic-e2e executable in the build context.
+COPY --chmod=0755 traffic-e2e /usr/local/bin/traffic-e2e
+
+# Controller owns interception and private evidence; it launches Source as 998:998.
+USER 0:0
+WORKDIR /app
+ENTRYPOINT ["/usr/local/bin/traffic-e2e", "record"]
+# Replace the explicit Source command with this project's real foreground command.
+CMD ["--source-workdir", "/app", "--data-root", "/data/traffic-e2e", "--", "/app/start-source"]

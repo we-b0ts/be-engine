@@ -1,137 +1,34 @@
-# Coordinator Recording Actions
+# External Recording Evidence
 
-Read this guide only for `recording_required`, `recording_in_progress`,
-`comparison_recording_required`, an explicit fresh-standard-recording request,
-or a consolidated capture refresh. The workflow coordinator owns every command in
-this guide.
+Backend rewrite never starts recording, allocates capture IDs, owns recording
+processes, or recovers their containers. Recording belongs to the independent
+`traffic-e2e record` service and its deployment caller.
 
-## Contents
+Place completed standard runs under the initialized target's conventional
+`.traffic-e2e/local/artifacts/recordings/<run-id>/`. Preserve the complete immutable
+run, semantic dependencies and network manifest. Encrypted headers require
+the matching private key at `.traffic-e2e/local/secrets/traffic-e2e-enc.sec`,
+outside Target; preserve permissions and do not replace a conflicting key.
+No import command is needed.
 
-- Execute and monitor recording actions
-- Preserve or replace standard cases
-- Request fresh standard traffic
-- Consolidate capture refreshes
+Use the existing local `.traffic-e2e/regression.yaml` `recording_run_id` to select
+an exact batch. Without a pin, next discovers an available completed batch and
+then retains that identity. Missing or rejected evidence returns `input_required`
+with the required directory and no recording execution command. Do not invent
+traffic or edit recordings. Use the returned bounded `recording_input_diagnosis`
+to identify rejected evidence. Run next after external evidence is available.
 
-## Execute A Recording Action
+Failed focused Replay attempts reuse the adopted cases. Capture-policy or Source
+changes invalidate affected evidence and require a newer externally produced
+batch; runs already present when refresh begins cannot satisfy this requirement.
+The coordinator does not produce it. Applied capture rules accumulate
+through the existing parked-API refresh lifecycle. Continue other runnable work;
+when refresh is required, arrange external recording with the new policy.
 
-This section applies to both standard and comparison recordings. For comparison
-recording, do not infer permission to request or replace standard traffic.
+When comparison is required, provide finalized comparison recordings under
+`.traffic-e2e/local/artifacts/comparison-recordings/<run-id>/` and select
+`comparison_run_id` in regression.yaml. The comparison gate remains enforced.
+Target changes still invalidate verification evidence.
 
-Execute the exact opaque `action.commands.execute` argv with the named required
-environment variables. The returned argv already binds the canonical absolute
-`--target-root`; use its `cwd` unchanged. The command starts a detached
-recording executor and returns immediately. Poll only the status command
-returned by that execution. While recording is live,
-`recording_in_progress.action.commands.wait` performs bounded waiting. After
-waiting, reconcile task-runtime worker events and refresh global status.
-
-Run `action.commands.advance` only after `advance_required`. The allocated
-identity is `action.details.run_id`; the engine owns its input mode,
-lifecycle, and exact finalized manifest. Never select a recording by recency or
-add manual curl, Replay, shell pipelines, backgrounding, or driver flags.
-Advancing a finalized unscoped standard recording may return the one-time
-`case_pattern_identification_required` batch described in
-[coordinator.md](coordinator.md) before it publishes the API inventory.
-
-Duration and case limit belong to the preceding recording request and are bound
-into the action ID. For explicit API selectors, duration is an upper bound and
-the managed runtime may finalize after every selected API reaches its case
-limit. With an omitted selector, retain the full duration so low-frequency APIs
-remain discoverable. An empty run-local selector is intentional when the
-workflow started without `--api`; recorder configuration admits traffic and
-the finalized cases produce the stable inventory.
-
-## Preserve Standard Cases
-
-Ordinary repair keeps the finalized standard cases immutable. A failed focused
-E2E attempt changes the target and reuses those cases. After focused E2E passes,
-the engine allocates fresh comparison evidence without replacing the
-standard cases.
-
-After the first focused attempt, `next` and `status` include
-`latest_focused_e2e`. `execution_mode=fresh_standard_cases` identifies the
-first attempt against the current standard baseline;
-`execution_mode=reused_standard_cases` proves reuse. The result also carries
-the recording run ID, exact case source, optional case inventory ID,
-previous/current attempt numbers, and pass status. It describes the latest
-completed attempt; a later `next` without a target change does not imply that
-another attempt ran.
-
-Applying or confirming a source-proven process-owned dependency rule does not
-authorize fresh traffic. The engine reclassifies the immutable focused
-Replay evidence and returns its next action. Follow
-[coordinator-rule-actions.md](coordinator-rule-actions.md) for that
-mutation.
-
-## Request Fresh Standard Traffic
-
-Every fresh standard recording requires explicit user authorization. Use
-`backend-rewrite recording request --kind standard` only after that
-authorization.
-
-Supply `--reason user-requested` and positive `--duration-seconds` and
-`--per-api-case-limit` values. Omit `--api` to replace a narrowed scope with
-every API admitted by recorder configuration. Provide `--api` only for an
-explicitly single-API recording.
-
-An identical pending request is idempotent. A different pending request
-requires explicit `--replace-pending`. The engine preserves prior
-artifacts, clears state derived from the old baseline, allocates a new run, and
-returns `recording_required`; execute that action and resume with `next`.
-
-Historical recording input is reusable only when its complete selector exactly
-matches the requested selector. Omitted selectors match only omitted selectors;
-a single API matches only that exact API. Never split or merge recordings
-because boot and case evidence belong to one recording lifecycle.
-
-When no exact atomic input exists,
-`action.details.input_mode=external_live_traffic` opens a fresh recording
-window. Treat its bounded recent candidate scopes and rejection counts in
-`action.details.recording_input_diagnosis` as complete. Do not inspect internal
-state or invent traffic.
-
-## Consolidated Capture Refresh
-
-HTTP JSON response URL rules use the same capture refresh lifecycle as Breeze
-resource rules. Applying either kind cannot repair old immutable dependency
-files.
-
-Plan and apply capture rules through
-[coordinator-rule-actions.md](coordinator-rule-actions.md#http-response-url-capture)
-using worker-proven selectors, then follow the returned refresh transition here.
-
-A recorder-capture apply is coordinator-owned and is the exception to the
-explicit request rules: never follow it with `recording request`. Apply returns
-either another runnable API command or, after runnable inventory drains, the
-exact consolidated recording command. Multiple applied capture rules
-accumulate before that one full-scope recording.
-
-`awaiting_recording_refresh` means an API has an applied, source-proven capture
-rule but cannot be reverified against the old baseline. It is parked, not
-complete or blocked. Continue pending APIs and existing workers; other APIs may
-still compare against the current baseline. When no runnable item remains, the
-engine atomically returns one `recording_required` refresh.
-
-The new finalized recording replaces the shared baseline atomically and
-invalidates old Replay/comparison evidence. Its observed APIs define the new
-round's inventory; rare APIs do not have to recur in every recording. Historical
-recordings and the known API catalog remain available, but an API absent from
-this recording does not participate in this round and is not counted as newly
-verified. Do not request another recording solely to reproduce the old API
-inventory. The refresh never creates per-API recording generations or merges
-old cases into the new recording.
-
-When repair verification requests fresh standard traffic while a capture
-refresh is pending, that run takes ownership of the existing refresh. Its
-applied-rule records and old case source remain until the new
-recording passes validation. `next` also reconciles older repair states that
-reserved a fresh run but left the refresh unbound; it validates that same run
-instead of allocating another one or checking an obsolete scheduling hash.
-Completed publication, nonempty cases and the requested recording scope still
-require validation. Configuration revision checks still apply when scheduling
-a refresh that has no replacement run.
-
-After a system repair, do not choose fresh traffic yourself. The
-engine-issued repair verification decides whether to allocate fresh
-standard cases or replay the existing cases. Follow
-[coordinator-recovery.md](coordinator-recovery.md).
+After adoption, follow case-pattern identification and normal coordinator actions.
+Recording contents, old batch identities and verification history remain immutable.

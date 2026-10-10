@@ -8,8 +8,8 @@ default-run = "traffic-e2e"
 aes-gcm = "0.10"
 anyhow = "1"
 base64 = "0.22"
-brz-http-gateway = { version = "=0.1.6", features = ["redis-recording"], optional = true }
-brz-redis = { version = "=0.0.10", optional = true }
+brz-http-gateway = { version = "=0.1.6", features = ["redis-recording"] }
+brz-redis = { version = "=0.0.10" }
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
@@ -56,12 +56,3 @@ sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio
 motan-json = { git = "ssh://git@git.intra.demo.test:2222/platform/breeze/motan.git", tag = "v0.0.4" }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
-
-[features]
-default = []
-online-recording = ["dep:brz-http-gateway", "dep:brz-redis"]
-
-[[bin]]
-name = "recording-online"
-path = "src/bin/recording-online/main.rs"
-required-features = ["online-recording"]

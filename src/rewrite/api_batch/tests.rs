@@ -69,7 +69,7 @@ fn route_transition_preserves_passed_and_skipped_methods_and_one_worker_scope() 
 }
 
 #[test]
-fn route_comparison_methods_reserve_distinct_recordings() {
+fn route_comparison_methods_wait_for_external_recordings() {
     let target = crate::rewrite::worker::tests::configured_target();
     let mut state = test_state();
     inventory::install(&mut state, vec!["GET /api".into(), "PUT /api".into()]).unwrap();
@@ -82,10 +82,8 @@ fn route_comparison_methods_reserve_distinct_recordings() {
     )
     .unwrap();
     assert_eq!(state.phase, RewritePhase::ComparisonRecordingRequired);
-    assert_ne!(
-        state.comparison_run_id,
-        state.parked_slices["PUT /api"].comparison_run_id
-    );
+    assert!(state.comparison_run_id.is_none());
+    assert!(state.parked_slices["PUT /api"].comparison_run_id.is_none());
     assert!(state.api_inventory.iter().all(|item| item.e2e_current));
     assert!(
         state

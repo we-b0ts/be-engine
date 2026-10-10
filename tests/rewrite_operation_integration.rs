@@ -92,7 +92,7 @@ fn detached_cli_operation_publishes_failure_and_status_does_not_restart_it() {
         target.path(),
         &["next", "--api", "/api", "--source-route", "/wrong-route"],
     );
-    assert_eq!(launched["schema_version"], 34);
+    assert_eq!(launched["schema_version"], 35);
     assert_eq!(
         launched["pending"],
         if launched["action"]["kind"] == "wait_required" {
@@ -255,10 +255,10 @@ fn cli_status_returns_purpose_and_confirmation_enters_an_engine_named_branch() {
         .output()
         .unwrap();
     assert_eq!(String::from_utf8(current.stdout).unwrap().trim(), branch);
-    assert_eq!(confirmed["next"]["action"]["kind"], "recording_required");
+    assert_eq!(confirmed["next"]["action"]["kind"], "input_required");
     assert_eq!(
         command(target.path(), &["status"])["action"]["kind"],
-        "recording_required"
+        "input_required"
     );
     switch_base();
     assert_eq!(

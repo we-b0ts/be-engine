@@ -45,10 +45,9 @@ The build produces sibling `traffic-e2e`, `backend-rewrite`, and
 `backend-rewrite-admin` executables. Keep them together in installed packages
 because detached coordinator actions delegate engine work to `traffic-e2e`.
 
-`cargo build --features online-recording --bin recording-online` additionally
-builds the independent [online recording service](online-recording.md). Its
-adapter tests run with `cargo test --features online-recording`; include that
-feature when running Clippy for online recording changes.
+`traffic-e2e record` is built normally and supports optional Redis coordination.
+See [standalone recording](recording.md) for its container contract, direct
+standby, generated run IDs and handoff to rewrite.
 
 All binaries report the package version, build revision, and exact pinned
 target-runtime image from `--version`. Git checkouts derive the revision
@@ -304,7 +303,7 @@ Repository scripts are development checks or explicit host trust-store tools
 only.
 
 Use the `backend-rewrite` binary and its `next`, `status`, `inventory`,
-`evidence`, `rule`, `dependency-rule`, `route`, `repair`, `recording`,
+`evidence`, `rule`, `dependency-rule`, `route`, `repair`,
 `config`, and `recover` commands for AI-facing migration orchestration.
 `traffic-e2e` has no
 `rewrite` subcommand; `backend-rewrite` invokes the shared crate directly and
@@ -332,7 +331,7 @@ retain their valid routes when their inventory is rebuilt; routes already lost
 by older resets fall back to their confirmed recorded patterns. New uncovered
 paths are handled by case-pattern identification before inventory installation;
 only an explicitly selected dynamic API without recorded pattern coverage needs
-source-route confirmation. An explicit `source_baseline_changed` recording request
+source-route confirmation. An explicit `source_baseline_changed` external recording requirement
 discards retained source routes while recorded patterns remain usable. Restarting
 the coordinator session does not clear bindings.
 
@@ -412,8 +411,8 @@ being stored for
 semantic comparison, while the baseline response returned to the frontend
 retains its original encoding. Comparison request and response bodies each
 default to a 64 MiB limit.
-Explicit named HTTP gateway rules and methods are required. Comparison
-recording accepts every method declared by the selected HTTP gateway rule and
+Explicit named HTTP gateway rules are required. Empty method filters admit all
+methods. Comparison recording accepts methods selected by the gateway rule and
 sends each admitted request to both upstreams without a separate read-only
 method restriction. Reaching an API case limit stops later requests for that
 API from reaching either upstream.
@@ -424,7 +423,7 @@ window after its readiness probe succeeds: every configured background Redis
 request restarts that window, and a 180-second hard deadline prevents a
 periodic task from blocking the run forever. The comparison snapshot probes
 the candidate, which starts after the source, so this boundary means both are
-ready. Standard managed recording uses the same barrier after source readiness.
+ready. Standalone Source recording uses the same barrier after source readiness.
 
 Comparison recording requires
 `http_gateway.fallback_mode = "fixed_response"`. A request is admitted only
@@ -463,7 +462,7 @@ readiness probes succeed, then shutdown finalizes
 When one or more APIs are selected explicitly, reaching every selected API's
 case limit finalizes the run early and records
 `completion_reason = per_api_case_limit_reached`; the duration remains the
-upper bound. Coordinator-managed comparison can instead reuse a finite
+upper bound. Managed comparison can instead reuse a finite
 standard-recording request source. For that finite-input mode only, the HTTP
 comparison gateway reuses the configured gateway port but binds it to
 `127.0.0.1`; environment traffic sent to the host address cannot enter the
@@ -572,30 +571,24 @@ Run the service with:
 cargo run -- diagnose recorder --config config/project.example.yaml
 ```
 
-Install the binary and run managed recording from an initialized target:
+Start the standalone Source/Recorder service inside the Source environment:
 
 ```bash
-cargo install --path .
-traffic-e2e record --target-root /path/to/target
-traffic-e2e record --target-root /path/to/target \
-  --api 'GET /api/widgets/*'
+traffic-e2e record --config /etc/traffic-e2e/project.yaml \
+  --source-workdir /app --data-root /data/traffic-e2e \
+  -- ./source --port 8080
 ```
 
-For a Docker-free recording in an existing host or container environment, let
-traffic-e2e start Source in the current network namespace:
+There is no required project configuration or rewrite state. Without coordination,
+record waits for direct HTTP requests. Add `--coordination redis`, a reachable
+`--advertise-url` and `TRAFFIC_E2E_RECORDING_REDIS_URL` for gateway discovery and
+reservation validation. Configured include/exclude rules remain effective;
+default include scope allows all methods and paths. API selection belongs to ingress.
 
-```bash
-traffic-e2e record-source --target-root /path/to/target \
-  --duration-seconds 60 -- ./source --port 7171
-```
-
-The command starts Recorder listeners before Source, runs Source as `998:998`,
-projects the generated CA to common SDK trust variables (and a Java truststore
-when `keytool` is present), waits for configured Source readiness, and starts
-the duration only then. Recorder finalizes before Source receives SIGTERM. It
-does not keep Source alive or install passthrough after recording. Omit
-`--api` for the configured full scope. The canonical output is
-`.traffic-e2e/local/artifacts/recordings/<run-id>` under `--target-root`.
+Each process creates one run. Stop normally to publish its final manifest. Place
+completed runs and authorized private key access in the target's conventional
+local layout; backend-rewrite consumes them directly and never executes capture.
+See [recording.md](recording.md) for the complete deployment and storage contract.
 
 The managed runtime publishes Recorder lifecycle state on a Unix socket and
 waits through its internal process contract:
@@ -782,7 +775,7 @@ later matching requests use the configured fallback strategy without creating
 a case. Failed cases do not consume the limit, and restarting Recorder starts
 a new run with fresh counts.
 
-`record` and `record-comparison` accept a positive `--per-api-case-limit N` for one
+`record-comparison` accepts a positive `--per-api-case-limit N` for one
 run. When present, it replaces both the configured default and every
 pattern-specific override in memory, so every resolved API or static path uses
 `N`; it is not a run-wide total when multiple APIs are recorded, and it never
@@ -1087,8 +1080,8 @@ The coordinator reverse-resolves a unique canonical resource from configured
 snapshots, using a source-proven port to disambiguate a shared domain when
 needed. It applies the capture rule immediately and parks only the affected API.
 Other API work continues. Once no API remains runnable, all accumulated rules
-trigger one full-scope standard recording; callers must not request a separate
-recording per rule.
+require one full-scope externally produced standard batch; callers must not
+produce a separate recording per rule.
 
 Pass the recorder config for direct replay:
 
@@ -1364,12 +1357,9 @@ backend-rewrite inventory
 backend-rewrite evidence <query-id>
 BACKEND_REWRITE_CASE_PATH_PATTERNS_JSON='["/api/tasks/*/tree"]' \
   backend-rewrite case-pattern apply <batch-id>
-backend-rewrite recording request \
-  --kind standard \
-  --reason user-requested \
-  --duration-seconds 60 \
-  --per-api-case-limit 100
-backend-rewrite recording execute <action-id>
+# Provide finalized external recordings in .traffic-e2e/local/artifacts/recordings/<run-id>/.
+# Optionally select recording_run_id in .traffic-e2e/regression.yaml, then:
+backend-rewrite next
 backend-rewrite repair verify <repair-id>
 BACKEND_REWRITE_SUBAGENT_HANDLE='<replacement-handle>' \
   backend-rewrite worker transfer --previous-agent-handle '<old-handle>' \
@@ -1380,7 +1370,7 @@ backend-rewrite verification request \
   --reason 'shared response mapper changed'
 ```
 
-Rewrite action schema v30 always returns `action.kind`, `action.summary`,
+Rewrite action schema v35 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under coordinator command roles such as
 `execute`, `status`, `advance`, `recover`, `apply`, and `acceptance`.
@@ -1500,28 +1490,18 @@ and `query.api_or_command` / `query.queried_at` in the transfer record's
 proves the query ran. Historical records lacking `authorization` deserialize as
 `user_approved`, matching the requirement enforced when they were written.
 
-`next` returns an opaque standard/comparison
-`action.commands.execute` recording action. `action.details.run_id` identifies
-the preallocated run. The coordinator either reuses one exact-scope atomic
-real-traffic input or opens a fresh external-live-traffic recording window;
-callers do not add curl loops, replayers, shell pipelines, backgrounding, or
-driver parameters. `execute` starts a detached coordinator-owned worker and
-returns immediately. A start report that requires delayed observation includes
-`status_poll_after_seconds`; wait that interval and execute its exact `status`
-command without repeating `execute`. `already_completed` omits the delay so
-its status can be queried immediately. While the worker remains live,
-`recording_in_progress.action.details.status_poll_after_seconds` carries the
-same polling delay and `action.commands.wait` performs the bounded wait.
-After waiting, reconcile task-runtime worker events and refresh global status. `advance_required` means finalization and cleanup completed, so its
-exact `action.commands.advance` can advance coordinator state. It does not mean
-rerunning the completed action. Historical
-input is reused only when its API selector exactly equals the requested
-selector; recordings are never split or merged. When no exact atomic input
-exists, `action.details.input_mode=external_live_traffic` opens a fresh
-recording window and includes bounded candidate/rejection diagnostics under
-`action.details.recording_input_diagnosis`. When startup omits `--api`, recorder
-configuration limits the standard run and the coordinator derives a stable
-API inventory from its published cases. `next` and `status` expose only its
+`next` consumes one completed external standard batch from the conventional
+recording directory. It retains that batch across Replay retries. Missing input
+returns `input_required` with `recording_evidence_required`, the required
+directory and bounded candidate/rejection diagnostics under
+`action.details.recording_input_diagnosis`; there is no capture execution command.
+A selected unfinished manifest returns `recording_in_progress` and a wait command.
+External recording ownership remains outside rewrite, including on recovery.
+For deterministic selection use local `recording_run_id`; Comparison uses the
+separate `comparison_run_id` when enabled. Runs are never copied, split or merged
+into fabricated capture batches. The coordinator derives its stable API inventory
+from the adopted cases.
+`next` and `status` expose only its
 bounded summary (`total`, `completed`, `unverified`, `active`, `implementation_required`,
 `system_repair_required`, `awaiting_recording_refresh`, `revalidation_pending`,
 `current_index`, and `current_api`) so their size does not grow with API count.
@@ -1788,7 +1768,7 @@ stable and bounded by the maximum number of configured profile types.
 
 After status returns
 `advance_required`, the returned `next` validates the
-preallocated run, prepares the current API, runs focused E2E, and returns
+adopted external run, prepares the current API, runs focused E2E, and returns
 either one bounded implementation issue or the next validation action.
 
 Regression settings are local to the target repository in
@@ -1992,19 +1972,16 @@ requirements belong in `AGENTS.md` or `CLAUDE.md`; project configuration cannot
 replace or disable the engine-standard quality checks.
 
 A failed focused E2E attempt reuses the same finalized standard cases after the
-target changes. A passing attempt advances to a newly allocated comparison
-recording. Every fresh standard recording requires explicit user authorization.
-Use `backend-rewrite recording request --kind standard` only after that
-authorization.
-The request accepts positive duration and per-API case-limit values, invalidates state
-derived from the old baseline without deleting its artifacts, and returns a
-new exact recording action. Omitting `--api` means all APIs admitted by recorder
-configuration, even when the prior workflow was narrowed; explicit `--api`
-keeps the fresh recording single-API. An identical pending request returns the existing
-action and run. A different pending request is rejected unless
-`--replace-pending` is explicit; a matching completed manifest returns an advance action.
-The coordinator defaults both standard and comparison recording actions to 60
-seconds and 100 cases.
+target changes. Backend rewrite consumes external evidence and never starts
+recording, allocates recording IDs, or manages recording containers. Place
+completed Source recordings under `.traffic-e2e/local/artifacts/recordings/<run-id>/`
+and optionally pin `recording_run_id` in the local regression configuration.
+Without a pin, `next` selects one completed batch and retains its identity.
+Fresh-capture requirements wait for a newer externally produced batch without
+modifying old evidence. If Comparison is required, supply finalized evidence in
+`comparison-recordings/<run-id>/` and select `comparison_run_id` in the same file.
+Missing evidence returns `input_required` with no recording execution command.
+See [standalone recording and handoff](recording.md).
 
 After a focused attempt, `next` and `status` expose
 `latest_focused_e2e.execution_mode` as either `fresh_standard_cases` or
@@ -2117,18 +2094,17 @@ workflow revision and active issue, so stale evidence is rejected.
 
 An accepted system/source repair route snapshots a coordinator-defined revision
 and returns `repair verify <repair-id>`. The caller cannot provide an acceptance
-command, and `next` or `recording request` cannot bypass the repair. Successful
-verification decides whether to rerun the same cases or allocate fresh standard
-recording evidence. A successful `missing-recorded-resource` route instead
+command, and `next` cannot bypass the repair. Successful
+verification decides whether to rerun the same cases or require fresh external
+standard recording evidence. A successful `missing-recorded-resource` route instead
 returns the existing recorder-capture apply command and never enters system
 repair.
 
-A fresh standard recording allocated by repair verification also takes over
-any pending capture refresh. The coordinator retains applied rules, the old
-baseline reference until validation succeeds. `next`
-reconciles older repair states with an unbound refresh to their already reserved
-recording, including a finalized one. It does not allocate duplicate traffic
-merely because the old scheduling revision differs. Publication and scope
+A fresh external recording requirement from repair verification also takes over
+any pending capture refresh. The coordinator retains applied rules and the old
+baseline reference until validation succeeds. It skips batches already present
+when the requirement begins and waits for a newer completed batch; it does not
+reserve a capture ID or execute recording. Publication and scope
 checks still apply, and the recording must contain published cases. A new
 recording does not have to cover every API from the old recording: its observed
 APIs define this round's inventory. Historical recordings and the known API
@@ -2334,7 +2310,7 @@ preflight:
 ```bash
 backend-rewrite-admin --target-root <target> \
   startup recapture --confirm-replace
-backend-rewrite --target-root <target> init preflight
+traffic-e2e diagnose preflight --target-root <target>
 ```
 
 Recapture reads the initialization-owned local source snapshot; it does not
@@ -2374,7 +2350,7 @@ rebuilds an adaptor cached for another source image ID.
 When the coordinator issued this change through a `source_change` system
 repair, execute its exact `backend-rewrite repair verify <repair-id>` command
 after the administrator upgrade. Verification detects the new source image
-revision and allocates fresh standard recording evidence; the administrator
+revision and requires fresh external standard recording evidence; the administrator
 command does not bypass that coordinator transition. A runtime-input-only
 upgrade does not change the image revision and therefore does not satisfy a
 `source_change` repair. Runtime-input repairs use `external_data_blocker`
@@ -2469,10 +2445,10 @@ change reruns the relevant Cargo build layer, but cached registry, git, and
 target artifacts prevent downloading the dependency graph again when the
 builder identity and cache IDs are unchanged.
 
-For standard recording, the managed runtime keeps a target-scoped
+For managed comparison and diagnostic preflight, the runtime keeps a target-scoped
 source-adaptor cache image. `.traffic-e2e/local/source/` is authoritative for
 the immutable local image ID and captured Kubernetes runtime inputs; preflight,
-recording, and comparison do not contact the original Pod. The target repository
+and comparison do not contact the original Pod. The target repository
 owns the reviewed `.traffic-e2e/Dockerfile.recording` build contract. Adaptor
 build binds the exact image ID through a deterministic temporary local alias
 and labels the resulting adaptor with that ID. A missing adaptor or one labeled
@@ -2484,9 +2460,11 @@ non-recursive build context from regular files at the top of `.traffic-e2e`, so
 The adaptor image's own `USER`, working directory, entrypoint, and command are
 used at runtime; the manager does not regenerate a Dockerfile or infer launch
 from `RUN_COMMAND`. Cleanup removes run-private containers but retains the
-matching adaptor image. Comparison recording uses the same adaptor image,
-snapshotted runtime inputs, and fixed `998:998` source identity as standard
-recording, so cache-only interception observes both source and target traffic.
+matching adaptor image. Comparison recording uses the adaptor image,
+snapshotted runtime inputs, and fixed `998:998` source identity so cache-only
+interception observes both source and target traffic. Standard recording uses
+the separate project-owned `Docker.recording`; its caller owns builds and
+container startup, and `traffic-e2e record` supervises Source/Recorder inside it.
 Initialization and managed runtime do not provision a Breeze sidecar, inject
 Mesh connection settings, or ship Java class patches. Existing projects must
 remove the retired `project.breeze` setting and any obsolete patch-copy steps
@@ -2529,7 +2507,7 @@ AI has reviewed and completed the generated `Dockerfile.recording` scaffold,
 run the authoritative preflight:
 
 ```bash
-backend-rewrite init preflight
+traffic-e2e diagnose preflight
 ```
 
 It first validates the startup snapshot, then builds and statically inspects
@@ -3042,7 +3020,8 @@ rule.
 Bootstrap Redis `HGET`/`HMGET` rules do not add an initial-load wait. They
 combine optional exact keys with compact `prefix<digits>suffix` patterns and
 require the exact field sequence. Applying one through the rewrite coordinator
-still queues a fresh standard recording so its first-value seed is explicit.
+still requires a fresh externally produced standard recording so its first-value
+seed is explicit.
 
 Process-owned Redis `HSCAN` rules likewise use exact keys or compact
 `prefix<digits>suffix` patterns, but have no field selector or initial-load

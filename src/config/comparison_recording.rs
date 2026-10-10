@@ -101,10 +101,6 @@ impl ComparisonRecordingConfig {
                 names.insert(name),
                 "duplicate comparison recording HTTP gateway rule name {name:?}"
             );
-            ensure!(
-                !rule.methods.is_empty(),
-                "comparison recording HTTP gateway rule {name:?} must declare explicit methods"
-            );
         }
         Ok(())
     }
@@ -202,9 +198,9 @@ mod tests {
     }
 
     #[test]
-    fn requires_explicit_methods_and_accepts_mutating_methods() {
+    fn accepts_all_methods_and_explicit_method_filters() {
         let config = ComparisonRecordingConfig::default();
-        assert!(validate(&config, &gateway(&[])).is_err());
+        assert!(validate(&config, &gateway(&[])).is_ok());
         assert!(validate(&config, &gateway(&["GET", "HEAD"])).is_ok());
         assert!(validate(&config, &gateway(&["POST", "PUT", "PATCH", "DELETE"])).is_ok());
 

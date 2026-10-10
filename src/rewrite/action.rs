@@ -7,10 +7,10 @@ use crate::RecordingApi;
 use super::model::{
     ACTION_SCHEMA_VERSION, RewriteAction, RewriteActionEnvelope, RewriteCommandSpec,
     RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason,
-    RewritePhase, RewriteRecordingInputMode, RewriteState, RewriteWorkflowView,
+    RewritePhase, RewriteState, RewriteWorkflowView,
 };
 use super::{
-    case_patterns, inventory, process_outputs, progress_publication, recorder_capture, recording,
+    case_patterns, inventory, process_outputs, progress_publication, recorder_capture,
     recording_action, repair, target_quality, worker,
 };
 
@@ -328,6 +328,7 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
                 reason: RewriteInputRequiredReason::VerificationProgressCommitRequired,
                 summary: "commit every listed coordinator-managed final delivery file".to_string(),
                 required,
+                recording_input_diagnosis: None,
             };
         }
         Some(progress_publication::PublicationState::Published) | None => {}
@@ -370,6 +371,7 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
                 display_api
             ),
             required: vec!["--source-route <confirmed-source-route>".to_string()],
+            recording_input_diagnosis: None,
         };
     }
     if state.phase == RewritePhase::ImplementationRequired {
@@ -400,23 +402,11 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
         }
     }
     match state.phase {
-        RewritePhase::RecordingRequired => RewriteAction::RecordingRequired {
-            summary: recording_summary(state),
-            run_id: state.recording_run_id.clone(),
-            input_mode: if recording::standard_recording_input_source(state).is_some() {
-                RewriteRecordingInputMode::ReusedAtomicRecording
-            } else {
-                RewriteRecordingInputMode::ExternalLiveTraffic
-            },
-            recording_input_diagnosis: if recording::standard_recording_input_source(state)
-                .is_none()
-                && !recording::requires_external_live_traffic(state)
-            {
-                state.recording_input_diagnosis.clone()
-            } else {
-                None
-            },
-            command: recording_action::command(target_root, state, false),
+        RewritePhase::RecordingRequired => RewriteAction::InputRequired {
+            reason: super::model::RewriteInputRequiredReason::RecordingEvidenceRequired,
+            summary: format!("{}; place a completed external recording under the conventional recording directory, then run next", recording_summary(state)),
+            required: vec![target_root.join(crate::repository::LOCAL_ARTIFACTS_ROOT).join("recordings").display().to_string()],
+            recording_input_diagnosis: state.recording_input_diagnosis.clone(),
         },
         RewritePhase::ApiPending => advance_required(
             target_root,
@@ -427,21 +417,11 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
         RewritePhase::AwaitingRecordingRefresh => {
             recorder_capture::pending_refresh_action(target_root, state)
         }
-        RewritePhase::ComparisonRecordingRequired => RewriteAction::ComparisonRecordingRequired {
-            summary: state.comparison_rejection.as_ref().map_or_else(
-                || format!("generate fresh comparison evidence for {display_api}"),
-                |reason| {
-                    format!(
-                        "previous comparison recording was rejected ({reason}); generate fresh comparison evidence for {}",
-                        display_api
-                    )
-                },
-            ),
-            run_id: state
-                .comparison_run_id
-                .clone()
-                .expect("comparison recording phase requires a run id"),
-            command: recording_action::command(target_root, state, true),
+        RewritePhase::ComparisonRecordingRequired => RewriteAction::InputRequired {
+            reason: super::model::RewriteInputRequiredReason::ComparisonEvidenceRequired,
+            summary: state.comparison_rejection.clone().unwrap_or_else(|| format!("provide completed external comparison evidence for {display_api}; select comparison_run_id in .traffic-e2e/regression.yaml")),
+            required: vec![target_root.join(crate::repository::LOCAL_ARTIFACTS_ROOT).join("comparison-recordings").display().to_string()],
+            recording_input_diagnosis: None,
         },
         RewritePhase::SystemRepairRequired => RewriteAction::SystemRepairRequired {
             work_scope: super::api_selector::work_scope(state, &state.api),
@@ -513,7 +493,7 @@ pub(super) fn advance_envelope(
 }
 
 fn recording_summary(state: &RewriteState) -> String {
-    let summary = if let Some(reason) = &state.recording_rejection {
+    if let Some(reason) = &state.recording_rejection {
         format!(
             "previous standard recording was rejected ({reason}); generate a replacement for {}",
             workflow_scope(state)
@@ -529,15 +509,6 @@ fn recording_summary(state: &RewriteState) -> String {
                 workflow_scope(state)
             ),
         }
-    };
-    if recording::requires_external_live_traffic(state) {
-        format!("{summary}; the request reason requires fresh external live traffic")
-    } else if recording::standard_recording_input_source(state).is_none() {
-        format!(
-            "{summary}; no exact-scope atomic historical input is reusable, capture fresh external live traffic"
-        )
-    } else {
-        summary
     }
 }
 
@@ -575,6 +546,7 @@ pub(super) fn source_route_required(
                 "dynamic API {api} requires a route confirmed from source registration"
             ),
             required: vec!["--source-route <confirmed-source-route>".to_string()],
+            recording_input_diagnosis: None,
         },
         terminal_allowed: false,
     }

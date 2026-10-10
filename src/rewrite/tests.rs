@@ -2,8 +2,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde_json::Value;
-
 use super::*;
 
 #[test]
@@ -19,70 +17,21 @@ fn pointer_patterns_replace_only_array_indices() {
 }
 
 #[test]
-fn action_commands_are_argv_and_do_not_contain_secret_values() {
-    let state = test_state();
-    let target = Path::new("/target");
-    let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
-    assert_eq!(value.get("schema_version"), Some(&serde_json::json!(34)));
-    assert!(value.get("source_process_traffic").is_none());
-    assert!(value.get("process_output_inventory").is_none());
-    assert!(value.get("latest_focused_e2e").is_none());
-    assert_eq!(
-        value.pointer("/action/commands/execute/cwd"),
-        Some(&serde_json::json!(target))
-    );
-    assert!(
-        value
-            .pointer("/action/commands/execute/required_env_names")
-            .is_none()
-    );
-    assert_eq!(
-        value.pointer("/action/commands/execute/argv/0"),
-        Some(&Value::String("backend-rewrite".to_string()))
-    );
-    assert_eq!(
-        value.pointer("/action/commands/execute/argv/1"),
-        Some(&serde_json::json!("--target-root"))
-    );
-    assert_eq!(
-        value.pointer("/action/commands/execute/argv/2"),
-        Some(&serde_json::json!("/target"))
-    );
-    assert_eq!(
-        value.pointer("/action/commands/execute/argv/4"),
-        Some(&serde_json::json!("execute"))
-    );
-    assert_eq!(
-        value
-            .pointer("/action/commands/execute/argv")
-            .unwrap()
-            .as_array()
-            .unwrap()
-            .len(),
-        6
-    );
-    assert!(!value.to_string().contains("encryption-key-value"));
-}
-
-#[test]
-fn rejected_recording_action_allocates_a_replacement_without_exposing_paths() {
+fn recording_requirements_are_external_inputs_without_execution_commands() {
     let mut state = test_state();
-    state.recording_rejection = Some(artifacts::recording_rejection(&anyhow::anyhow!(
-        "standard recording published no cases"
-    )));
-    state.recording_run_id = "20260802000001".to_string();
-
     let target = Path::new("/target");
-    let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
-    assert_eq!(
-        value.pointer("/action/commands/execute/argv/5"),
-        Some(&serde_json::json!(recording_action::recording_action_id(
-            &state, false
-        )))
-    );
-    let summary = value.pointer("/action/summary").unwrap().as_str().unwrap();
-    assert!(summary.contains("published no cases"));
-    assert!(!summary.contains(".traffic-e2e"));
+    for rejected in [false, true] {
+        state.recording_rejection =
+            rejected.then(|| "standard recording published no cases".to_owned());
+        let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
+        assert_eq!(value["action"]["kind"], "input_required");
+        assert_eq!(
+            value["action"]["details"]["reason"],
+            "recording_evidence_required"
+        );
+        assert_eq!(value["action"]["commands"], serde_json::json!({}));
+        assert!(!value.to_string().contains("encryption-key-value"));
+    }
 }
 
 #[test]
@@ -178,7 +127,7 @@ fn clean_reclassification_advances_without_replacing_standard_recording() {
     assert_eq!(state.recording_request_reason, None);
     assert_eq!(state.attempts.len(), 1);
     assert!(state.attempts[0].passed);
-    assert!(state.comparison_run_id.is_some());
+    assert!(state.comparison_run_id.is_none());
 }
 
 #[test]

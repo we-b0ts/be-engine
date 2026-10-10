@@ -3,8 +3,8 @@ use std::path::Path;
 use anyhow::{Context, Result, ensure};
 
 use super::model::{RewriteAttemptDelta, RewriteAttemptSummary, RewritePhase, RewriteState};
-use super::{artifacts, fingerprint, issue};
-use crate::{E2eApiRunResult, ManagedRecordingOperation};
+use super::{fingerprint, issue};
+use crate::E2eApiRunResult;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum AttemptTransition {
@@ -53,10 +53,7 @@ pub(super) fn from_e2e_result(
         state.active_issue = None;
         if state.require_comparison {
             state.phase = RewritePhase::ComparisonRecordingRequired;
-            state.comparison_run_id = Some(artifacts::allocate_run_id(
-                target_root,
-                ManagedRecordingOperation::RecordComparison,
-            )?);
+            state.comparison_run_id = None;
         } else {
             state.comparison_run_id = None;
             state.comparison_rejection = None;

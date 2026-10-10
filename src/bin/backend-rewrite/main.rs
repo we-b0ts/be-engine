@@ -1,7 +1,6 @@
 mod jwt_rule;
 mod review;
 use std::io::Write;
-use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 mod rule_args;
 use rule_args::RulePlanArgs;
@@ -12,16 +11,15 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_e2e::{
     ResponseBodyCodec, ResponseRuleKind, RewriteCaseDependenciesOptions,
-    RewriteCasePatternApplyOptions, RewriteContext, RewriteNextOptions, RewriteRecordingKind,
-    RewriteRecordingReason, RewriteRecordingRequestOptions, RewriteRevalidationRequestOptions,
-    RewriteRouteCause, RewriteRouteOptions, RewriteRulePlanOptions, RewriteTargetQualityOptions,
-    RewriteWorkerConfirmOptions, RewriteWorkerReportOptions, RewriteWorkerTransferOptions,
-    apply_rewrite_case_patterns, apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite,
-    plan_rewrite_rule, query_rewrite_case_dependencies, recover_rewrite, report_rewrite_worker,
-    request_rewrite_recording, request_rewrite_revalidation, resume_rewrite_replay_planning,
-    retry_rewrite_operation, route_rewrite, start_rewrite_next, start_rewrite_recording,
-    start_rewrite_target_quality, status_rewrite, status_rewrite_for_process_output,
-    transfer_rewrite_worker, verify_rewrite_repair,
+    RewriteCasePatternApplyOptions, RewriteContext, RewriteNextOptions,
+    RewriteRevalidationRequestOptions, RewriteRouteCause, RewriteRouteOptions,
+    RewriteRulePlanOptions, RewriteTargetQualityOptions, RewriteWorkerConfirmOptions,
+    RewriteWorkerReportOptions, RewriteWorkerTransferOptions, apply_rewrite_case_patterns,
+    apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite, plan_rewrite_rule,
+    query_rewrite_case_dependencies, recover_rewrite, report_rewrite_worker,
+    request_rewrite_revalidation, resume_rewrite_replay_planning, retry_rewrite_operation,
+    route_rewrite, start_rewrite_next, start_rewrite_target_quality, status_rewrite,
+    status_rewrite_for_process_output, transfer_rewrite_worker, verify_rewrite_repair,
 };
 
 mod config_protocol;
@@ -151,8 +149,6 @@ enum RewriteCommand {
     Verification(VerificationArgs),
     /// Validate existing quality receipts for legacy coordinator operations.
     TargetQuality(TargetQualityArgs),
-    /// Request a fresh coordinator-owned recording with explicit bounded parameters.
-    Recording(RecordingArgs),
     /// Remove only a stale coordinator lock after its process has exited.
     Recover,
 }
@@ -465,56 +461,6 @@ struct TargetQualityRunArgs {
     hardcode_ai_verified: Vec<String>,
 }
 
-#[derive(Debug, Args)]
-struct RecordingArgs {
-    #[command(subcommand)]
-    command: RecordingCommand,
-}
-
-#[derive(Debug, Subcommand)]
-enum RecordingCommand {
-    /// Request or recover one idempotent standard recording action.
-    Request(RecordingRequestArgs),
-    /// Start one detached coordinator-owned recording action and return immediately.
-    Execute(RecordingExecuteArgs),
-}
-
-#[derive(Debug, Args)]
-struct RecordingExecuteArgs {
-    action_id: String,
-}
-
-#[derive(Debug, Args)]
-struct RecordingRequestArgs {
-    #[arg(long, value_enum)]
-    kind: RecordingKindArg,
-    #[arg(long, value_enum)]
-    reason: RecordingReasonArg,
-    #[arg(long, default_value = "60")]
-    duration_seconds: NonZeroU64,
-    #[arg(long = "per-api-case-limit", default_value = "100")]
-    per_api_case_limit: NonZeroUsize,
-    /// Optional API selector; omit to record every API admitted by recorder configuration.
-    #[arg(long, value_name = "PATH_OR_PATTERN")]
-    api: Option<traffic_e2e::RewriteApiSelector>,
-    /// Replace a different pending recording request instead of returning a conflict.
-    #[arg(long)]
-    replace_pending: bool,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum RecordingKindArg {
-    Standard,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum RecordingReasonArg {
-    /// Explicit user authorization for a fresh standard recording. Standard
-    /// recording always requires explicit user authorization; the other
-    /// recording reasons are coordinator-owned and cannot be requested here.
-    UserRequested,
-}
-
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum RouteCauseArg {
     UnrecordedIp,
@@ -741,24 +687,6 @@ async fn run(cli: Cli) -> Result<()> {
                 pretty,
             ),
         },
-        RewriteCommand::Recording(args) => match args.command {
-            RecordingCommand::Request(args) => print_json(
-                &request_rewrite_recording(RewriteRecordingRequestOptions {
-                    target_root,
-                    kind: args.kind.into(),
-                    reason: args.reason.into(),
-                    duration_seconds: args.duration_seconds,
-                    per_api_case_limit: args.per_api_case_limit,
-                    api: args.api,
-                    replace_pending: args.replace_pending,
-                })?,
-                pretty,
-            ),
-            RecordingCommand::Execute(args) => print_json(
-                &start_rewrite_recording(target_root, &args.action_id)?,
-                pretty,
-            ),
-        },
         RewriteCommand::Recover => print_json(
             &recover_rewrite(RewriteContext { target_root }).await?,
             pretty,
@@ -803,22 +731,6 @@ impl RouteCauseArg {
                 Ok(RewriteRouteCause::SourceChange { required_change })
             }
             _ => bail!("route cause arguments are incomplete or mutually exclusive"),
-        }
-    }
-}
-
-impl From<RecordingKindArg> for RewriteRecordingKind {
-    fn from(value: RecordingKindArg) -> Self {
-        match value {
-            RecordingKindArg::Standard => Self::Standard,
-        }
-    }
-}
-
-impl From<RecordingReasonArg> for RewriteRecordingReason {
-    fn from(value: RecordingReasonArg) -> Self {
-        match value {
-            RecordingReasonArg::UserRequested => Self::UserRequested,
         }
     }
 }

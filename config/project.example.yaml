@@ -142,10 +142,9 @@ recorder:
     rules:
     - name: http-api
       hosts: []
-      methods:
-      - GET
+      methods: [] # All HTTP methods; ingress selects the recording traffic.
       path_prefixes:
-      - /api
+      - /
       headers: {}
   motan_gateway:
     enabled: false

@@ -50,7 +50,7 @@ source "$TRAFFIC_E2E_PLATFORM_ASSETS/comparison-process-outputs.sh"
 validate_comparison_process_output_environment
 
 case "$operation" in
-    record|record-comparison|preflight) ;;
+    record-comparison|preflight) ;;
     *)
         printf 'error: unsupported managed recording operation %s\n' "$operation" >&2
         exit 1
@@ -676,7 +676,7 @@ stop_recording_input() {
     ((status == 0))
 }
 
-run_standard_recording() {
+run_preflight() {
     local artifact_owner control_socket truststore
     artifact_owner="$runtime_uid:$runtime_gid"
     control_socket=/workspace/control/recorder.sock
@@ -689,19 +689,17 @@ run_standard_recording() {
     detect_source_java_runtime
     docker pull "$anchor_image" >/dev/null
     docker pull "$recorder_image" >/dev/null
-    if [[ "$operation" == preflight ]] && ! "$source_uses_java"; then
+    if ! "$source_uses_java"; then
         docker pull "$network_probe_image" >/dev/null
     fi
     docker run --detach --name "$anchor_name" --platform linux/amd64 --network host \
         "$anchor_image" >/dev/null
     anchor_started=true
     local -a recorder_command=(internal recorder-run --config /workspace/project.yaml --control-socket "$control_socket" --artifact-owner "$artifact_owner" --dns --run-id "$run_id")
-    if [[ "$operation" == preflight ]]; then
-        if "$source_uses_java"; then
-            recorder_command+=(--preflight-probe java-truststore)
-        else
-            recorder_command+=(--preflight-probe system-network)
-        fi
+    if "$source_uses_java"; then
+        recorder_command+=(--preflight-probe java-truststore)
+    else
+        recorder_command+=(--preflight-probe system-network)
     fi
     local selector
     for selector in "${api_selectors[@]}"; do recorder_command+=(--api "$selector"); done
@@ -744,10 +742,7 @@ run_standard_recording() {
         --container "$source_name" --side source \
         --observation before-shutdown \
         --output-root "$artifacts_dir/recordings/$run_id/process-outputs"
-    local manifest_filter='.status == "completed" and .failed_cases == 0 and (.errors | length == 0)'
-    if [[ "$operation" == preflight ]]; then
-        manifest_filter+=' and .published_cases > 0'
-    fi
+    local manifest_filter='.status == "completed" and .failed_cases == 0 and (.errors | length == 0) and .published_cases > 0'
     jq -e "$manifest_filter" "$artifacts_dir/recordings/$run_id/recording-run.json" >/dev/null
 }
 
@@ -862,7 +857,6 @@ run_comparison_recording() {
 }
 
 case "$operation" in
-    record) run_standard_recording ;;
     record-comparison) run_comparison_recording ;;
-    preflight) run_standard_recording ;;
+    preflight) run_preflight ;;
 esac

@@ -2,8 +2,8 @@ use serde::{Serialize, Serializer};
 
 use super::model::{
     RewriteAction, RewriteCommandSpec, RewriteInputRequiredReason, RewriteIssue, RewriteIssueKind,
-    RewriteIssueOwner, RewriteRecordingInputDiagnosis, RewriteRecordingInputMode,
-    RewriteRouteRecord, RewriteWorkerDispatchView,
+    RewriteIssueOwner, RewriteRecordingInputDiagnosis, RewriteRouteRecord,
+    RewriteWorkerDispatchView,
 };
 
 impl Serialize for RewriteAction {
@@ -45,10 +45,11 @@ impl Serialize for RewriteAction {
                 reason,
                 summary,
                 required,
+                recording_input_diagnosis,
             } => RewriteActionView {
                 kind: "input_required",
                 summary,
-                details: RewriteInputRequiredDetails { reason, required },
+                details: RewriteInputRequiredDetails { reason, required, recording_input_diagnosis: recording_input_diagnosis.as_ref() },
                 commands: RewriteNoCommands {},
             }
             .serialize(serializer),
@@ -79,23 +80,6 @@ impl Serialize for RewriteAction {
                     retry_after_seconds: *retry_after_seconds,
                 },
                 commands: serde_json::json!({"wait": super::waiting::command(status, *retry_after_seconds)}),
-            }
-            .serialize(serializer),
-            Self::RecordingRequired {
-                summary,
-                run_id,
-                input_mode,
-                recording_input_diagnosis,
-                command,
-            } => RewriteActionView {
-                kind: "recording_required",
-                summary,
-                details: RewriteRecordingRequiredDetails {
-                    run_id,
-                    input_mode,
-                    recording_input_diagnosis: recording_input_diagnosis.as_ref(),
-                },
-                commands: RewriteRecordingCommands { execute: command },
             }
             .serialize(serializer),
             Self::RecordingInProgress {
@@ -228,7 +212,7 @@ impl Serialize for RewriteAction {
                     target_fingerprint,
                     gates,
                 },
-                commands: RewriteRecordingCommands { execute: command },
+                commands: RewriteExecuteCommands { execute: command },
             }
             .serialize(serializer),
             Self::PlanApplyRequired { summary, command } => RewriteActionView {
@@ -243,17 +227,6 @@ impl Serialize for RewriteAction {
                 summary,
                 details: RewriteNoDetails {},
                 commands: RewriteAdvanceCommands { advance: command },
-            }
-            .serialize(serializer),
-            Self::ComparisonRecordingRequired {
-                summary,
-                run_id,
-                command,
-            } => RewriteActionView {
-                kind: "comparison_recording_required",
-                summary,
-                details: RewriteRecordingRunDetails { run_id },
-                commands: RewriteRecordingCommands { execute: command },
             }
             .serialize(serializer),
             Self::SystemRepairRequired {
@@ -330,19 +303,8 @@ struct RewriteNoCommands {}
 struct RewriteInputRequiredDetails<'a> {
     reason: &'a RewriteInputRequiredReason,
     required: &'a [String],
-}
-
-#[derive(Serialize)]
-struct RewriteRecordingRequiredDetails<'a> {
-    run_id: &'a str,
-    input_mode: &'a RewriteRecordingInputMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     recording_input_diagnosis: Option<&'a RewriteRecordingInputDiagnosis>,
-}
-
-#[derive(Serialize)]
-struct RewriteRecordingRunDetails<'a> {
-    run_id: &'a str,
 }
 
 #[derive(Serialize)]
@@ -445,7 +407,7 @@ struct RewriteRecoveryCommands<'a> {
 }
 
 #[derive(Serialize)]
-struct RewriteRecordingCommands<'a> {
+struct RewriteExecuteCommands<'a> {
     execute: &'a RewriteCommandSpec,
 }
 

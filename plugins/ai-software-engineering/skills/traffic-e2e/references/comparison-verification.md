@@ -26,12 +26,14 @@ egress guard owns target forwarding and masquerade for the lifetime of the
 cache snapshot. The target receives its declared startup mounts and environment.
 Do not generate or invoke repository comparison wrappers.
 
-Managed comparison runs source through the same reviewed
-`.traffic-e2e/Dockerfile.recording` adaptor used by standard recording. The
+Managed comparison runs source through the reviewed
+`.traffic-e2e/Dockerfile.recording` adaptor, also used by diagnostic preflight. The
 adaptor owns the source command and fixed `998:998` identity required by
 cache-only interception; callers do not adapt or configure the source UID.
 Comparison reads runtime inputs from the local source snapshot and starts the
 adapted, run-private source container. The initialization Pod is not required.
+This managed adaptor is separate from the project-owned `Docker.recording`
+used to deploy standalone `traffic-e2e record`.
 
 When the recorder config contains Redis process-owned rules, managed comparison
 also owns one cache-only run-local snapshot across both managed namespaces.
@@ -63,7 +65,7 @@ With explicit API selectors, comparison recording finalizes normally when
 every selected API reaches its case limit; `--duration-seconds` remains the
 upper bound. The project-level `verification.max_failed_cases_per_api` limit
 also stops admitting cases for an API after that many online comparison cases
-do not pass under the current verification policy. When the managed coordinator
+do not pass under the current verification policy. When the managed runtime
 supplies a finite standard-recording case source, it sends one complete case at
 a time. After the final case is
 published, the source, candidate, and cache snapshot remain running for a
@@ -72,6 +74,11 @@ three-second final quiet period, then the run finalizes with
 the published comparison case count; a mismatch finalizes with errors instead
 of silently accepting missing evidence. Without finite input or a completed
 explicit case limit, comparison keeps the full recording window.
+
+Backend rewrite consumes completed comparison batches placed under
+`.traffic-e2e/local/artifacts/comparison-recordings/<run-id>/`, selected with
+`comparison_run_id` in local `regression.yaml`. It never invokes this capture;
+the caller supplies evidence after the current Replay gate passes.
 
 Finite input selects matching cases across all standard-recording member
 directories, including concrete paths covered by a wildcard API. Overlapping

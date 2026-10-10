@@ -256,8 +256,7 @@ http_gateway:
     overrides: {}
   rules:
   - name: http-api
-    methods:
-    - GET
+    methods: []
     path_prefixes:
     - /
     headers: {}
@@ -354,7 +353,7 @@ mod tests {
         assert!(!raw.contains("strategy: breeze"));
         assert!(!raw.contains("snapshot_dir: /data1/breeze/snapshot"));
         assert_eq!(config.http_response_rewrite.rules.len(), 2);
-        assert_eq!(config.http_gateway.rules[0].methods, ["GET"]);
+        assert!(config.http_gateway.rules[0].methods.is_empty());
         assert_eq!(
             config.recording.access_policy,
             super::super::RecordingAccessPolicy::Unrestricted
