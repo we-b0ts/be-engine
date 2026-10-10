@@ -1,7 +1,7 @@
 # traffic-e2e
 
 Rust binaries for traffic-based E2E contracts and backend rewrite
-orchestration. `traffic-e2e` owns recording, replay, comparison, and
+orchestration. `traffic-e2e` owns recording, replay, and
 diagnostics; `backend-rewrite` owns the AI-facing migration workflow and uses
 the same `traffic_e2e` crate; `backend-rewrite-admin` owns explicit
 administrator repair outside ordinary AI workflows.
@@ -20,7 +20,6 @@ consumes finalized recordings from the conventional artifact directory.
   capture, and HTTP/HTTPS recording.
 - Automatic local root CA generation, with support for configured CA cert/key paths.
 - Full request/response recording with configurable body truncation.
-- Live baseline/candidate response recording without dependency interception.
 - Default redaction for sensitive proxy and HTTP headers.
 - Optional MySQL TCP proxy with DNS/hosts routing through per-IP listeners.
 - MySQL login/query/response packet metadata and raw response payload recording.
@@ -57,20 +56,10 @@ migration orchestration:
 
 ```bash
 traffic-e2e config init --source-pod <pod> --namespace <namespace>
-backend-rewrite next --api '/api/widgets/*' \
-  --source-route '/api/widgets/:id'
-backend-rewrite status
-backend-rewrite inventory
-backend-rewrite evidence <query-id>
-traffic-e2e record ...
-traffic-e2e record-comparison ...
-traffic-e2e compare ... --policy .traffic-e2e/verification.yaml
-traffic-e2e prepare ...
-traffic-e2e run-api ...
-traffic-e2e run ...
-traffic-e2e status ...
-traffic-e2e recover ...
-traffic-e2e abort ...
+traffic-e2e record --source-workdir /app --data-root /data/traffic-e2e -- ./source
+traffic-e2e prepare --help
+traffic-e2e run-api --help
+backend-rewrite next
 ```
 
 From a target repository root, the conventional initialization is simply
@@ -81,16 +70,15 @@ data, including recordings, boot inputs, internal state, and rewrite
 worktrees, lives below that root.
 
 For a backend migration, `backend-rewrite next` is the normal facade. It
-returns one argv-based action, automatically owns Prepare/E2E/Compare
+returns one argv-based action, automatically owns Prepare/E2E
 transitions, and exposes only bounded evidence queries. Direct `prepare`,
-`run-api`, `compare`, and report-oriented commands remain available to traffic
+`run-api` and report-oriented commands remain available to traffic
 operators and system maintainers.
 
 Nonpassing focused E2E attempts reuse the active immutable standard cases.
 Recording is external to rewrite. Place completed batches in
 `.traffic-e2e/local/artifacts/recordings/<run-id>/`; use `recording_run_id` in
-`.traffic-e2e/regression.yaml` to pin a batch. When comparison is required,
-provide completed comparison evidence and select `comparison_run_id` there.
+`.traffic-e2e/regression.yaml` to pin a batch.
 Missing evidence returns an input requirement, never a recording executor.
 
 Process-owned dependency rules are evidence-ownership rules, not fresh-capture
@@ -101,7 +89,7 @@ If an interrupted or older coordinator state still carries the strict
 dependency-finalize error after that derived view becomes clean, the next
 coordinator step repairs the same attempt in place before choosing its action.
 If that removes the remaining case-scoped dirty evidence, the same focused
-attempt advances to comparison without a new standard recording.
+attempt completes the API without a new standard recording.
 
 `backend-rewrite` emits one compact JSON object per command by default; use
 global `--pretty` for interactive inspection. Normal `next` and `status`
@@ -109,7 +97,7 @@ responses contain only the bounded API-inventory summary. Query the full
 ordered per-API list explicitly with the read-only `backend-rewrite inventory`
 command.
 
-Representative evidence returns the exact immutable standard or comparison
+Representative evidence returns the exact immutable standard
 case directory and a structured response difference. Use that case as the
 efficient starting point for diagnosis; all generated files under
 `.traffic-e2e/local/artifacts/` remain available for read-only inspection when
@@ -131,24 +119,8 @@ interpreted or returned.
 
 Evidence-driven recorder and verification-policy changes live under
 `traffic-e2e config ... plan|apply`; low-level grouping and report commands live
-under `traffic-e2e diagnose`. Standalone recording, managed comparison, replay, fixed-user target
+under `traffic-e2e diagnose`. Standalone recording and replay, fixed-user target
 isolation, and host interception are implemented by the same Rust binary.
-
-Comparison recording accepts all HTTP methods by default and retains configured
-method filters. Each admitted request reaches both upstreams. Set
-`comparison_recording.baseline_recheck = true` to additionally capture a
-source response after the candidate for source-drift diagnosis. Passing
-`record-comparison --baseline-recheck` enables it for one run without changing
-the configuration. Comparison recording defaults to 60 seconds; automated
-calls pass `--duration-seconds 60` or another positive integer explicitly. An
-explicitly scoped recording may finish earlier when every selected API reaches
-its per-API case limit; an unscoped recording retains the complete window for
-low-frequency API discovery. Finite-input comparison binds
-the gateway to loopback for that run, so concurrent environment traffic cannot
-be published as managed comparison evidence.
-Offline `compare` reuses
-`.traffic-e2e/verification.yaml`; see
-[development.md](docs/development.md#running-locally).
 
 ## Run
 
@@ -195,7 +167,7 @@ For runtime-generated UUIDs, timestamps, signed query fields, and reviewed
 response-comparison exemptions, keep a
 source-controlled `.traffic-e2e/verification.yaml` in the target project and pass it with
 `--policy`. Initialize it with `traffic-e2e config init --source-pod <pod>
---namespace <namespace>` from the target root; initialization, strategy application, replay, and comparison each
+--namespace <namespace>` from the target root; initialization, strategy application, and replay each
 validate the policy. See
 [Dependency Replay And Response Verification Policy](docs/replay-policy.md).
 
@@ -317,8 +289,7 @@ evaluated before both rule sets, so exclusion rules do not bypass
 
 Select Source recording traffic at ingress. `record` preserves configured
 include/exclude rules and has no per-invocation API selector. The default rule
-matches every method and path. `record-comparison --api 'METHOD /path-or-pattern'`
-continues to support explicit comparison selection.
+matches every method and path.
 
 `[http_gateway.ready]` is an optional active readiness probe against
 `matched_upstream`. When enabled, the recorder sends `GET path` every
@@ -336,10 +307,8 @@ apply and the bootstrap window still closes when the first matched gateway
 case is reserved.
 
 Each recorder process creates one run directory under
-`artifacts.root_dir/recordings` named `YYYYMMDDHHMMSS`. Comparison recording
-runs use the sibling `artifacts.root_dir/comparison-recordings` directory.
-Matched gateway requests create case directories inside the recording run
-after the case is complete and valid:
+`artifacts.root_dir/recordings` named `YYYYMMDDHHMMSS`. Matched gateway requests
+publish case directories inside the run after the case is complete and valid:
 
 ```text
 <run-id>/traffic.jsonl

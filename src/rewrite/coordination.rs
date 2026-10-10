@@ -109,10 +109,7 @@ pub(super) fn details(
             }
             Coverage::IntegrationRequired => add(&mut result.waiting, "integration_resource", 1),
             Coverage::VerificationRequired
-                if !busy
-                    && !first_pass_ready
-                    && (matches!(scope, super::RewriteWorkScope::ProcessOutput { .. })
-                        || super::inventory::can_switch_api(state)) =>
+                if !busy && !first_pass_ready && super::inventory::can_switch_api(state) =>
             {
                 add(&mut result.ready, "verify_handoff", 1)
             }

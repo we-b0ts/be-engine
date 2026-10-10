@@ -16,7 +16,6 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
     advance_atomic(AtomicNextOptions {
         target_root: options.target_root,
         api,
-        process_output: options.process_output,
         source_route: options.source_route,
         route_batch,
     })
@@ -26,7 +25,6 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
 struct AtomicNextOptions {
     target_root: PathBuf,
     api: Option<RecordingApi>,
-    process_output: Option<String>,
     source_route: Option<String>,
     route_batch: bool,
 }
@@ -35,7 +33,6 @@ impl AtomicNextOptions {
     fn uses_route_batch(&self, state: &RewriteState) -> bool {
         self.route_batch
             || self.api.is_none()
-                && self.process_output.is_none()
                 && !state.api.is_empty()
                 && !api_selector::work_scope(state, &state.api)
                     .binding_key()
@@ -48,17 +45,8 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
         return Ok(envelope);
     }
     let (target_root, project) = crate::e2e_run::resolve_project(&options.target_root)?;
-    ensure!(
-        options.api.is_none() || options.process_output.is_none(),
-        "--api and --process-output are mutually exclusive"
-    );
-    ensure!(
-        options.process_output.is_none() || options.source_route.is_none(),
-        "--source-route is valid only with --api"
-    );
     let store = RewriteStore::new(&target_root)?;
     let requested_api = options.api.as_ref().map(ToString::to_string);
-    let requested_process_output = options.process_output.clone();
     let Some(_lock) = store.try_lock()? else {
         if let Some(state) = store.load()? {
             if let Some(envelope) = execution::worker_action_while_busy(&target_root, &state) {
@@ -66,15 +54,8 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
             }
             match traffic_operation::state(&target_root)? {
                 traffic_operation::TrafficOperationState::Live(active) => {
-                    let mut envelope =
+                    let envelope =
                         action::wait_envelope(&target_root, &state, requested_api, &active);
-                    if let Some(id) = requested_process_output.as_deref() {
-                        action::retarget_wait_status_for_process_output(
-                            &mut envelope,
-                            &target_root,
-                            id,
-                        );
-                    }
                     return Ok(envelope);
                 }
                 traffic_operation::TrafficOperationState::Stale(_) => {
@@ -84,16 +65,7 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
             }
             return Ok(match store.lock_state()? {
                 RewriteLockState::Live => {
-                    let mut envelope =
-                        action::coordinator_wait_envelope(&target_root, &state, requested_api);
-                    if let Some(id) = requested_process_output.as_deref() {
-                        action::retarget_wait_status_for_process_output(
-                            &mut envelope,
-                            &target_root,
-                            id,
-                        );
-                    }
-                    envelope
+                    action::coordinator_wait_envelope(&target_root, &state, requested_api)
                 }
                 RewriteLockState::Stale | RewriteLockState::Absent => {
                     action::recovery_required(&target_root)
@@ -112,15 +84,7 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
     match traffic_operation::state(&target_root)? {
         traffic_operation::TrafficOperationState::Live(active) => {
             if let Some(state) = store.load()? {
-                let mut envelope =
-                    action::wait_envelope(&target_root, &state, requested_api, &active);
-                if let Some(id) = requested_process_output.as_deref() {
-                    action::retarget_wait_status_for_process_output(
-                        &mut envelope,
-                        &target_root,
-                        id,
-                    );
-                }
+                let envelope = action::wait_envelope(&target_root, &state, requested_api, &active);
                 return Ok(envelope);
             }
         }
@@ -135,28 +99,11 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
     let mut state = match store.load()? {
         Some(mut state) => {
             let migrated = inventory::initialize_legacy(&mut state);
-            if !state.api_inventory.is_empty() {
-                process_outputs::ensure_inventory_matches(&state, &project.process_outputs)?;
-            }
             let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
             let invalidated =
                 inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
-            let process_invalidated =
-                process_outputs::defer_for_target_change(&mut state, &target_fingerprint);
             if recording::begin_pending_capture_refresh(&target_root, &mut state)? {
                 store.save(&state)?;
-            }
-            let active_comparison_stale = state.phase == RewritePhase::ComparisonRecordingRequired
-                && state.target_fingerprint.as_deref() != Some(target_fingerprint.as_str());
-            if active_comparison_stale {
-                state.phase = RewritePhase::ApiPending;
-                state.e2e_current = false;
-                state.comparison_current = false;
-                state.comparison_run_id = None;
-                state.comparison_rejection = None;
-                state.active_issue = None;
-                state.target_fingerprint = None;
-                state.bump();
             }
             if let Some(api) = options.api.as_ref()
                 && let Some(envelope) =
@@ -167,10 +114,7 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
             }
             if let Some(requested_api) = options.api.as_ref()
                 && requested_api.to_string() != state.api
-                && matches!(
-                    state.phase,
-                    RewritePhase::RecordingRequired | RewritePhase::ComparisonRecordingRequired
-                )
+                && matches!(state.phase, RewritePhase::RecordingRequired)
             {
                 if !state.api_inventory.is_empty() {
                     ensure!(
@@ -181,7 +125,7 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
                         "recorded API inventory does not contain {requested_api:?}"
                     );
                 }
-                if migrated || invalidated || process_invalidated || active_comparison_stale {
+                if migrated || invalidated {
                     store.save(&state)?;
                 }
                 return Ok(action::api_selection_wait_envelope(
@@ -189,34 +133,6 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
                     &state,
                     requested_api.to_string(),
                 ));
-            }
-            if let Some(id) = options.process_output.as_deref() {
-                let scope = RewriteWorkScope::ProcessOutput { id: id.to_string() };
-                if let Some(action) =
-                    worker::scheduler::acceptance_gate(&target_root, &state, &scope)
-                {
-                    return Ok(action::envelope(&target_root, &state, action));
-                }
-                if (worker::runtime::acceptance_ready(&state, &scope)
-                    || review::requires_delivery_review(&target_root, &state))
-                    && let Some(review) = review::gate(&target_root, &state, &project.pr_base)?
-                {
-                    return Ok(action::envelope(&target_root, &state, review));
-                }
-                process_outputs::activate_and_compare(
-                    &target_root,
-                    &mut state,
-                    id,
-                    &target_fingerprint,
-                    &project.process_outputs,
-                    &project.process_output_rules,
-                )?;
-                store.save(&state)?;
-                progress_publication::synchronize_if_complete(&target_root, &state)?;
-                return Ok(action::for_state(&target_root, &state));
-            }
-            if options.api.is_some() {
-                state.process_outputs.current_id = None;
             }
             if state.phase == RewritePhase::SliceComplete
                 && options
@@ -228,7 +144,7 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
                     store.save(&state)?;
                     return Ok(action::for_state(&target_root, &state));
                 }
-                if migrated || invalidated || process_invalidated || active_comparison_stale {
+                if migrated || invalidated {
                     store.save(&state)?;
                 }
                 if let Some(review) = review::required_action(&target_root, &state)? {
@@ -244,22 +160,12 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
                 options.api.as_ref(),
                 options.source_route.as_deref(),
             )?;
-            if migrated
-                || invalidated
-                || process_invalidated
-                || active_comparison_stale
-                || activated
-                || bound
-            {
+            if migrated || invalidated || activated || bound {
                 store.save(&state)?;
             }
             state
         }
         None => {
-            ensure!(
-                options.process_output.is_none(),
-                "--process-output requires an initialized workflow"
-            );
             let (api, source_route, recording_apis) = match options.api.as_ref() {
                 Some(api) => {
                     let source_route = match options.source_route.as_ref() {
@@ -382,7 +288,6 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
                 recorded_cases,
             )?;
             let uses_recorded_patterns = inventory::install(&mut state, apis)?;
-            process_outputs::install(&mut state, &project.process_outputs);
             state.recording_refresh = None;
             regression_scope::apply(&target_root, &mut state)?;
             if state.current_api_index.is_none() {
@@ -449,7 +354,6 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
                 }
             }
             state.e2e_current = false;
-            state.comparison_current = false;
             let _traffic = claim_traffic_operation(
                 &target_root,
                 &state,
@@ -467,10 +371,6 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
                 return Ok(action::envelope(&target_root, &state, required));
             }
 
-            if regression_scope::start_if_required(&target_root, &mut state)? {
-                store.save(&state)?;
-                return Ok(action::for_state(&target_root, &state));
-            }
             if inventory::current_requires_source_route(&state) {
                 return Ok(action::for_state(&target_root, &state));
             }
@@ -487,47 +387,6 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
             let route_batch = options.uses_route_batch(&state);
             run_and_transition(&target_root, &mut state, route_batch).await?;
             store.save(&state)?;
-            Ok(action::for_state(&target_root, &state))
-        }
-        RewritePhase::ComparisonRecordingRequired => {
-            if state.comparison_run_id.is_none() {
-                state.comparison_run_id =
-                    crate::config::regression::RegressionScope::load(&target_root)?
-                        .comparison_run_id;
-                store.save(&state)?;
-            }
-            let Some(run_id) = state.comparison_run_id.clone() else {
-                return Ok(action::for_state(&target_root, &state));
-            };
-            match artifacts::comparison_recording_publication(&target_root, &run_id)? {
-                artifacts::RecordingPublication::Missing => {
-                    return Ok(action::for_state(&target_root, &state));
-                }
-                artifacts::RecordingPublication::Running => {
-                    return action::for_status(&target_root, &state);
-                }
-                artifacts::RecordingPublication::Finalized => {}
-            }
-            if let Err(error) = artifacts::validate_comparison_recording(&target_root, &state) {
-                state.comparison_rejection = Some(artifacts::comparison_rejection(&error));
-                state.bump();
-                store.save(&state)?;
-                return Ok(action::for_state(&target_root, &state));
-            }
-            state.comparison_rejection = None;
-            if review::requires_delivery_review(&target_root, &state)
-                && let Some(required) = review::gate(&target_root, &state, &project.pr_base)?
-            {
-                return Ok(action::envelope(&target_root, &state, required));
-            }
-            let _traffic = claim_traffic_operation(
-                &target_root,
-                &state,
-                traffic_operation::TrafficOperationKind::Comparison,
-            )?;
-            compare_and_transition(&target_root, &mut state)?;
-            store.save(&state)?;
-            progress_publication::synchronize_if_complete(&target_root, &state)?;
             Ok(action::for_state(&target_root, &state))
         }
         RewritePhase::AwaitingRecordingRefresh
@@ -551,7 +410,6 @@ fn claim_traffic_operation(
             &state.api,
             match kind {
                 traffic_operation::TrafficOperationKind::Replay => "replay",
-                traffic_operation::TrafficOperationKind::Comparison => "comparison",
             },
             &state.revision.to_string(),
         ])

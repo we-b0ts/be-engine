@@ -20,7 +20,6 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
         worker_bindings: std::collections::BTreeMap::new(),
         source_review_rework: std::collections::BTreeMap::new(),
         worker_event_revision: 0,
-        process_outputs: Default::default(),
         api_catalog_initialized: false,
         api_catalog: std::collections::BTreeSet::new(),
         case_pattern_identification: None,
@@ -28,7 +27,6 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
         delivery_review_required: false,
         recording_run_id: "20260802000000".to_string(),
         recording_after_run_id: None,
-        require_comparison: crate::config::regression::default_require_comparison(),
         recording_rejection: None,
         recording_settings: RewriteRecordingSettings::default(),
         recording_request_reason: None,
@@ -39,8 +37,6 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
             phase: RewritePhase::RecordingRequired,
             api: "GET /api".to_string(),
             source_route: "/api".to_string(),
-            comparison_run_id: None,
-            comparison_rejection: None,
             case_source: None,
             case_inventory_id: None,
             source_revision: None,
@@ -56,7 +52,6 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
             system_repair_accepted: false,
             rule_replay_pending: false,
             e2e_current: false,
-            comparison_current: false,
         },
     }
 }

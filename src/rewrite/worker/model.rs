@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::super::model::RewriteCommandSpec;
-use super::super::process_output_model::RewriteWorkScope;
+use super::super::work_scope::RewriteWorkScope;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::rewrite) struct RewriteWorkerBinding {

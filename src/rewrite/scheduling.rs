@@ -3,15 +3,14 @@
 use std::path::Path;
 
 use super::model::{RewriteAction, RewriteApiStatus, RewritePhase, RewriteState};
-use super::{action, inventory, process_outputs, repair, worker};
+use super::{action, inventory, repair, worker};
 
 pub(super) fn repair_action(target_root: &Path, state: &RewriteState) -> Option<RewriteAction> {
     if !inventory::can_switch_api(state) {
         return None;
     }
     repair_apis(state).into_iter().find_map(|api| {
-        let mut scoped = inventory::scoped(state, Some(&api.parse().ok()?)).ok()?;
-        scoped.process_outputs.current_id = None;
+        let scoped = inventory::scoped(state, Some(&api.parse().ok()?)).ok()?;
         let legacy = scoped
             .route
             .as_ref()
@@ -71,12 +70,6 @@ pub(super) fn idle_action(target_root: &Path, state: &RewriteState) -> Option<Re
     if let Some(api) = accepted.or_else(|| inventory::next_pending_api_for_concurrent_work(state)) {
         return Some(advance(target_root, state, api, "verify ready API"));
     }
-    if let Some(id) = process_outputs::next_eligible_id(state) {
-        return Some(RewriteAction::AdvanceRequired {
-            summary: format!("verify ready process output {id}"),
-            command: action::next_command_for_process_output(target_root, id),
-        });
-    }
     if let Some(api) = revalidation_api(state) {
         return Some(advance(
             target_root,
@@ -99,9 +92,6 @@ pub(super) fn idle_action(target_root: &Path, state: &RewriteState) -> Option<Re
             system_repair_apis: blocked.iter()
                 .map(|api| super::api_selector::public_api(api).to_string())
                 .collect::<std::collections::BTreeSet<_>>().into_iter().collect(),
-            dependent_process_outputs: state.process_outputs.inventory.iter()
-                .filter(|item| item.status != super::process_output_model::RewriteProcessOutputStatus::Complete)
-                .map(|item| item.id.clone()).collect(),
             resume: action::status_command_for_api(target_root, None),
         });
     }

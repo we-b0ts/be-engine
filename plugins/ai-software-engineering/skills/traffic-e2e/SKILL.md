@@ -1,6 +1,6 @@
 ---
 name: traffic-e2e
-description: "Operate and maintain the traffic-e2e engine directly for standalone Source recording, case grouping, genuine dependency replay, response assertion, managed comparison, evidence-backed recorder/replay policy, and engine capability diagnosis. Use for independent traffic operations or a routed traffic-e2e system repair; do not use for ordinary backend rewrites coordinated by backend-rewrite. This skill owns execution contracts and traffic facts, not migration diagnosis, target implementation, sequencing, completion, or delivery."
+description: "Operate and maintain the traffic-e2e engine directly for standalone Source recording, case grouping, genuine dependency replay, response assertion, evidence-backed recorder/replay policy, and engine capability diagnosis. Use for independent traffic operations or a routed traffic-e2e system repair; do not use for ordinary backend rewrites coordinated by backend-rewrite. This skill owns execution contracts and traffic facts, not migration diagnosis, target implementation, sequencing, completion, or delivery."
 ---
 
 # Traffic E2E
@@ -23,7 +23,7 @@ do not emulate that coordinator by composing low-level engine commands.
   never consume expected responses or recorded dependency outputs.
 - Replay must exercise genuine target clients and normal target behavior.
 - traffic-e2e owns Recorder/Replay, target process orchestration, HTTP request
-  execution, assertions, aggregation, comparison, and generated local state.
+  execution, assertions, aggregation, and generated local state.
 - Standard Source recording uses only `traffic-e2e record`. The project supplies
   `.traffic-e2e/Dockerfile.recording`; its deployment caller builds and starts the container.
   Inside it, record owns Source/Recorder readiness, interception and finalization.
@@ -42,8 +42,6 @@ Read only the reference for the active operation:
 - Standalone Source recording and evidence handoff: [recording.md](references/recording.md)
 - Case grouping: [case-grouping.md](references/case-grouping.md)
 - Prepare, run, and recover replay E2E: [e2e-run.md](references/e2e-run.md)
-- Record/verify comparison:
-  [comparison-verification.md](references/comparison-verification.md)
 - Change response policy: [replay-policy.md](references/replay-policy.md)
 - Configure source-proven process-owned dependency rules:
   [process-owned-dependencies.md](references/process-owned-dependencies.md)

@@ -434,57 +434,6 @@ fn response_jwt_rejects_duplicate_claims_and_headers_and_missing_signing_input()
     }
 }
 
-#[test]
-fn response_jwt_comparison_plan_uses_each_capture_timestamp_and_rejects_source_change() {
-    use crate::replay::assertion::{
-        ComparisonResponseAssertionOptions, assert_comparison_response,
-    };
-    for changed in [false, true] {
-        let (temp, options, mut feedback) = fixture();
-        for (path, time) in [
-            (&options.expected_response, SOURCE),
-            (&options.actual_response, TARGET),
-        ] {
-            let mut value: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-            value["version"] = json!(1);
-            value["timestamp"] = json!(chrono::DateTime::from_timestamp(time, 0).unwrap());
-            value.as_object_mut().unwrap().remove("request_sent_at");
-            write(path, &value);
-        }
-        let check = || {
-            assert_comparison_response(ComparisonResponseAssertionOptions {
-                case_id: options.case_id.clone(),
-                request: options.request.clone(),
-                expected_response: options.expected_response.clone(),
-                response: options.actual_response.clone(),
-                policy: options.policy.clone(),
-            })
-            .unwrap()
-        };
-        let observation = check();
-        assert!(!observation.passed);
-        let comparison_report = temp.path().join("comparison.json");
-        write(
-            &comparison_report,
-            &json!({"version":5,"kind":"comparison_recording_verification",
-            "case_source":temp.path(),"recording_summary_path":"summary.json","recording_summary_fingerprint":"summary",
-            "expected_response":"assertions_only","assertion_mode":"comparison_recording",
-            "baseline_recheck":"optional_source_consistency","policy_path":options.policy,
-            "policy_fingerprint":observation.policy_fingerprint,"report_path":comparison_report,"complete":true,"passed":false,
-            "counts":{"total":1,"passed":0,"failed":1,"inconclusive":0,"policy_mismatch":0,"unevaluable":0,"source_changed_cases":0,"apis_total":1,"apis_passed":0,"apis_failed":1},"apis":{},
-            "cases":[{"case_id":"case","case_dir":temp.path(),"api":"POST /connector/token","classification":"candidate_difference","passed":false,
-                "response":observation,"source_change_pointers":if changed {vec!["/access_token"]} else {vec![]}}]}),
-        );
-        feedback.evidence = ResponseBodyRuleEvidence::Comparison { comparison_report };
-        if changed {
-            assert!(plan_response_jwt_rule(feedback).is_err());
-        } else {
-            plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
-            assert!(check().passed);
-        }
-    }
-}
-
 #[tokio::test]
 async fn response_jwt_verifies_a_fresh_token_issued_over_http() {
     use http_body_util::{BodyExt as _, Full};

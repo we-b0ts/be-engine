@@ -139,15 +139,6 @@ pub(super) fn verify(
                 RewriteRecordingReason::RecorderContractChanged,
             )?;
         }
-        "source_change" => {
-            super::regression_scope::ensure_fresh_allowed(target_root, state)?;
-            recording::reset_for_fresh_recording(
-                target_root,
-                state,
-                state.recording_settings,
-                RewriteRecordingReason::SourceBaselineChanged,
-            )?;
-        }
         "replay_capability_gap" | "external_data_blocker" => {
             state.phase = super::model::RewritePhase::ImplementationRequired;
             state.system_repair_accepted = true;
@@ -158,7 +149,6 @@ pub(super) fn verify(
             state.dependency_rule_plan = None;
             state.recorder_capture_plan = None;
             state.e2e_current = false;
-            state.comparison_current = false;
             state.bump();
             return Ok(action::advance_envelope(
                 target_root,
@@ -326,7 +316,6 @@ fn retry_replay_after_out_of_band_run(
 
     state.target_fingerprint = None;
     state.e2e_current = false;
-    state.comparison_current = false;
     state.bump();
     Ok(action::advance_envelope(
         target_root,
@@ -363,7 +352,7 @@ fn cancel_misroute(
         .kind;
     ensure!(
         repair_can_return_to_target(&route.kind, issue_kind),
-        "only a misrouted source-change or Recorder/Replay capability repair can be returned to target implementation"
+        "only a misrouted Recorder/Replay capability repair can be returned to target implementation"
     );
     let issue = state
         .active_issue
@@ -382,7 +371,6 @@ fn cancel_misroute(
 
 fn repair_can_return_to_target(route_kind: &str, issue_kind: RewriteIssueKind) -> bool {
     match route_kind {
-        "source_change" => issue_kind == RewriteIssueKind::Comparison,
         "replay_capability_gap" => matches!(
             issue_kind,
             RewriteIssueKind::Replay | RewriteIssueKind::Dependency | RewriteIssueKind::Response
@@ -424,7 +412,6 @@ fn resume_replay_planning(
     state.dependency_rule_plan = None;
     state.recorder_capture_plan = None;
     state.e2e_current = false;
-    state.comparison_current = false;
     state.bump();
     Ok(action::advance_envelope(
         target_root,
@@ -527,7 +514,6 @@ fn acceptance_snapshot(
         "recorder_capability_gap" | "replay_capability_gap" => {
             RewriteRepairAcceptanceKind::TrafficE2eRevisionChanged
         }
-        "source_change" => RewriteRepairAcceptanceKind::SourceRevisionChanged,
         "external_data_blocker" => RewriteRepairAcceptanceKind::SourceRuntimeInputsChanged,
         kind => anyhow::bail!("unsupported repair route kind {kind:?}"),
     };
@@ -538,10 +524,6 @@ fn current_revision(target_root: &Path, kind: RewriteRepairAcceptanceKind) -> Re
     match kind {
         RewriteRepairAcceptanceKind::TrafficE2eRevisionChanged => {
             fingerprint::traffic_e2e_revision()
-        }
-        RewriteRepairAcceptanceKind::SourceRevisionChanged => {
-            crate::e2e_run::resolve_project(target_root)?;
-            fingerprint::source_image_revision(target_root)
         }
         RewriteRepairAcceptanceKind::SourceRuntimeInputsChanged => {
             crate::e2e_run::resolve_project(target_root)?;
@@ -580,15 +562,13 @@ fn validate_route_kind(issue: &RewriteIssue, kind: &str) -> Result<()> {
                 RewriteIssueKind::Replay
                     | RewriteIssueKind::Dependency
                     | RewriteIssueKind::Response
-            ) || (issue.kind == RewriteIssueKind::Comparison
-                && issue.owner == RewriteIssueOwner::TrafficE2eSystem)
+            )
         }
         "recorder_capability_gap" => matches!(
             issue.kind,
             RewriteIssueKind::Response | RewriteIssueKind::Dependency
         ),
         "external_data_blocker" => issue.kind == RewriteIssueKind::Response,
-        "source_change" => issue.kind == RewriteIssueKind::Comparison,
         _ => false,
     };
     ensure!(

@@ -27,25 +27,12 @@ project:
     pr_base: dev-migration
   state:
     runtime_root: local/runtime
-  process_outputs:
-  - id: metrics-profile
-    path: /data1/weibo/logs/profile.log
-    enabled: true
 recorder:
   # Static recorder example. Project initialization embeds these settings under
   # `recorder` in `.traffic-e2e/project.yaml`. Coordinator-managed source-traffic
   # policy values belong exclusively in `.traffic-e2e/source-traffic-policy.yaml`.
   artifacts:
     root_dir: ./.traffic-e2e/local/artifacts
-  comparison_recording:
-    baseline_upstream: null
-    candidate_upstream: http://127.0.0.1:6161
-    candidate_motan_upstream: null
-    baseline_recheck: false
-    upstream_timeout_ms: 30000
-    max_in_flight: 1
-    summary_flush_interval_ms: 1000
-    process_output_flush_after_last_case_ms: 15000
   dns_mock:
     enabled: true
     listen: 127.0.0.153:4053

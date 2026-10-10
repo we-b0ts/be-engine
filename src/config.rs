@@ -19,7 +19,6 @@ mod background_mysql_feedback;
 mod background_redis_feedback;
 mod breeze_capture_feedback;
 mod case_limits;
-mod comparison_recording;
 mod dns;
 pub(crate) mod edit;
 mod feedback;
@@ -65,7 +64,6 @@ pub use breeze_capture_feedback::{
     BreezeResourceCaptureReport, plan_breeze_endpoint_capture, plan_breeze_resource_capture,
 };
 pub use case_limits::HttpGatewayCaseLimitsConfig;
-pub use comparison_recording::ComparisonRecordingConfig;
 pub use dns::{DnsBypassStrategyConfig, DnsMockConfig};
 pub(crate) use feedback::validate_case_path_pattern;
 pub use feedback::{
@@ -103,15 +101,10 @@ pub const DEFAULT_DNS_MOCK_LISTEN: &str = "127.0.0.153:4053";
 pub const DEFAULT_TCP_GATEWAY_LISTEN: &str = "127.0.0.1:4001";
 pub const DEFAULT_UDP_GATEWAY_LISTEN: &str = "127.0.0.1:4002";
 
-pub(crate) fn managed_comparison_candidate(port: u16) -> String {
-    format!("http://comparison-target.traffic-e2e.invalid:{port}")
-}
-
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
     pub artifacts: Option<ArtifactsConfig>,
-    pub comparison_recording: Option<ComparisonRecordingConfig>,
     pub dns_mock: DnsMockConfig,
     pub tcp_gateway: TcpGatewayConfig,
     pub udp_gateway: UdpGatewayConfig,
@@ -303,59 +296,6 @@ impl AppConfig {
         Ok(config)
     }
 
-    pub fn load_comparison_recording(path: impl AsRef<Path>) -> Result<Self> {
-        Self::load_comparison_recording_with_candidate(path, None)
-    }
-
-    pub fn load_comparison_recording_with_candidate(
-        path: impl AsRef<Path>,
-        candidate_upstream: Option<&str>,
-    ) -> Result<Self> {
-        Self::load_comparison_recording_with_candidates(path, candidate_upstream, None)
-    }
-
-    pub fn load_comparison_recording_with_candidates(
-        path: impl AsRef<Path>,
-        candidate_upstream: Option<&str>,
-        candidate_motan_upstream: Option<&str>,
-    ) -> Result<Self> {
-        let path = path.as_ref();
-        let mut config = Self::load(path)?;
-        if let Some(candidate_upstream) = candidate_upstream {
-            config
-                .comparison_recording
-                .as_mut()
-                .context("record-comparison command requires a [comparison_recording] configuration section")?
-                .candidate_upstream = candidate_upstream.to_string();
-        }
-        if let Some(candidate_motan_upstream) = candidate_motan_upstream {
-            config
-                .comparison_recording
-                .as_mut()
-                .context("record-comparison command requires a [comparison_recording] configuration section")?
-                .candidate_motan_upstream = Some(candidate_motan_upstream.to_string());
-        }
-        config
-            .validate_comparison_recording()
-            .with_context(|| format!("invalid comparison recording config {}", path.display()))?;
-        Ok(config)
-    }
-
-    pub fn validate_comparison_recording(&self) -> Result<()> {
-        self.validate_artifacts()?;
-        self.recording.validate_body_limits()?;
-        self.recording.validate_request_header_encryption()?;
-        http_gateway::validate_config(&self.http_gateway)?;
-        motan_gateway::validate_config(&self.motan_gateway)?;
-        let comparison_recording = self.comparison_recording.as_ref().context(
-            "record-comparison command requires a [comparison_recording] configuration section",
-        )?;
-        comparison_recording.validate(&self.http_gateway, &self.motan_gateway)?;
-        self.http_gateway
-            .per_api_case_limits
-            .validate(&self.http_gateway.case_path_patterns)
-    }
-
     pub fn validate(&self) -> Result<()> {
         self.validate_artifacts()?;
         self.dns_mock.validate()?;
@@ -403,13 +343,6 @@ impl AppConfig {
             .as_ref()
             .map(|artifacts| artifacts.root_dir.join("recordings"))
             .unwrap_or_else(|| self.recording.output_dir.clone())
-    }
-
-    pub fn comparison_recording_output_dir(&self) -> PathBuf {
-        self.artifacts
-            .as_ref()
-            .map(|artifacts| artifacts.root_dir.join("comparison-recordings"))
-            .unwrap_or_else(|| self.recording.output_dir.join("comparison-recordings"))
     }
 
     pub fn override_per_api_case_limit_for_run(&mut self, limit: NonZeroUsize) {
@@ -660,33 +593,6 @@ mod tests {
     }
 
     #[test]
-    fn loads_example_comparison_recording_config() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("config")
-            .join("project.example.yaml");
-        let mut config = AppConfig::load_comparison_recording(path).unwrap();
-        assert!(
-            !config
-                .comparison_recording
-                .as_ref()
-                .unwrap()
-                .baseline_recheck
-        );
-        assert_eq!(config.http_gateway.rules.len(), 1);
-        assert_eq!(
-            config.recording_output_dir(),
-            PathBuf::from("./.traffic-e2e/local/artifacts/recordings")
-        );
-        assert_eq!(
-            config.comparison_recording_output_dir(),
-            PathBuf::from("./.traffic-e2e/local/artifacts/comparison-recordings")
-        );
-
-        config.recording.encrypt_request_headers = vec!["not a header".to_string()];
-        assert!(config.validate_comparison_recording().is_err());
-    }
-
-    #[test]
     fn parses_minimal_config_with_defaults() {
         let config: AppConfig = toml::from_str(
             r#"
@@ -732,10 +638,6 @@ mod tests {
         assert!(config.recording.access_rules.is_empty());
         assert!(config.artifacts.is_none());
         assert_eq!(config.recording_output_dir(), PathBuf::from("./recordings"));
-        assert_eq!(
-            config.comparison_recording_output_dir(),
-            PathBuf::from("./recordings/comparison-recordings")
-        );
     }
 
     #[test]
@@ -746,27 +648,6 @@ mod tests {
 
         assert_eq!(config.http_gateway.per_api_case_limits.default, 5);
         assert_eq!(config.motan_gateway.max_cases_per_api, 5);
-    }
-
-    #[test]
-    fn validates_comparison_recording_configuration_only_for_that_mode() {
-        let mut config = AppConfig {
-            comparison_recording: Some(ComparisonRecordingConfig::default()),
-            ..Default::default()
-        };
-        config
-            .comparison_recording
-            .as_mut()
-            .unwrap()
-            .candidate_upstream = config.http_gateway.matched_upstream.clone();
-        config.http_gateway.rules = vec![HttpGatewayRuleConfig {
-            name: Some("api".to_string()),
-            methods: vec!["GET".to_string()],
-            ..Default::default()
-        }];
-
-        config.validate().unwrap();
-        assert!(config.validate_comparison_recording().is_err());
     }
 
     #[test]

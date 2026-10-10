@@ -25,10 +25,5 @@ The coordinator does not produce it. Applied capture rules accumulate
 through the existing parked-API refresh lifecycle. Continue other runnable work;
 when refresh is required, arrange external recording with the new policy.
 
-When comparison is required, provide finalized comparison recordings under
-`.traffic-e2e/local/artifacts/comparison-recordings/<run-id>/` and select
-`comparison_run_id` in regression.yaml. The comparison gate remains enforced.
-Target changes still invalidate verification evidence.
-
 After adoption, follow case-pattern identification and normal coordinator actions.
 Recording contents, old batch identities and verification history remain immutable.

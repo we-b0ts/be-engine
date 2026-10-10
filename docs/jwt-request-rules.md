@@ -113,8 +113,7 @@ Rules apply across all APIs; they do not require an API list or initialization
 changes. Apply invalidates API acceptance and returns the ordinary `next`
 command. This is a Replay policy change: it requires real request execution
 using existing recordings, not a fresh standard recording or offline
-reclassification of old 401 responses. Existing workflow requirements for
-Comparison remain in force.
+reclassification of old 401 responses.
 
 ## Signing key sources
 
@@ -166,8 +165,5 @@ location/algorithm; the first verifying rule transforms the original token
 once.
 
 Actual response artifacts record rule ids, outcomes and offsets, without
-tokens or claims. Finite recording-input Comparison transforms once before
-the gateway fans the same request to source and candidate. Live Comparison
-does not refresh frontend credentials. Forwarding or hashing the changed
-token in downstream business calls can require additional compatibility
-work; dependency verification remains strict.
+tokens or claims. Forwarding or hashing the changed token in downstream business
+calls can require additional compatibility work; dependency verification remains strict.

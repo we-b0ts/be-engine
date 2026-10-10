@@ -57,15 +57,6 @@ fn exposes_worker_and_integrated_review_commands() {
         ],
         vec![
             "test",
-            "review",
-            "check",
-            "--worktree",
-            "/worker",
-            "--process-output",
-            "profile",
-        ],
-        vec![
-            "test",
             "worker",
             "report",
             "--agent-handle",
@@ -125,20 +116,6 @@ fn exposes_worker_and_integrated_review_commands() {
     ] {
         assert!(Cli::try_parse_from(args).is_ok());
     }
-    assert!(
-        Cli::try_parse_from([
-            "test",
-            "review",
-            "check",
-            "--worktree",
-            "/worker",
-            "--api",
-            "/api",
-            "--process-output",
-            "profile"
-        ])
-        .is_err()
-    );
 }
 
 #[test]
@@ -166,11 +143,7 @@ fn review_requires_a_delivery_worktree_and_worker_scope() {
 
 #[test]
 fn integration_review_rejects_incomplete_handoff_identity_before_accessing_state() {
-    for identity in [
-        vec!["--api", "/api"],
-        vec!["--process-output", "profile"],
-        vec!["--handoff-id", "commit"],
-    ] {
+    for identity in [vec!["--api", "/api"], vec!["--handoff-id", "commit"]] {
         let mut argv = vec![
             "test",
             "review",

@@ -300,7 +300,7 @@ mod tests {
             "cancel",
             "repair-current",
             "--reason",
-            "misrouted comparison issue",
+            "misrouted replay issue",
         ])
         .unwrap();
 

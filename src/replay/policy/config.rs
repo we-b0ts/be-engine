@@ -9,10 +9,7 @@ use serde::{Deserialize, Serialize};
 mod document;
 pub(in crate::replay::policy) use document::BindingEntry;
 
-use super::response::{
-    ComparisonVerificationPolicy, ResponseRules, ResponseSettings, response_rule_ids,
-    validate_response_rules,
-};
+use super::response::{ResponseRules, response_rule_ids, validate_response_rules};
 
 const MIN_POLICY_VERSION: u8 = 1;
 const MAX_POLICY_VERSION: u8 = 3;
@@ -28,10 +25,7 @@ pub(in crate::replay) struct ReplayPolicyDocument {
     pub(in crate::replay) expected_response: ExpectedResponseUsage,
     pub(super) dependency_rules: Vec<ReplayDependencyRule>,
     pub(crate) request_rules: crate::request_rules::RequestRules,
-    pub(in crate::replay) response_settings: ResponseSettings,
     pub(in crate::replay) response_rules: ResponseRules,
-    pub(in crate::replay) process_output_rules:
-        BTreeMap<String, crate::ProfileByTypeVerificationRules>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -255,11 +249,9 @@ pub struct ReplayPolicyValidationReport {
     pub path: String,
     pub fingerprint: String,
     pub expected_response: ExpectedResponseUsage,
-    pub comparison: ComparisonVerificationPolicy,
     pub dependency_rule_ids: Vec<String>,
     pub dynamic_value_rule_ids: Vec<String>,
     pub response_rule_ids: Vec<String>,
-    pub process_output_rules: BTreeMap<String, crate::ProfileByTypeVerificationRules>,
     pub runner_owned_response_assertions: bool,
 }
 
@@ -273,13 +265,11 @@ pub(in crate::replay) struct LoadedReplayPolicy {
 pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationReport> {
     let loaded = load_replay_policy(path)?;
     let response_rule_ids = response_rule_ids(&loaded.document.response_rules);
-    let comparison = loaded.document.response_settings.comparison;
     Ok(ReplayPolicyValidationReport {
         version: loaded.document.version,
         path: loaded.path.display().to_string(),
         fingerprint: loaded.fingerprint,
         expected_response: loaded.document.expected_response,
-        comparison,
         dynamic_value_rule_ids: loaded
             .document
             .dynamic_values
@@ -300,7 +290,6 @@ pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationRepor
             )
             .collect(),
         response_rule_ids,
-        process_output_rules: loaded.document.process_output_rules,
         runner_owned_response_assertions: loaded.document.version >= 3,
     })
 }
@@ -334,11 +323,8 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
         document.version
     );
     ensure!(
-        document.version >= 3
-            || (document.response_settings.is_empty()
-                && document.response_rules.is_empty()
-                && document.process_output_rules.is_empty()),
-        "response_settings and response_rules, plus process_output_rules, require replay policy version 3"
+        document.version >= 3 || document.response_rules.is_empty(),
+        "response_rules require replay policy version 3"
     );
     ensure!(
         document.version >= 3 || document.request_rules.is_empty(),
@@ -346,9 +332,6 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
     );
     document.request_rules.validate()?;
     validate_response_rules(&document.response_rules)?;
-    for (output_id, rules) in &document.process_output_rules {
-        crate::process_output::validate_verification_rules(output_id, rules)?;
-    }
     super::request_contract::validate_overlaps(document)?;
     super::redis_value::validate_overlaps(&document.dependency_rules)?;
     super::http_json::validate_overlaps(&document.dependency_rules)?;

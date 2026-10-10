@@ -7,9 +7,7 @@ mod artifact_owner;
 mod breeze;
 mod build_info;
 mod case_group;
-mod case_kind;
 pub mod command_output;
-mod comparison_recording;
 mod config;
 mod dependency;
 mod dependency_index;
@@ -29,7 +27,6 @@ mod mysql;
 mod network_probe;
 mod path_pattern;
 mod platform;
-mod process_output;
 mod proxy;
 pub mod record_service;
 mod recorded_request;
@@ -95,17 +92,6 @@ pub use case_group::{
     CaseGroupEnsureResult, CaseGroupOptions, CaseGroupStatus, PatternOutcome, PatternOutcomeStatus,
     ensure_case_group, resolve_recording_api_case_ids, resolve_recording_api_member,
 };
-pub use comparison_recording::{
-    ComparisonRecordingRunOptions, ComparisonRepresentativeDifference,
-    ComparisonRepresentativePolicyMismatch, ComparisonVerificationApi,
-    ComparisonVerificationApiCounts, ComparisonVerificationCase,
-    ComparisonVerificationClassification, ComparisonVerificationCounts,
-    ComparisonVerificationOptions, ComparisonVerificationOutcome, ComparisonVerificationReport,
-    MatchedSourceObservation, run as run_comparison_recording,
-    run_with_duration as run_comparison_recording_with_duration,
-    run_with_options as run_comparison_recording_with_options, update_comparison_progress,
-    verify_comparison_recording,
-};
 pub use config::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
     AppConfig, ArtifactsConfig, BackgroundDependencyFeedback, BackgroundDependencyPlan,
@@ -113,11 +99,11 @@ pub use config::{
     BreezeMemcachedBackgroundDependencyFeedback, BreezeMemcachedBackgroundDependencyPlan,
     BreezeMemcachedBackgroundDependencyReport, BreezeResourceCaptureFeedback,
     BreezeResourceCapturePlan, BreezeResourceCaptureReport, CasePathPatternAuthority,
-    CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport, ComparisonRecordingConfig,
-    DEFAULT_DNS_MOCK_LISTEN, DEFAULT_DNS_MOCK_PORT, DEFAULT_FAKE_CIDR, DEFAULT_HTTP_BACKEND_PORT,
-    DEFAULT_HTTP_GATEWAY_PORT, DEFAULT_TCP_GATEWAY_LISTEN, DEFAULT_TCP_GATEWAY_PORT,
-    DEFAULT_UDP_GATEWAY_LISTEN, DEFAULT_UDP_GATEWAY_PORT, DnsBypassStrategyConfig, DnsMockConfig,
-    HttpConfig, HttpGatewayCaseLimitsConfig, HttpGatewayConfig, HttpGatewayFallbackMode,
+    CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport, DEFAULT_DNS_MOCK_LISTEN,
+    DEFAULT_DNS_MOCK_PORT, DEFAULT_FAKE_CIDR, DEFAULT_HTTP_BACKEND_PORT, DEFAULT_HTTP_GATEWAY_PORT,
+    DEFAULT_TCP_GATEWAY_LISTEN, DEFAULT_TCP_GATEWAY_PORT, DEFAULT_UDP_GATEWAY_LISTEN,
+    DEFAULT_UDP_GATEWAY_PORT, DnsBypassStrategyConfig, DnsMockConfig, HttpConfig,
+    HttpGatewayCaseLimitsConfig, HttpGatewayConfig, HttpGatewayFallbackMode,
     HttpGatewayFixedResponseConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig,
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
     MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
@@ -161,23 +147,12 @@ pub use e2e_run::{
 pub use mysql::operation::MysqlWriteOperation;
 pub use network_probe::PreflightProbeKind;
 pub use platform::{
-    ManagedRecordingInputCompletion, ManagedRecordingInputOptions, ManagedRecordingInputResult,
-    ManagedRecordingOperation, ManagedRecordingOptions, ManagedRecordingPreflightOptions,
-    ManagedRecordingPreflightRecordingResult, ManagedRecordingPreflightResult,
-    ManagedRecordingRecoveryResult, ManagedRecordingResult, ManagedReplayNetworkPreflightResult,
+    ManagedRecordingPreflightOptions, ManagedRecordingPreflightRecordingResult,
+    ManagedRecordingPreflightResult, ManagedReplayNetworkPreflightResult,
     ManagedTargetImagePreflightChecks, ManagedTargetImagePreflightResult,
     ManagedTargetRuntimePreflightChecks, ManagedTargetRuntimePreflightResult,
     ReplayDirectEgressProbeResult, ReplayNegativeProbeResult, ReplayPositiveProbeResult,
-    drive_managed_recording_input, recover_managed_recording, run_managed_recording,
     run_managed_recording_preflight,
-};
-pub use process_output::{
-    ProcessOutputCaptureReport, ProcessOutputCaptureSide, ProcessOutputObservation,
-    capture_project_process_outputs, capture_project_process_outputs_for_observation,
-};
-pub use process_output::{
-    ProfileByTypeVerificationRules, ProfileTargetMissingAllowance,
-    ProfileTargetMissingEmitterEvidence,
 };
 pub use recorder::{
     AccessPolicyAllowEvent, BodyCapture, CaseBodyCapture, CaseContext, HeaderMapSnapshot,
@@ -192,8 +167,7 @@ pub use recorder::{
 };
 pub use recording_api::RecordingApi;
 pub use recording_control::{
-    RecordingReadiness, RecordingWaitConfig, notify_recording_input_complete,
-    wait_for_recording_listeners, wait_for_recording_ready,
+    RecordingReadiness, RecordingWaitConfig, wait_for_recording_listeners, wait_for_recording_ready,
 };
 
 pub use rewrite::{
@@ -217,29 +191,28 @@ pub use rewrite::{
     RewriteIpCaptureReport, RewriteIssue, RewriteIssueKind, RewriteIssueOwner,
     RewriteMemcachedExchangeDetail, RewriteMemcachedOperationDetail, RewriteMysqlExchangeDetail,
     RewriteMysqlOperationDetail, RewriteMysqlParameterDetail, RewriteNextOptions, RewritePhase,
-    RewriteProcessOutputInventoryDetails, RewriteProcessOutputInventoryView,
-    RewriteProcessOutputProgress, RewriteProcessOutputStatus, RewriteRecorderCapturePlanOptions,
-    RewriteRecorderCaptureReport, RewriteRecordingInputCandidate,
-    RewriteRecordingInputCandidateDisposition, RewriteRecordingInputDiagnosis,
-    RewriteRecordingInputRejections, RewriteRecordingReason, RewriteRecoveryReport,
-    RewriteRedisExchangeDetail, RewriteRedisOperationDetail, RewriteRegressionBeginOptions,
-    RewriteRegressionBeginReport, RewriteRepairAcceptanceKind, RewriteRepairCancelOptions,
-    RewriteReplayRetryOptions, RewriteRevalidationRequestOptions, RewriteRevalidationRequestReport,
-    RewriteReviewOptions, RewriteReviewReport, RewriteRouteCause, RewriteRouteOptions,
-    RewriteRouteOutcome, RewriteRouteReport, RewriteRuleHint, RewriteRulePlanOptions,
-    RewriteRuleReport, RewriteSourceProcessObservationView, RewriteSourceProcessOwnedRuleView,
-    RewriteSourceProcessOwnedView, RewriteSourceProcessRedisSnapshotEndpointView,
-    RewriteSourceProcessRedisSnapshotView, RewriteSourceProcessTrafficScopeView,
-    RewriteSourceProcessTrafficView, RewriteStatusReport, RewriteTargetQualityOptions,
-    RewriteTrafficOperationKind, RewriteTrafficOperationView, RewriteWaitOptions, RewriteWorkScope,
-    RewriteWorkerActivity, RewriteWorkerBlockingReason, RewriteWorkerConfirmOptions,
-    RewriteWorkerCoverageState, RewriteWorkerDispatchState, RewriteWorkerDispatchView,
-    RewriteWorkerInventoryItem, RewriteWorkerMissingQuery, RewriteWorkerReportOptions,
-    RewriteWorkerTransferOptions, RewriteWorkflowView, accept_rewrite_review,
-    apply_rewrite_case_patterns, apply_rewrite_dependency_rule, apply_rewrite_recorder_capture,
-    apply_rewrite_rule, begin_rewrite_regression, cancel_misrouted_rewrite_repair,
-    check_batch_rewrite_review, check_rewrite_review, close_rewrite_expert, confirm_rewrite_expert,
-    confirm_rewrite_worker, execute_rewrite_operation, inventory_rewrite, next_rewrite,
+    RewriteRecorderCapturePlanOptions, RewriteRecorderCaptureReport,
+    RewriteRecordingInputCandidate, RewriteRecordingInputCandidateDisposition,
+    RewriteRecordingInputDiagnosis, RewriteRecordingInputRejections, RewriteRecordingReason,
+    RewriteRecoveryReport, RewriteRedisExchangeDetail, RewriteRedisOperationDetail,
+    RewriteRegressionBeginOptions, RewriteRegressionBeginReport, RewriteRepairAcceptanceKind,
+    RewriteRepairCancelOptions, RewriteReplayRetryOptions, RewriteRevalidationRequestOptions,
+    RewriteRevalidationRequestReport, RewriteReviewOptions, RewriteReviewReport, RewriteRouteCause,
+    RewriteRouteOptions, RewriteRouteOutcome, RewriteRouteReport, RewriteRuleHint,
+    RewriteRulePlanOptions, RewriteRuleReport, RewriteSourceProcessObservationView,
+    RewriteSourceProcessOwnedRuleView, RewriteSourceProcessOwnedView,
+    RewriteSourceProcessRedisSnapshotEndpointView, RewriteSourceProcessRedisSnapshotView,
+    RewriteSourceProcessTrafficScopeView, RewriteSourceProcessTrafficView, RewriteStatusReport,
+    RewriteTargetQualityOptions, RewriteTrafficOperationKind, RewriteTrafficOperationView,
+    RewriteWaitOptions, RewriteWorkScope, RewriteWorkerActivity, RewriteWorkerBlockingReason,
+    RewriteWorkerConfirmOptions, RewriteWorkerCoverageState, RewriteWorkerDispatchState,
+    RewriteWorkerDispatchView, RewriteWorkerInventoryItem, RewriteWorkerMissingQuery,
+    RewriteWorkerReportOptions, RewriteWorkerTransferOptions, RewriteWorkflowView,
+    accept_rewrite_review, apply_rewrite_case_patterns, apply_rewrite_dependency_rule,
+    apply_rewrite_recorder_capture, apply_rewrite_rule, begin_rewrite_regression,
+    cancel_misrouted_rewrite_repair, check_batch_rewrite_review, check_rewrite_review,
+    close_rewrite_expert, confirm_rewrite_expert, confirm_rewrite_worker,
+    execute_rewrite_operation, inventory_rewrite, next_rewrite,
     plan_rewrite_dependency_payload_rule, plan_rewrite_dependency_rule,
     plan_rewrite_http_response_capture, plan_rewrite_recorder_capture, plan_rewrite_rule,
     prepare_rewrite_expert, query_rewrite_case_dependencies, query_rewrite_evidence,
@@ -249,8 +222,8 @@ pub use rewrite::{
     retry_rewrite_replay_after_out_of_band_run, rework_rewrite_review,
     rework_rewrite_review_with_report, route_rewrite, run_rewrite_target_quality,
     show_rewrite_review, start_rewrite_next, start_rewrite_target_quality, status_rewrite,
-    status_rewrite_for_api, status_rewrite_for_process_output, status_rewrite_for_selector,
-    transfer_rewrite_worker, verify_rewrite_repair, wait_rewrite,
+    status_rewrite_for_api, status_rewrite_for_selector, transfer_rewrite_worker,
+    verify_rewrite_repair, wait_rewrite,
 };
 pub use runtime_output::RuntimeOutputLocation;
 pub use source_snapshot::{

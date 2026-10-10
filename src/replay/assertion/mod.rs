@@ -19,9 +19,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 
-use self::artifact::{
-    ActualResponse, ComparisonResponse, ExpectedResponse, RecordedRequest, decode_body,
-};
+use self::artifact::{ActualResponse, ExpectedResponse, RecordedRequest, decode_body};
 use self::compare::compare_json;
 pub use self::model::{
     DocxBodyDifference, DocxBodyDifferenceKind, Hessian2BodyDifference, Hessian2BodyDifferenceKind,
@@ -35,8 +33,6 @@ pub use self::model::{
 use super::policy::{
     LoadedReplayPolicy, ResponseBodyCodec, fingerprint, load_replay_policy, uri_path,
 };
-use crate::config::DEFAULT_BODY_LIMIT_BYTES;
-use crate::http::content_encoding;
 
 pub struct ResponseAssertionOptions {
     pub case_id: String,
@@ -72,21 +68,6 @@ impl ResponseAssertionRuntime {
             &self.policy,
         )
     }
-}
-
-pub(crate) struct ComparisonResponseAssertionOptions {
-    pub case_id: String,
-    pub request: PathBuf,
-    pub expected_response: PathBuf,
-    pub response: PathBuf,
-    pub policy: PathBuf,
-}
-
-pub(crate) struct ComparisonResponseObservation {
-    pub(crate) status: u16,
-    pub(crate) headers: Option<crate::recorder::HeaderMapSnapshot>,
-    pub(crate) body: Vec<u8>,
-    pub(crate) timestamp: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub(crate) fn read_expected_response_body(
@@ -281,7 +262,6 @@ fn assert_recorded_response_with_policy(
     };
     evaluate_response(
         AssertionInputs {
-            mode: AssertionMode::Replay,
             times: RequestTimes {
                 source: request.timestamp,
                 target: actual.request_sent_at,
@@ -308,180 +288,8 @@ fn assert_recorded_response_with_policy(
     )
 }
 
-pub(crate) fn assert_comparison_response(
-    options: ComparisonResponseAssertionOptions,
-) -> Result<ResponseAssertionCaseReport> {
-    let request_bytes = read_regular(&options.request, "recorded request")?;
-    let expected_bytes = read_regular(&options.expected_response, "expected response")?;
-    let response_bytes = read_regular(&options.response, "response")?;
-    let request: RecordedRequest = serde_json::from_slice(&request_bytes)
-        .with_context(|| format!("invalid recorded request {}", options.request.display()))?;
-    let expected: ComparisonResponse =
-        serde_json::from_slice(&expected_bytes).with_context(|| {
-            format!(
-                "invalid expected response {}",
-                options.expected_response.display()
-            )
-        })?;
-    let response: ComparisonResponse = serde_json::from_slice(&response_bytes)
-        .with_context(|| format!("invalid response {}", options.response.display()))?;
-    ensure!(
-        expected.version == 1,
-        "unsupported expected response version {}; expected 1",
-        expected.version
-    );
-    ensure!(
-        response.version == 1,
-        "unsupported response version {}; expected 1",
-        response.version
-    );
-    let expected_status = captured_status(&expected, "expected response")?;
-    let expected_body = comparison_assertion_body(&request, &expected, "expected response")?;
-    let actual_status = captured_status(&response, "response")?;
-    let actual_body = comparison_assertion_body(&request, &response, "response")?;
-    let expected_request_headers = request.headers.clone();
-    let actual_request_headers = request.headers.clone();
-    let policy = load_replay_policy(&options.policy)?;
-    evaluate_response(
-        AssertionInputs {
-            mode: AssertionMode::Comparison,
-            times: RequestTimes {
-                source: expected.timestamp,
-                target: response.timestamp,
-            },
-            case_id: options.case_id,
-            request,
-            request_path: options.request,
-            expected_request_headers,
-            actual_request_headers,
-            expected_status,
-            expected_headers: expected.headers,
-            expected_sse_observation: None,
-            expected_body,
-            expected_path: options.expected_response,
-            expected_fingerprint: fingerprint(&expected_bytes),
-            actual_status,
-            actual_headers: response.headers,
-            actual_sse_observation: None,
-            actual_body,
-            actual_path: options.response,
-            actual_fingerprint: fingerprint(&response_bytes),
-        },
-        &policy,
-    )
-}
-
-pub(crate) fn read_comparison_response_observation(
-    request_path: &Path,
-    path: &Path,
-    label: &str,
-) -> Result<ComparisonResponseObservation> {
-    let request_bytes = read_regular(request_path, "comparison request")?;
-    let request: RecordedRequest = serde_json::from_slice(&request_bytes)
-        .with_context(|| format!("invalid comparison request {}", request_path.display()))?;
-    let bytes = read_regular(path, label)?;
-    let response: ComparisonResponse = serde_json::from_slice(&bytes)
-        .with_context(|| format!("invalid {label} {}", path.display()))?;
-    ensure!(
-        response.version == 1,
-        "unsupported {label} version {}; expected 1",
-        response.version
-    );
-    let body = comparison_assertion_body(&request, &response, label)?;
-    Ok(ComparisonResponseObservation {
-        status: captured_status(&response, label)?,
-        headers: response.headers,
-        body: body.body().to_vec(),
-        timestamp: response.timestamp,
-    })
-}
-
-fn comparison_assertion_body(
-    request: &RecordedRequest,
-    response: &ComparisonResponse,
-    label: &str,
-) -> Result<AssertionBody> {
-    let body = captured_body(response, label)?;
-    if !request.has_motan_frame() {
-        return Ok(AssertionBody::Bytes(body));
-    }
-    let version = response
-        .protocol_version
-        .as_deref()
-        .or(request.protocol_version.as_deref())
-        .context("Motan comparison response has no protocol version")?;
-    let version = motan::protocol_version(version, label)?;
-    let serialization = match response.serialization {
-        Some(serialization) => Some(serialization),
-        None => match request.body.as_ref() {
-            Some(request_body) => {
-                let raw = decode_body(request_body, "comparison request")?;
-                motan::request_serialization(&raw, "comparison request")?
-            }
-            None => None,
-        },
-    };
-    Ok(AssertionBody::MotanBody(motan::comparable_response_body(
-        version,
-        serialization,
-        body,
-        response.rpc_body_decoded == Some(true),
-        response.rpc_status.as_deref(),
-    )))
-}
-
-fn captured_status(response: &ComparisonResponse, label: &str) -> Result<u16> {
-    response.status.with_context(|| {
-        format!(
-            "{label} has no HTTP status{}",
-            response
-                .error
-                .as_deref()
-                .map(|error| format!(": {error}"))
-                .unwrap_or_default()
-        )
-    })
-}
-
-fn captured_body(response: &ComparisonResponse, label: &str) -> Result<Vec<u8>> {
-    let body = response.body.as_ref().with_context(|| {
-        format!(
-            "{label} has no body{}",
-            response
-                .error
-                .as_deref()
-                .map(|error| format!(": {error}"))
-                .unwrap_or_default()
-        )
-    })?;
-    let captured = decode_body(body, label)?;
-    if body.decoded == Some(true) {
-        return Ok(captured);
-    }
-    let content_encoding = body.content_encoding.clone().or_else(|| {
-        response
-            .headers
-            .as_ref()
-            .and_then(|headers| headers.get("content-encoding"))
-            .filter(|values| !values.is_empty())
-            .map(|values| values.join(","))
-    });
-    let Some(content_encoding) = content_encoding else {
-        return Ok(captured);
-    };
-    let limit = body.limit_bytes.unwrap_or(DEFAULT_BODY_LIMIT_BYTES);
-    let decoded = content_encoding::decode(&captured, &content_encoding, limit)
-        .with_context(|| format!("{label} body content decoding failed"))?;
-    ensure!(
-        !decoded.truncated,
-        "{label} decoded body exceeds limit of {limit} bytes"
-    );
-    Ok(decoded.body)
-}
-
 struct AssertionInputs {
     times: RequestTimes,
-    mode: AssertionMode,
     case_id: String,
     request: RecordedRequest,
     request_path: PathBuf,
@@ -504,7 +312,6 @@ struct AssertionInputs {
 enum AssertionBody {
     Bytes(Vec<u8>),
     MotanFrame(motan::ComparableResponseFrame),
-    MotanBody(motan::ComparableResponseBody),
 }
 
 impl AssertionBody {
@@ -512,7 +319,6 @@ impl AssertionBody {
         match self {
             Self::Bytes(bytes) => bytes,
             Self::MotanFrame(frame) => frame.body(),
-            Self::MotanBody(body) => body.body(),
         }
     }
 
@@ -522,9 +328,6 @@ impl AssertionBody {
             (Self::MotanFrame(expected), Self::MotanFrame(actual)) => {
                 expected.carrier() == actual.carrier()
             }
-            (Self::MotanBody(expected), Self::MotanBody(actual)) => {
-                expected.gateway_context_matches(actual)
-            }
             _ => false,
         }
     }
@@ -532,7 +335,6 @@ impl AssertionBody {
     fn protocol_body_codec(&self) -> Option<ResponseBodyCodec> {
         let body_kind = match self {
             Self::MotanFrame(frame) => frame.body_kind(),
-            Self::MotanBody(body) => body.body_kind(),
             Self::Bytes(_) => return None,
         };
         match body_kind {
@@ -546,20 +348,11 @@ impl AssertionBody {
             (Self::MotanFrame(expected), Self::MotanFrame(actual)) => {
                 (expected.body_kind(), actual.body_kind())
             }
-            (Self::MotanBody(expected), Self::MotanBody(actual)) => {
-                (expected.body_kind(), actual.body_kind())
-            }
             _ => return None,
         };
         (expected != actual)
             .then(|| ResponseDifference::body_type_mismatch(expected.as_str(), actual.as_str()))
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum AssertionMode {
-    Replay,
-    Comparison,
 }
 
 fn evaluate_response(
@@ -568,7 +361,6 @@ fn evaluate_response(
 ) -> Result<ResponseAssertionCaseReport> {
     let AssertionInputs {
         times,
-        mode,
         case_id,
         request,
         request_path,
@@ -592,16 +384,10 @@ fn evaluate_response(
         "runner-owned response assertions require replay policy version 3"
     );
     let path = uri_path(&request.uri);
-    let response_fields = match mode {
-        AssertionMode::Replay => loaded
-            .document
-            .response_rules
-            .matching_replay_fields(&request.method, &path),
-        AssertionMode::Comparison => loaded
-            .document
-            .response_rules
-            .matching_comparison_fields(&request.method, &path),
-    };
+    let response_fields = loaded
+        .document
+        .response_rules
+        .matching_replay_fields(&request.method, &path);
     let body_rules = loaded
         .document
         .response_rules

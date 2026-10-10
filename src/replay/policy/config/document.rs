@@ -13,12 +13,8 @@ pub(super) struct PolicyDocument {
         skip_serializing_if = "crate::request_rules::RequestRules::is_empty"
     )]
     request_rules: crate::request_rules::RequestRules,
-    #[serde(default, skip_serializing_if = "ResponseSettings::is_empty")]
-    response_settings: ResponseSettings,
     #[serde(default, skip_serializing_if = "ResponseRules::is_empty")]
     response_rules: ResponseRules,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    process_output_rules: BTreeMap<String, crate::ProfileByTypeVerificationRules>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -69,9 +65,7 @@ impl TryFrom<PolicyDocument> for ReplayPolicyDocument {
             dependency_rules,
             dynamic_values,
             request_rules: document.request_rules,
-            response_settings: document.response_settings,
             response_rules: document.response_rules,
-            process_output_rules: document.process_output_rules,
         })
     }
 }
@@ -92,9 +86,7 @@ impl From<ReplayPolicyDocument> for PolicyDocument {
             expected_response: document.expected_response,
             dependency_rules,
             request_rules: document.request_rules,
-            response_settings: document.response_settings,
             response_rules: document.response_rules,
-            process_output_rules: document.process_output_rules,
         }
     }
 }

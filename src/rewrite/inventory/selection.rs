@@ -78,7 +78,6 @@ fn park_current_issue(state: &mut RewriteState) -> Result<()> {
         .context("active API has no inventory index")?;
     let attempts = state.attempts.len();
     let e2e_current = state.e2e_current;
-    let comparison_current = state.comparison_current;
     let current = state
         .api_inventory
         .get_mut(index)
@@ -90,7 +89,6 @@ fn park_current_issue(state: &mut RewriteState) -> Result<()> {
     };
     current.attempts = attempts;
     current.e2e_current = e2e_current;
-    current.comparison_current = comparison_current;
     state
         .parked_slices
         .insert(state.api.clone(), state.active_slice.clone());

@@ -281,7 +281,6 @@ pub(super) fn apply(
     state.route = None;
     state.phase = RewritePhase::AwaitingRecordingRefresh;
     state.e2e_current = false;
-    state.comparison_current = false;
     state.bump();
     Ok(AppliedRecorderCapture {
         plan_id: record.id,
@@ -328,10 +327,7 @@ pub(super) fn capture_issue(state: &RewriteState) -> Result<RewriteIssue> {
     ensure!(
         matches!(
             issue.kind,
-            RewriteIssueKind::Response
-                | RewriteIssueKind::Replay
-                | RewriteIssueKind::Dependency
-                | RewriteIssueKind::Comparison
+            RewriteIssueKind::Response | RewriteIssueKind::Replay | RewriteIssueKind::Dependency
         ),
         "recorder capture planning is not valid for active issue {:?}",
         issue.kind
@@ -561,7 +557,6 @@ mod tests {
             status: RewriteApiStatus::Active,
             attempts: 0,
             e2e_current: false,
-            comparison_current: false,
             verified_target_fingerprint: None,
         });
 
@@ -668,7 +663,6 @@ mod tests {
             possible_causes: Vec::new(),
             observed_target_fingerprint: state.target_fingerprint.clone().unwrap(),
             attempt: 2,
-            comparison_observation: None,
         });
         let query_id = evidence::commands(target.path(), &state)
             .into_iter()

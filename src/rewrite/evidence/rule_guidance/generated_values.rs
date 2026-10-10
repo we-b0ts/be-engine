@@ -99,21 +99,12 @@ pub(super) fn planners(
 ) -> Vec<RewriteApplicableRulePlanner> {
     if !matches!(
         kind,
-        RewriteIssueKind::Response
-            | RewriteIssueKind::Replay
-            | RewriteIssueKind::Dependency
-            | RewriteIssueKind::Comparison
+        RewriteIssueKind::Response | RewriteIssueKind::Replay | RewriteIssueKind::Dependency
     ) {
         return Vec::new();
     }
     hints(root, query, facts)
         .into_iter()
-        .filter(|hint| {
-            !matches!(
-                hint.capability.as_str(),
-                "dynamic_value" | "dependency_request"
-            ) || kind != RewriteIssueKind::Comparison
-        })
         .map(|hint| RewriteApplicableRulePlanner {
             kind: hint.capability.clone(),
             capability: hint.capability,
@@ -189,26 +180,6 @@ mod tests {
         assert_eq!(
             hints(root, QUERY_DIRTY_CLUSTERS, &request)[0].capability,
             "dependency_request"
-        );
-        assert!(
-            planners(
-                root,
-                RewriteIssueKind::Comparison,
-                QUERY_DIRTY_CLUSTERS,
-                &request,
-                "current"
-            )
-            .is_empty()
-        );
-        assert!(
-            planners(
-                root,
-                RewriteIssueKind::Comparison,
-                QUERY_DIRTY_CLUSTERS,
-                &facts,
-                "evidence"
-            )
-            .is_empty()
         );
     }
 }

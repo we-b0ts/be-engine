@@ -13,14 +13,11 @@ use super::super::response::{
 };
 use super::document::{render_response_rules, replace_response_rules};
 use super::evidence::{AggregateEvidence, AssertionEvidence};
-use crate::comparison_recording::{
-    ComparisonVerificationClassification, ComparisonVerificationReport,
-};
 use crate::replay::assertion::{RequestTimes, diagnose_response_body, read_replay_request_times};
 use crate::replay::{
     ResponseAssertionCaseReport, ResponseBodyJoinedStringCandidate,
     ResponseBodyUnorderedPathCandidate, ResponseDifferenceKind, read_actual_response_body,
-    read_comparison_response_observation, read_expected_response_body,
+    read_expected_response_body,
 };
 
 mod codec;
@@ -57,16 +54,12 @@ pub enum ResponseBodyRuleEvidence {
         assertion_report: PathBuf,
         aggregate_report: PathBuf,
     },
-    Comparison {
-        comparison_report: PathBuf,
-    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseBodyRuleEvidenceKind {
     FocusedE2e,
-    Comparison,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -120,7 +113,6 @@ pub struct ResponseBodyRulePlan {
 
 enum ResponseBodyPlanVerification {
     FocusedE2e { cases: Vec<FocusedVerificationCase> },
-    Comparison { case_source: PathBuf },
 }
 
 struct FocusedVerificationCase {
@@ -141,9 +133,7 @@ struct ResponseBodyPlanningEvidence {
 struct ResponseBodyPlanningCase {
     case_id: String,
     passed: bool,
-    candidate_only: bool,
     policy_mismatch_rule_ids: Vec<String>,
-    source_change_pointers: Vec<String>,
     response: Option<ResponseAssertionCaseReport>,
     expected_body: Vec<u8>,
     actual_body: Vec<u8>,
@@ -156,96 +146,11 @@ fn load_planning_evidence(
     api: &str,
 ) -> Result<ResponseBodyPlanningEvidence> {
     match evidence {
-        ResponseBodyRuleEvidence::Comparison { comparison_report } => {
-            load_comparison_evidence(comparison_report, policy_fingerprint, api)
-        }
         ResponseBodyRuleEvidence::FocusedE2e {
             assertion_report,
             aggregate_report,
         } => load_focused_e2e_evidence(assertion_report, aggregate_report, policy_fingerprint, api),
     }
-}
-
-fn load_comparison_evidence(
-    comparison_report: &Path,
-    policy_fingerprint: &str,
-    api: &str,
-) -> Result<ResponseBodyPlanningEvidence> {
-    let bytes = read_regular(comparison_report, "comparison report")?;
-    let comparison: ComparisonVerificationReport =
-        serde_json::from_slice(&bytes).context("invalid comparison report")?;
-    ensure!(
-        comparison.version == 5
-            && comparison.kind == "comparison_recording_verification"
-            && comparison.expected_response == "assertions_only"
-            && comparison.assertion_mode == "comparison_recording",
-        "response-body rule planning requires current comparison verification evidence"
-    );
-    ensure!(
-        comparison.complete,
-        "comparison verification evidence must be complete"
-    );
-    ensure!(
-        comparison.policy_fingerprint == policy_fingerprint,
-        "comparison report replay policy fingerprint is stale"
-    );
-    let matching = comparison
-        .cases
-        .iter()
-        .filter(|case| case.api == api)
-        .collect::<Vec<_>>();
-    ensure!(
-        !matching.is_empty(),
-        "comparison evidence contains no cases for {api}"
-    );
-    let mut cases = Vec::with_capacity(matching.len());
-    for case in matching {
-        let case_dir = Path::new(&case.case_dir);
-        let (expected_body, actual_body, times) = if case.passed {
-            (Vec::new(), Vec::new(), RequestTimes::default())
-        } else {
-            let request = case_dir.join("request.json");
-            let expected = read_comparison_response_observation(
-                &request,
-                &case_dir.join("expected-response.json"),
-                "source-before response",
-            )?;
-            let actual = read_comparison_response_observation(
-                &request,
-                &case_dir.join("response.json"),
-                "candidate response",
-            )?;
-            (
-                expected.body,
-                actual.body,
-                RequestTimes {
-                    source: expected.timestamp,
-                    target: actual.timestamp,
-                },
-            )
-        };
-        cases.push(ResponseBodyPlanningCase {
-            case_id: case.case_id.clone(),
-            passed: case.passed,
-            candidate_only: case.classification
-                == ComparisonVerificationClassification::CandidateDifference,
-            policy_mismatch_rule_ids: case.policy_mismatch_rule_ids.clone(),
-            source_change_pointers: case.source_change_pointers.clone(),
-            response: case.response.clone(),
-            expected_body,
-            actual_body,
-            times,
-        });
-    }
-    Ok(ResponseBodyPlanningEvidence {
-        kind: ResponseBodyRuleEvidenceKind::Comparison,
-        report: comparison_report.to_path_buf(),
-        fingerprint: fingerprint(&bytes),
-        cases,
-        verification: ResponseBodyPlanVerification::Comparison {
-            case_source: PathBuf::from(comparison.case_source),
-        },
-    })
 }
 
 fn load_focused_e2e_evidence(
@@ -364,7 +269,6 @@ fn load_focused_e2e_evidence(
             .iter()
             .chain(&detail.unused_applicable_unordered_rule_ids)
             .chain(&detail.unused_applicable_unordered_joined_string_rule_ids)
-            .chain(&detail.unused_applicable_counter_rule_ids)
             .chain(&detail.unused_applicable_body_rule_ids)
             .cloned()
             .collect();
@@ -377,9 +281,7 @@ fn load_focused_e2e_evidence(
         cases.push(ResponseBodyPlanningCase {
             case_id: case.case_id,
             passed: case.passed,
-            candidate_only: true,
             policy_mismatch_rule_ids,
-            source_change_pointers: Vec::new(),
             response: Some(detail),
             expected_body,
             actual_body,
@@ -456,19 +358,9 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
             "case {:?} has an unused applicable response rule",
             case.case_id
         );
-        ensure!(
-            case.source_change_pointers.is_empty(),
-            "case {:?} has source changes and cannot authorize a response-body rule",
-            case.case_id
-        );
         if case.passed {
             continue;
         }
-        ensure!(
-            case.candidate_only,
-            "case {:?} is not a candidate-only response difference",
-            case.case_id
-        );
         let response = case
             .response
             .as_ref()

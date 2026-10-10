@@ -4,8 +4,8 @@ use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 
 use super::super::model::{RewriteActionEnvelope, RewritePhase, RewriteState};
-use super::super::process_output_model::{RewriteProcessOutputStatus, RewriteWorkScope};
-use super::super::{action, fingerprint, process_outputs, store::RewriteStore};
+use super::super::work_scope::RewriteWorkScope;
+use super::super::{action, fingerprint, store::RewriteStore};
 use super::model::{RewriteWorkerActivity, RewriteWorkerCoverageState, RewriteWorkerObservation};
 
 pub(in crate::rewrite) const RUNNING_OBSERVATION_SECONDS: i64 = 60 * 60;
@@ -138,7 +138,6 @@ pub(in crate::rewrite) fn current_envelope(target_root: &Path) -> Result<Rewrite
         pending: status.pending,
         workflow: status.workflow,
         api_inventory: status.api_inventory,
-        process_output_inventory: status.process_output_inventory,
         latest_focused_e2e: status.latest_focused_e2e,
         action: status.action,
         terminal_allowed: status.terminal_allowed,
@@ -293,19 +292,6 @@ pub(in crate::rewrite) fn scopes(state: &RewriteState) -> Vec<RewriteWorkScope> 
             }
         }
     }
-    scopes.extend(
-        state
-            .process_outputs
-            .inventory
-            .iter()
-            .filter(|item| {
-                item.status == RewriteProcessOutputStatus::ImplementationRequired
-                    && item.issue.is_some()
-            })
-            .map(|item| RewriteWorkScope::ProcessOutput {
-                id: item.id.clone(),
-            }),
-    );
     scopes
 }
 
@@ -315,11 +301,9 @@ pub(in crate::rewrite) fn scoped(
 ) -> Result<RewriteState> {
     match scope {
         RewriteWorkScope::Api { api } => {
-            let mut selected = super::super::api_selector::scoped(state, api)?;
-            selected.process_outputs.current_id = None;
+            let selected = super::super::api_selector::scoped(state, api)?;
             Ok(selected)
         }
-        RewriteWorkScope::ProcessOutput { id } => process_outputs::scoped(state, id),
     }
 }
 

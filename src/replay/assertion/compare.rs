@@ -35,7 +35,6 @@ pub(super) fn compare_json(
         &mut report.applied_generated_rule_ids,
         &mut report.applied_unordered_rule_ids,
         &mut report.applied_unordered_joined_string_rule_ids,
-        &mut report.applied_counter_rule_ids,
     ] {
         let mut seen = BTreeSet::new();
         ids.retain(|id| seen.insert(id.clone()));
@@ -140,40 +139,6 @@ fn compare_value(
                     report.differences.push(difference(
                         pointer,
                         ResponseDifferenceKind::UnorderedJoinedStringFieldNotString,
-                        Some(expected),
-                        Some(actual),
-                    ));
-                }
-            },
-            ResponseRuleKind::Counter => match (expected, actual) {
-                (Value::Number(_), Value::Number(_)) => {
-                    report.applied_counter_rule_ids.push(field.id.clone());
-                }
-                (Value::String(expected), Value::String(actual))
-                    if expected.is_empty() == actual.is_empty() =>
-                {
-                    report.applied_counter_rule_ids.push(field.id.clone());
-                }
-                _ if json_kind(expected) != json_kind(actual) => {
-                    report.differences.push(difference(
-                        pointer,
-                        ResponseDifferenceKind::TypeMismatch,
-                        Some(expected),
-                        Some(actual),
-                    ));
-                }
-                (Value::String(_), Value::String(_)) => {
-                    report.differences.push(difference(
-                        pointer,
-                        ResponseDifferenceKind::ValueMismatch,
-                        Some(expected),
-                        Some(actual),
-                    ));
-                }
-                _ => {
-                    report.differences.push(difference(
-                        pointer,
-                        ResponseDifferenceKind::CounterFieldUnsupportedType,
                         Some(expected),
                         Some(actual),
                     ));

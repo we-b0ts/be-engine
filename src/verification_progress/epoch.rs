@@ -261,7 +261,6 @@ fn archived_baseline(
     let file_name = match stage {
         VerificationStage::Progress => "progress.yaml",
         VerificationStage::Replay => "replay-progress.yaml",
-        VerificationStage::Comparison => "comparison-progress.yaml",
     };
     let Some(archived) = read_progress(&history_root.join(file_name), stage)? else {
         return Ok(None);

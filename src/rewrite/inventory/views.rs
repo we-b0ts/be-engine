@@ -38,7 +38,6 @@ fn items(state: &RewriteState) -> Vec<RewriteApiInventoryItem> {
                 (!state.source_route.is_empty()).then(|| state.source_route.clone());
             method.attempts = state.attempts.len();
             method.e2e_current = state.e2e_current;
-            method.comparison_current = state.comparison_current;
         }
         let api = api_key(&method.api).to_string();
         let position = *positions.entry(api.clone()).or_insert_with(|| {

@@ -4,7 +4,6 @@ use std::fs;
 use anyhow::{Context, Result, ensure};
 
 use super::*;
-use crate::comparison_recording::{ComparisonVerificationOptions, verify_comparison_recording};
 use crate::config::edit::write_atomic;
 use crate::replay::{ResponseAssertionOptions, assert_recorded_response};
 
@@ -29,45 +28,6 @@ impl ResponseBodyRulePlan {
         }
         let mut report = self.report;
         let (body_reports, outcome) = match self.verification {
-            ResponseBodyPlanVerification::Comparison { case_source } => {
-                let verification = verify_comparison_recording(ComparisonVerificationOptions {
-                    case_source,
-                    policy: self.policy_path.clone(),
-                    report: report.evidence_report.clone(),
-                })?;
-                let matching = verification
-                    .cases
-                    .iter()
-                    .filter(|case| case.api == report.api)
-                    .collect::<Vec<_>>();
-                ensure!(
-                    !matching.is_empty(),
-                    "offline response-body verification contains no cases for {}",
-                    report.api
-                );
-                let body_reports = matching
-                    .iter()
-                    .filter_map(|case| case.response.as_ref()?.body_diagnosis.clone())
-                    .collect::<Vec<_>>();
-                ensure!(
-                    body_reports.len() == matching.len(),
-                    "offline verification did not produce codec-aware body reports"
-                );
-                report.evidence_fingerprint = fingerprint(&read_regular(
-                    &report.evidence_report,
-                    "refreshed comparison report",
-                )?);
-                (
-                    body_reports,
-                    ResponseBodyRuleVerificationOutcome {
-                        kind: ResponseBodyRuleEvidenceKind::Comparison,
-                        complete: verification.complete,
-                        passed: verification.passed,
-                        cases: verification.counts.total,
-                        failed: verification.counts.failed,
-                    },
-                )
-            }
             ResponseBodyPlanVerification::FocusedE2e { cases } => {
                 let mut body_reports = Vec::with_capacity(cases.len());
                 let mut failed = 0usize;

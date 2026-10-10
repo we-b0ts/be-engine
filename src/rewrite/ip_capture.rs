@@ -140,7 +140,6 @@ pub(super) fn ensure_before_system_repair(
                 issue.kind,
                 RewriteIssueKind::Response
                     | RewriteIssueKind::Dependency
-                    | RewriteIssueKind::Comparison
                     | RewriteIssueKind::Replay
             )),
         "IP capture investigation has no active verification issue"

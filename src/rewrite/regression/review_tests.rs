@@ -67,7 +67,6 @@ fn unchanged_purposes_complete_without_review_after_progress_publication() {
         inventory::install(&mut state, vec!["GET /api".into()]).unwrap();
         state.phase = RewritePhase::SliceComplete;
         state.current_api_index = None;
-        state.require_comparison = false;
         state.e2e_current = true;
         state.api_inventory[0].status = rewrite::RewriteApiStatus::Complete;
         state.api_inventory[0].e2e_current = true;
@@ -136,7 +135,6 @@ async fn new_code_changes_require_review_before_verification_even_without_histor
         let next = rewrite::next_rewrite(rewrite::RewriteNextOptions {
             target_root: target.path().into(),
             api: None,
-            process_output: None,
             source_route: None,
         })
         .await

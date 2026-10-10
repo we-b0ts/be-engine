@@ -8,7 +8,7 @@ implementation owner; do not inspect source to invent startup requirements.
 ## Environment
 
 Initialization snapshots the selected source process's effective environment.
-Every target start, restart, preflight, Replay, and Comparison automatically
+Every target start, restart, preflight and Replay automatically
 loads the application-owned portion of that snapshot. Runtime identity,
 Kubernetes service-link variables, field-derived Pod identity, and
 `TRAFFIC_E2E_*` variables are not projected to the target. An explicitly

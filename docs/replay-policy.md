@@ -2,7 +2,7 @@
 
 Each target repository owns one source-controlled
 `.traffic-e2e/verification.yaml`. Pass it explicitly to every recorded replay
-and comparison verification:
+verification:
 
 ```bash
 traffic-e2e config init --source-pod <pod> --namespace <namespace>
@@ -34,9 +34,6 @@ Version three enables runner-owned response assertions:
 version: 3
 expected_response: assertions_only
 dependency_rules: []
-response_settings:
-  comparison:
-    source_match: before
 response_rules:
   json: {}
   protobuf: {}
@@ -46,34 +43,14 @@ response_rules:
 
 Rules are grouped by body codec, canonical API, and concrete rule kind.
 Standard replay loads JSON `timestamp`, `duration`, `uuid`, `random`, `jwt`, and
-`unordered` rules plus configured protobuf, Hessian2, and DOCX rules. Comparison also
-loads JSON `counter` rules. Rule kinds selecting JSON must use disjoint
+`unordered` rules plus configured protobuf, Hessian2, and DOCX rules. Rule kinds selecting JSON must use disjoint
 subtrees.
-
-Comparison uses the first source response as its oracle under the active
-response rules. `response_settings.comparison.source_match` accepts only
-`before` (the default). The removed `before_or_after` value is rejected; remove
-that setting or change it to `before` in existing configurations. Source-after
-is optional diagnostic evidence and never permits a candidate difference.
-Standard Replay ignores this comparison-only setting.
 
 `expected-response.json` is an assertion oracle only. Target product code,
 dependency mocks, E2E setup, and verification policy generation must not read its
 status, headers, or body to create the actual response, dependency result,
 branch decision, cache result, or side effect. The policy parser requires this
 declaration; migration review must also verify the target harness obeys it.
-
-The same version 3 `response_rules` also apply to offline comparison recording
-verification. `traffic-e2e compare <comparison-recording-run> --policy
-<verification.yaml>` treats the baseline `expected-response.json` as the
-oracle and the candidate `response.json` as actual output. When
-`expected-response-after.json` exists, it also checks source-before against
-source-after for diagnosis. When the candidate differs from source-before, a
-source change makes only candidate differences at the same response location
-inconclusive; unrelated candidate differences remain target differences. Neither classification passes
-verification; both require diagnosis. Replay dependency rules are
-ignored during this file-only operation, and no interception or isolation is
-enabled.
 
 ## Standard HTTP Response Headers
 
@@ -85,7 +62,7 @@ with one MySQL, Redis or HTTP capture, optional format and explicit endpoint sco
 [Dependency request rules](dependency-request-rules.md) extend these with integer
 HTTP captures, atomic Redis JSON/JWT writes, related write times and multipart boundaries.
 
-Version 3 Replay and Comparison compare the following HTTP response headers by
+Version 3 Replay compares the following HTTP response headers by
 default, without response rules:
 
 ```text
@@ -430,7 +407,7 @@ extras use the same behavior; every non-expiration component remains exact.
 
 Rule evidence is bound to the complete content fingerprint of
 `.traffic-e2e/verification.yaml`. Any edit, including another API's rule or a
-comment, makes earlier Replay or Comparison evidence stale. The recording run
+comment, makes earlier Replay evidence stale. The recording run
 remains reusable; selecting another evidence ID or changing rule selectors
 does not refresh the run's verification evidence.
 
@@ -492,7 +469,7 @@ through source review, unit tests, or real-traffic integration tests.
 JSON response Pointers also support a whole `*` segment for array elements,
 for example `/data/*/created_at` or `/data/*/items/*/id`. This is shared by
 `timestamp`, `duration`, `uuid`, `random`, `unordered`,
-`unordered_joined_string`, and Comparison-only `counter` rules. A numeric
+and `unordered_joined_string` rules. A numeric
 segment still selects one exact index; `/*` selects each element of a root
 array. Object keys remain exact (including a literal `*` key); `*` does not
 expand object members. Standard `~0` and `~1` escaping still applies.
@@ -510,7 +487,7 @@ same subtree.
 
 Time rules use a fixed ±5 second tolerance and the engine's captured request
 start times. Replay reads source `request.json.timestamp` and target
-`request_sent_at`; Comparison uses each capture's request-start `timestamp`.
+`request_sent_at`.
 No current wall-clock fallback or configurable tolerance is allowed.
 
 - `timestamp` requires `format: unix_seconds`, `unix_milliseconds`, `rfc3339`,
@@ -702,7 +679,7 @@ response_rules:
 ```
 
 When a structured body mismatches only on such a joined string, the codec-aware
-comparison report surfaces `unordered_joined_string_candidates` with the
+assertion report surfaces `unordered_joined_string_candidates` with the
 codec-specific path and the separator that makes the two sides compare equal.
 Protobuf requires `field_type: string` so length-delimited message/bytes fields
 are never implicitly treated as text. A selected field may be either an
@@ -718,7 +695,7 @@ must use the same envelope because an envelope change is a response-shape
 difference, not a body-value difference.
 
 Motan1 `value` responses are a protocol-defined exception to manual codec
-selection: after removing the Java ObjectStream wrapper, replay and comparison
+selection: after removing the Java ObjectStream wrapper, replay
 use Hessian2 semantic equality by default. This makes alternate wire encodings
 and map entry order non-semantic while list order and business values remain
 exact. A matching explicit protobuf or Hessian2 response-body rule still takes
@@ -734,9 +711,7 @@ request ID, response status, serialization, and every other metadata entry
 must still match.
 
 This is a response rule, not a Motan rule. Planning is available whenever
-current runner-owned focused E2E evidence or current comparison evidence
-contains the required body diagnosis; it is not gated on entering the
-Comparison phase. Except for protocol-defined Motan1 `value` responses, when
+current runner-owned focused E2E evidence contains the required body diagnosis. Except for protocol-defined Motan1 `value` responses, when
 no body codec is configured, evidence reports the syntactically valid
 `protobuf`, `hessian2`, and/or `docx` candidates. They are decoding candidates
 rather than schema claims, so application or schema context must select the
@@ -835,63 +810,3 @@ element order is ignored while empty elements and duplicate multiplicity are
 preserved. A path absent from both bodies is a no-op; selecting a present
 non-string fails closed. Joined-string selectors never overlap an `unordered`
 selector on the same field.
-
-Comparison-only live counter semantics use the `counter` kind under the JSON API:
-
-```yaml
-response_rules:
-  json:
-    "GET /api/users/show":
-      counter:
-        - pointer: /followers_count
-          source_evidence: src/user.rs:load live follower count
-          source_example: "100"
-          target_example: "101"
-```
-
-Standard replay ignores this subtree. Do not infer counter behavior from the
-field name. After source inspection proves a live count and a current
-comparison report contains differing observations, use:
-
-```bash
-traffic-e2e config comparison plan response-rule \
-  --target-root . \
-  --kind counter \
-  --source-evidence 'src/user.rs:load live follower count' \
-  --source-example '100' \
-  --target-example '101' \
-  --api 'GET /api/users/show' \
-  --json-pointer /followers_count \
-  --comparison-run .traffic-e2e/local/artifacts/comparison-recordings/<run-id>
-```
-
-Review the plan, then repeat with `apply`. Number matches only number. String
-matches only string, and empty strings match only empty strings. Presence and
-all unsupported JSON kinds remain exact.
-
-## Process-output target-missing allowances
-
-Target-specific metrics-profile allowances live at
-`process_output_rules.<output-id>.allow_target_missing`. Each rule selects one
-canonical `<type>.<name>` interaction and carries `source_revision`, an ordered
-`dependency_path` with at least a direct dependency and its indirect emitter,
-and structured `emitter_evidence`. The evidence contains at least two paths the
-target AI inspected in source or dependency source plus one single-line
-description of the independently emitted interaction.
-
-Use `traffic-e2e config comparison plan|apply allow-target-missing`; do not
-hand-edit these entries. Planning requires an exact finalized comparison run
-whose raw captures prove a positive source metric and the entire logical
-interaction absent on target. Apply rejects project, policy, or capture changes
-since planning. The rule is valid only for an independently emitting indirect
-dependency. A direct endpoint call, client construction, bean registration,
-initializer, or startup hook in repository code requires target implementation.
-An interaction that affects source behavior also requires target
-implementation. These two eligibility conclusions are preconditions for
-submitting rule evidence and are not persisted as boolean fields. The rule
-never applies to exact-count metrics and never suppresses target extras.
-
-HTTP `all_http://x`/`http://x` and `all_https://x`/`https://x` canonicalize to
-one allowance, without merging their observed counts. The four Motan client
-types canonicalize to `RPC_SERVICE_CLIENT`; they are still checked separately
-and reported with one logical representative.

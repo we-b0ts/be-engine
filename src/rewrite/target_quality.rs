@@ -48,7 +48,6 @@ pub fn run(options: RewriteTargetQualityOptions) -> Result<RewriteActionEnvelope
 
 pub(super) fn status_action(root: &Path, state: &RewriteState) -> Result<Option<RewriteAction>> {
     if state.phase != RewritePhase::ImplementationRequired
-        || state.process_outputs.current_id.is_some()
         || !worker::runtime::acceptance_ready(
             state,
             &super::RewriteWorkScope::Api {

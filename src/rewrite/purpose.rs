@@ -86,10 +86,8 @@ pub(super) fn status(root: &Path) -> Result<Option<RewriteStatusReport>> {
         initialized: RewriteStore::new(root).is_ok_and(|s| s.exists()),
         workflow: e.workflow,
         api_inventory: e.api_inventory,
-        process_output_inventory: e.process_output_inventory,
         latest_focused_e2e: None,
         e2e_current: false,
-        comparison_current: false,
         terminal_allowed: false,
         action: e.action,
     }))

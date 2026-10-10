@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Result, ensure};
 
 use super::config::{CONFIG_VERSION, DEFAULT_RUNTIME_ROOT};
-use super::model::{MAX_TARGET_STARTUP_TIMEOUT_SECONDS, ProcessOutputSettings, ProjectConfig};
+use super::model::{MAX_TARGET_STARTUP_TIMEOUT_SECONDS, ProjectConfig};
 
 pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
     let project = &config.project;
@@ -18,12 +18,6 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         "source.snapshot must be {:?}",
         crate::repository::LOCAL_SOURCE_ROOT
     );
-    let process_outputs = project
-        .process_outputs
-        .iter()
-        .map(ProcessOutputSettings::config)
-        .collect::<Vec<_>>();
-    crate::process_output::validate_configs(&process_outputs)?;
     ensure!(
         !project.target.dockerfile.as_os_str().is_empty(),
         "target.dockerfile must not be empty"

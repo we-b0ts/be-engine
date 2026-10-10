@@ -8,11 +8,11 @@ and constrained Kafka traffic to JSONL files, then groups, replays, and
 verifies recorded contracts.
 
 The primary crate is in `src/` and builds three default binaries. `traffic-e2e` exposes
-the low-level recording, replay, comparison, configuration, and diagnostic
+the low-level recording, replay, configuration, and diagnostic
 engine; `backend-rewrite` exposes AI-facing rewrite orchestration directly on
 the same crate; `backend-rewrite-admin` exposes explicit administrator-owned
 startup snapshot repair outside ordinary AI workflows. Standard engine
-workflow commands are `config init`, `record`, `record-comparison`, `prepare`,
+workflow commands are `config init`, `record`, `prepare`,
 `run-api`, `run`, `status`, `recover`, and `abort`; managed recording, replay,
 and target isolation are also provided by the `traffic-e2e` binary, while
 low-level tooling is under `diagnose`. Recorder

@@ -1,5 +1,4 @@
 use std::ffi::{OsStr, OsString};
-use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -12,80 +11,10 @@ use clap::{Args, Subcommand};
 
 use crate::command_output::{stderr_line, stdout_line};
 
-mod cache_ports;
 mod dns;
 mod egress;
 mod egress_counters;
 mod fake_ip;
-mod target_egress;
-
-pub struct CachePortGuard {
-    active: bool,
-}
-
-impl CachePortGuard {
-    pub fn enable(
-        ports: &[u16],
-        tcp_port: u16,
-        target_source_ip: Option<Ipv4Addr>,
-        interception_listen_ip: Option<Ipv4Addr>,
-    ) -> Result<Self> {
-        require_root()?;
-        ensure!(
-            target_source_ip.is_some() == interception_listen_ip.is_some(),
-            "target cache interception source and listener IPs must be configured together"
-        );
-        cache_ports::up(ports, tcp_port, target_source_ip, interception_listen_ip)?;
-        Ok(Self { active: true })
-    }
-
-    pub fn disable(&mut self) {
-        if std::mem::take(&mut self.active)
-            && let Err(error) = cache_ports::down()
-        {
-            stderr_line(format_args!(
-                "failed to remove cache snapshot interception: {error:#}"
-            ));
-        }
-    }
-}
-
-impl Drop for CachePortGuard {
-    fn drop(&mut self) {
-        self.disable();
-    }
-}
-
-pub struct TargetEgressGuard {
-    active: bool,
-}
-
-impl TargetEgressGuard {
-    pub fn enable(target_source_ip: Option<Ipv4Addr>) -> Result<Self> {
-        let Some(target_source_ip) = target_source_ip else {
-            return Ok(Self { active: false });
-        };
-        require_root()?;
-        target_egress::up(target_source_ip)?;
-        Ok(Self { active: true })
-    }
-
-    pub fn disable(&mut self) {
-        if std::mem::take(&mut self.active)
-            && let Err(error) = target_egress::down()
-        {
-            stderr_line(format_args!(
-                "failed to remove comparison target egress: {error:#}"
-            ));
-        }
-    }
-}
-
-impl Drop for TargetEgressGuard {
-    fn drop(&mut self) {
-        self.disable();
-    }
-}
 
 pub const FIXED_USER: &str = "trp-record";
 

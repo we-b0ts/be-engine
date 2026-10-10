@@ -7,10 +7,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::process_output_model::{
-    RewriteProcessOutputInventoryDetails, RewriteProcessOutputInventoryView,
-    RewriteProcessOutputState, RewriteWorkScope,
-};
+use super::work_scope::RewriteWorkScope;
 pub(super) use super::worker::model::{RewriteWorkerBinding, RewriteWorkerTransferRecord};
 pub use super::worker::model::{
     RewriteWorkerBlockingReason, RewriteWorkerDispatchState, RewriteWorkerDispatchView,
@@ -34,7 +31,6 @@ pub enum RewritePhase {
     ApiPending,
     ImplementationRequired,
     AwaitingRecordingRefresh,
-    ComparisonRecordingRequired,
     SystemRepairRequired,
     SliceComplete,
 }
@@ -70,8 +66,6 @@ pub struct RewriteApiProgress {
     pub attempts: usize,
     #[serde(default)]
     pub e2e_current: bool,
-    #[serde(default)]
-    pub comparison_current: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verified_target_fingerprint: Option<String>,
 }
@@ -116,8 +110,6 @@ pub enum RewriteIssueKind {
     TargetRuntime,
     Replay,
     Dependency,
-    Comparison,
-    ProcessOutput,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -212,8 +204,6 @@ pub struct RewriteIssue {
     pub possible_causes: Vec<String>,
     pub observed_target_fingerprint: String,
     pub attempt: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub comparison_observation: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -236,7 +226,6 @@ pub struct RewriteRouteRecord {
 #[serde(rename_all = "snake_case")]
 pub enum RewriteRepairAcceptanceKind {
     TrafficE2eRevisionChanged,
-    SourceRevisionChanged,
     SourceRuntimeInputsChanged,
 }
 
@@ -340,9 +329,6 @@ pub(super) struct RewriteSliceState {
     pub phase: RewritePhase,
     pub api: String,
     pub source_route: String,
-    pub comparison_run_id: Option<String>,
-    #[serde(default)]
-    pub comparison_rejection: Option<String>,
     pub case_source: Option<PathBuf>,
     #[serde(default)]
     pub case_inventory_id: Option<String>,
@@ -364,7 +350,6 @@ pub(super) struct RewriteSliceState {
     #[serde(default)]
     pub rule_replay_pending: bool,
     pub e2e_current: bool,
-    pub comparison_current: bool,
 }
 
 impl RewriteSliceState {
@@ -373,8 +358,6 @@ impl RewriteSliceState {
             phase: RewritePhase::ApiPending,
             api,
             source_route,
-            comparison_run_id: None,
-            comparison_rejection: None,
             case_source: None,
             case_inventory_id: None,
             source_revision: None,
@@ -390,7 +373,6 @@ impl RewriteSliceState {
             system_repair_accepted: false,
             rule_replay_pending: false,
             e2e_current: false,
-            comparison_current: false,
         }
     }
 }
@@ -423,8 +405,6 @@ pub(super) struct RewriteState {
     #[serde(default)]
     pub worker_event_revision: u64,
     #[serde(default)]
-    pub process_outputs: RewriteProcessOutputState,
-    #[serde(default)]
     pub api_catalog_initialized: bool,
     #[serde(default)]
     pub api_catalog: BTreeSet<String>,
@@ -438,9 +418,6 @@ pub(super) struct RewriteState {
     pub recording_run_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recording_after_run_id: Option<String>,
-    /// Last observed local policy; reloaded between operations, never frozen per batch.
-    #[serde(default = "crate::config::regression::default_require_comparison")]
-    pub require_comparison: bool,
     #[serde(default)]
     pub recording_rejection: Option<String>,
     #[serde(default)]
@@ -492,7 +469,6 @@ pub struct RewriteWorkflowView {
     pub phase: RewritePhase,
     pub scope: String,
     pub recording_run_id: String,
-    pub require_comparison: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub work_scope: Option<RewriteWorkScope>,
 }
@@ -523,7 +499,6 @@ pub struct RewriteCommandSpec {
 pub enum RewriteInputRequiredReason {
     WorkflowNotInitialized,
     RecordingEvidenceRequired,
-    ComparisonEvidenceRequired,
     SourceRouteRequired,
     VerificationProgressCommitRequired,
     ConfigurationCommitRequired,
@@ -573,7 +548,6 @@ pub enum RewriteRecordingInputCandidateDisposition {
 #[serde(rename_all = "snake_case")]
 pub enum RewriteTrafficOperationKind {
     Replay,
-    Comparison,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -590,7 +564,6 @@ pub enum RewriteAction {
     Blocked {
         summary: String,
         system_repair_apis: Vec<String>,
-        dependent_process_outputs: Vec<String>,
         resume: RewriteCommandSpec,
     },
     WorkerEventsRequired {
@@ -704,7 +677,6 @@ pub enum RewriteAction {
     Complete {
         summary: String,
         e2e_current: bool,
-        comparison_current: bool,
     },
 }
 
@@ -732,8 +704,6 @@ pub struct RewriteActionEnvelope {
     pub workflow: Option<RewriteWorkflowView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_inventory: Option<RewriteApiInventoryView>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub process_output_inventory: Option<RewriteProcessOutputInventoryView>,
     pub pending: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_focused_e2e: Option<RewriteFocusedE2eExecution>,
@@ -752,13 +722,10 @@ pub struct RewriteStatusReport {
     pub workflow: Option<RewriteWorkflowView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_inventory: Option<RewriteApiInventoryView>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub process_output_inventory: Option<RewriteProcessOutputInventoryView>,
     pub pending: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_focused_e2e: Option<RewriteFocusedE2eExecution>,
     pub e2e_current: bool,
-    pub comparison_current: bool,
     pub terminal_allowed: bool,
     pub action: RewriteAction,
 }
@@ -771,8 +738,6 @@ pub struct RewriteInventoryReport {
     pub workflow: Option<RewriteWorkflowView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_inventory: Option<RewriteApiInventoryDetails>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub process_output_inventory: Option<RewriteProcessOutputInventoryDetails>,
     pub pending: usize,
     pub details: super::coordination::RewriteCoordinationDetails,
     #[serde(skip_serializing_if = "Vec::is_empty")]

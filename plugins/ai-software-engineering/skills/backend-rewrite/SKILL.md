@@ -40,9 +40,7 @@ The coordinator remains the only bridge between agent results and engine
 mutations. An API expert advises the existing API implementer through the
 coordinator; it never creates another implementation owner.
 
-`route_analysis` is a read-only API-implementer task mode, not another role. Existing
-`work_scope.kind=process_output` assignments are a legacy worker specialization,
-not another core role. External system owners may repair infrastructure, but
+`route_analysis` is a read-only API-implementer task mode, not another role. External system owners may repair infrastructure, but
 they are outside this agent-role model.
 
 ## HTTP Route Work Scope
@@ -82,11 +80,6 @@ references it requests.
 | API implementer: `api-implementer` | Diagnose and implement the assigned API; return evidence and checked code | [api-implementer.md](references/api-implementer.md) |
 | Code integrator: `code-integrator` | Prepare the assigned integration or inspect assigned source findings; return a version-bound result | [code-integrator.md](references/code-integrator.md) |
 | Engine-requested API expert: `api-expert` | Investigate the assigned API read-only; return findings and evidence to the coordinator | [api-expert.md](references/api-expert.md) |
-
-A legacy implementation-worker assignment with API scope uses the
-`api-implementer` entrypoint. Existing `work_scope.kind=process_output`
-assignments use [api-implementer-diagnosis.md](references/api-implementer-diagnosis.md)
-and its routed [process-output diagnosis](references/api-implementer-process-output.md).
 
 For an explicit request to initialize an uninitialized target, read
 [project-init.md](references/project-init.md). Ordinary rewrite sessions never

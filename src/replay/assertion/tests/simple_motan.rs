@@ -67,6 +67,24 @@ fn simple_json_response_wrapper_uses_semantic_json_comparison() {
 }
 
 #[test]
+fn simple_payload_type_remains_part_of_the_contract() {
+    let payload = br#"{"value":1}"#;
+    let expected = to_vec(std::str::from_utf8(payload).unwrap(), Limits::default()).unwrap();
+    let actual = to_vec(payload.as_slice(), Limits::default()).unwrap();
+    let (_temp, options) = write_simple_case(&expected, &actual);
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(!report.passed);
+    assert_eq!(report.body_codec, ResponseBodyCodec::Json);
+    assert_eq!(report.differences.len(), 1);
+    assert_eq!(
+        report.differences[0].kind,
+        ResponseDifferenceKind::TypeMismatch
+    );
+}
+
+#[test]
 fn simple_string_exposes_json_for_semantic_comparison() {
     let expected = to_vec(r#"{"name":"motan","active":true}"#, Limits::default()).unwrap();
     let actual = to_vec(r#"{ "active": true, "name": "motan" }"#, Limits::default()).unwrap();
@@ -98,22 +116,4 @@ fn simple_byte_array_exposes_json_for_semantic_comparison() {
     assert!(report.passed);
     assert_eq!(report.body_codec, ResponseBodyCodec::Json);
     assert!(report.differences.is_empty());
-}
-
-#[test]
-fn simple_payload_type_remains_part_of_the_contract() {
-    let payload = br#"{"value":1}"#;
-    let expected = to_vec(std::str::from_utf8(payload).unwrap(), Limits::default()).unwrap();
-    let actual = to_vec(payload.as_slice(), Limits::default()).unwrap();
-    let (_temp, options) = write_simple_case(&expected, &actual);
-
-    let report = assert_recorded_response(options).unwrap();
-
-    assert!(!report.passed);
-    assert_eq!(report.body_codec, ResponseBodyCodec::Json);
-    assert_eq!(report.differences.len(), 1);
-    assert_eq!(
-        report.differences[0].kind,
-        ResponseDifferenceKind::TypeMismatch
-    );
 }

@@ -77,54 +77,6 @@ fn binding_id(state: &RewriteState) -> String {
 }
 
 #[test]
-fn process_output_issue_dispatches_an_independent_worker() {
-    let mut state = crate::rewrite::test_state();
-    let mut process_issue = issue("process-missing", 1, "target-a");
-    process_issue.kind = RewriteIssueKind::ProcessOutput;
-    state.process_outputs.inventory = vec![
-            crate::rewrite::process_output_model::RewriteProcessOutputProgress {
-                id: "metrics-profile".to_string(),
-                status: crate::rewrite::process_output_model::RewriteProcessOutputStatus::ImplementationRequired,
-                attempts: 1,
-                verified_target_fingerprint: None,
-                issue: Some(process_issue),
-            },
-        ];
-    state.process_outputs.current_id = Some("metrics-profile".to_string());
-
-    let action = serde_json::to_value(super::implementation_action(
-        Path::new("/target"),
-        &state,
-        None,
-    ))
-    .unwrap();
-
-    assert_eq!(
-        action.pointer("/details/work_scope/kind"),
-        Some(&serde_json::json!("process_output"))
-    );
-    assert_eq!(
-        action.pointer("/details/work_scope/id"),
-        Some(&serde_json::json!("metrics-profile"))
-    );
-    assert_eq!(
-        action.pointer("/details/worker/state"),
-        Some(&serde_json::json!("dispatch_required"))
-    );
-    assert_eq!(
-        action.pointer("/commands/acceptance/argv/4"),
-        Some(&serde_json::json!("--process-output"))
-    );
-    assert!(action["commands"].get("evidence").is_none());
-    assert!(
-        action["summary"]
-            .as_str()
-            .unwrap()
-            .contains("commands.confirm_worker")
-    );
-}
-
-#[test]
 fn diagnostic_entrypoints_require_worker_confirmation_without_mutating_state() {
     let target = configured_target();
     let store = RewriteStore::new(target.path()).unwrap();
@@ -204,8 +156,8 @@ fn diagnostic_entrypoints_require_worker_confirmation_without_mutating_state() {
     assert_confirmation_error(
         super::super::route_rewrite(RewriteRouteOptions {
             target_root: target.path().to_path_buf(),
-            cause: RewriteRouteCause::SourceChange {
-                required_change: "refresh the source baseline".to_string(),
+            cause: RewriteRouteCause::ReplayCapabilityGap {
+                required_change: "support the replay contract".to_string(),
             },
             evidence_id,
             source_ref: "SourceService.java:read".to_string(),
@@ -661,7 +613,6 @@ fn api_progress(api: &str, status: RewriteApiStatus) -> RewriteApiProgress {
         status,
         attempts: 0,
         e2e_current: false,
-        comparison_current: false,
         verified_target_fingerprint: None,
     }
 }
@@ -739,7 +690,6 @@ pub(in crate::rewrite) fn issue(id: &str, attempt: u64, target_fingerprint: &str
         possible_causes: Vec::new(),
         observed_target_fingerprint: target_fingerprint.to_string(),
         attempt,
-        comparison_observation: None,
     }
 }
 use crate::rewrite::evidence;

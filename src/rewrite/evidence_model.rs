@@ -11,7 +11,6 @@ pub struct RewriteEvidenceContext {
     pub workflow_id: String,
     pub revision: u64,
     pub recording_run_id: String,
-    pub require_comparison: bool,
     pub worker: RewriteWorkerDispatchView,
     pub review: crate::rewrite::review::ReviewContext,
 }

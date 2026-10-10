@@ -19,7 +19,6 @@ recorder:
   # `recorder` in `.traffic-e2e/project.yaml`. Coordinator-managed source-traffic
   # policy values belong exclusively in `.traffic-e2e/source-traffic-policy.yaml`.
   artifacts: null
-  comparison_recording: null
   dns_mock:
     enabled: false
     listen: 127.0.0.153:4053

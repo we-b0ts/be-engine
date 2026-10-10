@@ -12,9 +12,7 @@ use super::{action, inventory};
 
 use crate::config::regression as config;
 pub(super) use config::PATH;
-mod comparison;
 mod recording;
-pub(super) use comparison::start_if_required;
 pub(super) use recording::{ensure_fresh_allowed, has_active_pin, validate_uninitialized};
 
 pub(super) fn is_skipped(state: &RewriteState, api: &str) -> bool {
@@ -41,7 +39,6 @@ pub(super) fn apply(target_root: &Path, state: &mut RewriteState) -> Result<bool
         return Ok(false);
     }
     let mut changed = recording::apply(target_root, state, &policy)?;
-    changed |= comparison::bind_selected(state, &policy);
     if !state.api_inventory.is_empty() && state.phase != RewritePhase::RecordingRequired {
         for api in policy.selectors() {
             ensure!(
@@ -53,8 +50,6 @@ pub(super) fn apply(target_root: &Path, state: &mut RewriteState) -> Result<bool
             );
         }
     }
-    changed |= state.require_comparison != policy.require_comparison;
-    state.require_comparison = policy.require_comparison;
     if state.api_inventory.is_empty() || state.phase == RewritePhase::RecordingRequired {
         if changed {
             state.bump();
@@ -100,7 +95,6 @@ pub(super) fn apply(target_root: &Path, state: &mut RewriteState) -> Result<bool
         state.phase = RewritePhase::SliceComplete;
         changed = true;
     }
-    changed |= comparison::reconcile(state)?;
     if state.current_api_index.is_none() {
         let next = state
             .api_inventory
@@ -131,7 +125,6 @@ pub(super) fn skipped_envelope(
                     "{api} is skipped by {PATH}; no verification was performed for this scope"
                 ),
                 e2e_current: false,
-                comparison_current: false,
             },
         );
         envelope.latest_focused_e2e = None;

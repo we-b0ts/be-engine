@@ -23,7 +23,6 @@ const MAX_COUNTED_RUNS: usize = 10_000;
 pub(crate) enum VerificationStage {
     Progress,
     Replay,
-    Comparison,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -598,11 +597,8 @@ fn migrate_split_progress(path: &Path) -> Result<Option<ProgressReport>> {
         &parent.join("replay-progress.yaml"),
         VerificationStage::Replay,
     )?;
-    let comparison = load(
-        &parent.join("comparison-progress.yaml"),
-        VerificationStage::Comparison,
-    )?;
-    if replay.is_none() && comparison.is_none() {
+
+    if replay.is_none() {
         return Ok(None);
     }
     let mut merged = replay.unwrap_or_else(|| ProgressReport::new(VerificationStage::Progress));
@@ -758,25 +754,23 @@ fn cleanup_split_public_progress(progress_path: &Path) -> Result<()> {
     let parent = progress_path
         .parent()
         .context("progress path has no .traffic-e2e directory")?;
-    for name in ["replay-progress.yaml", "comparison-progress.yaml"] {
-        let legacy = parent.join(name);
-        match fs::symlink_metadata(&legacy) {
-            Ok(metadata) => {
-                ensure!(
-                    metadata.is_file() && !metadata.file_type().is_symlink(),
-                    "legacy progress must be a regular file and not a symlink: {}",
-                    legacy.display()
-                );
-                fs::remove_file(&legacy).with_context(|| {
-                    format!("failed to remove migrated progress {}", legacy.display())
-                })?;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!("failed to inspect legacy progress {}", legacy.display())
-                });
-            }
+    let legacy = parent.join("replay-progress.yaml");
+    match fs::symlink_metadata(&legacy) {
+        Ok(metadata) => {
+            ensure!(
+                metadata.is_file() && !metadata.file_type().is_symlink(),
+                "legacy progress must be a regular file and not a symlink: {}",
+                legacy.display()
+            );
+            fs::remove_file(&legacy).with_context(|| {
+                format!("failed to remove migrated progress {}", legacy.display())
+            })?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("failed to inspect legacy progress {}", legacy.display())
+            });
         }
     }
     Ok(())

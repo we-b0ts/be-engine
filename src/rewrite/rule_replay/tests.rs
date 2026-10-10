@@ -78,12 +78,6 @@ fn applied_rule_survives_restart_and_does_not_require_a_worker_handoff() {
             api: "/other".into()
         }
     ));
-    assert!(!ready(
-        &loaded,
-        &RewriteWorkScope::ProcessOutput {
-            id: "output".into()
-        }
-    ));
     let status = rewrite::status_rewrite(crate::RewriteContext {
         target_root: target.path().into(),
     })
@@ -132,7 +126,6 @@ async fn parked_rule_replay_is_selected_and_keeps_the_review_gate() {
                 .parse()
                 .unwrap(),
         ),
-        process_output: None,
         source_route: None,
     })
     .await
@@ -149,7 +142,6 @@ fn finalized_replay_consumes_the_request_for_passed_and_dirty_results() {
     let target = configured_target();
     for passed in [false, true] {
         let mut state = implementation_state_with_inventory(false);
-        state.require_comparison = false;
         request(&mut state);
         let result = crate::E2eApiRunResult {
             run_key: "recording".into(),

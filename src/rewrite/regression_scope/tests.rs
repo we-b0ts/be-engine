@@ -78,7 +78,6 @@ fn skip_all_keeps_history_and_explicit_api_is_complete_without_fake_evidence() {
         envelope.action,
         RewriteAction::Complete {
             e2e_current: false,
-            comparison_current: false,
             ..
         }
     ));
@@ -123,7 +122,7 @@ fn invalid_policy_fails_without_changing_progress() {
         "skip: [/a, /a]",
         "skip: [not-an-api]",
         "onyl: [GET /a]",
-        "require_comparison: perhaps",
+        "recording_run_id: invalid",
         "only: [GET /a]",
         "skip: [PUT /a]",
     ] {
@@ -205,7 +204,6 @@ fn route_patterns_are_exact_inventory_names_and_do_not_select_motan() {
 fn config_changes_wait_for_the_active_traffic_operation() {
     let root = target();
     let mut state = state();
-    state.require_comparison = true;
     use crate::rewrite::traffic_operation::{
         TrafficOperationClaim, TrafficOperationKind, claim_current,
     };
@@ -219,12 +217,10 @@ fn config_changes_wait_for_the_active_traffic_operation() {
     let TrafficOperationClaim::Acquired(guard) = claim else {
         panic!("expected claim")
     };
-    write(root.path(), "skip: [/a]\nrequire_comparison: false\n");
+    write(root.path(), "skip: [/a]\n");
     assert!(!apply(root.path(), &mut state).unwrap());
     assert_eq!(state.api, "GET /a");
-    assert!(state.require_comparison);
     drop(guard);
     apply(root.path(), &mut state).unwrap();
     assert_eq!(state.api, "GET /b");
-    assert!(!state.require_comparison);
 }

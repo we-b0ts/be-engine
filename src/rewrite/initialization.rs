@@ -6,7 +6,7 @@ use anyhow::Result;
 use std::path::Path;
 
 pub(super) fn new_state(
-    target_root: &Path,
+    _target_root: &Path,
     api: String,
     source_route: String,
     recording_apis: Vec<String>,
@@ -26,7 +26,6 @@ pub(super) fn new_state(
         worker_bindings: std::collections::BTreeMap::new(),
         source_review_rework: std::collections::BTreeMap::new(),
         worker_event_revision: 0,
-        process_outputs: Default::default(),
         api_catalog_initialized: false,
         api_catalog: std::collections::BTreeSet::new(),
         case_pattern_identification: None,
@@ -34,8 +33,6 @@ pub(super) fn new_state(
         delivery_review_required: false,
         recording_run_id,
         recording_after_run_id: None,
-        require_comparison: crate::config::regression::RegressionScope::load(target_root)?
-            .require_comparison,
         recording_rejection: None,
         recording_settings: RewriteRecordingSettings::default(),
         recording_request_reason: None,
@@ -46,8 +43,6 @@ pub(super) fn new_state(
             phase: RewritePhase::RecordingRequired,
             api,
             source_route,
-            comparison_run_id: None,
-            comparison_rejection: None,
             case_source: None,
             case_inventory_id: None,
             source_revision: None,
@@ -63,7 +58,6 @@ pub(super) fn new_state(
             system_repair_accepted: false,
             rule_replay_pending: false,
             e2e_current: false,
-            comparison_current: false,
         },
     })
 }

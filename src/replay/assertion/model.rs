@@ -390,10 +390,6 @@ pub struct ResponseAssertionCaseReport {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unused_applicable_unordered_joined_string_rule_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub applied_counter_rule_ids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub unused_applicable_counter_rule_ids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub applied_body_rule_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unused_applicable_body_rule_ids: Vec<String>,
@@ -451,8 +447,6 @@ impl ResponseAssertionCaseReport {
             unused_applicable_unordered_rule_ids: Vec::new(),
             applied_unordered_joined_string_rule_ids: Vec::new(),
             unused_applicable_unordered_joined_string_rule_ids: Vec::new(),
-            applied_counter_rule_ids: Vec::new(),
-            unused_applicable_counter_rule_ids: Vec::new(),
             applied_body_rule_ids: Vec::new(),
             unused_applicable_body_rule_ids: Vec::new(),
             body_diagnosis: None,
@@ -496,17 +490,6 @@ impl ResponseAssertionCaseReport {
             .filter(|field| !applied_joined_string.contains(&field.id))
             .map(|field| field.id.clone())
             .collect();
-        let applied_counter = self
-            .applied_counter_rule_ids
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        self.unused_applicable_counter_rule_ids = applicable
-            .iter()
-            .filter(|field| field.kind == ResponseRuleKind::Counter)
-            .filter(|field| !applied_counter.contains(&field.id))
-            .map(|field| field.id.clone())
-            .collect();
         let applied_body = self
             .applied_body_rule_ids
             .iter()
@@ -545,7 +528,6 @@ impl ResponseAssertionCaseReport {
             && self
                 .unused_applicable_unordered_joined_string_rule_ids
                 .is_empty()
-            && self.unused_applicable_counter_rule_ids.is_empty()
             && self.unused_applicable_body_rule_ids.is_empty();
     }
 }

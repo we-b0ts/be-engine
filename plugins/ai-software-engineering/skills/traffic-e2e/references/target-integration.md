@@ -29,9 +29,7 @@ not inspect Replay sessions or receive a CA private key.
 Optional `target.runtime_outputs` are application-output-only writable mounts.
 The engine creates retained host directories per run, role, and output below
 `.traffic-e2e/local/runtime-outputs/`, prints and reports each resolved host
-path, and mounts it at the configured absolute container path. Managed Record
-mounts the source role, managed Comparison mounts separate source and target
-roles, and Replay mounts the target role. These paths must not overlap startup
+path, and mounts it at the configured absolute container path. Diagnostic preflight mounts the source role, and Replay mounts the target role. These paths must not overlap startup
 inputs. Their contents never enter the startup snapshot, target build context,
 Replay inputs, or expected-response evidence.
 
@@ -45,7 +43,7 @@ Docker or Cargo build failure must remain bounded but include actionable build
 output in preflight and E2E APIs.
 
 Do not add traffic-specific `status`, `e2e`, test, check, recording,
-comparison, case execution, response capture, assertion, Replay lifecycle, or
+case execution, response capture, assertion, Replay lifecycle, or
 aggregation commands. traffic-e2e owns those operations and sends recorded
 HTTP requests itself.
 
@@ -65,8 +63,6 @@ materialize configuration from remote responses, recordings, logs, or
 diagnostics. A complete source-SDK-owned snapshot may be transported only in
 its native format.
 
-The port in recorder `http_gateway.matched_upstream` is the single native HTTP
-port source for readiness, the replay HTTP driver, and the Platform comparison
-driver. Replay addresses it on loopback; Comparison preserves it on the
-run-owned target bridge IP. traffic-e2e does not inject that port through an
-environment-variable convention.
+The port in recorder `http_gateway.matched_upstream` is the native HTTP port
+for readiness and the Replay HTTP driver. Replay addresses it on loopback;
+traffic-e2e does not inject it through an environment-variable convention.

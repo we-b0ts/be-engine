@@ -29,7 +29,7 @@ Docker and snapshots its image identity, effective environment, command and
 arguments, supported security settings, and supported ConfigMap/Secret mounts
 into the ignored `.traffic-e2e/local/source/` directory. It may pull the exact
 registry digest. The Pod is an initialization input only: later diagnostic
-preflight, Comparison, Replay, and startup-input APIs use the local snapshot
+preflight, Replay, and startup-input APIs use the local snapshot
 and do not require access to the original Pod.
 
 For a local Docker container, use:
@@ -85,7 +85,7 @@ add framework-specific port or trust mappings during initialization.
 
 `.traffic-e2e/Dockerfile.source` and `.traffic-e2e/Dockerfile.target` are
 target-owned build contracts. During initialization, complete either file as
-required by the source adaptor for managed comparison/diagnostic preflight or
+required by the source adaptor for diagnostic preflight or
 the target runtime contract. Independent standard recording uses a separate
 project-owned `.traffic-e2e/Dockerfile.recording`, built and started by its deployment caller.
 Both managed final processes must run in the

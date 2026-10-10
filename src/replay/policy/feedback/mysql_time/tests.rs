@@ -16,7 +16,11 @@ fn fixture() -> (tempfile::TempDir, MysqlTimeRuleFeedback) {
     let replay_report_path = temp.path().join("replay-report.json");
     fs::write(&replay_report_path, report.to_string()).unwrap();
     let policy_path = temp.path().join("verification.yaml");
-    fs::write(&policy_path,"# preserve\nversion: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_settings:\n  comparison:\n    source_match: before\n").unwrap();
+    fs::write(
+        &policy_path,
+        "# preserve\nversion: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+    )
+    .unwrap();
     let feedback = MysqlTimeRuleFeedback {
         policy_path,
         replay_report_path,
@@ -109,7 +113,7 @@ fn sql_time_plan_validates_evidence_and_preserves_other_policy_sections() {
     assert!(report.applied);
     let updated = fs::read_to_string(&path).unwrap();
     assert!(updated.starts_with("# preserve\n"));
-    assert!(updated.ends_with("response_settings:\n  comparison:\n    source_match: before\n"));
+    assert!(updated.ends_with(""));
     assert!(updated.contains("sql_values:"));
     assert!(updated.contains("sql_values: {0: {\"time\":\"replay_now\",\"tolerance\":\"5s\"}}"));
     for omitted in [

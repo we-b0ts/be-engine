@@ -15,20 +15,11 @@ pub(super) fn status_action(
             state.recording_run_id.as_str(),
             artifacts::standard_recording_status(target_root, &state.recording_run_id)?,
         ),
-        RewritePhase::ComparisonRecordingRequired if state.comparison_run_id.is_some() => {
-            let run_id = state.comparison_run_id.as_deref().unwrap();
-            (
-                run_id,
-                artifacts::comparison_recording_status(target_root, run_id)?,
-            )
-        }
         _ => return Ok(None),
     };
     Ok(match recording_status.publication {
         artifacts::RecordingPublication::Missing => None,
-        artifacts::RecordingPublication::Finalized
-            if state.recording_rejection.is_none() && state.comparison_rejection.is_none() =>
-        {
+        artifacts::RecordingPublication::Finalized if state.recording_rejection.is_none() => {
             Some(RewriteAction::AdvanceRequired {
                 summary: format!("external recording {run_id} is finalized; validate its evidence"),
                 command: action::next_command_for_selected_api(target_root, state, &state.api),

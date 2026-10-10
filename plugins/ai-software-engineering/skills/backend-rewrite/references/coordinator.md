@@ -106,7 +106,7 @@ listed protocol before handling that action.
 | `expert_required` | Reserve, dispatch, reconcile, forward, and close exactly as returned | API expert, reporting to the existing API implementer | [API expert assistance](coordinator-agent-protocol.md#api-expert-assistance) |
 | `integration_required` | Retain identity, publish only the reviewed candidate, then report integration | Code integrator | [integration](coordinator-integration.md) |
 | `source_review_required`, `target_quality_required` | Delegate candidate review or rework and admit only a matching report | Code integrator; API implementer only for a routed work-item defect | [review actions](coordinator-review.md) |
-| `plan_apply_required` | Apply the unchanged engine plan with source-proven inputs | Inputs originate from the assigned API implementer or process-output worker | [rule actions](coordinator-rule-actions.md) |
+| `plan_apply_required` | Apply the unchanged engine plan with source-proven inputs | Inputs originate from the assigned API implementer worker | [rule actions](coordinator-rule-actions.md) |
 | `input_required` | Resolve only the named input and resume the retained invocation | Delegate semantic/source questions to the owning API implementer or code integrator | [input handling](#input_required) and, for startup inputs, [startup inputs](coordinator-startup-inputs.md) |
 | `system_repair_required`, `recovery_required`, `blocked` | Execute only the returned acceptance/recovery action or stop with retained context | External system owner may install the named repair | [recovery and system repair](coordinator-recovery.md) |
 | `wait_required`, `worker_events_required` | Perform the mandatory runtime query pass, reconcile events, then wait or refresh status | Task runtime provides live observations | [mandatory runtime queries](coordinator-agent-protocol.md#mandatory-runtime-queries) |
@@ -123,7 +123,7 @@ infer scheduling from a phase field or create another task queue.
 Start with unscoped `status` in the canonical target repository. Top-level
 `pending` counts operations the coordinator can perform now, including one
 explicit wait when no productive action is ready. The engine selects
-across all APIs and process outputs, including parked implementation issues.
+across all APIs, including parked implementation issues.
 Use `pending`, `action`, and `terminal_allowed`; do not reconstruct scheduling
 from `workflow.phase`, `current_api`, or `api_inventory.unverified`.
 
@@ -217,7 +217,7 @@ engine-issued executable work from being handled.
 `next` starts detached engine verification operations when needed.
 Consume its returned actions immediately; do not
 background the commands yourself or wait for a worker's entire lifecycle.
-Replay and comparison verification share a serialized traffic lease. External
+Replay verification holds a serialized traffic lease. External
 recording has its own lifecycle. Dispatch,
 confirmation, and feedback remain available during verification; integration
 waits while the canonical target is being verified. When every remaining item
@@ -237,26 +237,18 @@ mechanics are in [coordinator-agent-protocol.md](coordinator-agent-protocol.md).
 The engine owns this phase order and returns the legal next action:
 
 ```text
-adopt completed external traffic -> identify patterns only for new uncovered APIs
-           -> stable API inventory + source process outputs
-           -> serialize prepare/focused E2E for API A
-           -> API A implementation issue (AI work may run in parallel)
-           -> serialize focused E2E for API B
-           -> API B implementation issue (AI work may run in parallel)
-           -> process-output comparisons after every API is dispatched
-           -> process-output implementation issues (AI work may run in parallel)
-           -> serialize each Replay/comparison transition
-           -> all API slices and process outputs complete at one fingerprint
+adopt completed external traffic -> identify patterns for new uncovered APIs
+    -> stable API inventory -> prepare -> focused Replay
+    -> implementation issue -> reviewed handoff -> integration -> focused Replay
+    -> API complete -> next API
+    -> all included APIs pass at the current target fingerprint -> final delivery
 
-explicit user authorization
-           -> wait for fresh external standard recording -> prepare -> focused E2E
+source-proven capture gap -> apply capture rule -> API waits
+    -> drain other runnable work -> wait for one full-scope external batch
 
-source-proven bypassed backend -> apply capture rule -> API waits
-           -> drain other runnable API work -> wait for one full-scope external batch
-
-source-proven Redis rule -> derive safe snapshot overlay from old Global evidence
-           -> reuse the same immutable recording
-           -> on strict derivation failure only, require the full-scope external refresh
+source-proven Redis rule -> derive safe snapshot overlay from immutable evidence
+    -> reuse the same recording
+    -> require an external refresh only when strict derivation fails
 ```
 
 ## Core Action Handling
@@ -293,11 +285,9 @@ remain assigned to workers.
 
 All remaining incomplete APIs require external system repair, no implementation
 worker needs coordination, and eligible revalidation has drained. End this run
-as blocked; `pending=0` and `terminal_allowed=false`. The action lists repair
-APIs and any process outputs whose final baseline depends on them. Those outputs
-remain incomplete. Preserve the worktrees and resume context. Execute
-`commands.resume` only after repair or an explicit resumed session; do not loop
-on it immediately and do not claim successful delivery.
+as blocked; `pending=0` and `terminal_allowed=false`. Preserve worktrees and resume
+context. Execute `commands.resume` after repair or an explicit resumed session;
+do not loop on it immediately or claim successful delivery.
 
 ### `recording_in_progress`
 
@@ -322,15 +312,13 @@ rule plan remains bound to its existing evidence and plan ID.
 ### `advance_required`
 
 The prerequisite in `summary` is already available. Execute the exact
-`commands.advance` argv once. Never rerun the preceding recording, Replay,
-comparison, implementation, or quality command.
+`commands.advance` argv once. Never rerun the preceding recording, Replay, implementation, or quality command.
 
 ### `input_required`
 
-For `recording_evidence_required` or `comparison_evidence_required`, follow
+For `recording_evidence_required`, follow
 [external recording evidence](coordinator-recording.md). Place the completed
-batch in the required conventional directory, then repeat next. Rewrite does
-not execute recording.
+batch in the required directory, then repeat next. Rewrite does not execute recording.
 
 This action has no returned command. Retain the triggering invocation and its
 `cwd`; after resolving the named input, repeat it with only that requested input
@@ -395,11 +383,8 @@ The engine returns work across the whole inventory before returning a global
 wait. The coordinator consumes actions and reports task runtime events; it does not
 rebuild that queue from API counters or historical confirmations.
 
-An integrated API handoff schedules only its own Replay and required Comparison.
-Do not promote other APIs for speculative shared-code impact. After ordinary
-work drains, the engine performs final verification against one integrated
-content fingerprint. Process-output work follows the same worker event protocol
-and retains its existing capture and final verification dependencies.
+An integrated API handoff schedules its own Replay. After ordinary work drains,
+the engine verifies every included API against one integrated content fingerprint.
 
 ### `execution_failed`
 
@@ -458,14 +443,10 @@ Continue other runnable work only through current engine-issued commands.
 
 ### `complete`
 
-API-scoped `complete` means only that API satisfies the current batch's focused
-E2E and required Comparison gates. Process-output-scoped `complete` means only
-that output
-passes its configured comparison for the current target fingerprint. Finish
-repository-wide verification and delivery only when `terminal_allowed=true`
-proves every API and process output is complete for the same target content
-fingerprint and the final public `progress.yaml` is committed. Use
-`backend-rewrite inventory` when delivery needs the full per-API list.
+API-scoped `complete` means that API passes focused Replay for the current batch.
+Finish repository-wide verification and delivery only when `terminal_allowed=true`
+proves every included API passes at the current target fingerprint and the final
+public `progress.yaml` is committed. Use `inventory` for the full per-API list.
 
 ## API Inventory And Serialized Traffic
 
@@ -477,7 +458,6 @@ resuming, integrating or accepting. A route acceptance selects all included
 method cases and runs one Replay/target session; each method keeps its own
 focused evidence and progress. Excluded methods stay skipped. HTTP coordinator
 selectors accept only the route; `METHOD API` selectors are rejected.
-
 
 Every initialized action or status includes a bounded `api_inventory` summary:
 `total`, `completed`, `unverified`, `implementation_required`,
@@ -502,7 +482,7 @@ an API with no observed traffic is not required and does not block completion.
 The scope remains stable as selected workers change.
 
 Normal issued API commands use route selectors, including rule/repair Replay,
-comparison continuation and idle revalidation. `verification request --api
+API completion and idle revalidation. `verification request --api
 '/path-or-pattern' --reason '<shared change>'` promotes all included stale
 methods on that route without selecting skipped methods. An unscoped `next`
 uses the same route batch as an explicit route command. Methods are implementation
@@ -511,8 +491,7 @@ and verification details, never separate coordinator work items.
 Every `implementation_required` action uses a worker. Inventory size controls
 only how much work the engine can make ready. Worker concurrency belongs to
 the task runtime; the coordinator does not impose a limit. The engine may park
-implementation and system-repair issues while it serializes the selected API's Replay or
-comparison. Expensive worker diagnosis, coding, and
+implementation and system-repair issues while it serializes the selected API's Replay. Expensive worker diagnosis, coding, and
 tests may overlap; only one traffic operation may be live.
 
 While any recorded API has no focused verification attempt, the engine gives that
@@ -570,25 +549,17 @@ for external evidence handoff.
 
 Keep worker handoff, work-item completion, and workflow completion distinct. A
 worker handoff supplies a reviewed code version, local results, and required inputs; only integrated
-acceptance can complete its API or process output. Later integrated changes may
+acceptance can complete its API. Later integrated changes may
 make that item `revalidation_pending`. Retain every work item's worker binding
 and worktree until `terminal_allowed=true` and final delivery no longer needs
 them.
 
-Read `workflow.require_comparison` as the current local regression requirement
-from `.traffic-e2e/regression.yaml` (default false). `only` selects exact inventory
-routes without an HTTP method and includes every recorded method on each route;
-method-prefixed HTTP entries are invalid. A pattern is an exact inventory name,
-not a glob over other routes. Omitted, null or empty `only` selects all recorded APIs. `skip` takes
-precedence; excluded APIs are explicitly `skipped` and do
-not block this run. The file is ignored by Git and does not need a commit or
-change code/target fingerprints. Preserve the user's chosen scope and validation
-requirements; do not narrow them merely to resolve failures.
-When Comparison is disabled, Replay may complete an API with
-`comparison_current=false`. Enabling it schedules missing Comparison using
-still-current Replay evidence. Settings apply between traffic operations, not
-per recording batch, and never change automatically after first completion.
-A terminal result covers the selected regression scope, not skipped APIs.
+Local `.traffic-e2e/regression.yaml` uses `only` to select exact inventory routes
+without an HTTP method, including every recorded method on each route. A pattern
+is an exact inventory name. Omitted, null or empty `only` selects all recorded APIs.
+`skip` takes precedence; excluded APIs are explicitly skipped and do not block
+completion. This ignored file does not change code fingerprints or require a commit.
+Preserve the user's selected scope; a terminal result covers that scope.
 
 Optional `recording_run_id` directly selects an existing completed standard
 recording as the regression baseline. Missing or unusable recordings block
@@ -597,9 +568,7 @@ Switching IDs resets current verification, with `only` / `skip` applied to the
 selected inventory. Respect this selection; a required fresh capture needs the
 user to remove or clear the field. Omitted, null or empty-string values keep the
 current baseline in effect, or allow completed external evidence discovery when
-no baseline has been adopted. `comparison_run_id` selects a completed external
-comparison batch when the comparison gate is required; backend rewrite never
-starts its capture.
+no baseline has been adopted.
 
 Only `terminal_allowed=true` permits successful workflow completion. Finish the
 caller-required repository checks and delivery after the engine's final gates.

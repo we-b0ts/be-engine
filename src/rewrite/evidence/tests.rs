@@ -25,7 +25,6 @@ fn target_runtime_evidence_starts_with_container_diagnostics() {
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target".to_string(),
         attempt: 2,
-        comparison_observation: None,
     });
 
     let commands = commands(target.path(), &state);
@@ -57,7 +56,6 @@ fn startup_runtime_issue_advertises_source_process_evidence() {
         possible_causes: vec!["source_compatible_configuration".to_string()],
         observed_target_fingerprint: "target".to_string(),
         attempt: 1,
-        comparison_observation: None,
     });
 
     let command = commands(target.path(), &state)
@@ -86,7 +84,6 @@ fn dependency_issue_leads_with_dirty_then_source_process_evidence() {
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target".to_string(),
         attempt: 1,
-        comparison_observation: None,
     });
 
     let commands = commands(target.path(), &state);
@@ -134,7 +131,6 @@ fn response_evidence_starts_with_paged_case_differences_and_rejects_stale_pages(
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target".to_string(),
         attempt: 2,
-        comparison_observation: None,
     });
 
     let commands = commands(target.path(), &state);
@@ -203,7 +199,6 @@ fn unavailable_response_evidence_omits_value_and_policy_queries() {
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target".to_string(),
         attempt: 2,
-        comparison_observation: None,
     });
 
     let purposes = commands(target.path(), &state)
@@ -267,7 +262,6 @@ fn standard_header_evidence_uses_response_flow_without_body_rule_queries() {
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target".to_string(),
         attempt: 2,
-        comparison_observation: None,
     });
 
     let queries = query_kinds(&state, state.active_issue.as_ref().unwrap())
@@ -345,7 +339,6 @@ fn parked_api_evidence_survives_unrelated_api_revisions() {
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target-a".to_string(),
         attempt: 1,
-        comparison_observation: None,
     });
     let evidence_command = commands(target_root, &state)
         .into_iter()
@@ -440,7 +433,6 @@ fn representatives_return_the_exact_recorded_case_directory_and_response_differe
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target".to_string(),
         attempt: 1,
-        comparison_observation: None,
     });
     let command = commands(target.path(), &state)
         .into_iter()
@@ -476,82 +468,6 @@ fn representatives_return_the_exact_recorded_case_directory_and_response_differe
             .is_none()
     );
     assert!(report.applicable_rule_planners.is_empty());
-}
-
-#[test]
-fn comparison_representatives_link_the_comparison_case_and_three_way_difference() {
-    let target = tempfile::tempdir().unwrap();
-    let policy = target.path().join(".traffic-e2e/verification.yaml");
-    std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
-    std::fs::write(
-        &policy,
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
-    )
-    .unwrap();
-    let run_id = "20260802120000";
-    let case_dir = target
-        .path()
-        .join(".traffic-e2e/local/artifacts/comparison-recordings")
-        .join(run_id)
-        .join("apis/api-comparison")
-        .join("case-comparison");
-    std::fs::create_dir_all(&case_dir).unwrap();
-    std::fs::write(
-        case_dir.join("case-kind.json"),
-        r#"{"version":1,"kind":"comparison_recording"}"#,
-    )
-    .unwrap();
-    let case_dir = std::fs::canonicalize(case_dir).unwrap();
-
-    let mut state = crate::rewrite::test_state();
-    state.phase = RewritePhase::ImplementationRequired;
-    state.comparison_run_id = Some(run_id.to_string());
-    state.active_issue = Some(RewriteIssue {
-        id: "issue-comparison".to_string(),
-        kind: RewriteIssueKind::Comparison,
-        owner: RewriteIssueOwner::TargetCode,
-        summary: "comparison mismatch".to_string(),
-        pointer_pattern: Some("/users/0/name".to_string()),
-        representative: None,
-        egress_rejections: None,
-        recorder_capture_diagnosis: None,
-        response_diagnosis: None,
-        possible_causes: Vec::new(),
-        observed_target_fingerprint: "target".to_string(),
-        attempt: 1,
-        comparison_observation: Some(serde_json::json!({
-            "api": "GET /api/widgets",
-            "case_id": "case-comparison",
-            "classification": "candidate_difference",
-            "pointer": "/users/0/name",
-            "difference_kind": "value_mismatch",
-            "source_before": "source",
-            "candidate": "target",
-            "source_after": "source",
-        })),
-    });
-    let command = commands(target.path(), &state)
-        .into_iter()
-        .find(|command| command.query_id.contains("representatives"))
-        .unwrap();
-
-    let report = query(target.path(), &state, &command.query_id).unwrap();
-
-    assert_eq!(report.facts["pointer_scope"], "decoded_response_body_json");
-    assert_eq!(
-        report.facts["representative"],
-        serde_json::json!({
-            "case_id": "case-comparison",
-            "case_dir": case_dir,
-            "response_difference": {
-                "pointer": "/users/0/name",
-                "kind": "value_mismatch",
-                "source_before": "source",
-                "candidate": "target",
-                "source_after": "source",
-            },
-        })
-    );
 }
 
 #[test]
@@ -784,7 +700,7 @@ fn focused_response_body_candidate_offers_the_unified_response_rule_planner() {
     assert_eq!(hints.len(), 1);
     assert_eq!(hints[0].rule, "response_body");
     assert_eq!(hints[0].capability, "protobuf");
-    assert!(hints[0].hint.contains("focused-E2E or comparison"));
+    assert!(hints[0].hint.contains("focused-E2E"));
     assert_eq!(planners.len(), 1);
     assert_eq!(planners[0].kind, "response_body");
     assert_eq!(planners[0].capability, "protobuf");
@@ -800,7 +716,7 @@ fn focused_response_body_candidate_offers_the_unified_response_rule_planner() {
 fn configured_response_body_candidate_offers_selector_help() {
     let target = tempfile::tempdir().unwrap();
     let facts = serde_json::json!({
-        "comparison_observation": {
+        "representative": {"response_difference": {
             "pointer": "$body",
             "body_diagnosis": {
                 "codec": "hessian2",
@@ -808,13 +724,13 @@ fn configured_response_body_candidate_offers_selector_help() {
                 "configured": true,
                 "unordered_path_candidates": [{"value_path": []}]
             }
-        }
+        }}
     });
 
     let hints = rule_hints(target.path(), QUERY_REPRESENTATIVES, &facts);
     let planners = applicable_rule_planners(
         target.path(),
-        RewriteIssueKind::Comparison,
+        RewriteIssueKind::Response,
         QUERY_REPRESENTATIVES,
         &facts,
         "evidence-current",
@@ -843,7 +759,6 @@ fn response_issues_can_query_dirty_clusters_for_protocol_rule_discovery() {
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target".to_string(),
         attempt: 1,
-        comparison_observation: None,
     });
 
     assert!(
@@ -933,7 +848,6 @@ fn source_process_query_returns_bounded_bootstrap_and_process_owned_evidence() {
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target".to_string(),
         attempt: 1,
-        comparison_observation: None,
     });
     let command = commands(target.path(), &state)
         .into_iter()

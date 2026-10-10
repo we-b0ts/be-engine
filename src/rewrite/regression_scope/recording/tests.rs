@@ -94,7 +94,6 @@ async fn next(root: &Path) -> Result<rewrite::RewriteActionEnvelope> {
         target_root: root.into(),
         api: None,
         source_route: None,
-        process_output: None,
     })
     .await
 }
@@ -106,7 +105,7 @@ async fn next_adopts_pinned_recording_and_filters_its_inventory_without_recaptur
     policy(
         root.path(),
         A,
-        "only: [/users/*, /orders/*]\nskip: [/orders/*]\nrequire_comparison: false\n",
+        "only: [/users/*, /orders/*]\nskip: [/orders/*]\n",
     );
     let manifest = artifacts::recording_manifest(root.path(), A);
     let original = fs::read(&manifest).unwrap();
@@ -128,7 +127,6 @@ async fn next_adopts_pinned_recording_and_filters_its_inventory_without_recaptur
     assert_eq!(state.phase, RewritePhase::ApiPending);
     assert_eq!(inventory::view(&state).skipped, 1);
     assert!(state.recording_apis.is_empty());
-    assert!(!state.require_comparison);
     assert!(state.recording_input_case_source.is_none());
     assert!(state.recording_input_diagnosis.is_none());
     assert!(state.attempts.is_empty());
@@ -261,12 +259,11 @@ fn switching_recordings_resets_verification_and_clearing_pin_keeps_current_basel
         assert_eq!(state.recording_apis, vec![api]);
         assert!(state.api_inventory.is_empty());
         assert!(state.parked_slices.is_empty());
-        assert!(!state.e2e_current && !state.comparison_current);
+        assert!(!state.e2e_current);
         assert!(state.case_source.is_none() && state.target_fingerprint.is_none());
         inventory::install(&mut state, vec![api.into()]).unwrap();
         state.phase = RewritePhase::SliceComplete;
         state.e2e_current = true;
-        state.comparison_current = true;
         state.case_source = Some(artifacts::recording_run(root.path(), id));
         state.target_fingerprint = Some("old-target".into());
         inventory::complete_current_and_advance(&mut state).unwrap();
@@ -278,7 +275,6 @@ fn switching_recordings_resets_verification_and_clearing_pin_keeps_current_basel
     let reloaded = store.load().unwrap().unwrap();
     assert_eq!(reloaded.recording_run_id, A);
     assert_eq!(reloaded.phase, RewritePhase::SliceComplete);
-    assert!(reloaded.e2e_current && reloaded.comparison_current);
     policy(root.path(), "", "");
     ensure_fresh_allowed(root.path(), &crate::rewrite::test_state()).unwrap();
     assert_eq!(
@@ -355,16 +351,14 @@ async fn status_and_next_switch_between_existing_recordings_and_clear_passes() {
         })
         .unwrap();
         assert!(!status.terminal_allowed);
-        assert!(!status.e2e_current && !status.comparison_current);
         next(root.path()).await.unwrap();
         let mut state = store.load().unwrap().unwrap();
         assert_eq!(state.recording_run_id, id);
         assert_eq!(state.api, api);
-        assert!(!state.e2e_current && !state.comparison_current);
+        assert!(!state.e2e_current);
         assert_eq!(state.phase, RewritePhase::ApiPending);
         state.phase = RewritePhase::SliceComplete;
         state.e2e_current = true;
-        state.comparison_current = true;
         state.target_fingerprint =
             Some(rewrite::fingerprint::repository_fingerprint(root.path()).unwrap());
         inventory::complete_current_and_advance(&mut state).unwrap();

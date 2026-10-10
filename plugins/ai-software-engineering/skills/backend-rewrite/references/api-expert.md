@@ -32,7 +32,7 @@ specialty documents for relevant diagnostic methods only; code-repair and
 delivery instructions do not apply to this role.
 
 Do not edit code, configuration, rules, recordings, or workflow state. Do not
-run formal Replay or Comparison, integrate changes, or confirm/report workers.
+run formal Replay, integrate changes, or confirm/report workers.
 Do not contact the implementer directly; return through the coordinator.
 
 ## Result

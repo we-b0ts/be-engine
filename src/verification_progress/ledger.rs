@@ -175,7 +175,6 @@ pub(super) fn path(progress_path: &Path, stage: VerificationStage) -> Result<Pat
     let name = match stage {
         VerificationStage::Progress => "counted-runs.yaml",
         VerificationStage::Replay => "replay-counted-runs.yaml",
-        VerificationStage::Comparison => "comparison-counted-runs.yaml",
     };
     Ok(traffic_e2e_dir
         .join(crate::repository::LOCAL_ARTIFACTS_RELATIVE_ROOT)

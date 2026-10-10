@@ -121,14 +121,12 @@ fn parked_system_repair_survives_revalidation_and_becomes_resumable_after_revisi
     // A passing revalidation advances only once to the next stale API.
     state.phase = RewritePhase::SliceComplete;
     state.e2e_current = true;
-    state.comparison_current = true;
     state.target_fingerprint =
         Some(rewrite::fingerprint::repository_fingerprint(target.path()).unwrap());
     assert!(inventory::complete_current_and_advance(&mut state).unwrap());
     assert_eq!(state.api, "GET /revalidate-1");
     state.phase = RewritePhase::SliceComplete;
     state.e2e_current = true;
-    state.comparison_current = true;
     state.target_fingerprint =
         Some(rewrite::fingerprint::repository_fingerprint(target.path()).unwrap());
     assert!(!inventory::complete_current_and_advance(&mut state).unwrap());
@@ -191,7 +189,6 @@ async fn integrated_handoff_can_advance_while_another_api_waits_for_system_repai
     let result = rewrite::next_rewrite(rewrite::RewriteNextOptions {
         target_root: target.path().into(),
         api: None,
-        process_output: None,
         source_route: None,
     })
     .await
@@ -336,55 +333,6 @@ async fn wait_wakes_for_reported_worker_interruption_before_its_deadline() {
 }
 
 #[test]
-fn recording_and_comparison_gates_cannot_be_parked_for_idle_revalidation() {
-    let target = configured_target();
-    for phase in [
-        RewritePhase::RecordingRequired,
-        RewritePhase::ComparisonRecordingRequired,
-    ] {
-        let mut state = with_revalidation(1);
-        state.phase = phase;
-        state.comparison_run_id = Some("comparison-test".into());
-        state.require_comparison = true;
-        assert!(idle_action(target.path(), &state).is_none());
-        assert!(
-            inventory::activate_requested(&mut state, Some(&"GET /revalidate-0".parse().unwrap()))
-                .is_err()
-        );
-    }
-}
-
-#[test]
-fn blocked_stop_preserves_dependent_outputs_and_does_not_hide_output_workers() {
-    use rewrite::process_output_model::{RewriteProcessOutputProgress, RewriteProcessOutputStatus};
-    let target = configured_target();
-    let mut state = with_revalidation(0);
-    mark_repair(&mut state);
-    state
-        .process_outputs
-        .inventory
-        .push(RewriteProcessOutputProgress {
-            id: "profile".into(),
-            status: RewriteProcessOutputStatus::RevalidationPending,
-            attempts: 1,
-            verified_target_fingerprint: None,
-            issue: None,
-        });
-    let blocked = action::for_state(target.path(), &state);
-    assert!(
-        matches!(blocked.action, RewriteAction::Blocked { ref dependent_process_outputs, .. } if dependent_process_outputs == &["profile"])
-    );
-    state.process_outputs.inventory[0].status = RewriteProcessOutputStatus::ImplementationRequired;
-    state.process_outputs.inventory[0].issue = state.active_issue.clone();
-    let dispatch = action::for_state(target.path(), &state);
-    assert!(dispatch.pending > 0);
-    assert!(matches!(
-        dispatch.action,
-        RewriteAction::ImplementationRequired { .. }
-    ));
-}
-
-#[test]
 fn completed_evidence_is_revalidated_again_only_after_target_changes() {
     let target = configured_target();
     let mut state = with_revalidation(1);
@@ -392,7 +340,6 @@ fn completed_evidence_is_revalidated_again_only_after_target_changes() {
     inventory::activate_requested(&mut state, Some(&"GET /revalidate-0".parse().unwrap())).unwrap();
     state.phase = RewritePhase::SliceComplete;
     state.e2e_current = true;
-    state.comparison_current = true;
     state.target_fingerprint = Some("target-v1".into());
     assert!(!inventory::complete_current_and_advance(&mut state).unwrap());
     assert!(!inventory::defer_completed_for_target_change(&mut state, "target-v1").unwrap());

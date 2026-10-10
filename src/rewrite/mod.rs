@@ -9,7 +9,6 @@ mod background_reclassification;
 mod case_dependencies;
 mod case_group_rebuild;
 mod case_patterns;
-mod comparison_issue;
 mod configuration_commit;
 mod coordination;
 mod execution;
@@ -44,13 +43,10 @@ mod ip_capture;
 mod issue;
 mod model;
 mod preparation;
-mod process_output_model;
-mod process_outputs;
 mod progress_publication;
 mod recorder_capture;
+mod work_scope;
 pub use ip_capture::RewriteIpCaptureReport;
-#[cfg(test)]
-mod comparison_requirement_tests;
 mod initialization;
 mod jwt_rule;
 mod purpose;
@@ -130,10 +126,6 @@ pub use model::{
     RewriteTrafficOperationKind, RewriteTrafficOperationView, RewriteWorkerBlockingReason,
     RewriteWorkerDispatchState, RewriteWorkerDispatchView, RewriteWorkflowView,
 };
-pub use process_output_model::{
-    RewriteProcessOutputInventoryDetails, RewriteProcessOutputInventoryView,
-    RewriteProcessOutputProgress, RewriteProcessOutputStatus, RewriteWorkScope,
-};
 pub use recorder_capture::{
     RewriteHttpResponseCapturePlanOptions, RewriteRecorderCapturePlanOptions,
     apply_rewrite_recorder_capture, plan_rewrite_http_response_capture,
@@ -150,10 +142,9 @@ pub use revalidation::{
 pub use route::{RewriteRouteCause, RewriteRouteOptions, RewriteRouteOutcome};
 pub use rule::RewriteRulePlanOptions;
 pub use source_process_traffic::*;
-pub use status::{
-    inventory_rewrite, status_rewrite, status_rewrite_for_api, status_rewrite_for_process_output,
-};
+pub use status::{inventory_rewrite, status_rewrite, status_rewrite_for_api};
 pub use target_quality::{RewriteTargetQualityOptions, run as run_rewrite_target_quality};
+pub use work_scope::RewriteWorkScope;
 pub use worker::{
     RewriteWorkerConfirmOptions, RewriteWorkerMissingQuery, RewriteWorkerTransferOptions,
     confirm as confirm_rewrite_worker, transfer as transfer_rewrite_worker,
@@ -164,16 +155,12 @@ use store::{RewriteLockState, RewriteStore};
 #[cfg(test)]
 pub(in crate::rewrite) use test_support::test_state;
 
-use crate::{
-    ComparisonVerificationOptions, E2eRunContext, RecordingApi, update_comparison_progress,
-    verify_comparison_recording,
-};
+use crate::{E2eRunContext, RecordingApi};
 
 #[derive(Debug, Clone)]
 pub struct RewriteNextOptions {
     pub target_root: PathBuf,
     pub api: Option<RewriteApiSelector>,
-    pub process_output: Option<String>,
     pub source_route: Option<String>,
 }
 
@@ -406,7 +393,6 @@ pub fn verify_rewrite_repair(
         let requested_api = api.parse::<RecordingApi>()?;
         inventory::activate_requested(&mut state, Some(&requested_api))?;
     }
-    state.process_outputs.current_id = None;
     let report = repair::verify(&target_root, &mut state, repair_id)?;
     store.save(&state)?;
     Ok(report)
@@ -449,84 +435,11 @@ async fn run_and_transition(
         state.active_issue = None;
         state.rule_replay_pending = false;
         state.e2e_current = false;
-        state.comparison_current = false;
         state.bump();
         return Ok(());
     }
-    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
-    let process_outputs = crate::process_output::configs_for_observation(
-        &project.process_outputs,
-        crate::process_output::ProcessOutputObservation::BeforeShutdown,
-    );
-    if !process_outputs.is_empty() {
-        let root = crate::e2e_run::focused_process_output_evidence(&context, &api)?;
-        crate::process_output::validate_capture_set(
-            &process_outputs,
-            crate::process_output::ProcessOutputCaptureSide::Target,
-            &root,
-            false,
-        )?;
-        process_outputs::observe_target_evidence(state, root, current_target_fingerprint.clone());
-    }
+    let (_, _project) = crate::e2e_run::resolve_project(target_root)?;
     api_batch::apply_results(target_root, state, &results, prepared.as_ref())?;
-    Ok(())
-}
-
-fn compare_and_transition(target_root: &Path, state: &mut RewriteState) -> Result<()> {
-    let run_id = state
-        .comparison_run_id
-        .as_deref()
-        .context("comparison phase has no run id")?;
-    let case_source = artifacts::comparison_run(target_root, run_id);
-    let policy = target_root.join(".traffic-e2e/verification.yaml");
-    let report = verify_comparison_recording(ComparisonVerificationOptions {
-        report: case_source.join("comparison-report.json"),
-        case_source,
-        policy: policy.clone(),
-    })?;
-    update_comparison_progress(
-        &report,
-        &policy
-            .parent()
-            .context("verification policy has no parent")?
-            .join("progress.yaml"),
-        &state.recording_run_id,
-    )?;
-    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
-    let target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
-    let process_output_issue = report.passed.then(|| {
-        process_outputs::comparison_issue(
-            target_root,
-            state,
-            &target_fingerprint,
-            &project.process_outputs,
-            &project.process_output_rules,
-        )
-    });
-    let process_output_issue = process_output_issue.transpose()?.flatten();
-    state.comparison_current = report.passed && process_output_issue.is_none();
-    if let Some(issue) = process_output_issue {
-        state.active_issue = Some(issue);
-        state.target_fingerprint = Some(target_fingerprint);
-        state.phase = RewritePhase::ImplementationRequired;
-    } else if report.passed {
-        state.active_issue = None;
-        if !inventory::complete_current_and_advance(state)?
-            && !recording::begin_pending_capture_refresh(target_root, state)?
-        {
-            state.phase = RewritePhase::SliceComplete;
-        }
-    } else {
-        state.active_issue = Some(comparison_issue::from_report(
-            &state.api,
-            &report,
-            fingerprint::repository_fingerprint(target_root)?,
-            state.attempts.last().map_or(0, |attempt| attempt.attempt),
-        )?);
-        state.target_fingerprint = Some(target_fingerprint);
-        state.phase = RewritePhase::ImplementationRequired;
-    }
-    state.bump();
     Ok(())
 }
 

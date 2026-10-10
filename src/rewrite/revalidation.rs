@@ -262,7 +262,6 @@ mod tests {
         inventory::activate_requested(&mut state, Some(&"POST /b".parse().unwrap())).unwrap();
         state.api_inventory[0].status = RewriteApiStatus::Complete;
         state.api_inventory[0].e2e_current = true;
-        state.api_inventory[0].comparison_current = true;
         state.api_inventory[0].verified_target_fingerprint = Some(baseline);
         RewriteStore::new(target.path())
             .unwrap()

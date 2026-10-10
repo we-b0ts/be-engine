@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use anyhow::{Context, Result, ensure};
 
 use super::{
@@ -8,69 +6,6 @@ use super::{
 };
 
 impl ProgressReport {
-    pub(crate) fn settle_api_results(
-        &mut self,
-        key: &str,
-        finished_at: String,
-        results: BTreeMap<String, super::ApiObservation>,
-    ) -> Result<bool> {
-        ensure!(
-            !results.is_empty(),
-            "progress settlement requires at least one API result"
-        );
-        self.validate_observation_history()?;
-        let mut current = self
-            .counted_observations
-            .get(key)
-            .with_context(|| format!("recorded progress batch {key:?} is missing"))?
-            .observation
-            .clone();
-        let mut changed = false;
-        for (api, mut result) in results {
-            ensure!(
-                result.finalized && result.success_streak.is_none(),
-                "progress settlement for API {api:?} must contain one terminal result"
-            );
-            let recorded = current.apis.get_mut(&api).with_context(|| {
-                format!("recorded progress batch {key:?} does not contain API {api:?}")
-            })?;
-            ensure!(
-                result.cases.executed <= recorded.cases.executed,
-                "comparison result for API {api:?} exceeds the standard recording case inventory"
-            );
-            ensure!(
-                !result.passed || result.cases.executed == recorded.cases.executed,
-                "passing comparison result for API {api:?} does not cover the standard recording case inventory"
-            );
-            result.cases.executed = recorded.cases.executed;
-            if *recorded != result {
-                *recorded = result;
-                changed = true;
-            }
-        }
-        if !changed {
-            return Ok(false);
-        }
-
-        current.finalized = current.apis.values().all(|api| api.finalized);
-        current.passed = current
-            .finalized
-            .then(|| current.apis.values().all(|api| api.passed));
-        current.finished_at = finished_at;
-        self.validate_observation(&current)?;
-        let streak_broken = super::observation_failed(&current);
-        let api_streak_broken = failed_apis(&current);
-        let counted = self
-            .counted_observations
-            .get_mut(key)
-            .expect("validated progress batch disappeared during settlement");
-        counted.streak_broken |= streak_broken;
-        counted.api_streak_broken.extend(api_streak_broken);
-        counted.observation = current;
-        self.rebuild_aggregates()?;
-        Ok(true)
-    }
-
     pub(crate) fn upsert_logical_run(
         &mut self,
         mut current: ProgressObservation,

@@ -19,7 +19,7 @@ use traffic_e2e::{
     query_rewrite_case_dependencies, recover_rewrite, report_rewrite_worker,
     request_rewrite_revalidation, resume_rewrite_replay_planning, retry_rewrite_operation,
     route_rewrite, start_rewrite_next, start_rewrite_target_quality, status_rewrite,
-    status_rewrite_for_process_output, transfer_rewrite_worker, verify_rewrite_repair,
+    transfer_rewrite_worker, verify_rewrite_repair,
 };
 
 mod config_protocol;
@@ -158,9 +158,6 @@ struct NextArgs {
     /// Optional canonical API selector; omit at startup to process every API observed through recorder configuration.
     #[arg(long, value_name = "PATH_OR_PATTERN")]
     api: Option<traffic_e2e::RewriteApiSelector>,
-    /// Process-level output work item returned by the coordinator.
-    #[arg(long, conflicts_with = "api")]
-    process_output: Option<String>,
     /// Source registration route for the active dynamic API when requested by the coordinator.
     #[arg(long)]
     source_route: Option<String>,
@@ -171,9 +168,6 @@ struct StatusArgs {
     /// API work item whose action should be reconstructed while other AI work proceeds.
     #[arg(long, value_name = "PATH_OR_PATTERN")]
     api: Option<traffic_e2e::RewriteApiSelector>,
-    /// Process-level output work item whose action should be reconstructed.
-    #[arg(long, conflicts_with = "api")]
-    process_output: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -248,7 +242,6 @@ enum RuleKindArg {
     Random,
     Unordered,
     UnorderedJoinedString,
-    Counter,
 }
 
 #[derive(Debug, Args)]
@@ -282,8 +275,7 @@ struct RouteArgs {
         required_if_eq_any([
             ("cause", "recorder-capability-gap"),
             ("cause", "replay-capability-gap"),
-            ("cause", "external-data-blocker"),
-            ("cause", "source-change")
+            ("cause", "external-data-blocker")
         ]),
         conflicts_with = "endpoint"
     )]
@@ -333,13 +325,9 @@ struct WorkerConfirmArgs {
     /// Exact API assigned to this worker.
     #[arg(
         long,
-        conflicts_with = "process_output",
-        required_unless_present = "process_output",
         value_parser = parse_api_scope
     )]
-    api: Option<String>,
-    #[arg(long)]
-    process_output: Option<String>,
+    api: String,
     /// Runtime-returned subagent handle. Supply through the named environment variable.
     #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_HANDLE", hide_env_values = true)]
     agent_handle: String,
@@ -421,7 +409,7 @@ struct VerificationArgs {
 
 #[derive(Debug, Subcommand)]
 enum VerificationCommand {
-    /// Promote stale completed APIs for early Replay and Compare after a high-impact change.
+    /// Promote stale completed APIs for early Replay after a high-impact change.
     Request(VerificationRequestArgs),
 }
 
@@ -468,7 +456,6 @@ enum RouteCauseArg {
     RecorderCapabilityGap,
     ReplayCapabilityGap,
     ExternalDataBlocker,
-    SourceChange,
 }
 
 async fn run(cli: Cli) -> Result<()> {
@@ -484,7 +471,6 @@ async fn run(cli: Cli) -> Result<()> {
             &start_rewrite_next(RewriteNextOptions {
                 target_root,
                 api: args.api,
-                process_output: args.process_output,
                 source_route: args.source_route,
             })?,
             pretty,
@@ -499,8 +485,6 @@ async fn run(cli: Cli) -> Result<()> {
             let context = RewriteContext { target_root };
             let report = if let Some(api) = args.api.as_ref() {
                 traffic_e2e::status_rewrite_for_selector(context, api)?
-            } else if let Some(id) = args.process_output.as_deref() {
-                status_rewrite_for_process_output(context, id)?
             } else {
                 status_rewrite(context)?
             };
@@ -625,14 +609,7 @@ async fn run(cli: Cli) -> Result<()> {
             WorkerCommand::Confirm(args) => print_json(
                 &confirm_rewrite_worker(RewriteWorkerConfirmOptions {
                     target_root,
-                    work_scope: args
-                        .api
-                        .map(|api| traffic_e2e::RewriteWorkScope::Api { api })
-                        .or_else(|| {
-                            args.process_output
-                                .map(|id| traffic_e2e::RewriteWorkScope::ProcessOutput { id })
-                        })
-                        .context("worker confirm requires --api or --process-output")?,
+                    work_scope: traffic_e2e::RewriteWorkScope::Api { api: args.api },
                     agent_handle: args.agent_handle,
                     agent_name: args.agent_name,
                     worktree: args.worktree,
@@ -704,7 +681,6 @@ impl From<RuleKindArg> for ResponseRuleKind {
             RuleKindArg::Random => Self::Random,
             RuleKindArg::Unordered => Self::Unordered,
             RuleKindArg::UnorderedJoinedString => Self::UnorderedJoinedString,
-            RuleKindArg::Counter => Self::Counter,
         }
     }
 }
@@ -727,9 +703,6 @@ impl RouteCauseArg {
             }
             (Self::ExternalDataBlocker, None, Some(required_change)) => {
                 Ok(RewriteRouteCause::ExternalDataBlocker { required_change })
-            }
-            (Self::SourceChange, None, Some(required_change)) => {
-                Ok(RewriteRouteCause::SourceChange { required_change })
             }
             _ => bail!("route cause arguments are incomplete or mutually exclusive"),
         }

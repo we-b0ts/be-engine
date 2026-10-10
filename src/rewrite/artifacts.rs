@@ -31,20 +31,7 @@ pub(super) struct RecordingStatus {
 }
 
 pub(super) fn validate_standard_recording(target_root: &Path, state: &RewriteState) -> Result<()> {
-    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
-    validate_standard_recording_with_process_outputs(target_root, state, &project.process_outputs)
-}
-
-fn validate_standard_recording_with_process_outputs(
-    target_root: &Path,
-    state: &RewriteState,
-    process_outputs: &[crate::process_output::ProcessOutputConfig],
-) -> Result<()> {
-    let scope = standard_recording_scope_with_process_outputs(
-        target_root,
-        &state.recording_run_id,
-        process_outputs,
-    )?;
+    let scope = standard_recording_scope(target_root, &state.recording_run_id)?;
     ensure!(
         scope == inventory::recording_scope(state) || scope == state.recording_apis,
         "standard recording scope does not match requested rewrite scope"
@@ -53,19 +40,6 @@ fn validate_standard_recording_with_process_outputs(
 }
 
 pub(super) fn standard_recording_scope(target_root: &Path, run_id: &str) -> Result<Vec<String>> {
-    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
-    standard_recording_scope_with_process_outputs(target_root, run_id, &project.process_outputs)
-}
-
-fn standard_recording_scope_with_process_outputs(
-    target_root: &Path,
-    run_id: &str,
-    process_outputs: &[crate::process_output::ProcessOutputConfig],
-) -> Result<Vec<String>> {
-    let process_outputs = crate::process_output::configs_for_observation(
-        process_outputs,
-        crate::process_output::ProcessOutputObservation::BeforeShutdown,
-    );
     let report: StandardRecordingManifest = read_json(&recording_manifest(target_root, run_id))?;
     ensure!(
         report.status == "completed",
@@ -75,12 +49,6 @@ fn standard_recording_scope_with_process_outputs(
         report.published_cases > 0,
         "standard recording published no cases"
     );
-    crate::process_output::validate_capture_set(
-        &process_outputs,
-        crate::process_output::ProcessOutputCaptureSide::Source,
-        &recording_run(target_root, run_id).join("process-outputs"),
-        true,
-    )?;
     Ok(report.recording_apis)
 }
 
@@ -168,79 +136,6 @@ pub(super) fn standard_recording_api_case_counts(
             Ok((api.clone(), cases))
         })
         .collect()
-}
-
-pub(super) fn validate_comparison_recording(
-    target_root: &Path,
-    state: &RewriteState,
-) -> Result<()> {
-    let run_id = state
-        .comparison_run_id
-        .as_deref()
-        .context("comparison phase has no run id")?;
-    let report: ComparisonRecordingManifest = read_json(&comparison_manifest(target_root, run_id))?;
-    ensure!(
-        report.status == "completed" && report.ready,
-        "comparison recording is not finalized and ready"
-    );
-    ensure!(
-        report.recording_apis == vec![state.api.clone()],
-        "comparison recording scope does not match active rewrite API"
-    );
-    ensure!(
-        report.counts.published > 0,
-        "comparison recording published no cases"
-    );
-    ensure!(
-        report.counts.failed == 0 && report.errors.is_empty(),
-        "comparison recording is dirty"
-    );
-    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
-    let process_outputs =
-        super::process_outputs::comparison_configs(state, &project.process_outputs);
-    let process_output_root = comparison_run(target_root, run_id).join("process-outputs");
-    crate::process_output::validate_capture_set(
-        &process_outputs,
-        crate::process_output::ProcessOutputCaptureSide::Source,
-        &process_output_root.join("source"),
-        true,
-    )?;
-    crate::process_output::validate_capture_set(
-        &process_outputs,
-        crate::process_output::ProcessOutputCaptureSide::Target,
-        &process_output_root.join("target"),
-        false,
-    )?;
-    Ok(())
-}
-
-pub(super) fn comparison_recording_publication(
-    target_root: &Path,
-    run_id: &str,
-) -> Result<RecordingPublication> {
-    Ok(comparison_recording_status(target_root, run_id)?.publication)
-}
-
-pub(super) fn comparison_recording_status(
-    target_root: &Path,
-    run_id: &str,
-) -> Result<RecordingStatus> {
-    let path = comparison_manifest(target_root, run_id);
-    if !path.is_file() {
-        return Ok(RecordingStatus {
-            publication: RecordingPublication::Missing,
-            progress: RecordingProgress::default(),
-        });
-    }
-    let manifest: ComparisonRecordingManifest = read_json(&path)?;
-    Ok(RecordingStatus {
-        publication: publication(&manifest.status)?,
-        progress: RecordingProgress {
-            apis: manifest.apis.len(),
-            published_cases: manifest.counts.published,
-            failed_cases: manifest.counts.failed,
-        },
-    })
 }
 
 pub(super) fn recording_rejection(error: &anyhow::Error) -> String {
@@ -411,19 +306,6 @@ fn collect_request_files(
     Ok(())
 }
 
-pub(super) fn comparison_rejection(error: &anyhow::Error) -> String {
-    public_rejection(
-        error,
-        &[
-            "comparison recording is not finalized and ready",
-            "comparison recording scope does not match active rewrite API",
-            "comparison recording published no cases",
-            "comparison recording is dirty",
-        ],
-        "comparison recording evidence is unreadable or invalid",
-    )
-}
-
 fn public_rejection(error: &anyhow::Error, allowed: &[&str], fallback: &str) -> String {
     let message = error.to_string();
     allowed
@@ -441,19 +323,8 @@ pub(super) fn recording_run(target_root: &Path, run_id: &str) -> PathBuf {
         .join(run_id)
 }
 
-pub(super) fn comparison_run(target_root: &Path, run_id: &str) -> PathBuf {
-    target_root
-        .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
-        .join("comparison-recordings")
-        .join(run_id)
-}
-
 pub(super) fn recording_manifest(target_root: &Path, run_id: &str) -> PathBuf {
     recording_run(target_root, run_id).join("recording-run.json")
-}
-
-pub(super) fn comparison_manifest(target_root: &Path, run_id: &str) -> PathBuf {
-    comparison_run(target_root, run_id).join("comparison-recording-run.json")
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
@@ -490,23 +361,6 @@ struct StandardCaseRequest {
     api_pattern: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ComparisonRecordingManifest {
-    status: String,
-    ready: bool,
-    recording_apis: Vec<String>,
-    counts: ComparisonRecordingCounts,
-    #[serde(default)]
-    apis: BTreeMap<String, serde_json::Value>,
-    errors: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ComparisonRecordingCounts {
-    published: usize,
-    failed: usize,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,45 +392,6 @@ mod tests {
             standard_recording_publication(target.path(), run_id).unwrap(),
             RecordingPublication::Running
         );
-    }
-
-    #[test]
-    fn standard_recording_validation_accepts_quarantined_case_errors() {
-        let target = tempfile::tempdir().unwrap();
-        let run_id = "20260803021953";
-        let run = recording_run(target.path(), run_id);
-        std::fs::create_dir_all(&run).unwrap();
-        std::fs::write(
-            run.join("recording-run.json"),
-            serde_json::to_vec(&serde_json::json!({
-                "status": "completed",
-                "recording_apis": ["GET /api"],
-                "published_cases": 667,
-                "failed_cases": 1,
-                "errors": [{
-                    "rule_name": "http-rule",
-                    "case_id": "f036616f-aa65-4938-b805-64fc26ef5165",
-                    "reason": "dependency_replay_unsafe"
-                }]
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let mut state = crate::rewrite::test_state();
-        state.recording_run_id = run_id.to_string();
-
-        validate_standard_recording_with_process_outputs(target.path(), &state, &[]).unwrap();
-
-        let comparison_output = crate::process_output::ProcessOutputConfig::profile_by_type(
-            "metrics-profile".to_string(),
-            PathBuf::from("/data1/weibo/logs/profile.log"),
-        );
-        validate_standard_recording_with_process_outputs(
-            target.path(),
-            &state,
-            &[comparison_output],
-        )
-        .unwrap();
     }
 
     #[test]
@@ -653,5 +468,33 @@ mod tests {
             .unwrap(),
             BTreeMap::from([("GET /users/*".to_string(), 1)])
         );
+    }
+
+    #[test]
+    fn standard_recording_validation_accepts_quarantined_case_errors() {
+        let target = tempfile::tempdir().unwrap();
+        let run_id = "20260803021953";
+        let run = recording_run(target.path(), run_id);
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(
+            run.join("recording-run.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "status": "completed",
+                "recording_apis": ["GET /api"],
+                "published_cases": 667,
+                "failed_cases": 1,
+                "errors": [{
+                    "rule_name": "http-rule",
+                    "case_id": "f036616f-aa65-4938-b805-64fc26ef5165",
+                    "reason": "dependency_replay_unsafe"
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut state = crate::rewrite::test_state();
+        state.recording_run_id = run_id.to_string();
+
+        validate_standard_recording(target.path(), &state).unwrap();
     }
 }

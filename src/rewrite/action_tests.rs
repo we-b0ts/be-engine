@@ -14,44 +14,6 @@ use super::super::model::{
 };
 
 #[test]
-fn cross_api_non_preemptible_transition_returns_bounded_wait() {
-    let mut state = crate::rewrite::test_state();
-    state.phase = RewritePhase::ComparisonRecordingRequired;
-    state.comparison_run_id = Some("20260907000000".into());
-    let target = Path::new("/target");
-
-    let response = serde_json::to_value(api_selection_wait_envelope(
-        target,
-        &state,
-        "POST /other".to_string(),
-    ))
-    .unwrap();
-
-    assert_eq!(response["action"]["kind"], "wait_required");
-    assert_eq!(
-        response["action"]["details"]["resource"],
-        "rewrite_api_transition"
-    );
-    assert_eq!(response["action"]["details"]["blocking_api"], "/api");
-    assert!(
-        response
-            .pointer("/action/details/active_operation")
-            .is_none()
-    );
-    assert_eq!(
-        response["action"]["commands"]["wait"]["argv"],
-        serde_json::json!([
-            "backend-rewrite",
-            "--target-root",
-            "/target",
-            "wait",
-            "--seconds",
-            "5"
-        ])
-    );
-}
-
-#[test]
 fn status_recovers_pending_case_pattern_identification_after_recording_finalizes() {
     let target = tempfile::tempdir().unwrap();
     let mut state = crate::rewrite::test_state();
@@ -100,7 +62,6 @@ fn status_returns_the_coordinator_issued_repair_acceptance() {
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target".to_string(),
         attempt: 1,
-        comparison_observation: None,
     });
     state.route = Some(RewriteRouteRecord {
         kind: "replay_capability_gap".to_string(),
@@ -304,4 +265,41 @@ fn test_attempt(attempt: u64, passed: bool) -> RewriteAttemptSummary {
             response_incomplete: 0,
         },
     }
+}
+
+#[test]
+fn cross_api_non_preemptible_transition_returns_bounded_wait() {
+    let mut state = crate::rewrite::test_state();
+    state.phase = RewritePhase::RecordingRequired;
+    let target = Path::new("/target");
+
+    let response = serde_json::to_value(api_selection_wait_envelope(
+        target,
+        &state,
+        "POST /other".to_string(),
+    ))
+    .unwrap();
+
+    assert_eq!(response["action"]["kind"], "wait_required");
+    assert_eq!(
+        response["action"]["details"]["resource"],
+        "rewrite_api_transition"
+    );
+    assert_eq!(response["action"]["details"]["blocking_api"], "/api");
+    assert!(
+        response
+            .pointer("/action/details/active_operation")
+            .is_none()
+    );
+    assert_eq!(
+        response["action"]["commands"]["wait"]["argv"],
+        serde_json::json!([
+            "backend-rewrite",
+            "--target-root",
+            "/target",
+            "wait",
+            "--seconds",
+            "5"
+        ])
+    );
 }

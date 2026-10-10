@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+#[cfg(test)]
 use std::path::Path;
 use std::str::FromStr as _;
 use std::sync::Arc;
@@ -45,7 +46,6 @@ pub(crate) struct RecordedHttpClient {
     origin: String,
     request_timeout: Duration,
     max_response_bytes: usize,
-    preserve_host: bool,
     request_rules: Option<Arc<crate::request_rules::RequestRuleRuntime>>,
 }
 
@@ -73,22 +73,11 @@ impl RecordedHttpClient {
             origin,
             request_timeout,
             max_response_bytes,
-            preserve_host: false,
             request_rules: None,
         }
     }
 
-    pub(crate) fn new_recording_input(
-        origin: String,
-        request_timeout: Duration,
-        max_response_bytes: usize,
-    ) -> Self {
-        Self {
-            preserve_host: true,
-            ..Self::new(origin, request_timeout, max_response_bytes)
-        }
-    }
-
+    #[cfg(test)]
     pub(crate) fn with_request_rules(mut self, root: &Path, policy: &Path) -> Result<Self> {
         self.request_rules = Some(Arc::new(crate::request_rules::RequestRuleRuntime::load(
             root, policy,
@@ -104,6 +93,7 @@ impl RecordedHttpClient {
         self
     }
 
+    #[cfg(test)]
     pub(crate) async fn send(&self, request_path: &Path) -> Result<RecordedHttpResponse> {
         let request_label = request_path.display().to_string();
         let request_path = request_path.to_path_buf();
@@ -136,7 +126,7 @@ impl RecordedHttpClient {
                 .validate()
                 .context("invalid recorded request SSE observation policy")?;
         }
-        let request = build_request(&self.origin, &recorded, self.preserve_host)?;
+        let request = build_request(&self.origin, &recorded)?;
         let request_headers = response_headers::snapshot_request_context(request.headers());
         let deadline = tokio::time::Instant::now() + self.request_timeout;
         let response = tokio::time::timeout_at(deadline, self.client.request(request))
@@ -172,11 +162,7 @@ impl RecordedHttpClient {
     }
 }
 
-fn build_request(
-    origin: &str,
-    recorded: &RecordedRequest,
-    preserve_host: bool,
-) -> Result<Request<Full<Bytes>>> {
+fn build_request(origin: &str, recorded: &RecordedRequest) -> Result<Request<Full<Bytes>>> {
     let method = Method::from_bytes(recorded.method.as_bytes())
         .with_context(|| format!("invalid recorded HTTP method {:?}", recorded.method))?;
     let uri = target_uri(origin, &recorded.uri)?;
@@ -187,7 +173,7 @@ fn build_request(
     for (name, values) in &recorded.headers {
         if is_hop_by_hop(name)
             || name.eq_ignore_ascii_case("accept-encoding")
-            || (!preserve_host && name.eq_ignore_ascii_case("host"))
+            || name.eq_ignore_ascii_case("host")
         {
             continue;
         }
@@ -335,13 +321,10 @@ mod tests {
                 truncated: false,
             },
         };
-        let request = build_request("http://127.0.0.1:8081", &recorded, false).unwrap();
+        let request = build_request("http://127.0.0.1:8081", &recorded).unwrap();
 
         assert!(!request.headers().contains_key("host"));
         assert!(!request.headers().contains_key("accept-encoding"));
         assert_eq!(request.headers()["x-request-id"], "one");
-
-        let recording_request = build_request("http://127.0.0.1:8081", &recorded, true).unwrap();
-        assert_eq!(recording_request.headers()["host"], "source");
     }
 }

@@ -257,22 +257,6 @@ pub(crate) fn reanchor_case_group_run_index(
     store::reanchor_index_case_source(&layout, source_revision, case_inventory_id)
 }
 
-pub(crate) fn focused_process_output_evidence(
-    context: &E2eRunContext,
-    api_key: &str,
-) -> Result<PathBuf> {
-    let (_, layout) = config::resolve_layout(
-        &context.target_root,
-        &context.case_source,
-        context.run_key.as_deref(),
-    )?;
-    Ok(layout
-        .run_root
-        .join("focused")
-        .join(support::api_directory(api_key))
-        .join("latest/reports/process-outputs"))
-}
-
 pub fn status_e2e_run(context: E2eRunContext) -> Result<E2eRunStatus> {
     let (_, layout) = config::resolve_layout(
         &context.target_root,

@@ -113,7 +113,7 @@ fn check_candidate(
         let scope = options
             .scope
             .as_ref()
-            .context("worker review requires --api or --process-output")?;
+            .context("worker review requires --api")?;
         worker::ensure_scope_confirmed(state, scope, "worker review")?;
         let assignment = assignment(state, scope)?;
         ensure!(
@@ -243,9 +243,6 @@ pub(super) fn context(
     ];
     match scope {
         RewriteWorkScope::Api { api } => argv.extend(["--api".into(), api.clone()]),
-        RewriteWorkScope::ProcessOutput { id } => {
-            argv.extend(["--process-output".into(), id.clone()])
-        }
     }
     ReviewContext {
         assignment,

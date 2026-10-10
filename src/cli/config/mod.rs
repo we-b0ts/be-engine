@@ -9,7 +9,6 @@ use traffic_e2e::{
     initialize_repository_config,
 };
 
-mod comparison;
 mod recorder;
 mod replay;
 
@@ -28,10 +27,8 @@ enum ConfigCommand {
     Init(InitArgs),
     /// Plan or apply evidence-backed recorder configuration changes.
     Recorder(recorder::RecorderArgs),
-    /// Configure dependency replay and response rules inherited by comparison.
+    /// Configure dependency replay and response rules.
     Replay(replay::ReplayArgs),
-    /// Configure additional comparison-only response rules.
-    Comparison(comparison::ComparisonArgs),
 }
 
 #[derive(Debug, Args)]
@@ -120,7 +117,6 @@ pub(super) fn run(args: ConfigArgs) -> Result<()> {
         )?),
         ConfigCommand::Recorder(command) => recorder::run(args.target_root, command),
         ConfigCommand::Replay(command) => replay::run(args.target_root, command),
-        ConfigCommand::Comparison(command) => comparison::run(args.target_root, command),
     }
 }
 

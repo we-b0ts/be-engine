@@ -10,11 +10,10 @@ use super::model::{
 use super::{action, evidence};
 mod generated_values;
 use crate::{
-    ComparisonResponseRuleFeedback, DocxTimestampRule, E2eRunContext, ResponseBodyCodec,
-    ResponseBodyJoinedStringPath, ResponseBodyRuleEvidence, ResponseBodyRuleFeedback,
-    ResponseBodyRulePlan, ResponseBodyUnorderedPath, ResponseRuleFeedback, ResponseRuleKind,
-    ResponseRulePlan, plan_comparison_response_rule, plan_response_body_rule, plan_response_rule,
-    resolve_e2e_response_rule_evidence,
+    DocxTimestampRule, E2eRunContext, ResponseBodyCodec, ResponseBodyJoinedStringPath,
+    ResponseBodyRuleEvidence, ResponseBodyRuleFeedback, ResponseBodyRulePlan,
+    ResponseBodyUnorderedPath, ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan,
+    plan_response_body_rule, plan_response_rule, resolve_e2e_response_rule_evidence,
 };
 
 #[derive(Debug, Clone)]
@@ -126,20 +125,7 @@ fn plan_json(
     validate_plan_evidence(target_root, state, &issue.id, &options.evidence_id)?;
     let pointer = options
         .json_pointer
-        .or_else(|| {
-            issue
-                .representative
-                .as_ref()
-                .map(|representative| representative.pointer.clone())
-        })
-        .or_else(|| {
-            issue.comparison_observation.as_ref().and_then(|value| {
-                value
-                    .get("pointer")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
-            })
-        })
+        .or_else(|| issue.representative.as_ref().map(|r| r.pointer.clone()))
         .context("rule plan requires a representative JSON Pointer")?;
     let record = RewriteRulePlanRecord {
         response_jwts: Vec::new(),
@@ -304,23 +290,7 @@ fn build_plan(
         )));
     }
     if let Some(spec) = &record.response_body {
-        let evidence = if state
-            .active_issue
-            .as_ref()
-            .is_some_and(|issue| issue.kind == super::model::RewriteIssueKind::Comparison)
-        {
-            let comparison_run = state
-                .comparison_run_id
-                .as_ref()
-                .context("comparison response rule requires a comparison run")?;
-            ResponseBodyRuleEvidence::Comparison {
-                comparison_report: target_root
-                    .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
-                    .join("comparison-recordings")
-                    .join(comparison_run)
-                    .join("comparison-report.json"),
-            }
-        } else {
+        let evidence = {
             let case_source = state
                 .case_source
                 .clone()
@@ -356,34 +326,7 @@ fn build_plan(
     }
     let kind = parse_rule_kind(&record.kind)?;
     let policy_path = target_root.join(".traffic-e2e/verification.yaml");
-    let comparison_run = state.comparison_run_id.as_ref().map(|run_id| {
-        target_root
-            .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
-            .join("comparison-recordings")
-            .join(run_id)
-    });
-    if kind == ResponseRuleKind::Counter
-        || state
-            .active_issue
-            .as_ref()
-            .is_some_and(|issue| issue.kind == super::model::RewriteIssueKind::Comparison)
-    {
-        let comparison_run = comparison_run.context("comparison rule requires a comparison run")?;
-        return Ok(VerificationRulePlan::Response(Box::new(
-            plan_comparison_response_rule(ComparisonResponseRuleFeedback {
-                time: record.time,
-                policy_path,
-                kind,
-                api: state.api.clone(),
-                json_pointers: vec![record.json_pointer.clone()],
-                source_evidence: record.source_evidence.clone(),
-                source_example: record.source_example.clone(),
-                target_example: record.target_example.clone(),
-                separator: record.separator.clone(),
-                comparison_report: comparison_run.join("comparison-report.json"),
-            })?,
-        )));
-    }
+    {}
     let case_source = state
         .case_source
         .clone()
@@ -546,7 +489,6 @@ fn rule_kind(kind: ResponseRuleKind) -> &'static str {
         ResponseRuleKind::Jwt => "jwt",
         ResponseRuleKind::Unordered => "unordered",
         ResponseRuleKind::UnorderedJoinedString => "unordered_joined_string",
-        ResponseRuleKind::Counter => "counter",
     }
 }
 
@@ -558,7 +500,6 @@ fn parse_rule_kind(value: &str) -> Result<ResponseRuleKind> {
         "random" => Ok(ResponseRuleKind::Random),
         "unordered" => Ok(ResponseRuleKind::Unordered),
         "unordered_joined_string" => Ok(ResponseRuleKind::UnorderedJoinedString),
-        "counter" => Ok(ResponseRuleKind::Counter),
         _ => anyhow::bail!("unsupported rewrite rule kind {value:?}"),
     }
 }

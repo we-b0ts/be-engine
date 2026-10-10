@@ -74,7 +74,7 @@ hardcode source-evidence trailer.
 
 For a source finding in `findings`, use the returned responsible work item and
 execute `review rework --report /absolute/failed-candidate-report.json --finding
-ID --owner 'api:/path'` (or `process-output:ID`). The engine validates the
+ID --owner 'api:/path'`. The engine validates the
 unpublished candidate and its unchanged canonical base before routing; it never
 publishes or accepts failing code. When using the current canonical report,
 omit `--report` and use `commands.rework` with `BACKEND_REWRITE_REVIEW_FINDING`

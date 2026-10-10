@@ -5,9 +5,9 @@ use super::model::{
     RewriteWorkerBinding, RewriteWorkerBlockingReason, RewriteWorkerDispatchState,
     RewriteWorkerDispatchView, RewriteWorkerTransferRecord,
 };
-use super::process_output_model::RewriteWorkScope;
 use super::store::RewriteStore;
-use super::{action, fingerprint, process_outputs};
+use super::work_scope::RewriteWorkScope;
+use super::{action, fingerprint};
 
 #[cfg(test)]
 use super::inventory;
@@ -91,9 +91,6 @@ pub(super) fn implementation_action(
     let report_worker = runtime::report_command(target_root, worker.agent_handle.as_deref(), false);
     let acceptance = match &scope {
         RewriteWorkScope::Api { api } => action::next_command_for_api(target_root, api),
-        RewriteWorkScope::ProcessOutput { id } => {
-            action::next_command_for_process_output(target_root, id)
-        }
     };
     RewriteAction::ImplementationRequired {
         summary,
@@ -141,9 +138,8 @@ pub(super) fn dispatch_view(
             .and_then(|binding| binding.last_integrated_commit.clone()),
         blocking_reason: (dispatch_state != RewriteWorkerDispatchState::Confirmed)
             .then_some(RewriteWorkerBlockingReason::WorkerDispatchUnconfirmed),
-        requested_api: requested_scope.and_then(|scope| match scope {
-            RewriteWorkScope::Api { api } => Some(api),
-            RewriteWorkScope::ProcessOutput { .. } => None,
+        requested_api: requested_scope.map(|scope| match scope {
+            RewriteWorkScope::Api { api } => api,
         }),
         agent_name: state
             .worker_bindings
@@ -160,9 +156,6 @@ pub(super) fn confirmation_command(
         let mut argv = vec!["worker".into(), "confirm".into()];
         match &view.work_scope {
             RewriteWorkScope::Api { api } => argv.extend(["--api".into(), api.clone()]),
-            RewriteWorkScope::ProcessOutput { id } => {
-                argv.extend(["--process-output".into(), id.clone()]);
-            }
         }
         let mut env = vec!["BACKEND_REWRITE_WORKER_WORKTREE".into()];
         identity::command_handle(&mut argv, &mut env, view.agent_handle.as_deref());
@@ -512,10 +505,8 @@ fn dispatch_state(
 }
 
 fn active_scope(state: &RewriteState) -> Option<RewriteWorkScope> {
-    process_outputs::active_scope(state).or_else(|| {
-        (state.phase == RewritePhase::ImplementationRequired && state.active_issue.is_some())
-            .then(|| super::api_selector::work_scope(state, &state.api))
-    })
+    (state.phase == RewritePhase::ImplementationRequired && state.active_issue.is_some())
+        .then(|| super::api_selector::work_scope(state, &state.api))
 }
 
 fn issue_for_scope<'a>(
@@ -546,7 +537,6 @@ fn issue_for_scope<'a>(
             slices.sort_by(|left, right| left.api.cmp(&right.api));
             slices.first().and_then(|slice| slice.active_issue.as_ref())
         }
-        RewriteWorkScope::ProcessOutput { .. } => process_outputs::issue_for_scope(state, scope),
     }
 }
 

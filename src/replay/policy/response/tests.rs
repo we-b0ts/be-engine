@@ -38,15 +38,6 @@ fn rejects_overlapping_array_patterns_and_explicit_indexes() {
     }
 }
 
-fn counter(pointer: &str) -> CounterResponseRule {
-    CounterResponseRule {
-        pointer: pointer.to_string(),
-        source_evidence: "src/user.rs:load live count".to_string(),
-        source_example: "100".to_string(),
-        target_example: "101".to_string(),
-    }
-}
-
 fn unordered(pointer: &str) -> JsonUnorderedResponseRule {
     JsonUnorderedResponseRule {
         pointer: pointer.to_string(),
@@ -137,23 +128,6 @@ fn rejects_overlapping_rule_kinds_in_one_json_api() {
 }
 
 #[test]
-fn rejects_overlapping_replay_and_comparison_rules() {
-    let rules = ResponseRules {
-        json: BTreeMap::from([(
-            "GET /api/users/show".to_string(),
-            JsonResponseRules {
-                uuid: vec![uuid("/followers_count")],
-                counter: vec![counter("/followers_count")],
-                ..Default::default()
-            },
-        )]),
-        ..Default::default()
-    };
-
-    assert!(validate_response_rules(&rules).is_err());
-}
-
-#[test]
 fn accepts_json_rules_on_a_motan_gateway() {
     let rules = ResponseRules {
         json: BTreeMap::from([(
@@ -193,33 +167,6 @@ fn matches_and_identifies_unordered_fields() {
     assert_eq!(
         fields[0].id,
         "response:unordered:GET /api/config/ansible_facts:/general/sudo_users"
-    );
-}
-
-#[test]
-fn counter_fields_are_available_only_to_comparison_matching() {
-    let rules = ResponseRules {
-        json: BTreeMap::from([(
-            "GET /api/users/show".to_string(),
-            JsonResponseRules {
-                counter: vec![counter("/followers_count")],
-                ..Default::default()
-            },
-        )]),
-        ..Default::default()
-    };
-
-    assert!(
-        rules
-            .matching_replay_fields("GET", "/api/users/show")
-            .is_empty()
-    );
-    let fields = rules.matching_comparison_fields("GET", "/api/users/show");
-    assert_eq!(fields.len(), 1);
-    assert_eq!(fields[0].kind, ResponseRuleKind::Counter);
-    assert_eq!(
-        fields[0].id,
-        "response:comparison:counter:GET /api/users/show:/followers_count"
     );
 }
 

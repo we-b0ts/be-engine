@@ -22,13 +22,11 @@ fn legacy_state() -> RewriteState {
         item.status = RewriteApiStatus::Complete;
         item.attempts = 3;
         item.e2e_current = true;
-        item.comparison_current = true;
         item.verified_target_fingerprint = Some("old-target".into());
     }
     state.phase = RewritePhase::SliceComplete;
     state.group_id = Some("old-group".into());
     state.e2e_current = true;
-    state.comparison_current = true;
     // Model the on-disk shape written before the persistent route catalog existed.
     state.source_route_bindings.clear();
     state
@@ -58,7 +56,7 @@ fn legacy_routes_survive_rerecord_and_restart_without_reusing_verification() {
         rerecord(&mut state, reason);
         assert!(state.api_inventory.is_empty());
         assert!(state.group_id.is_none());
-        assert!(!state.e2e_current && !state.comparison_current);
+        assert!(!state.e2e_current);
         // Scope changes may reset the inventory again before the recording starts.
         state.recording_apis = vec![API.into()];
         inventory::reset_for_recording(&mut state);
@@ -74,7 +72,7 @@ fn legacy_routes_survive_rerecord_and_restart_without_reusing_verification() {
         );
         for item in &state.api_inventory {
             assert_eq!(item.attempts, 0);
-            assert!(!item.e2e_current && !item.comparison_current);
+            assert!(!item.e2e_current);
             assert!(item.verified_target_fingerprint.is_none());
         }
         store.save(&state).unwrap();

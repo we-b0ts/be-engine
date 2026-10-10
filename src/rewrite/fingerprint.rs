@@ -15,7 +15,6 @@ const TRAFFIC_POLICY_PATHSPECS: &[&str] = &[
 const RUNTIME_PROGRESS_PATHSPECS: &[&str] = &[
     ":(exclude).traffic-e2e/progress.yaml",
     ":(exclude).traffic-e2e/replay-progress.yaml",
-    ":(exclude).traffic-e2e/comparison-progress.yaml",
     ":(exclude).traffic-e2e/e2e-progress.yaml",
 ];
 
@@ -326,12 +325,7 @@ mod tests {
             "version: 2\n",
         )
         .unwrap();
-        for name in [
-            "progress.yaml",
-            "replay-progress.yaml",
-            "comparison-progress.yaml",
-            "e2e-progress.yaml",
-        ] {
+        for name in ["progress.yaml", "replay-progress.yaml", "e2e-progress.yaml"] {
             fs::write(
                 repository.path().join(".traffic-e2e").join(name),
                 "attempt: 1\n",
@@ -352,7 +346,7 @@ mod tests {
 
         let baseline = repository_fingerprint(repository.path()).unwrap();
         let regression = repository.path().join(crate::config::regression::PATH);
-        fs::write(&regression, "require_comparison: false\n").unwrap();
+        fs::write(&regression, "").unwrap();
         assert_eq!(repository_fingerprint(repository.path()).unwrap(), baseline);
         let code = code_fingerprint(repository.path()).unwrap();
         git_ok(repository.path(), &["add", crate::config::regression::PATH]);
@@ -362,19 +356,14 @@ mod tests {
         );
         fs::write(
             &regression,
-            "recording_run_id: \"20260911093000\"\nrequire_comparison: true\nskip: [/a]\n",
+            "recording_run_id: \"20260911093000\"\nskip: [/a]\n",
         )
         .unwrap();
         assert_eq!(repository_fingerprint(repository.path()).unwrap(), baseline);
         assert_eq!(code_fingerprint(repository.path()).unwrap(), code);
         fs::remove_file(&regression).unwrap();
         assert_eq!(repository_fingerprint(repository.path()).unwrap(), baseline);
-        for name in [
-            "progress.yaml",
-            "replay-progress.yaml",
-            "comparison-progress.yaml",
-            "e2e-progress.yaml",
-        ] {
+        for name in ["progress.yaml", "replay-progress.yaml", "e2e-progress.yaml"] {
             fs::write(
                 repository.path().join(".traffic-e2e").join(name),
                 "attempt: 2\n",

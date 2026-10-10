@@ -109,7 +109,6 @@ pub(super) fn canonical_scope(
 ) -> super::RewriteWorkScope {
     match scope {
         super::RewriteWorkScope::Api { api } => work_scope(state, api),
-        _ => scope.clone(),
     }
 }
 

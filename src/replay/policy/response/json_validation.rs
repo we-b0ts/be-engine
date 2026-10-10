@@ -54,17 +54,6 @@ pub(super) fn validate_json_rule_map<'a>(
                 ResponseRuleKind::UnorderedJoinedString,
             ));
         }
-        let mut unique_counter = BTreeSet::new();
-        for field in &rules.counter {
-            validate_json_pointer(&field.pointer)?;
-            ensure!(
-                unique_counter.insert(field.pointer.as_str()),
-                "counter response rule API {api:?} repeats JSON Pointer {:?}",
-                field.pointer
-            );
-            validate_counter_rule(field)?;
-            locations.push((method, path, &field.pointer, ResponseRuleKind::Counter));
-        }
     }
     Ok(())
 }

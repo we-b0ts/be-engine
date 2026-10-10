@@ -34,7 +34,7 @@ listener, lifecycle, startup, or configuration contract. Load only affected SDKs
   own those changes.
 - `.traffic-e2e/Dockerfile.source` and `.traffic-e2e/Dockerfile.target` remain
   target-owned build contracts. Change either when the current work scope
-  requires source-adaptor integration for managed comparison/diagnostics or
+  requires source-adaptor integration for diagnostic preflight or
   target-runtime integration; the assigned code author owns their contents.
   Standalone standard capture uses the separate project-owned `.traffic-e2e/Dockerfile.recording`.
 - A `project.delivery.managed_paths` object with `build_context` exposes its

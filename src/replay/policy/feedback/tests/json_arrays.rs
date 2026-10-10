@@ -125,53 +125,6 @@ fn array_rule_planner_rejects_structural_differences_in_any_selected_element() {
 }
 
 #[test]
-fn comparison_array_rules_preserve_source_change_checks_and_counter_scope() {
-    for (kind, source_changes, allowed) in [
-        (ResponseRuleKind::Timestamp, json!([]), true),
-        (ResponseRuleKind::Timestamp, json!(["/data/1/value"]), false),
-        (ResponseRuleKind::Counter, json!(["/data/1/value"]), true),
-    ] {
-        let temp = tempdir().unwrap();
-        let feedback = array_feedback(temp.path(), kind);
-        let mut evidence: serde_json::Value =
-            serde_json::from_slice(&fs::read(&feedback.assertion_report).unwrap()).unwrap();
-        evidence["cases"][0]["source_change_pointers"] = source_changes;
-        evidence["kind"] = json!("comparison_recording_verification");
-        evidence["assertion_mode"] = json!("comparison_recording");
-        evidence["baseline_recheck"] = json!("optional_source_consistency");
-        evidence["complete"] = json!(true);
-        fs::write(
-            &feedback.assertion_report,
-            serde_json::to_vec(&evidence).unwrap(),
-        )
-        .unwrap();
-        let result = plan_comparison_response_rule(ComparisonResponseRuleFeedback {
-            time: feedback.time,
-            policy_path: feedback.policy_path,
-            kind,
-            api: feedback.api,
-            json_pointers: feedback.json_pointers,
-            source_evidence: feedback.source_evidence,
-            source_example: feedback.source_example,
-            target_example: feedback.target_example,
-            separator: None,
-            comparison_report: feedback.assertion_report,
-        });
-        if allowed {
-            result.unwrap().apply().unwrap();
-        } else {
-            assert!(
-                result
-                    .err()
-                    .unwrap()
-                    .to_string()
-                    .contains("source changes overlapping")
-            );
-        }
-    }
-}
-
-#[test]
 fn array_rule_planner_preserves_unselected_differences() {
     let temp = tempdir().unwrap();
     let feedback = array_feedback(temp.path(), ResponseRuleKind::Random);

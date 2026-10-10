@@ -33,19 +33,6 @@ pub(super) fn validate(
                 "--separator is not valid for generated response rules"
             );
         }
-        ResponseRuleKind::Counter => {
-            validate_text(source_evidence.as_deref(), "--source-evidence", 512)?;
-            validate_text(source_example.as_deref(), "--source-example", 1024)?;
-            validate_text(target_example.as_deref(), "--target-example", 1024)?;
-            ensure!(
-                source_example != target_example,
-                "counter response rules require different --source-example and --target-example values"
-            );
-            ensure!(
-                separator.is_none(),
-                "--separator is not valid with --kind counter"
-            );
-        }
         ResponseRuleKind::Unordered => {
             validate_text(source_evidence.as_deref(), "--source-evidence", 512)?;
             ensure!(

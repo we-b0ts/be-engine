@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde_json::json;
 
 use super::super::model::{RewriteIssue, RewriteState};
-use super::super::process_output_model::RewriteWorkScope;
+use super::super::work_scope::RewriteWorkScope;
 use super::super::{fingerprint, worker};
 use super::RewriteEvidenceReport;
 
@@ -17,40 +17,11 @@ pub(super) fn query_id(
 ) -> String {
     match scope {
         RewriteWorkScope::Api { .. } => super::query_id(state, issue, QUERY_OVERVIEW),
-        RewriteWorkScope::ProcessOutput { .. } => format!(
-            "evq-{}-overview",
-            fingerprint::id(&[
-                "rewrite-process-output-evidence-v1",
-                &state.workflow_id,
-                &state.recording_run_id,
-                &scope.binding_key(),
-                &serde_json::to_string(issue).expect("rewrite issue is serializable"),
-            ])
-            .trim_start_matches("fnv1a64:")
-        ),
     }
 }
 
 pub(super) fn api_query_id(state: &RewriteState, issue: &RewriteIssue) -> String {
     super::query_id(state, issue, QUERY_OVERVIEW)
-}
-
-pub(super) fn query_process_output(
-    target_root: &Path,
-    state: &RewriteState,
-    requested_id: &str,
-) -> Result<Option<RewriteEvidenceReport>> {
-    for item in &state.process_outputs.inventory {
-        let Some(issue) = &item.issue else { continue };
-        let scope = RewriteWorkScope::ProcessOutput {
-            id: item.id.clone(),
-        };
-        if query_id(state, &scope, issue) == requested_id {
-            worker::ensure_scope_confirmed(state, &scope, "querying evidence")?;
-            return report(target_root, state, scope, issue, requested_id).map(Some);
-        }
-    }
-    Ok(None)
 }
 
 pub(super) fn report(
@@ -68,11 +39,9 @@ pub(super) fn report(
             super::commands(target_root, state)
         }
         RewriteWorkScope::Api { .. } => Vec::new(),
-        RewriteWorkScope::ProcessOutput { .. } => Vec::new(),
     };
     let methods = match &scope {
         RewriteWorkScope::Api { api } => super::super::api_selector::members(state, &api.parse()?),
-        _ => Vec::new(),
     };
     let mut method_issues = Vec::new();
     for api in &methods {
@@ -109,7 +78,6 @@ pub(super) fn report(
             workflow_id: state.workflow_id.clone(),
             revision: state.revision,
             recording_run_id: state.recording_run_id.clone(),
-            require_comparison: state.require_comparison,
             review: crate::rewrite::review::context(target_root, state, &scope),
             worker: worker::dispatch_view(state, scope.clone(), None),
         })),
@@ -129,8 +97,6 @@ pub(super) fn report(
         } else { match scope {
             RewriteWorkScope::Api { .. } =>
                 "Inspect this issue and execute the relevant returned queries before tracing source and target behavior.",
-            RewriteWorkScope::ProcessOutput { .. } =>
-                "Inspect facts.issue.comparison_observation and trace the source and target startup/output path; no API evidence queries apply.",
         }.to_string() },
     })
 }

@@ -202,7 +202,7 @@ fn new_round_preserves_recording_scope_and_replays_before_workers() {
     let target = fixture();
     fs::write(
         target.path().join(".traffic-e2e/regression.yaml"),
-        "only:\n  - /other\nrequire_comparison: false\n",
+        "only:\n  - /other\n",
     )
     .unwrap();
     let report = begin(options(target.path())).unwrap();
@@ -216,7 +216,6 @@ fn new_round_preserves_recording_scope_and_replays_before_workers() {
         report.previous_workflow_id.clone().unwrap()
     );
     assert_eq!(saved.recording_run_id, "20260802000000");
-    assert!(!saved.require_comparison);
     assert_eq!(saved.api, "GET /other");
     assert_eq!(saved.phase, RewritePhase::ApiPending);
     assert!(saved.active_issue.is_none());
@@ -469,7 +468,6 @@ async fn every_base_status_requires_purpose_and_next_wait_cannot_resume_old_work
     let report = rewrite::next_rewrite(rewrite::RewriteNextOptions {
         target_root: target.path().into(),
         api: Some("/api".parse().unwrap()),
-        process_output: None,
         source_route: None,
     })
     .await
@@ -496,7 +494,7 @@ fn fresh_recording_supersedes_old_pin_without_needing_usable_old_evidence() {
     let target = fixture();
     fs::write(
         target.path().join(".traffic-e2e/regression.yaml"),
-        "recording_run_id: '20260101000000'\nrequire_comparison: false\n",
+        "recording_run_id: '20260101000000'\n",
     )
     .unwrap();
     let mut request = options(target.path());

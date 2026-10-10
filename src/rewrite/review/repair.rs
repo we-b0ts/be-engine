@@ -1,8 +1,8 @@
 use super::*;
+use crate::rewrite::RewriteActionEnvelope;
 use crate::rewrite::model::{
     RewriteApiStatus, RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewritePhase,
 };
-use crate::rewrite::{RewriteActionEnvelope, RewriteProcessOutputStatus};
 
 /// Coordinator-owned routing. Quality findings do not become fake Replay failures.
 pub fn rework(
@@ -96,7 +96,6 @@ pub fn rework_with_report(
         possible_causes: vec![finding.message.clone()],
         observed_target_fingerprint: report.target_fingerprint.clone(),
         attempt: 0,
-        comparison_observation: None,
     };
     match &scope {
         RewriteWorkScope::Api { api } => {
@@ -135,18 +134,6 @@ pub fn rework_with_report(
                 .find(|item| item.api == selected_api)
             {
                 item.status = RewriteApiStatus::ImplementationRequired;
-            }
-        }
-        RewriteWorkScope::ProcessOutput { id } => {
-            let item = state
-                .process_outputs
-                .inventory
-                .iter_mut()
-                .find(|i| i.id == *id)
-                .context("process-output work item is absent")?;
-            item.status = RewriteProcessOutputStatus::ImplementationRequired;
-            if item.issue.is_none() {
-                item.issue = Some(issue);
             }
         }
     }

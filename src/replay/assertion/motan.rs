@@ -22,14 +22,6 @@ pub(super) struct ComparableResponseFrame {
     status_code: u16,
 }
 
-pub(super) struct ComparableResponseBody {
-    encoded: Vec<u8>,
-    payload_offset: usize,
-    body_kind: ComparableBodyKind,
-    version: ProtocolVersion,
-    serialization: Option<u8>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ComparableBodyKind {
     WireBytes,
@@ -72,82 +64,6 @@ impl ComparableResponseFrame {
 
     pub(super) const fn status_code(&self) -> u16 {
         self.status_code
-    }
-}
-
-impl ComparableResponseBody {
-    pub(super) fn body(&self) -> &[u8] {
-        &self.encoded[self.payload_offset..]
-    }
-
-    pub(super) const fn body_kind(&self) -> ComparableBodyKind {
-        self.body_kind
-    }
-
-    pub(super) fn gateway_context_matches(&self, actual: &Self) -> bool {
-        self.version == actual.version && self.serialization == actual.serialization
-    }
-}
-
-pub(super) fn comparable_response_body(
-    version: ProtocolVersion,
-    serialization: Option<u8>,
-    body: Vec<u8>,
-    already_decoded: bool,
-    rpc_status: Option<&str>,
-) -> ComparableResponseBody {
-    let (payload_offset, body_kind) = if already_decoded {
-        (
-            0,
-            if version == ProtocolVersion::Motan1 && rpc_status == Some("value") {
-                ComparableBodyKind::Motan1Hessian2Value
-            } else {
-                ComparableBodyKind::WireBytes
-            },
-        )
-    } else {
-        business_body(version, serialization, &body)
-    };
-    ComparableResponseBody {
-        encoded: body,
-        payload_offset,
-        body_kind,
-        version,
-        serialization,
-    }
-}
-
-pub(super) fn request_serialization(raw: &[u8], label: &str) -> Result<Option<u8>> {
-    let capacity = raw.len().max(32);
-    let limits = Limits {
-        max_frame_bytes: capacity,
-        max_metadata_bytes: capacity,
-        max_body_bytes: capacity,
-    };
-    let DecodeStatus::Complete(frame) = decode_frame(raw, limits)
-        .with_context(|| format!("{label} contains an invalid Motan request frame"))?
-    else {
-        bail!("{label} contains an incomplete Motan request frame");
-    };
-    ensure!(
-        frame.raw().len() == raw.len(),
-        "{label} contains trailing bytes after its Motan request frame"
-    );
-    ensure!(
-        matches!(
-            frame.version,
-            ProtocolVersion::Motan1 | ProtocolVersion::Motan2
-        ) && frame.kind == MessageKind::Request,
-        "{label} does not contain a Motan request frame"
-    );
-    Ok(frame.serialization)
-}
-
-pub(super) fn protocol_version(value: &str, label: &str) -> Result<ProtocolVersion> {
-    match value {
-        "motan1" => Ok(ProtocolVersion::Motan1),
-        "motan2" => Ok(ProtocolVersion::Motan2),
-        value => bail!("{label} uses unsupported Motan protocol version {value:?}"),
     }
 }
 
@@ -347,41 +263,6 @@ mod tests {
     }
 
     #[test]
-    fn motan2_response_proxy_flag_does_not_affect_comparison() {
-        let source = FrameBuilder::response(42)
-            .body("response")
-            .encode()
-            .unwrap();
-        let target = FrameBuilder::response(42)
-            .proxy(true)
-            .body("response")
-            .encode()
-            .unwrap();
-
-        let source = comparable_response_frame(&source, "source response").unwrap();
-        let target = comparable_response_frame(&target, "target response").unwrap();
-
-        assert_eq!(source.encoded, target.encoded);
-        assert_eq!(source.carrier(), target.carrier());
-        assert_eq!(source.body(), target.body());
-    }
-
-    #[test]
-    fn motan2_body_length_does_not_affect_carrier_comparison() {
-        let source = FrameBuilder::response(42).body("short").encode().unwrap();
-        let target = FrameBuilder::response(42)
-            .body("a longer response")
-            .encode()
-            .unwrap();
-
-        let source = comparable_response_frame(&source, "source response").unwrap();
-        let target = comparable_response_frame(&target, "target response").unwrap();
-
-        assert_eq!(source.carrier(), target.carrier());
-        assert_ne!(source.body(), target.body());
-    }
-
-    #[test]
     fn motan2_breeze_non_payload_value_keeps_its_wire_body() {
         let encoded = FrameBuilder::response(42)
             .serialization(BREEZE_SERIALIZATION_ID)
@@ -470,5 +351,40 @@ mod tests {
 
         assert_eq!(frame.body(), body);
         assert_eq!(frame.body_kind(), ComparableBodyKind::SimpleValue);
+    }
+
+    #[test]
+    fn motan2_response_proxy_flag_does_not_affect_comparison() {
+        let source = FrameBuilder::response(42)
+            .body("response")
+            .encode()
+            .unwrap();
+        let target = FrameBuilder::response(42)
+            .proxy(true)
+            .body("response")
+            .encode()
+            .unwrap();
+
+        let source = comparable_response_frame(&source, "source response").unwrap();
+        let target = comparable_response_frame(&target, "target response").unwrap();
+
+        assert_eq!(source.encoded, target.encoded);
+        assert_eq!(source.carrier(), target.carrier());
+        assert_eq!(source.body(), target.body());
+    }
+
+    #[test]
+    fn motan2_body_length_does_not_affect_carrier_comparison() {
+        let source = FrameBuilder::response(42).body("short").encode().unwrap();
+        let target = FrameBuilder::response(42)
+            .body("a longer response")
+            .encode()
+            .unwrap();
+
+        let source = comparable_response_frame(&source, "source response").unwrap();
+        let target = comparable_response_frame(&target, "target response").unwrap();
+
+        assert_eq!(source.carrier(), target.carrier());
+        assert_ne!(source.body(), target.body());
     }
 }

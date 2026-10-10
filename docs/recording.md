@@ -150,8 +150,8 @@ Project Dockerfiles have separate roles:
 | File under `.traffic-e2e/` | Role |
 | --- | --- |
 | `Dockerfile.recording` | Standalone Source/Recorder service running `traffic-e2e record`; owned by the deployment caller. |
-| `Dockerfile.source` | Source adaptor used by managed Comparison and diagnostic preflight; scaffolded during project initialization. |
-| `Dockerfile.target` | Target application used by Replay, Comparison and diagnostic preflight; scaffolded during project initialization. |
+| `Dockerfile.source` | Source adaptor used by diagnostic preflight; scaffolded during project initialization. |
+| `Dockerfile.target` | Target application used by Replay and diagnostic preflight; scaffolded during project initialization. |
 
 For existing projects, rename the managed Source adaptor from
 `Dockerfile.recording` to `Dockerfile.source` before giving the standalone
@@ -238,8 +238,3 @@ available completed batch with a usable scope; subsequent runs keep that identit
 A new capture contract requires an externally produced newer batch; batches
 already present when refresh begins cannot satisfy it. Never edit
 old recordings to satisfy the new contract.
-
-When `require_comparison: true`, place completed comparison evidence under
-`.traffic-e2e/local/artifacts/comparison-recordings/<run-id>/` and select
-`comparison_run_id` in the same local file. Missing evidence remains an input
-requirement and does not disable the comparison gate.

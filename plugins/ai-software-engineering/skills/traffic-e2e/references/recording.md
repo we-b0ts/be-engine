@@ -66,8 +66,7 @@ Replay does not need the recording CA private key. No import command is needed.
 local `.traffic-e2e/regression.yaml` pins the batch; otherwise the engine discovers
 completed evidence and retains its identity. Missing or rejected evidence returns
 `input_required`. Capture-policy refresh requires a newer external batch;
-recordings already present when refresh begins cannot satisfy it. The caller
-supplies completed comparison evidence separately when its gate is required.
+recordings already present when refresh begins cannot satisfy it.
 
 Recorder policy changes use supported plan/apply commands and require new capture.
 Old JSONL is immutable. Backend rewrite only consumes completed external batches.

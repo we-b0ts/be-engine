@@ -6,10 +6,9 @@ use serde_json::{Value, json};
 
 use super::evidence_model::RewriteEvidenceReport;
 use super::model::{RewriteEvidenceCommand, RewriteIssue, RewriteIssueKind, RewriteState};
-use super::process_output_model::RewriteWorkScope;
-use super::{artifacts, fingerprint, source_process_traffic};
+use super::work_scope::RewriteWorkScope;
+use super::{fingerprint, source_process_traffic};
 use crate::case_group::resolve_published_case_dir;
-use crate::comparison_recording::resolve_comparison_case_dir;
 use crate::e2e_run::response_pointer_scope;
 use crate::{
     E2eDirtyCluster, E2eDirtyCounts, E2eRunContext, E2eValueObservation, E2eValuePresence,
@@ -156,7 +155,7 @@ fn source_process_next_step(kind: RewriteIssueKind) -> &'static str {
         RewriteIssueKind::Dependency | RewriteIssueKind::Replay => {
             "Compare the dirty-cluster endpoints and operations with this evidence, then use source code to prove request or process ownership."
         }
-        RewriteIssueKind::Response | RewriteIssueKind::Comparison => {
+        RewriteIssueKind::Response => {
             "Use matching endpoints to prioritize source startup, refresh, and local-cache paths, then prove the response-driving path in source code."
         }
         RewriteIssueKind::TargetRuntime => {
@@ -164,9 +163,6 @@ fn source_process_next_step(kind: RewriteIssueKind) -> &'static str {
         }
         RewriteIssueKind::TargetQuality => {
             "Read review show and address the target source quality finding; no traffic diagnosis is required."
-        }
-        RewriteIssueKind::ProcessOutput => {
-            "Use the recorded process output manifests and inspect the target startup path."
         }
     }
 }
@@ -195,7 +191,6 @@ fn facts(
             let mut facts = json!({
                     "pointer_scope": pointer_scope,
                     "representative": representative,
-                    "comparison_observation": issue.comparison_observation,
                 });
             if rule_guidance::has_response_jwt(&facts) {
                 facts["signing_key_discovery"] = super::jwt_rule::signing_key_discovery(target_root);
@@ -418,62 +413,7 @@ fn representative_facts(
             dependency_representative(target_root, cluster),
         ));
     }
-    let Some(observation) = issue.comparison_observation.as_ref() else {
-        return Ok(("not_applicable", Value::Null));
-    };
-    let case_id = observation
-        .get("case_id")
-        .and_then(Value::as_str)
-        .context("comparison representative has no case id")?;
-    let pointer = observation
-        .get("pointer")
-        .and_then(Value::as_str)
-        .context("comparison representative has no response pointer")?;
-    let difference_kind = observation
-        .get("difference_kind")
-        .context("comparison representative has no difference kind")?;
-    let source_before = observation
-        .get("source_before")
-        .context("comparison representative has no source-before value")?;
-    let candidate = observation
-        .get("candidate")
-        .context("comparison representative has no candidate value")?;
-    let source_after = observation
-        .get("source_after")
-        .context("comparison representative has no source-after value")?;
-    let run_id = state
-        .comparison_run_id
-        .as_deref()
-        .context("comparison representative has no recording run")?;
-    let case_dir =
-        resolve_comparison_case_dir(&artifacts::comparison_run(target_root, run_id), case_id)?;
-    let mut response_difference = json!({
-        "pointer": pointer,
-        "kind": difference_kind,
-        "source_before": source_before,
-        "candidate": candidate,
-        "source_after": source_after,
-    });
-    if let Some(body_diagnosis) = observation
-        .get("body_diagnosis")
-        .filter(|value| !value.is_null())
-    {
-        response_difference["body_diagnosis"] = body_diagnosis.clone();
-    }
-    if let Some(gateway_protocol) = observation.get("gateway_protocol") {
-        response_difference["gateway_protocol"] = gateway_protocol.clone();
-    }
-    if let Some(body_codec) = observation.get("body_codec") {
-        response_difference["body_codec"] = body_codec.clone();
-    }
-    Ok((
-        response_pointer_scope(pointer),
-        json!({
-            "case_id": case_id,
-            "case_dir": case_dir,
-            "response_difference": response_difference,
-        }),
-    ))
+    Ok(("not_applicable", Value::Null))
 }
 
 fn dependency_representative(target_root: &Path, cluster: &E2eDirtyCluster) -> Value {
@@ -591,15 +531,7 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
     let typed_body_candidate = issue
         .representative
         .as_ref()
-        .is_some_and(|representative| representative.body_diagnosis.is_some())
-        || issue
-            .comparison_observation
-            .as_ref()
-            .is_some_and(|observation| {
-                observation
-                    .get("body_diagnosis")
-                    .is_some_and(|body| !body.is_null())
-            });
+        .is_some_and(|representative| representative.body_diagnosis.is_some());
     if issue.kind == RewriteIssueKind::TargetRuntime {
         queries.push((
             QUERY_TARGET_RUNTIME_DIAGNOSTICS,
@@ -688,7 +620,7 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
 
 fn source_process_evidence_relevant(issue: &RewriteIssue) -> bool {
     match issue.kind {
-        RewriteIssueKind::ProcessOutput | RewriteIssueKind::TargetQuality => false,
+        RewriteIssueKind::TargetQuality => false,
         RewriteIssueKind::TargetRuntime => issue
             .possible_causes
             .iter()
@@ -702,7 +634,7 @@ fn source_process_evidence_purpose(kind: RewriteIssueKind) -> &'static str {
         RewriteIssueKind::Dependency | RewriteIssueKind::Replay => {
             "Inspect source bootstrap and configured process-owned traffic before classifying dirty dependencies as request-owned or process-owned"
         }
-        RewriteIssueKind::Response | RewriteIssueKind::Comparison => {
+        RewriteIssueKind::Response => {
             "Use this evidence when startup, background refresh, or local-cache state may explain the response mismatch"
         }
         RewriteIssueKind::TargetRuntime => {
@@ -710,9 +642,6 @@ fn source_process_evidence_purpose(kind: RewriteIssueKind) -> &'static str {
         }
         RewriteIssueKind::TargetQuality => {
             "Read review show and address the target source quality finding; no traffic diagnosis is required."
-        }
-        RewriteIssueKind::ProcessOutput => {
-            "Inspect the recorded process output manifests and target startup path"
         }
     }
 }
@@ -736,7 +665,6 @@ fn query_id(state: &RewriteState, issue: &RewriteIssue, kind: &str) -> String {
         state.case_inventory_id.as_deref().unwrap_or_default(),
         state.source_revision.as_deref().unwrap_or_default(),
         state.group_id.as_deref().unwrap_or_default(),
-        state.comparison_run_id.as_deref().unwrap_or_default(),
         case_source.as_ref(),
         kind,
     ]);
@@ -879,7 +807,6 @@ fn policy_applicability(issue: &RewriteIssue) -> Value {
             "uuid_with_source_proof",
             "random_with_source_proof",
         ]);
-        eligible.push("counter_in_comparison_with_source_proof");
         if matches!(representative.expected.value, Some(Value::Array(_)))
             && matches!(representative.actual.value, Some(Value::Array(_)))
         {

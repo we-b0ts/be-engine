@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use super::super::model::{RewriteAction, RewriteState};
-use super::super::process_output_model::RewriteWorkScope;
+use super::super::work_scope::RewriteWorkScope;
 use super::super::{action, inventory};
 use super::model::{
     RewriteWorkerCoverageState as Coverage, RewriteWorkerInventoryCommands,
@@ -22,11 +22,6 @@ pub(in crate::rewrite) fn inventory(
                 RewriteWorkScope::Api { api } => {
                     action::status_command_for_api(target_root, Some(api))
                 }
-                RewriteWorkScope::ProcessOutput { id } => action::command(
-                    target_root,
-                    vec!["status".into(), "--process-output".into(), id.clone()],
-                    Vec::new(),
-                ),
             };
             let report_worker =
                 runtime::report_command(target_root, worker.agent_handle.as_deref(), false);
@@ -65,10 +60,7 @@ pub(in crate::rewrite) fn global_action(
                 Coverage::StatusRequired => 1,
                 Coverage::IntegrationRequired if !busy && !first_pass_ready => 2,
                 Coverage::VerificationRequired
-                    if !busy
-                        && !first_pass_ready
-                        && (matches!(scope, RewriteWorkScope::ProcessOutput { .. })
-                            || inventory::can_switch_api(state)) =>
+                    if !busy && !first_pass_ready && inventory::can_switch_api(state) =>
                 {
                     3
                 }
@@ -160,9 +152,6 @@ pub(in crate::rewrite) fn acceptance_command(
 ) -> super::super::model::RewriteCommandSpec {
     match scope {
         RewriteWorkScope::Api { api } => action::next_command_for_api(target_root, api),
-        RewriteWorkScope::ProcessOutput { id } => {
-            action::next_command_for_process_output(target_root, id)
-        }
     }
 }
 

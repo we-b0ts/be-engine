@@ -19,7 +19,6 @@ use super::{RewriteContext, RewriteNextOptions, RewriteTargetQualityOptions, act
 enum Request {
     Next {
         api: Option<String>,
-        process_output: Option<String>,
         source_route: Option<String>,
     },
     TargetQuality {
@@ -51,13 +50,6 @@ pub fn start_next(mut options: RewriteNextOptions) -> Result<RewriteActionEnvelo
             },
             api,
         )?
-    } else if let Some(id) = &options.process_output {
-        super::status_rewrite_for_process_output(
-            RewriteContext {
-                target_root: target_root.clone(),
-            },
-            id,
-        )?
     } else {
         super::status_rewrite(RewriteContext {
             target_root: target_root.clone(),
@@ -74,15 +66,11 @@ pub fn start_next(mut options: RewriteNextOptions) -> Result<RewriteActionEnvelo
     // Freeze the selected scope before launching the detached operation. Its
     // own execution marker must not turn a later global selection into waiting.
     if options.api.is_none()
-        && options.process_output.is_none()
         && let RewriteAction::AdvanceRequired { command, .. } = &current.action
     {
         for pair in command.argv.windows(2) {
             if pair[0] == "--api" {
                 options.api = Some(pair[1].parse()?);
-            }
-            if pair[0] == "--process-output" {
-                options.process_output = Some(pair[1].clone());
             }
         }
     }
@@ -90,7 +78,6 @@ pub fn start_next(mut options: RewriteNextOptions) -> Result<RewriteActionEnvelo
         &target_root,
         Request::Next {
             api: options.api.map(|api| api.to_string()),
-            process_output: options.process_output,
             source_route: options.source_route,
         },
     )
@@ -181,15 +168,10 @@ pub async fn execute(target_root: PathBuf, id: &str) -> Result<RewriteActionEnve
         "coordinator operation already completed"
     );
     let result = match &execution.request {
-        Request::Next {
-            api,
-            process_output,
-            source_route,
-        } => {
+        Request::Next { api, source_route } => {
             super::next_rewrite(RewriteNextOptions {
                 target_root: target_root.clone(),
                 api: api.as_deref().map(str::parse).transpose()?,
-                process_output: process_output.clone(),
                 source_route: source_route.clone(),
             })
             .await
@@ -335,7 +317,6 @@ pub(super) fn from_status(status: super::RewriteStatusReport) -> RewriteActionEn
         pending: status.pending,
         workflow: status.workflow,
         api_inventory: status.api_inventory,
-        process_output_inventory: status.process_output_inventory,
         latest_focused_e2e: status.latest_focused_e2e,
         action: status.action,
         terminal_allowed: status.terminal_allowed,
@@ -372,9 +353,6 @@ fn traffic_summary(
 ) -> String {
     let api = active.api.as_deref().unwrap_or("the workflow");
     match active.kind {
-        super::traffic_operation::TrafficOperationKind::Comparison => {
-            format!("comparing {api}")
-        }
         super::traffic_operation::TrafficOperationKind::Replay => match replay_progress {
             Some(crate::e2e_run::E2eActiveProgress::PreparingIndex) => {
                 "Preparing dependency index".to_string()

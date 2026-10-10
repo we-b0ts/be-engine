@@ -111,15 +111,15 @@ fn authoritative_ledger_rebuilds_a_reset_public_snapshot() {
 #[test]
 fn public_snapshot_initializes_a_missing_local_ledger_baseline() {
     let directory = tempdir().unwrap();
-    let path = directory.path().join("comparison-progress.yaml");
-    let mut report = ProgressReport::new(VerificationStage::Comparison);
+    let path = directory.path().join("replay-progress.yaml");
+    let mut report = ProgressReport::new(VerificationStage::Replay);
     report
         .apply(observation("1", &[("POST /orders", 8, 8)]))
         .unwrap();
     write(&path, &report).unwrap();
-    fs::remove_file(ledger::path(&path, VerificationStage::Comparison).unwrap()).unwrap();
+    fs::remove_file(ledger::path(&path, VerificationStage::Replay).unwrap()).unwrap();
 
-    let imported = load(&path, VerificationStage::Comparison).unwrap().unwrap();
+    let imported = load(&path, VerificationStage::Replay).unwrap().unwrap();
     let baseline = imported.observation_baseline.as_ref().unwrap();
     assert_eq!(baseline.number, 1);
     assert_eq!(baseline.totals.runs.executed, 1);
@@ -137,9 +137,9 @@ fn public_snapshot_initializes_a_missing_local_ledger_baseline() {
     assert_eq!(baseline.apis["POST /orders"].totals.runs.executed, 1);
     assert_eq!(baseline.apis["POST /orders"].success_streak.cases, 8);
     assert!(imported.requires_persistence());
-    assert!(synchronize(&path, VerificationStage::Comparison).unwrap());
+    assert!(synchronize(&path, VerificationStage::Replay).unwrap());
     assert!(
-        ledger::path(&path, VerificationStage::Comparison)
+        ledger::path(&path, VerificationStage::Replay)
             .unwrap()
             .is_file()
     );
@@ -169,7 +169,7 @@ fn local_ledger_recreates_a_missing_public_snapshot() {
 
 #[test]
 fn tracks_totals_and_resets_global_and_api_streaks_on_failure() {
-    let mut report = ProgressReport::new(VerificationStage::Comparison);
+    let mut report = ProgressReport::new(VerificationStage::Replay);
     report
         .apply(observation("1", &[("GET /users", 100, 100)]))
         .unwrap();
@@ -217,7 +217,7 @@ fn one_failed_api_resets_global_streak_without_resetting_other_api() {
 
 #[test]
 fn changed_global_scope_preserves_the_business_success_streak() {
-    let mut report = ProgressReport::new(VerificationStage::Comparison);
+    let mut report = ProgressReport::new(VerificationStage::Replay);
     report
         .apply(observation("1", &[("GET /users", 100, 100)]))
         .unwrap();
@@ -370,7 +370,7 @@ fn recording_completion_counts_coverage_and_holds_streaks_until_the_result_is_fi
 
 #[test]
 fn duplicate_evidence_is_idempotent_and_conflicting_evidence_is_rejected() {
-    let mut report = ProgressReport::new(VerificationStage::Comparison);
+    let mut report = ProgressReport::new(VerificationStage::Replay);
     let first = observation("1", &[("GET /users", 100, 100)]);
     assert!(report.apply(first.clone()).unwrap());
     assert!(
@@ -531,19 +531,12 @@ fn round_trips_the_unified_public_schema_and_local_ledger() {
 fn migrates_only_recording_coverage_from_the_split_replay_ledger() {
     let directory = tempdir().unwrap();
     let replay_path = directory.path().join("replay-progress.yaml");
-    let comparison_path = directory.path().join("comparison-progress.yaml");
     let progress_path = directory.path().join("progress.yaml");
     let mut replay = ProgressReport::new(VerificationStage::Replay);
     replay
         .apply(observation("replay", &[("GET /users", 10, 10)]))
         .unwrap();
     write(&replay_path, &replay).unwrap();
-    let mut comparison = ProgressReport::new(VerificationStage::Comparison);
-    comparison
-        .apply(observation("comparison", &[("GET /users", 5, 4)]))
-        .unwrap();
-    write(&comparison_path, &comparison).unwrap();
-
     let migrated = load(&progress_path, VerificationStage::Progress)
         .unwrap()
         .unwrap();
@@ -556,7 +549,6 @@ fn migrates_only_recording_coverage_from_the_split_replay_ledger() {
 
     assert!(progress_path.is_file());
     assert!(!replay_path.exists());
-    assert!(!comparison_path.exists());
     assert!(
         ledger::path(&progress_path, VerificationStage::Progress)
             .unwrap()
@@ -590,8 +582,8 @@ fn loading_an_older_report_seeds_the_latest_run_in_the_ledger() {
 #[test]
 fn migrates_embedded_counted_runs_to_the_artifact_ledger() {
     let directory = tempdir().unwrap();
-    let path = directory.path().join("comparison-progress.yaml");
-    let mut report = ProgressReport::new(VerificationStage::Comparison);
+    let path = directory.path().join("replay-progress.yaml");
+    let mut report = ProgressReport::new(VerificationStage::Replay);
     let first = observation("1", &[("GET /users", 100, 100)]);
     report.apply(first.clone()).unwrap();
     let mut legacy_payload =
@@ -601,7 +593,7 @@ fn migrates_embedded_counted_runs_to_the_artifact_ledger() {
     legacy_payload.push_str("counted_runs:\n  '1': fingerprint-1\n");
     std::fs::write(&path, legacy_payload).unwrap();
 
-    let mut loaded = load(&path, VerificationStage::Comparison).unwrap().unwrap();
+    let mut loaded = load(&path, VerificationStage::Replay).unwrap().unwrap();
 
     assert!(loaded.requires_persistence());
     assert!(!loaded.apply(first).unwrap());
@@ -609,7 +601,7 @@ fn migrates_embedded_counted_runs_to_the_artifact_ledger() {
     let public_payload = std::fs::read_to_string(&path).unwrap();
     assert!(public_payload.starts_with("version: 3\n"));
     assert!(!public_payload.contains("counted_runs:"));
-    let ledger_path = ledger::path(&path, VerificationStage::Comparison).unwrap();
+    let ledger_path = ledger::path(&path, VerificationStage::Replay).unwrap();
     assert!(
         std::fs::read_to_string(ledger_path)
             .unwrap()

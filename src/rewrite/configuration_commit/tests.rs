@@ -74,7 +74,6 @@ async fn status_and_next_require_actual_commit_without_mutating_files_or_state()
         rewrite::status_rewrite(context.clone()).unwrap(),
         rewrite::status_rewrite_for_api(context.clone(), Some(&"GET /api".parse().unwrap()))
             .unwrap(),
-        rewrite::status_rewrite_for_process_output(context, "output-1").unwrap(),
     ] {
         assert_eq!(required(&status.action), &[CONFIGURATION_PATHS[1]]);
         assert!(!status.terminal_allowed);
@@ -82,7 +81,6 @@ async fn status_and_next_require_actual_commit_without_mutating_files_or_state()
     let envelope = next_rewrite(RewriteNextOptions {
         target_root: root.path().to_path_buf(),
         api: None,
-        process_output: None,
         source_route: None,
     })
     .await

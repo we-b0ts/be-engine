@@ -293,10 +293,8 @@ pub(super) fn apply(
 
 pub(super) fn invalidate_global(state: &mut RewriteState) {
     state.target_quality_fingerprint = None;
-    super::process_outputs::defer_for_target_change(state, "jwt-request-rules-changed");
     for item in &mut state.api_inventory {
         item.e2e_current = false;
-        item.comparison_current = false;
         item.verified_target_fingerprint = None;
         if item.status == super::model::RewriteApiStatus::Complete {
             item.status = super::model::RewriteApiStatus::RevalidationPending;
@@ -304,7 +302,6 @@ pub(super) fn invalidate_global(state: &mut RewriteState) {
     }
     for slice in state.parked_slices.values_mut() {
         slice.e2e_current = false;
-        slice.comparison_current = false;
         slice.target_fingerprint = None;
     }
 }

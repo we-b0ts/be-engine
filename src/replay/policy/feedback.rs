@@ -1,3 +1,4 @@
+use super::response::response_locations_overlap;
 mod http_cross_case;
 pub use http_cross_case::{
     HttpCrossCaseFeedback, HttpCrossCasePlan, HttpCrossCaseReport, plan_http_cross_case,
@@ -14,7 +15,6 @@ pub use mysql_time::{
 };
 mod generated_values;
 mod model;
-mod profile_target_missing;
 mod response_body;
 pub use generated_values::{
     DynamicValueRuleFeedback, GeneratedValueRulePlan, GeneratedValueRuleReport,
@@ -30,15 +30,14 @@ use anyhow::{Context, Result, ensure};
 
 use self::document::{render_response_rules, replace_response_rules};
 use self::evidence::{
-    AggregateEvidence, AssertionCaseEvidence, AssertionEvidence, ComparisonEvidence,
-    difference_supports_rule, response_rule_exists, source_change_overlaps,
+    AggregateEvidence, AssertionCaseEvidence, AssertionEvidence, difference_supports_rule,
+    response_rule_exists,
 };
 use super::config::{LoadedReplayPolicy, fingerprint, load_replay_policy};
 use super::pattern::path_pattern_matches;
 use super::response::{
-    CounterResponseRule, GeneratedResponseRule, JsonJoinedStringResponseRule,
-    JsonUnorderedResponseRule, ResponseRuleKind, parse_api, response_locations_overlap,
-    response_rule_id, validate_json_pointer, validate_response_rules,
+    GeneratedResponseRule, JsonJoinedStringResponseRule, JsonUnorderedResponseRule,
+    ResponseRuleKind, parse_api, response_rule_id, validate_json_pointer, validate_response_rules,
 };
 use crate::config::edit::write_atomic;
 
@@ -47,11 +46,7 @@ pub use memcached::{
     MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MemcachedTimestampRuleReport,
     plan_memcached_timestamp_rule,
 };
-pub use model::{ComparisonResponseRuleFeedback, ResponseRuleFeedback, ResponseRuleReport};
-pub use profile_target_missing::{
-    ProfileTargetMissingFeedback, ProfileTargetMissingPlan, ProfileTargetMissingReport,
-    plan_profile_target_missing,
-};
+pub use model::{ResponseRuleFeedback, ResponseRuleReport};
 pub use response_body::{
     ResponseBodyRuleEvidence, ResponseBodyRuleEvidenceKind, ResponseBodyRuleFeedback,
     ResponseBodyRulePlan, ResponseBodyRuleReport, ResponseBodyRuleVerificationOutcome,
@@ -94,10 +89,6 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
     ensure!(
         feedback.kind != ResponseRuleKind::Jwt,
         "JWT responses require the typed response-jwt planner"
-    );
-    ensure!(
-        feedback.kind != ResponseRuleKind::Counter,
-        "counter response rules require `config comparison` and --comparison-run"
     );
     let justification = justification::validate(
         feedback.kind,
@@ -213,81 +204,6 @@ fn hydrate_assertion_details(assertions: &mut AssertionEvidence) -> Result<()> {
     Ok(())
 }
 
-pub fn plan_comparison_response_rule(
-    feedback: ComparisonResponseRuleFeedback,
-) -> Result<ResponseRulePlan> {
-    ensure!(
-        feedback.kind != ResponseRuleKind::Jwt,
-        "JWT responses require the typed response-jwt planner"
-    );
-    let justification = justification::validate(
-        feedback.kind,
-        feedback.time,
-        feedback.source_evidence,
-        feedback.source_example,
-        feedback.target_example,
-        feedback.separator,
-    )?;
-    let prepared = prepare_response_rule(
-        &feedback.policy_path,
-        &feedback.api,
-        &feedback.json_pointers,
-    )?;
-    let comparison_bytes = read_regular(&feedback.comparison_report, "comparison report")?;
-    let comparison: ComparisonEvidence =
-        serde_json::from_slice(&comparison_bytes).context("invalid comparison report")?;
-    ensure!(
-        matches!(comparison.version, 3..=5)
-            && comparison.kind == "comparison_recording_verification"
-            && comparison.expected_response == "assertions_only"
-            && comparison.assertion_mode == "comparison_recording"
-            && comparison.baseline_recheck == "optional_source_consistency",
-        "response rule planning requires comparison recording verification evidence"
-    );
-    ensure!(
-        comparison.complete,
-        "comparison recording verification evidence must be complete"
-    );
-    ensure!(
-        comparison.policy_fingerprint == prepared.loaded.fingerprint,
-        "comparison report replay policy fingerprint is stale"
-    );
-    ensure!(
-        comparison.cases.iter().all(|case| case.response.is_some()),
-        "complete comparison report contains an unevaluable case"
-    );
-    ensure!(
-        comparison
-            .cases
-            .iter()
-            .all(
-                |case| case.classification.as_deref() != Some("policy_mismatch")
-                    && case.policy_mismatch_rule_ids.is_empty()
-            ),
-        "comparison evidence with unused applicable response rules cannot authorize a new rule"
-    );
-    let response_evidence = validate_response_evidence(
-        &prepared,
-        feedback.kind,
-        &feedback.api,
-        &comparison.cases,
-        false,
-        justification.separator.as_deref(),
-    )?;
-    build_response_rule_plan(
-        feedback.policy_path,
-        feedback.kind,
-        feedback.api,
-        prepared,
-        response_evidence,
-        justification,
-        ResponseRuleEvidence::Comparison {
-            comparison_report: feedback.comparison_report,
-            comparison_fingerprint: fingerprint(&comparison_bytes),
-        },
-    )
-}
-
 struct PreparedResponseRule {
     method: String,
     path_pattern: String,
@@ -303,10 +219,6 @@ enum ResponseRuleEvidence {
         aggregate_report: PathBuf,
         aggregate_fingerprint: String,
         aggregate_dirty: bool,
-    },
-    Comparison {
-        comparison_report: PathBuf,
-        comparison_fingerprint: String,
     },
 }
 
@@ -378,22 +290,10 @@ fn validate_response_evidence(
     let mut unselected_difference_pointers = BTreeSet::new();
     for (case, response) in &matching {
         ensure!(
-            case.matched_source.as_deref() != Some("after"),
-            "case {:?} uses removed source-after acceptance; regenerate comparison evidence",
-            case.case_id
-        );
-        ensure!(
             case.policy_mismatch_rule_ids.is_empty(),
             "case {:?} has unused applicable response rules",
             case.case_id
         );
-        if kind != ResponseRuleKind::Counter {
-            ensure!(
-                !source_change_overlaps(case, &prepared.requested),
-                "case {:?} has source changes overlapping the proposed response rule",
-                case.case_id
-            );
-        }
         ensure!(
             response.body_codec == super::response::ResponseBodyCodec::Json,
             "response rules require structural JSON assertion evidence"
@@ -439,7 +339,6 @@ fn validate_response_evidence(
                         .applied_rule_ids(kind)
                         .contains(&response_rule_id(kind, api, pointer))
                     || !has_overlapping_difference
-                    || (kind == ResponseRuleKind::Counter && has_overlapping_difference)
                     || response.differences.is_empty(),
                 "case {:?} does not provide {:?} evidence for {}",
                 case.case_id,
@@ -501,11 +400,6 @@ fn build_response_rule_plan(
             .collect::<BTreeSet<_>>(),
         ResponseRuleKind::UnorderedJoinedString => api_rules
             .unordered_joined_string
-            .iter()
-            .map(|field| field.pointer.clone())
-            .collect::<BTreeSet<_>>(),
-        ResponseRuleKind::Counter => api_rules
-            .counter
             .iter()
             .map(|field| field.pointer.clone())
             .collect::<BTreeSet<_>>(),
@@ -586,32 +480,6 @@ fn build_response_rule_plan(
             }
             fields.sort_by(|left, right| left.pointer.cmp(&right.pointer));
         }
-        ResponseRuleKind::Counter => {
-            let fields = &mut api_rules.counter;
-            for pointer in &prepared.requested {
-                let proposed = CounterResponseRule {
-                    pointer: pointer.clone(),
-                    source_evidence: justification
-                        .source_evidence
-                        .clone()
-                        .expect("counter justification requires source evidence"),
-                    source_example: justification
-                        .source_example
-                        .clone()
-                        .expect("counter justification requires a source example"),
-                    target_example: justification
-                        .target_example
-                        .clone()
-                        .expect("counter justification requires a target example"),
-                };
-                if let Some(existing) = fields.iter_mut().find(|field| field.pointer == *pointer) {
-                    *existing = proposed;
-                } else {
-                    fields.push(proposed);
-                }
-            }
-            fields.sort_by(|left, right| left.pointer.cmp(&right.pointer));
-        }
         _ => unreachable!("all response rule kinds are covered"),
     }
     validate_response_rules(&updated_rules)?;
@@ -640,8 +508,6 @@ fn build_response_rule_plan(
         assertion_fingerprint,
         aggregate_report,
         aggregate_fingerprint,
-        comparison_report,
-        comparison_fingerprint,
         aggregate_dirty,
     ) = match evidence {
         ResponseRuleEvidence::Replay {
@@ -655,21 +521,7 @@ fn build_response_rule_plan(
             Some(assertion_fingerprint),
             Some(aggregate_report),
             Some(aggregate_fingerprint),
-            None,
-            None,
             Some(aggregate_dirty),
-        ),
-        ResponseRuleEvidence::Comparison {
-            comparison_report,
-            comparison_fingerprint,
-        } => (
-            None,
-            None,
-            None,
-            None,
-            Some(comparison_report),
-            Some(comparison_fingerprint),
-            None,
         ),
     };
     Ok(ResponseRulePlan {
@@ -683,8 +535,6 @@ fn build_response_rule_plan(
             assertion_fingerprint,
             aggregate_report,
             aggregate_fingerprint,
-            comparison_report,
-            comparison_fingerprint,
             kind,
             time: justification.time,
             api,

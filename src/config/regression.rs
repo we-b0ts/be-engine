@@ -7,13 +7,10 @@ use serde::Deserialize;
 
 pub(crate) const PATH: &str = ".traffic-e2e/regression.yaml";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RegressionScope {
     pub(crate) recording_run_id: Option<String>,
-    pub(crate) comparison_run_id: Option<String>,
-    #[serde(default = "default_require_comparison")]
-    pub(crate) require_comparison: bool,
     only: Option<Vec<String>>,
     skip: Option<Vec<String>>,
 }
@@ -31,15 +28,10 @@ impl RegressionScope {
         let mut policy: Self = serde_yaml::from_slice(&bytes)
             .with_context(|| format!("invalid regression scope {}", path.display()))?;
         policy.recording_run_id = policy.recording_run_id.filter(|run_id| !run_id.is_empty());
-        policy.comparison_run_id = policy.comparison_run_id.filter(|run_id| !run_id.is_empty());
-        for (field, run_id) in [
-            ("recording_run_id", &policy.recording_run_id),
-            ("comparison_run_id", &policy.comparison_run_id),
-        ] {
-            let Some(run_id) = run_id else { continue };
+        if let Some(run_id) = &policy.recording_run_id {
             ensure!(
                 run_id.len() == 14 && run_id.bytes().all(|byte| byte.is_ascii_digit()),
-                "{PATH}: {field} must be a 14-digit existing recording run ID"
+                "{PATH}: recording_run_id must be a 14-digit existing recording run ID"
             );
         }
         for list in policy.only.iter().chain(policy.skip.iter()) {
@@ -77,23 +69,7 @@ impl RegressionScope {
 
 pub(crate) const GITIGNORE_RULE: &str = "/.traffic-e2e/regression.yaml";
 pub(crate) const GIT_PATHSPEC: &str = ":(exclude).traffic-e2e/regression.yaml";
-pub(crate) const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# Without a pin, rewrite selects an existing completed run and keeps it fixed.\n# recording_run_id: \"20260911093000\"\n# For required Comparison, select completed external comparison evidence.\n# comparison_run_id: \"20260911100000\"\n# HTTP API routes must match backend-rewrite inventory exactly, without methods.\n# Each route includes all its recorded methods.\n# Omitted or empty only selects all APIs; skip takes precedence.\n# only:\n#   - \"/api/users/*\"\nonly: []\nskip: []\nrequire_comparison: false\n";
-
-pub(crate) fn default_require_comparison() -> bool {
-    false
-}
-
-impl Default for RegressionScope {
-    fn default() -> Self {
-        Self {
-            recording_run_id: None,
-            comparison_run_id: None,
-            only: None,
-            skip: None,
-            require_comparison: default_require_comparison(),
-        }
-    }
-}
+pub(crate) const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# Without a pin, rewrite selects an existing completed run and keeps it fixed.\n# recording_run_id: \"20260911093000\"\n# HTTP API routes must match backend-rewrite inventory exactly, without methods.\n# Each route includes all its recorded methods.\n# Omitted or empty only selects all APIs; skip takes precedence.\n# only:\n#   - \"/api/users/*\"\nonly: []\nskip: []\n";
 
 /// Low-level project initialization also installs the local policy without
 /// replacing user choices. Full repository initialization creates it atomically
@@ -131,25 +107,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn initialization_is_idempotent_preserves_local_choices_and_defaults_false() {
+    fn initialization_is_idempotent_and_preserves_local_scope() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join(".gitignore"), "/target/").unwrap();
         initialize(root.path()).unwrap();
         assert!(
-            !RegressionScope::load(root.path())
-                .unwrap()
-                .require_comparison
-        );
-        std::fs::write(
-            root.path().join(PATH),
-            "require_comparison: true\nskip: [/a]\n",
-        )
-        .unwrap();
-        initialize(root.path()).unwrap();
-        assert!(
             RegressionScope::load(root.path())
                 .unwrap()
-                .require_comparison
+                .includes("GET /a")
+        );
+        std::fs::write(root.path().join(PATH), "skip: [/a]\n").unwrap();
+        initialize(root.path()).unwrap();
+        assert!(
+            !RegressionScope::load(root.path())
+                .unwrap()
+                .includes("GET /a")
         );
         for name in [".gitignore", ".dockerignore"] {
             let contents = std::fs::read_to_string(root.path().join(name)).unwrap();
@@ -161,17 +133,11 @@ mod tests {
                 1
             );
         }
-        std::fs::write(root.path().join(PATH), "only: []\n").unwrap();
-        assert!(
-            !RegressionScope::load(root.path())
-                .unwrap()
-                .require_comparison
-        );
         std::fs::remove_file(root.path().join(PATH)).unwrap();
         assert!(
-            !RegressionScope::load(root.path())
+            RegressionScope::load(root.path())
                 .unwrap()
-                .require_comparison
+                .includes("GET /a")
         );
     }
 }

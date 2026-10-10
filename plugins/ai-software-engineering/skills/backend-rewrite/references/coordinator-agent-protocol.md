@@ -10,8 +10,7 @@ Follow the main loop in
 
 In this protocol, **API implementer** means the dedicated `api-implementer`
 bound to one API work item. The engine may still expose protocol names such as
-`implementation worker`, `subagent`, `agent_handle`, or a legacy process-output
-worker; those names do not create additional core roles.
+`implementation worker`, `subagent`, `agent_handle`; those names do not create additional core roles.
 
 The **code integrator** is one retained `code-integrator` task for the workflow
 and is never stored or reported as an API-implementer binding. An **API expert** is a
@@ -25,7 +24,7 @@ them through the returned engine command.
 Maintain one exact work item to one dedicated task runtime handle and one worktree:
 
 ```text
-API path/pattern or process_output:<id> <-> worker handle <-> worker worktree
+API path/pattern <-> worker handle <-> worker worktree
 ```
 
 Issue IDs, attempts, and workflow revisions can change without changing this
@@ -51,11 +50,10 @@ Create worktrees from the integrated target revision under:
 <coordinator-root>/.traffic-e2e/local/rewrite-worktrees/<workflow.id>/<work-item-slug>
 ```
 
-Use `api-` and `process-output-` slug prefixes. Dispatch only:
+Use an `api-` slug prefix. Dispatch only:
 
-- Role: `api-implementer` for API scope; retain the generic implementation-worker
-  assignment for existing process-output scope.
-- Exact work scope: canonical API path/pattern or process-output ID.
+- Role: `api-implementer`.
+- Exact work scope: canonical API path/pattern.
 - Absolute canonical target root for engine evidence queries.
 - Absolute assigned worktree for edits and local tests.
 - Source repository locations for behavior analysis.
@@ -333,7 +331,7 @@ and finding admission keep their existing contract.
 For `replay`, follow `next` into fresh verification of the selected recording.
 For `record`, the engine requests new external live traffic, then proceeds through
 publication/case preparation to Replay. It supersedes the old recording pin for
-this workflow. Preserve local API selection and Comparison requirements. Do not
+this workflow. Preserve local API selection. Do not
 request an API implementer or expert before fresh verification needs one.
 Actual live/stale engine operations retain their finish/recovery contract; they
 are not task-runtime worker cleanup requirements.
@@ -344,7 +342,7 @@ At session start/resume with retained assignments, after interruption, on
 `worker_status_required`, before waiting on outstanding agents, and after every
 bounded engine or task-runtime wait, **actually invoke a runtime agent-list or
 status tool**. Query all assigned workers still awaiting results in one pass,
-including parked API and process-output workers. Also check retained integrator,
+including parked API workers. Also check retained integrator,
 route-analysis, and expert tasks before waiting on them, without reporting their
 handles as API implementers. A pass just completed after a wait can serve the
 immediately following wait; repeat after intervening work or assignment changes.

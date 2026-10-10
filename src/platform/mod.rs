@@ -6,7 +6,6 @@ use std::process::Stdio;
 
 use anyhow::{Context, Result, ensure};
 use chrono::Utc;
-use serde::Serialize;
 use tokio::process::Command;
 
 use crate::e2e_run::resolve_project;
@@ -24,8 +23,6 @@ mod manager_tests;
 #[cfg(test)]
 mod mount_tests;
 mod preflight;
-mod recording_input;
-mod recovery;
 mod replay_preflight;
 mod runtime_outputs;
 mod startup;
@@ -37,96 +34,25 @@ pub use preflight::{
     ManagedRecordingPreflightResult, ManagedTargetImagePreflightChecks,
     ManagedTargetImagePreflightResult,
 };
-pub use recording_input::{
-    ManagedRecordingInputCompletion, ManagedRecordingInputOptions, ManagedRecordingInputResult,
-    drive_managed_recording_input,
-};
-pub use recovery::{ManagedRecordingRecoveryResult, recover_managed_recording};
 pub use replay_preflight::{
     ManagedReplayNetworkPreflightResult, ManagedTargetRuntimePreflightChecks,
     ManagedTargetRuntimePreflightResult, ReplayDirectEgressProbeResult, ReplayNegativeProbeResult,
     ReplayPositiveProbeResult,
 };
 const MANAGER: &str = include_str!("assets/manage-platform.sh");
-const COMPARISON_PROCESS_OUTPUTS: &str = include_str!("assets/comparison-process-outputs.sh");
-const COMPARISON_TARGET_NETWORK: &str = include_str!("assets/comparison-target-network.sh");
 const CONTAINER_RUNTIME: &str = include_str!("assets/container-runtime.sh");
 const RECORDER_RUNTIME: &str = include_str!("assets/recorder-runtime.sh");
 const PLATFORM_MOUNTS: &str = include_str!("assets/platform-mounts.sh");
 const PREFLIGHT_READINESS: &str = include_str!("assets/preflight-readiness.sh");
 const HTTPS_PROBE: &[u8] = include_bytes!("assets/HttpsProbe.class");
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ManagedRecordingOperation {
-    RecordComparison,
-}
-
-impl ManagedRecordingOperation {
-    pub(crate) fn script_name(self) -> &'static str {
-        match self {
-            Self::RecordComparison => "record-comparison",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ManagedRuntimeOperation {
-    Comparison,
-    Preflight,
-}
-
-impl ManagedRuntimeOperation {
-    fn script_name(self) -> &'static str {
-        match self {
-            Self::Comparison => "record-comparison",
-            Self::Preflight => "preflight",
-        }
-    }
-
-    fn manifest(self, target_root: &Path, run_id: &str) -> PathBuf {
-        match self {
-            Self::Comparison => target_root
-                .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
-                .join("comparison-recordings")
-                .join(run_id)
-                .join("comparison-recording-run.json"),
-            Self::Preflight => target_root
-                .join(crate::repository::LOCAL_ROOT)
-                .join("preflight")
-                .join(run_id)
-                .join("artifacts/recordings")
-                .join(run_id)
-                .join("recording-run.json"),
-        }
-    }
-
-    fn requires_listener_preflight(self) -> bool {
-        self == Self::Preflight
-    }
-}
-
 #[derive(Debug, Clone)]
-pub struct ManagedRecordingOptions {
+struct PreflightRecordingOptions {
     pub target_root: PathBuf,
     pub run_id: Option<String>,
     pub duration_seconds: NonZeroU64,
-    pub baseline_recheck: bool,
     pub apis: Vec<RecordingApi>,
     pub per_api_case_limit: Option<NonZeroUsize>,
-    pub request_source: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ManagedRecordingResult {
-    pub operation: ManagedRecordingOperation,
-    pub run_id: String,
-    pub target_root: PathBuf,
-    pub source_snapshot_id: String,
-    pub manifest: PathBuf,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub runtime_outputs: Vec<crate::RuntimeOutputLocation>,
-    pub managed_by: &'static str,
 }
 
 struct ManagedRuntimeResult {
@@ -134,22 +60,6 @@ struct ManagedRuntimeResult {
     target_root: PathBuf,
     source_snapshot_id: String,
     manifest: PathBuf,
-    runtime_outputs: Vec<crate::RuntimeOutputLocation>,
-}
-
-pub async fn run_managed_recording(
-    options: ManagedRecordingOptions,
-) -> Result<ManagedRecordingResult> {
-    let result = run_managed_runtime(options, ManagedRuntimeOperation::Comparison).await?;
-    Ok(ManagedRecordingResult {
-        operation: ManagedRecordingOperation::RecordComparison,
-        run_id: result.run_id,
-        target_root: result.target_root,
-        source_snapshot_id: result.source_snapshot_id,
-        manifest: result.manifest,
-        runtime_outputs: result.runtime_outputs,
-        managed_by: "traffic-e2e",
-    })
 }
 
 pub async fn run_managed_recording_preflight(
@@ -173,18 +83,13 @@ pub async fn run_managed_recording_preflight(
     )
     .await
     .context("target_image preflight failed")?;
-    let runtime = run_managed_runtime(
-        ManagedRecordingOptions {
-            target_root,
-            run_id: None,
-            duration_seconds: options.duration_seconds,
-            baseline_recheck: false,
-            apis: vec![readiness_api],
-            per_api_case_limit: NonZeroUsize::new(1),
-            request_source: None,
-        },
-        ManagedRuntimeOperation::Preflight,
-    )
+    let runtime = run_managed_runtime(PreflightRecordingOptions {
+        target_root,
+        run_id: None,
+        duration_seconds: options.duration_seconds,
+        apis: vec![readiness_api],
+        per_api_case_limit: NonZeroUsize::new(1),
+    })
     .await?;
     let evidence = preflight::validate(&runtime.manifest, &project.target_readiness_path)?;
     let (replay_network, target_runtime) = replay_preflight::run(
@@ -223,15 +128,18 @@ pub async fn run_managed_recording_preflight(
     })
 }
 
-async fn run_managed_runtime(
-    options: ManagedRecordingOptions,
-    runtime_operation: ManagedRuntimeOperation,
-) -> Result<ManagedRuntimeResult> {
+async fn run_managed_runtime(options: PreflightRecordingOptions) -> Result<ManagedRuntimeResult> {
     let (target_root, config) = resolve_project(&options.target_root)?;
     let run_id = options
         .run_id
         .unwrap_or_else(|| Utc::now().format("%Y%m%d%H%M%S").to_string());
-    let manifest = runtime_operation.manifest(&target_root, &run_id);
+    let manifest = target_root
+        .join(crate::repository::LOCAL_ROOT)
+        .join("preflight")
+        .join(&run_id)
+        .join("artifacts/recordings")
+        .join(&run_id)
+        .join("recording-run.json");
     let recorder_config = &config.recorder_config;
     ensure!(
         recorder_config.is_file(),
@@ -244,21 +152,7 @@ async fn run_managed_runtime(
         "source traffic policy does not exist: {}",
         source_traffic_policy.display()
     );
-    let managed_candidate = crate::config::managed_comparison_candidate(config.target_port);
-    let recorder = crate::config::AppConfig::load_comparison_recording_with_candidate(
-        recorder_config,
-        Some(&managed_candidate),
-    )?;
-    let comparison_motan_port = if recorder.motan_gateway.enabled
-        && runtime_operation == ManagedRuntimeOperation::Comparison
-    {
-        Some(endpoint_port(
-            &recorder.motan_gateway.matched_upstream,
-            "motan_gateway.matched_upstream",
-        )?)
-    } else {
-        None
-    };
+    let recorder = crate::config::AppConfig::load_static(recorder_config)?;
     ensure!(
         recorder.recording.post_ready_quiet_period() >= std::time::Duration::from_secs(15),
         "managed recording requires a post-ready quiet period of at least 15 seconds"
@@ -267,76 +161,16 @@ async fn run_managed_runtime(
         !recorder.http_gateway.enabled || recorder.http_gateway.ready.enabled,
         "managed HTTP recording requires an enabled http_gateway.ready probe"
     );
-    if runtime_operation.requires_listener_preflight() && recorder.http_gateway.enabled {
+    if recorder.http_gateway.enabled {
         listen_preflight::require_available(recorder.http_gateway.listen).await?;
     }
-    let target_image = if runtime_operation == ManagedRuntimeOperation::Comparison {
-        crate::startup::load_startup_snapshot(&target_root, &config.target_startup)?;
-        Some(
-            crate::target_container::build_image(
-                &crate::target_container::TargetContainerConfig::from_project(
-                    target_root.clone(),
-                    &config,
-                ),
-            )
-            .await?,
-        )
-    } else {
-        None
-    };
-    let comparison = recorder
-        .comparison_recording
-        .as_ref()
-        .context("managed recording requires comparison configuration")?;
-    let comparison_process_outputs = crate::process_output::configs_for_observation(
-        &config.process_outputs,
-        crate::process_output::ProcessOutputObservation::Comparison,
-    );
-    let (source_origin, source_host, source_port) = if recorder.http_gateway.enabled {
-        let source_origin = comparison
-            .baseline_upstream(&recorder.http_gateway)
-            .to_string();
-        let (source_host, source_port) = http_origin_endpoint(&source_origin, "comparison source")?;
-        (source_origin, source_host, source_port)
-    } else {
-        // These values remain present for the shared platform script contract,
-        // but are not contacted when HTTP recording is disabled.
-        ("http://127.0.0.1:1".to_string(), "127.0.0.1".to_string(), 1)
-    };
-    let (_, target_port) = http_origin_endpoint(&config.target_http_origin, "comparison target")?;
+    let (_, target_port) = http_origin_endpoint(&config.target_http_origin, "preflight target")?;
     ensure!(
         target_port == config.target_port,
-        "comparison target origin port {target_port} does not match configured target port {}",
+        "preflight target origin port {target_port} does not match configured target port {}",
         config.target_port
     );
     let recording_origin = format!("http://127.0.0.1:{}", recorder.http_gateway.listen.port());
-    let motan_recording_upstream = if recorder.motan_gateway.enabled {
-        format!("127.0.0.1:{}", recorder.motan_gateway.listen.port())
-    } else {
-        String::new()
-    };
-    let request_source = options
-        .request_source
-        .map(fs::canonicalize)
-        .transpose()
-        .context("failed to resolve managed recording request source")?;
-    if let Some(request_source) = &request_source {
-        ensure!(
-            request_source.starts_with(target_root.join(crate::repository::LOCAL_ARTIFACTS_ROOT)),
-            "managed recording request source must be under {}",
-            crate::repository::LOCAL_ARTIFACTS_ROOT
-        );
-    }
-    let finite_input_comparison =
-        runtime_operation == ManagedRuntimeOperation::Comparison && request_source.is_some();
-    let managed_comparison_listen = listen_preflight::managed_finite_comparison(
-        finite_input_comparison && recorder.http_gateway.enabled,
-        recorder.http_gateway.listen,
-    );
-    let managed_comparison_motan_listen = listen_preflight::managed_finite_comparison(
-        finite_input_comparison && recorder.motan_gateway.enabled,
-        recorder.motan_gateway.listen,
-    );
     let executable = crate::engine_binary::executable()?;
     ensure_executable(&executable, "traffic-e2e binary")?;
     let encryption_key = encryption_key::load_or_create(&target_root)?;
@@ -349,7 +183,7 @@ async fn run_managed_runtime(
     runtime_outputs::stage_assets(&assets, &config.target_runtime_outputs)?;
     let runtime_output_root = target_root
         .join(crate::repository::LOCAL_RUNTIME_OUTPUTS_ROOT)
-        .join(runtime_operation.script_name())
+        .join("preflight")
         .join(&run_id);
     ensure!(
         !runtime_output_root
@@ -357,22 +191,10 @@ async fn run_managed_runtime(
             .contains([',', '\r', '\n']),
         "target runtime output host path contains an unsupported delimiter"
     );
-    let mut runtime_output_locations = crate::runtime_output::locations(
-        &runtime_output_root.join("source"),
-        "source",
-        &config.target_runtime_outputs,
-    );
-    if runtime_operation == ManagedRuntimeOperation::Comparison {
-        runtime_output_locations.extend(crate::runtime_output::locations(
-            &runtime_output_root.join("target"),
-            "target",
-            &config.target_runtime_outputs,
-        ));
-    }
     let mut command = Command::new("bash");
     command
         .arg(assets.join("manage-platform.sh"))
-        .arg(runtime_operation.script_name())
+        .arg("preflight")
         .current_dir(&target_root)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -390,42 +212,14 @@ async fn run_managed_runtime(
             assets.join("target-startup-mounts.tsv"),
         )
         .env(
-            "TRAFFIC_E2E_TARGET_STARTUP_ENV_FILE",
-            assets.join("target-startup.env"),
-        )
-        .env(
             "TRAFFIC_E2E_TARGET_RUNTIME_OUTPUTS_FILE",
             assets.join("target-runtime-outputs.tsv"),
-        )
-        .env("TRAFFIC_E2E_TARGET_PORT", config.target_port.to_string())
-        .env(
-            "TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED",
-            comparison_motan_port.is_some().to_string(),
         )
         .env(
             "TRAFFIC_E2E_HTTP_RECORDING_ENABLED",
             recorder.http_gateway.enabled.to_string(),
         )
-        .env(
-            "TRAFFIC_E2E_TARGET_READY_PATH",
-            &config.target_readiness_path,
-        )
-        .env(
-            "TRAFFIC_E2E_TARGET_READY_STATUS",
-            config.target_readiness_status.to_string(),
-        )
-        .env(
-            "TRAFFIC_E2E_TARGET_STARTUP_TIMEOUT_SECONDS",
-            config.target_startup_timeout.as_secs().to_string(),
-        )
-        .env("TRAFFIC_E2E_SOURCE_ORIGIN", source_origin)
-        .env("TRAFFIC_E2E_SOURCE_HOST", source_host)
-        .env("TRAFFIC_E2E_SOURCE_PORT", source_port.to_string())
         .env("TRAFFIC_E2E_RECORDING_ORIGIN", recording_origin)
-        .env(
-            "TRAFFIC_E2E_MOTAN_RECORDING_UPSTREAM",
-            motan_recording_upstream,
-        )
         .env(
             "TRAFFIC_E2E_SOURCE_READY_PATH",
             &recorder.http_gateway.ready.path,
@@ -436,47 +230,11 @@ async fn run_managed_runtime(
         )
         .env("TRAFFIC_E2E_RECORDER_CONFIG", recorder_config)
         .env("TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY", source_traffic_policy)
-        .env("TRAFFIC_E2E_REPLAY_POLICY", &config.replay_policy)
-        .env(
-            "TRAFFIC_E2E_MAX_FAILED_CASES_PER_API",
-            config.max_failed_cases_per_api.to_string(),
-        )
         .env("TRAFFIC_E2E_PLATFORM_ASSETS", &assets)
-        .env(
-            "TRAFFIC_E2E_COMPARISON_PROCESS_OUTPUTS_ENABLED",
-            (!comparison_process_outputs.is_empty()).to_string(),
-        )
-        .env(
-            "TRAFFIC_E2E_COMPARISON_PROCESS_OUTPUT_FLUSH_AFTER_LAST_CASE_MS",
-            comparison
-                .process_output_flush_after_last_case_ms
-                .to_string(),
-        )
         .arg("--duration-seconds")
         .arg(options.duration_seconds.to_string())
         .arg("--run-id")
         .arg(&run_id);
-    if let Some(listen) = managed_comparison_listen {
-        command.env("TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN", listen.to_string());
-    }
-    if let Some(listen) = managed_comparison_motan_listen {
-        command.env(
-            "TRAFFIC_E2E_MANAGED_COMPARISON_MOTAN_LISTEN",
-            listen.to_string(),
-        );
-    }
-    if let Some(port) = comparison_motan_port {
-        command.env("TRAFFIC_E2E_TARGET_MOTAN_PORT", port.to_string());
-    }
-    if let Some(image) = target_image {
-        command.env("TRAFFIC_E2E_TARGET_IMAGE_ID", image.id);
-    }
-    if let Some(request_source) = request_source {
-        command.env("TRAFFIC_E2E_REQUEST_SOURCE", request_source);
-    }
-    if options.baseline_recheck {
-        command.arg("--baseline-recheck");
-    }
     for api in &options.apis {
         command.arg("--api").arg(api.to_string());
     }
@@ -512,7 +270,6 @@ async fn run_managed_runtime(
         target_root,
         source_snapshot_id,
         manifest,
-        runtime_outputs: runtime_output_locations,
     })
 }
 

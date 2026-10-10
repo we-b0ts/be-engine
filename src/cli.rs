@@ -2,16 +2,12 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-mod cache_snapshot;
-mod compare;
 mod config;
 mod diagnose;
 mod interception;
 mod internal;
 mod output;
-mod platform;
 mod record;
-mod record_comparison;
 mod recording;
 mod replay;
 mod signal;
@@ -45,10 +41,6 @@ struct Cli {
 enum Command {
     /// Start Source and Recorder; optionally coordinate gateway traffic through Redis.
     Record(traffic_e2e::record_service::RecordOptions),
-    /// Record source and target responses through the managed comparison runtime.
-    RecordComparison(platform::RecordComparisonArgs),
-    /// Compare a finalized comparison recording with replay response rules.
-    Compare(compare::CompareArgs),
     /// Wait for and inspect managed recording lifecycle state.
     Recording(recording::RecordingArgs),
     /// Run a managed replay session with fixed-user local interception.
@@ -111,8 +103,6 @@ pub(crate) fn run() -> Result<()> {
 
 async fn dispatch(command: Command) -> Result<()> {
     match command {
-        Command::RecordComparison(args) => platform::run_record_comparison(args).await,
-        Command::Compare(args) => compare::run(args).await,
         Command::Record(args) => traffic_e2e::record_service::run(args).await,
         Command::Recording(args) => recording::run(args).await,
         Command::Replay(args) => replay::run(args).await,
@@ -144,36 +134,6 @@ mod tests {
         let command = Cli::command();
         command.clone().debug_assert();
         assert_eq!(command.get_version(), Some(traffic_e2e::BINARY_VERSION));
-    }
-
-    #[test]
-    fn exposes_public_commands_at_the_top_level() {
-        let command = Cli::command();
-        let names = command
-            .get_subcommands()
-            .filter(|subcommand| !subcommand.is_hide_set())
-            .map(|subcommand| subcommand.get_name())
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            names,
-            [
-                "record",
-                "record-comparison",
-                "compare",
-                "recording",
-                "replay",
-                "target",
-                "config",
-                "prepare",
-                "run-api",
-                "run",
-                "status",
-                "recover",
-                "abort",
-                "diagnose"
-            ]
-        );
     }
 
     #[test]
@@ -256,81 +216,52 @@ mod tests {
     }
 
     #[test]
-    fn compare_does_not_accept_recording_or_interception_options() {
-        assert!(
-            Cli::try_parse_from(["traffic-e2e", "compare", "run", "--policy", "replay.yaml",])
-                .is_ok()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "traffic-e2e",
-                "compare",
-                "run",
-                "--policy",
-                "replay.yaml",
-                "--intercept",
-            ])
-            .is_err()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "traffic-e2e",
-                "config",
-                "comparison",
-                "plan",
-                "response-rule",
-                "--kind",
-                "counter",
-                "--source-evidence",
-                "src/user.rs:load live follower count",
-                "--source-example",
-                "100",
-                "--target-example",
-                "101",
-                "--api",
-                "GET /api/users/show",
-                "--json-pointer",
-                "/followers_count",
-                "--comparison-run",
-                "comparison-run",
-            ])
-            .is_ok()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "traffic-e2e",
-                "config",
+    fn rejects_removed_configuration_entrypoints() {
+        assert!(Cli::try_parse_from(["traffic-e2e", "init"]).is_err());
+        assert!(Cli::try_parse_from(["traffic-e2e", "diagnose", "recorder-config"]).is_err());
+        assert!(Cli::try_parse_from(["traffic-e2e", "diagnose", "replay-policy"]).is_err());
+    }
+
+    #[test]
+    fn accepts_a_global_log_filter() {
+        let parsed = Cli::try_parse_from([
+            "traffic-e2e",
+            "--log-level",
+            "warn",
+            "record",
+            "--",
+            "/app/source",
+        ])
+        .unwrap();
+
+        assert_eq!(parsed.log_level, "warn");
+    }
+
+    #[test]
+    fn exposes_public_commands_at_the_top_level() {
+        let command = Cli::command();
+        let names = command
+            .get_subcommands()
+            .filter(|subcommand| !subcommand.is_hide_set())
+            .map(|subcommand| subcommand.get_name())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            names,
+            [
+                "record",
+                "recording",
                 "replay",
-                "plan",
-                "response-rule",
-                "--kind",
-                "counter",
-                "--api",
-                "GET /api/users/show",
-                "--json-pointer",
-                "/followers_count",
-                "--comparison-run",
-                "comparison-run",
-            ])
-            .is_err()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "traffic-e2e",
+                "target",
                 "config",
-                "comparison",
-                "plan",
-                "response-rule",
-                "--kind",
-                "uuid",
-                "--api",
-                "GET /api/token",
-                "--json-pointer",
-                "/token",
-                "--comparison-run",
-                "comparison-run",
-            ])
-            .is_err()
+                "prepare",
+                "run-api",
+                "run",
+                "status",
+                "recover",
+                "abort",
+                "diagnose"
+            ]
         );
     }
 
@@ -388,95 +319,5 @@ mod tests {
             ])
             .is_ok()
         );
-        assert!(
-            Cli::try_parse_from([
-                "traffic-e2e",
-                "config",
-                "replay",
-                "plan",
-                "response-rule",
-                "--kind",
-                "uuid",
-                "--source-evidence",
-                "src/token.rs:issue_token",
-                "--source-example",
-                "<redacted source UUID>",
-                "--target-example",
-                "<redacted target UUID>",
-                "--api",
-                "GET /api/token",
-                "--json-pointer",
-                "/token",
-                "--comparison-run",
-                "comparison-run",
-            ])
-            .is_ok()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "traffic-e2e",
-                "config",
-                "replay",
-                "plan",
-                "response-rule",
-                "--kind",
-                "uuid",
-                "--source-evidence",
-                "src/token.rs:issue_token",
-                "--source-example",
-                "<redacted source UUID>",
-                "--target-example",
-                "<redacted target UUID>",
-                "--api",
-                "GET /api/token",
-                "--json-pointer",
-                "/token",
-                "--comparison-run",
-                "comparison-run",
-                "--case-source",
-                "recordings/run/rule",
-            ])
-            .is_err()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "traffic-e2e",
-                "config",
-                "replay",
-                "plan",
-                "response-rule",
-                "--kind",
-                "uuid",
-                "--api",
-                "GET /api/token",
-                "--json-pointer",
-                "/token",
-                "--comparison-run",
-                "comparison-run",
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn rejects_removed_configuration_entrypoints() {
-        assert!(Cli::try_parse_from(["traffic-e2e", "init"]).is_err());
-        assert!(Cli::try_parse_from(["traffic-e2e", "diagnose", "recorder-config"]).is_err());
-        assert!(Cli::try_parse_from(["traffic-e2e", "diagnose", "replay-policy"]).is_err());
-    }
-
-    #[test]
-    fn accepts_a_global_log_filter() {
-        let parsed = Cli::try_parse_from([
-            "traffic-e2e",
-            "--log-level",
-            "warn",
-            "record",
-            "--",
-            "/app/source",
-        ])
-        .unwrap();
-
-        assert_eq!(parsed.log_level, "warn");
     }
 }

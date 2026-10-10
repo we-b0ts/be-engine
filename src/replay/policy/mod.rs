@@ -36,14 +36,12 @@ mod tests;
 pub(in crate::replay) use config::{LoadedReplayPolicy, fingerprint, load_replay_policy};
 pub use config::{ReplayPolicyValidationReport, validate_replay_policy};
 pub use feedback::{
-    ComparisonResponseRuleFeedback, MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan,
-    MemcachedTimestampRuleReport, MysqlTimeRuleFeedback, MysqlTimeRulePlan, MysqlTimeRuleReport,
-    MysqlTimeSelector, MysqlTimeValueSelector, ProfileTargetMissingFeedback,
-    ProfileTargetMissingPlan, ProfileTargetMissingReport, ResponseBodyRuleEvidence,
-    ResponseBodyRuleEvidenceKind, ResponseBodyRuleFeedback, ResponseBodyRulePlan,
-    ResponseBodyRuleReport, ResponseBodyRuleVerificationOutcome, ResponseRuleFeedback,
-    ResponseRulePlan, ResponseRuleReport, plan_comparison_response_rule,
-    plan_memcached_timestamp_rule, plan_mysql_time_rule, plan_profile_target_missing,
+    MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MemcachedTimestampRuleReport,
+    MysqlTimeRuleFeedback, MysqlTimeRulePlan, MysqlTimeRuleReport, MysqlTimeSelector,
+    MysqlTimeValueSelector, ResponseBodyRuleEvidence, ResponseBodyRuleEvidenceKind,
+    ResponseBodyRuleFeedback, ResponseBodyRulePlan, ResponseBodyRuleReport,
+    ResponseBodyRuleVerificationOutcome, ResponseRuleFeedback, ResponseRulePlan,
+    ResponseRuleReport, plan_memcached_timestamp_rule, plan_mysql_time_rule,
     plan_response_body_rule, plan_response_rule,
 };
 pub(crate) use initialization::render_validated_replay_policy;
@@ -59,12 +57,11 @@ pub(in crate::replay) use report::ReplayPolicyReport;
 pub(crate) use response::response_locations_overlap;
 pub(in crate::replay) use response::select_json_pointers;
 pub use response::{
-    ComparisonSourceMatch, ComparisonVerificationPolicy, DocxTimestampRule,
-    Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath, ProtobufFieldPath,
-    ProtobufJoinedStringFieldType, ProtobufJoinedStringPath, ProtobufRepeatedElementType,
-    ProtobufUnorderedPath, ResponseBodyCodec, ResponseBodyJoinedStringPath,
-    ResponseBodyUnorderedPath, ResponseDurationUnit, ResponseField, ResponseRuleKind,
-    ResponseTimeRule, ResponseTimestampFormat,
+    DocxTimestampRule, Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath,
+    ProtobufFieldPath, ProtobufJoinedStringFieldType, ProtobufJoinedStringPath,
+    ProtobufRepeatedElementType, ProtobufUnorderedPath, ResponseBodyCodec,
+    ResponseBodyJoinedStringPath, ResponseBodyUnorderedPath, ResponseDurationUnit, ResponseField,
+    ResponseRuleKind, ResponseTimeRule, ResponseTimestampFormat,
 };
 
 /// Read only explicit cross-case selectors before dependency preload.

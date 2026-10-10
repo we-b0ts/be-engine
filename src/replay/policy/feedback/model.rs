@@ -19,20 +19,6 @@ pub struct ResponseRuleFeedback {
     pub aggregate_report: PathBuf,
 }
 
-#[derive(Debug, Clone)]
-pub struct ComparisonResponseRuleFeedback {
-    pub policy_path: PathBuf,
-    pub kind: ResponseRuleKind,
-    pub time: Option<ResponseTimeRule>,
-    pub api: String,
-    pub json_pointers: Vec<String>,
-    pub source_evidence: Option<String>,
-    pub source_example: Option<String>,
-    pub target_example: Option<String>,
-    pub separator: Option<String>,
-    pub comparison_report: PathBuf,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct ResponseRuleReport {
     pub policy: PathBuf,
@@ -45,10 +31,6 @@ pub struct ResponseRuleReport {
     pub aggregate_report: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aggregate_fingerprint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub comparison_report: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub comparison_fingerprint: Option<String>,
     pub kind: ResponseRuleKind,
     pub time: Option<ResponseTimeRule>,
     pub api: String,

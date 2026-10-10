@@ -13,25 +13,19 @@ pub(super) struct EvidenceArgs {
     /// Fetch this exact API implementer's current issue, identity, and evidence queries.
     #[arg(long, value_name = "PATH_OR_PATTERN")]
     api: Option<traffic_e2e::RewriteApiSelector>,
-    /// Fetch this process-output worker's current issue and identity.
-    #[arg(long, value_name = "ID")]
-    process_output: Option<String>,
 }
 
 impl EvidenceArgs {
     pub(super) fn query(self, context: RewriteContext) -> Result<RewriteEvidenceReport> {
-        match (self.query_id, self.api, self.process_output) {
-            (Some(id), None, None) => query_rewrite_evidence(context, &id),
-            (None, Some(api), None) => query_rewrite_evidence_for_scope(
+        match (self.query_id, self.api) {
+            (Some(id), None) => query_rewrite_evidence(context, &id),
+            (None, Some(api)) => query_rewrite_evidence_for_scope(
                 context,
                 &RewriteWorkScope::Api {
                     api: api.to_string(),
                 },
             ),
-            (None, None, Some(id)) => {
-                query_rewrite_evidence_for_scope(context, &RewriteWorkScope::ProcessOutput { id })
-            }
-            _ => anyhow::bail!("select exactly one evidence query id, --api, or --process-output"),
+            _ => anyhow::bail!("select exactly one evidence query id or --api"),
         }
     }
 }
@@ -44,12 +38,7 @@ mod tests {
 
     #[test]
     fn evidence_requires_exactly_one_selector() {
-        for args in [
-            vec!["evq-current-overview"],
-            vec!["--api", "/api/tasks/*"],
-            vec!["--api", "/api/tasks/*"],
-            vec!["--process-output", "metrics"],
-        ] {
+        for args in [vec!["evq-current-overview"], vec!["--api", "/api/tasks/*"]] {
             let cli = Cli::try_parse_from(["backend-rewrite", "evidence"].into_iter().chain(args))
                 .unwrap();
             assert!(matches!(cli.command, RewriteCommand::Evidence(_)));
@@ -57,8 +46,6 @@ mod tests {
         for args in [
             vec![],
             vec!["evq-id", "--api", "/api"],
-            vec!["evq-id", "--process-output", "metrics"],
-            vec!["--api", "/api", "--process-output", "metrics"],
             vec!["--api", "not-an-api"],
         ] {
             assert!(

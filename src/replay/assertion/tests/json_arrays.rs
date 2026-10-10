@@ -116,49 +116,6 @@ fn array_rules_support_root_scalars_and_keep_explicit_indexes() {
 }
 
 #[test]
-fn comparison_supports_array_rules_and_counters_remain_comparison_only() {
-    for kind in ["timestamp", "duration", "uuid", "random", "counter"] {
-        let (source, target) = if kind == "timestamp" {
-            (1700000000_i64, 1700000060_i64)
-        } else {
-            (120, 180)
-        };
-        let (_temp, options) = write_raw_case(
-            &generated_rule(kind, "/data/*/value"),
-            &json!({"data": [{"value": source}, {"value": source}]}).to_string(),
-            &json!({"data": [{"value": target}, {"value": target}]}).to_string(),
-        );
-        let mut expected: serde_json::Value =
-            serde_json::from_slice(&fs::read(&options.expected_response).unwrap()).unwrap();
-        expected["version"] = json!(1);
-        expected["timestamp"] = json!("2023-11-14T22:13:20Z");
-        fs::write(
-            &options.expected_response,
-            serde_json::to_vec(&expected).unwrap(),
-        )
-        .unwrap();
-        let mut captured: serde_json::Value =
-            serde_json::from_slice(&fs::read(&options.actual_response).unwrap()).unwrap();
-        captured["timestamp"] = json!("2023-11-14T22:14:20Z");
-        let comparison = options.actual_response.with_file_name("comparison.json");
-        fs::write(&comparison, serde_json::to_vec(&captured).unwrap()).unwrap();
-        let report = assert_comparison_response(ComparisonResponseAssertionOptions {
-            case_id: options.case_id.clone(),
-            request: options.request.clone(),
-            expected_response: options.expected_response.clone(),
-            response: comparison,
-            policy: options.policy.clone(),
-        })
-        .unwrap();
-        assert!(report.passed, "{kind}: {report:?}");
-        assert_eq!(
-            assert_recorded_response(options).unwrap().passed,
-            kind != "counter"
-        );
-    }
-}
-
-#[test]
 fn time_array_rules_fail_on_one_invalid_element_or_missing_request_time() {
     for (kind, source, target, failure) in [
         (

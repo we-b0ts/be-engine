@@ -100,7 +100,6 @@ pub struct RepositoryConfigInitResult {
     pub rewrite_command: &'static str,
     pub preflight_command: &'static str,
     pub record_command: &'static str,
-    pub comparison_command: &'static str,
 }
 
 pub fn initialize_repository_config(
@@ -140,7 +139,6 @@ fn initialize_repository_config_with(
     let recorder_options = RecorderConfigInitOptions {
         target_root: target_root.clone(),
         source_http_port: options.http_backend_port,
-        candidate_http_port: options.http_backend_port,
         http_gateway_port: options.http_gateway_port,
         readiness_path: options.readiness_path.clone(),
         upstream_dns: options.upstream_dns,
@@ -226,7 +224,6 @@ fn initialize_repository_config_with(
         rewrite_command: "backend-rewrite next --api '<METHOD path-or-pattern>'",
         preflight_command: "traffic-e2e diagnose preflight",
         record_command: "traffic-e2e record --config .traffic-e2e/project.yaml -- /app/start-source",
-        comparison_command: "traffic-e2e record-comparison --target-root .",
     })
 }
 
@@ -686,11 +683,6 @@ mod tests {
 
         assert_eq!(result.generated.len(), 12);
         assert!(
-            !crate::config::regression::RegressionScope::load(target.path())
-                .unwrap()
-                .require_comparison
-        );
-        assert!(
             result
                 .generated
                 .contains(&target.path().join(crate::config::regression::PATH))
@@ -845,14 +837,6 @@ mod tests {
         assert_eq!(
             recorder.http_gateway.matched_upstream,
             "http://127.0.0.1:8181"
-        );
-        assert_eq!(
-            recorder
-                .comparison_recording
-                .as_ref()
-                .unwrap()
-                .candidate_upstream,
-            "http://comparison-target.traffic-e2e.invalid:8181"
         );
         assert_eq!(recorder.recording.max_body_bytes, DEFAULT_BODY_LIMIT_BYTES);
         crate::replay::validate_replay_policy(&target.path().join(VERIFICATION_POLICY_PATH))

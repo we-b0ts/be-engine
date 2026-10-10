@@ -3,7 +3,6 @@ use serde_json::Value;
 pub(super) fn body_diagnosis(facts: &Value) -> Option<&Value> {
     facts
         .pointer("/representative/response_difference/body_diagnosis")
-        .or_else(|| facts.pointer("/comparison_observation/body_diagnosis"))
         .or_else(|| facts.get("body_diagnosis"))
         .filter(|value| !value.is_null())
 }
