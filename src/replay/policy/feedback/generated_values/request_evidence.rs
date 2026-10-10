@@ -136,6 +136,33 @@ pub(super) fn validate(
 fn selected(rule: &DynamicValueCapture, candidate: &DynamicValueCapture) -> bool {
     match (rule, candidate) {
         (
+            DynamicValueCapture::Redis {
+                target,
+                database,
+                command,
+                key,
+                argument_index,
+                json_pointer,
+            },
+            DynamicValueCapture::Redis {
+                target: other,
+                database: other_database,
+                command: other_command,
+                key: crate::replay::RedisValueKeySelector::Exact { value },
+                argument_index: other_index,
+                json_pointer: other_pointer,
+            },
+        ) => {
+            target == other
+                && database == other_database
+                && command == other_command
+                && argument_index == other_index
+                && json_pointer == other_pointer
+                && key.matches(value.as_bytes())
+        }
+        // Discovery always records an exact key; a pattern is not a concrete witness.
+        (DynamicValueCapture::Redis { .. }, DynamicValueCapture::Redis { .. }) => false,
+        (
             DynamicValueCapture::Http {
                 target,
                 method,

@@ -120,7 +120,7 @@ impl DynamicValues {
                     },
                     database,
                     command: command.into(),
-                    key: key.into(),
+                    key: crate::replay::RedisValueKeySelector::Exact { value: key.into() },
                     argument_index: index,
                     json_pointer: pointer,
                 },

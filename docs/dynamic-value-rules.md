@@ -37,7 +37,7 @@ Choose one of these capture locations:
   `value_index` is zero-based among its placeholders. An optional `json_pointer`
   selects a string inside the selected SQL value. Text queries and prepared
   string parameters use the same capture contract.
-- **Redis**: select a `SET` or `HSET` value, an exact key and database. The index
+- **Redis**: select a `SET` or `HSET` value, a key selector and database. The index
   is zero-based among arguments after the command: `SET` value is index 1;
   `HSET` values are even indices starting at 2. An optional JSON pointer selects
   a string inside that value. Other arguments and options remain checked.
@@ -63,6 +63,32 @@ capture:
   path: /items
   json_pointer: /name
 ```
+
+Redis `capture.key` shares the existing Redis key selector syntax. A string
+keeps exact matching; an object selects a prefix, suffix or both. Set
+`numeric: true` to require a nonempty ASCII-digit middle between those affixes:
+
+```yaml
+key: identity:current                         # exact, unchanged syntax
+key: {prefix: 'identity:'}                    # prefix
+key: {suffix: ':current'}                    # suffix
+key: {prefix: 'identity:', suffix: ':current', numeric: true}
+```
+
+For task-owned keys, `key: {prefix: 'task:', numeric: true}` selects the family
+`task:<id>`. Selection does not exempt the ID: each source/target capture must
+have identical complete key bytes, even when both keys match the pattern.
+Capture keys are not rewritten during value normalization. Full keys are
+bounded to 1024 bytes. Plain strings do not interpret `*`, and arbitrary regex
+selectors are unsupported. Overlapping key selectors cannot own the same
+argument/JSON capture location in overlapping API scopes; request-contract
+overlap checks use the same selector semantics.
+
+Discovery continues to publish an exact key in each capture witness; it never
+infers a prefix from similar keys. A proposed pattern must cover a concrete
+same-case immutable witness, and source evidence must justify the selected
+family. Binding consistency, the 256-identity limit and reference behavior stay
+case-local to the rule across its selected keys.
 
 No format declaration is required. Values must be nonempty UTF-8 strings of at
 most 1024 bytes. Structured JSON requires an explicit pointer to a string;

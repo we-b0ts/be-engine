@@ -95,6 +95,9 @@ dependency.
 For a generated identity reused across SQL/JSON and Redis key segments, use
 [`dependency_rules` with `kind: dynamic_value`](../../../../../docs/dynamic-value-rules.md): one MySQL, Redis SET/HSET or HTTP JSON capture,
 exact allowed host/port endpoints, source proof, and optional UUID format.
+Redis capture keys accept the shared exact/prefix/suffix/numeric selectors;
+source and target complete capture keys remain equal. Discovery retains exact
+key witnesses; source review justifies any broader selector.
 References correlate automatically within the case after capture; ordinary
 values, finite calls and ownership stay strict. Dirty MySQL evidence and
 Redis/HTTP capture witnesses offer hints; the coordinator uses `rule plan --dynamic-value` / apply and

@@ -87,7 +87,7 @@ pub(in crate::replay::policy) fn validate(
                         .is_some_and(|h| h.eq_ignore_ascii_case(&target.host))
                         && rule.target.port == Some(target.port)
                         && a.database == *database
-                        && a.key.matches(key.as_bytes())
+                        && a.key.overlaps(key)
                         && a.commands.iter().any(|c| c.command == *command)
                 }
                 (
