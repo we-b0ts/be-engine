@@ -86,12 +86,13 @@ is unclear.
 - `bin/backend-rewrite/` owns the AI-facing coordinator CLI bootstrap only.
 - `bin/backend-rewrite-admin/` owns explicit administrator repair CLI bootstrap
   only; administrator behavior remains in the library owner for that contract.
-- `bin/recording-online/` owns the optional standalone online CLI bootstrap.
-  `online_recording/options` adapts optional project Recorder configuration and
-  source traffic policy to online listeners, mounts and unrestricted HTTP admission;
-  `online_recording/proxy` owns reservation validation, forwarding
-  and completion, while its parent owns Source/Recorder supervision and address
-  heartbeat scheduling. Redis lease primitives stay in the gateway SDK.
+- `record_service` owns the standalone Source/Recorder supervision and recording
+  lifecycle. Its `options` child projects optional Recorder configuration while
+  retaining HTTP rules; `coordination` owns optional Redis discovery/leases;
+  `proxy` owns direct or reservation-aware request forwarding and completion;
+  `source` owns fixed-identity process startup, trust, isolation and cleanup.
+  Redis primitives stay in the gateway SDK. CLI bootstrap initializes encryption
+  before starting Tokio threads. There is one public Source recording command.
 - `local_interception` owns reusable fixed-identity firewall setup/cleanup and
   diagnostics; CLI entry points delegate to it. `command_output` owns shared
   broken-pipe-safe diagnostic output for those library and CLI callers.
@@ -177,13 +178,6 @@ is unclear.
   `environment` owns shared target-environment name filtering. Container
   capture normalizes effective image launch configuration into its committed
   image, so downstream runtimes do not branch on provider type.
-- `source_recording` owns Docker-free co-located Source and Recorder process
-  orchestration, fixed-identity Source startup, source trust projection,
-  readiness ordering, signals, finalization ordering, and cleanup. Recorder
-  listeners, interception, protocol capture, and persistence remain in their
-  existing owners.
-  Its `process` child owns shared fixed-identity process startup, trust projection,
-  isolation checks, and process-group cleanup for project and online entry points.
 - `startup` owns the source-compatible target startup declaration,
   initialization-owned target-mount snapshot lifecycle, and merged source plus
   override Docker environment projection. Its `snapshot` child copies declared
@@ -210,7 +204,7 @@ is unclear.
   stable host-location projection for retained, run-scoped writable output
   mounts. `target_container/runtime_outputs.rs` prepares Replay-owned host
   directories, while `platform/runtime_outputs.rs` projects the same validated
-  contract into managed Record source and Comparison source/target runtimes.
+  contract into diagnostic-preflight source and Comparison source/target runtimes.
   Runtime outputs are never startup inputs or image build inputs.
 - `target_container/build.rs` owns target Dockerfile validation, projection of
   configured managed directories into BuildKit named contexts, Docker build
@@ -219,7 +213,7 @@ is unclear.
   stale-agent recovery, default-identity loading, and projection of that exact
   socket into BuildKit. It never owns or persists private-key material.
 - `rewrite` owns migration sequencing, the single coordinator state with
-  API-scoped AI work slices, the serialized recording/Replay/comparison runtime
+  API-scoped AI work slices, the serialized Replay/comparison verification
   lease, bounded action/evidence projection, rule routing, and the whole-target
   completion gate. It consumes public traffic operations and must not move
   rewrite state or completion semantics into Recorder, Replay, comparison, or
@@ -250,7 +244,9 @@ is unclear.
   admission after successful verification-rule application; it does not own
   worker delivery or bypass quality gates. `fingerprint/engine.rs` caches the executable digest
   within a process and invalidates it when the file identity changes.
-  `recording.rs` owns managed recording execution.
+  `recording.rs` owns invalidation for externally produced recording evidence.
+  `recording_input` binds completed conventional batches; `recording_action`
+  observes external publication without owning its process or allocating IDs.
   `execution.rs` owns detached Next and legacy quality-receipt operations, completion, failure, and
   recovery without moving verification semantics out of their existing owners.
   `expert.rs` owns assistance for the last unfinished API with a running
@@ -299,9 +295,9 @@ is unclear.
   transaction, action contract, or inventory transition.
   `purpose` owns the read-only `pr_base` purpose boundary for status/next and
   direct worker/traffic dispatch. `regression` owns authorized purpose entry,
-  automatic work-branch creation, old-round archival through `store`, and fresh
-  recording/Replay initialization. `initialization` owns construction of a new
-  recording workflow, shared by ordinary advance and purpose entry. Entry requires
+  automatic work-branch creation, old-round archival through `store`, external
+  recording adoption and Replay initialization. `initialization` owns construction
+  of a new rewrite workflow, shared by ordinary advance and purpose entry. Entry requires
   an actual current-coordinator runtime query declaring zero active child sessions;
   this is independent of engine bindings and historical sessions. Old-worker
   cleanup is not an entry prerequisite. Each API can bind once in the new workflow;

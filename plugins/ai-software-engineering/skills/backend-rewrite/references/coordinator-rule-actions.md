@@ -107,13 +107,13 @@ successful route returns the ordinary recorder-capture plan report and does not
 enter `system_repair_required`.
 
 Execute the exact returned apply argv. Apply is immediate, add-only, atomic,
-and stale-safe. If serialized recording, Replay, or comparison is live, inspect
+and stale-safe. If serialized Replay or comparison verification is live, inspect
 `status` and wait before retrying. A successful apply reports
 `recording_refresh_pending=true`, lists waiting APIs, and returns either another
-API's next command or the consolidated full-scope recording action. For a
+API's next command or the consolidated external recording requirement. For a
 scoped waiting API, poll current `status`; never execute its stale acceptance.
 
-Do not follow capture apply with `recording request`. Continue runnable work and
+After capture apply, continue runnable work and
 read [coordinator-recording.md](coordinator-recording.md) when the engine
 returns the consolidated refresh.
 
@@ -287,11 +287,11 @@ residual case-scoped dirty evidence remains in repair. Apply returns `next`.
 Redis rules that additionally require reusable snapshot seeds first try to
 derive them from complete, consistent immutable bootstrap evidence. If that
 derivation fails, `cache_snapshot_overlay` explicitly reports
-`recording_required=true` with the reason, and the engine schedules its
-recording refresh to obtain snapshot evidence that the existing recording cannot
+`recording_required=true` with the reason, and the engine waits for a newer
+external batch containing snapshot evidence that the existing recording cannot
 safely provide. MySQL ownership reclassification does not require Redis snapshot
-seeds. Follow the returned action in either case, without manually requesting a
-recording.
+seeds. Follow the returned action and the
+[external recording requirement](coordinator-recording.md).
 
 On resume, `next` may repair a finalized attempt whose derived dependency view
 is already clean but whose persisted failure retains an obsolete strict

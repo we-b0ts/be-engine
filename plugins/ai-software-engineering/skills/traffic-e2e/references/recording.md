@@ -1,116 +1,73 @@
-# Managed Recording
+# Standalone Source Recording
 
-Use traffic-e2e-owned lifecycle commands. Always pass a unique UTC run ID, a
-positive duration, and the narrow repeatable API scope. Retain the exact
-finalized manifest returned by the command; never select a run by recency.
-
-## Command
+Use the single `traffic-e2e record` command inside the prepared Source environment:
 
 ```bash
-traffic-e2e record --target-root <target> \
-  --run-id <YYYYMMDDHHMMSS> --duration-seconds 60 \
-  --api '<METHOD path>'
+traffic-e2e record --config /etc/traffic-e2e/project.yaml \
+  --source-workdir /app --data-root /data/traffic-e2e \
+  -- <source-command> [args...]
 ```
 
-For a short-lived recording performed directly in an existing host or
-container environment, without Docker lifecycle management, start Source
-through traffic-e2e:
+Project configuration is optional. Preserve configured HTTP include/exclude
+rules; their default admits all methods and paths. Ingress selects API traffic.
+There is no per-run API selector. Source runs as 998:998; the controller owns
+interception, trust, readiness, shutdown and finalization.
+
+## Deployment
+
+The project owns `Docker.recording`. Build it from the real Source image, install
+the engine and its interception tools (`setpriv`, `iptables`, `ip`, and CA
+certificates), and use `traffic-e2e record` as the container entrypoint. The
+controller runs as root and starts the real foreground Source command as 998:998.
+Its deployment caller owns image builds, container startup, ports and mounts;
+record does not build images or manage Docker. A typical deployment is:
 
 ```bash
-traffic-e2e record-source --target-root <target> \
-  --run-id <YYYYMMDDHHMMSS> --duration-seconds 60 \
-  --api '<METHOD path>' -- <source-command> [args...]
+docker build -f Docker.recording -t source-recording .
+docker run --rm --cap-add NET_ADMIN --cap-add NET_RAW \
+  -p 4080:4080 -v /absolute/recording-data:/data/traffic-e2e \
+  source-recording --data-root /data/traffic-e2e --source-workdir /app \
+  -- <source-command> [args...]
 ```
 
-`record-source` starts Recorder listeners first, then launches Source as the
-fixed numeric identity `998:998` in the current network namespace. Source must
-listen on the configured `http_gateway.matched_upstream` port, which must be
-different from the recording gateway listen port. The command projects the
-Recorder CA through common SDK trust variables and a Java truststore when
-`keytool` is available. It stops Source after Recorder finalization and does
-not provide post-recording passthrough. Omit `--api` to retain the configured
-full recording scope for the complete duration.
+Keep Source's real business configuration. Mount project Recorder configuration
+and its referenced source traffic policy when needed. The default HTTP include
+rule covers all methods and paths; existing exclusions still apply. Keep
+Source and Recorder on separate loopback ports in the container namespace.
+For a host bind mount, set `TRAFFIC_E2E_ARTIFACT_OWNER` to the host user's numeric
+UID:GID so completed evidence remains privately readable by that user.
 
-This mode requires root or non-interactive sudo, `setpriv`, and the same
-network capabilities required by local interception. It writes only to
-`<target>/.traffic-e2e/local/artifacts/recordings/<run-id>` and rejects legacy
-or custom artifact roots so backend-rewrite can consume the run directly.
+## Coordination And Completion
 
-Project config supplies the ignored initialization-owned source snapshot and
-the configured startup inputs. traffic-e2e selects the runtime internally and
-owns the adapted source, Recorder, readiness, finalization,
-signals, and cleanup. It builds the capture-only source adaptor from the exact
-snapshotted image. Do not generate or invoke repository recording wrappers.
+Without coordination, wait for direct HTTP requests. With `--coordination redis`,
+provide a reachable `--advertise-url` and explicit coordination Redis URL through
+`TRAFFIC_E2E_RECORDING_REDIS_URL`. Never infer coordination from Source REDIS_URL.
+The address is registered after readiness; reservations are released after case
+finalization. One local slot remains mandatory in both modes.
 
-The engine does not provision a Breeze sidecar or install Java class patches.
-Application-specific source adaptation belongs to the reviewed recording
-Dockerfile and explicit startup inputs. SDK and response rewrite policies are
-independent of that startup contract.
+One process creates one run. `--run-id` is optional; record generates and reserves
+its own UTC identity. Stop normally and retain the exact finalized manifest.
+Never select or edit a running or failed recording to make verification pass.
 
-The managed runtime retains a target-scoped adaptor image. Every managed run
-loads the immutable image ID, effective environment, command, security
-settings, and supported mounts from `.traffic-e2e/local/source/`; it never
-reconnects to the initialization Pod. A missing adaptor or one labeled for
-another source image or build-contract revision triggers a build/refresh.
-Run-private build state and the temporary exact-image alias are removed during
-cleanup. Do not retag or substitute the adaptor image.
+Persist the data root. Recordings live under
+`<data-root>/.traffic-e2e/local/artifacts/recordings/<run-id>/`; encrypted headers
+require private access to the persistent `.traffic-e2e/local/secrets` key.
+Source and Target must never read private recording evidence or key material.
 
-The fixed adapter may only establish Platform transport interception. It must
-not alter source business code, caches, feature switches, or response behavior.
+## Rewrite Handoff
 
-Use `--per-api-case-limit` only as an invocation-local per-pattern bound. Do not edit recorder
-scope for a temporary API selection. With explicit `--api` selectors, the
-duration is an upper bound: Recorder finalizes normally when every selected API
-reaches the bound. Without `--api`, Recorder observes the complete duration so
-low-frequency APIs can still be discovered.
+Expose the entire completed batch under the initialized target's
+`.traffic-e2e/local/artifacts/recordings/<run-id>/`. Make its matching encryption
+key privately available at `.traffic-e2e/local/secrets/traffic-e2e-enc.sec`;
+preserve restrictive permissions and do not replace a different existing key.
+Replay does not need the recording CA private key. No import command is needed.
 
-HTTP and Motan primary requests share one process-wide active-case slot. Only
-one case across both protocols may own process dependencies at a time; an
-overlapping matched request follows its gateway's configured non-admitted
-response path and does not create another case.
+`backend-rewrite next` consumes this evidence. Optional `recording_run_id` in
+local `.traffic-e2e/regression.yaml` pins the batch; otherwise the engine discovers
+completed evidence and retains its identity. Missing or rejected evidence returns
+`input_required`. Capture-policy refresh requires a newer external batch;
+recordings already present when refresh begins cannot satisfy it. The caller
+supplies completed comparison evidence separately when its gate is required.
 
-A matched HTTP gateway timeout returns 504 while retaining that slot and the
-Source HTTP operation. Recorder resets its open dependency connections once,
-waits for Source completion, then drains dependencies through a quiet interval.
-The failed case retains recovery diagnostics in `timeout-recovery.json`. Shared
-pool connections, including those carrying process-owned queries, are reset when
-their exclusive ownership cannot be established. An unconfirmed Source completion
-or incomplete recovery stops new case admission for the run. Remove incorrectly
-classified request-owned background rules and record new evidence; never use
-process-owned rules to hide late traffic from a timed-out request.
-
-When request-header encryption is configured, managed operations create and
-reuse the mode-0600 project key at
-`.traffic-e2e/local/secrets/traffic-e2e-enc.sec`; the AI does not provide it.
-An explicit `TRAFFIC_E2E_ENCRYPTION_KEY_B64` is accepted only to initialize an
-absent managed key and must decode to exactly 32 bytes. Never print or commit
-the key, or inject it into source, target, commands, or policy.
-
-## Recorder Rules
-
-Change Recorder behavior only through supported evidence-gated commands such
-as `traffic-e2e config recorder plan|apply`. Use Breeze resource capture only
-after tracing a response-driving source hostname to a unique snapshot
-descriptor. Use background attribution only after proving process ownership
-and response causality. Every applied Recorder rule requires a new recording.
-
-HTTP JSON responses that publish later IP URLs can use `http_response_rewrite`
-rules with request authority/method/path and JSON `pointers`. No per-service
-plugin is needed. In backend rewrite workflows, use the coordinator's
-`unrecorded-ip` preflight and returned `recorder-capture plan-http-response`
-command with source consumption proof. Apply requires fresh recording; never
-patch old JSONL. Standard recording does not install Replay's outbound REJECT
-policy, so rejection counters do not detect successful direct-IP recording
-bypasses.
-
-## Acceptance
-
-Trust the finalized recording manifest and command exit status. A valid run is
-completed, contains no failed cases/errors, and publishes canonical requests,
-expected responses, semantic dependencies, and summaries for selected cases.
-An empty semantic dependency stream can be valid explicit evidence; missing,
-partial, truncated, unsafe, or failed artifacts are not.
-
-Do not inspect every case or large report. Use `prepare` and managed E2E to
-consume finalized cases. Use protocol/debug artifacts only for a proven
-traffic-e2e system investigation.
+Recorder policy changes use supported plan/apply commands and require new capture.
+Old JSONL is immutable. Backend rewrite only consumes completed external batches.

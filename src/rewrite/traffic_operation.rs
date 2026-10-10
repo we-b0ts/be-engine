@@ -26,7 +26,6 @@ pub(super) struct TrafficOperationMarker {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum TrafficOperationKind {
-    Recording,
     Replay,
     Comparison,
 }
@@ -34,7 +33,6 @@ pub(super) enum TrafficOperationKind {
 impl From<TrafficOperationKind> for RewriteTrafficOperationKind {
     fn from(value: TrafficOperationKind) -> Self {
         match value {
-            TrafficOperationKind::Recording => Self::Recording,
             TrafficOperationKind::Replay => Self::Replay,
             TrafficOperationKind::Comparison => Self::Comparison,
         }
@@ -149,7 +147,6 @@ pub(super) fn clear_stale(target_root: &Path) -> Result<bool> {
 
 fn kind_label(kind: TrafficOperationKind) -> &'static str {
     match kind {
-        TrafficOperationKind::Recording => "recording",
         TrafficOperationKind::Replay => "replay",
         TrafficOperationKind::Comparison => "comparison",
     }
@@ -215,10 +212,6 @@ fn clear(target_root: &Path, operation_id: &str) -> Result<bool> {
     Ok(true)
 }
 
-pub(super) fn clear_owned(target_root: &Path, operation_id: &str) -> Result<bool> {
-    clear(target_root, operation_id)
-}
-
 fn load(target_root: &Path) -> Result<Option<TrafficOperationMarker>> {
     let path = marker_path(target_root);
     let bytes = match fs::read(&path) {
@@ -252,12 +245,6 @@ pub(super) struct TrafficOperationGuard {
     target_root: PathBuf,
     operation_id: String,
     armed: bool,
-}
-
-impl TrafficOperationGuard {
-    pub(super) fn disarm(mut self) {
-        self.armed = false;
-    }
 }
 
 impl Drop for TrafficOperationGuard {
@@ -314,7 +301,7 @@ mod tests {
         );
 
         let mut workflow_owner = active;
-        workflow_owner.kind = TrafficOperationKind::Recording;
+        workflow_owner.kind = TrafficOperationKind::Comparison;
         workflow_owner.api = None;
         let action = wait_action(
             target.path(),

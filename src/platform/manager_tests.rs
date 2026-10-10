@@ -4,15 +4,8 @@ use super::*;
 
 #[test]
 fn comparison_skips_the_probe_that_releases_its_listener() {
-    assert!(
-        ManagedRuntimeOperation::Recording(ManagedRecordingOperation::Record)
-            .requires_listener_preflight()
-    );
     assert!(ManagedRuntimeOperation::Preflight.requires_listener_preflight());
-    assert!(
-        !ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
-            .requires_listener_preflight()
-    );
+    assert!(!ManagedRuntimeOperation::Comparison.requires_listener_preflight());
 }
 
 #[test]

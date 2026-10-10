@@ -1,21 +1,17 @@
 use std::net::SocketAddr;
-use std::num::NonZeroU64;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::{Args, Subcommand};
+use clap::Args;
 use serde::Serialize;
 use traffic_e2e::{
     ContainerSourceOptions, DEFAULT_HTTP_BACKEND_PORT, DEFAULT_HTTP_GATEWAY_PORT,
-    KubernetesSourceOptions, ManagedRecordingPreflightOptions, RepositoryConfigInitOptions,
-    RepositoryConfigInitResult, SourceOptions, SourceSnapshotReport, StartupSnapshotReport,
-    initialize_repository_config, run_managed_recording_preflight,
+    KubernetesSourceOptions, RepositoryConfigInitOptions, RepositoryConfigInitResult,
+    SourceOptions, SourceSnapshotReport, StartupSnapshotReport, initialize_repository_config,
 };
 
 #[derive(Debug, Args)]
 pub(super) struct ProjectInitArgs {
-    #[command(subcommand)]
-    pub(super) command: Option<ProjectInitCommand>,
     /// Running Kubernetes Pod whose application container is snapshotted during initialization.
     #[arg(long, requires = "namespace", conflicts_with = "source_container")]
     source_pod: Option<String>,
@@ -64,19 +60,6 @@ pub(super) struct ProjectInitArgs {
     env_file: Option<PathBuf>,
 }
 
-#[derive(Debug, Subcommand)]
-pub(super) enum ProjectInitCommand {
-    /// Validate the target container and source recording environment without advancing state.
-    Preflight(ProjectPreflightArgs),
-}
-
-#[derive(Debug, Args)]
-pub(super) struct ProjectPreflightArgs {
-    /// Keep the disposable recording window open for at most this many seconds.
-    #[arg(long, default_value = "60")]
-    duration_seconds: NonZeroU64,
-}
-
 #[derive(Debug, Serialize)]
 struct ProjectInitReport {
     generated: Vec<PathBuf>,
@@ -97,47 +80,7 @@ struct ProjectInitReport {
     preflight_command: &'static str,
 }
 
-#[derive(Debug, Serialize)]
-struct ProjectPreflightFailureReport {
-    status: &'static str,
-    failure: ProjectPreflightFailure,
-    managed_by: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-struct ProjectPreflightFailure {
-    stage: &'static str,
-    reason: String,
-}
-
 pub(super) async fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: bool) -> Result<()> {
-    if let Some(command) = args.command {
-        return match command {
-            ProjectInitCommand::Preflight(args) => {
-                let result = run_managed_recording_preflight(ManagedRecordingPreflightOptions {
-                    target_root,
-                    duration_seconds: args.duration_seconds,
-                })
-                .await;
-                match result {
-                    Ok(result) => super::print_json(&result, pretty),
-                    Err(error) => {
-                        let reason = bounded_failure_reason(format!("{error:#}"));
-                        let stage = preflight_failure_stage(&reason);
-                        super::print_json(
-                            &ProjectPreflightFailureReport {
-                                status: "failed",
-                                failure: ProjectPreflightFailure { stage, reason },
-                                managed_by: "traffic-e2e",
-                            },
-                            pretty,
-                        )?;
-                        Err(error)
-                    }
-                }
-            }
-        };
-    }
     let source = match args.source_container {
         Some(container) => SourceOptions::Container(ContainerSourceOptions { container }),
         None => SourceOptions::Kubernetes(KubernetesSourceOptions {
@@ -159,33 +102,6 @@ pub(super) async fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: boo
         env_file: args.env_file,
     })?;
     super::print_json(&ProjectInitReport::from(result), pretty)
-}
-
-fn bounded_failure_reason(mut reason: String) -> String {
-    const MAX_BYTES: usize = 2_048;
-    if reason.len() <= MAX_BYTES {
-        return reason;
-    }
-    let suffix = "… [truncated]";
-    let mut end = MAX_BYTES - suffix.len();
-    while !reason.is_char_boundary(end) {
-        end -= 1;
-    }
-    reason.truncate(end);
-    reason.push_str(suffix);
-    reason
-}
-
-fn preflight_failure_stage(reason: &str) -> &'static str {
-    if reason.contains("target_image preflight failed") {
-        "target_image"
-    } else if reason.contains("replay_network preflight failed") {
-        "replay_network"
-    } else if reason.contains("target_runtime preflight failed") {
-        "target_runtime"
-    } else {
-        "recording"
-    }
 }
 
 impl From<RepositoryConfigInitResult> for ProjectInitReport {
@@ -213,8 +129,6 @@ impl From<RepositoryConfigInitResult> for ProjectInitReport {
 
 #[cfg(test)]
 mod tests {
-    use super::preflight_failure_stage;
-
     #[test]
     fn init_accepts_a_container_and_rejects_mixed_providers() {
         use clap::Parser;
@@ -234,25 +148,5 @@ mod tests {
             argv.extend(args);
             assert!(super::super::Cli::try_parse_from(argv).is_err());
         }
-    }
-
-    #[test]
-    fn classifies_preflight_failure_stages() {
-        assert_eq!(
-            preflight_failure_stage("target_image preflight failed: build failed"),
-            "target_image"
-        );
-        assert_eq!(
-            preflight_failure_stage("replay_network preflight failed: DNS leaked"),
-            "replay_network"
-        );
-        assert_eq!(
-            preflight_failure_stage("target_runtime preflight failed: readiness timed out"),
-            "target_runtime"
-        );
-        assert_eq!(
-            preflight_failure_stage("source adaptor did not become ready"),
-            "recording"
-        );
     }
 }

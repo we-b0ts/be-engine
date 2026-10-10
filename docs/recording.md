@@ -1,57 +1,54 @@
-# Standalone online recording
+# Standalone Source recording
 
-`recording-online` is an optional, independent application over `traffic_e2e`.
-It starts a co-located Source as UID/GID 998, starts Recorder, and registers a
+`traffic-e2e record` is the single standalone Source recording service.
+It starts a co-located Source as UID/GID 998, starts Recorder, and optionally registers a
 reachable HTTP address in coordination Redis after readiness and the existing
 post-ready settle window. Optional `--config PATH` / `TRAFFIC_E2E_PROJECT_CONFIG`
 reuses the Recorder section of `project.yaml` and its source traffic policy.
-The app does not inspect Git or start the rewrite coordinator. Gateway route
-configuration selects traffic; all methods and paths arriving with valid admission
-are eligible.
+The app does not inspect Git or start the rewrite coordinator. Ingress selects API traffic. Recorder preserves the configured HTTP include/exclude
+rules; their default permits all methods and paths.
 An optional `--source-traffic-policy PATH` /
 `TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY` applies the existing source traffic policy
 overlay at startup, including HTTP case patterns, allowed unused HTTP hosts,
-HTTP response rewrites and process-owned dependency rules. This does not filter
-inbound methods or paths. An explicit policy overrides the project's policy reference
+HTTP response rewrites and process-owned dependency rules. HTTP include/exclude rules continue to apply. An explicit policy overrides the project's policy reference
 and is applied once. Without project configuration or a policy, HTTP cases use literal URI paths.
 
-Build with the opt-in feature. The gateway SDK uses published
+Build the normal engine binary. The gateway SDK uses published
 `brz-http-gateway = 0.1.6`; Redis uses published `brz-redis`.
 
 ```bash
-cargo build --locked --release --features online-recording --bin recording-online
-cargo test --locked --features online-recording
-cargo clippy --locked --all-targets --features online-recording -- -D warnings
+cargo build --locked --release --bin traffic-e2e
+cargo test --locked
+cargo clippy --locked --all-targets -- -D warnings
 ```
 
 Run in an isolated container network namespace, with a root controller and
-`NET_ADMIN`/`NET_RAW` for fixed-identity dependency interception. The online
+`NET_ADMIN`/`NET_RAW` for fixed-identity dependency interception. The recording
 container's Source must use the same business configuration as the original
 service. Example environment and command (provide the Redis URL securely):
 
 ```bash
-export TRAFFIC_E2E_ONLINE_URL=http://recorder-host:4080
+export TRAFFIC_E2E_RECORD_URL=http://recorder-host:4080
 export TRAFFIC_E2E_RECORDING_PREFIX=recording:orders
 export TRAFFIC_E2E_RECORDING_SCOPE=all-apis
 export TRAFFIC_E2E_RECORDING_REDIS_URL=redis://redis-host:6379/0
-recording-online --source-workdir /app --ready-path /health \
+traffic-e2e record --coordination redis --source-workdir /app --ready-path /health \
   -- python -m uvicorn app.main:app --host 127.0.0.1 --port 8080 --workers 1
 ```
 
 Default flow is gateway → public adapter `:4080` → Recorder `127.0.0.1:4081` →
 Source `127.0.0.1:8080`. Recorder and Source listeners must use different
-loopback ports. `--advertise-url` / `TRAFFIC_E2E_ONLINE_URL` is required and
+loopback ports. With Redis coordination, `--advertise-url` / `TRAFFIC_E2E_RECORD_URL` is required and
 must be the HTTP origin reachable by gateways, including any Docker port mapping.
 
 The existing per-API case limit remains enabled. With project configuration,
 Recorder settings, including limits, redaction, dependency timing, DNS strategies,
-and post-ready observation, are reused. HTTP include/exclude rules are cleared
-to admit every valid gateway request. Online deployment still supplies its
+and post-ready observation, are reused. HTTP include/exclude rules are retained exactly as configured. The standalone service still supplies its
 internal listener, Source origin, fixed 404 fallback and persistent mount paths;
 explicit readiness, request-timeout and case-limit options override project values.
 The project setting `recorder.http_gateway.record_streaming` is also retained;
 there is no separate CLI override. Its default is `false`. With `false`, any
-request whose `Accept` includes `text/event-stream` returns the online fixed
+request whose `Accept` includes `text/event-stream` returns the fixed
 404 before Source dispatch, including mixed JSON/SSE MCP requests. The adapter
 releases the reservation on this response, allowing the gateway to use its
 original path. See [SSE recording selection](http-sse.md).
@@ -63,12 +60,14 @@ original path. There is no duration limit; SIGTERM/SIGINT ends the session.
 
 | Parameter / environment | Default | Purpose |
 | --- | --- | --- |
+| `--coordination` / `TRAFFIC_E2E_RECORDING_COORDINATION` | unset | Optional `redis` discovery and reservation coordination |
+| `--run-id` | generated UTC ID | One immutable recording run per process |
 | `--config` / `TRAFFIC_E2E_PROJECT_CONFIG` | unset | Read-only project YAML; reuses Recorder configuration and policy, without target or rewrite orchestration |
-| `--listen` / `TRAFFIC_E2E_ONLINE_LISTEN` | `0.0.0.0:4080` | Public adapter |
+| `--listen` / `TRAFFIC_E2E_RECORD_LISTEN` | `0.0.0.0:4080` | Public adapter |
 | `--recorder-listen` / `TRAFFIC_E2E_RECORDER_LISTEN` | `127.0.0.1:4081` | Internal Recorder |
 | `--source-origin` / `TRAFFIC_E2E_SOURCE_ORIGIN` | `http://127.0.0.1:8080` | Source origin |
 | `--ready-path` / `TRAFFIC_E2E_SOURCE_READY_PATH` | project value or `/` | Override Source readiness path |
-| `--redis-url` / `TRAFFIC_E2E_RECORDING_REDIS_URL` | exported `REDIS_URL` | Coordination Redis; supports password/default user and DB |
+| `--redis-url` / `TRAFFIC_E2E_RECORDING_REDIS_URL` | required with Redis coordination | Coordination Redis; supports password/default user and DB |
 | `--prefix` / `TRAFFIC_E2E_RECORDING_PREFIX` | `recording` | Shared coordination prefix |
 | `--scope` / `TRAFFIC_E2E_RECORDING_SCOPE` | `all-apis` | One shared request slot |
 | `--url-key` / `TRAFFIC_E2E_RECORDING_URL_KEY` | `<prefix>:url` | Address lease key |
@@ -116,6 +115,31 @@ releases admission after finalization. See [bounded SSE support](http-sse.md)
 for the recording/replay contract. HTTP upgrade and indefinite streaming sessions
 are not supported. The existing body capture limit bounds request buffering;
 oversized input is rejected before Source dispatch.
+
+## Direct standby and run identity
+
+Without `--coordination`, the service waits for direct HTTP requests after Source
+readiness. It never connects to Redis and requests need no reservation headers.
+The same local single-request slot, body limits, recording rules and finalization
+apply. Source's business `REDIS_URL` does not enable recording coordination.
+
+```bash
+traffic-e2e record --data-root /data/traffic-e2e --source-workdir /app \
+  -- python -m uvicorn app.main:app --host 127.0.0.1 --port 8080
+```
+
+Each process creates one run. `--run-id YYYYMMDDHHMMSS` is optional; the default
+uses UTC and atomically retries directory collisions. An explicit existing ID
+fails without overwriting its evidence. Ready logs include run ID and manifest
+path. SIGTERM/SIGINT withdraws admission, drains requests and finalizes the run;
+only completed runs are suitable for rewrite. Failed capture returns a nonzero
+exit status. There is no separate start command or per-invocation API selector.
+
+The project owns its `Docker.recording`, using the example in
+[`docker/record/Dockerfile.example`](../docker/record/Dockerfile.example).
+Build and container lifecycle belong to the deployment caller. The controller
+runs as root for interception and launches Source as 998:998; pass exit signals
+to the controller. Persist the entire data root, including private keys.
 
 ## Redis lifecycle
 
@@ -179,3 +203,26 @@ For a host bind mount, pass the invoking host user's numeric UID:GID as
 root and Source stays UID/GID 998. Private storage retains restrictive permissions;
 normal finalization recursively assigns the completed run to the configured host
 user. The reserved Source UID cannot own recording artifacts.
+
+## Rewrite handoff
+
+Expose the finalized recording tree under the target's conventional
+`.traffic-e2e/local/artifacts/recordings/<run-id>/`, with its key accessible
+privately at `.traffic-e2e/local/secrets/traffic-e2e-enc.sec` when encryption is
+used. Do not expose secrets or expected responses to Target. Replay does not
+need the recording CA private key.
+
+`backend-rewrite next` consumes existing completed batches directly; it does not
+start recording, allocate recording IDs, restart Source, or recover recording
+containers. The selected batch stays fixed across failed Replay attempts.
+For deterministic selection, set `recording_run_id` in the existing local
+`.traffic-e2e/regression.yaml`. Without a pin, initial discovery selects an
+available completed batch with a usable scope; subsequent runs keep that identity.
+A new capture contract requires an externally produced newer batch; batches
+already present when refresh begins cannot satisfy it. Never edit
+old recordings to satisfy the new contract.
+
+When `require_comparison: true`, place completed comparison evidence under
+`.traffic-e2e/local/artifacts/comparison-recordings/<run-id>/` and select
+`comparison_run_id` in the same local file. Missing evidence remains an input
+requirement and does not disable the comparison gate.

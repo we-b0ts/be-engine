@@ -64,11 +64,9 @@ http_response_rewrite:
     path
 }
 
-pub(super) fn options(path: &std::path::Path) -> OnlineRecordingOptions {
+pub(super) fn options(path: &std::path::Path) -> RecordOptions {
     OptionsCli::try_parse_from([
-        "recording-online".as_ref(),
-        "--advertise-url".as_ref(),
-        "http://127.0.0.1:4080".as_ref(),
+        "traffic-e2e record".as_ref(),
         "--config".as_ref(),
         path.as_os_str(),
         "--".as_ref(),
@@ -111,8 +109,8 @@ fn project_recording_settings_and_policy_survive_online_routing() {
         ["/api/teams/*/skills"]
     );
     assert_eq!(config.http_response_rewrite.rules.len(), 1);
-    assert!(config.http_gateway.rules.is_empty());
-    assert!(config.http_gateway.exclude_rules.is_empty());
+    assert_eq!(config.http_gateway.rules.len(), 1);
+    assert_eq!(config.http_gateway.exclude_rules.len(), 1);
     assert!(matches!(
         crate::gateway::http::rules::evaluate_request(
             &config.http_gateway.exclude_rules,
@@ -121,7 +119,7 @@ fn project_recording_settings_and_policy_survive_online_routing() {
             &"/api/teams/123/skills".parse().unwrap(),
             &hyper::HeaderMap::new(),
         ),
-        crate::gateway::http::rules::RuleDecision::Matched(_)
+        crate::gateway::http::rules::RuleDecision::Excluded { .. }
     ));
     assert_eq!(config.http_gateway.listen, options.recorder_listen);
     assert_eq!(config.http_gateway.matched_upstream, options.source_origin);

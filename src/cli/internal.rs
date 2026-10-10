@@ -8,7 +8,7 @@ use traffic_e2e::{
     ManagedRecordingInputCompletion, ManagedRecordingInputOptions, ProcessOutputCaptureSide,
     ProcessOutputObservation, RecordingApi, capture_project_process_outputs,
     capture_project_process_outputs_for_observation, drive_managed_recording_input,
-    execute_rewrite_operation, execute_rewrite_recording_worker,
+    execute_rewrite_operation,
 };
 
 use super::{record, record_comparison};
@@ -33,11 +33,8 @@ enum InternalCommand {
     RecordingInput(RecordingInputArgs),
     /// Capture configured process-owned files before a managed container exits.
     ProcessOutputCapture(ProcessOutputCaptureArgs),
-    /// Run one detached rewrite recording action owned by the coordinator.
     #[command(hide = true)]
-    RewriteRecordingWorker(RewriteRecordingWorkerArgs),
-    #[command(hide = true)]
-    RewriteOperationWorker(RewriteRecordingWorkerArgs),
+    RewriteOperationWorker(RewriteOperationWorkerArgs),
 }
 
 #[derive(Debug, Args)]
@@ -62,7 +59,7 @@ struct RecordingInputArgs {
 }
 
 #[derive(Debug, Args)]
-struct RewriteRecordingWorkerArgs {
+struct RewriteOperationWorkerArgs {
     #[arg(long)]
     target_root: PathBuf,
     action_id: String,
@@ -157,11 +154,6 @@ pub(super) async fn run(args: InternalArgs) -> Result<()> {
         InternalCommand::RewriteOperationWorker(args) => {
             let report = execute_rewrite_operation(args.target_root, &args.action_id).await?;
             super::output::stdout_line(format_args!("{}", serde_json::to_string(&report)?))
-        }
-        InternalCommand::RewriteRecordingWorker(args) => {
-            let report =
-                execute_rewrite_recording_worker(args.target_root, &args.action_id).await?;
-            super::output::stdout_line(format_args!("{}", serde_json::to_string_pretty(&report)?))
         }
     }
 }

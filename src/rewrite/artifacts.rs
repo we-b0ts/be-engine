@@ -2,12 +2,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
-use chrono::{Duration, Utc};
 use serde::Deserialize;
 
 use super::inventory;
 use super::model::RewriteState;
-use crate::{ManagedRecordingOperation, RecordingApi};
+use crate::RecordingApi;
 
 const MAX_HISTORICAL_RECORDING_RUNS: usize = 256;
 
@@ -31,37 +30,6 @@ pub(super) struct RecordingStatus {
     pub(super) progress: RecordingProgress,
 }
 
-pub(super) fn allocate_run_id(
-    target_root: &Path,
-    operation: ManagedRecordingOperation,
-) -> Result<String> {
-    allocate_run_id_excluding(target_root, operation, &[])
-}
-
-pub(super) fn allocate_run_id_excluding(
-    target_root: &Path,
-    operation: ManagedRecordingOperation,
-    excluded: &[&str],
-) -> Result<String> {
-    let now = Utc::now().naive_utc();
-    for offset in 0..120 {
-        let run_id = (now + Duration::seconds(offset))
-            .format("%Y%m%d%H%M%S")
-            .to_string();
-        if excluded.contains(&run_id.as_str()) {
-            continue;
-        }
-        let run = match operation {
-            ManagedRecordingOperation::Record => recording_run(target_root, &run_id),
-            ManagedRecordingOperation::RecordComparison => comparison_run(target_root, &run_id),
-        };
-        if !run.exists() {
-            return Ok(run_id);
-        }
-    }
-    anyhow::bail!("failed to allocate a unique recording run id")
-}
-
 pub(super) fn validate_standard_recording(target_root: &Path, state: &RewriteState) -> Result<()> {
     let (_, project) = crate::e2e_run::resolve_project(target_root)?;
     validate_standard_recording_with_process_outputs(target_root, state, &project.process_outputs)
@@ -78,7 +46,7 @@ fn validate_standard_recording_with_process_outputs(
         process_outputs,
     )?;
     ensure!(
-        scope == inventory::recording_scope(state),
+        scope == inventory::recording_scope(state) || scope == state.recording_apis,
         "standard recording scope does not match requested rewrite scope"
     );
     Ok(())
@@ -542,21 +510,6 @@ struct ComparisonRecordingCounts {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn allocator_can_exclude_an_unpublished_reserved_run() {
-        let target = tempfile::tempdir().unwrap();
-        let reserved = allocate_run_id(target.path(), ManagedRecordingOperation::Record).unwrap();
-
-        let replacement = allocate_run_id_excluding(
-            target.path(),
-            ManagedRecordingOperation::Record,
-            &[&reserved],
-        )
-        .unwrap();
-
-        assert_ne!(replacement, reserved);
-    }
 
     #[test]
     fn standard_recording_publication_accepts_structured_errors() {

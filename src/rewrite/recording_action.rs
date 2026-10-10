@@ -1,141 +1,88 @@
-use std::path::Path;
-
-use anyhow::Result;
-
-use super::model::{
-    RewriteAction, RewriteCommandSpec, RewritePhase, RewriteRecordingProgress, RewriteState,
+//! Read-only observation of external recording publication.
+use super::{
+    action, artifacts,
+    model::{RewriteAction, RewritePhase, RewriteRecordingProgress, RewriteState},
 };
-use super::recording_execution::RecordingExecutionState;
-use super::{action, artifacts, fingerprint, inventory, recording, recording_execution};
+use anyhow::Result;
+use std::path::Path;
 
 pub(super) fn status_action(
     target_root: &Path,
     state: &RewriteState,
 ) -> Result<Option<RewriteAction>> {
-    let (run_id, recording_status, label) = match state.phase {
-        RewritePhase::RecordingRequired => {
-            let run_id = state.recording_run_id.as_str();
-            (
-                run_id,
-                artifacts::standard_recording_status(target_root, run_id)?,
-                "standard",
-            )
-        }
-        RewritePhase::ComparisonRecordingRequired => {
-            let run_id = state
-                .comparison_run_id
-                .as_deref()
-                .expect("comparison recording phase requires a run id");
+    let (run_id, recording_status) = match state.phase {
+        RewritePhase::RecordingRequired if !state.recording_run_id.is_empty() => (
+            state.recording_run_id.as_str(),
+            artifacts::standard_recording_status(target_root, &state.recording_run_id)?,
+        ),
+        RewritePhase::ComparisonRecordingRequired if state.comparison_run_id.is_some() => {
+            let run_id = state.comparison_run_id.as_deref().unwrap();
             (
                 run_id,
                 artifacts::comparison_recording_status(target_root, run_id)?,
-                "comparison",
             )
         }
         _ => return Ok(None),
     };
-    let publication = recording_status.publication;
-    let execution = recording_execution::state(target_root)?;
-    Ok(Some(match execution {
-        RecordingExecutionState::Live(marker) => {
-            let expected = recording_action_id(
-                state,
-                state.phase == RewritePhase::ComparisonRecordingRequired,
-            );
-            if marker.action_id != expected || marker.run_id != run_id {
-                recovery_required(
-                    target_root,
-                    "recording executor does not match the current coordinator action",
-                )
-            } else {
-                let progress = recording_status.progress;
-                RewriteAction::RecordingInProgress {
-                    summary: format!(
-                        "{label} recording run {run_id} is executing: {} APIs, {} cases published, {} cases failed",
-                        progress.apis, progress.published_cases, progress.failed_cases
-                    ),
-                    run_id: run_id.to_string(),
-                    progress: RewriteRecordingProgress {
-                        apis: progress.apis,
-                        published_cases: progress.published_cases,
-                        failed_cases: progress.failed_cases,
-                    },
-                    status_poll_after_seconds: recording::STATUS_POLL_AFTER_SECONDS,
-                    status: action::status_command(target_root),
-                }
-            }
-        }
-        RecordingExecutionState::Stale(_) => recovery_required(
-            target_root,
-            "recording executor stopped before coordinator completion",
-        ),
-        RecordingExecutionState::Absent => match publication {
-            artifacts::RecordingPublication::Finalized => RewriteAction::AdvanceRequired {
-                summary: format!(
-                    "{label} recording result for run {run_id} is finalized; advance coordinator validation"
-                ),
+    Ok(match recording_status.publication {
+        artifacts::RecordingPublication::Missing => None,
+        artifacts::RecordingPublication::Finalized
+            if state.recording_rejection.is_none() && state.comparison_rejection.is_none() =>
+        {
+            Some(RewriteAction::AdvanceRequired {
+                summary: format!("external recording {run_id} is finalized; validate its evidence"),
                 command: action::next_command_for_selected_api(target_root, state, &state.api),
-            },
-            artifacts::RecordingPublication::Running => recovery_required(
-                target_root,
-                "recording manifest is still running but no executor owns it",
+            })
+        }
+        artifacts::RecordingPublication::Finalized => None,
+        artifacts::RecordingPublication::Running => Some(RewriteAction::RecordingInProgress {
+            summary: format!(
+                "external recording {run_id} has not finalized; rewrite does not own its process"
             ),
-            artifacts::RecordingPublication::Missing => return Ok(None),
-        },
-    }))
+            run_id: run_id.to_owned(),
+            progress: RewriteRecordingProgress {
+                apis: recording_status.progress.apis,
+                published_cases: recording_status.progress.published_cases,
+                failed_cases: recording_status.progress.failed_cases,
+            },
+            status_poll_after_seconds: 30,
+            status: action::status_command(target_root),
+        }),
+    })
 }
 
-fn recovery_required(target_root: &Path, reason: &str) -> RewriteAction {
-    RewriteAction::RecoveryRequired {
-        summary: format!("{reason}; recover the managed recording before continuing"),
-        command: action::recover_command(target_root),
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn external_publication_is_observed_without_process_ownership_or_artifact_writes() {
+        let target = tempfile::tempdir().unwrap();
+        let state = crate::rewrite::test_state();
+        let manifest = artifacts::recording_manifest(target.path(), &state.recording_run_id);
+        fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        let running = br#"{"status":"running","recording_apis":["GET /api"],"published_cases":1}"#;
+        fs::write(&manifest, running).unwrap();
+        assert!(matches!(
+            status_action(target.path(), &state).unwrap(),
+            Some(RewriteAction::RecordingInProgress { progress, .. }) if progress.published_cases == 1
+        ));
+        assert_eq!(fs::read(&manifest).unwrap(), running);
+        fs::write(
+            &manifest,
+            br#"{"status":"completed","recording_apis":["GET /api"],"published_cases":1}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            status_action(target.path(), &state).unwrap(),
+            Some(RewriteAction::AdvanceRequired { .. })
+        ));
+        assert_eq!(
+            fs::read_dir(manifest.parent().unwrap().parent().unwrap())
+                .unwrap()
+                .count(),
+            1
+        );
     }
-}
-
-pub(super) fn recording_action_id(state: &RewriteState, comparison: bool) -> String {
-    let run_id = if comparison {
-        state
-            .comparison_run_id
-            .as_deref()
-            .expect("comparison action requires run id")
-    } else {
-        &state.recording_run_id
-    };
-    let input_source = if comparison {
-        state.case_source.as_deref()
-    } else {
-        recording::standard_recording_input_source(state)
-    };
-    let input_source = input_source
-        .map(|path| path.to_string_lossy())
-        .unwrap_or_default();
-    format!(
-        "recording-{}",
-        fingerprint::id(&[
-            &state.workflow_id,
-            if comparison { "comparison" } else { "standard" },
-            run_id,
-            &inventory::recording_scope(state).join("\n"),
-            &state.recording_settings.duration_seconds.to_string(),
-            &state.recording_settings.per_api_case_limit.to_string(),
-            input_source.as_ref(),
-        ])
-        .trim_start_matches("fnv1a64:")
-    )
-}
-
-pub(super) fn command(
-    target_root: &Path,
-    state: &RewriteState,
-    comparison: bool,
-) -> RewriteCommandSpec {
-    action::command(
-        target_root,
-        vec![
-            "recording".to_string(),
-            "execute".to_string(),
-            recording_action_id(state, comparison),
-        ],
-        Vec::new(),
-    )
 }

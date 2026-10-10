@@ -303,6 +303,7 @@ read-only old-Global snapshot overlay first when the command has compatible
 Global seed evidence. If it reports
 `reused_old_global_evidence`, continue with the same recording. If strict
 derivation fails, the coordinator consolidates the rule with other pending
-recording-contract changes and schedules one fresh recording after runnable API
-work drains. In particular, do not modify old Case-only HSCAN JSONL to
+recording-contract changes and requires one fresh externally produced batch
+after runnable API work drains. Follow the [recording handoff](recording.md#rewrite-handoff).
+In particular, do not modify old Case-only HSCAN JSONL to
 manufacture a Global seed.

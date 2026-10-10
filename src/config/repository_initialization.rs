@@ -225,8 +225,8 @@ fn initialize_repository_config_with(
                                   target.env overrides and source-compatible startup mounts, \
                                   and owns readiness, signals, network namespace, and cleanup",
         rewrite_command: "backend-rewrite next --api '<METHOD path-or-pattern>'",
-        preflight_command: "backend-rewrite init preflight",
-        record_command: "traffic-e2e record --target-root .",
+        preflight_command: "traffic-e2e diagnose preflight",
+        record_command: "traffic-e2e record --config .traffic-e2e/project.yaml -- /app/start-source",
         comparison_command: "traffic-e2e record-comparison --target-root .",
     })
 }
@@ -729,7 +729,7 @@ mod tests {
             result.rewrite_command,
             "backend-rewrite next --api '<METHOD path-or-pattern>'"
         );
-        assert_eq!(result.preflight_command, "backend-rewrite init preflight");
+        assert_eq!(result.preflight_command, "traffic-e2e diagnose preflight");
         assert_eq!(
             result.recording_dockerfile,
             PathBuf::from(".traffic-e2e/Dockerfile.recording")

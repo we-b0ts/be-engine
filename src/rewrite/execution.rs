@@ -372,13 +372,6 @@ fn traffic_summary(
 ) -> String {
     let api = active.api.as_deref().unwrap_or("the workflow");
     match active.kind {
-        super::traffic_operation::TrafficOperationKind::Recording => {
-            if active.api.is_some() {
-                format!("recording {api}")
-            } else {
-                "recording traffic".into()
-            }
-        }
         super::traffic_operation::TrafficOperationKind::Comparison => {
             format!("comparing {api}")
         }

@@ -8,10 +8,8 @@ use super::model::{
     RewriteRouteReport, RewriteState,
 };
 use super::store::RewriteStore;
-use super::{
-    action, artifacts, evidence, fingerprint, inventory, recording, traffic_operation, worker,
-};
-use crate::{E2eRunContext, ManagedRecordingOperation, RecordingApi, RewriteContext};
+use super::{action, evidence, fingerprint, inventory, recording, traffic_operation, worker};
+use crate::{E2eRunContext, RecordingApi, RewriteContext};
 
 #[derive(Debug, Clone)]
 pub(super) struct SystemRepairRouteOptions {
@@ -133,32 +131,22 @@ pub(super) fn verify(
 
     match route.kind.as_str() {
         "recorder_capability_gap" => {
-            super::regression_scope::ensure_fresh_allowed(target_root)?;
-            let run_id = artifacts::allocate_run_id_excluding(
-                target_root,
-                ManagedRecordingOperation::Record,
-                &[&state.recording_run_id],
-            )?;
+            super::regression_scope::ensure_fresh_allowed(target_root, state)?;
             recording::reset_for_fresh_recording(
+                target_root,
                 state,
-                run_id,
                 state.recording_settings,
                 RewriteRecordingReason::RecorderContractChanged,
-            );
+            )?;
         }
         "source_change" => {
-            super::regression_scope::ensure_fresh_allowed(target_root)?;
-            let run_id = artifacts::allocate_run_id_excluding(
-                target_root,
-                ManagedRecordingOperation::Record,
-                &[&state.recording_run_id],
-            )?;
+            super::regression_scope::ensure_fresh_allowed(target_root, state)?;
             recording::reset_for_fresh_recording(
+                target_root,
                 state,
-                run_id,
                 state.recording_settings,
                 RewriteRecordingReason::SourceBaselineChanged,
-            );
+            )?;
         }
         "replay_capability_gap" | "external_data_blocker" => {
             state.phase = super::model::RewritePhase::ImplementationRequired;

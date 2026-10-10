@@ -103,6 +103,11 @@ pub fn begin(options: RewriteRegressionBeginOptions) -> Result<RewriteRegression
         if previous.is_none() {
             regression_scope::apply(&target_root, &mut state)?;
         }
+        if state.recording_run_id.is_empty()
+            && !regression_scope::has_active_pin(&target_root, &state)?
+        {
+            super::recording_input::bind(&target_root, &mut state, None)?;
+        }
         ensure!(
             !state.recording_run_id.is_empty(),
             "select a completed standard recording or choose --purpose record"
@@ -116,18 +121,13 @@ pub fn begin(options: RewriteRegressionBeginOptions) -> Result<RewriteRegression
             inventory::install(&mut state, apis)?;
         }
     } else {
-        let run_id = artifacts::allocate_run_id_excluding(
-            &target_root,
-            crate::ManagedRecordingOperation::Record,
-            &[&state.recording_run_id],
-        )?;
         let settings = state.recording_settings;
         super::recording::reset_for_fresh_recording(
+            &target_root,
             &mut state,
-            run_id,
             settings,
             super::model::RewriteRecordingReason::UserRequested,
-        );
+        )?;
     }
     state.regression = Some(RegressionOrigin {
         previous_workflow_id: previous

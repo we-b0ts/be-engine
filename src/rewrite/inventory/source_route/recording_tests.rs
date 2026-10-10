@@ -35,12 +35,14 @@ fn legacy_state() -> RewriteState {
 }
 
 fn rerecord(state: &mut RewriteState, reason: RewriteRecordingReason) {
+    let root = tempfile::tempdir().unwrap();
     reset_for_fresh_recording(
+        root.path(),
         state,
-        "20260910000000".into(),
         RewriteRecordingSettings::default(),
         reason,
-    );
+    )
+    .unwrap();
 }
 
 #[test]

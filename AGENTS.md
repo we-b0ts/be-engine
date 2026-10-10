@@ -19,10 +19,9 @@ low-level tooling is under `diagnose`. Recorder
 configuration starts from `config/project.example.yaml`. Repository scripts
 are development or manual host-trust tools only.
 
-The optional `online-recording` feature adds `recording-online`, a standalone
-Source/Recorder app with Redis discovery, completion and optional project
-Recorder configuration;
-see [docs/online-recording.md](docs/online-recording.md).
+`traffic-e2e record` runs Source and Recorder directly with optional Redis
+coordination. Projects own the recording container; backend-rewrite consumes
+completed recordings without starting capture. See [docs/recording.md](docs/recording.md).
 
 ## Read First
 

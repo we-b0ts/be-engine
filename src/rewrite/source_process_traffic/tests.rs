@@ -79,7 +79,7 @@ fn projects_a_bounded_evidence_view_from_the_recording_summary() {
 
     let envelope = crate::rewrite::action::for_state(temp.path(), &state);
     let action = serde_json::to_value(envelope).unwrap();
-    assert_eq!(action["schema_version"], 34);
+    assert_eq!(action["schema_version"], 35);
     assert!(action.get("source_process_traffic").is_none());
 }
 

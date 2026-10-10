@@ -10,8 +10,7 @@ use super::model::{
 };
 use super::store::RewriteStore;
 use super::{
-    RewriteContext, action, evidence, fingerprint, inventory, recording, recording_action,
-    traffic_operation,
+    RewriteContext, action, evidence, fingerprint, inventory, recording, traffic_operation,
 };
 use crate::{BreezeEndpointCaptureFeedback, plan_breeze_endpoint_capture};
 
@@ -481,7 +480,7 @@ fn apply_command(target_root: &Path, plan_id: &str) -> super::model::RewriteComm
 
 fn next_command(target_root: &Path, state: &RewriteState) -> super::model::RewriteCommandSpec {
     if state.phase == RewritePhase::RecordingRequired {
-        recording_action::command(target_root, state, false)
+        action::next_command(target_root)
     } else if let Some(api) = state
         .current_api_index
         .and_then(|index| state.api_inventory.get(index))

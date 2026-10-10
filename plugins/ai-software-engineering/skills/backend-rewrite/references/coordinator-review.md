@@ -20,7 +20,7 @@ handoff. Admission does not replace integration or formal acceptance.
 ## Delegate Candidate Review And Admit The Report
 
 Purpose confirmation establishes the committed `pr_base` snapshot as trusted.
-Start its recording/Replay directly; an unchanged baseline needs no source review
+Adopt completed external recordings and run Replay; an unchanged baseline needs no source review
 at startup or final completion. Ignore historical receipts as a reason to create
 an integrator assignment. Progress-only commits do not change this exemption.
 Source/configuration changes relative to the purpose baseline restore normal

@@ -72,7 +72,7 @@ pub fn enable_repository_motan_protocol(
         native_port,
         gateway_port: options.gateway_port,
         validation_status: "not_run",
-        preflight_command: "backend-rewrite init preflight",
+        preflight_command: "traffic-e2e diagnose preflight",
         motan_replay_command: format!(
             "motan-replay --input-raw :{} --output-rpc 127.0.0.1:{}",
             native_port, options.gateway_port

@@ -18,6 +18,35 @@ const MAX_REPORTED_APIS_PER_CANDIDATE: usize = 100;
 const MAX_OBSERVED_APIS: usize = 1_000;
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 
+pub(super) fn latest_existing_run_id(target_root: &Path) -> Result<Option<String>> {
+    let root = target_root
+        .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
+        .join("recordings");
+    match fs::read_dir(&root) {
+        Ok(entries) => entries
+            .map(|entry| {
+                let entry = entry?;
+                Ok(run_id(&entry))
+            })
+            .collect::<std::io::Result<Vec<_>>>()
+            .map(|ids| ids.into_iter().flatten().max())
+            .with_context(|| format!("failed to inspect recordings {}", root.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to inspect recordings {}", root.display()))
+        }
+    }
+}
+
+fn run_id(entry: &fs::DirEntry) -> Option<String> {
+    let id = entry.file_name().to_str()?.to_owned();
+    (entry.file_type().ok()?.is_dir()
+        && id.len() == 14
+        && id.bytes().all(|byte| byte.is_ascii_digit())
+        && chrono::NaiveDateTime::parse_from_str(&id, "%Y%m%d%H%M%S").is_ok())
+    .then_some(id)
+}
+
 #[derive(Debug, Deserialize)]
 struct RecordingManifest {
     status: String,
@@ -30,13 +59,40 @@ pub(super) fn bind(
     state: &mut RewriteState,
     excluded_run_id: Option<&str>,
 ) -> Result<bool> {
-    if state.recording_input_case_source.is_some() {
+    if state.recording_rejection.is_none()
+        && state
+            .recording_input_case_source
+            .as_ref()
+            .is_some_and(|path| {
+                path.file_name()
+                    .is_some_and(|id| id == state.recording_run_id.as_str())
+            })
+    {
         return Ok(false);
     }
     let requested_apis = inventory::recording_scope(state);
-    let (case_source, diagnosis) = inspect(target_root, &requested_apis, excluded_run_id)?;
+    let (case_source, diagnosis) = inspect(
+        target_root,
+        &requested_apis,
+        excluded_run_id,
+        state.recording_after_run_id.as_deref(),
+    )?;
     let changed = state.recording_input_case_source != case_source
         || state.recording_input_diagnosis != diagnosis;
+    if let Some(path) = &case_source {
+        state.recording_run_id = path
+            .file_name()
+            .context("recording run directory has no ID")?
+            .to_string_lossy()
+            .into_owned();
+        state.recording_rejection = None;
+        state.recording_apis = read_manifest(path)
+            .context("selected recording manifest disappeared")?
+            .recording_apis;
+        if let Some(refresh) = &mut state.recording_refresh {
+            refresh.recording_run_id = Some(state.recording_run_id.clone());
+        }
+    }
     state.recording_input_case_source = case_source;
     state.recording_input_diagnosis = diagnosis;
     Ok(changed)
@@ -46,6 +102,7 @@ fn inspect(
     target_root: &Path,
     requested_apis: &[String],
     excluded_run_id: Option<&str>,
+    after_run_id: Option<&str>,
 ) -> Result<(Option<PathBuf>, Option<RewriteRecordingInputDiagnosis>)> {
     let root = target_root
         .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
@@ -60,7 +117,7 @@ fn inspect(
                 .with_context(|| format!("failed to inspect recordings {}", root.display()));
         }
     };
-    entries.retain(|entry| entry.path().is_dir());
+    entries.retain(|entry| run_id(entry).is_some());
     entries.sort_by_key(fs::DirEntry::file_name);
     entries.reverse();
     let omitted_older_runs = entries.len().saturating_sub(MAX_INSPECTED_RUNS);
@@ -79,7 +136,9 @@ fn inspect(
 
     for entry in entries {
         let run_id = entry.file_name().to_string_lossy().to_string();
-        if excluded_run_id == Some(run_id.as_str()) {
+        if excluded_run_id == Some(run_id.as_str())
+            || after_run_id.is_some_and(|after| run_id.as_str() <= after)
+        {
             continue;
         }
         diagnosis.inspected_runs = diagnosis.inspected_runs.saturating_add(1);
@@ -127,7 +186,9 @@ fn inspect(
                 observed_apis.insert(api.clone());
             }
         }
-        if report.recording_apis == requested_apis
+        if (requested_apis.is_empty()
+            || report.recording_apis == requested_apis
+            || report.recording_apis.is_empty())
             && scope_cases_are_valid(&entry.path(), requested_apis)
         {
             return Ok((Some(entry.path()), None));
@@ -226,7 +287,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn recorded_inventory_scope_reuses_only_an_atomic_unscoped_recording() {
+    fn recorded_inventory_scope_adopts_one_completed_batch_directly() {
         let target = tempfile::tempdir().unwrap();
         write_run(
             target.path(),
@@ -254,19 +315,29 @@ mod tests {
         assert_eq!(state.recording_input_case_source, Some(all_scope));
         assert!(state.recording_input_diagnosis.is_none());
         let envelope = super::super::action::for_state(target.path(), &state);
-        let super::super::model::RewriteAction::RecordingRequired {
-            input_mode,
-            recording_input_diagnosis,
-            ..
-        } = envelope.action
-        else {
-            panic!("expected a reused recording action");
-        };
-        assert_eq!(
-            input_mode,
-            super::super::model::RewriteRecordingInputMode::ReusedAtomicRecording
+        assert!(matches!(
+            envelope.action,
+            super::super::model::RewriteAction::InputRequired { .. }
+        ));
+        assert_eq!(state.recording_run_id, "20260802000002");
+        assert!(
+            !target
+                .path()
+                .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
+                .join("recordings/20260802000000")
+                .exists()
         );
-        assert!(recording_input_diagnosis.is_none());
+        // A newly arrived batch does not replace evidence already selected.
+        write_run(
+            target.path(),
+            "20260802000003",
+            &[],
+            &["/new"],
+            "completed",
+            false,
+        );
+        assert!(!bind(target.path(), &mut state, None).unwrap());
+        assert_eq!(state.recording_run_id, "20260802000002");
     }
 
     #[test]
@@ -292,21 +363,17 @@ mod tests {
 
         bind(target.path(), &mut state, None).unwrap();
 
-        assert!(state.recording_input_case_source.is_none());
-        let diagnosis = state.recording_input_diagnosis.as_ref().unwrap();
-        assert_eq!(diagnosis.finalized_clean_runs, 2);
-        assert_eq!(diagnosis.rejections.scope_mismatch, 2);
-        assert_eq!(
-            diagnosis.observed_apis,
-            ["GET /2/users/show.json", "GET /2/users/show_batch.json"]
-        );
-        assert_eq!(diagnosis.candidates.len(), 2);
+        assert_eq!(state.recording_run_id, "20260802000002");
+        assert_eq!(state.recording_apis, ["GET /2/users/show_batch.json"]);
+        let run = state.recording_input_case_source.as_ref().unwrap();
+        assert_eq!(fs::read_dir(run.join("apis/api-users")).unwrap().count(), 1);
+        assert!(state.recording_input_diagnosis.is_none());
     }
 
     #[test]
-    fn explicit_api_requires_an_exact_atomic_recording_scope() {
+    fn explicit_api_can_use_an_unscoped_batch_that_contains_it() {
         let target = tempfile::tempdir().unwrap();
-        write_run(
+        let batch = write_run(
             target.path(),
             "20260802000001",
             &[],
@@ -318,31 +385,86 @@ mod tests {
             false,
         );
         let mut state = scoped_state("GET /2/users/show.json");
-
         bind(target.path(), &mut state, None).unwrap();
-
-        assert!(state.recording_input_case_source.is_none());
+        assert_eq!(state.recording_input_case_source, Some(batch));
+        assert!(state.recording_apis.is_empty());
+        let mut absent = scoped_state("GET /2/users/missing.json");
+        bind(target.path(), &mut absent, None).unwrap();
+        assert!(absent.recording_input_case_source.is_none());
         assert_eq!(
-            state
+            absent
                 .recording_input_diagnosis
-                .as_ref()
                 .unwrap()
                 .rejections
                 .scope_mismatch,
             1
         );
+    }
 
-        let exact = write_run(
+    #[test]
+    fn refresh_waits_for_a_newer_completed_batch_without_creating_a_run() {
+        let target = tempfile::tempdir().unwrap();
+        write_run(
             target.path(),
-            "20260802000002",
-            &["GET /2/users/show.json"],
-            &["/2/users/show.json?uid=1"],
+            "20260802000001",
+            &[],
+            &["/api"],
             "completed",
             false,
         );
-        state.recording_input_diagnosis = None;
+        // A batch already present at refresh time must also be superseded.
+        write_run(
+            target.path(),
+            "20260802000002",
+            &[],
+            &["/api"],
+            "completed",
+            false,
+        );
+        let mut state = unscoped_state();
+        state.recording_run_id = "20260802000001".into();
+        let settings = state.recording_settings;
+        super::super::recording::reset_for_fresh_recording(
+            target.path(),
+            &mut state,
+            settings,
+            super::super::model::RewriteRecordingReason::UserRequested,
+        )
+        .unwrap();
         bind(target.path(), &mut state, None).unwrap();
-        assert_eq!(state.recording_input_case_source, Some(exact));
+        assert!(state.recording_run_id.is_empty());
+        assert!(state.recording_input_case_source.is_none());
+        write_run(
+            target.path(),
+            "20260802000003",
+            &[],
+            &["/api"],
+            "running",
+            false,
+        );
+        bind(target.path(), &mut state, None).unwrap();
+        assert!(state.recording_run_id.is_empty());
+        write_run(
+            target.path(),
+            "20260802000003",
+            &[],
+            &["/api"],
+            "completed",
+            false,
+        );
+        bind(target.path(), &mut state, None).unwrap();
+        assert_eq!(state.recording_run_id, "20260802000003");
+        assert_eq!(
+            fs::read_dir(
+                target
+                    .path()
+                    .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
+                    .join("recordings")
+            )
+            .unwrap()
+            .count(),
+            3
+        );
     }
 
     #[test]
@@ -375,19 +497,9 @@ mod tests {
         assert_eq!(diagnosis.rejections.dirty, 0);
         assert_eq!(diagnosis.candidates.len(), 2);
         let envelope = super::super::action::for_state(target.path(), &state);
-        let super::super::model::RewriteAction::RecordingRequired {
-            input_mode,
-            recording_input_diagnosis: Some(public_diagnosis),
-            ..
-        } = envelope.action
-        else {
-            panic!("expected a fresh external recording action");
-        };
-        assert_eq!(
-            input_mode,
-            super::super::model::RewriteRecordingInputMode::ExternalLiveTraffic
+        assert!(
+            matches!(envelope.action, super::super::model::RewriteAction::InputRequired { reason: super::super::model::RewriteInputRequiredReason::RecordingEvidenceRequired, recording_input_diagnosis: Some(public_diagnosis), .. } if public_diagnosis == *diagnosis)
         );
-        assert_eq!(public_diagnosis.candidates, diagnosis.candidates);
         assert!(!bind(target.path(), &mut state, None).unwrap());
     }
 

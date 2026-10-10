@@ -3,9 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use self::run::{RecorderRunState, new_run_id};
+use self::run::RecorderRunState;
 use anyhow::{Context, Result};
-use chrono::NaiveDateTime;
 use serde::Serialize;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -173,17 +172,7 @@ impl Recorder {
         tokio::fs::create_dir_all(output_dir)
             .await
             .with_context(|| format!("failed to create recording dir {}", output_dir.display()))?;
-        let run_id = run_id.unwrap_or_else(new_run_id);
-        anyhow::ensure!(
-            run_id.len() == 14
-                && run_id.bytes().all(|byte| byte.is_ascii_digit())
-                && NaiveDateTime::parse_from_str(&run_id, "%Y%m%d%H%M%S").is_ok(),
-            "recording run ID must be a valid 14-digit UTC timestamp"
-        );
-        let run_dir = output_dir.join(&run_id);
-        tokio::fs::create_dir(&run_dir)
-            .await
-            .with_context(|| format!("failed to create recording run dir {}", run_dir.display()))?;
+        let (run_id, run_dir) = run::create_run_dir(output_dir, run_id).await?;
         let run_dir = Arc::new(run_dir);
         let finalized_cases = Arc::new(Mutex::new(HashSet::new()));
         let writer = writer::RecorderWriter::start(

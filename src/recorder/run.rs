@@ -485,8 +485,41 @@ async fn remove_dir_if_exists(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn new_run_id() -> String {
-    Utc::now().format("%Y%m%d%H%M%S").to_string()
+pub(super) async fn create_run_dir(
+    root: &Path,
+    explicit: Option<String>,
+) -> Result<(String, PathBuf)> {
+    if let Some(id) = &explicit {
+        anyhow::ensure!(
+            id.len() == 14
+                && id.bytes().all(|c| c.is_ascii_digit())
+                && chrono::NaiveDateTime::parse_from_str(id, "%Y%m%d%H%M%S").is_ok(),
+            "recording run ID must be a valid 14-digit UTC timestamp"
+        );
+    }
+    let now = Utc::now();
+    for offset in 0..120 {
+        let run_id = explicit.clone().unwrap_or_else(|| {
+            (now + chrono::Duration::seconds(offset))
+                .format("%Y%m%d%H%M%S")
+                .to_string()
+        });
+        let run_dir = root.join(&run_id);
+        match tokio::fs::create_dir(&run_dir).await {
+            Ok(()) => return Ok((run_id, run_dir)),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AlreadyExists && explicit.is_none() =>
+            {
+                continue;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to create recording run dir {}", run_dir.display())
+                });
+            }
+        }
+    }
+    bail!("failed to reserve a unique recording run ID")
 }
 
 fn path_relative_to(path: &Path, base: &Path) -> String {
@@ -508,6 +541,32 @@ mod tests {
             rule_name: "http-rule".to_string(),
             uri_group: Some(group.to_string()),
         }
+    }
+
+    #[tokio::test]
+    async fn automatic_run_ids_are_unique_and_explicit_ids_never_overwrite() {
+        let root = tempfile::tempdir().unwrap();
+        let (first, second) = tokio::join!(
+            create_run_dir(root.path(), None),
+            create_run_dir(root.path(), None)
+        );
+        let (first, first_dir) = first.unwrap();
+        let (second, second_dir) = second.unwrap();
+        assert_ne!(first, second);
+        assert_ne!(first_dir, second_dir);
+        tokio::fs::write(first_dir.join("keep"), b"evidence")
+            .await
+            .unwrap();
+        assert!(create_run_dir(root.path(), Some(first)).await.is_err());
+        assert_eq!(
+            tokio::fs::read(first_dir.join("keep")).await.unwrap(),
+            b"evidence"
+        );
+        assert!(
+            create_run_dir(root.path(), Some("20261399000000".into()))
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

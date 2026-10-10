@@ -56,7 +56,6 @@ mod jwt_rule;
 mod purpose;
 mod recording;
 mod recording_action;
-mod recording_execution;
 mod recording_input;
 mod recovery;
 mod regression;
@@ -124,14 +123,12 @@ pub use model::{
     RewriteDependencyRuleReport, RewriteEvidenceCommand, RewriteFocusedE2eExecution,
     RewriteFocusedE2eExecutionMode, RewriteHttpResponseCaptureReport, RewriteInputRequiredReason,
     RewriteInventoryReport, RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewritePhase,
-    RewriteRecorderCaptureReport, RewriteRecordingExecutionReport, RewriteRecordingInputCandidate,
+    RewriteRecorderCaptureReport, RewriteRecordingInputCandidate,
     RewriteRecordingInputCandidateDisposition, RewriteRecordingInputDiagnosis,
-    RewriteRecordingInputMode, RewriteRecordingInputRejections, RewriteRecordingKind,
-    RewriteRecordingReason, RewriteRecordingStartReport, RewriteRecordingStartState,
-    RewriteRecoveryReport, RewriteRepairAcceptanceKind, RewriteRouteReport, RewriteRuleReport,
-    RewriteStatusReport, RewriteTrafficOperationKind, RewriteTrafficOperationView,
-    RewriteWorkerBlockingReason, RewriteWorkerDispatchState, RewriteWorkerDispatchView,
-    RewriteWorkflowView,
+    RewriteRecordingInputRejections, RewriteRecordingReason, RewriteRecoveryReport,
+    RewriteRepairAcceptanceKind, RewriteRouteReport, RewriteRuleReport, RewriteStatusReport,
+    RewriteTrafficOperationKind, RewriteTrafficOperationView, RewriteWorkerBlockingReason,
+    RewriteWorkerDispatchState, RewriteWorkerDispatchView, RewriteWorkflowView,
 };
 pub use process_output_model::{
     RewriteProcessOutputInventoryDetails, RewriteProcessOutputInventoryView,
@@ -141,10 +138,6 @@ pub use recorder_capture::{
     RewriteHttpResponseCapturePlanOptions, RewriteRecorderCapturePlanOptions,
     apply_rewrite_recorder_capture, plan_rewrite_http_response_capture,
     plan_rewrite_recorder_capture,
-};
-pub use recording::{
-    RewriteRecordingRequestOptions, execute_rewrite_recording_worker, request_rewrite_recording,
-    start_rewrite_recording,
 };
 pub use repair::{
     RewriteRepairCancelOptions, RewriteReplayRetryOptions, cancel_misrouted_rewrite_repair,
@@ -172,8 +165,8 @@ use store::{RewriteLockState, RewriteStore};
 pub(in crate::rewrite) use test_support::test_state;
 
 use crate::{
-    ComparisonVerificationOptions, E2eRunContext, ManagedRecordingOperation, RecordingApi,
-    update_comparison_progress, verify_comparison_recording,
+    ComparisonVerificationOptions, E2eRunContext, RecordingApi, update_comparison_progress,
+    verify_comparison_recording,
 };
 
 #[derive(Debug, Clone)]

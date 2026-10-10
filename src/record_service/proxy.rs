@@ -28,7 +28,7 @@ use tracing::warn;
 
 #[derive(Clone)]
 pub(super) struct Relay<R> {
-    reservations: RedisAdmissionProvider<R>,
+    reservations: Option<RedisAdmissionProvider<R>>,
     client: Client<HttpConnector, Full<Bytes>>,
     origin: hyper::Uri,
     scope: String,
@@ -40,7 +40,7 @@ pub(super) struct Relay<R> {
 
 impl<R: Redis + Clone + 'static> Relay<R> {
     pub(super) fn new(
-        reservations: RedisAdmissionProvider<R>,
+        reservations: Option<RedisAdmissionProvider<R>>,
         origin: hyper::Uri,
         scope: String,
         timeout: Duration,
@@ -70,16 +70,23 @@ impl<R: Redis + Clone + 'static> Relay<R> {
         let _permit = self.slot.acquire().await;
     }
 
-    async fn release(&self, ticket: &AdmissionTicket) {
-        if let Err(error) = self.reservations.complete(ticket).await {
+    async fn release(&self, ticket: &Option<AdmissionTicket>) {
+        let (Some(reservations), Some(ticket)) = (&self.reservations, ticket) else {
+            return;
+        };
+        if let Err(error) = reservations.complete(ticket).await {
             warn!(%error, "recording slot release failed; TTL will recover it");
         }
     }
 
     async fn handle(&self, mut request: Request<Incoming>) -> Response<Full<Bytes>> {
-        let ticket = match AdmissionTicket::from_headers(request.headers()) {
-            Ok(Some(ticket)) if ticket.scope() == self.scope => ticket,
-            _ => return response(StatusCode::NOT_FOUND, "recording admission required"),
+        let ticket = if self.reservations.is_some() {
+            match AdmissionTicket::from_headers(request.headers()) {
+                Ok(Some(ticket)) if ticket.scope() == self.scope => Some(ticket),
+                _ => return response(StatusCode::NOT_FOUND, "recording admission required"),
+            }
+        } else {
+            None
         };
         request.headers_mut().remove(ADMISSION_SCOPE_HEADER);
         request.headers_mut().remove(ADMISSION_TOKEN_HEADER);
@@ -87,9 +94,11 @@ impl<R: Redis + Clone + 'static> Relay<R> {
             // Do not release an identical replay of the currently executing token.
             return response(StatusCode::NOT_FOUND, "recorder busy");
         };
-        match self.reservations.owns(&ticket).await {
-            Ok(true) => {}
-            _ => return response(StatusCode::NOT_FOUND, "reservation unavailable"),
+        if let (Some(reservations), Some(ticket)) = (&self.reservations, &ticket) {
+            match reservations.owns(ticket).await {
+                Ok(true) => {}
+                _ => return response(StatusCode::NOT_FOUND, "reservation unavailable"),
+            }
         }
         if !self.ready.load(Ordering::SeqCst) {
             self.release(&ticket).await;
@@ -161,9 +170,9 @@ pub(super) async fn serve<R: Redis + Clone + 'static>(
     loop {
         tokio::select! {
             changed = stopping.changed() => { changed.ok(); break; }
-            joined = tasks.join_next(), if !tasks.is_empty() => { if let Some(Err(error)) = joined { warn!(%error, "online recording connection failed"); } }
+            joined = tasks.join_next(), if !tasks.is_empty() => { if let Some(Err(error)) = joined { warn!(%error, "recording service connection failed"); } }
             accepted = listener.accept() => {
-                let (stream, _) = accepted.context("online recording accept failed")?;
+                let (stream, _) = accepted.context("recording service accept failed")?;
                 let relay = relay.clone();
                 let mut stopping = stop.clone();
                 tasks.spawn(async move {
@@ -178,7 +187,7 @@ pub(super) async fn serve<R: Redis + Clone + 'static>(
                     let connection = hyper::server::conn::http1::Builder::new().serve_connection(TokioIo::new(stream), service);
                     tokio::pin!(connection);
                     tokio::select! {
-                        result = &mut connection => { if let Err(error) = result { warn!(%error, "online recording HTTP connection ended"); } }
+                        result = &mut connection => { if let Err(error) = result { warn!(%error, "recording service HTTP connection ended"); } }
                         _ = stopping.changed() => { connection.as_mut().graceful_shutdown(); let _ = connection.await; }
                     }
                 });

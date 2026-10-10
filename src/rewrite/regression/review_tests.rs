@@ -29,7 +29,10 @@ fn both_purposes_ignore_old_receipts_at_entry() {
         assert!(matches!(
             report.next.action,
             rewrite::RewriteAction::AdvanceRequired { .. }
-                | rewrite::RewriteAction::RecordingRequired { .. }
+                | rewrite::RewriteAction::InputRequired {
+                    reason: crate::rewrite::RewriteInputRequiredReason::RecordingEvidenceRequired,
+                    ..
+                }
         ));
         assert!(!report.next.terminal_allowed);
         let state = RewriteStore::new(target.path())

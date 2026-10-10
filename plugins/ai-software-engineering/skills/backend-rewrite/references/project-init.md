@@ -28,8 +28,8 @@ The command pins the selected container's exact immutable image in local
 Docker and snapshots its image identity, effective environment, command and
 arguments, supported security settings, and supported ConfigMap/Secret mounts
 into the ignored `.traffic-e2e/local/source/` directory. It may pull the exact
-registry digest. The Pod is an initialization input only: later preflight,
-recording, Comparison, Replay, and startup-input APIs use the local snapshot
+registry digest. The Pod is an initialization input only: later diagnostic
+preflight, Comparison, Replay, and startup-input APIs use the local snapshot
 and do not require access to the original Pod.
 
 For a local Docker container, use:
@@ -85,7 +85,10 @@ add framework-specific port or trust mappings during initialization.
 
 `.traffic-e2e/Dockerfile.recording` and `.traffic-e2e/Dockerfile.e2e` are
 target-owned build contracts. During initialization, complete either file as
-required by the source adaptor or target runtime contract. Both final processes must run in the
+required by the source adaptor for managed comparison/diagnostic preflight or
+the target runtime contract. Independent standard recording uses a separate
+project-owned `Docker.recording`, built and started by its deployment caller.
+Both managed final processes must run in the
 foreground as UID/GID `998:998`; neither image may contain credentials,
 recordings, generated trust, build cache, or `.traffic-e2e/local/` content.
 
@@ -127,13 +130,15 @@ its real structure. Do not assume a fixed base image or available shell tool.
 Run:
 
 ```bash
-backend-rewrite init preflight --duration-seconds 60
+traffic-e2e diagnose preflight --target-root <canonical-root> --duration-seconds 60
 ```
 
 Only overall `status = "passed"` completes the check. On failure, adjust the
 reported build/startup contract or managed input and rerun the same command.
-Preflight checks initialization plumbing; it is not business API evidence and
-must not advance `backend-rewrite next`.
+This traffic-e2e diagnostic checks initialization plumbing, including one
+readiness recording and Replay probes. Its output is not business API evidence
+and must not advance `backend-rewrite next`. Backend rewrite initialization
+only creates configuration and snapshots; it has no recording preflight command.
 
 For a missing managed startup input during preflight, use
 [coordinator-startup-inputs.md](coordinator-startup-inputs.md). Use `startup env`

@@ -51,10 +51,12 @@ old workflow is unfinished. An explicit user request supplies purpose authorizat
 otherwise ask the user to choose. On a work branch, continue the normal workflow.
 
 Follow the returned action to start an absent rewrite workflow.
-Before the first standard recording, omit `--api` and use Recorder configuration
-to bound capture. After the engine publishes its stable inventory, select work
-with the exact API path/pattern. Recording refreshes may select one recorded
-route with `--api '/path-or-pattern'`. If an action response was lost or the session is
+Before the engine adopts external standard recordings, omit `--api`. Missing
+evidence returns `input_required`; follow
+[external recording evidence](coordinator-recording.md). After the engine
+publishes its stable inventory, select work with the exact API path/pattern.
+The standalone recording service has no per-run API selector; ingress and
+preserved Recorder include/exclude rules bound capture. If an action response was lost or the session is
 resuming, recover the engine scheduler's current action with unscoped read-only
 `status`; scoped status serves work-item inspection. Execute the returned
 action's command to advance the workflow.
@@ -98,7 +100,7 @@ listed protocol before handling that action.
 | Action | Coordinator responsibility | Agent or external owner | Protocol |
 | --- | --- | --- | --- |
 | `purpose_required` | Confirm the user-authorized purpose after the required live runtime query | None | [authorized regression start](coordinator-agent-protocol.md#authorized-regression-start) |
-| `recording_required`, `recording_in_progress`, `comparison_recording_required`, `recording_refresh_pending` | Execute or wait for the exact recording action | External traffic source only when the action requires it | [recording actions](coordinator-recording.md) |
+| `recording_in_progress`, `recording_refresh_pending` | Observe external publication and wait for the selected evidence | External recording owner | [recording actions](coordinator-recording.md) |
 | `case_pattern_identification_required` | Retain the batch, delegate analysis, then apply the exact result | API implementer in read-only `route_analysis` mode | [case patterns](coordinator-case-patterns.md) |
 | `implementation_required`, `worker_status_required` | Dispatch/resume/query the bound implementer and report actual runtime observations | API implementer | [agent protocol](coordinator-agent-protocol.md) |
 | `expert_required` | Reserve, dispatch, reconcile, forward, and close exactly as returned | API expert, reporting to the existing API implementer | [API expert assistance](coordinator-agent-protocol.md#api-expert-assistance) |
@@ -112,7 +114,7 @@ listed protocol before handling that action.
 
 ## Coordinator Loop
 
-Use the existing `backend-rewrite` interface. Response schema v33 actions have
+Use the existing `backend-rewrite` interface. Response schema v35 actions have
 exactly `kind`, `summary`, `details`, and `commands`. Status/next expose scheduling
 and short issue facts, not diagnostic payloads. Default `workflow` has `id` and
 `revision`; use `inventory` for binding recovery and scheduling detail. Never
@@ -212,10 +214,11 @@ work, and respect runtime backpressure after a rejected submission. A rejected
 submission is not confirmed. One waiting or failed item must not prevent other
 engine-issued executable work from being handled.
 
-`next` and recording execution start detached engine
-operations when needed. Consume their returned actions immediately; do not
+`next` starts detached engine verification operations when needed.
+Consume its returned actions immediately; do not
 background the commands yourself or wait for a worker's entire lifecycle.
-Recording, Replay, and Comparison share a serialized traffic lease. Dispatch,
+Replay and comparison verification share a serialized traffic lease. External
+recording has its own lifecycle. Dispatch,
 confirmation, and feedback remain available during verification; integration
 waits while the canonical target is being verified. When every remaining item
 is waiting for Replay, execute the returned bounded wait command. A stopped executor requires its recovery action; an
@@ -234,7 +237,7 @@ mechanics are in [coordinator-agent-protocol.md](coordinator-agent-protocol.md).
 The engine owns this phase order and returns the legal next action:
 
 ```text
-record configured traffic -> identify patterns only for new uncovered APIs
+adopt completed external traffic -> identify patterns only for new uncovered APIs
            -> stable API inventory + source process outputs
            -> serialize prepare/focused E2E for API A
            -> API A implementation issue (AI work may run in parallel)
@@ -246,14 +249,14 @@ record configured traffic -> identify patterns only for new uncovered APIs
            -> all API slices and process outputs complete at one fingerprint
 
 explicit user authorization
-           -> fresh standard recording -> prepare -> focused E2E
+           -> wait for fresh external standard recording -> prepare -> focused E2E
 
 source-proven bypassed backend -> apply capture rule -> API waits
-           -> drain other runnable API work -> one full-scope fresh recording
+           -> drain other runnable API work -> wait for one full-scope external batch
 
 source-proven Redis rule -> derive safe snapshot overlay from old Global evidence
            -> reuse the same immutable recording
-           -> on strict derivation failure only, join the full-scope fresh recording fallback
+           -> on strict derivation failure only, require the full-scope external refresh
 ```
 
 ## Core Action Handling
@@ -296,17 +299,11 @@ remain incomplete. Preserve the worktrees and resume context. Execute
 `commands.resume` only after repair or an explicit resumed session; do not loop
 on it immediately and do not claim successful delivery.
 
-### `recording_required`
-
-Read [coordinator-recording.md](coordinator-recording.md), execute its exact
-recording action, and poll only the status command returned by that execution.
-Do not reconstruct a recording command or discover its run by recency.
-
 ### `recording_in_progress`
 
-Read [coordinator-recording.md](coordinator-recording.md) and execute `commands.wait`. After it returns, reconcile worker events and
-refresh global status. Do not start another executor or advance before the exact
-finalized run becomes `advance_required`.
+The selected external recording is still being published. Execute `commands.wait`
+and refresh status. The coordinator never starts or recovers its process.
+See [external recording evidence](coordinator-recording.md).
 
 ### `case_pattern_identification_required`
 
@@ -328,14 +325,12 @@ The prerequisite in `summary` is already available. Execute the exact
 `commands.advance` argv once. Never rerun the preceding recording, Replay,
 comparison, implementation, or quality command.
 
-### `comparison_recording_required`
-
-Read [coordinator-recording.md](coordinator-recording.md) and execute the exact
-`commands.execute` for its allocated run ID. This creates comparison evidence;
-it never replaces the shared standard cases or authorizes a standard recording
-request.
-
 ### `input_required`
+
+For `recording_evidence_required` or `comparison_evidence_required`, follow
+[external recording evidence](coordinator-recording.md). Place the completed
+batch in the required conventional directory, then repeat next. Rewrite does
+not execute recording.
 
 This action has no returned command. Retain the triggering invocation and its
 `cwd`; after resolving the named input, repeat it with only that requested input
@@ -421,7 +416,8 @@ local quality suite. A `source_review_required` action requests candidate
 review, evidence or worker rework through
 [coordinator-review.md](coordinator-review.md). It is actionable work, not an execution
 failure. Return to global status after handling it. A new purpose trusts the
-committed `pr_base` snapshot: run initial recording/Replay without source review.
+committed `pr_base` snapshot: adopt external evidence and run initial Replay
+without source review.
 If no source/configuration changes were made, passing verification and committed
 progress can complete without a review receipt. Historical review files do not
 change this. Once the purpose has changes relative to that baseline, verification
@@ -498,7 +494,7 @@ implementation, active verification, revalidation, then unverified. MOTAN
 entries retain their existing protocol-qualified identity.
 The engine owns this read-only projection; it does not change stored progress,
 worker bindings, or receipts. In expanded `inventory`,
-`workflow.scope` is the selector of the shared standard recording and is separate
+`workflow.scope` selects work from the adopted standard recording and is separate
 from the selected API. An
 omitted selector produces `recorded_api_inventory`: every API that actually
 publishes a case in the selected standard recording enters the inventory, while
@@ -532,8 +528,8 @@ resuming from status, and waiting for handoffs.
 Keep finalized standard cases immutable through ordinary repair attempts. A
 failed focused attempt changes the target and reuses the same cases; it does
 not authorize fresh traffic. Read
-[coordinator-recording.md](coordinator-recording.md) before explicitly requesting a
-new standard recording or handling a consolidated capture refresh.
+[coordinator-recording.md](coordinator-recording.md) when a new external standard
+batch is required or a consolidated capture refresh is pending.
 
 If the target fingerprint changes during focused Replay, discard that result
 and return the API to Replay. If later integration changes the fingerprint of a
@@ -565,10 +561,10 @@ serialized traffic time and never replaces the mandatory final epoch.
 
 `awaiting_recording_refresh` is parked, not complete or blocked. Continue other
 pending APIs and resume existing workers until the engine returns one
-consolidated full-scope recording action. Follow
+consolidated external recording requirement. Follow
 [coordinator-rule-actions.md](coordinator-rule-actions.md) for the
 capture/rule transition and [coordinator-recording.md](coordinator-recording.md)
-for that recording.
+for external evidence handoff.
 
 ## Completion Invariants
 
@@ -600,7 +596,10 @@ progress; do not substitute another recording or recapture historical requests.
 Switching IDs resets current verification, with `only` / `skip` applied to the
 selected inventory. Respect this selection; a required fresh capture needs the
 user to remove or clear the field. Omitted, null or empty-string values keep the
-existing recording workflow and current baseline in effect.
+current baseline in effect, or allow completed external evidence discovery when
+no baseline has been adopted. `comparison_run_id` selects a completed external
+comparison batch when the comparison gate is required; backend rewrite never
+starts its capture.
 
 Only `terminal_allowed=true` permits successful workflow completion. Finish the
 caller-required repository checks and delivery after the engine's final gates.

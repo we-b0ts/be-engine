@@ -6,12 +6,16 @@ use crate::{
     HttpGatewayFixedResponseConfig,
 };
 use anyhow::{Context, Result, ensure};
-use brz_redis::{RedisService, RedisServiceOptions};
-use clap::Args;
-use std::{ffi::OsString, net::SocketAddr, path::PathBuf, time::Duration};
+use clap::{Args, ValueEnum};
+use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CoordinationBackend {
+    Redis,
+}
 
 #[derive(Args)]
-pub struct OnlineRecordingOptions {
+pub struct RecordOptions {
     /// Reuse the Recorder section and source traffic policy from project.yaml.
     #[arg(
         long = "config",
@@ -21,15 +25,26 @@ pub struct OnlineRecordingOptions {
     pub config_path: Option<PathBuf>,
     #[arg(
         long,
-        env = "TRAFFIC_E2E_ONLINE_LISTEN",
+        env = "TRAFFIC_E2E_RECORD_LISTEN",
         default_value = "0.0.0.0:4080"
     )]
     pub listen: SocketAddr,
+    /// Optional gateway discovery and request reservation backend.
+    #[arg(long, env = "TRAFFIC_E2E_RECORDING_COORDINATION", value_enum)]
+    pub coordination: Option<CoordinationBackend>,
+    /// Optional 14-digit UTC run identifier; generated atomically when omitted.
+    #[arg(long, value_parser = parse_run_id)]
+    pub run_id: Option<String>,
     /// Reachable HTTP origin published to gateways, including the exposed port.
-    #[arg(long, env = "TRAFFIC_E2E_ONLINE_URL")]
-    pub advertise_url: String,
-    /// Coordination Redis URL. Falls back to the Source's REDIS_URL when omitted.
-    #[arg(long, env = "TRAFFIC_E2E_RECORDING_REDIS_URL", hide_env_values = true)]
+    #[arg(long, env = "TRAFFIC_E2E_RECORD_URL", requires = "coordination")]
+    pub advertise_url: Option<String>,
+    /// Coordination Redis URL; independent of Source business Redis.
+    #[arg(
+        long,
+        env = "TRAFFIC_E2E_RECORDING_REDIS_URL",
+        hide_env_values = true,
+        requires = "coordination"
+    )]
     pub redis_url: Option<String>,
     #[arg(
         long,
@@ -85,7 +100,7 @@ pub struct OnlineRecordingOptions {
     pub source_command: Vec<OsString>,
 }
 
-impl OnlineRecordingOptions {
+impl RecordOptions {
     pub(super) fn storage_owner(&self) -> Result<ArtifactOwner> {
         let owner = match self.artifact_owner {
             Some(owner) => owner,
@@ -106,7 +121,7 @@ impl OnlineRecordingOptions {
         let owner = self.storage_owner()?;
         std::fs::create_dir_all(&self.data_root)?;
         self.data_root = self.data_root.canonicalize()?;
-        crate::source_recording::prepare_recordings_root(&self.data_root, owner)?;
+        super::source::prepare_recordings_root(&self.data_root, owner)?;
         let key = crate::platform::encryption_key::load_or_create(&self.data_root)?;
         owner.assign_path_to(&self.data_root.join(crate::repository::LOCAL_SECRETS_ROOT))?;
         owner.assign_path_to(
@@ -128,6 +143,19 @@ impl OnlineRecordingOptions {
             !self.source_command.is_empty(),
             "Source command is required"
         );
+        if self.coordination.is_some() {
+            ensure!(
+                self.advertise_url.is_some(),
+                "Redis coordination requires --advertise-url"
+            );
+            ensure!(
+                self.redis_url.is_some(),
+                "Redis coordination requires --redis-url"
+            );
+        }
+        if let Some(run_id) = &self.run_id {
+            parse_run_id(run_id).map_err(anyhow::Error::msg)?;
+        }
         brz_http_gateway::AdmissionTicket::new(&self.scope, "validation")?;
         ensure!(
             self.discovery_key() != format!("{}:max-gateways", self.prefix)
@@ -187,8 +215,6 @@ impl OnlineRecordingOptions {
         });
         config.http_gateway.enabled = true;
         config.http.enabled = false;
-        config.http_gateway.rules.clear();
-        config.http_gateway.exclude_rules.clear();
         config.http_gateway.listen = self.recorder_listen;
         config.http_gateway.matched_upstream = self.source_origin.clone();
         if let Some(seconds) = self.request_timeout_seconds {
@@ -216,6 +242,7 @@ impl OnlineRecordingOptions {
             config.dns_mock.enabled = false;
             config.tcp_gateway.enabled = false;
             config.udp_gateway.enabled = false;
+            config.http_response_rewrite.enabled = false;
         } else {
             ensure!(
                 config.dns_mock.enabled && config.tcp_gateway.enabled,
@@ -231,53 +258,20 @@ impl OnlineRecordingOptions {
             .join("fake_dns_registry.json");
         config
             .validate()
-            .context("invalid online recording configuration")?;
+            .context("invalid recording service configuration")?;
         Ok(config)
-    }
-
-    pub(super) async fn redis(&self) -> Result<RedisService> {
-        let input = self
-            .redis_url
-            .clone()
-            .or_else(|| std::env::var("REDIS_URL").ok())
-            .context("provide --redis-url or REDIS_URL")?;
-        let parsed = url::Url::parse(&input)
-            .map_err(|_| anyhow::anyhow!("invalid coordination Redis URL"))?;
-        ensure!(
-            parsed.scheme() == "redis"
-                && parsed.query().is_none()
-                && parsed.fragment().is_none()
-                && (parsed.username().is_empty() || parsed.username() == "default"),
-            "Redis requires redis:// with password-only/default-user authentication and no query"
-        );
-        let host = parsed.host_str().context("Redis URL requires a host")?;
-        let db = parsed.path().trim_start_matches('/');
-        let db = if db.is_empty() {
-            0
-        } else {
-            db.parse::<u32>()
-                .context("Redis DB must be a nonnegative integer")?
-        };
-        let password = parsed.password().map(percent_decode).transpose()?;
-        let endpoint = format!("{host}:{}:{db}", parsed.port().unwrap_or(6379));
-        Ok(RedisService::single_with_options(
-            endpoint,
-            RedisServiceOptions::default()
-                .with_password(password)
-                .with_timeout(Duration::from_millis(200)),
-        )
-        .await?)
     }
 }
 
-fn percent_decode(value: &str) -> Result<String> {
-    // URL form parsing already supplies percent decoding without another dependency.
-    let encoded = format!("value={}", value.replace('+', "%2B"));
-    Ok(url::form_urlencoded::parse(encoded.as_bytes())
-        .next()
-        .context("invalid Redis password")?
-        .1
-        .into_owned())
+fn parse_run_id(value: &str) -> std::result::Result<String, String> {
+    if value.len() == 14
+        && value.bytes().all(|c| c.is_ascii_digit())
+        && chrono::NaiveDateTime::parse_from_str(value, "%Y%m%d%H%M%S").is_ok()
+    {
+        Ok(value.to_owned())
+    } else {
+        Err("run ID must be a valid 14-digit UTC timestamp".to_owned())
+    }
 }
 
 fn system_dns() -> SocketAddr {
@@ -291,4 +285,16 @@ fn system_dns() -> SocketAddr {
         })
         .map(|ip| SocketAddr::new(ip, 53))
         .unwrap_or_else(|| "8.8.8.8:53".parse().unwrap())
+}
+
+impl std::fmt::Debug for RecordOptions {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RecordOptions")
+            .field("coordination", &self.coordination)
+            .field("listen", &self.listen)
+            .field("run_id", &self.run_id)
+            .field("data_root", &self.data_root)
+            .finish_non_exhaustive()
+    }
 }

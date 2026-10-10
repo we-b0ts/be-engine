@@ -3,12 +3,10 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Args;
-use traffic_e2e::{
-    ManagedRecordingOperation, ManagedRecordingOptions, RecordingApi, run_managed_recording,
-};
+use traffic_e2e::{ManagedRecordingOptions, RecordingApi, run_managed_recording};
 
 #[derive(Debug, Clone, Args)]
-pub(super) struct RecordArgs {
+pub(super) struct ComparisonRunArgs {
     /// Target repository containing .traffic-e2e/project.yaml.
     #[arg(long, default_value = ".")]
     target_root: PathBuf,
@@ -29,23 +27,14 @@ pub(super) struct RecordArgs {
 #[derive(Debug, Args)]
 pub(super) struct RecordComparisonArgs {
     #[command(flatten)]
-    run: RecordArgs,
+    run: ComparisonRunArgs,
     /// Capture the source response again after the candidate response.
     #[arg(long)]
     baseline_recheck: bool,
 }
 
-pub(super) async fn run_record(args: RecordArgs) -> Result<()> {
-    run(options(args, ManagedRecordingOperation::Record, false)).await
-}
-
 pub(super) async fn run_record_comparison(args: RecordComparisonArgs) -> Result<()> {
-    run(options(
-        args.run,
-        ManagedRecordingOperation::RecordComparison,
-        args.baseline_recheck,
-    ))
-    .await
+    run(options(args.run, args.baseline_recheck)).await
 }
 
 async fn run(options: ManagedRecordingOptions) -> Result<()> {
@@ -55,14 +44,9 @@ async fn run(options: ManagedRecordingOptions) -> Result<()> {
     Ok(())
 }
 
-fn options(
-    args: RecordArgs,
-    operation: ManagedRecordingOperation,
-    baseline_recheck: bool,
-) -> ManagedRecordingOptions {
+fn options(args: ComparisonRunArgs, baseline_recheck: bool) -> ManagedRecordingOptions {
     ManagedRecordingOptions {
         target_root: args.target_root,
-        operation,
         run_id: args.run_id,
         duration_seconds: args.duration_seconds,
         baseline_recheck,
@@ -90,9 +74,9 @@ mod tests {
     use super::*;
 
     #[derive(Parser)]
-    struct RecordCli {
+    struct ComparisonRunCli {
         #[command(flatten)]
-        record: RecordArgs,
+        record: ComparisonRunArgs,
     }
 
     #[derive(Parser)]
@@ -102,8 +86,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_managed_record_and_comparison_commands() {
-        let record = RecordCli::try_parse_from([
+    fn parses_managed_comparison_options() {
+        let record = ComparisonRunCli::try_parse_from([
             "test",
             "--duration-seconds",
             "60",
@@ -119,6 +103,6 @@ mod tests {
 
     #[test]
     fn rejects_zero_duration() {
-        assert!(RecordCli::try_parse_from(["test", "--duration-seconds", "0"]).is_err());
+        assert!(ComparisonRunCli::try_parse_from(["test", "--duration-seconds", "0"]).is_err());
     }
 }

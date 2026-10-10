@@ -516,11 +516,13 @@ fn fresh_recording_supersedes_old_pin_without_needing_usable_old_evidence() {
     );
     assert_eq!(
         serde_json::to_value(report.next).unwrap()["action"]["kind"],
-        "recording_required"
+        "input_required"
     );
     assert!(rewrite::purpose::pending(target.path()).unwrap().is_none());
     // A published new recording advances towards Replay instead of the stale worker issue.
-    let run = artifacts::recording_run(target.path(), &state.recording_run_id);
+    assert!(state.recording_run_id.is_empty());
+    let external_run_id = "20261010000000";
+    let run = artifacts::recording_run(target.path(), external_run_id);
     for (index, uri) in ["/api", "/other"].iter().enumerate() {
         let case = run.join("apis/cases").join(format!("case-{index}"));
         fs::create_dir_all(&case).unwrap();
@@ -532,6 +534,10 @@ fn fresh_recording_supersedes_old_pin_without_needing_usable_old_evidence() {
         fs::write(case.join("expected-response.json"), "{}").unwrap();
     }
     fs::write(run.join("recording-run.json"), serde_json::to_vec(&serde_json::json!({"status":"completed","recording_apis":state.recording_apis,"published_cases":2})).unwrap()).unwrap();
+    let mut adopted = store.load().unwrap().unwrap();
+    assert!(!regression_scope::has_active_pin(target.path(), &adopted).unwrap());
+    rewrite::recording_input::bind(target.path(), &mut adopted, None).unwrap();
+    store.save(&adopted).unwrap();
     let status = rewrite::status_rewrite(rewrite::RewriteContext {
         target_root: target.path().into(),
     })
@@ -540,6 +546,10 @@ fn fresh_recording_supersedes_old_pin_without_needing_usable_old_evidence() {
         status.action,
         rewrite::RewriteAction::AdvanceRequired { .. }
     ));
+    assert_eq!(
+        store.load().unwrap().unwrap().recording_run_id,
+        external_run_id
+    );
     git(target.path(), &["switch", "-q", "master"]);
     let report = begin(RewriteRegressionBeginOptions {
         ..options(target.path())
@@ -547,7 +557,7 @@ fn fresh_recording_supersedes_old_pin_without_needing_usable_old_evidence() {
     .unwrap();
     assert_eq!(
         store.load().unwrap().unwrap().recording_run_id,
-        state.recording_run_id
+        external_run_id
     );
     assert!(matches!(
         report.next.action,
@@ -569,7 +579,10 @@ fn purpose_is_required_without_workflow_and_new_traffic_can_initialize_it() {
     assert!(report.previous_workflow_id.is_none());
     assert!(matches!(
         report.next.action,
-        rewrite::RewriteAction::RecordingRequired { .. }
+        rewrite::RewriteAction::InputRequired {
+            reason: crate::rewrite::RewriteInputRequiredReason::RecordingEvidenceRequired,
+            ..
+        }
     ));
 }
 

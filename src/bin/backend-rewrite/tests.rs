@@ -24,16 +24,6 @@ fn http_coordinator_commands_accept_routes_and_reject_method_selectors() {
             "--api",
         ],
         vec!["test", "review", "check", "--worktree", "/worker", "--api"],
-        vec![
-            "test",
-            "recording",
-            "request",
-            "--kind",
-            "standard",
-            "--reason",
-            "user-requested",
-            "--api",
-        ],
     ];
     for prefix in prefixes {
         let mut args = prefix.clone();
@@ -92,7 +82,6 @@ fn exposes_only_the_rewrite_coordinator_surface() {
             "operation",
             "verification",
             "target-quality",
-            "recording",
             "recover",
         ]
     );
@@ -504,18 +493,7 @@ fn parses_the_bounded_rewrite_surface() {
         default_init.http_backend_port,
         traffic_e2e::DEFAULT_HTTP_BACKEND_PORT
     );
-    assert!(default_init.command.is_none());
-    let RewriteCommand::Init(preflight) =
-        Cli::try_parse_from(["test", "init", "preflight", "--duration-seconds", "30"])
-            .unwrap()
-            .command
-    else {
-        panic!("expected init command");
-    };
-    assert!(matches!(
-        preflight.command,
-        Some(project_init::ProjectInitCommand::Preflight(_))
-    ));
+    assert!(Cli::try_parse_from(["test", "init", "preflight"]).is_err());
     assert!(Cli::try_parse_from(["test", "init", "preflight", "--duration-seconds", "0"]).is_err());
     assert!(Cli::try_parse_from(["test", "init", "preflight", "--api", "/business"]).is_err());
     assert!(
@@ -645,7 +623,7 @@ fn parses_the_bounded_rewrite_surface() {
             "--api",
             "/api/widgets/*",
         ])
-        .is_ok()
+        .is_err()
     );
     assert!(
         Cli::try_parse_from([
@@ -658,11 +636,11 @@ fn parses_the_bounded_rewrite_surface() {
             "user-requested",
             "--replace-pending",
         ])
-        .is_ok()
+        .is_err()
     );
     assert!(
         Cli::try_parse_from(["test", "recording", "execute", "recording-0123456789abcdef",])
-            .is_ok()
+            .is_err()
     );
     assert!(Cli::try_parse_from(["test", "evidence", "evq-r1-issue-representatives"]).is_ok());
     assert!(
@@ -823,7 +801,7 @@ fn parses_the_bounded_rewrite_surface() {
             "--per-api-case-limit",
             "250",
         ])
-        .is_ok()
+        .is_err()
     );
     assert!(
         Cli::try_parse_from([

@@ -15,11 +15,9 @@ process_owned_dependencies:
   source_evidence: test configuration refresh
 "#;
 
-fn options(path: &Path) -> OnlineRecordingOptions {
+fn options(path: &Path) -> RecordOptions {
     OptionsCli::try_parse_from([
-        "recording-online".as_ref(),
-        "--advertise-url".as_ref(),
-        "http://127.0.0.1:4080".as_ref(),
+        "traffic-e2e record".as_ref(),
         "--source-traffic-policy".as_ref(),
         path.as_os_str(),
         "--case-limit".as_ref(),

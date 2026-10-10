@@ -10,10 +10,7 @@ use crate::PreflightProbeKind;
 
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_CASE_DESCRIPTOR_BYTES: u64 = 64 * 1024;
-const MAX_TRAFFIC_EVIDENCE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RUN_ENTRIES: usize = 20_000;
-const MAX_MOTAN_FAILURES: usize = 16;
-const MAX_MOTAN_FAILURE_BYTES: usize = 512;
 
 #[derive(Debug, Clone)]
 pub struct ManagedRecordingPreflightOptions {
@@ -56,20 +53,6 @@ pub struct ManagedRecordingPreflightRecordingResult {
     pub published_cases: usize,
     pub https_interception_verified: bool,
     pub global_probe_dependency_verified: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MotanPreflightStatus {
-    Verified,
-    NotObserved,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ManagedMotanRecordingResult {
-    pub status: MotanPreflightStatus,
-    pub observed_cases: usize,
-    pub validation_deferred: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,16 +108,6 @@ struct CaseSourceBindingProbe {
     #[serde(default)]
     method: String,
     path_pattern: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TrafficEventProbe {
-    #[serde(default)]
-    event_type: String,
-    #[serde(default)]
-    protocol: String,
-    #[serde(default)]
-    error: String,
 }
 
 pub(super) fn validate(manifest_path: &Path, readiness_path: &str) -> Result<PreflightEvidence> {
@@ -201,94 +174,6 @@ pub(super) fn validate(manifest_path: &Path, readiness_path: &str) -> Result<Pre
     })
 }
 
-pub(super) fn validate_motan_recording(
-    manifest_path: &Path,
-) -> Result<ManagedMotanRecordingResult> {
-    let run_dir = manifest_path
-        .parent()
-        .context("managed recording manifest has no recording run directory")?;
-    let observation = inspect_run(run_dir)?;
-    validate_motan_gateway_observation(run_dir)?;
-    let status = if observation.motan_cases > 0 {
-        MotanPreflightStatus::Verified
-    } else {
-        MotanPreflightStatus::NotObserved
-    };
-    Ok(ManagedMotanRecordingResult {
-        status,
-        observed_cases: observation.motan_cases,
-        validation_deferred: status == MotanPreflightStatus::NotObserved,
-    })
-}
-
-fn validate_motan_gateway_observation(run_dir: &Path) -> Result<()> {
-    let failures = motan_gateway_failures(&run_dir.join("traffic.jsonl"))?;
-    ensure!(
-        failures.is_empty(),
-        "Motan traffic reached the recording gateway but failed: {}",
-        failures.join("; ")
-    );
-    Ok(())
-}
-
-fn motan_gateway_failures(path: &Path) -> Result<Vec<String>> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(error).with_context(|| {
-                format!(
-                    "failed to inspect preflight traffic evidence {}",
-                    path.display()
-                )
-            });
-        }
-    };
-    ensure!(
-        metadata.is_file() && !metadata.file_type().is_symlink(),
-        "preflight traffic evidence is not a regular file: {}",
-        path.display()
-    );
-    ensure!(
-        metadata.len() <= MAX_TRAFFIC_EVIDENCE_BYTES,
-        "preflight traffic evidence exceeds the {} byte limit: {}",
-        MAX_TRAFFIC_EVIDENCE_BYTES,
-        path.display()
-    );
-    let events = serde_json::Deserializer::from_reader(BufReader::new(File::open(path)?))
-        .into_iter::<TrafficEventProbe>();
-    let mut failures = Vec::new();
-    for event in events {
-        let event = event.with_context(|| {
-            format!(
-                "failed to stream preflight traffic evidence {}",
-                path.display()
-            )
-        })?;
-        if event.event_type == "proxy_error" && event.protocol == "motan_gateway" {
-            failures.push(bounded_text(event.error, MAX_MOTAN_FAILURE_BYTES));
-            if failures.len() == MAX_MOTAN_FAILURES {
-                break;
-            }
-        }
-    }
-    Ok(failures)
-}
-
-fn bounded_text(mut value: String, max_bytes: usize) -> String {
-    if value.len() <= max_bytes {
-        return value;
-    }
-    let suffix = "… [truncated]";
-    let mut end = max_bytes.saturating_sub(suffix.len());
-    while !value.is_char_boundary(end) {
-        end = end.saturating_sub(1);
-    }
-    value.truncate(end);
-    value.push_str(suffix);
-    value
-}
-
 fn count_global_probe_dependencies(path: &Path) -> Result<(usize, Option<PreflightProbeKind>)> {
     regular_file_metadata(path, "preflight HTTP evidence")?;
     let file = File::open(path)
@@ -343,7 +228,6 @@ fn count_global_probe_dependencies(path: &Path) -> Result<(usize, Option<Preflig
 #[derive(Debug, Default)]
 struct RunObservation {
     responses: usize,
-    motan_cases: usize,
     readiness_cases: usize,
     readiness_path: Option<String>,
 }
@@ -414,7 +298,6 @@ fn inspect_run(run_dir: &Path) -> Result<RunObservation> {
                             )
                         })?;
                     match descriptor.kind.as_str() {
-                        "motan_rpc" => observation.motan_cases += 1,
                         "http"
                             if descriptor.source_binding.as_ref().is_some_and(|binding| {
                                 binding.protocol == "http" && binding.method == "GET"
@@ -578,14 +461,6 @@ mod tests {
     }
 
     #[test]
-    fn managed_motan_recording_defers_when_no_motan_case_is_observed() {
-        let (_temp, manifest) = fixture();
-        let recording = validate_motan_recording(&manifest).unwrap();
-        assert_eq!(recording.status, MotanPreflightStatus::NotObserved);
-        assert!(recording.validation_deferred);
-    }
-
-    #[test]
     fn preflight_rejects_a_window_without_one_readiness_case() {
         let (_temp, manifest) = fixture();
         let run = manifest.parent().unwrap();
@@ -603,30 +478,5 @@ mod tests {
 
         let error = validate(&manifest, "/healthz").unwrap_err().to_string();
         assert!(error.contains("exactly one readiness case"));
-    }
-
-    #[test]
-    fn managed_motan_recording_verifies_a_published_motan_case() {
-        let (_temp, manifest) = fixture();
-        let run = manifest.parent().unwrap();
-        let case = run.join("apis/example/case-1");
-        fs::write(case.join("case.json"), r#"{"kind":"motan_rpc"}"#).unwrap();
-        let recording = validate_motan_recording(&manifest).unwrap();
-        assert_eq!(recording.status, MotanPreflightStatus::Verified);
-        assert!(!recording.validation_deferred);
-    }
-
-    #[test]
-    fn managed_motan_recording_rejects_observed_gateway_failures() {
-        let (_temp, manifest) = fixture();
-        let run = manifest.parent().unwrap();
-        fs::write(
-            run.join("traffic.jsonl"),
-            r#"{"event_type":"proxy_error","protocol":"motan_gateway","error":"bad frame"}
-"#,
-        )
-        .unwrap();
-
-        assert!(validate_motan_recording(&manifest).is_err());
     }
 }
