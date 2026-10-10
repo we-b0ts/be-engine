@@ -8,7 +8,11 @@ use super::pattern::path_pattern_matches;
 mod body_validation;
 mod joined_string;
 mod json_pointer;
+mod json_validation;
+mod jwt;
 mod time_rule;
+use json_validation::validate_json_rule_map;
+pub use jwt::ResponseJwtRule;
 pub use time_rule::{ResponseDurationUnit, ResponseTimeRule, ResponseTimestampFormat};
 
 pub(crate) use json_pointer::response_locations_overlap;
@@ -16,7 +20,9 @@ pub(in crate::replay) use json_pointer::{
     response_pointer_matches, select_json_pointers, validate_json_pointer,
 };
 
-use body_validation::{validate_hessian2_rule_map, validate_protobuf_rule_map};
+use body_validation::{
+    validate_body_codec_routes, validate_hessian2_rule_map, validate_protobuf_rule_map,
+};
 pub(in crate::replay) use joined_string::JsonJoinedStringResponseRule;
 use joined_string::validate_separator;
 pub use joined_string::{
@@ -79,6 +85,8 @@ pub(in crate::replay) struct ResponseRules {
 #[serde(deny_unknown_fields)]
 pub(in crate::replay) struct JsonResponseRules {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) jwt: Vec<ResponseJwtRule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) timestamp: Vec<GeneratedResponseRule>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) duration: Vec<GeneratedResponseRule>,
@@ -96,7 +104,8 @@ pub(in crate::replay) struct JsonResponseRules {
 
 impl JsonResponseRules {
     fn is_empty(&self) -> bool {
-        self.timestamp.is_empty()
+        self.jwt.is_empty()
+            && self.timestamp.is_empty()
             && self.duration.is_empty()
             && self.uuid.is_empty()
             && self.random.is_empty()
@@ -133,7 +142,8 @@ impl JsonResponseRules {
             ResponseRuleKind::Duration => Some(&self.duration),
             ResponseRuleKind::Uuid => Some(&self.uuid),
             ResponseRuleKind::Random => Some(&self.random),
-            ResponseRuleKind::Unordered
+            ResponseRuleKind::Jwt
+            | ResponseRuleKind::Unordered
             | ResponseRuleKind::UnorderedJoinedString
             | ResponseRuleKind::Counter => None,
         }
@@ -148,7 +158,8 @@ impl JsonResponseRules {
             ResponseRuleKind::Duration => Some(&mut self.duration),
             ResponseRuleKind::Uuid => Some(&mut self.uuid),
             ResponseRuleKind::Random => Some(&mut self.random),
-            ResponseRuleKind::Unordered
+            ResponseRuleKind::Jwt
+            | ResponseRuleKind::Unordered
             | ResponseRuleKind::UnorderedJoinedString
             | ResponseRuleKind::Counter => None,
         }
@@ -216,6 +227,12 @@ impl ResponseRules {
                                 .expect("response time settings were validated on load");
                         selected
                     })
+                    .chain(rules.jwt.iter().map(move |rule| {
+                        let mut field =
+                            response_field(ResponseRuleKind::Jwt, api, &rule.pointer, None);
+                        field.jwt = Some(rule.clone());
+                        field
+                    }))
                     .chain(rules.unordered.iter().map(move |field| {
                         response_field(ResponseRuleKind::Unordered, api, &field.pointer, None)
                     }))
@@ -518,6 +535,7 @@ pub enum ResponseRuleKind {
     Duration,
     Uuid,
     Random,
+    Jwt,
     Unordered,
     UnorderedJoinedString,
     Counter,
@@ -527,7 +545,7 @@ impl ResponseRuleKind {
     pub(in crate::replay) fn is_generated(self) -> bool {
         matches!(
             self,
-            Self::Timestamp | Self::Duration | Self::Uuid | Self::Random
+            Self::Timestamp | Self::Duration | Self::Uuid | Self::Random | Self::Jwt
         )
     }
 }
@@ -563,6 +581,8 @@ pub(in crate::replay) struct CounterResponseRule {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResponseField {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jwt: Option<ResponseJwtRule>,
     pub id: String,
     pub api: String,
     pub pointer: String,
@@ -612,6 +632,7 @@ pub(in crate::replay) fn response_rule_ids(rules: &ResponseRules) -> Vec<String>
             rules
                 .generated()
                 .map(move |(kind, field)| response_rule_id(kind, api, &field.pointer))
+                .chain(rules.jwt.iter().map(move |rule| rule.id(api)))
                 .chain(rules.unordered.iter().map(move |field| {
                     response_rule_id(ResponseRuleKind::Unordered, api, &field.pointer)
                 }))
@@ -653,6 +674,7 @@ pub(in crate::replay) fn response_rule_id(
         ResponseRuleKind::Duration => ("response", "duration"),
         ResponseRuleKind::Uuid => ("response", "uuid"),
         ResponseRuleKind::Random => ("response", "random"),
+        ResponseRuleKind::Jwt => ("response", "jwt"),
         ResponseRuleKind::Unordered => ("response", "unordered"),
         ResponseRuleKind::UnorderedJoinedString => ("response", "unordered_joined_string"),
         ResponseRuleKind::Counter => ("response:comparison", "counter"),
@@ -676,98 +698,6 @@ pub(in crate::replay) fn parse_api(api: &str) -> Result<(&str, &str)> {
 }
 
 type RuleLocation<'a> = (&'a str, &'a str, &'a str, ResponseRuleKind);
-
-fn validate_json_rule_map<'a>(
-    rules: &'a BTreeMap<String, JsonResponseRules>,
-    locations: &mut Vec<RuleLocation<'a>>,
-) -> Result<()> {
-    for (api, rules) in rules {
-        let (method, path) = validate_rule_api(api)?;
-        ensure!(
-            !rules.is_empty(),
-            "JSON response rule API {api:?} must select at least one rule"
-        );
-        let mut unique_generated = BTreeSet::new();
-        for (kind, field) in rules.generated() {
-            validate_json_pointer(&field.pointer)?;
-            ensure!(
-                unique_generated.insert(field.pointer.as_str()),
-                "generated response rules for API {api:?} repeat JSON Pointer {:?}",
-                field.pointer
-            );
-            validate_generated_rule(kind, field)?;
-            locations.push((method, path, &field.pointer, kind));
-        }
-        let mut unique_unordered = BTreeSet::new();
-        for field in &rules.unordered {
-            validate_json_pointer(&field.pointer)?;
-            ensure!(
-                unique_unordered.insert(field.pointer.as_str()),
-                "unordered response rule API {api:?} repeats JSON Pointer {:?}",
-                field.pointer
-            );
-            validate_audit_text(&field.source_evidence, "source_evidence", 512)?;
-            locations.push((method, path, &field.pointer, ResponseRuleKind::Unordered));
-        }
-        let mut unique_joined_string = BTreeSet::new();
-        for field in &rules.unordered_joined_string {
-            validate_json_pointer(&field.pointer)?;
-            ensure!(
-                unique_joined_string.insert(field.pointer.as_str()),
-                "unordered joined-string response rule API {api:?} repeats JSON Pointer {:?}",
-                field.pointer
-            );
-            validate_separator(&field.separator, "JSON unordered joined-string separator")?;
-            validate_audit_text(&field.source_evidence, "source_evidence", 512)?;
-            locations.push((
-                method,
-                path,
-                &field.pointer,
-                ResponseRuleKind::UnorderedJoinedString,
-            ));
-        }
-        let mut unique_counter = BTreeSet::new();
-        for field in &rules.counter {
-            validate_json_pointer(&field.pointer)?;
-            ensure!(
-                unique_counter.insert(field.pointer.as_str()),
-                "counter response rule API {api:?} repeats JSON Pointer {:?}",
-                field.pointer
-            );
-            validate_counter_rule(field)?;
-            locations.push((method, path, &field.pointer, ResponseRuleKind::Counter));
-        }
-    }
-    Ok(())
-}
-
-fn validate_body_codec_routes(rules: &ResponseRules) -> Result<()> {
-    let routes = rules
-        .json
-        .keys()
-        .map(|api| ("json", api))
-        .chain(rules.protobuf.keys().map(|api| ("protobuf", api)))
-        .chain(rules.hessian2.keys().map(|api| ("hessian2", api)))
-        .chain(rules.docx.keys().map(|api| ("docx", api)))
-        .map(|(codec, api)| {
-            let (method, path) = parse_api(api)?;
-            Ok((codec, api.as_str(), method, path))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    for (index, (left_codec, left_api, left_method, left_path)) in routes.iter().enumerate() {
-        for (right_codec, right_api, right_method, right_path) in routes.iter().skip(index + 1) {
-            if *left_codec == "json" && *right_codec == "json" {
-                continue;
-            }
-            ensure!(
-                !left_method.eq_ignore_ascii_case(right_method)
-                    || !path_patterns_overlap(left_path, right_path),
-                "overlapping body codec response rules select the same API: {left_codec} {left_api:?} and {right_codec} {right_api:?}"
-            );
-        }
-    }
-    Ok(())
-}
 
 fn validate_docx_rule_map(rules: &BTreeMap<String, DocxResponseRules>) -> Result<()> {
     for (api, rules) in rules {
@@ -898,6 +828,7 @@ fn response_field(
     separator: Option<&str>,
 ) -> ResponseField {
     ResponseField {
+        jwt: None,
         id: response_rule_id(kind, api, pointer),
         api: api.to_string(),
         pointer: pointer.to_string(),

@@ -20,6 +20,7 @@ fn response_state() -> RewriteState {
         comparison_observation: None,
     });
     state.rule_plan = Some(RewriteRulePlanRecord {
+        response_jwts: Vec::new(),
         header_dates: Vec::new(),
         dynamic_value: None,
         dependency_request: None,

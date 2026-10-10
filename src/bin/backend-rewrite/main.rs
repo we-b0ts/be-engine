@@ -549,6 +549,7 @@ async fn run(cli: Cli) -> Result<()> {
                 &plan_rewrite_rule(
                     RewriteContext { target_root },
                     RewriteRulePlanOptions {
+                        response_jwts: args.response_jwts,
                         header_dates: args.header_dates,
                         dynamic_value: args.dynamic_value,
                         dependency_request: args.dependency_request,

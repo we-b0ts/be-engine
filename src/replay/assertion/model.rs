@@ -236,6 +236,13 @@ impl From<Hessian2BodyDifference> for ResponseBodyDifferenceDetail {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseDifferenceKind {
+    JwtInvalid,
+    JwtAlgorithmMismatch,
+    JwtSignatureInvalid,
+    JwtClaimsMismatch,
+    JwtTimeMismatch,
+    JwtNonceMismatch,
+    JwtSigningKeyUnavailable,
     ResponseUnavailable,
     StatusMismatch,
     HeaderMissingActual,

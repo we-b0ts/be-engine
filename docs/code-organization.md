@@ -472,6 +472,19 @@ explicit repository-wide audit.
   coordinator plan/apply transaction and global revalidation. Its `discovery`
   child projects existing startup inspection contracts without secret values.
   These modules never make expected responses available to request execution.
+  Its pure `jwt/contract` child compares signed headers, stable claims,
+  request-relative NumericDate offsets and explicitly selected UUID nonces;
+  response assertions and Redis write assertions share that validator.
+- `json_value` owns bounded strict JSON decoding with duplicate-member
+  rejection. Replay JSON normalization and signed-token validation share it;
+  selector expansion and collection normalization stay in Replay.
+- `replay/policy/response/jwt` owns explicit JWT response selectors and startup
+  key references. `replay/assertion/jwt` resolves private signing inputs and
+  enforces per-response nonce consistency. Generated-value feedback's
+  `response_evidence` child owns protected response observation admission;
+  `response_jwt` owns signed witness validation and atomic plan/apply through
+  the existing coordinator rule transaction. JSON subtree ownership remains
+  in `response/json_validation` and the shared pointer-overlap validator.
 
 - `replay/policy/response/json_pointer` owns JSON response selector validation,
   array expansion, evidence matching, and subtree overlap checks. The assertion

@@ -19,6 +19,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct RewriteRulePlanOptions {
+    pub response_jwts: Vec<crate::ResponseJwtRule>,
     pub header_dates: Vec<crate::ResponseHeaderDateRule>,
     pub dynamic_value: Option<crate::DynamicValueRule>,
     pub dependency_request: Option<Value>,
@@ -66,7 +67,8 @@ pub(super) fn plan(
     state: &mut RewriteState,
     options: RewriteRulePlanOptions,
 ) -> Result<RewriteRuleReport> {
-    if !options.header_dates.is_empty()
+    if !options.response_jwts.is_empty()
+        || !options.header_dates.is_empty()
         || options.dynamic_value.is_some()
         || options.dependency_request.is_some()
     {
@@ -140,6 +142,7 @@ fn plan_json(
         })
         .context("rule plan requires a representative JSON Pointer")?;
     let record = RewriteRulePlanRecord {
+        response_jwts: Vec::new(),
         header_dates: Vec::new(),
         dynamic_value: None,
         dependency_request: None,
@@ -225,6 +228,7 @@ fn plan_response_body(
     };
     let spec_json = serde_json::to_string(&spec)?;
     let record = RewriteRulePlanRecord {
+        response_jwts: Vec::new(),
         header_dates: Vec::new(),
         dynamic_value: None,
         dependency_request: None,
@@ -290,7 +294,8 @@ fn build_plan(
     state: &RewriteState,
     record: &RewriteRulePlanRecord,
 ) -> Result<VerificationRulePlan> {
-    if record.dependency_request.is_some()
+    if !record.response_jwts.is_empty()
+        || record.dependency_request.is_some()
         || record.dynamic_value.is_some()
         || !record.header_dates.is_empty()
     {
@@ -538,6 +543,7 @@ fn rule_kind(kind: ResponseRuleKind) -> &'static str {
         ResponseRuleKind::Duration => "duration",
         ResponseRuleKind::Uuid => "uuid",
         ResponseRuleKind::Random => "random",
+        ResponseRuleKind::Jwt => "jwt",
         ResponseRuleKind::Unordered => "unordered",
         ResponseRuleKind::UnorderedJoinedString => "unordered_joined_string",
         ResponseRuleKind::Counter => "counter",

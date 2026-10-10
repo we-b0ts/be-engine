@@ -1,7 +1,6 @@
 //! JSON object identity and explicit array-order normalization for dependency values.
-mod decode;
+pub(in crate::replay) use crate::json_value::parse;
 use crate::replay::policy::select_json_pointers;
-pub(in crate::replay) use decode::parse;
 use serde_json::Value;
 use std::collections::BTreeMap;
 

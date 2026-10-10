@@ -46,7 +46,7 @@ response_rules:
 
 Response field rules are grouped by body codec, canonical API, and then
 concrete rule kind. Standard replay loads JSON `timestamp`, `duration`, `uuid`,
-`random`, and `unordered` rules plus configured protobuf, Hessian2, and DOCX rules.
+`random`, `jwt`, and `unordered` rules plus configured protobuf, Hessian2, and DOCX rules.
 Comparison also loads JSON `counter` rules. Replay and comparison-only rules
 must select disjoint JSON subtrees;
 overlapping strategies are rejected rather than ordered by precedence.
@@ -58,6 +58,14 @@ rejected and must omit that setting or use `before`. Source-after evidence is
 optional and diagnostic only. Source changes and a candidate matching source-after
 do not authorize acceptance or response rules; investigate the source code.
 Standard Replay ignores this setting.
+
+Signed HTTP JSON tokens use explicit `jwt` rules, not whole-token `random`
+exemptions. Prove source issuance and key precedence, then use the coordinator's
+`rule plan --response-jwt` with current evidence and a private startup-key
+reference. Plan verifies both signatures, exact stable claims and relative
+`exp`/`iat`/`nbf` offsets within five seconds; optional `/jti` must be UUID v4.
+Apply rechecks artifacts, policy and key, then requires fresh Replay. See
+[JWT response rules](../../../../../docs/jwt-response-rules.md).
 
 `traffic-e2e config init` validates the initial policy, every
 evidence-driven `apply` validates the resulting policy, and the runner validates

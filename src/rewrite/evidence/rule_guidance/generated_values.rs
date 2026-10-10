@@ -26,8 +26,33 @@ fn has_header_difference(value: &Value, depth: usize) -> bool {
     }
 }
 
+pub(in crate::rewrite::evidence) fn has_response_jwt(value: &Value) -> bool {
+    fn contains(value: &Value, depth: usize) -> bool {
+        if depth > 16 {
+            return false;
+        }
+        match value {
+            Value::String(raw) => crate::request_rules::jwt::Token::parse(raw)
+                .ok()
+                .flatten()
+                .is_some(),
+            Value::Object(fields) => fields.values().any(|value| contains(value, depth + 1)),
+            Value::Array(items) => items.iter().any(|value| contains(value, depth + 1)),
+            _ => false,
+        }
+    }
+    contains(value, 0)
+}
+
 pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleHint> {
     let mut hints = Vec::new();
+    if query == QUERY_REPRESENTATIVES && has_response_jwt(facts) {
+        hints.push(RewriteRuleHint {
+            capability: "response_jwt".into(), rule: "response-jwt".into(),
+            hint: "Response observations contain a compact HMAC JWT candidate; decoding alone does not prove generation or a valid signature. Trace source issuance, signing algorithm/key precedence and stable claims. Inspect signing_key_discovery, then use rule plan --response-jwt with pointer, algorithm, signing_key_source, source_evidence and only an explicitly source-proven UUID v4 dynamic_claims: [/jti]. Plan verifies both signatures, exact headers/stable claims and exp/iat/nbf relative to each request within five seconds. Do not exempt a JWT with random or timestamp. Apply and fresh Replay; recordings and authentication remain unchanged.".into(),
+            help: super::super::super::action::command(root, vec!["rule".into(), "plan".into(), "--help".into()], Vec::new()),
+        });
+    }
     if query == QUERY_REPRESENTATIVES && has_header_difference(facts, 0) {
         hints.push(RewriteRuleHint {
             capability: "response_header_date".into(), rule: "header-date".into(),
@@ -112,6 +137,23 @@ pub(super) fn planners(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn response_jwt_guidance_is_candidate_only_and_does_not_echo_tokens() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        let raw = format!(
+            "{}.{}.AA",
+            URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256"}"#),
+            URL_SAFE_NO_PAD.encode(r#"{"sub":"example","exp":2000}"#)
+        );
+        let facts = json!({"representative":{"response_difference":{"expected":{"value":raw}}}});
+        let hints = hints(Path::new("/target"), QUERY_REPRESENTATIVES, &facts);
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].capability, "response_jwt");
+        assert!(!serde_json::to_string(&hints).unwrap().contains(&raw));
+        assert!(hints[0].hint.contains("does not prove"));
+        assert!(!has_response_jwt(&json!({"value":"opaque-access-token"})));
+    }
+
     #[test]
     fn header_rules_are_offered_without_body_codecs_and_identity_rules_require_capture_evidence() {
         let root = Path::new("/target");

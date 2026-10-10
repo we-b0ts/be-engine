@@ -1,6 +1,5 @@
 //! Atomic validation of Redis argument copies, JSON timestamps and signed JWT claims.
 use super::*;
-use base64::Engine as _;
 use config::{ArgumentRule, JsonField, JwtContract, RedisRequestSelector, TimeField};
 
 pub(super) fn number(value: &Value) -> Result<f64> {
@@ -218,31 +217,11 @@ impl RequestContracts {
         config: &JwtContract,
         decision: &mut Decision,
     ) -> Result<()> {
-        let parse = |value: &Value| {
-            let raw = value.as_str().context("JWT must be a string")?;
-            let token = crate::request_rules::jwt::Token::parse(raw)?
-                .context("invalid compact HMAC JWT")?;
-            for part in raw.split('.').take(2) {
-                let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(part)?;
-                crate::replay::json_order::parse(&bytes)
-                    .context("JWT header and claims require complete unique-member JSON")?;
-            }
-            Ok::<_, anyhow::Error>(token)
-        };
-        let mut source = parse(source)?;
-        let mut actual = parse(actual)?;
         let key = self
             .keys
             .get(&(rule.into(), pointer.into()))
             .context("request JWT signing key is unavailable")?
             .bytes();
-        ensure!(
-            source.algorithm == config.algorithm
-                && actual.algorithm == config.algorithm
-                && source.verify(key)
-                && actual.verify(key),
-            "JWT algorithm or signature differs from its declared signing contract"
-        );
         let a = number(
             source_document
                 .pointer(&config.relative_to)
@@ -253,57 +232,23 @@ impl RequestContracts {
                 .pointer(&config.relative_to)
                 .context("target JWT time anchor missing")?,
         )?;
-        for name in ["exp", "iat", "nbf"] {
-            let left = source.integer_claim(name)?;
-            let right = actual.integer_claim(name)?;
-            ensure!(
-                left.is_some() == right.is_some(),
-                "JWT time claim presence changed"
-            );
-            if let (Some(left), Some(right)) = (left, right) {
-                decision.time_validations += 1;
-                ensure!(
-                    ((right as f64 - b) - (left as f64 - a)).abs()
-                        <= config::tolerance(&config.tolerance)?,
-                    "JWT relative lifetime changed"
-                );
-                if matches!(name, "iat" | "nbf") {
-                    ensure!(
-                        left as f64 <= a + config::tolerance(&config.tolerance)?
-                            && right as f64 <= b + config::tolerance(&config.tolerance)?,
-                        "JWT is not valid at generation"
-                    );
-                }
-                if name == "exp" {
-                    ensure!(
-                        left as f64 > a && right as f64 > b,
-                        "JWT expired at generation"
-                    );
-                }
-                source.claims[name] = Value::Null;
-                actual.claims[name] = Value::Null;
-            }
-        }
-        ensure!(source.claims.get("exp").is_some(), "JWT requires exp");
-        for claim in &config.dynamic_claims {
-            let a = source
-                .claims
-                .pointer(claim)
-                .and_then(Value::as_str)
-                .context("source JWT nonce is missing")?
-                .to_owned();
-            let b = actual
-                .claims
-                .pointer(claim)
-                .and_then(Value::as_str)
-                .context("target JWT nonce is missing")?
-                .to_owned();
-            for value in [&a, &b] {
-                ensure!(
-                    uuid::Uuid::parse_str(value)?.get_version_num() == 4,
-                    "JWT nonce must be UUID v4"
-                );
-            }
+        let validated = crate::request_rules::jwt::contract::compare(
+            source,
+            actual,
+            crate::request_rules::jwt::contract::Contract {
+                algorithm: config.algorithm,
+                key,
+                anchors: [(a * 1e9).round() as i128, (b * 1e9).round() as i128],
+                tolerance: (config::tolerance(&config.tolerance)? * 1e9).round() as i128,
+                dynamic_claims: &config.dynamic_claims,
+            },
+        )
+        .map_err(|error| anyhow::anyhow!("JWT contract failed: {error:?}"))?;
+        decision.time_validations += validated.time_validations;
+        for nonce in validated.nonces {
+            let claim = &nonce.claim;
+            let a = nonce.source;
+            let b = nonce.target;
             let key = (case.into(), rule.into(), format!("{pointer}{claim}"));
             let state = self.state.lock().expect("request contracts");
             if let Some(bindings) = state.nonces.get(&key) {
@@ -318,13 +263,7 @@ impl RequestContracts {
             }
             drop(state);
             decision.nonces.push((key, a, b));
-            *source.claims.pointer_mut(claim).unwrap() = Value::Null;
-            *actual.claims.pointer_mut(claim).unwrap() = Value::Null;
         }
-        ensure!(
-            source.header_value()? == actual.header_value()? && source.claims == actual.claims,
-            "unselected JWT header or claims differ"
-        );
         Ok(())
     }
 }

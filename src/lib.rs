@@ -20,6 +20,7 @@ mod engine_binary;
 mod gateway;
 mod http;
 mod internal_runtime;
+mod json_value;
 mod kafka;
 pub mod local_interception;
 mod memcached;

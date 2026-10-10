@@ -92,6 +92,10 @@ impl ResponseRulePlan {
 
 pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRulePlan> {
     ensure!(
+        feedback.kind != ResponseRuleKind::Jwt,
+        "JWT responses require the typed response-jwt planner"
+    );
+    ensure!(
         feedback.kind != ResponseRuleKind::Counter,
         "counter response rules require `config comparison` and --comparison-run"
     );
@@ -212,6 +216,10 @@ fn hydrate_assertion_details(assertions: &mut AssertionEvidence) -> Result<()> {
 pub fn plan_comparison_response_rule(
     feedback: ComparisonResponseRuleFeedback,
 ) -> Result<ResponseRulePlan> {
+    ensure!(
+        feedback.kind != ResponseRuleKind::Jwt,
+        "JWT responses require the typed response-jwt planner"
+    );
     let justification = justification::validate(
         feedback.kind,
         feedback.time,
@@ -788,3 +796,5 @@ pub use redis_publish::{
 };
 
 pub use generated_values::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
+
+pub use generated_values::{ResponseJwtRuleFeedback, plan_response_jwt_rule};

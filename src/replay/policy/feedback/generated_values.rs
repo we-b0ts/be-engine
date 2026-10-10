@@ -3,6 +3,8 @@ mod dependency_request;
 mod evidence;
 mod header_evidence;
 mod request_evidence;
+mod response_evidence;
+mod response_jwt;
 use super::super::{
     config::{fingerprint, load_replay_policy},
     dynamic_values::DynamicValueRule,
@@ -14,6 +16,7 @@ use super::{
 };
 use anyhow::{Context, Result, ensure};
 pub use dependency_request::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
+pub use response_jwt::{ResponseJwtRuleFeedback, plan_response_jwt_rule};
 use serde::Serialize;
 use std::{fs, path::PathBuf};
 

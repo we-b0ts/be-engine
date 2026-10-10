@@ -6,6 +6,7 @@ pub(in crate::replay) mod headers;
 pub use headers::date::ResponseHeaderDateCandidate;
 pub(in crate::replay) mod hessian2;
 mod joined_string;
+pub(in crate::replay) mod jwt;
 mod model;
 pub(in crate::replay) mod time;
 pub(in crate::replay) use time::RequestTimes;

@@ -24,7 +24,8 @@ pub(super) fn plan(
     ensure!(
         (usize::from(options.dynamic_value.is_some())
             + usize::from(options.dependency_request.is_some())
-            + usize::from(!options.header_dates.is_empty()))
+            + usize::from(!options.header_dates.is_empty())
+            + usize::from(!options.response_jwts.is_empty()))
             == 1,
         "plan one generated value rule family at a time"
     );
@@ -70,7 +71,14 @@ pub(super) fn plan(
             rule.source_evidence = options.source_evidence.clone().unwrap_or_default();
         }
     }
-    let kind = if options.dynamic_value.is_some() {
+    for rule in &mut options.response_jwts {
+        if rule.source_evidence.is_empty() {
+            rule.source_evidence = options.source_evidence.clone().unwrap_or_default();
+        }
+    }
+    let kind = if !options.response_jwts.is_empty() {
+        "response_jwt"
+    } else if options.dynamic_value.is_some() {
         "dynamic_value"
     } else if options.dependency_request.is_some() {
         "dependency_request"
@@ -81,6 +89,7 @@ pub(super) fn plan(
         options.dynamic_value.as_ref(),
         &options.header_dates,
         &options.dependency_request,
+        &options.response_jwts,
     ))?;
     let record = RewriteRulePlanRecord {
         id: format!(
@@ -108,6 +117,7 @@ pub(super) fn plan(
         dynamic_value: options.dynamic_value,
         dependency_request: options.dependency_request,
         header_dates: options.header_dates,
+        response_jwts: options.response_jwts,
     };
     let report = build(target_root, state, &record)?.report().clone();
     state.rule_plan = Some(record.clone());
@@ -179,6 +189,14 @@ pub(super) fn build(
             aggregate_report: evidence.aggregate,
         }
     };
+    if !record.response_jwts.is_empty() {
+        return crate::plan_response_jwt_rule(crate::ResponseJwtRuleFeedback {
+            policy_path,
+            api: state.api.clone(),
+            rules: record.response_jwts.clone(),
+            evidence,
+        });
+    }
     crate::plan_response_header_date_rule(ResponseHeaderDateRuleFeedback {
         policy_path,
         api: super::super::api_selector::public_api(&state.api).into(),
