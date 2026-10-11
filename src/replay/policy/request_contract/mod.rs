@@ -3,6 +3,7 @@ pub(crate) mod config;
 pub(in crate::replay::policy) mod evidence;
 mod overlap;
 mod redis;
+mod script;
 pub(in crate::replay::policy) use overlap::validate as validate_overlaps;
 #[cfg(test)]
 mod tests;
@@ -251,12 +252,23 @@ impl RequestContracts {
                         && selector
                             .commands
                             .iter()
-                            .any(|c| event["command"] == c.command)
-                        && event["args"]
-                            .as_array()
-                            .and_then(|args| args.first())
-                            .and_then(|key| evidence::decode(key).ok())
-                            .is_some_and(|key| selector.key.matches(&key))
+                            .filter(|c| event["command"] == c.command)
+                            .any(|command| {
+                                event["args"]
+                                    .as_array()
+                                    .and_then(|args| {
+                                        args.iter()
+                                            .map(evidence::decode)
+                                            .collect::<Result<Vec<_>>>()
+                                            .ok()
+                                    })
+                                    .is_some_and(|args| {
+                                        command.validate_arguments(&args).is_ok()
+                                            && command
+                                                .key(&args)
+                                                .is_some_and(|key| selector.key.matches(key))
+                                    })
+                            })
                 } else {
                     rule.http.as_ref().is_some_and(|h| {
                         event["method"] == h.method

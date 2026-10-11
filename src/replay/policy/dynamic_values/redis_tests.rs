@@ -48,6 +48,113 @@ fn event(key: &str) -> Value {
 }
 
 #[test]
+fn rpush_integer_capture_is_typed_case_local_and_keeps_other_fields_exact() {
+    let mut spec = serde_json::to_value(rule(json!("events"))).unwrap();
+    spec["value_type"] = json!("integer");
+    spec["capture"]["command"] = json!("RPUSH");
+    spec["capture"]["json_pointer"] = json!("/id");
+    let rule: DynamicValueRule = serde_json::from_value(spec).unwrap();
+    rule.validate().unwrap();
+    let runtime = runtime(rule.clone());
+    let values = |body: &str| vec![b"events".to_vec(), body.as_bytes().to_vec()];
+    let source = values(r#"{ "id": 1, "stable": 7 }"#);
+    let actual = values(r#"{"id":9,"stable":7}"#);
+    let normalized = runtime
+        .redis(Some("case"), &target(), 0, "RPUSH", &source, &actual)
+        .unwrap()
+        .unwrap();
+    assert_eq!(normalized.source, normalized.actual);
+    runtime.commit("case", normalized.decision);
+    assert!(
+        runtime
+            .redis(
+                Some("case"),
+                &target(),
+                0,
+                "RPUSH",
+                &source,
+                &values(r#"{"id":10,"stable":7}"#)
+            )
+            .unwrap()
+            .is_err()
+    );
+    for body in [
+        r#"{"id":"9","stable":7}"#,
+        r#"{"id":9.0,"stable":7}"#,
+        r#"{"id":9,"id":10,"stable":7}"#,
+        r#"{"stable":7}"#,
+    ] {
+        assert!(
+            runtime
+                .redis(Some("case"), &target(), 0, "RPUSH", &source, &values(body))
+                .unwrap()
+                .is_err()
+        );
+    }
+    let normalized = runtime
+        .redis(
+            Some("case"),
+            &target(),
+            0,
+            "RPUSH",
+            &source,
+            &values(r#"{"id":9,"stable":9}"#),
+        )
+        .unwrap()
+        .unwrap();
+    assert_ne!(normalized.source, normalized.actual);
+    assert!(
+        runtime
+            .redis(
+                Some("other"),
+                &target(),
+                0,
+                "RPUSH",
+                &source,
+                &values(r#"{"id":10,"stable":7}"#)
+            )
+            .unwrap()
+            .is_ok()
+    );
+    let mut recorded = event("events");
+    recorded["command"] = json!("RPUSH");
+    recorded["args"][1]["data"] = json!(r#"{"id":1,"stable":7}"#);
+    assert_eq!(
+        source::from_event(&rule.capture, rule.value_type, &recorded)
+            .unwrap()
+            .unwrap()
+            .value,
+        "1"
+    );
+}
+
+#[test]
+fn rpush_discovery_reports_each_typed_field_without_exposing_values() {
+    let runtime = runtime(rule(json!("events")));
+    let values = |body: &str| vec![b"events".to_vec(), body.as_bytes().to_vec()];
+    runtime.observe_redis(
+        "case",
+        &target(),
+        0,
+        "RPUSH",
+        &values(r#"{"id":1,"timestamp":1000,"stable":7}"#),
+        &values(r#"{"id":9,"timestamp":2000,"stable":7}"#),
+    );
+    let candidates = runtime.capture_candidates();
+    assert_eq!(candidates.len(), 2);
+    assert!(
+        candidates
+            .iter()
+            .all(|c| c.value_type == DynamicValueType::Integer)
+    );
+    assert!(
+        !serde_json::to_string(&candidates)
+            .unwrap()
+            .contains("\"timestamp\":2000")
+    );
+}
+
+#[test]
 fn exact_affix_and_numeric_selectors_round_trip_and_select_recorded_keys() {
     for (selector, matching, rejected) in [
         (json!("task:12:status"), "task:12:status", "task:13:status"),
@@ -339,7 +446,7 @@ fn overlapping_key_patterns_cannot_own_the_same_capture_location() {
 }
 
 #[test]
-fn request_contract_overlap_checks_patterns_instead_of_one_literal_key() {
+fn request_contract_overlap_checks_key_patterns_and_json_locations() {
     for (selector, rejected) in [
         (json!({"prefix":"task:","numeric":true}), true),
         (json!({"prefix":"other:"}), false),
@@ -353,6 +460,13 @@ fn request_contract_overlap_checks_patterns_instead_of_one_literal_key() {
             "redis":{"database":0,"key":{"prefix":"task:"},"commands":[{"command":"SET",
                 "argument_values":{"1":{"json":{"/at":{"time":"preserve_relative","format":"unix_seconds"}}}}}]}
         })).unwrap()];
+        super::super::request_contract::validate_overlaps(&document).unwrap();
+        let DynamicValueCapture::Redis { json_pointer, .. } =
+            &mut document.dynamic_values[0].capture
+        else {
+            unreachable!()
+        };
+        *json_pointer = Some("/at".into());
         assert_eq!(
             super::super::request_contract::validate_overlaps(&document).is_err(),
             rejected

@@ -2,6 +2,7 @@ mod active_artifact;
 mod active_progress;
 mod admin_source;
 mod admin_startup;
+mod assertion_publication;
 mod branch;
 mod case_progress;
 mod config;

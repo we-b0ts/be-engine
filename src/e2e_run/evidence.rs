@@ -324,10 +324,12 @@ fn unavailable_response_page(
             difference_kind: ResponseDifferenceKind::ResponseUnavailable,
             unavailable_reason: reason,
             expected: E2eValueObservation {
+                jwt_candidate: false,
                 presence: E2eValuePresence::Present,
                 value: None,
             },
             actual: E2eValueObservation {
+                jwt_candidate: false,
                 presence: E2eValuePresence::Unavailable,
                 value: None,
             },
@@ -526,10 +528,12 @@ mod tests {
     #[test]
     fn missing_and_json_null_have_different_projection_keys() {
         let missing = E2eValueObservation {
+            jwt_candidate: false,
             presence: E2eValuePresence::Missing,
             value: None,
         };
         let json_null = E2eValueObservation {
+            jwt_candidate: false,
             presence: E2eValuePresence::Present,
             value: Some(Value::Null),
         };

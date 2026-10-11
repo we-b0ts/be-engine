@@ -73,48 +73,16 @@ pub(super) fn publish(
             );
             copy_evidence(&primary.active_dir, &active)?;
         }
-        let projected = store::state_for_published_directory(
+        let projected = super::assertion_publication::prepare(
             &project(state, &api.group_id),
             &primary.active_dir,
             &active,
+            &active,
         )?;
-        if active != primary.active_dir {
-            retarget_copied_assertions(&projected, &primary.active_dir, &active)?;
-        }
         projections.push((active, latest, projected));
     }
     for (active, latest, projected) in projections {
         store::publish_snapshot(&active, &latest, &projected)?;
-    }
-    Ok(())
-}
-
-fn retarget_copied_assertions(state: &ActiveRunState, old: &Path, new: &Path) -> Result<()> {
-    let paths = std::iter::once(state.assertions_report.clone()).chain(
-        state
-            .apis
-            .iter()
-            .map(|api| api.report_dir.join("assertions.json")),
-    );
-    for path in paths {
-        if !path.is_file() {
-            continue;
-        }
-        let mut report: super::model::AssertionReport = serde_json::from_slice(&fs::read(&path)?)?;
-        for case in &mut report.cases {
-            if let Some(response) = &mut case.response {
-                for path in [
-                    &mut response.detail_report,
-                    &mut response.request,
-                    &mut response.actual_response,
-                ] {
-                    if let Ok(relative) = path.strip_prefix(old) {
-                        *path = new.join(relative);
-                    }
-                }
-            }
-        }
-        store::write_json(&path, &report)?;
     }
     Ok(())
 }

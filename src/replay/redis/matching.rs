@@ -8,6 +8,33 @@ use crate::replay::report::command::CommandMatchDiagnostic;
 
 impl RedisReplayState {
     fn arguments_match(&self, exchange: &ReplayExchange, args: &[Vec<u8>]) -> bool {
+        let normalized =
+            if exchange.source == ReplaySource::Case && exchange.shared_rule_id.is_none() {
+                match self
+                    .dynamic_values
+                    .redis(
+                        exchange.case_id.as_deref(),
+                        &TargetKey {
+                            host: exchange.record.target_host.clone(),
+                            port: exchange.record.target_port,
+                        },
+                        exchange.record.database,
+                        &exchange.record.command,
+                        &exchange.args,
+                        args,
+                    )
+                    .transpose()
+                {
+                    Ok(normalized) => normalized,
+                    Err(_) => return false,
+                }
+            } else {
+                None
+            };
+        let source = normalized
+            .as_ref()
+            .map_or(exchange.args.as_slice(), |n| n.source.as_slice());
+        let actual = normalized.as_ref().map_or(args, |n| n.actual.as_slice());
         if exchange.source == ReplaySource::Case
             && exchange.shared_rule_id.is_none()
             && let Some(case) = exchange.case_id.as_deref()
@@ -19,34 +46,19 @@ impl RedisReplayState {
                 },
                 exchange.record.database,
                 &exchange.record.command,
-                &exchange.args,
-                args,
+                source,
+                actual,
             )
         {
             return result.is_ok();
         }
-        if exchange.source == ReplaySource::Case
-            && exchange.shared_rule_id.is_none()
-            && let Some(normalized) = self.dynamic_values.redis(
-                exchange.case_id.as_deref(),
-                &TargetKey {
-                    host: exchange.record.target_host.clone(),
-                    port: exchange.record.target_port,
-                },
-                exchange.record.database,
-                &exchange.record.command,
-                &exchange.args,
-                args,
-            )
-        {
-            let Ok(normalized) = normalized else {
-                return false;
-            };
-            let mut normalized_exchange = exchange.clone();
-            normalized_exchange.args = normalized.source;
-            return self.arguments_match_plain(&normalized_exchange, &normalized.actual);
+        if let Some(normalized) = normalized {
+            let mut comparison = exchange.clone();
+            comparison.args = normalized.source;
+            self.arguments_match_plain(&comparison, &normalized.actual)
+        } else {
+            self.arguments_match_plain(exchange, args)
         }
-        self.arguments_match_plain(exchange, args)
     }
 
     fn arguments_match_plain(&self, exchange: &ReplayExchange, args: &[Vec<u8>]) -> bool {
@@ -215,23 +227,6 @@ impl RedisReplayState {
             }
         };
         let exchange = &self.exchanges[index];
-        let request_decision = (exchange.source == ReplaySource::Case
-            && exchange.shared_rule_id.is_none())
-        .then(|| {
-            exchange.case_id.as_deref().and_then(|case| {
-                self.request_contracts.preview_redis(
-                    case,
-                    target,
-                    database,
-                    command,
-                    &exchange.args,
-                    args,
-                )
-            })
-        })
-        .flatten()
-        .transpose()
-        .expect("selected Redis request contract was validated");
         let normalized = (exchange.source == ReplaySource::Case
             && exchange.shared_rule_id.is_none())
         .then(|| {
@@ -257,6 +252,23 @@ impl RedisReplayState {
         } else {
             args
         };
+        let request_decision = (exchange.source == ReplaySource::Case
+            && exchange.shared_rule_id.is_none())
+        .then(|| {
+            exchange.case_id.as_deref().and_then(|case| {
+                self.request_contracts.preview_redis(
+                    case,
+                    target,
+                    database,
+                    command,
+                    &normalized_exchange.args,
+                    arguments,
+                )
+            })
+        })
+        .flatten()
+        .transpose()
+        .expect("selected Redis request contract was validated");
         let mut rule_ids = value::used_rules(&normalized_exchange, arguments, &self.value_rules);
         rule_ids.extend(self.lock_tokens.claim(&normalized_exchange, arguments));
         rule_ids.extend(self.publish_rules.claim(&normalized_exchange, arguments));

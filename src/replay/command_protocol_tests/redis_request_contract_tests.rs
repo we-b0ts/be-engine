@@ -214,3 +214,162 @@ async fn redis_request_contracts_discover_plan_apply_and_verify_json_jwts_and_fr
         task.abort();
     }
 }
+
+#[tokio::test]
+async fn script_and_rpush_contracts_plan_apply_and_replay_over_real_redis_clients() {
+    for script in [true, false] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let local = root.join(".traffic-e2e/local");
+        let case = local.join("recordings/run/case");
+        std::fs::create_dir_all(&case).unwrap();
+        let key_path = local.join(crate::repository::LOCAL_ENCRYPTION_KEY_FROM_LOCAL);
+        std::fs::create_dir_all(key_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            key_path,
+            std::env::var(crate::request_headers::ENCRYPTION_KEY_ENV)
+                .unwrap_or_else(|_| STANDARD.encode([7u8; 32])),
+        )
+        .unwrap();
+        std::fs::write(
+            case.join("request.json"),
+            r#"{"method":"PUT","uri":"/scenario","timestamp":"1970-01-01T00:16:40Z"}"#,
+        )
+        .unwrap();
+        std::fs::write(case.join("expected-response.json"), "{}").unwrap();
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let command = if script { "EVALSHA" } else { "RPUSH" };
+        let source_args = if script {
+            vec![sha, "1", "events", "1000000", "stable"]
+        } else {
+            vec!["events", r#"{"id":1,"timestamp":1000,"stable":"keep"}"#]
+        };
+        let record = redis_hash_dependency(Uuid::new_v4(), 1, command, &source_args, b":1\r\n");
+        let immutable = record.to_string();
+        std::fs::write(case.join("dependencies.jsonl"), &immutable).unwrap();
+        let policy = root.join(".traffic-e2e/verification.yaml");
+        std::fs::write(
+            &policy,
+            "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+        )
+        .unwrap();
+        let report = root.join("replay.json");
+        let request = || {
+            let now = Utc::now();
+            if script {
+                vec![
+                    command.into(),
+                    sha.into(),
+                    "1".into(),
+                    "events".into(),
+                    now.timestamp_millis().to_string(),
+                    "stable".into(),
+                ]
+            } else {
+                vec![
+                    command.into(),
+                    "events".into(),
+                    json!({"id":9,"timestamp":now.timestamp(),"stable":"keep"}).to_string(),
+                ]
+            }
+        };
+        // RPUSH first captures its ID. Both families then plan a time contract
+        // from a fresh protected witness under the currently applied policy.
+        for identity_phase in if script {
+            vec![false]
+        } else {
+            vec![true, false]
+        } {
+            let (addr, state, task) = redis_value_tests::spawn(&case, Some(policy.clone())).await;
+            state
+                .lock()
+                .await
+                .replay_policy
+                .as_ref()
+                .unwrap()
+                .request_contracts
+                .request_begin("case")
+                .unwrap();
+            let mut client = TcpStream::connect(addr).await.unwrap();
+            let actual = request();
+            redis_value_tests::request(
+                &mut client,
+                &actual.iter().map(String::as_str).collect::<Vec<_>>(),
+                b"-ERR no recorded Redis dependency matched\r\n",
+            )
+            .await;
+            {
+                let mut replay = state.lock().await;
+                replay.finalized_at = Some(Utc::now());
+                std::fs::write(
+                    &report,
+                    serde_json::to_vec(&replay.snapshot_report()).unwrap(),
+                )
+                .unwrap();
+            }
+            task.abort();
+            if identity_phase {
+                let rule = serde_json::from_value(json!({"id":"event-id","api":"/scenario","value_type":"integer","targets":[{"host":"redis.internal","port":6379}],"capture":{"protocol":"redis","target":{"host":"redis.internal","port":6379},"database":0,"command":"RPUSH","key":"events","argument_index":1,"json_pointer":"/id"},"source_evidence":"Emitter:enqueue generates one integer ID for its emitted event"})).unwrap();
+                crate::plan_dynamic_value_rule(crate::DynamicValueRuleFeedback {
+                    policy_path: policy.clone(),
+                    rule,
+                    replay_report: report.clone(),
+                })
+                .unwrap()
+                .apply()
+                .unwrap();
+            } else {
+                let redis = if script {
+                    json!({"key":"events","commands":[{"command":"EVALSHA","script":{"sha1":sha},"argument_values":{"3":{"time":"preserve_relative","format":"unix_milliseconds"}}}]})
+                } else {
+                    json!({"key":"events","commands":[{"command":"RPUSH","argument_values":{"1":{"json":{"/timestamp":{"time":"preserve_relative","format":"unix_seconds"}}}}}]})
+                };
+                let rule = json!({"id":"event-time","protocol":"redis","target":{"host":"redis.internal","port":6379},"case":{"method":"PUT","path":"/scenario"},"source_evidence":"Emitter:enqueue writes the current request time to Redis","redis":redis});
+                plan_dependency_request_rule(DependencyRequestRuleFeedback {
+                    policy_path: policy.clone(),
+                    rule,
+                    replay_report: report.clone(),
+                })
+                .unwrap()
+                .apply()
+                .unwrap();
+            }
+        }
+        let (addr, state, task) = redis_value_tests::spawn(&case, Some(policy.clone())).await;
+        state
+            .lock()
+            .await
+            .replay_policy
+            .as_ref()
+            .unwrap()
+            .request_contracts
+            .request_begin("case")
+            .unwrap();
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let actual = request();
+        redis_value_tests::request(
+            &mut client,
+            &actual.iter().map(String::as_str).collect::<Vec<_>>(),
+            b":1\r\n",
+        )
+        .await;
+        {
+            let replay = state.lock().await;
+            assert!(!replay.snapshot_report().is_dirty());
+            let usage = replay.replay_policy.as_ref().unwrap().report();
+            assert!(usage.dependency_rules.iter().all(|r| r.matches > 0));
+            assert!(usage.unused_applicable_dependency_rule_ids.is_empty());
+        }
+        redis_value_tests::request(
+            &mut client,
+            &actual.iter().map(String::as_str).collect::<Vec<_>>(),
+            b"-ERR no recorded Redis dependency matched\r\n",
+        )
+        .await;
+        assert_eq!(
+            std::fs::read_to_string(case.join("dependencies.jsonl")).unwrap(),
+            immutable
+        );
+        task.abort();
+    }
+}

@@ -42,7 +42,7 @@ pub(super) struct RulePlanArgs {
     #[arg(long = "response-jwt", value_name = "RULE_JSON", value_parser = parse_response_jwt, conflicts_with_all = ["header_dates", "dynamic_value", "dependency_request", "request_kind", "kind", "json_pointer", "unordered_paths", "unordered_joined_string_paths", "docx_timestamps"])]
     pub(super) response_jwts: Vec<traffic_e2e::ResponseJwtRule>,
     /// Source-proven Redis argument or HTTP multipart dependency contract.
-    #[arg(long, value_name = "RULE_JSON", conflicts_with_all = ["dynamic_value", "header_dates", "request_kind", "kind", "json_pointer", "unordered_paths", "unordered_joined_string_paths", "docx_timestamps"])]
+    #[arg(long, value_name = "RULE_JSON", value_parser = parse_dependency_request, conflicts_with_all = ["dynamic_value", "header_dates", "request_kind", "kind", "json_pointer", "unordered_paths", "unordered_joined_string_paths", "docx_timestamps"])]
     pub(super) dependency_request: Option<serde_json::Value>,
     /// Source-proven captured identity rule; references are automatic across scoped endpoints.
     #[arg(long, value_name = "RULE_JSON", value_parser = parse_dynamic_value, conflicts_with_all = ["header_dates", "request_kind", "kind", "json_pointer", "unordered_paths", "unordered_joined_string_paths", "docx_timestamps"])]
@@ -118,6 +118,15 @@ pub(super) struct RulePlanArgs {
     pub(super) docx_timestamps: Vec<traffic_e2e::DocxTimestampRule>,
 }
 
+fn parse_dependency_request(value: &str) -> Result<serde_json::Value, String> {
+    let value: serde_json::Value = serde_json::from_str(value)
+        .map_err(|error| format!("invalid dependency request JSON: {error}"))?;
+    if !value.is_object() {
+        return Err("dependency request rule requires a JSON object".into());
+    }
+    Ok(value)
+}
+
 fn parse_dynamic_value(value: &str) -> Result<traffic_e2e::DynamicValueRule, String> {
     serde_json::from_str(value).map_err(|error| format!("invalid dynamic value rule: {error}"))
 }
@@ -134,6 +143,46 @@ fn parse_response_jwt(value: &str) -> Result<traffic_e2e::ResponseJwtRule, Strin
 #[cfg(test)]
 mod generated_tests {
     use clap::Parser;
+    #[test]
+    fn dependency_request_cli_parses_an_object_and_rejects_other_json_values() {
+        use super::super::{Cli, RewriteCommand, RuleCommand};
+        let raw = r#"{"protocol":"redis","redis":{"commands":[]}}"#;
+        let cli = Cli::try_parse_from([
+            "backend-rewrite",
+            "rule",
+            "plan",
+            "--evidence-id",
+            "current",
+            "--dependency-request",
+            raw,
+        ])
+        .unwrap();
+        let RewriteCommand::Rule(args) = cli.command else {
+            panic!("rule command")
+        };
+        let RuleCommand::Plan(plan) = args.command else {
+            panic!("plan command")
+        };
+        assert_eq!(
+            plan.dependency_request,
+            Some(serde_json::from_str(raw).unwrap())
+        );
+        for raw in ["null", "[]", "42", "true", "\"object\"", "{broken"] {
+            assert!(
+                Cli::try_parse_from([
+                    "backend-rewrite",
+                    "rule",
+                    "plan",
+                    "--evidence-id",
+                    "current",
+                    "--dependency-request",
+                    raw,
+                ])
+                .is_err()
+            );
+        }
+    }
+
     #[test]
     fn generated_value_rules_do_not_require_a_body_codec_and_reject_mixed_families() {
         let dependency = r#"{"id":"write-contract","protocol":"redis","target":{"host":"redis","port":6379},"redis":{"key":"one","commands":[{"command":"SET","argument_values":{"1":{"json":{"/at":{"time":"preserve_relative","format":"unix_seconds"}}}}}]}}"#;

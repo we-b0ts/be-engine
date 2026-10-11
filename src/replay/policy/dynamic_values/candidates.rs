@@ -77,6 +77,7 @@ impl DynamicValues {
         let indexes: Vec<usize> = match command {
             "SET" => vec![1],
             "HSET" => (2..source.len().min(130)).step_by(2).collect(),
+            "RPUSH" if source.len() <= 129 => (1..source.len()).collect(),
             _ => return,
         };
         let Some(Ok(key)) = source.first().map(|key| std::str::from_utf8(key)) else {
@@ -95,40 +96,44 @@ impl DynamicValues {
             {
                 continue;
             }
-            let (pointer, left, right) = if let Some((pointer, left, right, value_type)) =
-                json_difference(&source[index], &actual[index])
-            {
-                if value_type != DynamicValueType::String {
-                    continue;
-                }
-                (Some(pointer), left, right)
-            } else {
-                let (Ok(left), Ok(right)) = (
-                    strings::capture(&source[index], None),
-                    strings::capture(&actual[index], None),
-                ) else {
-                    continue;
+            let differences =
+                if let Some(differences) = json_differences(&source[index], &actual[index]) {
+                    if command != "RPUSH" && differences.len() != 1 {
+                        continue;
+                    }
+                    differences
+                        .into_iter()
+                        .map(|(pointer, left, right, kind)| (Some(pointer), left, right, kind))
+                        .collect::<Vec<_>>()
+                } else {
+                    let (Ok(left), Ok(right)) = (
+                        strings::capture(&source[index], None),
+                        strings::capture(&actual[index], None),
+                    ) else {
+                        continue;
+                    };
+                    vec![(None, left, right, DynamicValueType::String)]
                 };
-                (None, left, right)
-            };
-            self.candidate(
-                case,
-                DynamicValueCapture::Redis {
-                    target: DynamicValueTarget {
-                        host: target.host.clone(),
-                        port: target.port,
+            for (pointer, left, right, value_type) in differences {
+                self.candidate(
+                    case,
+                    DynamicValueCapture::Redis {
+                        target: DynamicValueTarget {
+                            host: target.host.clone(),
+                            port: target.port,
+                        },
+                        database,
+                        command: command.into(),
+                        key: crate::replay::RedisValueKeySelector::Exact { value: key.into() },
+                        argument_index: index,
+                        json_pointer: pointer,
                     },
-                    database,
-                    command: command.into(),
-                    key: crate::replay::RedisValueKeySelector::Exact { value: key.into() },
-                    argument_index: index,
-                    json_pointer: pointer,
-                },
-                &serde_json::to_vec(source).expect("byte vectors serialize"),
-                &left,
-                &right,
-                DynamicValueType::String,
-            );
+                    &serde_json::to_vec(source).expect("byte vectors serialize"),
+                    &left,
+                    &right,
+                    value_type,
+                );
+            }
         }
     }
     pub(in crate::replay) fn observe_http(
@@ -169,6 +174,14 @@ fn json_difference(
     source: &[u8],
     target: &[u8],
 ) -> Option<(String, String, String, DynamicValueType)> {
+    let mut differences = json_differences(source, target)?;
+    (differences.len() == 1).then(|| differences.remove(0))
+}
+
+fn json_differences(
+    source: &[u8],
+    target: &[u8],
+) -> Option<Vec<(String, String, String, DynamicValueType)>> {
     let (source, target) = (
         crate::replay::json_order::parse(source)?,
         crate::replay::json_order::parse(target)?,
@@ -184,7 +197,7 @@ fn json_difference(
         if source == target {
             return Some(());
         }
-        if depth > 64 || out.len() > 1 {
+        if depth > 64 || out.len() >= 32 {
             return None;
         }
         match (source, target) {
@@ -222,5 +235,5 @@ fn json_difference(
         Some(())
     }
     visit(&source, &target, String::new(), 0, &mut differences)?;
-    (differences.len() == 1).then(|| differences.remove(0))
+    Some(differences)
 }

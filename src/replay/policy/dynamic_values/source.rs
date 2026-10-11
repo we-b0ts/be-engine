@@ -54,10 +54,11 @@ pub(in crate::replay) fn from_event(
                 return Ok(None);
             }
             Ok(Some(SourceCapture {
-                value: strings::capture(
+                value: super::redis::capture(
                     args.get(*argument_index)
                         .context("source capture argument is absent")?,
                     json_pointer.as_deref(),
+                    value_type,
                 )?,
                 payload: serde_json::to_vec(&args)?,
             }))

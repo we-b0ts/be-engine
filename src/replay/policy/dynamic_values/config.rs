@@ -120,8 +120,9 @@ impl DynamicValueCapture {
                         || command == "HSET"
                             && *argument_index >= 2
                             && *argument_index <= 128
-                            && argument_index.is_multiple_of(2),
-                    "Redis capture selects SET value (index 1) or HSET value (even index >= 2)"
+                            && argument_index.is_multiple_of(2)
+                        || command == "RPUSH" && (1..=128).contains(argument_index),
+                    "Redis capture selects SET value, HSET value, or RPUSH element indices 1..128"
                 );
                 if let Some(pointer) = json_pointer {
                     validate_pointer(pointer)?;
@@ -232,16 +233,17 @@ impl DynamicValueRule {
         self.capture.validate()?;
         ensure!(
             self.value_type == DynamicValueType::String
-                || matches!(self.capture, DynamicValueCapture::Http { .. })
-                    && matches!(
-                        &self.capture,
-                        DynamicValueCapture::Http {
-                            json_pointer: Some(_),
-                            ..
-                        }
-                    )
-                    && self.format.is_none(),
-            "integer dynamic values require an HTTP JSON capture without a string format"
+                || matches!(
+                    &self.capture,
+                    DynamicValueCapture::Http {
+                        json_pointer: Some(_),
+                        ..
+                    } | DynamicValueCapture::Redis {
+                        json_pointer: Some(_),
+                        ..
+                    }
+                ) && self.format.is_none(),
+            "integer dynamic values require an HTTP or Redis JSON capture without a string format"
         );
         let target = self.capture.target();
         ensure!(

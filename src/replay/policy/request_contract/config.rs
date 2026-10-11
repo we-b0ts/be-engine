@@ -16,8 +16,18 @@ pub(crate) struct RedisRequestSelector {
 #[serde(deny_unknown_fields)]
 pub(crate) struct RedisRequestCommand {
     pub command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<RedisScriptIdentity>,
     #[serde(deserialize_with = "argument_values")]
     pub argument_values: BTreeMap<usize, ArgumentRule>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RedisScriptIdentity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha1: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
@@ -40,7 +50,7 @@ pub(crate) enum JsonField {
 #[serde(deny_unknown_fields)]
 pub(crate) struct TimeField {
     pub time: RelativeTime,
-    pub format: UnixSeconds,
+    pub format: UnixTimeFormat,
     #[serde(default = "default_tolerance")]
     pub tolerance: String,
 }
@@ -52,10 +62,11 @@ fn default_tolerance() -> String {
 pub(crate) enum RelativeTime {
     PreserveRelative,
 }
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum UnixSeconds {
+pub(crate) enum UnixTimeFormat {
     UnixSeconds,
+    UnixMilliseconds,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -104,6 +115,7 @@ impl RedisRequestSelector {
         self.key.validate()?;
         let mut commands = std::collections::BTreeSet::new();
         for command in &self.commands {
+            command.validate_script()?;
             ensure!(
                 commands.insert(&command.command),
                 "duplicate Redis request command"
@@ -119,15 +131,17 @@ impl RedisRequestSelector {
                             matches!(
                                 (command.command.as_str(), index),
                                 ("ZADD", 1) | ("ZREMRANGEBYSCORE", 2)
-                            ),
-                            "scalar time rules support the single-member ZADD score and ZREMRANGEBYSCORE maximum"
+                            ) || matches!(command.command.as_str(), "EVAL" | "EVALSHA")
+                                && (3..=128).contains(index),
+                            "scalar time rules select ZADD/ZREMRANGEBYSCORE time slots or bounded script ARGV indices"
                         );
                         tolerance(&time.tolerance)?;
                     }
                     ArgumentRule::Json(json) => {
                         ensure!(
-                            command.command == "SET" && *index == 1,
-                            "JSON request rules select SET value index 1"
+                            command.command == "SET" && *index == 1
+                                || command.command == "RPUSH" && (1..=128).contains(index),
+                            "JSON request rules select SET value index 1 or RPUSH element indices 1..128"
                         );
                         ensure!(
                             !json.json.is_empty() && json.json.len() <= 32,
@@ -144,6 +158,10 @@ impl RedisRequestSelector {
                                     tolerance(&time.tolerance)?;
                                 }
                                 JsonField::Jwt(field) => {
+                                    ensure!(
+                                        command.command == "SET",
+                                        "signed JSON request fields currently select SET values"
+                                    );
                                     crate::request_rules::keys::validate_source(
                                         &field.jwt.signing_key_source,
                                     )?;
@@ -154,6 +172,16 @@ impl RedisRequestSelector {
                                             Some(JsonField::Time(_))
                                         ),
                                         "JWT relative_to must select a time field in the same JSON argument"
+                                    );
+                                    ensure!(
+                                        matches!(
+                                            json.json.get(&field.jwt.relative_to),
+                                            Some(JsonField::Time(TimeField {
+                                                format: UnixTimeFormat::UnixSeconds,
+                                                ..
+                                            }))
+                                        ),
+                                        "JWT relative_to requires Unix seconds"
                                     );
                                     ensure!(
                                         field.jwt.dynamic_claims.is_empty()

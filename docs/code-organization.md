@@ -59,6 +59,13 @@ is unclear.
   Generated-value feedback and coordinator adapters keep the existing
   evidence/plan/apply/fresh-Replay transaction. Replay control supplies an
   independent inbound request anchor; protocol arguments cannot choose it.
+  Its `script` child validates explicit Lua digests and bounded KEYS/ARGV
+  envelopes without evaluating Lua. Redis compares dynamic-identity copies
+  before disjoint request-time contracts; overlapping field ownership is rejected.
+- `e2e_run/assertion_publication` owns staging-time retargeting of assertion
+  details, summary references and their fingerprints for both ordinary terminal
+  publication and focused method projections. Store owns atomic directory
+  replacement; published consumers never need the transient active directory.
 - `replay/assertion/time` owns the shared timestamp formats and fixed request
   time windows consumed by response assertions and dependency-header rules.
   `replay/policy/http_headers` owns typed selectors/schema validation, its
