@@ -482,11 +482,17 @@ an API with no observed traffic is not required and does not block completion.
 The scope remains stable as selected workers change.
 
 Normal issued API commands use route selectors, including rule/repair Replay,
-API completion and idle revalidation. `verification request --api
-'/path-or-pattern' --reason '<shared change>'` promotes all included stale
-methods on that route without selecting skipped methods. An unscoped `next`
+API completion and round revalidation. `verification request --api
+'/path-or-pattern' --reason '<shared change>'` reports included stale methods
+through the same all-accepted-or-gap and round-membership gates; it never promotes
+them to ordinary pending work or selects skipped methods. An unscoped `next`
 uses the same route batch as an explicit route command. Methods are implementation
 and verification details, never separate coordinator work items.
+
+Route selection prefers a pending first attempt or a method with precise
+rule/system-repair Replay admission over a sibling awaiting implementation.
+The unaccepted sibling retains its issue and worker binding; its route-wide
+worker does not block the admitted method's Replay.
 
 Every `implementation_required` action uses a worker. Inventory size controls
 only how much work the engine can make ready. Worker concurrency belongs to
@@ -510,33 +516,32 @@ not authorize fresh traffic. Read
 [coordinator-recording.md](coordinator-recording.md) when a new external standard
 batch is required or a consolidated capture refresh is pending.
 
-If the target fingerprint changes during focused Replay, discard that result
-and return the API to Replay. If later integration changes the fingerprint of a
-completed API, move it to deferred `revalidation_pending`. Ordinary pending and
-implementation actions run first. When none is executable and verification
-resources are free, the engine selects one stale API in stable inventory order,
-even while other workers run or APIs wait for system repair. A passing API is
-verified for the current fingerprint; a target-code failure dispatches/resumes
-its worker, and a system failure is parked with its repair route. Continue
-selecting eligible work until all APIs pass or remaining failures require
-external system repair. A later integration may invalidate earlier successes;
-final completion still requires one current content fingerprint. A commit with no effective content change does
-not create a new validation epoch.
+If the target fingerprint changes during focused Replay, discard that unaccepted
+result and keep the API eligible for a valid attempt. Later content changes mark
+completed APIs `revalidation_pending` without immediately repeating Replay.
+Start revalidation only after every included method is complete, stale awaiting
+revalidation, or at a confirmed system gap. Pending workers, handoffs, delivery
+acceptance and recording refresh must finish first.
 
-For a high-impact shared module, global configuration, or startup change, the
-caller may explicitly request earlier verification for selected stale APIs; routine
-coordination already uses idle verification capacity without such a request:
+The engine persists a complete round of stale methods in stable inventory order.
+Drain that round even when an API fails: record every failure and continue the
+remaining APIs before dispatching repairs or integrating their handoffs. A method
+runs once in that round; later fingerprint changes mark evidence stale for the
+next round without restoring consumed membership. Route batches select only
+remaining methods. Resume/recovery preserves the unfinished round.
 
-```text
-backend-rewrite verification request \
-  --api '/api/a' \
-  --api '/api/b' \
-  --reason 'shared response mapper changed'
-```
+After the round, repair and accept all failures or confirm their system gaps
+before starting another round for stale evidence. An individual successful repair
+never starts revalidation while another implementation/acceptance is unfinished.
+If no stale evidence remains, finish normally with the existing publication gate;
+if only system gaps remain, use the existing `blocked` stop. Final success still
+requires current passing evidence for every included method. Content-preserving
+commits do not invalidate evidence.
 
-Execute the returned `next.action.commands.advance`. Only
-`revalidation_pending` APIs are eligible. This optional check spends extra
-serialized traffic time and never replaces the mandatory final epoch.
+`verification request --api '/api/a' --reason 'shared response mapper changed'`
+remains available to inspect/request selected stale APIs. Follow its returned
+action, including waits: it obeys the same readiness and membership gates and
+cannot interrupt the current round or cause a member to repeat.
 
 `awaiting_recording_refresh` is parked, not complete or blocked. Continue other
 pending APIs and resume existing workers until the engine returns one

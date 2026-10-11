@@ -1,6 +1,8 @@
 mod http;
 use http::{HttpDependencyRuleArgs, http_options};
+mod mysql_tables;
 mod redis;
+use mysql_tables::MysqlTableArgs;
 use redis::RedisDependencyRuleArgs;
 use std::path::PathBuf;
 
@@ -65,9 +67,11 @@ struct MysqlTimeArgs {
     /// Optional user filter for evidence lookup; not written to the rule.
     #[arg(long, default_value = "")]
     username: String,
-    /// SQL template: each ? represents one scalar value; other tokens stay exact.
+    /// SQL template: ? selects a scalar value; {{table}} uses declared table bounds.
     #[arg(long)]
     sql: String,
+    #[command(flatten)]
+    table_scope: MysqlTableArgs,
     /// Zero-based ? slot in the SQL template, independent of wire parameter positions.
     #[arg(long, required_unless_present = "time_values")]
     value_index: Option<usize>,
@@ -152,19 +156,8 @@ struct MysqlDependencyRuleArgs {
         help = "Single SELECT with {{table}}, AS {{table}}_suffix aliases and ? for variable literals"
     )]
     sql: String,
-    #[arg(long = "table")]
-    tables: Vec<String>,
-    /// Table identifier pattern with one *, e.g. subtasks_* or *_archive. Repeatable.
-    #[arg(long = "table-pattern")]
-    table_patterns: Vec<String>,
-    #[arg(long, requires_all = ["table_start", "table_end"])]
-    table_prefix: Option<String>,
-    #[arg(long, requires = "table_prefix")]
-    table_start: Option<u32>,
-    #[arg(long, requires = "table_prefix")]
-    table_end: Option<u32>,
-    #[arg(long, default_value_t = 4)]
-    table_width: usize,
+    #[command(flatten)]
+    table_scope: MysqlTableArgs,
 }
 
 #[derive(Debug, Args)]
@@ -278,6 +271,9 @@ impl TryFrom<DependencyRuleProtocolArgs> for DependencyPlan {
                         database: args.database,
                         username: args.username,
                         sql: args.sql,
+                        table_series: args.table_scope.series(),
+                        tables: args.table_scope.tables,
+                        table_patterns: args.table_scope.table_patterns,
                         time_values: if args.time_values.is_empty() {
                             vec![traffic_e2e::MysqlTimeValueSelector {
                                 value_index: args
@@ -307,14 +303,7 @@ impl TryFrom<DependencyRuleProtocolArgs> for DependencyPlan {
                 },
             },
             DependencyRuleProtocolArgs::Mysql(args) => {
-                let table_series =
-                    args.table_prefix
-                        .map(|prefix| traffic_e2e::MysqlBackgroundTableSeries {
-                            prefix,
-                            start: args.table_start.expect("clap requires table-start"),
-                            end: args.table_end.expect("clap requires table-end"),
-                            width: args.table_width,
-                        });
+                let table_series = args.table_scope.series();
                 dependency_rule_options(
                     args.common,
                     RewriteDependencyRuleSelector::Mysql {
@@ -324,8 +313,8 @@ impl TryFrom<DependencyRuleProtocolArgs> for DependencyPlan {
                             database: args.database,
                             username: args.username,
                             sql: args.sql,
-                            tables: args.tables,
-                            table_patterns: args.table_patterns,
+                            tables: args.table_scope.tables,
+                            table_patterns: args.table_scope.table_patterns,
                             table_series,
                         },
                     },
@@ -566,6 +555,57 @@ mod tests {
         );
         assert_eq!(selector.time_values[0].format, "%+");
         assert_eq!(selector.time_values[1].value_index, 1);
+    }
+
+    #[test]
+    fn mysql_time_cli_preserves_table_templates_and_bounds() {
+        let base = [
+            "test",
+            "plan",
+            "mysql-time",
+            "--evidence-id",
+            "current",
+            "--rule-id",
+            "subtask-times",
+            "--database",
+            "app",
+            "--sql",
+            "UPDATE {{table}} SET updated_at=? WHERE {{table}}.id=?",
+            "--value-index",
+            "0",
+            "--source-evidence",
+            "sharding.py:subtasks shards use datetime.now()",
+        ];
+        for extra in [
+            vec!["--table-pattern", "subtasks_*"],
+            vec![
+                "--table-prefix",
+                "subtasks_",
+                "--table-start",
+                "0",
+                "--table-end",
+                "1023",
+                "--table-width",
+                "4",
+            ],
+        ] {
+            let parsed = TestCli::try_parse_from(base.iter().copied().chain(extra)).unwrap();
+            let DependencyRuleCommand::Plan(plan) = parsed.dependency_rule.command else {
+                panic!("plan")
+            };
+            let DependencyPlan::Ownership(options) = plan.protocol.try_into().unwrap() else {
+                panic!("ownership")
+            };
+            let RewriteDependencyRuleSelector::MysqlSqlTime { selector } = options.selector else {
+                panic!("MySQL time")
+            };
+            assert!(selector.sql.contains("{{table}}"));
+            assert!(selector.table_series.is_some() || selector.table_patterns == ["subtasks_*"]);
+        }
+        assert!(
+            TestCli::try_parse_from(base.iter().copied().chain(["--table-prefix", "subtasks_"]))
+                .is_err()
+        );
     }
 
     #[test]

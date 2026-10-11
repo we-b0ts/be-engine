@@ -6,7 +6,7 @@ use super::*;
 use crate::mysql::sql::Token;
 use crate::replay::mysql::sql_match::materialize;
 use crate::replay::policy::config::{MysqlTimeValueRule, TimeRule};
-use crate::replay::policy::sql_template::{bounded_tokens, extract};
+use crate::replay::policy::sql_template::{SqlValueTemplate, bounded_tokens, extract};
 use crate::replay::policy::value::parse_time;
 
 fn materialized(
@@ -40,6 +40,18 @@ pub(in crate::replay::policy) fn values(
     let template = bounded_tokens(template).ok_or("invalid SQL template")?;
     extract(&template, &materialized(sql, params)?)
         .ok_or_else(|| "SQL differs from template".into())
+}
+
+pub(in crate::replay::policy) fn template_values(
+    template: &SqlValueTemplate<'_>,
+    sql: Option<&str>,
+    params: Option<&[RecordedMysqlValue]>,
+) -> Result<Vec<Token>, String> {
+    let actual = materialized(sql, params)?;
+    let bound = template
+        .bind(&actual)
+        .ok_or("SQL differs from table template")?;
+    extract(&bound, &actual).ok_or_else(|| "SQL differs from template".into())
 }
 
 pub(in crate::replay::policy) struct SelectedMysqlTime {
@@ -181,7 +193,16 @@ impl ReplayPolicyRuntime {
                 if !mysql.params.is_empty() {
                     return Err("overlapping MySQL params and sql_values rules".into());
                 }
-                let template = bounded_tokens(&mysql.sql).ok_or("invalid SQL template")?;
+                let compiled = SqlValueTemplate::new(
+                    &mysql.sql,
+                    &mysql.tables,
+                    &mysql.table_patterns,
+                    mysql.table_series.as_ref(),
+                )
+                .map_err(|error| error.to_string())?;
+                let template = compiled
+                    .bind(&recorded)
+                    .ok_or("recorded SQL differs from table template")?;
                 extract(&template, &recorded).ok_or("recorded SQL differs from template")?;
                 extract(&template, &actual).ok_or("actual SQL differs from template")?;
                 let mut slot = 0;

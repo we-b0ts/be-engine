@@ -752,7 +752,13 @@ fn rule_matches_mysql(
         return false;
     };
     if !mysql.sql_values.is_empty() {
-        return super::sql_template::template_matches(&mysql.sql, sql);
+        return super::sql_template::SqlValueTemplate::new(
+            &mysql.sql,
+            &mysql.tables,
+            &mysql.table_patterns,
+            mysql.table_series.as_ref(),
+        )
+        .is_ok_and(|template| template.matches(sql));
     }
     text_pattern_matches(
         &crate::mysql::sql::normalize_pattern(&mysql.sql),
@@ -765,7 +771,13 @@ fn rule_matches_mysql_sql_pattern(rule: &ReplayDependencyRule, sql: Option<&str>
         return false;
     };
     if !mysql.sql_values.is_empty() {
-        return super::sql_template::template_matches(&mysql.sql, sql);
+        return super::sql_template::SqlValueTemplate::new(
+            &mysql.sql,
+            &mysql.tables,
+            &mysql.table_patterns,
+            mysql.table_series.as_ref(),
+        )
+        .is_ok_and(|template| template.matches(sql));
     }
     text_pattern_matches(
         &crate::mysql::sql::normalize_pattern(&mysql.sql),

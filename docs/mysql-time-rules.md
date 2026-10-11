@@ -33,11 +33,36 @@ dependency_rules:
 ```
 
 Add this section to the existing verification policy. The rule applies to the
-selected database and SQL across all inbound APIs. The table is already part of
-the SQL template; no URL path, host, user, wire command or duplicate table field
-is required. Ordinary replay still matches source and target connection identity.
+selected database and SQL across all inbound APIs. A concrete table stays exact;
+no URL path, host, user or wire command is required. Ordinary replay still
+matches source and target connection identity.
 The template is shared by source and target after bound values are materialized;
 it is not a SQL rewrite from one side to the other.
+
+For source-proven sharded tables, use `{{table}}` with `tables` (exact physical
+names), `table_series` (at most 4096 names), or `table_patterns` (at most 64
+identifier patterns containing one `*`). For example:
+
+```yaml
+- id: subtask-updated-at
+  protocol: mysql
+  mysql:
+    database: task_manager
+    sql: UPDATE {{table}} SET updated_at=? WHERE {{table}}.id = ?
+    table_series: {prefix: subtasks_, start: 0, end: 1023, width: 4}
+    sql_values: {0: {time: replay_now, tolerance: 5s, timezone: "+08:00"}}
+```
+
+Every `{{table}}` in one statement binds to the same physical table, and source
+and target must bind to that same table. The example covers `subtasks_0155` and
+`subtasks_0640` independently; it cannot match a source write to one shard with a
+target write to another. Stable keys, predicates, database identity and finite
+recorded consumption still apply. The marker can replace a whole table name or
+a table qualifier, including backticked names; literals, column/alias names and
+identifier fragments are unsupported. Table selectors require `{{table}}`, and
+`{{table}}` requires declared table bounds. Existing concrete rules need no change.
+Table patterns match only ASCII identifiers up to 64 bytes and reject a bare `*`.
+Source proof must justify the selected table family as well as its generated time.
 
 `time: replay_now` defaults to zero offset, 5 seconds tolerance, UTC and MySQL
 `%Y-%m-%d %H:%M:%S%.f` datetime strings (including microseconds). Integer Unix
@@ -94,6 +119,12 @@ object requires `value_index` and may set `json_pointer`, `tolerance`, `offset`,
 `format` and `timezone`. The original `--value-index` plus optional time flags
 remains supported for one scalar slot; it cannot be combined with
 `--time-value`.
+
+For a table template, add repeatable `--table` or `--table-pattern`, or use
+`--table-prefix subtasks_ --table-start 0 --table-end 1023 --table-width 4` with
+`--sql 'UPDATE {{table}} SET updated_at=? WHERE {{table}}.id = ?'`. These bounds
+are persisted in the pending plan and generated policy. Plan/apply requires a
+same-case witness with the same physical table on source and target.
 
 Plan requires source-code proof and uses current active API evidence for the
 correlation, without adding an API selector to the generated rule. Optional

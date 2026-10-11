@@ -19,6 +19,7 @@ pub(super) fn new_state(
         regression: None,
         recording_apis,
         api_inventory: Vec::new(),
+        revalidation_round: None,
         skipped_api_statuses: Default::default(),
         source_route_bindings: std::collections::BTreeMap::new(),
         current_api_index: None,

@@ -89,3 +89,65 @@ fn route_completion_requires_every_method_and_preserves_method_history() {
     );
     assert!(crate::rewrite::worker::runtime::scopes(&state).is_empty());
 }
+
+#[test]
+fn route_acceptance_never_replays_a_completed_or_deferred_sibling() {
+    let mut state = test_state();
+    inventory::install(&mut state, vec!["GET /api".into(), "PUT /api".into()]).unwrap();
+    state.api_inventory[1].status = RewriteApiStatus::Complete;
+    assert_eq!(replayable_methods(&state), vec!["GET /api"]);
+    state.api_inventory[1].status = RewriteApiStatus::RevalidationPending;
+    assert_eq!(replayable_methods(&state), vec!["GET /api"]);
+    // Both methods join a new round only after implementation acceptance drains.
+    state.api_inventory[0].status = RewriteApiStatus::RevalidationPending;
+    state.phase = RewritePhase::SliceComplete;
+    state.current_api_index = None;
+    inventory::activate_requested(&mut state, Some(&"GET /api".parse().unwrap())).unwrap();
+    assert_eq!(replayable_methods(&state), vec!["GET /api", "PUT /api"]);
+    inventory::revalidation_round::finish(&mut state, "GET /api");
+    state.api_inventory[0].status = RewriteApiStatus::ImplementationRequired;
+    let selector = RewriteApiSelector::Route("/api".into());
+    assert_eq!(
+        api_selector::select(&state, &selector).unwrap().to_string(),
+        "PUT /api"
+    );
+    assert_eq!(replayable_methods(&state), vec!["PUT /api"]);
+}
+
+#[test]
+fn failed_route_batch_keeps_the_remaining_round_ahead_of_its_worker() {
+    let target = crate::rewrite::worker::tests::configured_target();
+    let mut state = test_state();
+    inventory::install(
+        &mut state,
+        vec!["GET /api".into(), "PUT /api".into(), "GET /other".into()],
+    )
+    .unwrap();
+    for item in &mut state.api_inventory {
+        item.status = RewriteApiStatus::RevalidationPending;
+    }
+    state.phase = RewritePhase::SliceComplete;
+    state.current_api_index = None;
+    inventory::activate_requested(&mut state, Some(&"GET /api".parse().unwrap())).unwrap();
+    apply_results(
+        target.path(),
+        &mut state,
+        &[result("GET /api", false), result("PUT /api", false)],
+        None,
+    )
+    .unwrap();
+    assert_eq!(state.api, "GET /other");
+    assert_eq!(state.phase, RewritePhase::ApiPending);
+    assert_eq!(
+        inventory::revalidation_round::next(&state),
+        Some("GET /other")
+    );
+    assert_eq!(
+        state.parked_slices["GET /api"].phase,
+        RewritePhase::ImplementationRequired
+    );
+    assert_eq!(
+        state.parked_slices["PUT /api"].phase,
+        RewritePhase::ImplementationRequired
+    );
+}

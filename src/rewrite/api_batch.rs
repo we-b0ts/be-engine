@@ -13,29 +13,39 @@ pub(super) struct PreparedRoute {
     pub slices: std::collections::BTreeMap<String, RewriteSliceState>,
 }
 
-pub(super) fn prepare(target_root: &Path, state: &RewriteState) -> Result<PreparedRoute> {
+fn replayable_methods(state: &RewriteState) -> Vec<String> {
     let selector = api_selector::RewriteApiSelector::Route(api_selector::route(&state.api).into());
     let mut apis = api_selector::members(state, &selector)
         .into_iter()
         .filter(|api| {
             !super::regression_scope::is_skipped(state, api)
+                && (state.revalidation_round.is_none()
+                    || inventory::revalidation_round::contains(state, api))
                 && state
                     .api_inventory
                     .iter()
                     .find(|item| item.api == *api)
                     .is_some_and(|item| {
-                        !matches!(
-                            item.status,
-                            RewriteApiStatus::SystemRepairRequired
-                                | RewriteApiStatus::AwaitingRecordingRefresh
-                        )
+                        (item.status != RewriteApiStatus::RevalidationPending
+                            || state.revalidation_round.is_some())
+                            && !matches!(
+                                item.status,
+                                RewriteApiStatus::Complete
+                                    | RewriteApiStatus::SystemRepairRequired
+                                    | RewriteApiStatus::AwaitingRecordingRefresh
+                            )
                     })
         })
         .collect::<Vec<_>>();
+    apis.sort_by_key(|api| api != &state.api);
+    apis
+}
+
+pub(super) fn prepare(target_root: &Path, state: &RewriteState) -> Result<PreparedRoute> {
+    let apis = replayable_methods(state);
     ensure!(!apis.is_empty(), "route has no replayable method cases");
     // Keep the active method as the runtime owner so existing focused recovery
     // resolves the same directory after an interrupted route session.
-    apis.sort_by_key(|api| api != &state.api);
     let mut slices = std::collections::BTreeMap::new();
     let mut selected_apis = Vec::new();
     for api in &apis {
@@ -117,19 +127,27 @@ pub(super) fn apply_results(
         };
         state.parked_slices.insert(slice.api.clone(), slice);
     }
+    for result in results {
+        inventory::revalidation_round::finish(state, &result.api);
+    }
     let path = api_selector::route(&state.api).to_string();
-    let next = state
-        .api_inventory
-        .iter()
-        .position(|item| {
-            api_selector::route(&item.api) == path
-                && item.status == RewriteApiStatus::ImplementationRequired
-        })
+    let next = inventory::revalidation_round::next(state)
+        .and_then(|api| state.api_inventory.iter().position(|item| item.api == api))
         .or_else(|| {
-            state
-                .api_inventory
-                .iter()
-                .position(|item| !item.status.is_done())
+            state.api_inventory.iter().position(|item| {
+                api_selector::route(&item.api) == path
+                    && item.status == RewriteApiStatus::ImplementationRequired
+            })
+        })
+        .or_else(|| inventory::next_runnable_index(state))
+        .or_else(|| {
+            state.api_inventory.iter().position(|item| {
+                matches!(
+                    item.status,
+                    RewriteApiStatus::SystemRepairRequired
+                        | RewriteApiStatus::AwaitingRecordingRefresh
+                )
+            })
         });
     if let Some(index) = next {
         inventory::resume_at(state, index)?;

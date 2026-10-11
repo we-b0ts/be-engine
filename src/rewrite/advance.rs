@@ -3,15 +3,15 @@ use super::*;
 
 pub(super) struct AdvanceResult {
     pub envelope: RewriteActionEnvelope,
-    /// True only for a Replay executed by this step with fresh passing evidence.
-    pub replay_passed: bool,
+    /// A fresh pass, or a terminal round result with remaining members to verify.
+    pub replay_can_continue: bool,
 }
 
 impl AdvanceResult {
     pub fn without_replay(envelope: RewriteActionEnvelope) -> Self {
         Self {
             envelope,
-            replay_passed: false,
+            replay_can_continue: false,
         }
     }
 }
@@ -28,7 +28,7 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Advan
         }
         None => None,
     };
-    let mut replay_passed = false;
+    let mut replay_can_continue = false;
     let envelope = advance_atomic(
         AtomicNextOptions {
             target_root: options.target_root,
@@ -36,12 +36,12 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Advan
             source_route: options.source_route,
             route_batch,
         },
-        &mut replay_passed,
+        &mut replay_can_continue,
     )
     .await?;
     Ok(AdvanceResult {
         envelope,
-        replay_passed,
+        replay_can_continue,
     })
 }
 
@@ -65,7 +65,7 @@ impl AtomicNextOptions {
 
 async fn advance_atomic(
     options: AtomicNextOptions,
-    replay_passed: &mut bool,
+    replay_can_continue: &mut bool,
 ) -> Result<RewriteActionEnvelope> {
     if let Some(envelope) = purpose::pending(&options.target_root)? {
         return Ok(envelope);
@@ -160,7 +160,20 @@ async fn advance_atomic(
                     requested_api.to_string(),
                 ));
             }
+            if let Some(api) = options.api.as_ref()
+                && let Some(envelope) =
+                    revalidation::deferred_next_envelope(&target_root, &state, api)?
+            {
+                if migrated || invalidated {
+                    store.save(&state)?;
+                }
+                return Ok(envelope);
+            }
             if state.phase == RewritePhase::SliceComplete
+                && !state.api_inventory.iter().any(|item| {
+                    item.api == state.api
+                        && item.status == model::RewriteApiStatus::RevalidationPending
+                })
                 && options
                     .api
                     .as_ref()
@@ -351,7 +364,8 @@ async fn advance_atomic(
                 traffic_operation::TrafficOperationKind::Replay,
             )?;
             let route_batch = options.uses_route_batch(&state);
-            *replay_passed = run_and_transition(&target_root, &mut state, route_batch).await?;
+            *replay_can_continue =
+                run_and_transition(&target_root, &mut state, route_batch).await?;
             store.save(&state)?;
             Ok(action::for_state(&target_root, &state))
         }
@@ -386,7 +400,8 @@ async fn advance_atomic(
                 traffic_operation::TrafficOperationKind::Replay,
             )?;
             let route_batch = options.uses_route_batch(&state);
-            *replay_passed = run_and_transition(&target_root, &mut state, route_batch).await?;
+            *replay_can_continue =
+                run_and_transition(&target_root, &mut state, route_batch).await?;
             store.save(&state)?;
             Ok(action::for_state(&target_root, &state))
         }
@@ -411,7 +426,8 @@ async fn advance_atomic(
                 traffic_operation::TrafficOperationKind::Replay,
             )?;
             let route_batch = options.uses_route_batch(&state);
-            *replay_passed = run_and_transition(&target_root, &mut state, route_batch).await?;
+            *replay_can_continue =
+                run_and_transition(&target_root, &mut state, route_batch).await?;
             store.save(&state)?;
             Ok(action::for_state(&target_root, &state))
         }

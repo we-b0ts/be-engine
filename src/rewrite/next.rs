@@ -1,4 +1,4 @@
-//! Execution of the scheduler's selected step, optionally continuing successful Replay.
+//! Execution of the selected step, optionally continuing passes and unfinished rounds.
 //! Selection, priorities and gates remain with the existing action and advance owners.
 use std::future::Future;
 
@@ -84,7 +84,7 @@ where
 {
     loop {
         let result = execute_step(options.clone()).await?;
-        if mode != RewriteExecutionMode::AutoNext || !result.replay_passed {
+        if mode != RewriteExecutionMode::AutoNext || !result.replay_can_continue {
             return Ok(result.envelope);
         }
         // The previous atomic step has released its workflow lock and traffic lease.

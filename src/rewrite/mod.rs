@@ -403,6 +403,7 @@ async fn run_and_transition(
     state: &mut RewriteState,
     route_batch: bool,
 ) -> Result<bool> {
+    let in_round = state.revalidation_round.is_some();
     let replay_target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
     let case_source = state
         .case_source
@@ -436,7 +437,9 @@ async fn run_and_transition(
     }
     let (_, _project) = crate::e2e_run::resolve_project(target_root)?;
     api_batch::apply_results(target_root, state, &results, prepared.as_ref())?;
-    Ok(!results.is_empty() && results.iter().all(|result| result.passed))
+    Ok(!results.is_empty()
+        && (results.iter().all(|result| result.passed)
+            || in_round && state.revalidation_round.is_some()))
 }
 
 fn validate_single_line(label: &str, value: &str) -> Result<()> {

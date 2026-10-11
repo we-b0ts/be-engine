@@ -111,6 +111,12 @@ pub(super) struct MysqlSelector {
     )]
     pub(super) command: String,
     pub(super) sql: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) tables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) table_patterns: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) table_series: Option<crate::MysqlTableSeries>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) database: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -494,6 +500,13 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
             );
             if !mysql.sql_values.is_empty() {
                 mysql::validate_selector(mysql)?;
+            } else {
+                ensure!(
+                    mysql.tables.is_empty()
+                        && mysql.table_patterns.is_empty()
+                        && mysql.table_series.is_none(),
+                    "MySQL table templates require sql_values"
+                );
             }
             for (index, field) in &mysql.params {
                 validate_dynamic_value(field)

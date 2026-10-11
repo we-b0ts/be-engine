@@ -20,8 +20,46 @@ pub(in crate::rewrite) fn activate_requested(
         return Ok(false);
     };
     let requested = requested_api.to_string();
+    if let Some(index) = state
+        .api_inventory
+        .iter()
+        .position(|item| item.api == requested)
+    {
+        ensure!(
+            state.revalidation_round.is_none() || revalidation_round::contains(state, &requested),
+            "finish the current revalidation round before revisiting API {requested}"
+        );
+        ensure!(
+            state.api_inventory[index].status != RewriteApiStatus::RevalidationPending
+                || state.revalidation_round.is_some()
+                || revalidation_round::ready(state),
+            "API {requested} must wait for all implementation acceptances before revalidation"
+        );
+    }
+    let started =
+        state.api_inventory.iter().any(|item| {
+            item.api == requested && item.status == RewriteApiStatus::RevalidationPending
+        }) && revalidation_round::begin(state);
     if state.api == requested {
-        return Ok(false);
+        if state.api_inventory.iter().any(|item| {
+            item.api == requested && item.status == RewriteApiStatus::RevalidationPending
+        }) {
+            ensure!(
+                revalidation_round::contains(state, &requested),
+                "API {requested} must wait for all implementation acceptances before revalidation"
+            );
+            let index = state
+                .api_inventory
+                .iter()
+                .position(|item| item.api == requested)
+                .unwrap();
+            state.api_inventory[index].status = RewriteApiStatus::Active;
+            state.current_api_index = Some(index);
+            state.active_slice = pending_slice(&state.api_inventory[index])?;
+            state.bump();
+            return Ok(true);
+        }
+        return Ok(started);
     }
     ensure!(
         can_switch_api(state),
@@ -53,7 +91,12 @@ pub(in crate::rewrite) fn activate_requested(
         let current_index = state
             .current_api_index
             .context("active API has no inventory index")?;
-        state.api_inventory[current_index].status = RewriteApiStatus::Pending;
+        state.api_inventory[current_index].status =
+            if revalidation_round::contains(state, &state.api) {
+                RewriteApiStatus::RevalidationPending
+            } else {
+                RewriteApiStatus::Pending
+            };
     }
     state.current_api_index = Some(requested_index);
     state.api_inventory[requested_index].status = RewriteApiStatus::Active;

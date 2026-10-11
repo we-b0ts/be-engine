@@ -56,7 +56,27 @@ pub(super) fn select(state: &RewriteState, selector: &RewriteApiSelector) -> Res
                 RewriteApiStatus::SystemRepairRequired => 3,
                 _ => 4,
             };
-            (priority, *api)
+            let outside_round = state.revalidation_round.is_some()
+                && !super::inventory::revalidation_round::contains(state, api);
+            // Public selectors name a route. Preserve the executable method when
+            // a sibling still has an unaccepted issue, even if it is active.
+            let slice = if state.api == **api {
+                Some(&state.active_slice)
+            } else {
+                state.parked_slices.get(*api)
+            };
+            let ready = item.status != RewriteApiStatus::Skipped
+                && (item.status == RewriteApiStatus::Pending
+                    || item.status == RewriteApiStatus::Active
+                        && slice
+                            .is_some_and(|slice| slice.phase == super::RewritePhase::ApiPending)
+                    || super::rule_replay::admitted(
+                        state,
+                        &super::RewriteWorkScope::Api {
+                            api: (*api).clone(),
+                        },
+                    ));
+            (outside_round, !ready, priority, *api)
         })
         .unwrap();
     selected.parse()

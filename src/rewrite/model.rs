@@ -388,6 +388,8 @@ pub(super) struct RewriteState {
     pub recording_apis: Vec<String>,
     #[serde(default)]
     pub api_inventory: Vec<RewriteApiProgress>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revalidation_round: Option<super::inventory::revalidation_round::RevalidationRound>,
     /// Original scheduling status retained while regression policy excludes an API.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub skipped_api_statuses: BTreeMap<String, RewriteApiStatus>,

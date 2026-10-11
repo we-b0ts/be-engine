@@ -73,6 +73,7 @@ pub(super) fn apply(target_root: &Path, state: &mut RewriteState) -> Result<bool
             changed = true;
         }
     }
+    inventory::revalidation_round::reconcile_skips(state);
     if is_skipped(state, &state.api) {
         let api = state.api.clone();
         state
@@ -96,10 +97,15 @@ pub(super) fn apply(target_root: &Path, state: &mut RewriteState) -> Result<bool
         changed = true;
     }
     if state.current_api_index.is_none() {
-        let next = state
-            .api_inventory
-            .iter()
-            .position(|item| !item.status.is_done());
+        let next = inventory::next_runnable_index(state).or_else(|| {
+            state.api_inventory.iter().position(|item| {
+                matches!(
+                    item.status,
+                    RewriteApiStatus::SystemRepairRequired
+                        | RewriteApiStatus::AwaitingRecordingRefresh
+                )
+            })
+        });
         if let Some(index) = next {
             inventory::resume_at(state, index)?;
             changed = true;

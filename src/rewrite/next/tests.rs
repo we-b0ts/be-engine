@@ -94,7 +94,7 @@ fn replay(
     store.save(&state).unwrap();
     AdvanceResult {
         envelope: action::for_state(root, &state),
-        replay_passed: passed,
+        replay_can_continue: passed || state.revalidation_round.is_some(),
     }
 }
 
@@ -275,7 +275,7 @@ async fn ready_handoff_keeps_first_pass_priority_then_takes_over() {
 }
 
 #[tokio::test]
-async fn idle_revalidation_drains_without_changing_the_running_worker_binding() {
+async fn running_implementation_defers_revalidation_and_preserves_its_binding() {
     let target = configured_target();
     enable(target.path());
     let mut state = implementation_state_with_inventory(false);
@@ -285,53 +285,65 @@ async fn idle_revalidation_drains_without_changing_the_running_worker_binding() 
     let binding = serde_json::to_value(&state.worker_bindings).unwrap();
     let store = RewriteStore::new(target.path()).unwrap();
     store.save(&state).unwrap();
-    let mut calls = 0;
-    let output = run_steps(
-        options(target.path()),
-        RewriteExecutionMode::AutoNext,
-        |options| {
-            calls += 1;
-            std::future::ready(Ok(replay(options, true, |_| {})))
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(calls, 2);
+    let output = next_rewrite(options(target.path())).await.unwrap();
     assert!(matches!(output.action, RewriteAction::WaitRequired { .. }));
+    let saved = store.load().unwrap().unwrap();
+    assert!(saved.revalidation_round.is_none());
     assert_eq!(
-        serde_json::to_value(store.load().unwrap().unwrap().worker_bindings).unwrap(),
+        serde_json::to_value(saved.worker_bindings).unwrap(),
         binding
     );
 }
 
 #[tokio::test]
-async fn a_handoff_arriving_during_revalidation_preempts_the_next_replay() {
+async fn failed_members_and_a_ready_handoff_do_not_interrupt_the_round() {
     let target = configured_target();
     enable(target.path());
-    let mut state = implementation_state_with_inventory(false);
-    worker::confirm_current_for_test(&mut state);
+    let mut state = test_state();
+    inventory::install(&mut state, vec!["GET /api".into()]).unwrap();
+    state.api_inventory[0].status = RewriteApiStatus::RevalidationPending;
+    state.phase = RewritePhase::SliceComplete;
+    state.current_api_index = None;
     add_revalidation(&mut state, "GET /stale-a");
     add_revalidation(&mut state, "GET /stale-b");
-    RewriteStore::new(target.path())
-        .unwrap()
-        .save(&state)
-        .unwrap();
+    let store = RewriteStore::new(target.path()).unwrap();
+    store.save(&state).unwrap();
     let mut calls = 0;
     let output = run_steps(
         options(target.path()),
         RewriteExecutionMode::AutoNext,
         |options| {
             calls += 1;
-            std::future::ready(Ok(replay(options, true, ready)))
+            std::future::ready(Ok(replay(options, calls == 3, |state| {
+                if calls == 1 {
+                    worker::confirm_current_for_test(state);
+                    ready(state);
+                }
+            })))
         },
     )
     .await
     .unwrap();
-    assert_eq!(calls, 1);
-    assert!(matches!(
-        output.action,
-        RewriteAction::IntegrationRequired { .. }
-    ));
+    assert_eq!(calls, 3);
+    assert!(
+        matches!(output.action, RewriteAction::ImplementationRequired { ref worker, .. } if worker.work_scope.binding_key() == "/stale-a"),
+        "{:?}",
+        output.action
+    );
+    let saved = store.load().unwrap().unwrap();
+    assert!(saved.revalidation_round.is_none());
+    assert_eq!(
+        saved.worker_bindings["/api"]
+            .observation
+            .as_ref()
+            .unwrap()
+            .activity,
+        worker::model::RewriteWorkerActivity::HandoffReady
+    );
+    assert_eq!(
+        saved.parked_slices["GET /stale-a"].phase,
+        RewritePhase::ImplementationRequired
+    );
 }
 
 #[tokio::test]

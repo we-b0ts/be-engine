@@ -143,6 +143,88 @@ async fn parked_rule_replay_is_selected_and_keeps_the_review_gate() {
     assert!(state.parked_slices[api].rule_replay_pending);
 }
 
+#[tokio::test]
+async fn parked_method_rule_replay_does_not_loop_on_the_other_method_after_skips() {
+    let target = configured_target();
+    std::fs::write(
+        target.path().join(crate::config::regression::PATH),
+        "auto_next: true\nskip: [/completed-a, /completed-b]\n",
+    )
+    .unwrap();
+    let mut state = implementation_state_with_inventory(false);
+    let api = "POST /api";
+    let mut item = state.api_inventory[0].clone();
+    item.api = api.into();
+    item.status = rewrite::model::RewriteApiStatus::ImplementationRequired;
+    state.api_inventory.push(item.clone());
+    let mut sibling = state.active_slice.clone();
+    sibling.api = api.into();
+    sibling.active_issue.as_mut().unwrap().id = "post-issue".into();
+    sibling.rule_replay_pending = true;
+    state.parked_slices.insert(api.into(), sibling);
+    for api in ["GET /completed-a", "GET /completed-b"] {
+        let mut completed = item.clone();
+        completed.api = api.into();
+        completed.source_route = Some(crate::rewrite::api_selector::route(api).into());
+        completed.status = rewrite::model::RewriteApiStatus::Complete;
+        state.api_inventory.push(completed);
+    }
+    rewrite::regression_scope::apply(target.path(), &mut state).unwrap();
+    worker::confirm_current_for_test(&mut state);
+    let store = RewriteStore::new(target.path()).unwrap();
+    store.save(&state).unwrap();
+    let status = rewrite::status_rewrite(crate::RewriteContext {
+        target_root: target.path().into(),
+    })
+    .unwrap();
+    assert!(matches!(
+        status.action,
+        RewriteAction::AdvanceRequired { .. }
+    ));
+    let scoped = rewrite::status_rewrite_for_selector(
+        crate::RewriteContext {
+            target_root: target.path().into(),
+        },
+        &"/api".parse().unwrap(),
+    )
+    .unwrap();
+    assert!(
+        matches!(scoped.action, RewriteAction::SourceReviewRequired { .. }),
+        "{:?}",
+        scoped.action
+    );
+    let result = rewrite::next_rewrite(crate::RewriteNextOptions {
+        target_root: target.path().into(),
+        api: None,
+        source_route: None,
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        result.action,
+        RewriteAction::SourceReviewRequired { .. }
+    ));
+    let saved = store.load().unwrap().unwrap();
+    assert_eq!(saved.api, api);
+    assert!(saved.rule_replay_pending);
+    assert!(!saved.parked_slices["GET /api"].rule_replay_pending);
+    assert_eq!(
+        saved.parked_slices["GET /api"].attempts.len(),
+        state.attempts.len()
+    );
+    assert!(
+        saved
+            .api_inventory
+            .iter()
+            .filter(|item| item.api.starts_with("GET /completed-"))
+            .all(|item| item.status == rewrite::model::RewriteApiStatus::Skipped)
+    );
+    assert_eq!(
+        saved.worker_bindings["/api"].agent_handle,
+        state.worker_bindings["/api"].agent_handle
+    );
+}
+
 #[test]
 fn finalized_replay_consumes_the_request_for_passed_and_dirty_results() {
     let target = configured_target();

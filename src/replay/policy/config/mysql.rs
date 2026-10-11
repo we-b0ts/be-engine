@@ -1,7 +1,7 @@
 //! Configuration validation for explicit MySQL SQL time slots.
 use super::*;
 use crate::mysql::sql::Token;
-use crate::replay::policy::sql_template::bounded_tokens;
+use crate::replay::policy::sql_template::SqlValueTemplate;
 
 fn validate_time_field(field: &MysqlTimeFieldRule) -> Result<()> {
     if !field.source_evidence.is_empty() {
@@ -37,7 +37,13 @@ pub(in crate::replay::policy) fn validate_selector(mysql: &MysqlSelector) -> Res
         matches!(mysql.command.as_str(), "COM_QUERY" | "COM_STMT_EXECUTE"),
         "MySQL sql_values requires COM_QUERY or COM_STMT_EXECUTE"
     );
-    let template = bounded_tokens(&mysql.sql).context("invalid or oversized MySQL SQL template")?;
+    let compiled = SqlValueTemplate::new(
+        &mysql.sql,
+        &mysql.tables,
+        &mysql.table_patterns,
+        mysql.table_series.as_ref(),
+    )?;
+    let template = compiled.tokens();
     ensure!(
         template
             .first()
@@ -91,6 +97,41 @@ mod tests {
     use super::*;
     use crate::replay::policy::sql_template::template_matches;
     use serde_json::json;
+
+    #[test]
+    fn table_templates_require_declared_identifier_bounds() {
+        let valid = json!({"database":"app", "sql":"UPDATE {{table}} SET stamp=? WHERE {{table}}.id=?", "table_patterns":["subtasks_*"], "sql_values":{"0":{"time":"replay_now"}}});
+        validate_selector(&serde_json::from_value(valid.clone()).unwrap()).unwrap();
+        for (field, value) in [
+            ("table_patterns", json!([])),
+            ("table_patterns", json!(["*"])),
+            ("table_patterns", json!(["subtasks_**"])),
+            ("sql", json!("UPDATE subtasks_0155 SET stamp=? WHERE id=?")),
+            ("sql", json!("UPDATE pre_{{table}} SET stamp=? WHERE id=?")),
+            (
+                "sql",
+                json!("UPDATE subtasks SET stamp=?, note='{{table}}' WHERE id=?"),
+            ),
+            ("sql", json!("UPDATE subtasks SET {{table}}=? WHERE id=?")),
+            (
+                "sql",
+                json!("UPDATE {{table}} SET stamp=? WHERE id=? /* {{table}} */"),
+            ),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[field] = value;
+            assert!(
+                validate_selector(&serde_json::from_value(invalid).unwrap()).is_err(),
+                "{field}"
+            );
+        }
+        let mut series = valid.clone();
+        series["table_patterns"] = json!([]);
+        series["table_series"] = json!({"prefix":"subtasks_","start":0,"end":1023,"width":4});
+        validate_selector(&serde_json::from_value(series.clone()).unwrap()).unwrap();
+        series["table_series"]["end"] = json!(u32::MAX);
+        assert!(validate_selector(&serde_json::from_value(series).unwrap()).is_err());
+    }
 
     #[test]
     fn sql_value_slots_require_bounded_statements_and_explicit_time() {

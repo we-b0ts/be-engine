@@ -358,6 +358,9 @@ fn mysql_time_plan_survives_response_issue_persistence_without_background_reclas
             database: "app".into(),
             username: "user".into(),
             sql: "UPDATE keys SET stamp=? WHERE id=?".into(),
+            tables: vec![],
+            table_patterns: vec![],
+            table_series: None,
             time_values: vec![crate::MysqlTimeValueSelector {
                 value_index: 0,
                 json_pointer: None,

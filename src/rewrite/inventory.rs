@@ -5,6 +5,7 @@ use super::model::{
 };
 use crate::RecordingApi;
 
+pub(super) mod revalidation_round;
 mod selection;
 pub(super) use selection::{activate_requested, can_switch_api};
 mod source_route;
@@ -72,6 +73,7 @@ pub(super) fn install(state: &mut RewriteState, apis: Vec<String>) -> Result<boo
     );
     source_route::retain_bindings(state);
     state.skipped_api_statuses.clear();
+    state.revalidation_round = None;
     state.api_inventory = apis
         .into_iter()
         .enumerate()
@@ -272,27 +274,28 @@ pub(super) fn complete_current_and_advance(state: &mut RewriteState) -> Result<b
     let mut completed = state.active_slice.clone();
     completed.phase = RewritePhase::SliceComplete;
     state.parked_slices.insert(state.api.clone(), completed);
+    let api = state.api.clone();
+    revalidation_round::finish(state, &api);
 
-    let next = state
-        .api_inventory
-        .iter()
-        .position(|item| item.status == RewriteApiStatus::Pending);
+    let next = revalidation_round::next(state)
+        .and_then(|api| state.api_inventory.iter().position(|item| item.api == api));
+    let next = next.or_else(|| {
+        state
+            .api_inventory
+            .iter()
+            .position(|item| item.status == RewriteApiStatus::Pending)
+    });
     let next = next.or_else(|| {
         state
             .api_inventory
             .iter()
             .position(|item| item.status == RewriteApiStatus::ImplementationRequired)
     });
-    let next = next.or_else(|| {
-        state
-            .api_inventory
-            .iter()
-            .position(|item| item.status == RewriteApiStatus::RevalidationPending)
-    });
     let Some(next) = next else {
         state.current_api_index = None;
         return Ok(false);
     };
+    revalidation_round::begin(state);
     state.api_inventory[next].status = RewriteApiStatus::Active;
     state.current_api_index = Some(next);
     let api = state.api_inventory[next].api.clone();
@@ -341,14 +344,15 @@ pub(super) fn mark_awaiting_recording_refresh(state: &mut RewriteState, api: &st
 }
 
 pub(super) fn has_runnable_work(state: &RewriteState) -> bool {
-    state.api_inventory.iter().any(|item| {
-        matches!(
-            item.status,
-            RewriteApiStatus::Active
-                | RewriteApiStatus::Pending
-                | RewriteApiStatus::ImplementationRequired
-        )
-    })
+    revalidation_round::next(state).is_some()
+        || state.api_inventory.iter().any(|item| {
+            matches!(
+                item.status,
+                RewriteApiStatus::Active
+                    | RewriteApiStatus::Pending
+                    | RewriteApiStatus::ImplementationRequired
+            )
+        })
 }
 
 pub(super) fn rebase_target_fingerprint(state: &mut RewriteState, previous: &str, current: &str) {
@@ -369,11 +373,15 @@ fn rebase_slice_fingerprint(slice: &mut RewriteSliceState, previous: &str, curre
     }
 }
 
-fn next_runnable_index(state: &RewriteState) -> Option<usize> {
-    state
-        .api_inventory
-        .iter()
-        .position(|item| item.status == RewriteApiStatus::Pending)
+pub(super) fn next_runnable_index(state: &RewriteState) -> Option<usize> {
+    revalidation_round::next(state)
+        .and_then(|api| state.api_inventory.iter().position(|item| item.api == api))
+        .or_else(|| {
+            state
+                .api_inventory
+                .iter()
+                .position(|item| item.status == RewriteApiStatus::Pending)
+        })
         .or_else(|| {
             state
                 .api_inventory
@@ -385,6 +393,7 @@ fn next_runnable_index(state: &RewriteState) -> Option<usize> {
 pub(super) fn reset_for_recording(state: &mut RewriteState) {
     source_route::retain_bindings(state);
     state.api_inventory.clear();
+    state.revalidation_round = None;
     state.skipped_api_statuses.clear();
     state.current_api_index = None;
     state.parked_slices.clear();
@@ -417,19 +426,6 @@ pub(super) fn defer_completed_for_target_change(
             item.e2e_current = false;
             changed = true;
         }
-    }
-    if changed
-        && state.phase == RewritePhase::SliceComplete
-        && !super::transition::replay_completion_pending(state)
-    {
-        let next = state
-            .api_inventory
-            .iter()
-            .position(|item| item.status == RewriteApiStatus::RevalidationPending)
-            .context("stale API inventory has no deferred revalidation slice")?;
-        state.api_inventory[next].status = RewriteApiStatus::Active;
-        state.current_api_index = Some(next);
-        load_pending(state, next)?;
     }
     if changed {
         state.bump();
@@ -485,6 +481,13 @@ fn load_pending(state: &mut RewriteState, index: usize) -> Result<()> {
 }
 
 pub(super) fn resume_at(state: &mut RewriteState, index: usize) -> Result<()> {
+    if state.api_inventory[index].status == RewriteApiStatus::RevalidationPending {
+        revalidation_round::begin(state);
+        ensure!(
+            revalidation_round::contains(state, &state.api_inventory[index].api),
+            "API must wait for all implementation acceptances before revalidation"
+        );
+    }
     let item = &state.api_inventory[index];
     state.active_slice = match state.parked_slices.remove(&item.api) {
         Some(slice) => slice,
@@ -733,7 +736,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_target_change_starts_one_final_revalidation_slice() {
+    fn terminal_target_change_defers_without_implicitly_starting_a_round() {
         let mut state = crate::rewrite::test_state();
         install(
             &mut state,
@@ -750,14 +753,17 @@ mod tests {
 
         assert!(defer_completed_for_target_change(&mut state, "target-r1").unwrap());
 
-        assert_eq!(state.phase, RewritePhase::ApiPending);
-        assert_eq!(state.current_api_index, Some(0));
-        assert_eq!(state.api_inventory[0].status, RewriteApiStatus::Active);
+        assert_eq!(state.phase, RewritePhase::SliceComplete);
+        assert_eq!(state.current_api_index, None);
+        assert_eq!(
+            state.api_inventory[0].status,
+            RewriteApiStatus::RevalidationPending
+        );
         assert_eq!(
             state.api_inventory[1].status,
             RewriteApiStatus::RevalidationPending
         );
-        assert_eq!(view(&state).revalidation_pending, 1);
+        assert_eq!(view(&state).revalidation_pending, 2);
     }
 
     #[test]

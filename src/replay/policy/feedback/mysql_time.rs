@@ -66,6 +66,9 @@ pub struct MysqlTimeSelector {
     pub database: String,
     pub username: String,
     pub sql: String,
+    pub tables: Vec<String>,
+    pub table_patterns: Vec<String>,
+    pub table_series: Option<crate::MysqlTableSeries>,
     pub time_values: Vec<MysqlTimeValueSelector>,
 }
 
@@ -78,6 +81,12 @@ enum MysqlTimeSelectorOutput {
         database: String,
         username: String,
         sql: String,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        tables: Vec<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        table_patterns: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        table_series: Option<crate::MysqlTableSeries>,
         value_index: usize,
         tolerance: String,
         offset: String,
@@ -90,6 +99,12 @@ enum MysqlTimeSelectorOutput {
         database: String,
         username: String,
         sql: String,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        tables: Vec<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        table_patterns: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        table_series: Option<crate::MysqlTableSeries>,
         time_values: Vec<MysqlTimeValueSelector>,
     },
 }
@@ -102,6 +117,9 @@ impl From<MysqlTimeSelector> for MysqlTimeSelectorOutput {
             database,
             username,
             sql,
+            tables,
+            table_patterns,
+            table_series,
             mut time_values,
         } = selector;
         if time_values.len() == 1 && time_values[0].json_pointer.is_none() {
@@ -112,6 +130,9 @@ impl From<MysqlTimeSelector> for MysqlTimeSelectorOutput {
                 database,
                 username,
                 sql,
+                tables,
+                table_patterns,
+                table_series,
                 value_index: selected.value_index,
                 tolerance: selected.tolerance,
                 offset: selected.offset,
@@ -125,6 +146,9 @@ impl From<MysqlTimeSelector> for MysqlTimeSelectorOutput {
                 database,
                 username,
                 sql,
+                tables,
+                table_patterns,
+                table_series,
                 time_values,
             }
         }
@@ -139,6 +163,12 @@ struct MysqlTimeSelectorConfig {
     database: String,
     username: String,
     sql: String,
+    #[serde(default)]
+    tables: Vec<String>,
+    #[serde(default)]
+    table_patterns: Vec<String>,
+    #[serde(default)]
+    table_series: Option<crate::MysqlTableSeries>,
     #[serde(default)]
     time_values: Vec<MysqlTimeValueSelector>,
     #[serde(default)]
@@ -185,6 +215,9 @@ impl TryFrom<MysqlTimeSelectorConfig> for MysqlTimeSelector {
             database: config.database,
             username: config.username,
             sql: config.sql,
+            tables: config.tables,
+            table_patterns: config.table_patterns,
+            table_series: config.table_series,
             time_values,
         })
     }
@@ -309,6 +342,9 @@ pub fn plan_mysql_time_rule(feedback: MysqlTimeRuleFeedback) -> Result<MysqlTime
         mysql: Some(MysqlSelector {
             command: "COM_QUERY".into(),
             sql: s.sql.clone(),
+            tables: s.tables.clone(),
+            table_patterns: s.table_patterns.clone(),
+            table_series: s.table_series.clone(),
             database: Some(s.database.clone()),
             username: None,
             params: BTreeMap::new(),

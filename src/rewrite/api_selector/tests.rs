@@ -78,3 +78,42 @@ fn persisted_route_worker_keeps_its_identity_and_method_progress() {
     assert_eq!(work_scope(&restored, "POST /other").binding_key(), "/other");
     assert_eq!(restored.api_inventory.len(), 2);
 }
+
+#[test]
+fn route_selection_prefers_an_admitted_method_over_its_blocked_active_sibling() {
+    for system_repair in [false, true] {
+        let mut state = worker::tests::implementation_state_with_inventory(false);
+        let mut sibling = state.active_slice.clone();
+        sibling.api = "POST /api".into();
+        sibling.active_issue.as_mut().unwrap().id = "post-issue".into();
+        sibling.rule_replay_pending = !system_repair;
+        sibling.system_repair_accepted = system_repair;
+        let mut item = state.api_inventory[0].clone();
+        item.api = sibling.api.clone();
+        item.status = RewriteApiStatus::ImplementationRequired;
+        state.api_inventory.push(item);
+        state.parked_slices.insert(sibling.api.clone(), sibling);
+        let selector = "/api".parse().unwrap();
+        assert_eq!(select(&state, &selector).unwrap().to_string(), "POST /api");
+        // A precise rule/repair admission never releases the other dirty method.
+        assert!(!crate::rewrite::rule_replay::admitted(
+            &state,
+            &work_scope(&state, &state.api)
+        ));
+        state.api_inventory[1].status = RewriteApiStatus::Skipped;
+        assert_eq!(select(&state, &selector).unwrap().to_string(), "GET /api");
+    }
+}
+
+#[test]
+fn route_selection_can_discover_a_pending_method_while_its_sibling_is_implemented() {
+    let mut state = worker::tests::implementation_state_with_inventory(true);
+    state.api_inventory[1].api = "POST /api".into();
+    state.api_inventory[1].source_route = Some("/api".into());
+    assert_eq!(
+        select(&state, &"/api".parse().unwrap())
+            .unwrap()
+            .to_string(),
+        "POST /api"
+    );
+}

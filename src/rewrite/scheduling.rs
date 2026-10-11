@@ -1,4 +1,4 @@
-//! Idle-work selection and resumable external blocking. Traffic ownership stays
+//! Round-aware verification selection and resumable external blocking. Traffic ownership stays
 //! with the operation lease; worker dispatch remains in worker::scheduler.
 use std::path::Path;
 
@@ -40,14 +40,19 @@ pub(super) fn repair_apis(state: &RewriteState) -> Vec<String> {
 
 pub(super) fn revalidation_api(state: &RewriteState) -> Option<&str> {
     inventory::can_switch_api(state)
-        .then(|| {
-            state
-                .api_inventory
-                .iter()
-                .find(|item| item.status == RewriteApiStatus::RevalidationPending)
-                .map(|item| item.api.as_str())
-        })
+        .then(|| inventory::revalidation_round::next(state))
         .flatten()
+}
+
+pub(super) fn round_action(target_root: &Path, state: &RewriteState) -> Option<RewriteAction> {
+    state.revalidation_round.as_ref()?;
+    revalidation_api(state).map(|api| {
+        advance(
+            target_root,
+            api,
+            "continue complete revalidation round for API",
+        )
+    })
 }
 
 /// Called only after ordinary ready worker/native actions have been considered.
@@ -74,7 +79,7 @@ pub(super) fn idle_action(target_root: &Path, state: &RewriteState) -> Option<Re
         return Some(advance(
             target_root,
             api,
-            "use idle verification capacity to revalidate API",
+            "all implementations are accepted or confirmed gaps; revalidate API",
         ));
     }
     let blocked = repair_apis(state);
