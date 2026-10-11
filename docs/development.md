@@ -1505,13 +1505,13 @@ skip:
 ```
 
 Set `auto_next: true` to let an unscoped `next` continue after fresh passing
-Replay when the next globally scheduled action is also Replay. First verification
-and deferred revalidation use the same rule. Each step saves its result and releases
-its workflow lock and Replay lease before the engine merges new feedback and
-re-evaluates the original priorities and gates. Failed or stale Replay, dispatch,
-integration, review, rule/input handling, waiting and final publication stop the
-operation and return the current action. A ready handoff still waits behind
-first-pass discovery and takes its normal priority over idle revalidation.
+Replay when the next globally scheduled action is also Replay. During an active
+revalidation round, terminal failures also continue to its remaining members.
+Each step saves its result and releases its workflow lock and Replay lease before
+merging new feedback. A started round drains before worker dispatch, integration,
+repair acceptance or a new round. Outside a round, first-pass discovery and ready
+handoffs retain their existing priorities. Stale Replay, resource recovery,
+review, rule/input handling, waiting and final publication retain their gates.
 Changing `auto_next` to false stops continuation after the current step.
 The omitted field defaults to false; its value must be a boolean. Explicit API
 or source-route inputs always use single execution. These local settings do not
@@ -1525,6 +1525,12 @@ summaries also include the current Replay phase and progress. The operation rema
 so another command cannot start a competing Replay or admit an integration.
 Retries retain the mode and the last selected scope, rather than restarting the
 first API in the chain. Legacy operation markers default to single execution.
+
+When a route has several methods, selection prefers a pending first attempt or
+a method with precise rule/system-repair Replay admission over an active sibling
+still awaiting implementation acceptance. Scoped status and detached `next` use
+the same selection. A rule for one method never admits an unaccepted sibling;
+the route batch preserves that sibling's issue and worker binding.
 
 `only` and `skip` can be combined: first select `only` (or all APIs when absent or empty),
 then remove `skip`. HTTP selectors must be exact canonical routes from `inventory`,
@@ -1627,23 +1633,36 @@ with an explicit skipped explanation and false current-verification flags.
 Global completion is restricted to the selected scope, with separate verified
 and skipped counts; skips never become passing traffic observations.
 
-Passing Replay completes the API. The following `next` prepares the next inventory
-item from the same standard recording. A repository or policy content change makes prior
-E2E evidence stale. Completed APIs become `revalidation_pending`
-and receive lower scheduling priority than executable ordinary work. When
-ordinary actions are waiting and verification resources are free, the engine
-selects one stale API in inventory order. Worker execution and API-scoped system
-repair do not block unrelated revalidation. A target failure creates worker
-work; a system failure can be parked with its exact repair identity. Completed
-APIs are not repeated at an unchanged target fingerprint. Later integrations
-still invalidate stale successes for the final verification epoch. A commit that
-preserves the effective worktree content does not change the fingerprint.
-`verification request` remains available for an explicit caller request to
-verify selected stale APIs early; ordinary coordination already uses idle
-verification capacity; the returned advance command starts
-their normal Replay flow, and final whole-inventory coverage remains
-mandatory. `terminal_allowed` is false until every API inventory item has
-passing E2E evidence for the same target content fingerprint.
+Passing Replay completes the API. A repository or policy content change makes
+prior E2E evidence stale and marks completed APIs `revalidation_pending`; it does
+not immediately replay them. Automatic revalidation starts only when every
+included method contract is complete, pending revalidation, or at a confirmed
+system-repair gap. Skipped methods are excluded. Pending implementation,
+unintegrated handoffs, integrated-but-unverified deliveries and recording-refresh
+waiters must finish their existing acceptance/input flow first.
+
+Starting revalidation persists the complete set of stale method contracts in
+inventory order. Run every member once before returning to implementation or
+repair acceptance. A terminal failure records its issue and consumes that round
+membership, so failures on multiple APIs are collected in the same sweep.
+Route batches include only their remaining methods, never completed siblings.
+Between Replay steps, later fingerprint changes can mark successes stale again,
+but cannot re-add them to the active round. Recovery and process restarts retain
+its remaining membership. A fingerprint change during Replay still discards
+that unaccepted result and requires a valid attempt before consuming membership.
+
+After the sweep drains, repair and accept every failed API, or confirm its system
+gap. Only then may another round start for evidence that is still stale. An API
+accepted earlier in this repair phase is not replayed again while other repairs
+remain outstanding. `verification request` reports selected stale APIs through
+the same gate; it cannot promote them to ordinary pending work or bypass an
+active round. No empty round is created: with current evidence for all included
+APIs, normal completion/publication proceeds; if only confirmed gaps remain,
+the existing global `blocked` stop preserves evidence and bindings for resume.
+Gaps never count as passing traffic or allow successful terminal completion.
+`terminal_allowed` still requires every included API's passing evidence at the
+current target fingerprint plus the existing review and publication gates.
+A commit preserving effective worktree content does not change the fingerprint.
 
 After a finalized unscoped standard recording, the coordinator compares its
 concrete APIs with a persistent historical API catalog canonicalized by current

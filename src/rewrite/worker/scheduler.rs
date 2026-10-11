@@ -47,7 +47,7 @@ pub(in crate::rewrite) fn global_action(
     state: &RewriteState,
     busy: bool,
 ) -> Option<RewriteAction> {
-    if state.case_pattern_identification.is_some() {
+    if state.case_pattern_identification.is_some() || state.revalidation_round.is_some() {
         return None;
     }
     let first_pass_ready =

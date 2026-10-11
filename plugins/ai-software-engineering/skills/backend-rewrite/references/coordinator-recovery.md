@@ -19,14 +19,16 @@ required repair. The coordinator does not repair code while idle. Read global
 status again after installing the repair.
 Until the relevant revision changes, it is counted in `waiting.system_repair`
 and `action.details.acceptance_ready` is false. Other ready worker work continues. The engine can park this API with its exact
-issue, evidence, route, and repair identity while verifying other APIs. If only
-deferred API revalidation remains executable, it selects one item at a time.
+issue, evidence, route, and repair identity while verifying other APIs. After every implementation is accepted or confirmed as a gap, deferred
+revalidation starts a persistent round. Drain all its members before acting on
+new repair or worker handoffs, even if individual APIs fail. Recovery retains
+remaining membership; fingerprint changes do not repeat finished members.
 After eligible revalidation drains, a global `blocked` action stops this run
 when the remaining incomplete APIs all require system repair. Preserve resume
 context and worker bindings; do not claim completion. A later global status
 checks both active and parked repair revisions and can resume acceptance.
 Once ready and the verification resource is free, it contributes one
-`ready.verify_system_repair` and is selected before worker checks or dispatch.
+`ready.verify_system_repair` and is selected before worker checks or dispatch outside an active revalidation round.
 Execute the exact `action.commands.acceptance` returned then. New repairs use
 `repair verify <repair-id>`. A legacy Response `external_data_blocker` now
 expressible by bootstrap Replay planning instead receives

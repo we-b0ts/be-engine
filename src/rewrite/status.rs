@@ -189,8 +189,17 @@ fn api_envelope_unannotated(
     {
         return Ok(envelope);
     }
-    if let Some(expert) =
-        super::expert::required_action(target_root, state, api.map(ToString::to_string).as_deref())
+    if let Some(api) = api
+        && let Some(envelope) = revalidation::deferred_status_envelope(target_root, state, api)?
+    {
+        return Ok(envelope);
+    }
+    if state.revalidation_round.is_none()
+        && let Some(expert) = super::expert::required_action(
+            target_root,
+            state,
+            api.map(ToString::to_string).as_deref(),
+        )
     {
         return Ok(action::envelope(target_root, state, expert));
     }

@@ -54,6 +54,8 @@ pub(super) fn from_e2e_result(
     } else {
         state.active_issue = Some(issue::from_e2e(&state.api, result, target_fingerprint));
         state.phase = RewritePhase::ImplementationRequired;
+        let api = state.api.clone();
+        super::inventory::revalidation_round::finish(state, &api);
     }
     state.bump();
     Ok(())

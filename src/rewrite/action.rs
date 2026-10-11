@@ -65,6 +65,13 @@ pub(super) fn select_action(
     state: &RewriteState,
     base: RewriteAction,
 ) -> RewriteAction {
+    if !matches!(
+        base,
+        RewriteAction::SourceReviewRequired { .. } | RewriteAction::TargetQualityRequired { .. }
+    ) && let Some(round) = super::scheduling::round_action(target_root, state)
+    {
+        return round;
+    }
     if let Some(expert) = super::expert::required_action(target_root, state, None) {
         return expert;
     }
@@ -134,13 +141,18 @@ pub(super) fn for_scoped_status(
     target_root: &Path,
     state: &RewriteState,
 ) -> Result<RewriteActionEnvelope> {
-    if let Some(scope) = worker::runtime::scopes(state)
-        .into_iter()
-        .find(|scope| match scope {
-            super::RewriteWorkScope::Api { api } => {
-                api == &super::api_selector::work_scope(state, &state.api).binding_key()
-            }
-        })
+    let method_scope = super::RewriteWorkScope::Api {
+        api: state.api.clone(),
+    };
+    if state.phase == RewritePhase::ImplementationRequired
+        && !super::rule_replay::admitted(state, &method_scope)
+        && let Some(scope) = worker::runtime::scopes(state)
+            .into_iter()
+            .find(|scope| match scope {
+                super::RewriteWorkScope::Api { api } => {
+                    api == &super::api_selector::work_scope(state, &state.api).binding_key()
+                }
+            })
         && state.rule_plan.is_none()
         && state.dependency_rule_plan.is_none()
         && state.recorder_capture_plan.is_none()

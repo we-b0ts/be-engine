@@ -36,7 +36,7 @@ pub fn request(
 ) -> Result<RewriteRevalidationRequestReport> {
     ensure!(
         !options.apis.is_empty(),
-        "early revalidation requires at least one --api"
+        "revalidation request requires at least one --api"
     );
     super::validate_single_line("revalidation reason", &options.reason)?;
     ensure!(
@@ -51,7 +51,7 @@ pub fn request(
             traffic_operation::state(&target_root)?,
             traffic_operation::TrafficOperationState::Absent
         ),
-        "early revalidation cannot be requested while a traffic operation is active"
+        "revalidation cannot be requested while a traffic operation is active"
     );
     let mut state = store
         .load()?
@@ -80,14 +80,17 @@ pub fn request(
         requested.extend(methods);
     }
     let requested = requested.into_iter().collect::<Vec<_>>();
-    promote(&mut state, &requested, &target_fingerprint)?;
+    validate_requested(&state, &requested, &target_fingerprint)?;
 
     let first = requested
         .first()
         .expect("non-empty revalidation request was validated")
         .parse::<RecordingApi>()?;
-    let scoped = inventory::scoped(&state, Some(&first))?;
-    let next = action::for_status(&target_root, &scoped)?;
+    let next = if let Some(deferred) = deferred_next_envelope(&target_root, &state, &first)? {
+        deferred
+    } else {
+        action::for_status(&target_root, &state)?
+    };
     store.save(&state)?;
     Ok(RewriteRevalidationRequestReport {
         schema_version: ACTION_SCHEMA_VERSION,
@@ -108,6 +111,24 @@ pub(super) fn deferred_status_envelope(
     state: &RewriteState,
     api: &RecordingApi,
 ) -> Result<Option<RewriteActionEnvelope>> {
+    deferred_envelope(target_root, state, api, true)
+}
+
+/// Next already owns the coordinator lock; only the scheduling gate is relevant.
+pub(super) fn deferred_next_envelope(
+    target_root: &std::path::Path,
+    state: &RewriteState,
+    api: &RecordingApi,
+) -> Result<Option<RewriteActionEnvelope>> {
+    deferred_envelope(target_root, state, api, false)
+}
+
+fn deferred_envelope(
+    target_root: &std::path::Path,
+    state: &RewriteState,
+    api: &RecordingApi,
+    respect_resources: bool,
+) -> Result<Option<RewriteActionEnvelope>> {
     let requested = api.to_string();
     let Some(item) = state
         .api_inventory
@@ -116,10 +137,13 @@ pub(super) fn deferred_status_envelope(
     else {
         return Ok(None);
     };
-    if item.status != RewriteApiStatus::RevalidationPending {
+    let outside_round = state.revalidation_round.is_some()
+        && !inventory::revalidation_round::contains(state, &requested);
+    if item.status != RewriteApiStatus::RevalidationPending && !outside_round {
         return Ok(None);
     }
-    if !super::coordination::resources_busy(target_root)? {
+    if !outside_round && (!respect_resources || !super::coordination::resources_busy(target_root)?)
+    {
         let selected = action::for_status(target_root, state)?.action;
         if matches!(selected, RewriteAction::AdvanceRequired { api: Some(ref selected_api), .. }
             if selected_api == &requested || selected_api == super::api_selector::public_api(&requested))
@@ -134,7 +158,7 @@ pub(super) fn deferred_status_envelope(
         RewriteAction::WaitRequired {
             execution_mode: None,
             summary: format!(
-                "defer revalidation for {requested} while higher-priority work or verification resources are occupied; global status selects idle revalidation automatically"
+                "defer {requested} until all implementations are accepted or confirmed gaps and this API is eligible in the revalidation round; finish every member before repairs or another round"
             ),
             resource: "rewrite_final_revalidation".to_string(),
             requested_api: Some(super::api_selector::public_api(&requested).into()),
@@ -150,7 +174,11 @@ pub(super) fn deferred_status_envelope(
     )))
 }
 
-fn promote(state: &mut RewriteState, requested: &[String], target_fingerprint: &str) -> Result<()> {
+fn validate_requested(
+    state: &RewriteState,
+    requested: &[String],
+    target_fingerprint: &str,
+) -> Result<()> {
     let requested = requested
         .iter()
         .map(String::as_str)
@@ -171,12 +199,6 @@ fn promote(state: &mut RewriteState, requested: &[String], target_fingerprint: &
             item.status
         );
     }
-    for item in &mut state.api_inventory {
-        if requested.contains(item.api.as_str()) {
-            item.status = RewriteApiStatus::Pending;
-        }
-    }
-    state.bump();
     Ok(())
 }
 
@@ -189,7 +211,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn early_request_promotes_only_selected_stale_apis() {
+    fn request_preserves_selected_stale_apis_until_round_is_ready() {
         let mut state = crate::rewrite::test_state();
         inventory::install(
             &mut state,
@@ -203,22 +225,26 @@ mod tests {
         state.api_inventory[0].status = RewriteApiStatus::RevalidationPending;
         state.api_inventory[1].status = RewriteApiStatus::RevalidationPending;
 
-        promote(&mut state, &["POST /b".to_string()], "fnv1a64:current").unwrap();
+        validate_requested(&state, &["POST /b".to_string()], "fnv1a64:current").unwrap();
 
         assert_eq!(
             state.api_inventory[0].status,
             RewriteApiStatus::RevalidationPending
         );
-        assert_eq!(state.api_inventory[1].status, RewriteApiStatus::Pending);
+        assert_eq!(
+            state.api_inventory[1].status,
+            RewriteApiStatus::RevalidationPending
+        );
         assert_eq!(state.api_inventory[2].status, RewriteApiStatus::Pending);
     }
 
     #[test]
-    fn early_request_rejects_current_or_normal_pending_apis() {
+    fn request_rejects_current_or_normal_pending_apis() {
         let mut state = crate::rewrite::test_state();
         inventory::install(&mut state, vec!["GET /a".to_string()]).unwrap();
 
-        let error = promote(&mut state, &["GET /a".to_string()], "fnv1a64:current").unwrap_err();
+        let error =
+            validate_requested(&state, &["GET /a".to_string()], "fnv1a64:current").unwrap_err();
 
         assert!(error.to_string().contains("not revalidation_pending"));
     }
@@ -250,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn request_persists_selected_early_work_and_returns_its_next_action() {
+    fn request_cannot_bypass_an_unfinished_implementation() {
         let target = configured_target();
         let baseline = fingerprint::repository_fingerprint(target.path()).unwrap();
         let mut state = crate::rewrite::test_state();
@@ -284,10 +310,10 @@ mod tests {
         assert_eq!(value["schema_version"], serde_json::json!(36));
         assert_eq!(
             value.pointer("/next/action/kind"),
-            Some(&serde_json::json!("advance_required"))
+            Some(&serde_json::json!("wait_required"))
         );
         assert_eq!(
-            value.pointer("/next/action/details/api"),
+            value.pointer("/next/action/details/requested_api"),
             Some(&serde_json::json!("/a"))
         );
         let saved = RewriteStore::new(target.path())
@@ -295,8 +321,34 @@ mod tests {
             .load()
             .unwrap()
             .unwrap();
-        assert_eq!(saved.api_inventory[0].status, RewriteApiStatus::Pending);
+        assert_eq!(
+            saved.api_inventory[0].status,
+            RewriteApiStatus::RevalidationPending
+        );
         assert_eq!(saved.api_inventory[1].status, RewriteApiStatus::Active);
+    }
+
+    #[test]
+    fn next_uses_the_round_gate_without_waiting_on_its_own_lock() {
+        let target = configured_target();
+        let mut state = crate::rewrite::test_state();
+        inventory::install(&mut state, vec!["GET /a".into()]).unwrap();
+        state.api_inventory[0].status = RewriteApiStatus::RevalidationPending;
+        state.phase = crate::rewrite::RewritePhase::SliceComplete;
+        state.current_api_index = None;
+        let store = RewriteStore::new(target.path()).unwrap();
+        let _lock = store.lock().unwrap();
+        let api = "GET /a".parse().unwrap();
+        assert!(
+            deferred_status_envelope(target.path(), &state, &api)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            deferred_next_envelope(target.path(), &state, &api)
+                .unwrap()
+                .is_none()
+        );
     }
 
     fn configured_target() -> tempfile::TempDir {

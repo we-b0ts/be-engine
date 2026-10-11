@@ -54,7 +54,7 @@ fn assert_advance(action: &RewriteAction, api: &str) {
 }
 
 #[test]
-fn screenshot_running_worker_and_thirty_stale_apis_selects_one_without_mutation() {
+fn running_worker_defers_thirty_stale_apis_without_mutation() {
     let target = configured_target();
     let state = with_revalidation(30);
     let store = RewriteStore::new(target.path()).unwrap();
@@ -62,14 +62,14 @@ fn screenshot_running_worker_and_thirty_stale_apis_selects_one_without_mutation(
     let before = serde_json::to_value(store.load().unwrap().unwrap()).unwrap();
     let report = status(target.path());
     assert_eq!(report.pending, 1);
-    assert_advance(&report.action, "GET /revalidate-0");
+    assert!(matches!(report.action, RewriteAction::WaitRequired { .. }));
     let inventory = rewrite::inventory_rewrite(rewrite::RewriteContext {
         target_root: target.path().into(),
     })
     .unwrap();
     assert_eq!(inventory.pending, report.pending);
-    assert_eq!(inventory.details.ready["revalidate_api"], 1);
-    assert_eq!(inventory.details.waiting["final_revalidation"], 29);
+    assert!(!inventory.details.ready.contains_key("revalidate_api"));
+    assert_eq!(inventory.details.waiting["final_revalidation"], 30);
     assert_eq!(inventory.details.waiting["worker_handoff"], 1);
     let scoped = rewrite::status_rewrite_for_api(
         rewrite::RewriteContext {
@@ -78,7 +78,7 @@ fn screenshot_running_worker_and_thirty_stale_apis_selects_one_without_mutation(
         Some(&"GET /revalidate-0".parse().unwrap()),
     )
     .unwrap();
-    assert_advance(&scoped.action, "GET /revalidate-0");
+    assert!(matches!(scoped.action, RewriteAction::WaitRequired { .. }));
     assert_eq!(
         before,
         serde_json::to_value(store.load().unwrap().unwrap()).unwrap()
@@ -183,7 +183,9 @@ async fn integrated_handoff_can_advance_while_another_api_waits_for_system_repai
     let mut state = with_revalidation(1);
     let worker_api = state.api.clone();
     worker::integrate_current_for_test(&mut state);
-    inventory::activate_requested(&mut state, Some(&"GET /revalidate-0".parse().unwrap())).unwrap();
+    state = inventory::scoped(&state, Some(&"GET /revalidate-0".parse().unwrap())).unwrap();
+    state.api_inventory[0].status = RewriteApiStatus::ImplementationRequired;
+    state.api_inventory[1].status = RewriteApiStatus::Active;
     state.active_issue = state.parked_slices[&worker_api].active_issue.clone();
     mark_repair(&mut state);
     let repair_slice = serde_json::to_value(&state.active_slice).unwrap();
@@ -213,7 +215,7 @@ async fn integrated_handoff_can_advance_while_another_api_waits_for_system_repai
 }
 
 #[test]
-fn new_implementation_issue_preempts_revalidation_then_releases_it_after_dispatch() {
+fn new_implementation_issue_keeps_revalidation_deferred_after_dispatch() {
     let target = configured_target();
     let mut state = with_revalidation(2);
     state.worker_bindings.clear();
@@ -223,10 +225,10 @@ fn new_implementation_issue_preempts_revalidation_then_releases_it_after_dispatc
         RewriteAction::ImplementationRequired { .. }
     ));
     worker::confirm_current_for_test(&mut state);
-    assert_advance(
-        &action::for_state(target.path(), &state).action,
-        "GET /revalidate-0",
-    );
+    assert!(matches!(
+        action::for_state(target.path(), &state).action,
+        RewriteAction::WaitRequired { .. }
+    ));
 }
 
 #[test]
@@ -355,7 +357,7 @@ fn completed_evidence_is_revalidated_again_only_after_target_changes() {
         RewriteAction::Blocked { .. }
     ));
     assert!(inventory::defer_completed_for_target_change(&mut state, "target-v2").unwrap());
-    assert_eq!(state.phase, RewritePhase::ApiPending);
+    assert_eq!(state.phase, RewritePhase::SliceComplete);
     assert_advance(
         &action::for_state(target.path(), &state).action,
         "GET /revalidate-0",

@@ -30,7 +30,9 @@ pub(super) fn status_details(
     let base = super::action::status_base(target_root, state)?;
     let execution = super::execution::status_action(target_root)?;
     let failed = matches!(execution, Some(RewriteAction::ExecutionFailed { .. }));
-    let selected = if let Some(expert) = super::expert::required_action(target_root, state, None) {
+    let selected = if state.revalidation_round.is_none()
+        && let Some(expert) = super::expert::required_action(target_root, state, None)
+    {
         expert
     } else if busy || failed {
         super::worker::scheduler::global_action(target_root, state, true)
@@ -99,6 +101,10 @@ pub(super) fn details(
     add(&mut result.waiting, "expert_report", reports);
     add(&mut result.ready, "close_expert", close);
     for scope in runtime::scopes(state) {
+        if state.revalidation_round.is_some() {
+            add(&mut result.waiting, "revalidation_round", 1);
+            continue;
+        }
         match runtime::coverage(state, &scope) {
             Coverage::DispatchRequired => add(&mut result.ready, "dispatch_worker", 1),
             Coverage::ResumeRequired => add(&mut result.ready, "resume_worker", 1),
@@ -247,6 +253,34 @@ pub(super) fn projected_details(
     if matches!(selected, RewriteAction::Blocked { .. }) {
         result.ready.clear();
     } else if !busy
+        && super::scheduling::round_action(target_root, state).is_some()
+        && matches!(selected, RewriteAction::AdvanceRequired { .. })
+    {
+        for key in [
+            "dispatch_worker",
+            "resume_worker",
+            "check_worker_status",
+            "integrate_handoff",
+            "verify_handoff",
+            "verify_api",
+            "verify_system_repair",
+        ] {
+            if let Some(count) = result.ready.remove(key) {
+                add(&mut result.waiting, "revalidation_round", count);
+            }
+        }
+        if let Some(api) = super::scheduling::revalidation_api(state)
+            && state.api_inventory.iter().any(|item| {
+                item.status == RewriteApiStatus::RevalidationPending
+                    && super::api_selector::public_api(&item.api)
+                        == super::api_selector::public_api(api)
+            })
+        {
+            remove_one(&mut result.waiting, "final_revalidation");
+        }
+        result.ready.clear();
+        add(&mut result.ready, "revalidate_api", 1);
+    } else if !busy
         && result.ready.is_empty()
         && matches!(selected, RewriteAction::AdvanceRequired { .. })
     {
@@ -274,6 +308,9 @@ pub(super) fn busy_workers(
     state: &RewriteState,
     api: Option<&crate::RecordingApi>,
 ) -> Result<Option<super::model::RewriteActionEnvelope>> {
+    if state.revalidation_round.is_some() {
+        return Ok(None);
+    }
     let selected = if let Some(api) = api {
         let scope = super::api_selector::work_scope(state, &api.to_string());
         runtime::scopes(state)
