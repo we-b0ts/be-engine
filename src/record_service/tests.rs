@@ -13,7 +13,7 @@ use std::sync::{
 use std::time::Duration;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    net::TcpListener,
+    net::{TcpListener, TcpSocket},
     sync::{Notify, watch},
     task::JoinHandle,
 };
@@ -176,6 +176,7 @@ online_test!(
     busy_during_shutdown_cannot_release_active_token,
     partial_response_and_downstream_disconnect_keep_operation_alive,
     connect_failure_releases_but_dispatched_timeout_retains_slot,
+    connected_upstream_failure_returns_502_and_retains_slot,
     oversized_body_falls_back_before_dispatch
 );
 
@@ -533,20 +534,25 @@ mod cases {
     }
 
     pub async fn connect_failure_releases_but_dispatched_timeout_retains_slot() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        drop(listener);
+        // Reserve the address without listening: connect is refused, and another
+        // parallel fixture cannot reuse the port and turn this into a dispatched
+        // HTTP failure (502). Dropping a listener before the request races reuse.
+        let unreachable = TcpSocket::new_v4().unwrap();
+        unreachable.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let address = unreachable.local_addr().unwrap();
+        assert!(TcpListener::bind(address).await.is_err());
         let fixture = Fixture::new(
             format!("http://{address}").parse().unwrap(),
             Duration::from_secs(1),
             1024,
         )
         .await;
-        assert_eq!(
-            fixture.request("POST", Some("token-1"), "payload").await.0,
-            StatusCode::NOT_FOUND
-        );
+        let (status, body) = fixture.request("POST", Some("token-1"), "payload").await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body:?}");
+        assert_eq!(body.as_ref(), b"recorder unreachable");
         assert_eq!(fixture.releases.load(Ordering::SeqCst), 1);
+        assert!(fixture.token.lock().unwrap().is_none());
+        drop(unreachable);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let fixture = Fixture::new(
             format!("http://{}", listener.local_addr().unwrap())
@@ -574,6 +580,29 @@ mod cases {
         assert_eq!(fixture.releases.load(Ordering::SeqCst), 0);
         assert!(fixture.token.lock().unwrap().is_some());
         upstream.abort();
+    }
+
+    pub async fn connected_upstream_failure_returns_502_and_retains_slot() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let fixture = Fixture::new(
+            format!("http://{}", listener.local_addr().unwrap())
+                .parse()
+                .unwrap(),
+            Duration::from_secs(2),
+            1024,
+        )
+        .await;
+        let upstream = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            assert!(read_request(&mut stream).await.ends_with("payload"));
+            // Dispatch succeeded, but the peer closes without an HTTP response.
+        });
+        let (status, body) = fixture.request("POST", Some("token-1"), "payload").await;
+        upstream.await.unwrap();
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{body:?}");
+        assert_eq!(body.as_ref(), b"recorder response failed");
+        assert_eq!(fixture.releases.load(Ordering::SeqCst), 0);
+        assert!(fixture.token.lock().unwrap().is_some());
     }
 
     pub async fn oversized_body_falls_back_before_dispatch() {
