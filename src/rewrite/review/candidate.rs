@@ -53,8 +53,9 @@ pub(super) fn handoff(
         ensure!(handoff_id.is_none(), "handoff id requires a work scope");
         return Ok(None);
     };
-    worker::ensure_scope_confirmed(state, scope, "integration review")?;
-    let observation = worker::runtime::observation(state, scope)
+    let scope = current_handoff_scope(state, scope)?;
+    worker::ensure_scope_confirmed(state, &scope, "integration review")?;
+    let observation = worker::runtime::observation(state, &scope)
         .context("integration review requires an accepted worker handoff")?;
     ensure!(
         handoff_id.is_some()
@@ -65,9 +66,20 @@ pub(super) fn handoff(
             ),
         "integration review must match the accepted handoff and dispatch"
     );
-    Ok(Some(
-        worker::dispatch_view(state, scope.clone(), None).dispatch_id,
-    ))
+    Ok(Some(worker::dispatch_view(state, scope, None).dispatch_id))
+}
+
+fn current_handoff_scope(
+    state: &RewriteState,
+    scope: &RewriteWorkScope,
+) -> Result<RewriteWorkScope> {
+    let scope = super::super::api_selector::canonical_scope(state, scope);
+    ensure!(
+        worker::runtime::scopes(state).contains(&scope),
+        "integration handoff scope {} is no longer eligible: it is skipped, completed or has no current implementation dispatch. Refresh inventory and rebuild the batch from current handoff identities; do not reset integrated handoffs",
+        scope.label()
+    );
+    Ok(scope)
 }
 
 pub(super) fn batch_handoffs(
@@ -85,29 +97,32 @@ pub(super) fn batch_handoffs(
                 matches!(selection.scope, RewriteWorkScope::Api { .. }),
                 "batch integration currently supports API handoffs only"
             );
+            // Bindings survive skip/completion. Validate the current scope
+            // before coverage computes a dispatch from its active issue.
+            let scope = current_handoff_scope(state, &selection.scope)?;
             ensure!(
-                seen.insert(selection.scope.binding_key()),
+                seen.insert(scope.binding_key()),
                 "batch integration contains a duplicate work item"
             );
-            let coverage = worker::runtime::coverage(state, &selection.scope);
+            let coverage = worker::runtime::coverage(state, &scope);
             ensure!(
                 matches!(coverage, Coverage::IntegrationRequired | Coverage::VerificationRequired),
                 "batch integration requires a current handoff_ready or integrated handoff for {}; current coverage is {coverage:?}. Refresh inventory and rebuild the batch from current handoff identities; do not reset integrated handoffs",
-                selection.scope.label()
+                scope.label()
             );
             has_pending_handoff |= coverage == Coverage::IntegrationRequired;
-            let scoped = worker::runtime::scoped(state, &selection.scope)?;
+            let scoped = worker::runtime::scoped(state, &scope)?;
             ensure!(
                 scoped.rule_plan.is_none()
                     && scoped.dependency_rule_plan.is_none()
                     && scoped.recorder_capture_plan.is_none(),
                 "finish the pending rule or capture plan before batching {}",
-                selection.scope.label()
+                scope.label()
             );
-            let dispatch_id = handoff(state, Some(&selection.scope), Some(&selection.handoff_id))?
+            let dispatch_id = handoff(state, Some(&scope), Some(&selection.handoff_id))?
                 .expect("batch handoff has a scope");
             Ok(IntegrationHandoffReview {
-                scope: selection.scope.clone(),
+                scope,
                 dispatch_id,
                 handoff_id: selection.handoff_id.clone(),
             })
