@@ -287,7 +287,7 @@ pub(super) fn apply(
         plan_id: record.id,
         issue_id: record.issue_id,
         traffic_e2e_report: report,
-        next_command: action::next_command_for_selected_api(root, state, &state.api),
+        next_command: action::next_command(root),
     })
 }
 

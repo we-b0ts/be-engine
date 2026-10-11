@@ -1,7 +1,22 @@
 //! Atomic API/recording transition; worker feedback is folded into persisted state.
 use super::*;
 
-pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
+pub(super) struct AdvanceResult {
+    pub envelope: RewriteActionEnvelope,
+    /// True only for a Replay executed by this step with fresh passing evidence.
+    pub replay_passed: bool,
+}
+
+impl AdvanceResult {
+    pub fn without_replay(envelope: RewriteActionEnvelope) -> Self {
+        Self {
+            envelope,
+            replay_passed: false,
+        }
+    }
+}
+
+pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<AdvanceResult> {
     let route_batch = matches!(options.api, Some(RewriteApiSelector::Route(_)));
     let api = match options.api.as_ref() {
         Some(RewriteApiSelector::Motan(api)) => Some(api.clone()),
@@ -13,13 +28,21 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Rewri
         }
         None => None,
     };
-    advance_atomic(AtomicNextOptions {
-        target_root: options.target_root,
-        api,
-        source_route: options.source_route,
-        route_batch,
+    let mut replay_passed = false;
+    let envelope = advance_atomic(
+        AtomicNextOptions {
+            target_root: options.target_root,
+            api,
+            source_route: options.source_route,
+            route_batch,
+        },
+        &mut replay_passed,
+    )
+    .await?;
+    Ok(AdvanceResult {
+        envelope,
+        replay_passed,
     })
-    .await
 }
 
 struct AtomicNextOptions {
@@ -40,7 +63,10 @@ impl AtomicNextOptions {
     }
 }
 
-async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvelope> {
+async fn advance_atomic(
+    options: AtomicNextOptions,
+    replay_passed: &mut bool,
+) -> Result<RewriteActionEnvelope> {
     if let Some(envelope) = purpose::pending(&options.target_root)? {
         return Ok(envelope);
     }
@@ -325,7 +351,7 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
                 traffic_operation::TrafficOperationKind::Replay,
             )?;
             let route_batch = options.uses_route_batch(&state);
-            run_and_transition(&target_root, &mut state, route_batch).await?;
+            *replay_passed = run_and_transition(&target_root, &mut state, route_batch).await?;
             store.save(&state)?;
             Ok(action::for_state(&target_root, &state))
         }
@@ -360,7 +386,7 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
                 traffic_operation::TrafficOperationKind::Replay,
             )?;
             let route_batch = options.uses_route_batch(&state);
-            run_and_transition(&target_root, &mut state, route_batch).await?;
+            *replay_passed = run_and_transition(&target_root, &mut state, route_batch).await?;
             store.save(&state)?;
             Ok(action::for_state(&target_root, &state))
         }
@@ -385,7 +411,7 @@ async fn advance_atomic(options: AtomicNextOptions) -> Result<RewriteActionEnvel
                 traffic_operation::TrafficOperationKind::Replay,
             )?;
             let route_batch = options.uses_route_batch(&state);
-            run_and_transition(&target_root, &mut state, route_batch).await?;
+            *replay_passed = run_and_transition(&target_root, &mut state, route_batch).await?;
             store.save(&state)?;
             Ok(action::for_state(&target_root, &state))
         }

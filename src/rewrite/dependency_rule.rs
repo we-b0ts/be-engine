@@ -372,7 +372,7 @@ fn classify_non_process_owned(
         plan_id: None,
         traffic_e2e_report: None,
         required_change: Some(required_change),
-        next_command: action::next_command_for_selected_api(target_root, state, &state.api),
+        next_command: action::next_command(target_root),
     })
 }
 
@@ -440,7 +440,7 @@ pub(super) fn apply(
         traffic_e2e_report: report,
         evidence_reclassification: None,
         cache_snapshot_overlay: None,
-        next_command: action::next_command_for_selected_api(target_root, state, &state.api),
+        next_command: action::next_command(target_root),
     })
 }
 

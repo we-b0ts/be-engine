@@ -88,11 +88,19 @@ fn detached_cli_operation_publishes_failure_and_status_does_not_restart_it() {
     // Deliberately fail Next's source-route validation before target execution.
     // This exercises the real sibling traffic-e2e child and its launch handoff;
     // quality receipt admission itself is synchronous and no longer launches one.
+    fs::write(
+        target.path().join(".traffic-e2e/regression.yaml"),
+        "auto_next: true\n",
+    )
+    .unwrap();
     let launched = command(
         target.path(),
         &["next", "--api", "/api", "--source-route", "/wrong-route"],
     );
-    assert_eq!(launched["schema_version"], 35);
+    if launched["action"]["kind"] == "wait_required" {
+        assert_eq!(launched["action"]["details"]["execution_mode"], "single");
+    }
+    assert_eq!(launched["schema_version"], 36);
     assert_eq!(
         launched["pending"],
         if launched["action"]["kind"] == "wait_required" {
@@ -135,7 +143,18 @@ fn detached_cli_operation_publishes_failure_and_status_does_not_restart_it() {
 
 #[test]
 fn detached_unscoped_next_activates_idle_revalidation_while_an_api_is_blocked() {
+    for auto_next in [false, true] {
+        assert_detached_idle_revalidation(auto_next);
+    }
+}
+
+fn assert_detached_idle_revalidation(auto_next: bool) {
     let target = configured_target();
+    fs::write(
+        target.path().join(".traffic-e2e/regression.yaml"),
+        format!("auto_next: {auto_next}\n"),
+    )
+    .unwrap();
     let runtime = target.path().join(".traffic-e2e/local/runtime/rewrite");
     fs::create_dir_all(&runtime).unwrap();
     // A versioned engine fixture with a recorded dynamic pattern but no legacy
@@ -167,13 +186,21 @@ fn detached_unscoped_next_activates_idle_revalidation_while_an_api_is_blocked() 
     .unwrap();
     let before = command(target.path(), &["status"]);
     assert_eq!(before["pending"], 1);
-    assert_eq!(
-        before["action"]["commands"]["advance"]["argv"][5],
-        "/revalidate/*"
-    );
+    assert_eq!(before["action"]["details"]["api"], "/revalidate/*");
     let launched = command(target.path(), &["next"]);
     assert_eq!(launched["action"]["kind"], "wait_required");
     assert_eq!(launched["pending"], 1);
+    assert_eq!(
+        launched["action"]["details"]["execution_mode"],
+        if auto_next { "auto_next" } else { "single" }
+    );
+    assert_eq!(
+        launched["action"]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("automatically advancing Replay"),
+        auto_next
+    );
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let status = command(target.path(), &["status"]);

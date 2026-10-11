@@ -165,6 +165,7 @@ pub(in crate::rewrite) fn is_rework_wait(action: &RewriteAction) -> bool {
 
 fn rework_wait(root: &Path) -> RewriteAction {
     RewriteAction::WaitRequired {
+        execution_mode: None,
         summary: "source findings are assigned to a worker; continue worker events and integration, then rerun integrated review after the corrected handoff".into(),
         resource: "source_review_rework".into(),
         requested_api: None, blocking_api: None, active_operation: None,

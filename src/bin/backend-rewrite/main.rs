@@ -155,7 +155,7 @@ enum RewriteCommand {
 
 #[derive(Debug, Args)]
 struct NextArgs {
-    /// Optional canonical API selector; omit at startup to process every API observed through recorder configuration.
+    /// Execute only this API scope; omit to let the engine select work and honor local auto_next.
     #[arg(long, value_name = "PATH_OR_PATTERN")]
     api: Option<traffic_e2e::RewriteApiSelector>,
     /// Source registration route for the active dynamic API when requested by the coordinator.

@@ -46,10 +46,11 @@ fn first_pass_api_verification_preempts_ready_handoff_integration() {
         target_root: target.path().into(),
     })
     .unwrap();
-    let RewriteAction::AdvanceRequired { command, .. } = status.action else {
+    let RewriteAction::AdvanceRequired { command, api, .. } = status.action else {
         panic!("unattempted API should be verified before integrating a ready handoff")
     };
-    assert_eq!(command.argv.last().unwrap(), "/other");
+    assert_eq!(api.as_deref(), Some("/other"));
+    assert_eq!(command.argv.last().unwrap(), "next");
 
     let inventory = rewrite::inventory_rewrite(RewriteContext {
         target_root: target.path().into(),
@@ -186,10 +187,11 @@ fn accepted_parked_repair_is_scheduled_without_a_new_worker_handoff() {
     })
     .unwrap();
     assert_eq!(status.pending, 1);
-    let RewriteAction::AdvanceRequired { command, .. } = status.action else {
+    let RewriteAction::AdvanceRequired { command, api, .. } = status.action else {
         panic!("replay the accepted repair")
     };
-    assert_eq!(command.argv.last().unwrap(), "/api-01");
+    assert_eq!(api.as_deref(), Some("/api-01"));
+    assert_eq!(command.argv.last().unwrap(), "next");
     let scoped = rewrite::status_rewrite_for_api(
         RewriteContext {
             target_root: target.path().into(),

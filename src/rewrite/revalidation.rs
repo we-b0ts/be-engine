@@ -121,9 +121,8 @@ pub(super) fn deferred_status_envelope(
     }
     if !super::coordination::resources_busy(target_root)? {
         let selected = action::for_status(target_root, state)?.action;
-        if matches!(selected, RewriteAction::AdvanceRequired { ref command, .. }
-            if command.argv.windows(2).any(|pair| pair[0] == "--api"
-                && (pair[1] == requested || pair[1] == super::api_selector::public_api(&requested))))
+        if matches!(selected, RewriteAction::AdvanceRequired { api: Some(ref selected_api), .. }
+            if selected_api == &requested || selected_api == super::api_selector::public_api(&requested))
         {
             return Ok(None);
         }
@@ -133,6 +132,7 @@ pub(super) fn deferred_status_envelope(
         target_root,
         &scoped,
         RewriteAction::WaitRequired {
+            execution_mode: None,
             summary: format!(
                 "defer revalidation for {requested} while higher-priority work or verification resources are occupied; global status selects idle revalidation automatically"
             ),
@@ -281,13 +281,13 @@ mod tests {
         .unwrap();
 
         let value = serde_json::to_value(&report).unwrap();
-        assert_eq!(value["schema_version"], serde_json::json!(35));
+        assert_eq!(value["schema_version"], serde_json::json!(36));
         assert_eq!(
             value.pointer("/next/action/kind"),
             Some(&serde_json::json!("advance_required"))
         );
         assert_eq!(
-            value.pointer("/next/action/commands/advance/argv/5"),
+            value.pointer("/next/action/details/api"),
             Some(&serde_json::json!("/a"))
         );
         let saved = RewriteStore::new(target.path())

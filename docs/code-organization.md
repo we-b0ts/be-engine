@@ -254,6 +254,10 @@ is unclear.
   observes external publication without owning its process or allocating IDs.
   `execution.rs` owns detached Next and legacy quality-receipt operations, completion, failure, and
   recovery without moving verification semantics out of their existing owners.
+  `next.rs` owns invocation intent, structured selection of the existing action,
+  and optional continuation after fresh passing Replay. It reuses global
+  scheduling between atomic steps; execution markers retain mode and retry scope.
+  `configuration_commit.rs` owns persistent-configuration commit gates only.
   `expert.rs` owns assistance for the last unfinished API with a running
   implementer after two hours without a code integration, one-time expert identity,
   serialized batch reservation, per-API report-delivery acknowledgement, and

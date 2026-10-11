@@ -63,7 +63,7 @@ pub(super) fn resources_busy(target_root: &Path) -> Result<bool> {
     ) || !matches!(
         super::store::RewriteStore::new(target_root)?.lock_state()?,
         super::store::RewriteLockState::Absent
-    ) || super::execution::busy(target_root)?)
+    ) || super::execution::owned_by_other_process(target_root)?)
 }
 
 fn add(counts: &mut BTreeMap<String, usize>, name: &str, count: usize) {

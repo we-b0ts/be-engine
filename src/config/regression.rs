@@ -10,6 +10,8 @@ pub(crate) const PATH: &str = ".traffic-e2e/regression.yaml";
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RegressionScope {
+    #[serde(default)]
+    pub(crate) auto_next: bool,
     pub(crate) recording_run_id: Option<String>,
     only: Option<Vec<String>>,
     skip: Option<Vec<String>>,
@@ -69,7 +71,7 @@ impl RegressionScope {
 
 pub(crate) const GITIGNORE_RULE: &str = "/.traffic-e2e/regression.yaml";
 pub(crate) const GIT_PATHSPEC: &str = ":(exclude).traffic-e2e/regression.yaml";
-pub(crate) const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# Without a pin, rewrite selects an existing completed run and keeps it fixed.\n# recording_run_id: \"20260911093000\"\n# HTTP API routes must match backend-rewrite inventory exactly, without methods.\n# Each route includes all its recorded methods.\n# Omitted or empty only selects all APIs; skip takes precedence.\n# only:\n#   - \"/api/users/*\"\nonly: []\nskip: []\n";
+pub(crate) const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# Without a pin, rewrite selects an existing completed run and keeps it fixed.\n# recording_run_id: \"20260911093000\"\n# HTTP API routes must match backend-rewrite inventory exactly, without methods.\n# Each route includes all its recorded methods.\n# Omitted or empty only selects all APIs; skip takes precedence.\n# only:\n#   - \"/api/users/*\"\n# Continue only successful Replay when the existing scheduler selects Replay again.\nauto_next: false\nonly: []\nskip: []\n";
 
 /// Low-level project initialization also installs the local policy without
 /// replacing user choices. Full repository initialization creates it atomically
@@ -105,6 +107,26 @@ pub(crate) fn initialize(target_root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_next_defaults_to_false_and_requires_a_boolean() {
+        let root = tempfile::tempdir().unwrap();
+        initialize(root.path()).unwrap();
+        assert!(!RegressionScope::load(root.path()).unwrap().auto_next);
+        for (yaml, enabled) in [
+            ("only: []\n", false),
+            ("auto_next: false\n", false),
+            ("auto_next: true\n", true),
+        ] {
+            std::fs::write(root.path().join(PATH), yaml).unwrap();
+            assert_eq!(
+                RegressionScope::load(root.path()).unwrap().auto_next,
+                enabled
+            );
+        }
+        std::fs::write(root.path().join(PATH), "auto_next: sometimes\n").unwrap();
+        assert!(RegressionScope::load(root.path()).is_err());
+    }
 
     #[test]
     fn initialization_is_idempotent_and_preserves_local_scope() {

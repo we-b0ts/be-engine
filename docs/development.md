@@ -1474,6 +1474,12 @@ The coordinator admits version-bound integration reports; the legacy
 One admitted integrated API handoff schedules that API's Replay. Final unified verification handles shared
 changes after ordinary work drains.
 
+Returned `next` commands omit `--api`; the engine retains its selected route
+independently of command arguments. Explicit `next --api '/route'` remains a
+single-scope operation, even with automatic continuation configured. Schema 36
+adds `advance_required.details.operation` (`replay` or `workflow`) and the
+engine-selected `details.api` without asking the coordinator to select it.
+
 After status returns
 `advance_required`, the returned `next` validates the
 adopted external run, prepares the current API, runs focused E2E, and returns
@@ -1488,6 +1494,8 @@ all recorded APIs.
 ```yaml
 # Optional: directly reuse this completed standard recording.
 # recording_run_id: "20260911093000"
+# Optional: continue passing Replay while the existing scheduler selects Replay.
+auto_next: false
 # Omitted or empty only selects every API in the recorded inventory.
 only:
   - "/api/users/*"
@@ -1495,6 +1503,28 @@ only:
 skip:
   - "/api/users"
 ```
+
+Set `auto_next: true` to let an unscoped `next` continue after fresh passing
+Replay when the next globally scheduled action is also Replay. First verification
+and deferred revalidation use the same rule. Each step saves its result and releases
+its workflow lock and Replay lease before the engine merges new feedback and
+re-evaluates the original priorities and gates. Failed or stale Replay, dispatch,
+integration, review, rule/input handling, waiting and final publication stop the
+operation and return the current action. A ready handoff still waits behind
+first-pass discovery and takes its normal priority over idle revalidation.
+Changing `auto_next` to false stops continuation after the current step.
+The omitted field defaults to false; its value must be a boolean. Explicit API
+or source-route inputs always use single execution. These local settings do not
+invalidate evidence or require a commit.
+
+While an operation runs, ordinary `status` returns `wait_required` unless a
+higher-priority independently executable worker/expert action is ready. Both wait
+and those independent actions expose `details.execution_mode` as `single` or
+`auto_next`; auto-next summaries say `automatically advancing Replay`, and wait
+summaries also include the current Replay phase and progress. The operation remains busy between APIs,
+so another command cannot start a competing Replay or admit an integration.
+Retries retain the mode and the last selected scope, rather than restarting the
+first API in the chain. Legacy operation markers default to single execution.
 
 `only` and `skip` can be combined: first select `only` (or all APIs when absent or empty),
 then remove `skip`. HTTP selectors must be exact canonical routes from `inventory`,

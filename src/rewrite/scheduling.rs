@@ -68,12 +68,11 @@ pub(super) fn idle_action(target_root: &Path, state: &RewriteState) -> Option<Re
         })
         .map(|slice| slice.api.as_str());
     if let Some(api) = accepted.or_else(|| inventory::next_pending_api_for_concurrent_work(state)) {
-        return Some(advance(target_root, state, api, "verify ready API"));
+        return Some(advance(target_root, api, "verify ready API"));
     }
     if let Some(api) = revalidation_api(state) {
         return Some(advance(
             target_root,
-            state,
             api,
             "use idle verification capacity to revalidate API",
         ));
@@ -97,6 +96,7 @@ pub(super) fn idle_action(target_root: &Path, state: &RewriteState) -> Option<Re
     }
     if !worker::runtime::scopes(state).is_empty() || !blocked.is_empty() {
         return Some(RewriteAction::WaitRequired {
+            execution_mode: None,
             summary: "before waiting on agents and after every wait, must actually invoke built-in ListAgents (/list-agents) in Claude Code or equivalent runtime status tools for all workers awaiting results; reconcile returned states and events, then refresh global status. Historical reports and absent stop events do not establish liveness".into(),
             resource: if worker::runtime::scopes(state).is_empty() { "workflow_dependency" } else { "worker_handoff" }.into(),
             requested_api: None,
@@ -109,11 +109,12 @@ pub(super) fn idle_action(target_root: &Path, state: &RewriteState) -> Option<Re
     None
 }
 
-fn advance(target_root: &Path, state: &RewriteState, api: &str, purpose: &str) -> RewriteAction {
-    RewriteAction::AdvanceRequired {
-        summary: format!("{purpose} {}", super::api_selector::public_api(api)),
-        command: action::next_command_for_selected_api(target_root, state, api),
-    }
+fn advance(target_root: &Path, api: &str, purpose: &str) -> RewriteAction {
+    action::replay_advance(
+        target_root,
+        api,
+        format!("{purpose} {}", super::api_selector::public_api(api)),
+    )
 }
 
 #[cfg(test)]

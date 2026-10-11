@@ -1,7 +1,6 @@
-mod advance;
-use advance::advance_rewrite;
 mod action;
 mod action_contract;
+mod advance;
 mod api_batch;
 mod api_selector;
 mod artifacts;
@@ -14,7 +13,7 @@ mod coordination;
 mod execution;
 mod expert;
 pub use api_selector::{RewriteApiSelector, status_rewrite_for_selector};
-pub use configuration_commit::next_rewrite;
+mod next;
 pub use coordination::RewriteCoordinationDetails;
 pub use execution::{
     execute as execute_rewrite_operation, retry as retry_rewrite_operation,
@@ -29,6 +28,7 @@ pub use expert::{
     close as close_rewrite_expert, confirm as confirm_rewrite_expert,
     delivered as report_rewrite_expert_delivery, prepare as prepare_rewrite_expert,
 };
+pub use next::next_rewrite;
 pub use worker::model::{
     RewriteWorkerActivity, RewriteWorkerCoverageState, RewriteWorkerInventoryItem,
 };
@@ -114,12 +114,12 @@ pub use evidence_model::{
     RewriteApplicableRulePlanner, RewriteEvidenceContext, RewriteEvidenceReport, RewriteRuleHint,
 };
 pub use model::{
-    RewriteAction, RewriteActionEnvelope, RewriteApiInventoryDetails, RewriteApiInventoryItem,
-    RewriteApiInventoryView, RewriteApiProgress, RewriteApiStatus, RewriteCommandSpec,
-    RewriteDependencyRuleReport, RewriteEvidenceCommand, RewriteFocusedE2eExecution,
-    RewriteFocusedE2eExecutionMode, RewriteHttpResponseCaptureReport, RewriteInputRequiredReason,
-    RewriteInventoryReport, RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewritePhase,
-    RewriteRecorderCaptureReport, RewriteRecordingInputCandidate,
+    RewriteAction, RewriteActionEnvelope, RewriteAdvanceKind, RewriteApiInventoryDetails,
+    RewriteApiInventoryItem, RewriteApiInventoryView, RewriteApiProgress, RewriteApiStatus,
+    RewriteCommandSpec, RewriteDependencyRuleReport, RewriteEvidenceCommand, RewriteExecutionMode,
+    RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewriteHttpResponseCaptureReport,
+    RewriteInputRequiredReason, RewriteInventoryReport, RewriteIssue, RewriteIssueKind,
+    RewriteIssueOwner, RewritePhase, RewriteRecorderCaptureReport, RewriteRecordingInputCandidate,
     RewriteRecordingInputCandidateDisposition, RewriteRecordingInputDiagnosis,
     RewriteRecordingInputRejections, RewriteRecordingReason, RewriteRecoveryReport,
     RewriteRepairAcceptanceKind, RewriteRouteReport, RewriteRuleReport, RewriteStatusReport,
@@ -323,8 +323,7 @@ pub fn apply_rewrite_dependency_rule(
                         }));
                         report.evidence_reclassification =
                             Some(background_reclassification::apply(&target_root, state)?);
-                        report.next_command =
-                            action::next_command_for_selected_api(&target_root, state, &state.api);
+                        report.next_command = action::next_command(&target_root);
                         return Ok((report, false));
                     }
                     Err(error) => {
@@ -338,8 +337,7 @@ pub fn apply_rewrite_dependency_rule(
                             state,
                             applied,
                         )?;
-                        report.next_command =
-                            action::next_command_for_selected_api(&target_root, state, &state.api);
+                        report.next_command = action::next_command(&target_root);
                         return Ok((report, true));
                     }
                 }
@@ -349,8 +347,7 @@ pub fn apply_rewrite_dependency_rule(
             }
             report.evidence_reclassification =
                 Some(background_reclassification::apply(&target_root, state)?);
-            report.next_command =
-                action::next_command_for_selected_api(&target_root, state, &state.api);
+            report.next_command = action::next_command(&target_root);
             Ok((report, false))
         })?;
     if changes_dependency_matching {
@@ -361,8 +358,7 @@ pub fn apply_rewrite_dependency_rule(
         if !runnable {
             recording::begin_pending_capture_refresh(&target_root, &mut state)?;
         }
-        report.next_command =
-            action::next_command_for_selected_api(&target_root, &state, &owner_api);
+        report.next_command = action::next_command(&target_root);
     }
     store.save(&state)?;
     Ok(report)
@@ -406,7 +402,7 @@ async fn run_and_transition(
     target_root: &Path,
     state: &mut RewriteState,
     route_batch: bool,
-) -> Result<()> {
+) -> Result<bool> {
     let replay_target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
     let case_source = state
         .case_source
@@ -436,11 +432,11 @@ async fn run_and_transition(
         state.rule_replay_pending = false;
         state.e2e_current = false;
         state.bump();
-        return Ok(());
+        return Ok(false);
     }
     let (_, _project) = crate::e2e_run::resolve_project(target_root)?;
     api_batch::apply_results(target_root, state, &results, prepared.as_ref())?;
-    Ok(())
+    Ok(!results.is_empty() && results.iter().all(|result| result.passed))
 }
 
 fn validate_single_line(label: &str, value: &str) -> Result<()> {

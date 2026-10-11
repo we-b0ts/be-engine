@@ -173,6 +173,16 @@ fn api_envelope(
     state: &super::model::RewriteState,
     api: Option<&RecordingApi>,
 ) -> Result<super::model::RewriteActionEnvelope> {
+    let mut envelope = api_envelope_unannotated(target_root, state, api)?;
+    super::execution::annotate_status(target_root, &mut envelope.action)?;
+    Ok(envelope)
+}
+
+fn api_envelope_unannotated(
+    target_root: &std::path::Path,
+    state: &super::model::RewriteState,
+    api: Option<&RecordingApi>,
+) -> Result<super::model::RewriteActionEnvelope> {
     if let Some(api) = api
         && let Some(envelope) =
             super::regression_scope::skipped_envelope(target_root, state, &api.to_string())
