@@ -127,9 +127,9 @@ enum RewriteCommand {
     CasePattern(CasePatternArgs),
     /// Inspect an issue overview or execute one returned bounded evidence query.
     Evidence(evidence::EvidenceArgs),
-    /// Plan or apply one evidence-backed response rule.
+    /// Plan or apply evidence-backed inbound request, dependency request or response rules.
     Rule(RuleArgs),
-    /// Classify dependency ownership, or plan/apply one process-owned rule.
+    /// Classify dependency ownership or plan/apply dependency value and scope rules.
     DependencyRule(dependency_rule::DependencyRuleArgs),
     /// Plan or apply one source-proven Breeze resource capture rule.
     RecorderCapture(recorder_capture::RecorderCaptureArgs),

@@ -154,9 +154,23 @@ their absence does not mean a documented capability is unavailable.
 | An inbound JWT in a Bearer header or named URL query parameter expired between capture and Replay | JWT `preserve_relative`; inspect the returned `jwt-time-validity` query and prove the exact token location, authentication path, expiry leeway, and signing-key source. |
 | A DOCX download differs because OPC ZIP metadata and `docProps/core.xml` creation time are generated per request | DOCX response-body rule; prove the generated XML timestamp in source, select it explicitly, verify that its source-to-target delta tracks elapsed request time, and keep every other decompressed package part exact. |
 | Random SET NX ownership tokens differ from recordings, or a script/DELEX references that token | Redis `lock`; inspect `redis_lock_candidates`, prove random tokens and conditional release from source, and return host, port, key selector plus source evidence. One rule correlates all supported references; never remove the lock or independently ignore token arguments. |
+| Redis writes differ at a source-generated ZADD score or ZREMRANGEBYSCORE cutoff | Dependency request `time: preserve_relative`; inspect `dependency_request_candidates` from `dirty_clusters`, then return endpoint/key, `commands.argument_values` (ZADD index 1, ZREMRANGEBYSCORE index 2), timestamp format and source proof for `rule plan --dependency-request`. See [dependency request rules](../../../../../docs/dependency-request-rules.md). |
 | A recorded Redis response timestamp makes an otherwise correct cache expire during Replay, causing extra reads or an error branch | Redis `time-shift`; inspect earlier successfully matched GET/HGET responses, including previous cases, and prove their time semantics. |
 | Shared HTTP initialization was recorded in another case | HTTP `cross-case`; verify same-run request identity and source sharing semantics. |
 | An outbound HTTP array or Redis write collection differs only in order | Protocol-specific `unordered`; prove collection semantics and inspect exact order witnesses. |
+
+The two CLI entrypoints group supported planners; they are not disjoint policy
+categories. Both can author `verification.yaml` `dependency_rules`.
+
+| Entrypoint | Examples of supported planners |
+| --- | --- |
+| `rule plan/apply` | Inbound JWT time translation, response assertions, generated identities (`--dynamic-value`), and dependency request contracts (`--dependency-request`). |
+| `dependency-rule plan/apply` | Protocol-specific ownership, cross-case scope, HTTP/Redis unordered values, Redis lock/publish/response time-shift, and MySQL time values. |
+
+Check both `rule plan --help` and the relevant protocol's `dependency-rule plan`
+help before declaring a capability gap, even when dynamic candidates or planner
+hints are absent. The coordinator plans and applies with current evidence and
+source proof, followed by fresh Replay.
 
 Redis `time-shift` has no automatic hint: a numeric value, field name, elapsed
 time, extra read, or missing exchange cannot establish business time semantics.
