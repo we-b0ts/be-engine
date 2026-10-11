@@ -36,9 +36,22 @@ fn time(
         source.is_i64() == actual.is_i64() && source.is_u64() == actual.is_u64(),
         "timestamp numeric category changed"
     );
-    let pair = (number(source)?, number(actual)?);
+    let pair = (
+        timestamp(source, rule.format)?,
+        timestamp(actual, rule.format)?,
+    );
     relative(pair.0, pair.1, anchor, config::tolerance(&rule.tolerance)?)?;
     Ok(pair)
+}
+
+pub(super) fn timestamp(value: &Value, format: config::UnixTimeFormat) -> Result<f64> {
+    let unit = match format {
+        config::UnixTimeFormat::UnixSeconds => 1.0,
+        config::UnixTimeFormat::UnixMilliseconds => 1000.0,
+    };
+    number(&Value::from(
+        value.as_f64().context("timestamp must be numeric")? / unit,
+    ))
 }
 
 impl RequestContracts {
@@ -61,11 +74,13 @@ impl RequestContracts {
                     return false;
                 };
                 selector.database == database
-                    && source.first().is_some_and(|key| selector.key.matches(key))
-                    && selector
-                        .commands
-                        .iter()
-                        .any(|entry| entry.command == command)
+                    && selector.commands.iter().any(|entry| {
+                        entry.command == command
+                            && entry.matches_identity(source)
+                            && entry
+                                .key(source)
+                                .is_some_and(|key| selector.key.matches(key))
+                    })
             })
             .collect();
         if rules.is_empty() {
@@ -101,6 +116,8 @@ impl RequestContracts {
             .position(|c| c.command == command)
             .context("request command is not selected")?;
         let config = &selector.commands[location];
+        config.validate_arguments(source)?;
+        config.validate_arguments(actual)?;
         if command == "ZADD" {
             ensure!(
                 source.len() == 3,
@@ -144,7 +161,7 @@ impl RequestContracts {
                             .context("target request field is missing")?;
                         match field {
                             JsonField::Time(field) => {
-                                time(a, b, field, &anchor)?;
+                                times.push(time(a, b, field, &anchor)?);
                                 decision.time_validations += 1;
                             }
                             JsonField::Jwt(field) => {
@@ -172,8 +189,20 @@ impl RequestContracts {
             config.argument_values.keys().all(|i| *i < source.len()),
             "selected Redis argument is missing"
         );
+        if let Some(first) = times.first() {
+            ensure!(
+                times
+                    .iter()
+                    .all(|pair| ((pair.1 - first.1) - (pair.0 - first.0)).abs() <= 0.000_001),
+                "request time parameter relationship changed"
+            );
+        }
         if selector.commands.len() > 1 {
-            let key = (case.into(), rule.id.clone(), source[0].clone());
+            let key = (
+                case.into(),
+                rule.id.clone(),
+                config.key(source).context("Redis key is missing")?.to_vec(),
+            );
             let previous = self
                 .state
                 .lock()

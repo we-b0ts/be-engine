@@ -8,8 +8,7 @@ use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
 use super::model::{
-    ActiveRunState, AssertionReport, CurrentPointer, RunIndex, RunIndexPathAnchor, RunLayout,
-    STATE_VERSION,
+    ActiveRunState, CurrentPointer, RunIndex, RunIndexPathAnchor, RunLayout, STATE_VERSION,
 };
 
 pub(super) fn begin_active(layout: &RunLayout, state: &ActiveRunState) -> Result<()> {
@@ -228,12 +227,14 @@ pub(super) fn publish_terminal(
     );
     let _ = fs::remove_file(layout.active_dir.join("progress.json"));
     remove_decrypted_request_views(&layout.active_dir)?;
-    let published_state =
-        state_for_published_directory(state, &layout.active_dir, &layout.latest_dir)?;
+    let published_state = super::assertion_publication::prepare(
+        state,
+        &layout.active_dir,
+        &layout.active_dir,
+        &layout.latest_dir,
+    )?;
     write_active(layout, &published_state)?;
     write_yaml(&layout.index_path, index)?;
-
-    retarget_assertion_reports(state, &layout.active_dir, &layout.latest_dir)?;
 
     let previous = layout
         .run_root
@@ -275,9 +276,9 @@ pub(super) fn publish_snapshot(
     );
     let _ = fs::remove_file(active_dir.join("progress.json"));
     remove_decrypted_request_views(active_dir)?;
-    let published_state = state_for_published_directory(state, active_dir, latest_dir)?;
+    let published_state =
+        super::assertion_publication::prepare(state, active_dir, active_dir, latest_dir)?;
     write_yaml(&active_dir.join("state.yaml"), &published_state)?;
-    retarget_assertion_reports(state, active_dir, latest_dir)?;
     let parent = latest_dir
         .parent()
         .context("latest directory has no parent")?;
@@ -327,6 +328,7 @@ pub(super) fn state_for_published_directory(
         if let Some(assertion) = &mut case.response_assertion {
             retarget_path(&mut assertion.detail_report, active_dir, latest_dir)?;
             retarget_path(&mut assertion.request, active_dir, latest_dir)?;
+            retarget_path(&mut assertion.expected_response, active_dir, latest_dir)?;
             retarget_path(&mut assertion.actual_response, active_dir, latest_dir)?;
         }
     }
@@ -342,49 +344,6 @@ fn retarget_path(path: &mut PathBuf, active_dir: &Path, latest_dir: &Path) -> Re
             .strip_prefix(active_dir)
             .context("published state path escaped the active directory")?;
         *path = latest_dir.join(relative);
-    }
-    Ok(())
-}
-
-fn retarget_assertion_reports(
-    state: &ActiveRunState,
-    active_dir: &Path,
-    latest_dir: &Path,
-) -> Result<()> {
-    let mut report_paths = Vec::with_capacity(state.apis.len() + 1);
-    report_paths.push(state.assertions_report.clone());
-    report_paths.extend(
-        state
-            .apis
-            .iter()
-            .map(|api| api.report_dir.join("assertions.json")),
-    );
-    for report_path in &report_paths {
-        ensure!(
-            report_path.starts_with(active_dir),
-            "assertion report escaped the active E2E directory: {}",
-            report_path.display()
-        );
-        let bytes = match fs::read(report_path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!("failed to read assertion report {}", report_path.display())
-                });
-            }
-        };
-        let mut report: AssertionReport = serde_json::from_slice(&bytes)
-            .with_context(|| format!("invalid assertion report {}", report_path.display()))?;
-        for case in &mut report.cases {
-            let Some(response) = &mut case.response else {
-                continue;
-            };
-            retarget_path(&mut response.detail_report, active_dir, latest_dir)?;
-            retarget_path(&mut response.request, active_dir, latest_dir)?;
-            retarget_path(&mut response.actual_response, active_dir, latest_dir)?;
-        }
-        write_json(report_path, &report)?;
     }
     Ok(())
 }
@@ -529,7 +488,10 @@ mod tests {
 
     use super::*;
     use crate::case_group::CaseGroupInventory;
-    use crate::e2e_run::model::{ApiExecution, AssertionCase, ResponseAssertionSummary};
+    use crate::e2e_run::model::{
+        ApiExecution, AssertionCase, AssertionReport, CaseExecution, CaseStatus,
+        ResponseAssertionSummary,
+    };
 
     fn state(active_dir: &Path, status: super::super::model::RunStatus) -> ActiveRunState {
         let mut state = ActiveRunState::new(
@@ -609,7 +571,16 @@ mod tests {
         let actual_response = active.join("tmp/actual-response-0001.json");
         fs::create_dir_all(active.join("reports")).unwrap();
         fs::create_dir_all(active.join("tmp")).unwrap();
-        fs::write(&detail_report, "{}").unwrap();
+        write_json(
+            &detail_report,
+            &serde_json::json!({
+                "actual_response_path": actual_response,
+                "request_path": active.join("tmp/request.json"),
+                "expected_response_path": "/cases/case-1/response.json"
+            }),
+        )
+        .unwrap();
+        fs::write(active.join("tmp/request.json"), "{}").unwrap();
         fs::write(&actual_response, "{}").unwrap();
 
         let mut terminal = state(&active, super::super::model::RunStatus::Failed);
@@ -637,6 +608,16 @@ mod tests {
             }),
         });
         write_json(&terminal.assertions_report, &assertions).unwrap();
+        terminal.cases.push(CaseExecution {
+            case_id: "case-1".into(),
+            case_dir: PathBuf::from("/cases/case-1"),
+            group_id: "GET /api".into(),
+            status: CaseStatus::Failed,
+            assertion_passed: Some(false),
+            replay_clean: Some(true),
+            response_assertion: assertions.cases[0].response.clone(),
+            response_unavailable_reason: None,
+        });
 
         let api_report_dir = active.join("apis/api-0001");
         fs::create_dir_all(&api_report_dir).unwrap();
@@ -657,6 +638,32 @@ mod tests {
 
         publish_snapshot(&active, &latest, &terminal).unwrap();
 
+        let detail_path = latest.join("reports/assertion-detail-0001.json");
+        let detail_bytes = fs::read(&detail_path).unwrap();
+        let detail: serde_json::Value = serde_json::from_slice(&detail_bytes).unwrap();
+        assert_eq!(
+            detail["actual_response_path"],
+            latest
+                .join("tmp/actual-response-0001.json")
+                .to_string_lossy()
+                .as_ref()
+        );
+        assert_eq!(
+            detail["request_path"],
+            latest.join("tmp/request.json").to_string_lossy().as_ref()
+        );
+        assert!(Path::new(detail["actual_response_path"].as_str().unwrap()).is_file());
+        let fingerprint = crate::verification_progress::fingerprint(&detail_bytes);
+        let published_state: ActiveRunState = read_yaml(&latest.join("state.yaml")).unwrap();
+        assert_eq!(
+            published_state.cases[0]
+                .response_assertion
+                .as_ref()
+                .unwrap()
+                .detail_fingerprint,
+            fingerprint
+        );
+
         for report_path in [
             latest.join("reports/assertions.json"),
             latest.join("apis/api-0001/assertions.json"),
@@ -664,6 +671,7 @@ mod tests {
             let published: AssertionReport =
                 serde_json::from_slice(&fs::read(report_path).unwrap()).unwrap();
             let response = published.cases[0].response.as_ref().unwrap();
+            assert_eq!(response.detail_fingerprint, fingerprint);
             assert_eq!(
                 response.detail_report,
                 latest.join("reports/assertion-detail-0001.json")
@@ -677,5 +685,23 @@ mod tests {
                 PathBuf::from("/cases/case-1/response.json")
             );
         }
+    }
+
+    #[test]
+    fn malformed_assertion_evidence_keeps_previous_latest_untouched() {
+        let temp = tempdir().unwrap();
+        let active = temp.path().join(".active");
+        let latest = temp.path().join("latest");
+        fs::create_dir_all(active.join("reports")).unwrap();
+        fs::create_dir_all(&latest).unwrap();
+        fs::write(latest.join("previous-evidence"), "keep").unwrap();
+        fs::write(active.join("reports/assertions.json"), "{broken").unwrap();
+        let terminal = state(&active, super::super::model::RunStatus::Failed);
+        assert!(publish_snapshot(&active, &latest, &terminal).is_err());
+        assert_eq!(
+            fs::read_to_string(latest.join("previous-evidence")).unwrap(),
+            "keep"
+        );
+        assert!(active.is_dir());
     }
 }

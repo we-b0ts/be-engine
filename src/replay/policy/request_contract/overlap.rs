@@ -78,7 +78,8 @@ pub(in crate::replay::policy) fn validate(
                         database,
                         command,
                         key,
-                        ..
+                        argument_index,
+                        json_pointer,
                     },
                 ) => {
                     rule.target
@@ -88,7 +89,23 @@ pub(in crate::replay::policy) fn validate(
                         && rule.target.port == Some(target.port)
                         && a.database == *database
                         && a.key.overlaps(key)
-                        && a.commands.iter().any(|c| c.command == *command)
+                        && a.commands
+                            .iter()
+                            .filter(|c| c.command == *command)
+                            .any(|c| {
+                                c.argument_values.get(argument_index).is_some_and(|field| {
+                                    match (field, json_pointer) {
+                                        (config::ArgumentRule::Json(json), Some(pointer)) => {
+                                            json.json.keys().any(|other| {
+                                                super::super::response_locations_overlap(
+                                                    pointer, other,
+                                                )
+                                            })
+                                        }
+                                        _ => true,
+                                    }
+                                })
+                            })
                 }
                 (
                     _,

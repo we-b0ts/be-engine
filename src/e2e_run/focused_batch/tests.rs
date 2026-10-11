@@ -94,13 +94,45 @@ fn method_publication_retains_separate_readable_snapshots() {
         .join(api_directory("GET /api"));
     primary.active_dir = primary.run_root.join(".active");
     primary.latest_dir = primary.run_root.join("latest");
-    let state = state(&primary.active_dir);
+    let mut state = state(&primary.active_dir);
     fs::create_dir_all(&primary.active_dir).unwrap();
     fs::write(
         primary.active_dir.join("target.log"),
         "one shared target session",
     )
     .unwrap();
+    fs::create_dir_all(primary.active_dir.join("reports")).unwrap();
+    fs::create_dir_all(primary.active_dir.join("tmp")).unwrap();
+    for (index, case) in state.cases.iter_mut().enumerate() {
+        let actual = primary.active_dir.join(format!("tmp/actual-{index}.json"));
+        fs::write(&actual, "{}").unwrap();
+        let detail = primary
+            .active_dir
+            .join(format!("reports/assertion-detail-{index}.json"));
+        store::write_json(&detail,&serde_json::json!({"actual_response_path":actual,"request_path":case.case_dir.join("request.json")})).unwrap();
+        case.response_assertion = Some(serde_json::from_value(serde_json::json!({
+            "passed":case.status == CaseStatus::Passed,"method":case.group_id.split_once(' ').unwrap().0,"path":"/api",
+            "gateway_protocol":"http","body_codec":"json","difference_count":0,"detail_report":detail,
+            "detail_fingerprint":crate::verification_progress::fingerprint(&fs::read(&detail).unwrap()),
+            "request":case.case_dir.join("request.json"),"expected_response":case.case_dir.join("expected-response.json"),
+            "actual_response":actual,"policy_path":"/target/verification.yaml","policy_fingerprint":"policy"
+        })).unwrap());
+    }
+    for api in &state.apis {
+        fs::create_dir_all(&api.report_dir).unwrap();
+        let mut report = super::super::model::AssertionReport::new(&state, true);
+        report.cases = state
+            .cases
+            .iter()
+            .filter(|case| case.group_id == api.group_id)
+            .map(|case| super::super::model::AssertionCase {
+                case_id: case.case_id.clone(),
+                passed: case.status == CaseStatus::Passed,
+                response: case.response_assertion.clone(),
+            })
+            .collect();
+        store::write_json(&api.report_dir.join("assertions.json"), &report).unwrap();
+    }
     publish(&global, &primary, &state).unwrap();
     for (api, expected) in [
         ("GET /api", RunStatus::Successful),
@@ -118,6 +150,29 @@ fn method_publication_retains_separate_readable_snapshots() {
         assert!(snapshot.aggregate_report.starts_with(&latest));
         assert!(latest.join("target.log").is_file());
         assert!(!latest.parent().unwrap().join(".active").exists());
+        let response = snapshot.cases[0].response_assertion.as_ref().unwrap();
+        let bytes = fs::read(&response.detail_report).unwrap();
+        assert_eq!(
+            response.detail_fingerprint,
+            crate::verification_progress::fingerprint(&bytes)
+        );
+        let detail: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            detail["actual_response_path"],
+            serde_json::json!(response.actual_response)
+        );
+        assert!(response.actual_response.is_file());
+        assert!(response.actual_response.starts_with(&latest));
+        let assertions: super::super::model::AssertionReport =
+            serde_json::from_slice(&fs::read(&snapshot.assertions_report).unwrap()).unwrap();
+        assert_eq!(
+            assertions.cases[0]
+                .response
+                .as_ref()
+                .unwrap()
+                .detail_fingerprint,
+            response.detail_fingerprint
+        );
     }
 }
 

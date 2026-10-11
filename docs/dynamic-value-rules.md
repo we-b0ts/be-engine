@@ -37,10 +37,12 @@ Choose one of these capture locations:
   `value_index` is zero-based among its placeholders. An optional `json_pointer`
   selects a string inside the selected SQL value. Text queries and prepared
   string parameters use the same capture contract.
-- **Redis**: select a `SET` or `HSET` value, a key selector and database. The index
+- **Redis**: select a `SET` or `HSET` value or `RPUSH` element, a key selector and database. The index
   is zero-based among arguments after the command: `SET` value is index 1;
-  `HSET` values are even indices starting at 2. An optional JSON pointer selects
-  a string inside that value. Other arguments and options remain checked.
+  `HSET` values are even indices starting at 2; `RPUSH` element indices are 1..128.
+  An optional JSON pointer selects a string inside that value; an integer
+  capture requires an explicit pointer and `value_type: integer`. Other
+  arguments and options remain checked.
 - **HTTP dependency**: select method, dependency path/pattern and exact JSON
   pointer in its request body, or an explicit `path_segment` template. This method identifies the outbound capture;
   the enclosing inbound `api` remains route-only.
@@ -97,7 +99,7 @@ whole objects and arrays cannot be captured as opaque identities. Optional
 must prove generation, lifetime and intended uses. A differing argument alone
 does not prove randomness.
 
-HTTP integer correlation IDs use `value_type: integer` with an exact capture
+HTTP and Redis integer correlation IDs use `value_type: integer` with an exact capture
 JSON pointer. The default remains string. Integer rules preserve type and do
 not infer references outside that selected request location. See the complete
 [dependency request rule examples](dependency-request-rules.md).

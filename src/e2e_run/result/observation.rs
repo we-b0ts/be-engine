@@ -26,14 +26,14 @@ pub(in crate::e2e_run) fn response_observation_with_status(
             return observation(E2eValuePresence::Present, Some(Value::from(status)));
         }
         return match response.get("status") {
-            Some(value) => observation(E2eValuePresence::Present, Some(bounded(value, pointer))),
+            Some(value) => observed_value(value, pointer),
             None => observation(E2eValuePresence::Missing, None),
         };
     }
     if pointer == "$sse_observation" || pointer.starts_with("$sse_observation/") {
         let json_pointer = format!("/{}", pointer.trim_start_matches('$'));
         return match response.pointer(&json_pointer) {
-            Some(value) => observation(E2eValuePresence::Present, Some(bounded(value, pointer))),
+            Some(value) => observed_value(value, pointer),
             None => observation(E2eValuePresence::Missing, None),
         };
     }
@@ -42,7 +42,7 @@ pub(in crate::e2e_run) fn response_observation_with_status(
             return observation(E2eValuePresence::Unavailable, None);
         };
         return match headers.get(name) {
-            Some(value) => observation(E2eValuePresence::Present, Some(bounded(value, pointer))),
+            Some(value) => observed_value(value, pointer),
             None => observation(E2eValuePresence::Missing, None),
         };
     }
@@ -66,13 +66,13 @@ pub(in crate::e2e_run) fn response_observation_with_status(
             .unwrap_or_else(|error| {
                 Value::String(format!("<binary bytes={}>", error.as_bytes().len()))
             });
-        return observation(E2eValuePresence::Present, Some(bounded(&value, pointer)));
+        return observed_value(&value, pointer);
     }
     let Ok(json) = serde_json::from_slice::<Value>(&decoded) else {
         return observation(E2eValuePresence::NotApplicable, None);
     };
     match json.pointer(pointer) {
-        Some(value) => observation(E2eValuePresence::Present, Some(bounded(value, pointer))),
+        Some(value) => observed_value(value, pointer),
         None => observation(E2eValuePresence::Missing, None),
     }
 }
@@ -115,7 +115,7 @@ fn header_observation(
         Some(value) if protected_header_value(value) => {
             observation(E2eValuePresence::Unavailable, None)
         }
-        Some(value) => observation(E2eValuePresence::Present, Some(bounded(value, pointer))),
+        Some(value) => observed_value(value, pointer),
         None => observation(E2eValuePresence::Missing, None),
     }
 }
@@ -131,7 +131,40 @@ fn protected_header_value(value: &Value) -> bool {
 }
 
 fn observation(presence: E2eValuePresence, value: Option<Value>) -> E2eValueObservation {
-    E2eValueObservation { presence, value }
+    E2eValueObservation {
+        presence,
+        value,
+        jwt_candidate: false,
+    }
+}
+
+fn observed_value(value: &Value, pointer: &str) -> E2eValueObservation {
+    E2eValueObservation {
+        presence: E2eValuePresence::Present,
+        jwt_candidate: jwt_candidate(value, 0),
+        value: Some(bounded(value, pointer)),
+    }
+}
+
+fn jwt_candidate(value: &Value, depth: usize) -> bool {
+    if depth > 16 {
+        return false;
+    }
+    match value {
+        Value::String(raw) => {
+            crate::request_rules::jwt::Token::parse(raw)
+                .ok()
+                .flatten()
+                .is_some()
+                || crate::request_rules::jwt::url_query::has_candidate(raw)
+        }
+        Value::Array(values) => values.iter().take(64).any(|v| jwt_candidate(v, depth + 1)),
+        Value::Object(values) => values
+            .values()
+            .take(64)
+            .any(|v| jwt_candidate(v, depth + 1)),
+        _ => false,
+    }
 }
 
 pub(super) fn bounded(value: &Value, pointer: &str) -> Value {
@@ -186,6 +219,35 @@ fn sensitive_pointer(pointer: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jwt_hint_survives_redaction_and_long_url_bounding_without_exposing_tokens() {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let token = format!(
+            "{}.{}.AA",
+            URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256"}"#),
+            URL_SAFE_NO_PAD.encode(r#"{"sub":"private-user","exp":2000}"#)
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("response.json");
+        let url = format!("/download?padding={}&token={token}", "x".repeat(300));
+        std::fs::write(&path, serde_json::json!({"body":{"encoding":"utf8","data":serde_json::json!({"access_token":token,"downloadUrl":url,"opaque_token":"secret-value"}).to_string()}}).to_string()).unwrap();
+        for pointer in ["/access_token", "/downloadUrl"] {
+            let value = response_observation(&path, pointer);
+            assert!(value.jwt_candidate);
+            let rendered = serde_json::to_string(&value).unwrap();
+            assert!(!rendered.contains(&token));
+            assert!(!rendered.contains("private-user"));
+        }
+        let opaque = response_observation(&path, "/opaque_token");
+        assert!(!opaque.jwt_candidate);
+        assert!(
+            !serde_json::to_string(&opaque)
+                .unwrap()
+                .contains("secret-value")
+        );
+        assert!(!response_observation(&path, "/missing").jwt_candidate);
+    }
 
     #[test]
     fn projects_response_header_presence_and_values_for_api_evidence() {

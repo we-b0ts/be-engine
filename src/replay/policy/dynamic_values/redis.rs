@@ -56,10 +56,16 @@ impl DynamicValues {
         }
         Some((|| {
             ensure!(
+                command != "RPUSH" || source.len() <= 129,
+                "RPUSH dynamic capture supports at most 128 elements"
+            );
+            ensure!(
                 source.first() == actual.first(),
                 "dynamic Redis capture key changed"
             );
             let mut decision = DynamicDecision::default();
+            let mut source = source.to_vec();
+            let mut actual = actual.to_vec();
             for rule in captures {
                 let DynamicValueCapture::Redis {
                     argument_index,
@@ -76,10 +82,22 @@ impl DynamicValues {
                     .get(*argument_index)
                     .ok_or_else(|| anyhow::anyhow!("target Redis capture argument is absent"))?;
                 let pair = IdentityPair {
-                    source: strings::capture(source_value, json_pointer.as_deref())?,
-                    target: strings::capture(actual_value, json_pointer.as_deref())?,
+                    source: capture(source_value, json_pointer.as_deref(), rule.value_type)?,
+                    target: capture(actual_value, json_pointer.as_deref(), rule.value_type)?,
                 };
                 self.check_pair(case, rule, &pair, &decision)?;
+                if rule.value_type == DynamicValueType::Integer {
+                    let pointer = json_pointer.as_deref().expect("validated integer pointer");
+                    let source_json =
+                        crate::replay::json_order::parse(source_value).expect("validated capture");
+                    let mut actual_json =
+                        crate::replay::json_order::parse(actual_value).expect("validated capture");
+                    *actual_json.pointer_mut(pointer).expect("validated pointer") =
+                        serde_json::from_str(&pair.source)?;
+                    // Canonicalize only complete, explicitly selected JSON arguments.
+                    source[*argument_index] = serde_json::to_vec(&source_json)?;
+                    actual[*argument_index] = serde_json::to_vec(&actual_json)?;
+                }
                 decision.pairs.push((rule.id.clone(), pair));
             }
             let pairs = self.pairs(case, target, &decision);
@@ -113,5 +131,21 @@ impl DynamicValues {
                 decision,
             })
         })())
+    }
+}
+
+pub(super) fn capture(
+    bytes: &[u8],
+    pointer: Option<&str>,
+    value_type: DynamicValueType,
+) -> Result<String> {
+    if value_type == DynamicValueType::Integer {
+        super::http::capture(
+            bytes,
+            pointer.ok_or_else(|| anyhow::anyhow!("integer capture requires a JSON pointer"))?,
+            value_type,
+        )
+    } else {
+        strings::capture(bytes, pointer)
     }
 }

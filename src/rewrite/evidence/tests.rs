@@ -117,10 +117,12 @@ fn response_evidence_starts_with_paged_case_differences_and_rejects_stale_pages(
             body_diagnosis: None,
             unavailable_reason: None,
             expected: E2eValueObservation {
+                jwt_candidate: false,
                 presence: E2eValuePresence::Present,
                 value: Some(Value::from(1)),
             },
             actual: E2eValueObservation {
+                jwt_candidate: false,
                 presence: E2eValuePresence::Missing,
                 value: None,
             },
@@ -185,10 +187,12 @@ fn unavailable_response_evidence_omits_value_and_policy_queries() {
             body_diagnosis: None,
             unavailable_reason: Some(crate::E2eResponseUnavailableReason::TargetConnectionClosed),
             expected: E2eValueObservation {
+                jwt_candidate: false,
                 presence: E2eValuePresence::Present,
                 value: None,
             },
             actual: E2eValueObservation {
+                jwt_candidate: false,
                 presence: E2eValuePresence::Unavailable,
                 value: None,
             },
@@ -248,10 +252,12 @@ fn standard_header_evidence_uses_response_flow_without_body_rule_queries() {
             body_diagnosis: None,
             unavailable_reason: None,
             expected: E2eValueObservation {
+                jwt_candidate: false,
                 presence: E2eValuePresence::Present,
                 value: Some(serde_json::json!(["Origin"])),
             },
             actual: E2eValueObservation {
+                jwt_candidate: false,
                 presence: E2eValuePresence::Present,
                 value: Some(serde_json::json!(["Accept-Encoding"])),
             },
@@ -419,10 +425,12 @@ fn representatives_return_the_exact_recorded_case_directory_and_response_differe
             body_diagnosis: None,
             unavailable_reason: None,
             expected: E2eValueObservation {
+                jwt_candidate: false,
                 presence: E2eValuePresence::Present,
                 value: Some(Value::from(403)),
             },
             actual: E2eValueObservation {
+                jwt_candidate: false,
                 presence: E2eValuePresence::Present,
                 value: Some(Value::from(200)),
             },

@@ -37,8 +37,13 @@ pub fn plan_dependency_request_rule(
         &feedback.policy_path,
         &Default::default(),
     )?;
-    let matching_cases =
-        request_contract::evidence::verify(&runtime, &rule, &report, &mut witnesses)?;
+    let matching_cases = request_contract::evidence::verify(
+        &runtime,
+        &rule,
+        &report,
+        &loaded.document.dynamic_values,
+        &mut witnesses,
+    )?;
     if let Some(existing) = loaded
         .document
         .dependency_rules

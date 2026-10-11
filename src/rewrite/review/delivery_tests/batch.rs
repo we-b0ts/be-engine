@@ -44,6 +44,132 @@ fn prepare_delivery(
 }
 
 #[test]
+fn batch_review_rejects_skipped_or_finished_handoffs_without_panicking() {
+    let target = target();
+    let root = target.path();
+    let store = RewriteStore::new(root).unwrap();
+    let mut state = store.load().unwrap().unwrap();
+    let mut scopes = vec![crate::rewrite::api_selector::work_scope(&state, &state.api)];
+    for index in 1..3 {
+        let api = format!("GET /batch-live-{index}");
+        let mut item = state.api_inventory[0].clone();
+        item.api = api.clone();
+        state.api_inventory.push(item);
+        let mut slice = state.active_slice.clone();
+        slice.api = api.clone();
+        state.parked_slices.insert(api.clone(), slice);
+        scopes.push(crate::rewrite::api_selector::work_scope(&state, &api));
+    }
+    store.save(&state).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let selections = scopes
+        .iter()
+        .enumerate()
+        .map(|(index, scope)| prepare_delivery(root, directory.path(), scope, index).0)
+        .collect::<Vec<_>>();
+    let candidate_tree = worktree(root, directory.path(), "skip-batch-candidate");
+    git(
+        &candidate_tree,
+        &["merge", "--ff-only", &selections[0].handoff_id],
+    );
+    for selection in &selections[1..] {
+        git(&candidate_tree, &["cherry-pick", &selection.handoff_id]);
+    }
+    fs::write(
+        root.join(crate::config::regression::PATH),
+        "skip: [/batch-live-1]\n",
+    )
+    .unwrap();
+    let skipped = store.load().unwrap().unwrap();
+    assert!(
+        skipped
+            .worker_bindings
+            .contains_key(&scopes[1].binding_key())
+    );
+    assert!(crate::rewrite::regression_scope::is_skipped(
+        &skipped,
+        "GET /batch-live-1"
+    ));
+    let before = serde_json::to_value(&skipped.worker_bindings).unwrap();
+    for position in 0..3 {
+        let mut batch = selections.clone();
+        batch.swap(position, 1);
+        let error = check_batch(options(root, &candidate_tree, None), batch).unwrap_err();
+        assert!(error.to_string().contains("/batch-live-1"));
+        assert!(error.to_string().contains("no longer eligible"));
+        assert!(error.to_string().contains("Refresh inventory"));
+    }
+    let mut single = options(root, &candidate_tree, Some(scopes[1].clone()));
+    single.integration = true;
+    single.handoff_id = Some(selections[1].handoff_id.clone());
+    assert!(
+        check(single)
+            .unwrap_err()
+            .to_string()
+            .contains("no longer eligible")
+    );
+
+    // Completed and removed issues can leave the same historical binding.
+    for phase in [
+        super::super::super::RewritePhase::SliceComplete,
+        super::super::super::RewritePhase::ImplementationRequired,
+    ] {
+        let mut finished = skipped.clone();
+        let slice = finished.parked_slices.get_mut("GET /batch-live-2").unwrap();
+        slice.phase = phase;
+        slice.active_issue = None;
+        let error =
+            candidate::batch_handoffs(&finished, &[selections[0].clone(), selections[2].clone()])
+                .unwrap_err();
+        assert!(error.to_string().contains("/batch-live-2"));
+        assert!(error.to_string().contains("no longer eligible"));
+    }
+    assert_eq!(
+        serde_json::to_value(&store.load().unwrap().unwrap().worker_bindings).unwrap(),
+        before
+    );
+
+    // Removing only the obsolete handoff makes the two live deliveries valid.
+    let live = vec![selections[0].clone(), selections[2].clone()];
+    let report = check_batch(options(root, &candidate_tree, None), live).unwrap();
+    assert_eq!(report.status, ReviewStatus::Passed);
+    assert_eq!(report.integration.as_ref().unwrap().handoffs.len(), 2);
+
+    // Method aliases cannot smuggle the same route into a batch twice.
+    let mut alias = selections[0].clone();
+    alias.scope = RewriteWorkScope::Api {
+        api: "GET /api".into(),
+    };
+    assert!(
+        candidate::batch_handoffs(&skipped, &[selections[0].clone(), alias])
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate")
+    );
+
+    // Eligibility must also be checked if a scope is skipped after review.
+    git(root, &["merge", "--ff-only", &report.head_revision]);
+    fs::write(
+        root.join(crate::config::regression::PATH),
+        "skip: [/api, /batch-live-1]\n",
+    )
+    .unwrap();
+    let mut changed = store.load().unwrap().unwrap();
+    let original = serde_json::to_value(&changed).unwrap();
+    let error = candidate::accept_locked(
+        root,
+        &mut changed,
+        &report.report_path,
+        Some(&scopes[2]),
+        Some(&selections[2].handoff_id),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("/api"));
+    assert!(error.to_string().contains("no longer eligible"));
+    assert_eq!(serde_json::to_value(&changed).unwrap(), original);
+}
+
+#[test]
 fn six_integrated_handoffs_and_one_new_delivery_review_and_admit_as_one_candidate() {
     let target = target();
     let root = target.path();

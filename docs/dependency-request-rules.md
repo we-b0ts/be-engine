@@ -25,7 +25,9 @@ Normal protocol rules use `case: {method, path}` for the inbound HTTP API;
 The default remains `value_type: string`. Integer captures preserve JSON type
 and bind only the selected pointer on the selected request. They do not infer
 references in other numbers, strings, paths, Redis arguments or response IDs.
-Floats, stringified integers, missing pointers and inconsistent bindings fail.
+Redis JSON captures also support `value_type: integer` for an explicit pointer
+in a SET/HSET value or RPUSH element. Floats, stringified integers, missing
+pointers and inconsistent bindings fail.
 Stable JSON members and the original HTTP path/query remain checked.
 
 ## Redis SET JSON containing generated JWTs and a timestamp
@@ -105,6 +107,62 @@ later updates on the same key. It does not pin the key to its first update time.
 This initial implementation supports a plain single-member ZADD score and a
 ZREMRANGEBYSCORE maximum. Keys, members, range minimums, extra options, database,
 authentication, connection lanes and finite consumption remain checked.
+
+## Redis script ARGV timestamps
+
+```yaml
+- id: callback-script-time
+  protocol: redis
+  case: {method: POST, path: /internal/callback}
+  target: {host: cache.internal, port: 6379}
+  source_evidence: 'Callback:enqueue passes current milliseconds as the first Lua ARGV'
+  redis:
+    database: 0
+    key: {prefix: 'callback:'}
+    commands:
+    - command: EVALSHA
+      script: {sha1: '0123456789abcdef0123456789abcdef01234567'}
+      argument_values:
+        3: {time: preserve_relative, format: unix_milliseconds, tolerance: 5s}
+```
+
+Supply the actual script digest from source and immutable evidence. EVALSHA
+requires its 40-digit SHA1; EVAL instead requires `script: {sha256: '...'}`
+with the SHA256 of the exact Lua bytes. Replay never interprets or executes Lua.
+For `EVALSHA digest 1 key timestamp`, argument index 3 is ARGV[1]. The key
+selector scopes the first KEYS entry; all KEYS, numkeys, script bytes/digest and
+unselected ARGV remain exact. Rules require 1..32 keys and at most 128 argument
+indices. Selected indices must lie in the present ARGV region, never KEYS.
+Unix seconds and milliseconds retain numeric category and request-relative
+offsets. Multiple selected time parameters also retain their differences.
+SCRIPT LOAD remains an ordinary exact dependency exchange.
+
+## RPUSH JSON identities and timestamps
+
+A dynamic-value rule can select `capture.command: RPUSH`, an element
+`argument_index` in 1..128, and an exact `json_pointer: /id`. Use
+`value_type: integer` only when the source ID is a JSON integer. A separate
+request contract can select a disjoint time pointer in that same element:
+
+```yaml
+redis:
+  database: 0
+  key: callback:events
+  commands:
+  - command: RPUSH
+    argument_values:
+      1:
+        json:
+          /timestamp: {time: preserve_relative, format: unix_seconds}
+```
+
+The two contracts compose on comparison copies. Capture the ID, apply that
+rule and run fresh Replay; then plan the time contract from its protected
+failure witness. Planning honors already applied identity rules. Discovery
+can report separate typed scalar candidates in one RPUSH JSON element, but
+does not infer which field is an identity or a time. Source proof is required
+for each selected field. Overlapping pointers are rejected; other fields,
+element count/order, keys, session identity and finite consumption stay strict.
 
 Managed E2E sends the internal `request_begin` control command after preparing
 the inbound request. For manual low-level Replay, call

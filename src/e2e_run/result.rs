@@ -181,6 +181,9 @@ pub struct E2eValueObservation {
     pub presence: E2eValuePresence,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<Value>,
+    /// Format-only hint extracted before bounding/redaction; never proof of a signature.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub jwt_candidate: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -264,10 +267,12 @@ fn diagnosis(layout: &RunLayout, state: &ActiveRunState) -> E2eDiagnosis {
                 expected: E2eValueObservation {
                     presence: E2eValuePresence::Present,
                     value: None,
+                    jwt_candidate: false,
                 },
                 actual: E2eValueObservation {
                     presence: E2eValuePresence::Unavailable,
                     value: None,
+                    jwt_candidate: false,
                 },
             })
         } else {

@@ -2,6 +2,7 @@ mod active_artifact;
 mod active_progress;
 mod admin_source;
 mod admin_startup;
+mod assertion_publication;
 mod branch;
 mod case_progress;
 mod config;
@@ -417,10 +418,9 @@ pub fn resolve_e2e_response_rule_evidence(
         state.apis.iter().any(|candidate| candidate.group_id == api),
         "finalized E2E evidence does not contain API {api:?}"
     );
-    ensure!(
-        state.replay_report.is_file(),
-        "runner-owned replay evidence is missing"
-    );
+    // Response planners consume the published assertion and aggregate reports.
+    // Consumers of the replay report validate it when reading it; do not require
+    // that additional artifact for response-only planning.
     ensure!(
         state.assertions_report.is_file(),
         "runner-owned assertion evidence is missing"

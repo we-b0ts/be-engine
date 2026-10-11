@@ -39,7 +39,10 @@ pub(in crate::rewrite::evidence) fn has_response_jwt(value: &Value) -> bool {
                     .is_some()
                     || crate::request_rules::jwt::url_query::has_candidate(raw)
             }
-            Value::Object(fields) => fields.values().any(|value| contains(value, depth + 1)),
+            Value::Object(fields) => {
+                fields.get("jwt_candidate") == Some(&Value::Bool(true))
+                    || fields.values().any(|value| contains(value, depth + 1))
+            }
             Value::Array(items) => items.iter().any(|value| contains(value, depth + 1)),
             _ => false,
         }
@@ -75,7 +78,7 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
     {
         hints.push(RewriteRuleHint {
             capability: "dynamic_value".into(), rule: "dynamic-value".into(),
-            hint: "If a source-generated identity differs in decoded dependency requests, trace its generator and lifetime. Inspect dynamic_capture_candidates for Redis/HTTP witnesses. Use rule plan --dynamic-value with one MySQL SQL value, Redis SET/HSET value, or HTTP JSON pointer/path_segment capture, exact allowed host/port endpoints, and source evidence. The applied dependency_rules entry uses kind: dynamic_value. HTTP path_segment captures declare exact, random hex and UTC timestamp fields; timestamps use each dependency request start with the shared inclusive five-second window. Add SQL reference endpoints to targets. Path witnesses do not prove generation, and uploaded bytes and headers remain checked. HTTP JSON captures support value_type: integer for one explicit JSON pointer; numeric values retain JSON integer type and are never inferred as automatic references. String remains the default. Format is optional. Apply and fresh Replay bind one consistent case-local identity across decoded requests without listing each reference. Fixed values, authentication/database, finite consumption and case ownership remain strict; hashes and opaque binary payloads are not inferred.".into(),
+            hint: "If a source-generated identity differs in decoded dependency requests, trace its generator and lifetime. Inspect dynamic_capture_candidates for Redis/HTTP witnesses. Use rule plan --dynamic-value with one MySQL SQL value, Redis SET/HSET value or RPUSH element, or HTTP JSON pointer/path_segment capture, exact allowed host/port endpoints, and source evidence. The applied dependency_rules entry uses kind: dynamic_value. HTTP path_segment captures declare exact, random hex and UTC timestamp fields; timestamps use each dependency request start with the shared inclusive five-second window. Add SQL reference endpoints to targets. Path witnesses do not prove generation, and uploaded bytes and headers remain checked. HTTP and Redis JSON captures support value_type: integer for one explicit JSON pointer; numeric values retain JSON integer type and are never inferred as automatic references. String remains the default. Format is optional. Apply and fresh Replay bind one consistent case-local identity across decoded requests without listing each reference. Fixed values, authentication/database, finite consumption and case ownership remain strict; hashes and opaque binary payloads are not inferred.".into(),
             help: super::super::super::action::command(root, vec!["rule".into(),"plan".into(),"--help".into()], Vec::new()),
         });
     }
@@ -86,7 +89,7 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
     {
         hints.push(RewriteRuleHint {
             capability: "dependency_request".into(), rule: "dependency-request".into(),
-            hint: "Review dependency_request_candidates and trace source generation before using rule plan --dependency-request RULE_JSON. Reuse dependency_rules protocol/target/case selectors: Redis commands.argument_values select a SET JSON value or ZADD/ZREMRANGEBYSCORE time parameter; HTTP multipart.boundary: normalize selects only transport delimiters. time: preserve_relative uses the engine's recorded/replay inbound request anchors without a configured clock or offset, and a multi-command rule also preserves parameter differences per update. Inspect signing_key_discovery for available startup variable names and mount paths without secret values. JWT fields require a declared target startup signing_key_source, algorithm and relative_to JSON time field; optional dynamic_claims: [/jti] requires a case-local UUID v4 binding. Stable JSON, keys, other arguments, signatures, JWT lifetimes, multipart part bytes/order, headers/auth, case ownership and finite consumption remain strict. Planning verifies protected current target witnesses against immutable recordings; apply then fresh Replay. No raw JWT/key/file bytes are exposed in discovery.".into(),
+            hint: "Review dependency_request_candidates and trace source generation before using rule plan --dependency-request RULE_JSON. Reuse dependency_rules protocol/target/case selectors: Redis commands.argument_values select SET/RPUSH JSON time fields, ZADD/ZREMRANGEBYSCORE time parameters, or explicit EVAL/EVALSHA ARGV time locations with script identity; HTTP multipart.boundary: normalize selects only transport delimiters. time: preserve_relative supports unix_seconds and unix_milliseconds using the engine's recorded/replay inbound request anchors without a configured clock or offset; related time parameters retain their differences. Inspect signing_key_discovery for available startup variable names and mount paths without secret values. SET JWT fields require a declared target startup signing_key_source, algorithm and relative_to JSON time field; optional dynamic_claims: [/jti] requires a case-local UUID v4 binding. Stable JSON, keys, other arguments, signatures, JWT lifetimes, multipart part bytes/order, headers/auth, case ownership and finite consumption remain strict. Planning verifies protected current target witnesses against immutable recordings; apply then fresh Replay. No raw JWT/key/file bytes are exposed in discovery.".into(),
             help: super::super::super::action::command(root, vec!["rule".into(),"plan".into(),"--help".into()], Vec::new()),
         });
     }
@@ -154,6 +157,15 @@ mod tests {
         let rendered = serde_json::to_string(&hints).unwrap();
         assert!(!rendered.contains(&raw));
         assert!(!rendered.contains(&url));
+        let facts = json!({"representative":{"pointer":"/access_token","expected":{"presence":"present","value":"<redacted string bytes=500>","jwt_candidate":true}}});
+        let planners = planners(
+            Path::new("/target"),
+            RewriteIssueKind::Response,
+            QUERY_REPRESENTATIVES,
+            &facts,
+            "evidence",
+        );
+        assert!(planners.iter().any(|p| p.capability == "response_jwt"));
     }
 
     #[test]

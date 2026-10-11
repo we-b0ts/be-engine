@@ -53,7 +53,7 @@ impl RequestContracts {
         if source.len() != actual.len() || source.first() != actual.first() || source == actual {
             return;
         }
-        let capability = if command == "SET"
+        let capability = if matches!(command, "SET" | "RPUSH")
             && source.len() >= 2
             && crate::replay::json_order::parse(&source[1]).is_some()
             && crate::replay::json_order::parse(&actual[1]).is_some()
@@ -61,6 +61,9 @@ impl RequestContracts {
             "redis_json_request"
         } else if matches!(command, "ZADD" | "ZREMRANGEBYSCORE") && source.len() == 3 {
             "redis_request_time"
+        } else if matches!(command, "EVAL" | "EVALSHA") && source.len() >= 4 && source.len() <= 129
+        {
+            "redis_script_request_time"
         } else {
             return;
         };
@@ -181,6 +184,7 @@ pub(in crate::replay::policy) fn verify(
     runtime: &RequestContracts,
     rule: &ReplayDependencyRule,
     report: &Value,
+    dynamic_rules: &[super::super::dynamic_values::DynamicValueRule],
     witnesses: &mut Vec<(PathBuf, String)>,
 ) -> Result<usize> {
     let mut validated = BTreeSet::new();
@@ -238,6 +242,13 @@ pub(in crate::replay::policy) fn verify(
             continue;
         }
         let recorded = request["timestamp"].as_str().and_then(|v| v.parse().ok());
+        let dynamic = super::super::dynamic_values::DynamicValues::new(
+            dynamic_rules.to_vec(),
+            BTreeMap::from([(
+                candidate.case_id.clone(),
+                super::super::pattern::uri_path(request["uri"].as_str().unwrap_or_default()),
+            )]),
+        );
         runtime
             .state
             .lock()
@@ -307,7 +318,11 @@ pub(in crate::replay::policy) fn verify(
                     continue;
                 };
                 if selector.database != candidate.database
-                    || source.first().is_none_or(|key| !selector.key.matches(key))
+                    || selector
+                        .commands
+                        .iter()
+                        .filter(|c| c.command == candidate.command)
+                        .all(|c| c.key(&source).is_none_or(|key| !selector.key.matches(key)))
                 {
                     continue;
                 }
@@ -319,13 +334,30 @@ pub(in crate::replay::policy) fn verify(
                 if single.commands.is_empty() {
                     continue;
                 }
+                let normalized = dynamic
+                    .redis(
+                        Some(&candidate.case_id),
+                        &TargetKey {
+                            host: candidate.host.clone(),
+                            port: candidate.port,
+                        },
+                        candidate.database,
+                        &candidate.command,
+                        &source,
+                        &actual,
+                    )
+                    .transpose()?;
                 runtime.compare_redis(
                     &candidate.case_id,
                     rule,
                     &single,
                     &candidate.command,
-                    &source,
-                    &actual,
+                    normalized
+                        .as_ref()
+                        .map_or(source.as_slice(), |n| n.source.as_slice()),
+                    normalized
+                        .as_ref()
+                        .map_or(actual.as_slice(), |n| n.actual.as_slice()),
                 )?;
                 validated.insert(candidate.command.clone());
                 matched_cases.insert(candidate.case_id.clone());
@@ -431,6 +463,11 @@ fn validate_source_commands(
         .filter(|line| !line.is_empty())
         .map(serde_json::from_slice::<Value>)
         .collect::<std::result::Result<Vec<_>, _>>()?;
+    let selected_command = selector
+        .commands
+        .iter()
+        .find(|c| c.command == candidate.command)
+        .context("source command is not selected")?;
     let source_key = events
         .iter()
         .filter(|e| e["event_type"] == "redis_exchange" && e["command"] == candidate.command)
@@ -442,7 +479,7 @@ fn validate_source_commands(
                 .collect::<Result<Vec<_>>>()
                 .ok()?;
             (fingerprint(&serde_json::to_vec(&args).ok()?) == candidate.source_fingerprint)
-                .then(|| args.first().cloned())
+                .then(|| selected_command.key(&args).map(<[u8]>::to_vec))
                 .flatten()
         })
         .context("source request witness key is missing")?;
@@ -473,19 +510,25 @@ fn validate_source_commands(
             .iter()
             .map(decode)
             .collect::<Result<Vec<_>>>()?;
-        if args.first() != Some(&source_key)
-            || args.first().is_none_or(|key| !selector.key.matches(key))
+        if command.key(&args) != Some(source_key.as_slice())
+            || command
+                .key(&args)
+                .is_none_or(|key| !selector.key.matches(key))
         {
             continue;
         }
+        if !command.matches_identity(&args) {
+            continue;
+        }
+        command.validate_arguments(&args)?;
         decode(&event["response"])?;
         for (index, field) in &command.argument_values {
             let bytes = args
                 .get(*index)
                 .context("source selected argument missing")?;
             match field {
-                config::ArgumentRule::Time(_) => {
-                    super::redis::number(&serde_json::from_slice(bytes)?)?;
+                config::ArgumentRule::Time(field) => {
+                    super::redis::timestamp(&serde_json::from_slice(bytes)?, field.format)?;
                 }
                 config::ArgumentRule::Json(fields) => {
                     let json = crate::replay::json_order::parse(bytes)
@@ -495,8 +538,8 @@ fn validate_source_commands(
                             .pointer(pointer)
                             .context("source selected JSON field missing")?;
                         match field {
-                            config::JsonField::Time(_) => {
-                                super::redis::number(value)?;
+                            config::JsonField::Time(field) => {
+                                super::redis::timestamp(value, field.format)?;
                             }
                             config::JsonField::Jwt(_) => {
                                 ensure!(value.is_string(), "source JWT field must be a string");
