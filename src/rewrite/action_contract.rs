@@ -12,10 +12,10 @@ impl Serialize for RewriteAction {
         S: Serializer,
     {
         match self {
-            Self::ExpertRequired { summary, expert, commands } => RewriteActionView {
+            Self::ExpertRequired { summary, expert, commands, execution_mode } => RewriteActionView {
                 kind: "expert_required",
                 summary,
-                details: expert,
+                details: RewriteExpertDetails { expert, execution_mode: *execution_mode },
                 commands,
             }.serialize(serializer),
             Self::Blocked { summary, system_repair_apis,  resume } => RewriteActionView {
@@ -61,6 +61,7 @@ impl Serialize for RewriteAction {
             .serialize(serializer),
             Self::WaitRequired {
                 summary,
+                execution_mode,
                 resource,
                 requested_api,
                 blocking_api,
@@ -71,6 +72,7 @@ impl Serialize for RewriteAction {
                 kind: "wait_required",
                 summary,
                 details: RewriteWaitRequiredDetails {
+                    execution_mode: *execution_mode,
                     reason: "resource_busy",
                     resource,
                     requested_api: requested_api.as_deref(),
@@ -127,6 +129,7 @@ impl Serialize for RewriteAction {
             .serialize(serializer),
             Self::ImplementationRequired {
                 summary,
+                execution_mode,
                 issue,
                 worker,
                 confirm_worker,
@@ -136,6 +139,7 @@ impl Serialize for RewriteAction {
                 kind: "implementation_required",
                 summary,
                 details: RewriteImplementationDetails {
+                    execution_mode: *execution_mode,
                     issue: RewriteIssueDetails::from(issue),
                     work_scope: &worker.work_scope,
                     worker,
@@ -149,12 +153,14 @@ impl Serialize for RewriteAction {
             .serialize(serializer),
             Self::WorkerStatusRequired {
                 summary,
+                execution_mode,
                 worker,
                 report_worker,
             } => RewriteActionView {
                 kind: "worker_status_required",
                 summary,
                 details: RewriteWorkerCoordinationDetails {
+                    execution_mode: *execution_mode,
                     worker,
                     handoff_id: None,
                 },
@@ -172,6 +178,7 @@ impl Serialize for RewriteAction {
                 kind: "integration_required",
                 summary,
                 details: RewriteWorkerCoordinationDetails {
+                    execution_mode: None,
                     worker,
                     handoff_id: Some(handoff_id),
                 },
@@ -221,10 +228,10 @@ impl Serialize for RewriteAction {
                 commands: RewriteApplyCommands { apply: command },
             }
             .serialize(serializer),
-            Self::AdvanceRequired { summary, command } => RewriteActionView {
+            Self::AdvanceRequired { summary, command, api, kind } => RewriteActionView {
                 kind: "advance_required",
                 summary,
-                details: RewriteNoDetails {},
+                details: serde_json::json!({"operation": kind, "api": api.as_deref().map(super::api_selector::public_api)}),
                 commands: RewriteAdvanceCommands { advance: command },
             }
             .serialize(serializer),
@@ -335,6 +342,8 @@ struct RewriteRecordingRefreshPendingDetails<'a> {
 
 #[derive(Serialize)]
 struct RewriteWaitRequiredDetails<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution_mode: Option<super::model::RewriteExecutionMode>,
     reason: &'static str,
     resource: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -357,6 +366,8 @@ struct RewriteIssueDetails<'a> {
 
 #[derive(Serialize)]
 struct RewriteImplementationDetails<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution_mode: Option<super::model::RewriteExecutionMode>,
     #[serde(flatten)]
     issue: RewriteIssueDetails<'a>,
     work_scope: &'a super::work_scope::RewriteWorkScope,
@@ -417,9 +428,19 @@ struct RewriteImplementationCommands<'a> {
 
 #[derive(Serialize)]
 struct RewriteWorkerCoordinationDetails<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution_mode: Option<super::model::RewriteExecutionMode>,
     worker: &'a RewriteWorkerDispatchView,
     #[serde(skip_serializing_if = "Option::is_none")]
     handoff_id: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct RewriteExpertDetails<'a> {
+    #[serde(flatten)]
+    expert: &'a super::expert::model::RewriteExpertView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution_mode: Option<super::model::RewriteExecutionMode>,
 }
 
 #[derive(Serialize)]

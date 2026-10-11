@@ -89,11 +89,10 @@ pub(super) fn implementation_action(
     };
     let confirm_worker = confirmation_command(target_root, &worker);
     let report_worker = runtime::report_command(target_root, worker.agent_handle.as_deref(), false);
-    let acceptance = match &scope {
-        RewriteWorkScope::Api { api } => action::next_command_for_api(target_root, api),
-    };
+    let acceptance = action::next_command(target_root);
     RewriteAction::ImplementationRequired {
         summary,
+        execution_mode: None,
         issue,
         worker,
         confirm_worker,

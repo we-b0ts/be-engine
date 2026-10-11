@@ -5,9 +5,9 @@ use anyhow::Result;
 use crate::RecordingApi;
 
 use super::model::{
-    ACTION_SCHEMA_VERSION, RewriteAction, RewriteActionEnvelope, RewriteCommandSpec,
-    RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason,
-    RewritePhase, RewriteState, RewriteWorkflowView,
+    ACTION_SCHEMA_VERSION, RewriteAction, RewriteActionEnvelope, RewriteAdvanceKind,
+    RewriteCommandSpec, RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode,
+    RewriteInputRequiredReason, RewritePhase, RewriteState, RewriteWorkflowView,
 };
 use super::{
     case_patterns, inventory, progress_publication, recorder_capture, recording_action, repair,
@@ -192,6 +192,7 @@ pub(super) fn api_selection_wait_envelope(
         target_root,
         state,
         RewriteAction::WaitRequired {
+            execution_mode: None,
             summary: format!(
                 "wait for API {}; its {:?} transition must finish before selecting {}",
                 blocking_api, state.phase, requested_api
@@ -223,6 +224,7 @@ pub(super) fn coordinator_wait_envelope(
         target_root,
         state,
         RewriteAction::WaitRequired {
+            execution_mode: None,
             summary: "wait for the live rewrite coordinator transition".to_string(),
             resource: "rewrite_coordinator".to_string(),
             requested_api: requested_api.map(|api| super::api_selector::public_api(&api).into()),
@@ -248,6 +250,7 @@ pub(super) fn uninitialized_coordinator_wait_envelope(
         latest_focused_e2e: None,
         terminal_allowed: false,
         action: RewriteAction::WaitRequired {
+            execution_mode: None,
             summary: "wait for the live rewrite coordinator initialization".to_string(),
             resource: "rewrite_coordinator".to_string(),
             requested_api,
@@ -326,16 +329,16 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
         Some(progress_publication::PublicationState::Published) | None => {}
     }
     if super::rule_replay::pending(&state.active_slice) {
-        return advance_required(
+        return replay_advance(
             target_root,
-            Some(&selected_api),
+            &selected_api,
             "verification rule applied; replay the same API and immutable cases".into(),
         );
     }
     if state.system_repair_accepted {
-        return advance_required(
+        return replay_advance(
             target_root,
-            Some(&selected_api),
+            &selected_api,
             "system repair accepted; replay the same API and immutable cases".into(),
         );
     }
@@ -406,9 +409,9 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
             ],
             recording_input_diagnosis: state.recording_input_diagnosis.clone(),
         },
-        RewritePhase::ApiPending => advance_required(
+        RewritePhase::ApiPending => replay_advance(
             target_root,
-            Some(&selected_api),
+            &selected_api,
             format!("continue with the next recorded API {display_api}"),
         ),
         RewritePhase::ImplementationRequired => {
@@ -458,11 +461,22 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
 }
 
 fn advance_required(target_root: &Path, api: Option<&str>, summary: String) -> RewriteAction {
-    advance_required_with_command(summary, next_command_with_optional_api(target_root, api))
+    RewriteAction::AdvanceRequired {
+        summary,
+        command: next_command(target_root),
+        api: api
+            .filter(|api| !api.is_empty())
+            .map(|api| super::api_selector::public_api(api).to_string()),
+        kind: RewriteAdvanceKind::Workflow,
+    }
 }
 
-fn advance_required_with_command(summary: String, command: RewriteCommandSpec) -> RewriteAction {
-    RewriteAction::AdvanceRequired { summary, command }
+pub(super) fn replay_advance(target_root: &Path, api: &str, summary: String) -> RewriteAction {
+    let mut action = advance_required(target_root, Some(api), summary);
+    if let RewriteAction::AdvanceRequired { kind, .. } = &mut action {
+        *kind = RewriteAdvanceKind::Replay;
+    }
+    action
 }
 
 pub(super) fn advance_envelope(
@@ -473,9 +487,9 @@ pub(super) fn advance_envelope(
     envelope(
         target_root,
         state,
-        advance_required(
+        replay_advance(
             target_root,
-            Some(&super::api_selector::work_scope(state, &state.api).binding_key()),
+            &super::api_selector::work_scope(state, &state.api).binding_key(),
             summary,
         ),
     )
@@ -633,32 +647,6 @@ pub(super) fn command(
 
 pub(super) fn next_command(target_root: &Path) -> RewriteCommandSpec {
     command(target_root, vec!["next".to_string()], Vec::new())
-}
-
-pub(super) fn next_command_for_api(target_root: &Path, api: &str) -> RewriteCommandSpec {
-    next_command_with_optional_api(target_root, Some(api))
-}
-
-pub(super) fn next_command_for_selected_api(
-    target_root: &Path,
-    state: &RewriteState,
-    api: &str,
-) -> RewriteCommandSpec {
-    next_command_for_api(
-        target_root,
-        &super::api_selector::work_scope(state, api).binding_key(),
-    )
-}
-
-fn next_command_with_optional_api(target_root: &Path, api: Option<&str>) -> RewriteCommandSpec {
-    let mut arguments = vec!["next".to_string()];
-    if let Some(api) = api.filter(|api| !api.is_empty()) {
-        arguments.extend([
-            "--api".to_string(),
-            super::api_selector::public_api(api).to_string(),
-        ]);
-    }
-    command(target_root, arguments, Vec::new())
 }
 
 pub(super) fn status_command(target_root: &Path) -> RewriteCommandSpec {

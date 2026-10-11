@@ -10,7 +10,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::model::{RewriteAction, RewriteActionEnvelope, RewriteState};
+use super::model::{RewriteAction, RewriteActionEnvelope, RewriteExecutionMode, RewriteState};
 use super::store::{RewriteLockState, RewriteStore};
 use super::{RewriteContext, RewriteNextOptions, RewriteTargetQualityOptions, action};
 
@@ -20,6 +20,8 @@ enum Request {
     Next {
         api: Option<String>,
         source_route: Option<String>,
+        #[serde(default)]
+        execution_mode: RewriteExecutionMode,
     },
     TargetQuality {
         api: String,
@@ -43,6 +45,7 @@ pub fn start_next(mut options: RewriteNextOptions) -> Result<RewriteActionEnvelo
         return Ok(envelope);
     }
     let target_root = fs::canonicalize(&options.target_root)?;
+    let execution_mode = super::next::mode(&options)?;
     let current = if let Some(api) = options.api.as_ref() {
         super::status_rewrite_for_selector(
             RewriteContext {
@@ -65,20 +68,15 @@ pub fn start_next(mut options: RewriteNextOptions) -> Result<RewriteActionEnvelo
     }
     // Freeze the selected scope before launching the detached operation. Its
     // own execution marker must not turn a later global selection into waiting.
-    if options.api.is_none()
-        && let RewriteAction::AdvanceRequired { command, .. } = &current.action
-    {
-        for pair in command.argv.windows(2) {
-            if pair[0] == "--api" {
-                options.api = Some(pair[1].parse()?);
-            }
-        }
+    if options.api.is_none() {
+        options.api = super::next::selected_api(&current.action)?;
     }
     start(
         &target_root,
         Request::Next {
             api: options.api.map(|api| api.to_string()),
             source_route: options.source_route,
+            execution_mode,
         },
     )
 }
@@ -168,12 +166,19 @@ pub async fn execute(target_root: PathBuf, id: &str) -> Result<RewriteActionEnve
         "coordinator operation already completed"
     );
     let result = match &execution.request {
-        Request::Next { api, source_route } => {
-            super::next_rewrite(RewriteNextOptions {
-                target_root: target_root.clone(),
-                api: api.as_deref().map(str::parse).transpose()?,
-                source_route: source_route.clone(),
-            })
+        Request::Next {
+            api,
+            source_route,
+            execution_mode,
+        } => {
+            super::next::run_selected(
+                RewriteNextOptions {
+                    target_root: target_root.clone(),
+                    api: api.as_deref().map(str::parse).transpose()?,
+                    source_route: source_route.clone(),
+                },
+                *execution_mode,
+            )
             .await
         }
         Request::TargetQuality {
@@ -200,6 +205,25 @@ pub async fn execute(target_root: PathBuf, id: &str) -> Result<RewriteActionEnve
         .map(|error| format!("{error:#}").chars().take(1024).collect());
     save(&target_root, &current)?;
     result
+}
+
+/// Retain the current selected step for explicit retry after an auto-next failure.
+pub(super) fn update_next_scope(options: &RewriteNextOptions) -> Result<()> {
+    let Some(mut execution) = load(&options.target_root)? else {
+        return Ok(());
+    };
+    if execution.pid != std::process::id() || execution.finished {
+        return Ok(());
+    }
+    if let Request::Next {
+        api, source_route, ..
+    } = &mut execution.request
+    {
+        *api = options.api.as_ref().map(ToString::to_string);
+        *source_route = options.source_route.clone();
+        save(&options.target_root, &execution)?;
+    }
+    Ok(())
 }
 
 pub fn retry(context: RewriteContext, id: &str) -> Result<RewriteActionEnvelope> {
@@ -260,6 +284,52 @@ pub(super) fn owned_by_other_process(target_root: &Path) -> Result<bool> {
         .is_some_and(|execution| !execution.finished && execution.pid != std::process::id()))
 }
 
+/// Observability for independently executable actions returned during background work.
+pub(super) fn annotate_status(target_root: &Path, action: &mut RewriteAction) -> Result<()> {
+    let Some(execution) = load(target_root)? else {
+        return Ok(());
+    };
+    if execution.finished || execution.pid == std::process::id() || !alive(execution.pid) {
+        return Ok(());
+    }
+    let Request::Next {
+        execution_mode: mode,
+        ..
+    } = execution.request
+    else {
+        return Ok(());
+    };
+    match action {
+        RewriteAction::WaitRequired {
+            summary,
+            execution_mode,
+            ..
+        }
+        | RewriteAction::ImplementationRequired {
+            summary,
+            execution_mode,
+            ..
+        }
+        | RewriteAction::WorkerStatusRequired {
+            summary,
+            execution_mode,
+            ..
+        }
+        | RewriteAction::ExpertRequired {
+            summary,
+            execution_mode,
+            ..
+        } if execution_mode.is_none() => {
+            *execution_mode = Some(mode);
+            if mode == RewriteExecutionMode::AutoNext {
+                *summary = format!("automatically advancing Replay; {summary}");
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 pub(super) fn status_action(target_root: &Path) -> Result<Option<RewriteAction>> {
     let Some(execution) = load(target_root)? else {
         return Ok(None);
@@ -287,8 +357,18 @@ pub(super) fn status_action(target_root: &Path) -> Result<Option<RewriteAction>>
     if !alive(execution.pid) {
         return Ok(Some(action::recovery_required(target_root).action));
     }
+    let execution_mode = match execution.request {
+        Request::Next { execution_mode, .. } => Some(execution_mode),
+        Request::TargetQuality { .. } => None,
+    };
+    let summary = running_summary(target_root);
     Ok(Some(RewriteAction::WaitRequired {
-        summary: running_summary(target_root),
+        execution_mode,
+        summary: if execution_mode == Some(RewriteExecutionMode::AutoNext) {
+            format!("automatically advancing Replay: {summary}")
+        } else {
+            summary
+        },
         resource: "coordinator_operation".into(),
         requested_api: None,
         blocking_api: None,

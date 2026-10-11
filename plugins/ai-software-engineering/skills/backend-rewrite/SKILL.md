@@ -67,6 +67,10 @@ are rejected. One API route owns one worker, worktree and delivery.
 The local `.traffic-e2e/regression.yaml` `only` and `skip` lists use the same
 route identities and affect all recorded HTTP methods on each route. `skip`
 takes precedence; use exact inventory patterns and preserve the user's scope.
+Returned `next` commands omit `--api`; use them as returned and let the engine
+choose the route. Local `auto_next: true` optionally continues passing Replay
+only when the existing global scheduler selects Replay again. Explicit `--api`
+always executes one scope. Respect the returned wait or non-Replay action.
 
 ## Select Your Agent Role
 

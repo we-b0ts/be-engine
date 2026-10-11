@@ -34,11 +34,8 @@ fn policy_freshness_stale_or_missing_identity_disables_planners_but_keeps_diagno
             let argv = facts["policy_freshness"]["refresh_command"]["argv"]
                 .as_array()
                 .unwrap();
-            assert!(
-                argv.windows(3).any(
-                    |args| args == [json!("next"), json!("--api"), json!("/api/subscriptions")]
-                )
-            );
+            assert_eq!(argv.last(), Some(&json!("next")));
+            assert!(!argv.iter().any(|arg| arg == "--api"));
             assert!(
                 applicable_rule_planners(
                     root,

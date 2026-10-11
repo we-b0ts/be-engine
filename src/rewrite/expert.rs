@@ -333,6 +333,7 @@ pub(super) fn required_action(
     }.to_string();
     Some(RewriteAction::ExpertRequired {
         summary,
+        execution_mode: None,
         expert: item.expert,
         commands: item.commands,
     })

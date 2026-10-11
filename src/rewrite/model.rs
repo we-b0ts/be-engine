@@ -19,7 +19,7 @@ use crate::{
 };
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 35;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 36;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -559,6 +559,21 @@ pub struct RewriteTrafficOperationView {
     pub started_at: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewriteAdvanceKind {
+    Replay,
+    Workflow,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewriteExecutionMode {
+    #[default]
+    Single,
+    AutoNext,
+}
+
 #[derive(Debug, Clone)]
 pub enum RewriteAction {
     Blocked {
@@ -589,6 +604,7 @@ pub enum RewriteAction {
     },
     WaitRequired {
         summary: String,
+        execution_mode: Option<RewriteExecutionMode>,
         resource: String,
         requested_api: Option<String>,
         blocking_api: Option<String>,
@@ -612,6 +628,7 @@ pub enum RewriteAction {
     },
     ImplementationRequired {
         summary: String,
+        execution_mode: Option<RewriteExecutionMode>,
         issue: RewriteIssue,
         worker: RewriteWorkerDispatchView,
         confirm_worker: Option<RewriteCommandSpec>,
@@ -620,11 +637,13 @@ pub enum RewriteAction {
     },
     WorkerStatusRequired {
         summary: String,
+        execution_mode: Option<RewriteExecutionMode>,
         worker: RewriteWorkerDispatchView,
         report_worker: RewriteCommandSpec,
     },
     ExpertRequired {
         summary: String,
+        execution_mode: Option<RewriteExecutionMode>,
         expert: super::expert::model::RewriteExpertView,
         commands: super::expert::model::RewriteExpertCommands,
     },
@@ -661,6 +680,9 @@ pub enum RewriteAction {
     AdvanceRequired {
         summary: String,
         command: RewriteCommandSpec,
+        /// Engine-owned selection; commands deliberately omit the selector.
+        api: Option<String>,
+        kind: RewriteAdvanceKind,
     },
     SystemRepairRequired {
         work_scope: RewriteWorkScope,

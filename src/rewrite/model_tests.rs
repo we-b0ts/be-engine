@@ -52,6 +52,7 @@ fn implementation_action_has_one_stable_public_shape() {
         required_env_names: Vec::new(),
     };
     let action = RewriteAction::ImplementationRequired {
+        execution_mode: None,
         summary: "response status differs".to_string(),
         issue: RewriteIssue {
             id: "issue-response".to_string(),
@@ -147,7 +148,7 @@ fn implementation_action_has_one_stable_public_shape() {
         action,
     })
     .unwrap();
-    assert_eq!(status.get("schema_version"), Some(&serde_json::json!(35)));
+    assert_eq!(status.get("schema_version"), Some(&serde_json::json!(36)));
     assert!(status.get("active_issue").is_none());
     assert!(status.get("next").is_none());
 }

@@ -46,9 +46,7 @@ fn project(
     value["api"] = json!(super::super::api_selector::public_api(&state.api));
     value["recording_run_id"] = json!(state.recording_run_id);
     if freshness.requires_fresh_replay {
-        value["refresh_command"] = serde_json::to_value(
-            super::super::action::next_command_for_selected_api(root, state, &state.api),
-        )?;
+        value["refresh_command"] = serde_json::to_value(super::super::action::next_command(root))?;
     }
     facts["policy_freshness"] = value;
     Ok(freshness.requires_fresh_replay.then(|| {
@@ -85,9 +83,7 @@ pub(super) fn refresh_hint(
             capability: "fresh_replay".into(),
             rule: "policy_freshness".into(),
             hint: "verification.yaml changed since this evidence, or its policy identity is unavailable. Follow policy_freshness.refresh_command and the coordinator gates, reuse the existing recordings, then obtain new evidence before planning. This is an evidence freshness requirement, not a missing engine capability or recording-version incompatibility.".into(),
-            help: facts["policy_freshness"]["api"].as_str().map_or_else(
-                || super::super::action::next_command(root),
-                |api| super::super::action::next_command_for_api(root, api)),
+            help: super::super::action::next_command(root),
         }
     })
 }

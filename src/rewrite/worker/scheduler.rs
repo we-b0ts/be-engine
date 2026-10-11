@@ -95,6 +95,7 @@ pub(in crate::rewrite) fn scope_action(
     let worker = super::dispatch_view(state, scope.clone(), None);
     match runtime::coverage(state, scope) {
         Coverage::StatusRequired => RewriteAction::WorkerStatusRequired {
+            execution_mode: None,
             summary: format!(
                 "must actually invoke built-in ListAgents (/list-agents) in Claude Code or equivalent runtime status tools for all workers awaiting results, including {}; collect results before reporting changes or required refreshes through the owning commands.report_worker. Resolve omitted or unclassified tasks through results or individual queries; historical dispatch confirmation is not runtime status",
                 scope.label()
@@ -121,13 +122,14 @@ pub(in crate::rewrite) fn scope_action(
             ),
             worker,
         },
-        Coverage::VerificationRequired => RewriteAction::AdvanceRequired {
-            summary: format!(
+        Coverage::VerificationRequired => action::replay_advance(
+            target_root,
+            &scope.binding_key(),
+            format!(
                 "worker handoff for {} is integrated; execute coordinator acceptance",
                 scope.label()
             ),
-            command: acceptance_command(target_root, scope),
-        },
+        ),
         _ => super::implementation_action(target_root, &scoped, None),
     }
 }
@@ -144,15 +146,6 @@ pub(in crate::rewrite) fn after_dispatch(
         return action;
     }
     scope_action(target_root, state, &scope)
-}
-
-pub(in crate::rewrite) fn acceptance_command(
-    target_root: &Path,
-    scope: &RewriteWorkScope,
-) -> super::super::model::RewriteCommandSpec {
-    match scope {
-        RewriteWorkScope::Api { api } => action::next_command_for_api(target_root, api),
-    }
 }
 
 pub(in crate::rewrite) fn acceptance_gate(

@@ -112,13 +112,19 @@ async fn parked_rule_replay_is_selected_and_keeps_the_review_gate() {
         .save(&state)
         .unwrap();
     let selected = rewrite::scheduling::idle_action(target.path(), &state).unwrap();
-    let RewriteAction::AdvanceRequired { command, .. } = selected else {
+    let RewriteAction::AdvanceRequired {
+        command,
+        api: selected_api,
+        ..
+    } = selected
+    else {
         panic!("schedule fresh Replay")
     };
     assert_eq!(
-        command.argv.last().unwrap(),
+        selected_api.as_deref().unwrap(),
         crate::rewrite::api_selector::public_api(api)
     );
+    assert_eq!(command.argv.last().unwrap(), "next");
     let result = rewrite::next_rewrite(crate::RewriteNextOptions {
         target_root: target.path().into(),
         api: Some(

@@ -561,6 +561,18 @@ is an exact inventory name. Omitted, null or empty `only` selects all recorded A
 completion. This ignored file does not change code fingerprints or require a commit.
 Preserve the user's selected scope; a terminal result covers that scope.
 
+Optional `auto_next: true` lets one unscoped `next` continue successful Replay
+only while the existing global scheduler selects another Replay. It defaults
+to false. Returned next commands omit `--api`; execute them unchanged. Explicit
+`--api` or source-route inputs use single execution. Automatic continuation
+preserves first-pass discovery, worker/expert actions, integration and review
+priorities, scope and gates. Report arrived feedback immediately as before;
+each Replay boundary re-evaluates it. Failed or stale Replay and any non-Replay
+next action stop continuation. During execution, wait and independent
+worker/expert actions expose actual `execution_mode: auto_next` or `single`.
+Wait summaries also retain current Replay progress. Treat wait as observation,
+without issuing an extra next.
+
 Optional `recording_run_id` directly selects an existing completed standard
 recording as the regression baseline. Missing or unusable recordings block
 progress; do not substitute another recording or recapture historical requests.

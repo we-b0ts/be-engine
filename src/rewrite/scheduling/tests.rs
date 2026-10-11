@@ -37,13 +37,20 @@ fn status(root: &Path) -> RewriteStatusReport {
 }
 
 fn assert_advance(action: &RewriteAction, api: &str) {
-    let RewriteAction::AdvanceRequired { command, .. } = action else {
+    let RewriteAction::AdvanceRequired {
+        command,
+        api: selected_api,
+        ..
+    } = action
+    else {
         panic!("expected advance to {api}, got {action:?}")
     };
     assert_eq!(
-        command.argv.last().unwrap(),
+        selected_api.as_deref().unwrap(),
         crate::rewrite::api_selector::public_api(api)
     );
+    assert_eq!(command.argv.last().unwrap(), "next");
+    assert!(!command.argv.iter().any(|arg| arg == "--api"));
 }
 
 #[test]

@@ -21,8 +21,11 @@ pub(super) fn status_action(
         artifacts::RecordingPublication::Missing => None,
         artifacts::RecordingPublication::Finalized if state.recording_rejection.is_none() => {
             Some(RewriteAction::AdvanceRequired {
+                api: (!state.api.is_empty())
+                    .then(|| super::api_selector::public_api(&state.api).into()),
+                kind: super::model::RewriteAdvanceKind::Workflow,
                 summary: format!("external recording {run_id} is finalized; validate its evidence"),
-                command: action::next_command_for_selected_api(target_root, state, &state.api),
+                command: action::next_command(target_root),
             })
         }
         artifacts::RecordingPublication::Finalized => None,

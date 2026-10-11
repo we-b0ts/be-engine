@@ -61,9 +61,9 @@ pub(super) fn status_action(root: &Path, state: &RewriteState) -> Result<Option<
     if let Some(required) = review::gate(root, state, &project.pr_base)? {
         return Ok(Some(required));
     }
-    Ok(Some(RewriteAction::AdvanceRequired {
-        summary: "complete delivery quality receipt is current; advance coordinator verification"
-            .into(),
-        command: action::next_command_for_selected_api(root, state, &state.api),
-    }))
+    Ok(Some(action::replay_advance(
+        root,
+        &state.api,
+        "complete delivery quality receipt is current; advance coordinator verification".into(),
+    )))
 }

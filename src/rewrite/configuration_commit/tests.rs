@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::Command;
 
 use super::*;
-use crate::rewrite::{self, RewriteContext, test_support};
+use crate::rewrite::{self, RewriteContext, RewriteNextOptions, next_rewrite, test_support};
 
 fn git(root: &Path, args: &[&str]) {
     let output = Command::new("git")

@@ -115,6 +115,7 @@ pub(super) fn wait_action(
         .map(super::api_selector::public_api);
     let status = action::status_command_for_api(target_root, status_api);
     RewriteAction::WaitRequired {
+        execution_mode: None,
         summary: format!(
             "wait for {RESOURCE}; {active_api} is executing {}",
             kind_label(active.kind)

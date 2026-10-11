@@ -428,6 +428,8 @@ pub(super) fn pending_plan_action(
 pub(super) fn pending_refresh_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
     if !inventory::has_runnable_work(state) {
         return RewriteAction::AdvanceRequired {
+            api: None,
+            kind: super::model::RewriteAdvanceKind::Workflow,
             summary: "all current API work is drained; schedule the consolidated recording refresh"
                 .to_string(),
             command: action::next_command(target_root),
@@ -475,14 +477,13 @@ fn apply_command(target_root: &Path, plan_id: &str) -> super::model::RewriteComm
 }
 
 fn next_command(target_root: &Path, state: &RewriteState) -> super::model::RewriteCommandSpec {
-    if state.phase == RewritePhase::RecordingRequired {
-        action::next_command(target_root)
-    } else if let Some(api) = state
-        .current_api_index
-        .and_then(|index| state.api_inventory.get(index))
-        .map(|item| item.api.as_str())
+    if state.phase == RewritePhase::RecordingRequired
+        || state
+            .current_api_index
+            .and_then(|index| state.api_inventory.get(index))
+            .is_some()
     {
-        action::next_command_for_selected_api(target_root, state, api)
+        action::next_command(target_root)
     } else {
         action::status_command(target_root)
     }

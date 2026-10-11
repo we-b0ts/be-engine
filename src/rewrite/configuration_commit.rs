@@ -8,44 +8,13 @@ use super::model::{
     RewriteAction, RewriteActionEnvelope, RewriteInputRequiredReason, RewriteStatusReport,
 };
 use super::store::{RewriteLockState, RewriteStore};
-use super::{RewriteNextOptions, action, traffic_operation};
+use super::{action, traffic_operation};
 
 const CONFIGURATION_PATHS: &[&str] = &[
     ".traffic-e2e/project.yaml",
     ".traffic-e2e/source-traffic-policy.yaml",
     ".traffic-e2e/verification.yaml",
 ];
-
-pub async fn next_rewrite(mut options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
-    let target_root = options.target_root.clone();
-    if let Some(envelope) = super::purpose::pending(&target_root)? {
-        return Ok(envelope);
-    }
-    if let Some(envelope) = pending(&target_root)? {
-        return Ok(envelope);
-    }
-    if options.api.is_none() && options.source_route.is_none() {
-        let status = super::status_rewrite(super::RewriteContext {
-            target_root: target_root.clone(),
-        })?;
-        if status.initialized {
-            if let RewriteAction::AdvanceRequired { command, .. } = &status.action {
-                // These command specs are engine-owned argv, never shell programs.
-                for pair in command.argv.windows(2) {
-                    if pair[0] == "--api" {
-                        options.api = Some(pair[1].parse()?);
-                    }
-                }
-            } else {
-                return Ok(super::execution::from_status(status));
-            }
-        }
-    }
-    let envelope = super::advance_rewrite(options).await?;
-    // A transition may itself persist configuration (for example a source route).
-    // Return the commit boundary before handing the next action to a worker.
-    Ok(pending(&target_root)?.unwrap_or(envelope))
-}
 
 pub(super) fn status(target_root: &Path) -> Result<Option<RewriteStatusReport>> {
     Ok(pending(target_root)?.map(|envelope| RewriteStatusReport {
@@ -62,7 +31,7 @@ pub(super) fn status(target_root: &Path) -> Result<Option<RewriteStatusReport>> 
     }))
 }
 
-fn pending(target_root: &Path) -> Result<Option<RewriteActionEnvelope>> {
+pub(super) fn pending(target_root: &Path) -> Result<Option<RewriteActionEnvelope>> {
     let store = RewriteStore::new(target_root)?;
     if store.lock_state()? != RewriteLockState::Absent
         || super::execution::owned_by_other_process(target_root)?

@@ -117,10 +117,11 @@ fn handoff_wakes_idle_coordinator_and_only_its_api_becomes_ready_for_acceptance(
     ))
     .unwrap();
     assert_eq!(integrated.pending, 1);
-    let RewriteAction::AdvanceRequired { command, .. } = integrated.action else {
+    let RewriteAction::AdvanceRequired { command, api, .. } = integrated.action else {
         panic!("accepted quality receipt should advance verification")
     };
-    assert_eq!(command.argv.last().unwrap(), "/api");
+    assert_eq!(api.as_deref(), Some("/api"));
+    assert_eq!(command.argv.last().unwrap(), "next");
     report(handoff).unwrap();
     assert!(acceptance_ready(&store.load().unwrap().unwrap(), &scope));
 }

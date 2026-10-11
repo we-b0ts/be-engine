@@ -438,9 +438,7 @@ fn confirmed_worker_advances_the_next_pending_api_before_waiting() {
             "backend-rewrite",
             "--target-root",
             "/target",
-            "next",
-            "--api",
-            "/other"
+            "next"
         ]))
     );
 }
@@ -472,7 +470,7 @@ fn status_reconstructs_post_dispatch_pending_api_advance() {
             .unwrap();
     assert_eq!(status["action"]["kind"], "advance_required");
     assert_eq!(
-        status.pointer("/action/commands/advance/argv/5"),
+        status.pointer("/action/details/api"),
         Some(&serde_json::json!("/other"))
     );
 }
@@ -575,14 +573,7 @@ fn status_recovers_confirmation_and_advance_across_repeated_worker_dispatches() 
     assert_eq!(recovered["action"], confirmed["action"]);
     assert_eq!(
         recovered["action"]["commands"]["advance"]["argv"],
-        serde_json::json!([
-            "backend-rewrite",
-            "--target-root",
-            target.path(),
-            "next",
-            "--api",
-            "/other"
-        ])
+        serde_json::json!(["backend-rewrite", "--target-root", target.path(), "next"])
     );
     assert_eq!(
         serde_json::to_value(store.load().unwrap().unwrap()).unwrap(),
