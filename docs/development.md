@@ -1817,8 +1817,10 @@ intentionally neither interpreted nor exposed. Dependency `representatives` and 
 return the appropriate summary command so an AI does not need to reconstruct
 argv or write an ad hoc artifact parser.
 
-Use `backend-rewrite rule plan|apply` for a source-proven response rule and
-`backend-rewrite route` for a source-proven missing recorded resource,
+Use `backend-rewrite rule plan|apply` for source-proven inbound request,
+dependency request or response rules. Generated dependency request fields use
+`rule plan --dependency-request`; see [dependency request rules](dependency-request-rules.md).
+Use `backend-rewrite route` for a source-proven missing recorded resource,
 Recorder/Replay capability gap, external-data blocker, or source change. For a
 missing dependency, use `--cause missing-recorded-resource --endpoint
 'hostname[:port]'`; the coordinator resolves the endpoint through configured
