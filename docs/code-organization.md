@@ -30,6 +30,12 @@ is unclear.
 
 ## Current Boundaries
 
+- `config/mysql_tables` owns shared bounded physical-table selection for
+  process-owned reads and SQL-time rules. `replay/policy/sql_template/table`
+  binds whole table identifiers and qualifiers for SQL-time rules; matcher and
+  evidence planning retain source/target physical-table equality. CLI table
+  bounds live in `bin/backend-rewrite/dependency_rule/mysql_tables`.
+
 - `dependency_index` owns disposable semantic evidence locations, source identity,
   atomic index persistence, cancellation and immutable byte caching. Protocol
   matching and sharing eligibility remain in `replay/<protocol>`. Recorder summary
@@ -248,7 +254,7 @@ is unclear.
   owns the atomic verification transition. `action.rs` projects actions and
   commands; `coordination.rs` projects executable `pending` and the expanded
   ready/waiting breakdown from the native workflow gate and selected action.
-  `scheduling.rs` owns idle API revalidation and resumable system-repair blocking;
+  `scheduling.rs` owns gated API revalidation selection and resumable system-repair blocking;
   `waiting.rs` owns bounded read-only waits and the return to external task-event
   reconciliation. Neither implements a task-runtime adapter.
   `repair.rs` owns revision readiness and the API-scoped permission to replay an
@@ -262,7 +268,8 @@ is unclear.
   `execution.rs` owns detached Next and legacy quality-receipt operations, completion, failure, and
   recovery without moving verification semantics out of their existing owners.
   `next.rs` owns invocation intent, structured selection of the existing action,
-  and optional continuation after fresh passing Replay. It reuses global
+  and optional continuation after fresh passing Replay or terminal results within
+  an unfinished revalidation round. It reuses global
   scheduling between atomic steps; execution markers retain mode and retry scope.
   `configuration_commit.rs` owns persistent-configuration commit gates only.
   `expert.rs` owns assistance for the last unfinished API with a running
@@ -284,13 +291,15 @@ is unclear.
   public action contract and reexports the worker contract for compatibility.
   `recording_api/scope` owns canonical route selector grammar and identity shared
   by coordinator commands and local regression configuration. `api_selector`
-  owns route-to-method inventory selection and worker scope projection.
+  owns executable route-to-method inventory selection and worker scope projection.
   `api_batch` owns grouped preparation
   and method-slice transitions for one route acceptance. `e2e_run/focused_batch`
   owns terminal method evidence publication from a shared Replay session; it
   never alters recorded cases or moves rewrite scheduling into E2E execution.
   `inventory.rs` owns the API inventory state machine: stable installation,
   activation and parking (in `inventory/selection.rs`) and deferred revalidation.
+  Its `revalidation_round` child owns persisted sweep membership, the all-accepted
+  or confirmed-gap start gate, and consumption independently of fingerprint freshness.
   `inventory/views` owns the read-only route summary and route-item projection
   with per-method verification details; the persisted ledger remains method-keyed.
   Its `inventory/source_route` child owns source-route binding,
@@ -300,9 +309,9 @@ is unclear.
   identification gate, persistent canonical API catalog, and add-only policy
   application; it does not mutate recorded cases or delegate this gate to API
   workers. `work_scope.rs` owns the API worker scope identity.
-  `revalidation.rs` owns the coordinator's explicit early-validation
-  request boundary and projection for deferred API status, including eligibility
-  of the engine-selected idle revalidation item.
+  `revalidation.rs` owns the coordinator's explicit verification request
+  boundary and projection for deferred API status. Requests and scoped Next obey
+  the same round gate and cannot turn stale successes into first-pass work.
   Status projection and the traffic lease remain separate owners. Further
   splitting must follow a responsibility boundary rather than divide one
   transaction, action contract, or inventory transition.

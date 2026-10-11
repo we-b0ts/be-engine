@@ -1,5 +1,7 @@
 //! Bounded scalar-slot templates for explicit SQL value policies.
 use crate::mysql::sql::{Token, tokens};
+mod table;
+pub(super) use table::SqlValueTemplate;
 
 pub(super) fn bounded_tokens(sql: &str) -> Option<Vec<Token>> {
     if sql.len() > 64 * 1024 {
@@ -23,6 +25,7 @@ pub(super) fn extract(template: &[Token], actual: &[Token]) -> Option<Vec<Token>
     Some(values)
 }
 
+#[cfg(test)]
 pub(super) fn template_matches(template: &str, sql: &str) -> bool {
     let (Some(template), Some(actual)) = (bounded_tokens(template), bounded_tokens(sql)) else {
         return false;

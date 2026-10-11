@@ -27,6 +27,7 @@ mod http_response_rewrite;
 mod initialization;
 mod managed_fields;
 mod motan_gateway;
+pub(crate) mod mysql_tables;
 pub(crate) mod process_owned_dependencies;
 mod recording;
 mod repository_initialization;
@@ -76,6 +77,7 @@ pub use http_response_rewrite::{
 };
 pub use initialization::{DEFAULT_HTTP_BACKEND_PORT, DEFAULT_HTTP_GATEWAY_PORT};
 pub use motan_gateway::{MotanGatewayConfig, MotanGatewayRuleConfig};
+pub use mysql_tables::MysqlTableSeries;
 pub use process_owned_dependencies::{
     BackgroundDependencyRuleConfig, MysqlBackgroundSelector, MysqlBackgroundTableSeries,
     RedisKeyPatternConfig,

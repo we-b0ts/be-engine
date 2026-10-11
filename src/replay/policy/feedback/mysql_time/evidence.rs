@@ -1,7 +1,8 @@
 //! Correlate SQL time slots with finalized replay and immutable SQL evidence.
 use super::*;
 use crate::replay::policy::config::MysqlTimeValueRule;
-use crate::replay::policy::matcher::mysql_values::{selected_times, values};
+use crate::replay::policy::matcher::mysql_values::{selected_times, template_values};
+use crate::replay::policy::sql_template::{SqlValueTemplate, bounded_tokens};
 use crate::replay::policy::value::parse_time;
 use serde_json::Value;
 
@@ -62,7 +63,14 @@ fn identity(s: &MysqlTimeSelector, event: &Value, recorded: bool) -> bool {
 fn event_values(s: &MysqlTimeSelector, event: &Value) -> Option<Vec<crate::mysql::sql::Token>> {
     let params: Option<Vec<crate::replay::RecordedMysqlValue>> =
         serde_json::from_value(event.get("params").cloned().unwrap_or(Value::Null)).ok()?;
-    values(&s.sql, event["sql"].as_str(), params.as_deref()).ok()
+    let template = SqlValueTemplate::new(
+        &s.sql,
+        &s.tables,
+        &s.table_patterns,
+        s.table_series.as_ref(),
+    )
+    .ok()?;
+    template_values(&template, event["sql"].as_str(), params.as_deref()).ok()
 }
 
 pub(super) fn validate(
@@ -78,6 +86,12 @@ pub(super) fn validate(
         "SQL time rule requires finalized replay evidence"
     );
     let s = &feedback.selector;
+    let template = SqlValueTemplate::new(
+        &s.sql,
+        &s.tables,
+        &s.table_patterns,
+        s.table_series.as_ref(),
+    )?;
     let loaded = load_replay_policy(&feedback.policy_path)?;
     if !loaded.document.dynamic_values.is_empty() {
         ensure!(
@@ -155,6 +169,14 @@ pub(super) fn validate(
             let Some(source) = event_values(s, &event) else {
                 continue;
             };
+            // A template covers several physical tables, never a source/target
+            // routing difference within the same exchange.
+            let binding = |event: &Value| {
+                bounded_tokens(event["sql"].as_str()?).and_then(|tokens| template.bind(&tokens))
+            };
+            if binding(&event) != binding(actual) {
+                continue;
+            }
             let (source, actual_values) = if loaded.document.dynamic_values.is_empty() {
                 (source, actual_values.clone())
             } else {
@@ -198,15 +220,15 @@ pub(super) fn validate(
                     });
                 match normalized {
                     Some(Ok(normalized)) => {
-                        let Ok(source) = values(
-                            &s.sql,
+                        let Ok(source) = template_values(
+                            &template,
                             normalized.source_sql.as_deref(),
                             normalized.source_params.as_deref(),
                         ) else {
                             continue;
                         };
-                        let Ok(actual) = values(
-                            &s.sql,
+                        let Ok(actual) = template_values(
+                            &template,
                             normalized.actual_sql.as_deref(),
                             normalized.actual_params.as_deref(),
                         ) else {

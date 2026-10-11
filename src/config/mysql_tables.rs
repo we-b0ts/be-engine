@@ -1,9 +1,18 @@
 //! Physical table selectors, independent of SQL template expansion.
-use super::MysqlBackgroundSelector;
 use anyhow::{Result, ensure};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub(super) struct TableMatcher<'a> {
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MysqlTableSeries {
+    pub prefix: String,
+    pub start: u32,
+    pub end: u32,
+    pub width: usize,
+}
+
+pub(crate) struct TableMatcher<'a> {
     exact: BTreeSet<String>,
     patterns: Vec<Pattern<'a>>,
 }
@@ -14,17 +23,18 @@ struct Pattern<'a> {
 }
 
 impl<'a> TableMatcher<'a> {
-    pub(super) fn new(selector: &'a MysqlBackgroundSelector) -> Result<Self> {
+    pub(crate) fn new(
+        tables: &[String],
+        table_patterns: &'a [String],
+        table_series: Option<&MysqlTableSeries>,
+    ) -> Result<Self> {
+        ensure!(tables.len() <= 4096, "MySQL selector has too many tables");
+        let mut exact: BTreeSet<_> = tables.iter().cloned().collect();
         ensure!(
-            selector.tables.len() <= 4096,
-            "MySQL selector has too many tables"
-        );
-        let mut exact: BTreeSet<_> = selector.tables.iter().cloned().collect();
-        ensure!(
-            exact.len() == selector.tables.len(),
+            exact.len() == tables.len(),
             "MySQL selector tables must be unique"
         );
-        if let Some(series) = &selector.table_series {
+        if let Some(series) = table_series {
             ensure!(
                 series.start <= series.end
                     && series.end - series.start < 4096
@@ -46,12 +56,12 @@ impl<'a> TableMatcher<'a> {
             "MySQL selector tables must be ASCII identifiers"
         );
         ensure!(
-            selector.table_patterns.len() <= 64,
+            table_patterns.len() <= 64,
             "MySQL selector has too many table patterns"
         );
         let mut seen = BTreeSet::new();
         let mut patterns = Vec::new();
-        for pattern in &selector.table_patterns {
+        for pattern in table_patterns {
             ensure!(seen.insert(pattern), "MySQL table patterns must be unique");
             let Some((prefix, suffix)) = pattern.split_once('*') else {
                 anyhow::bail!(
@@ -74,12 +84,12 @@ impl<'a> TableMatcher<'a> {
         Ok(Self { exact, patterns })
     }
 
-    pub(super) fn matches(&self, table: &str) -> bool {
+    pub(crate) fn matches(&self, table: &str) -> bool {
         identifier(table)
             && (self.exact.contains(table) || self.patterns.iter().any(|p| p.matches(table)))
     }
 
-    pub(super) fn overlaps(&self, other: &Self) -> bool {
+    pub(crate) fn overlaps(&self, other: &Self) -> bool {
         self.exact.iter().any(|table| other.matches(table))
             || other.exact.iter().any(|table| self.matches(table))
             || self

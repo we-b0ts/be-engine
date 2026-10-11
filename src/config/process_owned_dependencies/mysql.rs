@@ -5,7 +5,8 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 pub(crate) mod evidence;
-mod tables;
+pub use crate::config::mysql_tables::MysqlTableSeries as MysqlBackgroundTableSeries;
+use crate::config::mysql_tables::TableMatcher;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -25,15 +26,6 @@ pub struct MysqlBackgroundSelector {
     pub table_series: Option<MysqlBackgroundTableSeries>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct MysqlBackgroundTableSeries {
-    pub prefix: String,
-    pub start: u32,
-    pub end: u32,
-    pub width: usize,
-}
-
 const TABLE_MARKER: &str = "__traffic_background_table__";
 
 impl MysqlBackgroundSelector {
@@ -49,7 +41,11 @@ impl MysqlBackgroundSelector {
         super::validate_single_line("MySQL database", &self.database, 64)?;
         super::validate_single_line("MySQL username", &self.username, 128)?;
         super::validate_single_line("MySQL SQL selector", &self.sql, 8192)?;
-        tables::TableMatcher::new(self)?;
+        TableMatcher::new(
+            &self.tables,
+            &self.table_patterns,
+            self.table_series.as_ref(),
+        )?;
         let template = self.template().ok_or_else(|| anyhow::anyhow!("MySQL selector requires one read-only SELECT with FROM {{{{table}}}} and a WHERE clause"))?;
         ensure!(
             template
@@ -138,7 +134,11 @@ impl MysqlBackgroundSelector {
         let (Some(template), Some(actual)) = (self.template(), sql.and_then(tokens)) else {
             return false;
         };
-        let Ok(tables) = tables::TableMatcher::new(self) else {
+        let Ok(tables) = TableMatcher::new(
+            &self.tables,
+            &self.table_patterns,
+            self.table_series.as_ref(),
+        ) else {
             return false;
         };
         let from = template.iter().position(|t| t.is("from")).unwrap();
@@ -181,8 +181,16 @@ impl MysqlBackgroundSelector {
             return false;
         };
         let (Ok(a), Ok(b)) = (
-            tables::TableMatcher::new(self),
-            tables::TableMatcher::new(other),
+            TableMatcher::new(
+                &self.tables,
+                &self.table_patterns,
+                self.table_series.as_ref(),
+            ),
+            TableMatcher::new(
+                &other.tables,
+                &other.table_patterns,
+                other.table_series.as_ref(),
+            ),
         ) else {
             return false;
         };
@@ -494,7 +502,8 @@ mod tests {
         assert!(s.validate().is_err());
         s.table_patterns = vec![format!("{}*", "a".repeat(64))];
         s.validate().unwrap();
-        let matcher = tables::TableMatcher::new(&s).unwrap();
+        let matcher =
+            TableMatcher::new(&s.tables, &s.table_patterns, s.table_series.as_ref()).unwrap();
         assert!(matcher.matches(&"a".repeat(64)));
         assert!(!matcher.matches(&"a".repeat(65)));
         let mut b = s.clone();

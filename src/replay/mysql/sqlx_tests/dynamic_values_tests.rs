@@ -139,7 +139,7 @@ async fn sql_time_planner_uses_only_committed_same_case_identity_proofs() {
         }
         let feedback = || crate::MysqlTimeRuleFeedback {
             policy_path:temp.path().join("policy.yaml"),replay_report_path:report.clone(),api:"GET /users".into(),rule_id:"insert-time".into(),
-            selector: crate::MysqlTimeSelector {target_host:"127.0.0.1".into(),target_port:3306,database:"appdb".into(),username:"root".into(),sql:"INSERT INTO kinds(name,json,created_at) VALUES(?,?,?)".into(),time_values:vec![crate::MysqlTimeValueSelector {value_index:2,json_pointer:None,tolerance:"5s".into(),offset:"0s".into(),format:"%Y-%m-%d %H:%M:%S%.f".into(),timezone:"+00:00".into()}]},
+            selector: crate::MysqlTimeSelector {target_host:"127.0.0.1".into(),target_port:3306,database:"appdb".into(),username:"root".into(),sql:"INSERT INTO kinds(name,json,created_at) VALUES(?,?,?)".into(),tables:vec![],table_patterns:vec![],table_series:None,time_values:vec![crate::MysqlTimeValueSelector {value_index:2,json_pointer:None,tolerance:"5s".into(),offset:"0s".into(),format:"%Y-%m-%d %H:%M:%S%.f".into(),timezone:"+00:00".into()}]},
             source_evidence:"Storage:create writes datetime.utcnow()".into(),
         };
         let bytes = std::fs::read(&report).unwrap();

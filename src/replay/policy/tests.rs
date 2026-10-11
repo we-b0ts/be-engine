@@ -16,6 +16,8 @@ use crate::replay::{
 
 const CASE_ID: &str = "case-1";
 
+mod mysql_tables;
+
 #[test]
 fn compact_sql_time_rule_matches_across_api_paths_but_not_databases() {
     let fixture = policy_fixture(

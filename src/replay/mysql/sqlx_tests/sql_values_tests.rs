@@ -11,6 +11,46 @@ fn policy(template: &str) -> String {
 }
 
 #[tokio::test]
+async fn table_time_templates_replay_shards_without_consuming_a_wrong_shard() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let template = "UPDATE {{table}} SET last_used_at=?, updated_at=now() WHERE {{table}}.id=?";
+        let policy = policy(template).replace("      sql_values:", "      table_series: {prefix: subtasks_, start: 0, end: 1023, width: 4}\n      sql_values:");
+        for source_prepared in [false, true] {
+            for target_prepared in [false, true] {
+                let sql = TEMPLATE.replace("api_keys", "subtasks_0155");
+                let mut write = exchange("UPDATE subtasks_0155 SET last_used_at='2020-01-01 00:00:00', updated_at=now() WHERE subtasks_0155.id=7", json!({"status":"ok","affected_rows":1}));
+                if source_prepared {
+                    write["command"] = json!("COM_STMT_EXECUTE");
+                    write["sql"] = json!(sql);
+                    write["params"] = json!([{"kind":"datetime","value":"2020-01-01 00:00:00"},{"kind":"integer","value":7}]);
+                }
+                let (temp, addr, runtime, task) = fixture_with_policy(&[write], Some(&policy)).await;
+                let path = temp.path().join("case-id/dependencies.jsonl");
+                let original = std::fs::read(&path).unwrap();
+                let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+                let now = chrono::Utc::now().naive_utc().format("%Y-%m-%d %H:%M:%S%.6f").to_string();
+                for (attempt, table) in ["subtasks_0640", "subtasks_0155", "subtasks_0155"].into_iter().enumerate() {
+                    let result = if target_prepared {
+                        sqlx::query(&TEMPLATE.replace("api_keys",table)).bind(&now).bind(7_i64).execute(&mut client).await
+                    } else {
+                        let sql = format!("UPDATE {table} SET last_used_at='{now}', updated_at=now() WHERE {table}.id=7");
+                        (&mut client).execute(sql.as_str()).await
+                    };
+                    if attempt == 1 { assert_eq!(result.unwrap().rows_affected(),1); }
+                    else { assert!(result.is_err(), "wrong shard and exhausted evidence must fail"); }
+                }
+                client.close().await.unwrap();
+                let state = runtime.state.lock().await;
+                assert_eq!(state.mysql.events.matched_query_count,1);
+                assert_eq!(state.mysql.events.unmatched_queries.len(),2);
+                assert_eq!(std::fs::read(path).unwrap(),original);
+                task.abort();
+            }
+        }
+    }).await.unwrap();
+}
+
+#[tokio::test]
 async fn dynamic_sql_time_matches_text_and_prepared_writes_without_consuming_wrong_values() {
     tokio::time::timeout(Duration::from_secs(30), async {
         for source_prepared in [false, true] {

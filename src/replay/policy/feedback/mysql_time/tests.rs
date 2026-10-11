@@ -32,6 +32,9 @@ fn fixture() -> (tempfile::TempDir, MysqlTimeRuleFeedback) {
             database: "app".into(),
             username: "user".into(),
             sql: "UPDATE api_keys SET last_used_at=? WHERE id=?".into(),
+            tables: vec![],
+            table_patterns: vec![],
+            table_series: None,
             time_values: vec![MysqlTimeValueSelector {
                 value_index: 0,
                 json_pointer: None,
@@ -320,7 +323,60 @@ fn mysql_time_selector_reads_legacy_single_slot_state() {
     assert_eq!(selector.time_values.len(), 1);
     assert_eq!(selector.time_values[0].value_index, 0);
     assert!(selector.time_values[0].json_pointer.is_none());
+    assert!(
+        selector.tables.is_empty()
+            && selector.table_patterns.is_empty()
+            && selector.table_series.is_none()
+    );
     let encoded = serde_json::to_value(selector).unwrap();
     assert_eq!(encoded["value_index"], 0);
     assert!(encoded.get("time_values").is_none());
+}
+
+#[test]
+fn table_time_plan_requires_the_same_physical_table_and_persists_template_bounds() {
+    for wrong_table in [false, true] {
+        let (temp, mut feedback) = fixture();
+        feedback.selector.sql = "UPDATE {{table}} SET last_used_at=? WHERE id=?".into();
+        feedback.selector.table_patterns = vec!["subtasks_*".into()];
+        feedback.source_evidence = "sharding.py:subtask writes route to subtasks_{shard:04d}; updated_at uses datetime.now()".into();
+        let path = temp.path().join("case/dependencies.jsonl");
+        let original = fs::read_to_string(&path).unwrap();
+        fs::write(&path, original.replace("api_keys", "subtasks_0155")).unwrap();
+        let report = fs::read_to_string(&feedback.replay_report_path).unwrap();
+        fs::write(
+            &feedback.replay_report_path,
+            report.replace(
+                "api_keys",
+                if wrong_table {
+                    "subtasks_0640"
+                } else {
+                    "subtasks_0155"
+                },
+            ),
+        )
+        .unwrap();
+        let plan = plan_mysql_time_rule(feedback.clone());
+        if wrong_table {
+            assert!(plan.is_err());
+            continue;
+        }
+        let report = plan.unwrap().apply().unwrap();
+        let restored: MysqlTimeSelector =
+            serde_json::from_value(serde_json::to_value(&report.selector).unwrap()).unwrap();
+        assert_eq!(restored, feedback.selector);
+        let configured = load_replay_policy(&feedback.policy_path).unwrap();
+        let selector = configured.document.dependency_rules[0]
+            .mysql
+            .as_ref()
+            .unwrap();
+        assert_eq!(selector.sql, feedback.selector.sql);
+        assert_eq!(selector.table_patterns, ["subtasks_*"]);
+        assert!(
+            plan_mysql_time_rule(feedback)
+                .unwrap()
+                .report()
+                .reused_existing
+        );
+    }
 }
