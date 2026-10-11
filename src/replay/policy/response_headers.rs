@@ -11,9 +11,17 @@ pub struct ResponseHeaderDateRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parameter: Option<String>,
     pub format: String,
+    #[serde(default = "utc_timezone", skip_serializing_if = "is_utc_timezone")]
     pub timezone: String,
     #[serde(default)]
     pub source_evidence: String,
+}
+
+fn utc_timezone() -> String {
+    "+00:00".into()
+}
+fn is_utc_timezone(value: &str) -> bool {
+    value == "+00:00"
 }
 
 pub(in crate::replay) type ResponseHeaderRules = BTreeMap<String, Vec<ResponseHeaderDateRule>>;

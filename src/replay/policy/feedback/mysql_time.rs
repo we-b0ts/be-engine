@@ -36,24 +36,24 @@ pub struct MysqlTimeValueSelector {
     pub value_index: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub json_pointer: Option<String>,
-    #[serde(default = "default_tolerance")]
+    #[serde(default = "default_tolerance", skip_serializing)]
     pub tolerance: String,
-    #[serde(default = "default_offset")]
+    #[serde(default = "default_offset", skip_serializing)]
     pub offset: String,
     #[serde(default = "default_format")]
     pub format: String,
-    #[serde(default = "default_timezone")]
+    #[serde(default = "default_timezone", skip_serializing)]
     pub timezone: String,
 }
 
 impl MysqlTimeValueSelector {
     fn time_rule(&self) -> TimeRule {
         TimeRule {
-            relative_to: TimeReference::ReplayNow,
-            offset: self.offset.clone(),
+            relative_to: TimeReference::PreserveRelative,
+            offset: "0s".into(),
             tolerance: self.tolerance.clone(),
             format: Some(self.format.clone()),
-            timezone: Some(self.timezone.clone()),
+            timezone: Some(default_timezone()),
         }
     }
 }
@@ -88,10 +88,7 @@ enum MysqlTimeSelectorOutput {
         #[serde(skip_serializing_if = "Option::is_none")]
         table_series: Option<crate::MysqlTableSeries>,
         value_index: usize,
-        tolerance: String,
-        offset: String,
         format: String,
-        timezone: String,
     },
     Multiple {
         target_host: String,
@@ -134,10 +131,7 @@ impl From<MysqlTimeSelector> for MysqlTimeSelectorOutput {
                 table_patterns,
                 table_series,
                 value_index: selected.value_index,
-                tolerance: selected.tolerance,
-                offset: selected.offset,
                 format: selected.format,
-                timezone: selected.timezone,
             }
         } else {
             Self::Multiple {

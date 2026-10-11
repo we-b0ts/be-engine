@@ -457,7 +457,7 @@ explicit repository-wide audit.
   exchanges, shared by planning and `replay/report/background_overlay/mysql.rs`.
   That Replay adapter owns reversible MySQL report reclassification only; its
   parent reads immutable case dependencies once for all protocol projections.
-  `config/process_owned_dependencies/mysql/tables.rs` owns physical table selector
+  `config/mysql_tables.rs` owns physical table selector
   validation, matching, and intersection independently of SQL template expansion.
 - `rewrite/case_dependencies` owns bounded, read-only per-target dependency
   projections. Its `mysql` child owns query, parameter, connection, and response
@@ -465,7 +465,11 @@ explicit repository-wide audit.
   planning. The shared summary/detail command flow also serves Redis and Memcached.
 
 - `replay/policy/matcher/mysql_values` owns explicit scalar and exact nested-JSON
-  SQL time-location validation across text and prepared calls. It reuses
+  SQL time-location validation across text and prepared calls. It shares the fixed
+  request-relative timestamp comparator in `replay/assertion/time` through
+  `replay/policy/value`, and consumes the case anchors owned by
+  `replay/policy/request_contract`. Snapshot case reports publish the captured
+  request times for evidence-backed planning. It reuses
   `replay/mysql/sql_match` value
   materialization; the MySQL matcher retains identity and finite consumption.
   SQL time metadata previews allow unbound placeholders only during prepare;
@@ -475,7 +479,7 @@ explicit repository-wide audit.
   materialized result-column metadata and delivery adaptation.
   `replay/policy/sql_template` owns pure bounded template extraction, and
   `replay/policy/config/mysql` owns rule-schema validation. Its sibling
-  `config/mysql_time` owns compact time defaults and legacy syntax conversion;
+  `config/mysql_time` owns compact relative-time defaults and legacy syntax conversion;
   the policy document renderer keeps SQL value maps on one line.
   `replay/policy/feedback/mysql_time` owns atomic policy plan/apply; its evidence
   child correlates immutable writes. Coordinator dependency rules persist the plan

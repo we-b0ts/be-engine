@@ -27,6 +27,70 @@ fn rule(jwt: bool) -> Value {
 }
 
 #[tokio::test]
+async fn redis_rfc3339_time_rule_replays_finitely_and_rejects_changed_offsets() {
+    let temp = tempfile::tempdir().unwrap();
+    let case = temp.path().join("case");
+    std::fs::create_dir(&case).unwrap();
+    std::fs::write(
+        case.join("request.json"),
+        r#"{"method":"PUT","uri":"/scenario","timestamp":"1970-01-01T00:16:40Z"}"#,
+    )
+    .unwrap();
+    std::fs::write(case.join("expected-response.json"), "{}").unwrap();
+    let source = r#"{"last_activity_at":"1970-01-01T08:16:40+08:00","status":"running"}"#;
+    let record = redis_hash_dependency(
+        Uuid::new_v4(),
+        1,
+        "SET",
+        &["streaming:1", source],
+        b"+OK\r\n",
+    );
+    let path = case.join("dependencies.jsonl");
+    let immutable = record.to_string();
+    std::fs::write(&path, &immutable).unwrap();
+    let policy = temp.path().join("verification.yaml");
+    std::fs::write(&policy,json!({"version":3,"expected_response":"assertions_only","dependency_rules":[{
+        "id":"activity-time","protocol":"redis","case":{"method":"PUT","path":"/scenario"},
+        "target":{"host":"redis.internal","port":6379},"source_evidence":"Session:touch writes datetime.now(timezone.utc).isoformat()",
+        "redis":{"key":{"prefix":"streaming:","numeric":true},"commands":[{"command":"SET","argument_values":{"1":{"json":{"/last_activity_at":{"time":"preserve_relative","format":"rfc3339"}}}}}]}
+    }]}).to_string()).unwrap();
+    let (addr, state, task) = redis_value_tests::spawn(&case, Some(policy)).await;
+    state
+        .lock()
+        .await
+        .replay_policy
+        .as_ref()
+        .unwrap()
+        .request_contracts
+        .request_begin("case")
+        .unwrap();
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    for (seconds, status, passes) in [
+        (60, "running", false),
+        (0, "stopped", false),
+        (0, "running", true),
+        (0, "running", false),
+    ] {
+        let timestamp = (Utc::now() + chrono::Duration::seconds(seconds))
+            .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+            .to_rfc3339();
+        let actual = json!({"last_activity_at":timestamp,"status":status}).to_string();
+        redis_value_tests::request(
+            &mut client,
+            &["SET", "streaming:1", &actual],
+            if passes {
+                b"+OK\r\n"
+            } else {
+                b"-ERR no recorded Redis dependency matched\r\n"
+            },
+        )
+        .await;
+    }
+    assert_eq!(std::fs::read_to_string(path).unwrap(), immutable);
+    task.abort();
+}
+
+#[tokio::test]
 async fn redis_request_contracts_discover_plan_apply_and_verify_json_jwts_and_fractional_time_sequence()
  {
     for jwt in [false, true] {

@@ -34,6 +34,14 @@ fn clock(text: &str) -> DateTime<Utc> {
 #[test]
 fn path_capture_schema_rejects_ambiguous_or_unbounded_declarations() {
     let base = serde_json::to_value(rule()).unwrap();
+    assert!(
+        base.pointer("/capture/path_segment/fields/created_at/timezone")
+            .is_none()
+    );
+    assert_eq!(
+        serde_json::from_value::<DynamicValueRule>(base.clone()).unwrap(),
+        rule()
+    );
     rule().validate().unwrap();
     let original = rule();
     assert_eq!(

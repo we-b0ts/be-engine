@@ -44,10 +44,19 @@ fn time(
     Ok(pair)
 }
 
-pub(super) fn timestamp(value: &Value, format: config::UnixTimeFormat) -> Result<f64> {
+pub(super) fn timestamp(value: &Value, format: config::RequestTimestampFormat) -> Result<f64> {
+    if matches!(format, config::RequestTimestampFormat::Rfc3339) {
+        let value = DateTime::parse_from_rfc3339(
+            value
+                .as_str()
+                .context("timestamp must be an RFC3339 string")?,
+        )?;
+        return Ok(value.timestamp() as f64 + f64::from(value.timestamp_subsec_nanos()) / 1e9);
+    }
     let unit = match format {
-        config::UnixTimeFormat::UnixSeconds => 1.0,
-        config::UnixTimeFormat::UnixMilliseconds => 1000.0,
+        config::RequestTimestampFormat::UnixSeconds => 1.0,
+        config::RequestTimestampFormat::UnixMilliseconds => 1000.0,
+        config::RequestTimestampFormat::Rfc3339 => unreachable!("handled string timestamp"),
     };
     number(&Value::from(
         value.as_f64().context("timestamp must be numeric")? / unit,

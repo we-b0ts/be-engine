@@ -1,9 +1,10 @@
 //! Correlate SQL time slots with finalized replay and immutable SQL evidence.
 use super::*;
 use crate::replay::policy::config::MysqlTimeValueRule;
-use crate::replay::policy::matcher::mysql_values::{selected_times, template_values};
+use crate::replay::policy::matcher::mysql_values::{
+    selected_times, template_values, validate_selected_time,
+};
 use crate::replay::policy::sql_template::{SqlValueTemplate, bounded_tokens};
-use crate::replay::policy::value::parse_time;
 use serde_json::Value;
 
 fn complete_response(event: &Value) -> bool {
@@ -133,6 +134,21 @@ pub(super) fn validate(
         };
         let case_dir = super::super::resolve_published_report_path(std::path::Path::new(case_dir));
         let request: Value = serde_json::from_slice(&fs::read(case_dir.join("request.json"))?)?;
+        let request_times = crate::replay::assertion::RequestTimes {
+            source: request["timestamp"].as_str().and_then(|s| s.parse().ok()),
+            target: case["target_request_started_at"]
+                .as_str()
+                .and_then(|s| s.parse().ok()),
+        };
+        ensure!(
+            request_times.source.is_some() && request_times.target.is_some(),
+            "SQL time evidence requires source and target request timestamps; replay the case with the current engine"
+        );
+        let target_request = request_times.target.expect("validated request timestamp");
+        ensure!(
+            target_request >= start && target_request <= finish,
+            "SQL time target request timestamp is outside the replay interval"
+        );
         let (method, path) = crate::replay::policy::response::parse_api(&feedback.api)?;
         if request["method"].as_str() != Some(method)
             || !crate::replay::policy::pattern::path_pattern_matches(
@@ -261,30 +277,7 @@ pub(super) fn validate(
                 };
                 for selected in times {
                     if selected.source == selected.target
-                        || parse_time(&selected.source, &selected.rule).is_err()
-                    {
-                        validated = 0;
-                        break;
-                    }
-                    let Ok(actual_time) = parse_time(&selected.target, &selected.rule) else {
-                        validated = 0;
-                        break;
-                    };
-                    let offset =
-                        crate::replay::policy::config::parse_duration(&selected.rule.offset)?;
-                    let tolerance =
-                        crate::replay::policy::config::parse_duration(&selected.rule.tolerance)?;
-                    let actual_millis = actual_time.timestamp_millis();
-                    if actual_millis
-                        < start
-                            .timestamp_millis()
-                            .saturating_add(offset)
-                            .saturating_sub(tolerance)
-                        || actual_millis
-                            > finish
-                                .timestamp_millis()
-                                .saturating_add(offset)
-                                .saturating_add(tolerance)
+                        || validate_selected_time(&selected, request_times).is_err()
                     {
                         validated = 0;
                         break;

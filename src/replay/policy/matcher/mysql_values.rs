@@ -7,7 +7,7 @@ use crate::mysql::sql::Token;
 use crate::replay::mysql::sql_match::materialize;
 use crate::replay::policy::config::{MysqlTimeValueRule, TimeRule};
 use crate::replay::policy::sql_template::{SqlValueTemplate, bounded_tokens, extract};
-use crate::replay::policy::value::parse_time;
+use crate::replay::policy::value::validate_relative_time;
 
 fn materialized(
     sql: Option<&str>,
@@ -58,6 +58,13 @@ pub(in crate::replay::policy) struct SelectedMysqlTime {
     pub(in crate::replay::policy) source: Value,
     pub(in crate::replay::policy) target: Value,
     pub(in crate::replay::policy) rule: TimeRule,
+}
+
+pub(in crate::replay::policy) fn validate_selected_time(
+    selected: &SelectedMysqlTime,
+    times: crate::replay::assertion::RequestTimes,
+) -> Result<(), String> {
+    validate_relative_time(&selected.source, &selected.target, &selected.rule, times)
 }
 
 fn ensure_same_scalar_type(source: &Value, target: &Value) -> Result<(), String> {
@@ -128,9 +135,8 @@ impl ReplayPolicyRuntime {
     pub(in crate::replay) fn preview_mysql_sql_values(
         &self,
         context: &MysqlPolicyContext<'_>,
-        now: DateTime<Utc>,
     ) -> Option<Result<DependencyRuleDecision, String>> {
-        self.mysql_sql_values_decision(context, now, false)
+        self.mysql_sql_values_decision(context, false)
     }
 
     // Prepare exposes metadata without consuming evidence or binding unknown
@@ -139,14 +145,13 @@ impl ReplayPolicyRuntime {
         &self,
         context: &MysqlPolicyContext<'_>,
     ) -> bool {
-        self.mysql_sql_values_decision(context, Utc::now(), true)
+        self.mysql_sql_values_decision(context, true)
             .is_some_and(|decision| decision.is_ok())
     }
 
     fn mysql_sql_values_decision(
         &self,
         context: &MysqlPolicyContext<'_>,
-        now: DateTime<Utc>,
         metadata: bool,
     ) -> Option<Result<DependencyRuleDecision, String>> {
         if !self.loaded.document.dependency_rules.iter().any(|rule| {
@@ -221,9 +226,11 @@ impl ReplayPolicyRuntime {
                         }
                         let times = selected_times(&recorded[position], &actual[position], field)?;
                         for selected in &times {
-                            parse_time(&selected.source, &selected.rule)
-                                .map_err(|e| e.to_string())?;
-                            validate_time(&selected.target, &selected.rule, now)?;
+                            validate_selected_time(
+                                selected,
+                                self.request_contracts
+                                    .request_times(context.case_id.expect("resolved case")),
+                            )?;
                         }
                         decision
                             .usage

@@ -63,6 +63,10 @@ pub(super) struct ReplayCaseReport {
     pub(super) case_dir: String,
     pub(super) dependencies_path: String,
     pub(super) status: ReplayCaseStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) source_request_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) target_request_started_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub(super) fn register_replay_target(

@@ -20,8 +20,22 @@ pub struct PathSegmentCapture {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PathSegmentField {
     Exact,
-    Random { format: String, length: usize },
-    Timestamp { format: String, timezone: String },
+    Random {
+        format: String,
+        length: usize,
+    },
+    Timestamp {
+        format: String,
+        #[serde(default = "utc_timezone", skip_serializing_if = "is_utc_timezone")]
+        timezone: String,
+    },
+}
+
+fn utc_timezone() -> String {
+    "UTC".into()
+}
+fn is_utc_timezone(value: &str) -> bool {
+    value == "UTC"
 }
 
 enum Part<'a> {

@@ -50,8 +50,8 @@ pub(crate) enum JsonField {
 #[serde(deny_unknown_fields)]
 pub(crate) struct TimeField {
     pub time: RelativeTime,
-    pub format: UnixTimeFormat,
-    #[serde(default = "default_tolerance")]
+    pub format: RequestTimestampFormat,
+    #[serde(default = "default_tolerance", skip_serializing)]
     pub tolerance: String,
 }
 fn default_tolerance() -> String {
@@ -64,9 +64,10 @@ pub(crate) enum RelativeTime {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum UnixTimeFormat {
+pub(crate) enum RequestTimestampFormat {
     UnixSeconds,
     UnixMilliseconds,
+    Rfc3339,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -79,7 +80,7 @@ pub(crate) struct JwtContract {
     pub signing_key_source: crate::request_rules::keys::SigningKeySource,
     pub algorithm: crate::request_rules::JwtAlgorithm,
     pub relative_to: String,
-    #[serde(default = "default_tolerance")]
+    #[serde(default = "default_tolerance", skip_serializing)]
     pub tolerance: String,
     #[serde(default)]
     pub dynamic_claims: Vec<String>,
@@ -100,10 +101,7 @@ pub(crate) fn tolerance(value: &str) -> Result<f64> {
         .strip_suffix('s')
         .ok_or_else(|| anyhow::anyhow!("request tolerance must be in seconds"))?
         .parse::<f64>()?;
-    ensure!(
-        seconds.is_finite() && seconds > 0.0 && seconds <= 5.0,
-        "request tolerance must be greater than zero and at most 5s"
-    );
+    ensure!(seconds == 5.0, "request tolerance is fixed at 5s");
     Ok(seconds)
 }
 impl RedisRequestSelector {
@@ -177,7 +175,7 @@ impl RedisRequestSelector {
                                         matches!(
                                             json.json.get(&field.jwt.relative_to),
                                             Some(JsonField::Time(TimeField {
-                                                format: UnixTimeFormat::UnixSeconds,
+                                                format: RequestTimestampFormat::UnixSeconds,
                                                 ..
                                             }))
                                         ),

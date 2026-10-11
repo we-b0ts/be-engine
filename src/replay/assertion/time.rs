@@ -59,11 +59,24 @@ pub(super) fn compare_preserved_timestamp(
     if !(expected.is_number() && actual.is_number() || expected.is_string() && actual.is_string()) {
         return Err(invalid);
     }
+    if times.source.is_none() || times.target.is_none() {
+        return Err(ResponseDifferenceKind::TimeReferenceMissing);
+    }
+    let source = timestamp_nanos(expected, format).ok_or(invalid)?;
+    let target = timestamp_nanos(actual, format).ok_or(invalid)?;
+    compare_timestamp_delta(source, target, times)
+}
+
+/// Preserve timestamp distance from each request with the engine's fixed 5s limit.
+pub(in crate::replay) fn compare_timestamp_delta(
+    source: i128,
+    target: i128,
+    times: RequestTimes,
+) -> Result<(), ResponseDifferenceKind> {
+    let invalid = ResponseDifferenceKind::TimeFieldInvalid;
     let (Some(source_time), Some(target_time)) = (times.source, times.target) else {
         return Err(ResponseDifferenceKind::TimeReferenceMissing);
     };
-    let source = timestamp_nanos(expected, format).ok_or(invalid)?;
-    let target = timestamp_nanos(actual, format).ok_or(invalid)?;
     let timestamp_delta = target.checked_sub(source).ok_or(invalid)?;
     let request_delta = date_nanos(target_time) - date_nanos(source_time);
     if timestamp_delta.abs_diff(request_delta) > TOLERANCE_NANOS {
@@ -72,7 +85,7 @@ pub(super) fn compare_preserved_timestamp(
     Ok(())
 }
 
-fn date_nanos(time: DateTime<Utc>) -> i128 {
+pub(in crate::replay) fn date_nanos(time: DateTime<Utc>) -> i128 {
     i128::from(time.timestamp()) * NANOS_PER_SECOND + i128::from(time.timestamp_subsec_nanos())
 }
 

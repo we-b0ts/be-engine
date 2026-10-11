@@ -293,7 +293,7 @@ async fn replays_http_exchange_with_unscoped_dynamic_query_policy() {
     .await;
     tokio::fs::write(
         case_dir.join("request.json"),
-        r#"{"method":"GET","uri":"/api/aliyun/instance/attr"}"#,
+        r#"{"method":"GET","uri":"/api/aliyun/instance/attr","timestamp":"2026-07-15T04:30:00Z"}"#,
     )
     .await
     .unwrap();
@@ -323,7 +323,7 @@ dependency_rules:
         Timestamp:
           time:
             relative_to: replay_now
-            tolerance: 2s
+            tolerance: 5s
 "#,
     )
     .await
@@ -334,6 +334,16 @@ dependency_rules:
     );
     let (addr, runtime, task) =
         spawn_http_replay_with_policy(&case_dir, Vec::new(), Some(policy_path), None).await;
+    runtime
+        .state
+        .lock()
+        .await
+        .replay_policy
+        .as_ref()
+        .unwrap()
+        .request_contracts
+        .request_begin(case_dir.file_name().unwrap().to_str().unwrap())
+        .unwrap();
 
     let stream = TcpStream::connect(addr).await.unwrap();
     let response = send_request(

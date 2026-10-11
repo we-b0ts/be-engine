@@ -55,11 +55,11 @@ async fn dynamic_sql_time_matches_text_and_prepared_writes_without_consuming_wro
     tokio::time::timeout(Duration::from_secs(30), async {
         for source_prepared in [false, true] {
             for target_mode in 0..3 {
-                let mut write = exchange("UPDATE api_keys SET last_used_at='2020-01-01 06:20:38.340150', updated_at=now() WHERE api_keys.id=7",json!({"status":"ok","affected_rows":1}));
+                let mut write = exchange("UPDATE api_keys SET last_used_at='2020-01-01 00:00:00.340150', updated_at=now() WHERE api_keys.id=7",json!({"status":"ok","affected_rows":1}));
                 if source_prepared {
                     write["command"] = json!("COM_STMT_EXECUTE");
                     write["sql"] = json!(TEMPLATE);
-                    write["params"] = json!([{"kind":"datetime","value":"2020-01-01 06:20:38.340150"},{"kind":"integer","value":7}]);
+                    write["params"] = json!([{"kind":"datetime","value":"2020-01-01 00:00:00.340150"},{"kind":"integer","value":7}]);
                 }
                 let records = [write, exchange("COMMIT", json!({"status":"ok"}))];
                 let (temp,addr,runtime,task) = fixture_with_policy(&records,Some(&policy(TEMPLATE))).await;
@@ -68,7 +68,7 @@ async fn dynamic_sql_time_matches_text_and_prepared_writes_without_consuming_wro
                 let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
                 for attempt in 0..4 {
                     let now = chrono::Utc::now().naive_utc();
-                    let timestamp = if attempt == 0 { "2020-01-01 06:20:38.340150".to_owned() } else { now.format("%Y-%m-%d %H:%M:%S%.6f").to_string() };
+                    let timestamp = if attempt == 0 { "2020-01-01 00:00:00.340150".to_owned() } else { now.format("%Y-%m-%d %H:%M:%S%.6f").to_string() };
                     let id = if attempt == 1 { 8_i64 } else { 7 };
                     let sql = format!("UPDATE api_keys SET last_used_at='{timestamp}', updated_at=now() WHERE api_keys.id={id}");
                     let result = match target_mode {

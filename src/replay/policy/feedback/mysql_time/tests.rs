@@ -7,12 +7,12 @@ fn fixture() -> (tempfile::TempDir, MysqlTimeRuleFeedback) {
     fs::create_dir(&case).unwrap();
     fs::write(
         case.join("request.json"),
-        r#"{"method":"GET","uri":"/responses/7"}"#,
+        r#"{"method":"GET","uri":"/responses/7","timestamp":"2020-01-01T00:00:00Z"}"#,
     )
     .unwrap();
     let source = json!({"event_type":"mysql_exchange","target_host":"db.internal","target_port":3306,"database":"app","username":"user","command":"COM_QUERY","sql":"UPDATE api_keys SET last_used_at='2020-01-01 00:00:00.123456' WHERE id=7","parse_warnings":[],"response":{"status":"ok","affected_rows":1}});
     fs::write(case.join("dependencies.jsonl"), source.to_string()).unwrap();
-    let report = json!({"finalized":true,"started_at":"2026-09-07T12:00:00Z","finalized_at":"2026-09-07T12:00:02Z","cases":[{"case_id":"case-1","case_dir":case}],"unmatched_queries":[{"case_id":"case-1","command":"COM_STMT_EXECUTE","target":{"host":"db.internal","port":3306},"database":"app","username":"user","sql":"UPDATE api_keys SET last_used_at=? WHERE id=?","params":[{"kind":"datetime","value":"2026-09-07 12:00:01.123456"},{"kind":"integer","value":7}]}]});
+    let report = json!({"finalized":true,"started_at":"2026-09-07T12:00:00Z","finalized_at":"2026-09-07T12:00:02Z","cases":[{"case_id":"case-1","case_dir":case,"target_request_started_at":"2026-09-07T12:00:00Z"}],"unmatched_queries":[{"case_id":"case-1","command":"COM_STMT_EXECUTE","target":{"host":"db.internal","port":3306},"database":"app","username":"user","sql":"UPDATE api_keys SET last_used_at=? WHERE id=?","params":[{"kind":"datetime","value":"2026-09-07 12:00:01.123456"},{"kind":"integer","value":7}]}]});
     let replay_report_path = temp.path().join("replay-report.json");
     fs::write(&replay_report_path, report.to_string()).unwrap();
     let policy_path = temp.path().join("verification.yaml");
@@ -67,7 +67,7 @@ fn select_sql_time_plan_requires_complete_same_case_resultsets() {
         let mut source = json!({
             "event_type":"mysql_exchange", "target_host":"db.internal", "target_port":3306,
             "database":"app", "username":"user", "command":"COM_QUERY",
-            "sql":"SELECT count(*) AS total FROM errors WHERE created_at>'2020-01-01 00:00:00' AND project_id=7",
+            "sql":"SELECT count(*) AS total FROM errors WHERE created_at>'2019-12-31 00:00:00' AND project_id=7",
             "parse_warnings":[], "response":{"status":"resultset", "columns":[{"name":"total", "family":"integer","sql_type":"BIGINT"}], "rows":[[{"kind":"integer","value":3}]]}
         });
         match mutation {
@@ -118,7 +118,7 @@ fn sql_time_plan_validates_evidence_and_preserves_other_policy_sections() {
     assert!(updated.starts_with("# preserve\n"));
     assert!(updated.ends_with(""));
     assert!(updated.contains("sql_values:"));
-    assert!(updated.contains("sql_values: {0: {\"time\":\"replay_now\",\"tolerance\":\"5s\"}}"));
+    assert!(updated.contains("sql_values: {0: {\"time\":\"preserve_relative\"}}"));
     for omitted in [
         "case:",
         "target:",
@@ -127,6 +127,7 @@ fn sql_time_plan_validates_evidence_and_preserves_other_policy_sections() {
         "source_evidence:",
         "format:",
         "timezone:",
+        "tolerance:",
     ] {
         assert!(!updated.contains(omitted), "{omitted}");
     }
@@ -145,6 +146,56 @@ fn sql_time_plan_validates_evidence_and_preserves_other_policy_sections() {
 }
 
 #[test]
+fn sql_time_plan_requires_captured_request_anchors_and_preserves_source_offsets() {
+    for mutation in [
+        "valid_offset",
+        "missing_target",
+        "outside_interval",
+        "missing_source",
+        "changed_offset",
+    ] {
+        let (temp, feedback) = fixture();
+        let mut report: Value =
+            serde_json::from_slice(&fs::read(&feedback.replay_report_path).unwrap()).unwrap();
+        let path = temp.path().join("case/dependencies.jsonl");
+        let source = fs::read_to_string(&path)
+            .unwrap()
+            .replace("2020-01-01 00:00:00", "2020-01-01 08:00:00");
+        fs::write(&path, source).unwrap();
+        report["unmatched_queries"][0]["params"][0]["value"] = json!("2026-09-07 20:00:01.123456");
+        match mutation {
+            "missing_target" => {
+                report["cases"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("target_request_started_at");
+            }
+            "outside_interval" => {
+                report["cases"][0]["target_request_started_at"] = json!("2026-09-07T13:00:00Z")
+            }
+            "missing_source" => {
+                fs::write(
+                    temp.path().join("case/request.json"),
+                    r#"{"method":"GET","uri":"/responses/7"}"#,
+                )
+                .unwrap();
+            }
+            "changed_offset" => {
+                report["unmatched_queries"][0]["params"][0]["value"] =
+                    json!("2026-09-07 12:00:01.123456")
+            }
+            _ => {}
+        }
+        fs::write(&feedback.replay_report_path, report.to_string()).unwrap();
+        assert_eq!(
+            plan_mysql_time_rule(feedback).is_ok(),
+            mutation == "valid_offset",
+            "{mutation}"
+        );
+    }
+}
+
+#[test]
 fn sql_time_rule_is_reused_across_apis_and_evidence_filters_are_optional() {
     let (temp, mut feedback) = fixture();
     feedback.selector.target_host.clear();
@@ -155,7 +206,7 @@ fn sql_time_rule_is_reused_across_apis_and_evidence_filters_are_optional() {
         .unwrap();
     fs::write(
         temp.path().join("case/request.json"),
-        r#"{"method":"POST","uri":"/documents/content"}"#,
+        r#"{"method":"POST","uri":"/documents/content","timestamp":"2020-01-01T00:00:00Z"}"#,
     )
     .unwrap();
     feedback.api = "POST /documents/content".into();
@@ -249,7 +300,7 @@ fn sql_time_plan_correlates_scalar_and_nested_json_locations_atomically() {
         "finalized":true,
         "started_at":"2026-09-07T12:00:00Z",
         "finalized_at":"2026-09-07T12:00:02Z",
-        "cases":[{"case_id":"case-1","case_dir":temp.path().join("case")}],
+        "cases":[{"case_id":"case-1","case_dir":temp.path().join("case"),"target_request_started_at":"2026-09-07T12:00:00Z"}],
         "unmatched_queries":[{
             "case_id":"case-1",
             "command":"COM_STMT_EXECUTE",
@@ -295,7 +346,7 @@ fn sql_time_plan_correlates_scalar_and_nested_json_locations_atomically() {
         .unwrap();
     let updated = fs::read_to_string(path).unwrap();
     assert!(updated.contains("/spec/observedAt"));
-    assert!(updated.contains("1: {\"time\":\"replay_now\",\"tolerance\":\"5s\"}"));
+    assert!(updated.contains("1: {\"time\":\"preserve_relative\"}"));
 
     let mut changed: Value =
         serde_json::from_slice(&fs::read(&feedback.replay_report_path).unwrap()).unwrap();

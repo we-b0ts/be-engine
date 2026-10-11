@@ -162,6 +162,28 @@ impl RequestContracts {
             .cloned()
             .context("request rule has no case metadata")
     }
+    pub(in crate::replay) fn request_times(
+        &self,
+        case: &str,
+    ) -> crate::replay::assertion::RequestTimes {
+        self.anchor(case)
+            .map(|anchor| crate::replay::assertion::RequestTimes {
+                source: anchor.recorded,
+                target: anchor.actual,
+            })
+            .unwrap_or_default()
+    }
+    #[cfg(test)]
+    pub(in crate::replay) fn set_request_times(
+        &self,
+        case: &str,
+        times: crate::replay::assertion::RequestTimes,
+    ) {
+        let mut state = self.state.lock().expect("request contracts");
+        let anchor = state.cases.get_mut(case).expect("test case metadata");
+        anchor.recorded = times.source;
+        anchor.actual = times.target;
+    }
     fn selected(
         &self,
         case: &str,

@@ -234,19 +234,31 @@ pub(super) enum ValueValidator {
 #[serde(deny_unknown_fields)]
 pub(super) struct TimeRule {
     pub(super) relative_to: TimeReference,
-    #[serde(default = "zero_duration")]
+    #[serde(default = "zero_duration", skip_serializing)]
     pub(super) offset: String,
+    #[serde(
+        default = "fixed_time_tolerance",
+        skip_serializing_if = "is_fixed_time_tolerance"
+    )]
     pub(super) tolerance: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) format: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub(super) timezone: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum TimeReference {
-    ReplayNow,
+    #[serde(alias = "replay_now")]
+    PreserveRelative,
+}
+
+fn fixed_time_tolerance() -> String {
+    "5s".into()
+}
+fn is_fixed_time_tolerance(value: &str) -> bool {
+    value == "5s"
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -665,13 +677,9 @@ fn validate_dynamic_value(rule: &DynamicValueRule) -> Result<()> {
         "validate and time are mutually exclusive"
     );
     if let Some(time) = &rule.time {
-        ensure!(
-            time.relative_to == TimeReference::ReplayNow,
-            "only replay_now is supported"
-        );
         parse_duration(&time.offset).context("invalid time.offset")?;
         let tolerance = parse_duration(&time.tolerance).context("invalid time.tolerance")?;
-        ensure!(tolerance >= 0, "time.tolerance must not be negative");
+        ensure!(tolerance == 5_000, "time tolerance is fixed at 5s");
         if let Some(timezone) = &time.timezone {
             parse_timezone(timezone)?;
         }

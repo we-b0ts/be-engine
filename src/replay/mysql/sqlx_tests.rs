@@ -74,7 +74,7 @@ async fn fixture_with_policy(
     let policy_path = if let Some(policy) = policy {
         std::fs::write(
             case.join("request.json"),
-            r#"{"method":"GET","uri":"/users"}"#,
+            r#"{"method":"GET","uri":"/users","timestamp":"2020-01-01T00:00:00Z"}"#,
         )
         .unwrap();
         std::fs::write(case.join("expected-response.json"), "{}").unwrap();
@@ -85,6 +85,9 @@ async fn fixture_with_policy(
         None
     };
     let (addr, runtime, task) = super::tests::spawn_replay_with_policy(&case, policy_path).await;
+    if let Some(policy) = &runtime.state.lock().await.replay_policy {
+        policy.request_contracts.request_begin("case-id").unwrap();
+    }
     (temp, addr, runtime, task)
 }
 

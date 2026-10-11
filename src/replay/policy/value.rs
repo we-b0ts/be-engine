@@ -3,7 +3,7 @@ use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone, Utc};
 use serde_json::Value;
 use uuid::{Uuid, Version};
 
-use super::config::{TimeRule, ValueValidator, parse_duration, parse_timezone};
+use super::config::{TimeRule, ValueValidator, parse_timezone};
 
 pub(super) fn validate_value(actual: &Value, validator: ValueValidator) -> Result<(), String> {
     let value = actual
@@ -26,23 +26,17 @@ pub(super) fn validate_value(actual: &Value, validator: ValueValidator) -> Resul
     Ok(())
 }
 
-pub(super) fn validate_time(
+pub(super) fn validate_relative_time(
+    source: &Value,
     actual: &Value,
     rule: &TimeRule,
-    now: DateTime<Utc>,
+    times: crate::replay::assertion::RequestTimes,
 ) -> Result<(), String> {
+    let source = parse_time(source, rule).map_err(|error| error.to_string())?;
     let actual = parse_time(actual, rule).map_err(|error| error.to_string())?;
-    let offset = parse_duration(&rule.offset).map_err(|error| error.to_string())?;
-    let tolerance = parse_duration(&rule.tolerance).map_err(|error| error.to_string())?;
-    let expected_millis = now.timestamp_millis().saturating_add(offset);
-    let delta = actual.timestamp_millis().abs_diff(expected_millis);
-    if delta > tolerance.unsigned_abs() {
-        return Err(format!(
-            "time value is {delta}ms away from replay_now plus {}, exceeding tolerance {}",
-            rule.offset, rule.tolerance
-        ));
-    }
-    Ok(())
+    use crate::replay::assertion::time::{compare_timestamp_delta, date_nanos};
+    compare_timestamp_delta(date_nanos(source), date_nanos(actual), times)
+        .map_err(|error| format!("request-relative time mismatch: {error:?}; fixed tolerance 5s"))
 }
 
 pub(super) fn parse_time(actual: &Value, rule: &TimeRule) -> Result<DateTime<Utc>> {

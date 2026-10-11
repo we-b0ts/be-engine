@@ -19,6 +19,7 @@ dependency_rules:
     let runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
     let identity = mysql_identity();
     let now = Utc.with_ymd_and_hms(2026, 9, 7, 12, 0, 1).unwrap();
+    anchor_sql_times(&runtime, now);
     for table in ["subtasks_0000", "subtasks_0155", "subtasks_1023"] {
         let source = format!(
             "UPDATE {table} SET updated_at='2020-01-01 00:00:00.123456' WHERE {table}.id = 7"
@@ -43,12 +44,7 @@ dependency_rules:
                 recorded: reverse.then_some(source_params.as_slice()),
                 actual: (!reverse).then_some(target_params.as_slice()),
             };
-            assert!(
-                runtime
-                    .preview_mysql_sql_values(&context, now)
-                    .unwrap()
-                    .is_ok()
-            );
+            assert!(runtime.preview_mysql_sql_values(&context).unwrap().is_ok());
             let prepare = MysqlPolicyContext {
                 command: "COM_STMT_EXECUTE",
                 sql: Some(&prepared),
@@ -76,7 +72,7 @@ dependency_rules:
             };
             assert!(
                 !runtime
-                    .preview_mysql_sql_values(&context, now)
+                    .preview_mysql_sql_values(&context)
                     .is_some_and(|r| r.is_ok()),
                 "{table}: {mutation}"
             );
@@ -93,6 +89,6 @@ dependency_rules:
             recorded: None,
             actual: None,
         };
-        assert!(runtime.preview_mysql_sql_values(&context, now).is_none());
+        assert!(runtime.preview_mysql_sql_values(&context).is_none());
     }
 }
