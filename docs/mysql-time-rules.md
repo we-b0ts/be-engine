@@ -27,9 +27,9 @@ dependency_rules:
         0:
           json:
             /spec/cloudConfig/nevisIpObservedAt:
-              time: replay_now
+              time: preserve_relative
               format: "%+"
-        1: {time: replay_now, tolerance: 5s}
+        1: {time: preserve_relative}
 ```
 
 Add this section to the existing verification policy. The rule applies to the
@@ -50,7 +50,7 @@ identifier patterns containing one `*`). For example:
     database: task_manager
     sql: UPDATE {{table}} SET updated_at=? WHERE {{table}}.id = ?
     table_series: {prefix: subtasks_, start: 0, end: 1023, width: 4}
-    sql_values: {0: {time: replay_now, tolerance: 5s, timezone: "+08:00"}}
+    sql_values: {0: {time: preserve_relative}}
 ```
 
 Every `{{table}}` in one statement binds to the same physical table, and source
@@ -64,20 +64,27 @@ identifier fragments are unsupported. Table selectors require `{{table}}`, and
 Table patterns match only ASCII identifiers up to 64 bytes and reject a bare `*`.
 Source proof must justify the selected table family as well as its generated time.
 
-`time: replay_now` defaults to zero offset, 5 seconds tolerance, UTC and MySQL
-`%Y-%m-%d %H:%M:%S%.f` datetime strings (including microseconds). Integer Unix
-seconds are also accepted. Override `tolerance`, `offset`, `format` or `timezone`
-beside each selected time only when necessary; `%+` accepts RFC 3339 values such
-as Python `datetime.isoformat()` output. Every source value must parse, and every
-target value must satisfy its own offset/tolerance around Replay's current time.
+`time: preserve_relative` compares
+`(target_value - source_value) - (target_request_time - source_request_time)`
+with the engine's fixed 5-second tolerance. The source anchor is the immutable
+inbound request timestamp; Replay captures the target anchor before sending that
+case's request. Both anchors are required, with no current-clock fallback.
+A common timezone offset cancels in the difference, and moving cutoffs such as
+`now - 24h` preserve their recorded offset without configuring it.
+
+MySQL `%Y-%m-%d %H:%M:%S%.f` strings (including microseconds) and integer Unix
+seconds are supported. Set `format` only for another representation; `%+` accepts
+RFC 3339. No per-rule `tolerance`, `timezone` or `offset` is generated.
+Legacy `replay_now`, explicit `tolerance: 5s`, timezone and offset options remain
+readable and normalize to the relative comparison; other tolerances are rejected.
 Each source/target pair must share the same scalar category. JSON pointers must
 be exact, non-root, non-overlapping pointers; wildcards are not supported.
 Recorded database errors are still returned as errors.
 
 In `sql_values` mode, both `COM_QUERY` and `COM_STMT_EXECUTE` are covered.
 The previous nested `time: {relative_to: replay_now, ...}` syntax remains
-supported with its original parsing semantics. Explicit legacy case, endpoint
-and username selectors remain supported, but the time-rule planner generates
+accepted as a compatibility alias for the relative comparison. Explicit legacy
+case, endpoint and username selectors remain supported, but the planner generates
 only database/SQL scope. Source-code proof stays in the plan report and
 coordinator plan record, rather than the runtime configuration.
 
@@ -88,8 +95,8 @@ and optimizer hints remain unsupported. Quoted `?` does not create a slot;
 in one rule. Overlapping dynamic rules fail. SELECT time rules replay the recorded
 columns and rows, including COUNT queries and prepared-statement metadata. A
 count query and a row query need separate templates even when both use slot zero.
-For a moving cutoff such as `now - 24 hours`, set `offset: -24h`; stable filters,
-ordering and limits remain exact.
+Moving cutoffs preserve the recorded source offset; stable filters, ordering
+and limits remain exact.
 
 Ordinary queries with no dynamic values need no time rule. Text queries and
 prepared statements with bound, inline or mixed scalar values match by exact
@@ -115,8 +122,8 @@ backend-rewrite --target-root /path/to/target dependency-rule apply <plan-id>
 ```
 
 Repeat `--time-value` with a JSON object for an atomic multi-location plan. Each
-object requires `value_index` and may set `json_pointer`, `tolerance`, `offset`,
-`format` and `timezone`. The original `--value-index` plus optional time flags
+object requires `value_index` and may set `json_pointer` and `format`.
+The original `--value-index` plus optional `--format`
 remains supported for one scalar slot; it cannot be combined with
 `--time-value`.
 
@@ -131,9 +138,11 @@ correlation, without adding an API selector to the generated rule. Optional
 `--target-host`/`--target-port` and `--username` filter the evidence lookup only.
 Source and target evidence must still have the same endpoint, database and user.
 It correlates an unmatched target statement with an immutable recorded statement in the
-same case. Every selected time must differ, parse and fall in the captured replay
-interval plus its configured offset/tolerance, while all unselected SQL and JSON
-values remain equal. Wrong keys, malformed source times, parse warnings,
+same case. Every selected time must differ, parse and preserve its distance from
+its own request anchor within 5 seconds, while all unselected SQL and JSON values
+remain equal. The replay report must contain that case's captured target request
+timestamp; old reports require a fresh replay before planning. Wrong keys,
+malformed source times, parse warnings,
 unfinished replay and unrelated APIs cannot authorize the plan. SELECT resultsets
 must have complete columns and rows, with no truncation or client termination. The preview
 includes the policy diff and a case id.

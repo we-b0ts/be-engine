@@ -46,7 +46,7 @@ Stable JSON members and the original HTTP path/query remain checked.
       argument_values:
         1:
           json:
-            /approved_at: {time: preserve_relative, format: unix_seconds, tolerance: 5s}
+            /approved_at: {time: preserve_relative, format: unix_seconds}
             /access_token:
               jwt:
                 signing_key_source: {kind: target_env, name: SECRET_KEY}
@@ -89,17 +89,18 @@ dynamic claims are rejected. A failed field leaves all bindings uncommitted.
     commands:
     - command: ZADD
       argument_values:
-        1: {time: preserve_relative, format: unix_seconds, tolerance: 5s}
+        1: {time: preserve_relative, format: unix_seconds}
     - command: ZREMRANGEBYSCORE
       argument_values:
-        2: {time: preserve_relative, format: unix_seconds, tolerance: 5s}
+        2: {time: preserve_relative, format: unix_seconds}
 ```
 
 There is no configured clock or offset. The source anchor is the immutable
 inbound recording timestamp; the target anchor is taken by Replay immediately
 before the engine sends the inbound request. Each selected time preserves its
 distance from its own anchor. Integer and fractional Unix seconds are supported;
-the numeric category is preserved. Tolerance defaults to 5s and cannot exceed 5s.
+the numeric category is preserved. Tolerance is fixed at 5s and is omitted from
+generated rules. Legacy explicit 5s remains readable; other values are rejected.
 
 The command list also preserves order and the recorded parameter difference
 within 1 microsecond. The sequence resets after each complete update, allowing
@@ -107,6 +108,12 @@ later updates on the same key. It does not pin the key to its first update time.
 This initial implementation supports a plain single-member ZADD score and a
 ZREMRANGEBYSCORE maximum. Keys, members, range minimums, extra options, database,
 authentication, connection lanes and finite consumption remain checked.
+
+Redis SET/RPUSH JSON time fields also accept `format: rfc3339`. For example,
+`/last_activity_at: {time: preserve_relative, format: rfc3339}` compares the two
+ISO timestamps relative to their own captured request anchors. No configured
+clock, offset or timezone is needed; invalid times and changed stable JSON fields
+still fail.
 
 ## Redis script ARGV timestamps
 
@@ -123,7 +130,7 @@ authentication, connection lanes and finite consumption remain checked.
     - command: EVALSHA
       script: {sha1: '0123456789abcdef0123456789abcdef01234567'}
       argument_values:
-        3: {time: preserve_relative, format: unix_milliseconds, tolerance: 5s}
+        3: {time: preserve_relative, format: unix_milliseconds}
 ```
 
 Supply the actual script digest from source and immutable evidence. EVALSHA

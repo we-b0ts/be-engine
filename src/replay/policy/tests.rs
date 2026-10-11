@@ -16,7 +16,18 @@ use crate::replay::{
 
 const CASE_ID: &str = "case-1";
 
+mod mysql_relative_time;
 mod mysql_tables;
+
+fn anchor_sql_times(runtime: &ReplayPolicyRuntime, target: chrono::DateTime<Utc>) {
+    runtime.request_contracts.set_request_times(
+        CASE_ID,
+        crate::replay::assertion::RequestTimes {
+            source: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
+            target: Some(target),
+        },
+    );
+}
 
 #[test]
 fn compact_sql_time_rule_matches_across_api_paths_but_not_databases() {
@@ -27,10 +38,11 @@ fn compact_sql_time_rule_matches_across_api_paths_but_not_databases() {
     for (method, path) in [("GET", "/responses/7"), ("POST", "/documents/content")] {
         fs::write(
             fixture.cases[CASE_ID].dir.join("request.json"),
-            json!({"method":method,"uri":path}).to_string(),
+            json!({"method":method,"uri":path,"timestamp":"2020-01-01T00:00:00Z"}).to_string(),
         )
         .unwrap();
         let runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
+        anchor_sql_times(&runtime, now);
         for database in ["pluto_audit", "other_database"] {
             let mut identity = mysql_identity();
             identity.database = Some(database.into());
@@ -47,7 +59,7 @@ fn compact_sql_time_rule_matches_across_api_paths_but_not_databases() {
                 recorded: None,
                 actual: None,
             };
-            let decision = runtime.preview_mysql_sql_values(&context, now);
+            let decision = runtime.preview_mysql_sql_values(&context);
             if database == "pluto_audit" {
                 assert!(decision.unwrap().is_ok(), "{path}");
             } else {
@@ -90,6 +102,7 @@ dependency_rules:
         json!(7),
     ]);
     let now = Utc.with_ymd_and_hms(2026, 9, 7, 12, 0, 1).unwrap();
+    anchor_sql_times(&runtime, now);
     let context = |actual| MysqlPolicyContext {
         case_id: Some(CASE_ID),
         identity: &identity,
@@ -101,7 +114,7 @@ dependency_rules:
     };
 
     let decision = runtime
-        .preview_mysql_sql_values(&context(&actual), now)
+        .preview_mysql_sql_values(&context(&actual))
         .unwrap()
         .unwrap();
     runtime.commit(Some(CASE_ID), decision);
@@ -114,7 +127,7 @@ dependency_rules:
     ]);
     assert!(
         runtime
-            .preview_mysql_sql_values(&context(&changed_stable_json), now)
+            .preview_mysql_sql_values(&context(&changed_stable_json))
             .unwrap()
             .unwrap_err()
             .contains("stable MySQL JSON fields differ")
@@ -127,10 +140,10 @@ dependency_rules:
     ]);
     assert!(
         runtime
-            .preview_mysql_sql_values(&context(&stale_scalar), now)
+            .preview_mysql_sql_values(&context(&stale_scalar))
             .unwrap()
             .unwrap_err()
-            .contains("exceeding tolerance")
+            .contains("fixed tolerance")
     );
 }
 
@@ -237,6 +250,13 @@ fn binds_and_references_runtime_mysql_uuid() {
     let identity = mysql_identity();
     observe_mysql_policy_exchanges(&mut runtime, &identity);
     let now = Utc.with_ymd_and_hms(2026, 7, 15, 4, 30, 0).unwrap();
+    runtime.request_contracts.set_request_times(
+        CASE_ID,
+        crate::replay::assertion::RequestTimes {
+            source: Some(now),
+            target: Some(now),
+        },
+    );
     let recorded_insert = values(&[
         json!("11111111-1111-4111-8111-111111111111"),
         json!("2026-07-15 12:30:00"),
@@ -292,6 +312,13 @@ fn rejects_changed_reference_and_out_of_window_time() {
     let identity = mysql_identity();
     observe_mysql_policy_exchanges(&mut runtime, &identity);
     let now = Utc.with_ymd_and_hms(2026, 7, 15, 4, 30, 0).unwrap();
+    runtime.request_contracts.set_request_times(
+        CASE_ID,
+        crate::replay::assertion::RequestTimes {
+            source: Some(now),
+            target: Some(now),
+        },
+    );
     let recorded_insert = values(&[
         json!("11111111-1111-4111-8111-111111111111"),
         json!("2026-07-15 12:30:00"),
@@ -317,7 +344,7 @@ fn rejects_changed_reference_and_out_of_window_time() {
                 now,
             )
             .unwrap_err()
-            .contains("exceeding tolerance")
+            .contains("fixed tolerance")
     );
 
     let actual_insert = values(&[
@@ -497,6 +524,14 @@ fn rejects_memcached_timestamp_rule_with_a_broad_or_invalid_selector() {
 fn validates_scoped_http_query_fields() {
     let fixture = policy_fixture(http_policy());
     let mut runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
+    let now = Utc.with_ymd_and_hms(2026, 7, 15, 4, 30, 0).unwrap();
+    runtime.request_contracts.set_request_times(
+        CASE_ID,
+        crate::replay::assertion::RequestTimes {
+            source: Some(now),
+            target: Some(now),
+        },
+    );
     runtime.observe_recorded_http_exchange(
         Some(CASE_ID),
         &TargetKey {
@@ -639,7 +674,7 @@ fn policy_fixture(policy: &str) -> PolicyFixture {
     fs::write(
         case_dir.join("request.json"),
         r#"{
-  "timestamp": "2026-07-16T06:53:32.117486280Z",
+  "timestamp": "2020-01-01T00:00:00Z",
   "client_addr": "127.0.0.1:12345",
   "method": "GET",
   "uri": "/api/resource/token",
@@ -694,7 +729,7 @@ dependency_rules:
         1:
           time:
             relative_to: replay_now
-            tolerance: 2s
+            tolerance: 5s
             format: "%Y-%m-%d %H:%M:%S"
             timezone: "+08:00"
   - id: audit-update
@@ -734,7 +769,7 @@ dependency_rules:
         Timestamp:
           time:
             relative_to: replay_now
-            tolerance: 2s
+            tolerance: 5s
 "#
 }
 

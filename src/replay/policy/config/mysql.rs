@@ -9,14 +9,11 @@ fn validate_time_field(field: &MysqlTimeFieldRule) -> Result<()> {
             &field.source_evidence,
         )?;
     }
-    parse_duration(&field.time.offset).context("invalid time.offset")?;
     ensure!(
-        parse_duration(&field.time.tolerance)? >= 0,
-        "time.tolerance must not be negative"
+        field.time.relative_to == TimeReference::PreserveRelative
+            && parse_duration(&field.time.tolerance)? == 5_000,
+        "MySQL SQL times preserve request-relative differences with a fixed 5s tolerance"
     );
-    if let Some(timezone) = &field.time.timezone {
-        parse_timezone(timezone)?;
-    }
     Ok(())
 }
 

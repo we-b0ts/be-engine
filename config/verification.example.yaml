@@ -24,10 +24,8 @@ dependency_rules:
           validate: uuid_v4
         1:
           time:
-            relative_to: replay_now
-            tolerance: 2s
+            relative_to: preserve_relative
             format: "%Y-%m-%d %H:%M:%S"
-            timezone: "+08:00"
 
   - id: example-audit-update
     case:
@@ -64,8 +62,7 @@ dependency_rules:
           validate: uuid_v4
         Timestamp:
           time:
-            relative_to: replay_now
-            tolerance: 2s
+            relative_to: preserve_relative
 
   # Memcached SET protobuf timestamps use an engine-owned ±5 second window.
   # The recorded timestamp is checked against its recorded SET event; the

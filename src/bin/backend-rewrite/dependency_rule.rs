@@ -79,14 +79,8 @@ struct MysqlTimeArgs {
     #[arg(long, requires = "value_index")]
     json_pointer: Option<String>,
     #[arg(long)]
-    tolerance: Option<String>,
-    #[arg(long)]
-    offset: Option<String>,
-    #[arg(long)]
     format: Option<String>,
-    #[arg(long)]
-    timezone: Option<String>,
-    /// Repeatable JSON time location with value_index, optional json_pointer and time options.
+    /// Repeatable JSON time location with value_index, optional json_pointer and format.
     #[arg(long = "time-value", value_name = "JSON", value_parser = parse_mysql_time_value)]
     time_values: Vec<traffic_e2e::MysqlTimeValueSelector>,
     /// Source file/symbol proving how this field obtains the current time.
@@ -280,21 +274,18 @@ impl TryFrom<DependencyRuleProtocolArgs> for DependencyPlan {
                                     .value_index
                                     .expect("clap requires value-index or time-value"),
                                 json_pointer: args.json_pointer,
-                                tolerance: args.tolerance.unwrap_or_else(|| "5s".into()),
-                                offset: args.offset.unwrap_or_else(|| "0s".into()),
+                                tolerance: "5s".into(),
+                                offset: "0s".into(),
                                 format: args
                                     .format
                                     .unwrap_or_else(|| "%Y-%m-%d %H:%M:%S%.f".into()),
-                                timezone: args.timezone.unwrap_or_else(|| "+00:00".into()),
+                                timezone: "+00:00".into(),
                             }]
                         } else {
                             ensure!(
                                 args.value_index.is_none()
                                     && args.json_pointer.is_none()
-                                    && args.tolerance.is_none()
-                                    && args.offset.is_none()
-                                    && args.format.is_none()
-                                    && args.timezone.is_none(),
+                                    && args.format.is_none(),
                                 "--time-value cannot be combined with legacy single-value options"
                             );
                             args.time_values
@@ -606,6 +597,9 @@ mod tests {
             TestCli::try_parse_from(base.iter().copied().chain(["--table-prefix", "subtasks_"]))
                 .is_err()
         );
+        for obsolete in ["--tolerance", "--timezone", "--offset"] {
+            assert!(TestCli::try_parse_from(base.iter().copied().chain([obsolete, "5s"])).is_err());
+        }
     }
 
     #[test]

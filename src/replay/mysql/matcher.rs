@@ -228,18 +228,15 @@ impl ReplayState {
                             sql_match::prepared_values_match(&exchange.record, command, sql, params)
                         });
                     let sql_value_decision = self.replay_policy.as_ref().and_then(|policy| {
-                        policy.preview_mysql_sql_values(
-                            &MysqlPolicyContext {
-                                case_id: active_case_id.as_deref(),
-                                identity,
-                                command,
-                                recorded_sql: exchange.record.sql.as_deref(),
-                                sql,
-                                recorded: exchange.record.params.as_deref(),
-                                actual: params,
-                            },
-                            Utc::now(),
-                        )
+                        policy.preview_mysql_sql_values(&MysqlPolicyContext {
+                            case_id: active_case_id.as_deref(),
+                            identity,
+                            command,
+                            recorded_sql: exchange.record.sql.as_deref(),
+                            sql,
+                            recorded: exchange.record.params.as_deref(),
+                            actual: params,
+                        })
                     });
                     let (policy_decision, projected) = if let Some(decision) = sql_value_decision {
                         let Ok(decision) = decision else {

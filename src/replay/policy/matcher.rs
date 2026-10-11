@@ -15,7 +15,7 @@ use super::config::{
 use super::pattern::{path_pattern_matches, query_values, text_pattern_matches, uri_path};
 use super::protobuf::matches_with_timestamp_fields;
 use super::report::{DependencyRuleReport, ReplayPolicyReport};
-use super::value::{validate_time, validate_value};
+use super::value::{validate_relative_time, validate_value};
 use crate::replay::{
     RecordedMysqlValue, ReplayCase, ReplaySessionIdentity, TargetKey, normalize_host, normalize_sql,
 };
@@ -280,7 +280,7 @@ impl ReplayPolicyRuntime {
     pub(in crate::replay) fn preview_mysql(
         &self,
         context: &MysqlPolicyContext<'_>,
-        now: DateTime<Utc>,
+        _now: DateTime<Utc>,
     ) -> Result<DependencyRuleDecision, String> {
         let Some(case_id) = context.case_id else {
             return exact_mysql_params(context.recorded, context.actual);
@@ -359,7 +359,17 @@ impl ReplayPolicyRuntime {
                         "replay policy requires scalar MySQL params[{index}], but actual value is raw"
                     )
                 })?;
-                self.preview_dynamic_value(case_id, rule_id, field, value, now, &mut decision)?;
+                self.preview_dynamic_value(
+                    case_id,
+                    rule_id,
+                    field,
+                    recorded_value
+                        .value
+                        .as_ref()
+                        .expect("validated scalar value"),
+                    value,
+                    &mut decision,
+                )?;
             } else if recorded_value != actual_value {
                 return Err(format!(
                     "stable MySQL params[{index}] did not match the recording"
@@ -390,7 +400,7 @@ impl ReplayPolicyRuntime {
     pub(in crate::replay) fn preview_http(
         &self,
         context: &HttpPolicyContext<'_>,
-        now: DateTime<Utc>,
+        _now: DateTime<Utc>,
     ) -> Result<DependencyRuleDecision, String> {
         let Some(case_id) = context.case_id else {
             return Ok(DependencyRuleDecision::default());
@@ -447,8 +457,8 @@ impl ReplayPolicyRuntime {
                 case_id,
                 rule_id,
                 field,
+                &Value::String(recorded_values[0].clone()),
                 &Value::String(actual_values[0].clone()),
-                now,
                 &mut decision,
             )?;
             decision.dynamic_query_params.push(name.to_string());
@@ -525,8 +535,8 @@ impl ReplayPolicyRuntime {
         case_id: &str,
         rule_id: &str,
         field: &DynamicValueRule,
+        recorded: &Value,
         actual: &Value,
-        now: DateTime<Utc>,
         decision: &mut DependencyRuleDecision,
     ) -> Result<(), String> {
         let usage = decision.usage.entry(rule_id.to_string()).or_default();
@@ -553,7 +563,12 @@ impl ReplayPolicyRuntime {
             usage.validations += 1;
         }
         if let Some(time) = &field.time {
-            validate_time(actual, time, now)?;
+            validate_relative_time(
+                recorded,
+                actual,
+                time,
+                self.request_contracts.request_times(case_id),
+            )?;
             usage.time_validations += 1;
         }
         if let Some(binding) = &field.bind {

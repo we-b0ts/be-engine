@@ -285,8 +285,8 @@ parameters, and the narrowly defined Memcached protobuf timestamp fields below:
 - `ref`: require the actual value to equal a value bound earlier in that case.
 - `validate: uuid`, `uuid_v4`, or `non_empty`: validate shape without comparing
   the recorded literal.
-- `time`: require a timestamp relative to `replay_now`, with an offset and
-  tolerance.
+- `time`: preserve the source/target timestamp difference relative to each
+  captured request, with a fixed 5-second tolerance.
 
 Example:
 
@@ -310,10 +310,8 @@ dependency_rules:
           validate: uuid_v4
         1:
           time:
-            relative_to: replay_now
-            tolerance: 2s
+            relative_to: preserve_relative
             format: "%Y-%m-%d %H:%M:%S"
-            timezone: "+08:00"
 
   - id: audit-update
     protocol: mysql
@@ -348,9 +346,11 @@ dependency_rules:
           validate: non_empty
 ```
 
-Durations accept integer `ms`, `s`, `m`, `h`, and `d` units. A time value may
-be RFC 3339, Unix seconds, or use an explicit Chrono format and numeric
-`+HH:MM`/`-HH:MM` timezone.
+Time fields preserve the source/target difference relative to their own captured
+request timestamps, with a fixed 5-second tolerance. A time value may be RFC
+3339, Unix seconds, or use an explicit Chrono format. Shared timezone offsets
+cancel; no clock offset or timezone setting is needed for this comparison.
+Legacy `replay_now` and explicit 5s remain readable. Other tolerances fail.
 
 Memcached `set` rules may select top-level protobuf varint fields that source
 code proves contain the current Unix time in seconds:

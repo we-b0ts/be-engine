@@ -87,6 +87,14 @@ impl ReplayState {
                 case_dir: case.dir.display().to_string(),
                 dependencies_path: case.dependencies_path.display().to_string(),
                 status: case.status,
+                source_request_started_at: self
+                    .replay_policy
+                    .as_ref()
+                    .and_then(|policy| policy.request_contracts.request_times(&case.id).source),
+                target_request_started_at: self
+                    .replay_policy
+                    .as_ref()
+                    .and_then(|policy| policy.request_contracts.request_times(&case.id).target),
             })
             .collect()
     }

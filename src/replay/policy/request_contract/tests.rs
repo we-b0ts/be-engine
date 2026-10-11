@@ -224,13 +224,57 @@ fn selectors_reject_ambiguous_ownership_and_unbounded_time_or_json_fields() {
     document.dependency_rules = vec![rule.clone(), rule];
     document.dependency_rules[1].id = "other".into();
     assert!(validate_overlaps(&document).is_err());
-    let mut value = serde_json::to_value(time_rule()).unwrap();
-    value["redis"]["commands"][0]["argument_values"]["1"]["tolerance"] = json!("30s");
-    assert!(validate(&serde_json::from_value(value).unwrap()).is_err());
+    for tolerance in ["0s", "2s", "6s", "30s"] {
+        let mut value = serde_json::to_value(time_rule()).unwrap();
+        value["redis"]["commands"][0]["argument_values"]["1"]["tolerance"] = json!(tolerance);
+        assert!(validate(&serde_json::from_value(value).unwrap()).is_err());
+    }
     let mut value = serde_json::to_value(jwt_rule()).unwrap();
     value["redis"]["commands"][0]["argument_values"]["1"]["json"]["/refresh_token"]["jwt"]["dynamic_claims"] =
         json!(["/sub"]);
     assert!(validate(&serde_json::from_value(value).unwrap()).is_err());
+}
+
+#[test]
+fn redis_rfc3339_request_times_preserve_offset_without_timezone_configuration() {
+    let rule = rule(
+        json!({"key":{"prefix":"streaming:","numeric":true},"commands":[
+            {"command":"SET","argument_values":{"1":{"json":{"/updated_at":{"time":"preserve_relative","format":"rfc3339"}}}}}
+        ]}),
+    );
+    validate(&rule).unwrap();
+    let runtime = runtime(rule);
+    let source = r#"{"updated_at":"1970-01-01T08:16:40+08:00","status":"running"}"#;
+    for (time, passes) in [
+        ("1970-01-01T08:33:20+08:00", true),
+        ("1970-01-01T08:33:25+08:00", true),
+        ("1970-01-01T08:33:25.000001+08:00", false),
+        ("1970-01-01T08:16:40+08:00", false),
+        ("invalid", false),
+    ] {
+        let actual = json!({"updated_at":time,"status":"running"}).to_string();
+        assert_eq!(
+            check(
+                &runtime,
+                "SET",
+                &["streaming:1", source],
+                &["streaming:1", &actual]
+            )
+            .is_ok(),
+            passes,
+            "{time}"
+        );
+    }
+    let changed = r#"{"updated_at":"1970-01-01T08:33:20+08:00","status":"stopped"}"#;
+    assert!(
+        check(
+            &runtime,
+            "SET",
+            &["streaming:1", source],
+            &["streaming:1", changed]
+        )
+        .is_err()
+    );
 }
 
 #[test]

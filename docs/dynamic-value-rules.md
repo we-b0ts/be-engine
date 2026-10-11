@@ -132,7 +132,6 @@ dependency_rules:
           created_at:
             kind: timestamp
             format: "%Y%m%d%H%M%S"
-            timezone: UTC
           user_id: {kind: exact}
           attachment_id: {kind: exact}
     source_evidence: >-
@@ -156,8 +155,9 @@ decoded slashes, backslashes and control characters are rejected.
 - `random` currently requires `format: hex` and an explicit length (1–1024);
   both values must have that shape. Shape alone does not prove randomness.
 - `timestamp` currently requires the strict 14-digit UTC format
-  `%Y%m%d%H%M%S` and `timezone: UTC`. Both values must be within the shared
-  inclusive ±5-second window of their own dependency HTTP request start.
+  `%Y%m%d%H%M%S`; UTC is implicit and omitted from generated rules. Both values
+  must be within the shared inclusive ±5-second window of their own dependency
+  HTTP request start.
   This is independent of the inbound API clock. For older recordings, a
   missing request start can be estimated from that exchange's completion
   timestamp minus integral nonnegative `duration_ms`, as with header rules.

@@ -24,7 +24,7 @@ async fn select_sql_time_matches_counts_and_rows_across_text_and_prepared_protoc
                     .enumerate()
                     .map(|(i, template)| {
                         let sql = template
-                            .replacen('?', "'2020-01-01 00:00:00'", 1)
+                            .replacen('?', "'2019-12-31 00:00:00'", 1)
                             .replacen('?', "7", 1);
                         let mut read = exchange(
                             &sql,
@@ -37,7 +37,7 @@ async fn select_sql_time_matches_counts_and_rows_across_text_and_prepared_protoc
                             read["command"] = json!("COM_STMT_EXECUTE");
                             read["sql"] = json!(template);
                             read["params"] = json!([
-                                {"kind":"datetime","value":"2020-01-01 00:00:00"},
+                                {"kind":"datetime","value":"2019-12-31 00:00:00"},
                                 {"kind":"integer","value":7}
                             ]);
                         }
@@ -53,7 +53,7 @@ async fn select_sql_time_matches_counts_and_rows_across_text_and_prepared_protoc
                     for attempt in 0..4 {
                         let cutoff = if attempt == 0 {
                             chrono::NaiveDateTime::parse_from_str(
-                                "2020-01-01 00:00:00",
+                                "2019-12-31 00:00:00",
                                 "%Y-%m-%d %H:%M:%S",
                             )
                             .unwrap()

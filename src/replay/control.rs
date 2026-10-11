@@ -517,6 +517,10 @@ pub(super) async fn begin_case(
             case_dir: case.dir.display().to_string(),
             dependencies_path: case.dependencies_path.display().to_string(),
             status: case.status,
+            source_request_started_at: state.replay_policy.as_ref()
+                .and_then(|policy| policy.request_contracts.request_times(case_id).source),
+            target_request_started_at: state.replay_policy.as_ref()
+                .and_then(|policy| policy.request_contracts.request_times(case_id).target),
         }),
     })
 }

@@ -1,5 +1,7 @@
 //! Compact SQL time configuration; retain the original nested syntax on input.
-use super::{MysqlTimeFieldRule, MysqlTimeValueRule, TimeReference, TimeRule};
+use super::{
+    MysqlTimeFieldRule, MysqlTimeValueRule, TimeReference, TimeRule, parse_duration, parse_timezone,
+};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -47,7 +49,7 @@ impl TryFrom<TimeFieldConfig> for MysqlTimeFieldRule {
     type Error = anyhow::Error;
 
     fn try_from(config: TimeFieldConfig) -> Result<Self> {
-        let time = match config.time {
+        let mut time = match config.time {
             TimeConfig::Reference(relative_to) => TimeRule {
                 relative_to,
                 tolerance: config.tolerance.unwrap_or_else(|| "5s".into()),
@@ -66,6 +68,20 @@ impl TryFrom<TimeFieldConfig> for MysqlTimeFieldRule {
                 time
             }
         };
+        ensure!(
+            parse_duration(&time.tolerance)? == 5_000,
+            "MySQL SQL time tolerance is fixed at 5s"
+        );
+        // Legacy options remain readable, but a shared timezone and source
+        // offset cancel in the source/target difference. No rule sets a clock.
+        parse_duration(&time.offset)?;
+        if let Some(timezone) = &time.timezone {
+            parse_timezone(timezone)?;
+        }
+        time.relative_to = TimeReference::PreserveRelative;
+        time.tolerance = "5s".into();
+        time.offset = "0s".into();
+        time.timezone = Some(TIMEZONE.into());
         Ok(Self {
             source_evidence: config.source_evidence,
             time,
@@ -75,16 +91,15 @@ impl TryFrom<TimeFieldConfig> for MysqlTimeFieldRule {
 
 impl From<MysqlTimeFieldRule> for TimeFieldConfig {
     fn from(rule: MysqlTimeFieldRule) -> Self {
-        // Missing format/timezone in the original syntax has different parsing
-        // semantics; retain that syntax rather than assigning compact defaults.
-        let compact = rule.time.format.is_some() && rule.time.timezone.is_some();
+        // Keep legacy automatic format detection when no format was supplied.
+        let compact = rule.time.format.is_some();
         if compact {
             TimeFieldConfig {
-                time: TimeConfig::Reference(rule.time.relative_to),
-                tolerance: Some(rule.time.tolerance),
-                offset: (rule.time.offset != "0s").then_some(rule.time.offset),
+                time: TimeConfig::Reference(TimeReference::PreserveRelative),
+                tolerance: None,
+                offset: None,
                 format: rule.time.format.filter(|value| value != FORMAT),
-                timezone: rule.time.timezone.filter(|value| value != TIMEZONE),
+                timezone: None,
                 source_evidence: rule.source_evidence,
             }
         } else {
@@ -147,7 +162,7 @@ mod tests {
     fn compact_sql_time_defaults_and_original_syntax_round_trip_without_semantic_changes() {
         for yaml in [
             "time: replay_now",
-            "time: replay_now\ntolerance: 2s\noffset: -1s\nformat: '%Y/%m/%d %H:%M:%S'\ntimezone: '+08:00'",
+            "time: replay_now\ntolerance: 5s\noffset: -1s\nformat: '%Y/%m/%d %H:%M:%S'\ntimezone: '+08:00'",
             "time: {relative_to: replay_now, tolerance: 5s}",
             "time: {relative_to: replay_now, tolerance: 5s, format: '%Y-%m-%d %H:%M:%S%.f'}",
         ] {
@@ -183,7 +198,7 @@ json:
     format: "%+"
   /updatedAt:
     time: replay_now
-    tolerance: 2s
+    tolerance: 5s
 "#;
         let rule: MysqlTimeValueRule = serde_yaml::from_str(yaml).unwrap();
         let encoded = serde_yaml::to_string(&rule).unwrap();

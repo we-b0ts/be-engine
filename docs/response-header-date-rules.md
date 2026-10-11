@@ -26,7 +26,8 @@ for `filename*`. Both sides must contain identical parameter sets. Omitting
 `parameter` selects a scalar whole-header value.
 
 `format` is explicit: `%Y-%m-%d`, `%Y%m%d`, `%Y/%m/%d`, `%d-%m-%Y` or
-`%m-%d-%Y`. `timezone` is the source implementation's numeric UTC offset.
+`%m-%d-%Y`. `timezone` defaults to UTC and is omitted when it is `+00:00`. A non-UTC
+calendar-date rule can declare the source implementation's numeric UTC offset.
 The selected value must contain exactly one valid date of that format. Each
 date must equal the day at its own recorded request start, with a fixed five
 second boundary window around midnight. Missing clocks, invalid dates, multiple
