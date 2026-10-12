@@ -395,7 +395,7 @@ where
 }
 
 fn run_self_as_root(args: &[OsString]) -> Result<()> {
-    let executable = std::env::current_exe().context("failed to resolve traffic-e2e binary")?;
+    let executable = crate::engine_binary::executable()?;
     let sudo = system_program("sudo")?;
     let true_command = system_program("true")?;
     ensure!(
@@ -454,7 +454,7 @@ pub fn system_program(name: &str) -> Result<PathBuf> {
 }
 
 pub fn counter_reader() -> Result<crate::ReplayEgressCounterReader> {
-    let executable = std::env::current_exe()?;
+    let executable = crate::engine_binary::executable()?;
     let (program, mut arguments) = if effective_uid() == 0 {
         (executable, Vec::new())
     } else {

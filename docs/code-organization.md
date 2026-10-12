@@ -30,6 +30,10 @@ is unclear.
 
 ## Current Boundaries
 
+- `engine_binary` resolves companion executables and Linux reexec paths for a
+  replaced running engine. Replay, coordinator workers and local interception
+  share that resolver; process lifecycle remains with each caller.
+
 - `recording_api/methods` owns the optional per-route method metadata codec and
   lookup. Recorder run finalization projects its existing observed API set into
   the recording manifest once; coordinator execution summaries only read it.

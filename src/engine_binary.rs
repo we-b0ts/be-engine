@@ -7,8 +7,34 @@ const ENGINE_BINARY_NAME: &str = "traffic-e2e";
 
 pub(crate) fn executable() -> Result<PathBuf> {
     let current = std::env::current_exe().context("failed to resolve current executable")?;
-    let Some(engine) = companion_engine_path(&current) else {
-        return Ok(current);
+    resolve_executable(&current, std::process::id())
+}
+
+/// An installed filesystem path for container mounts, rather than a reexec handle.
+pub(crate) fn installed_executable() -> Result<PathBuf> {
+    let current = std::env::current_exe().context("failed to resolve current executable")?;
+    companion_or_self(installed_executable_path(&current))
+}
+
+fn resolve_executable(current: &Path, process_id: u32) -> Result<PathBuf> {
+    let installed = installed_executable_path(current);
+    #[cfg(target_os = "linux")]
+    if installed
+        .file_name()
+        .is_some_and(|name| name == ENGINE_BINARY_NAME)
+    {
+        // Pin the running inode before an atomic replacement can race with
+        // spawn. Use this process's PID so sudo resolves the engine,
+        // rather than its own /proc/self/exe.
+        return Ok(PathBuf::from(format!("/proc/{process_id}/exe")));
+    }
+    let _ = process_id;
+    companion_or_self(installed)
+}
+
+fn companion_or_self(installed: PathBuf) -> Result<PathBuf> {
+    let Some(engine) = companion_engine_path(&installed) else {
+        return Ok(installed);
     };
     ensure!(
         engine.is_file(),
@@ -16,6 +42,19 @@ pub(crate) fn executable() -> Result<PathBuf> {
         engine.display()
     );
     Ok(engine)
+}
+
+fn installed_executable_path(current: &Path) -> PathBuf {
+    #[cfg(target_os = "linux")]
+    if let Some(name) = current
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_suffix(" (deleted)"))
+        .filter(|name| matches!(*name, REWRITE_BINARY_NAME | ENGINE_BINARY_NAME))
+    {
+        return current.with_file_name(name);
+    }
+    current.to_path_buf()
 }
 
 fn companion_engine_path(current: &Path) -> Option<PathBuf> {
@@ -50,4 +89,46 @@ mod tests {
         assert!(companion_engine_path(Path::new("/opt/bin/traffic-e2e")).is_none());
         assert!(companion_engine_path(Path::new("/tmp/traffic_e2e-tests")).is_none());
     }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn replaced_coordinator_still_resolves_its_installed_companion() {
+        let root = tempfile::tempdir().unwrap();
+        let engine = root.path().join(ENGINE_BINARY_NAME);
+        let coordinator = root.path().join("backend-rewrite (deleted)");
+        assert!(resolve_executable(&coordinator, std::process::id()).is_err());
+        std::fs::write(&engine, "installed engine").unwrap();
+        assert_eq!(
+            resolve_executable(&coordinator, std::process::id()).unwrap(),
+            engine
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn replaced_engine_uses_its_live_inode_without_requiring_a_replacement_file() {
+        assert_eq!(
+            resolve_executable(Path::new("/opt/traffic-e2e"), 1234).unwrap(),
+            PathBuf::from("/proc/1234/exe")
+        );
+        assert_eq!(
+            resolve_executable(Path::new("/removed/traffic-e2e (deleted)"), 1234).unwrap(),
+            PathBuf::from("/proc/1234/exe")
+        );
+        assert_eq!(
+            resolve_executable(Path::new("/opt/other (deleted)"), 1234).unwrap(),
+            PathBuf::from("/opt/other (deleted)")
+        );
+        // Container bind mounts retain an installed path, not a host PID handle.
+        assert_eq!(
+            companion_or_self(installed_executable_path(Path::new(
+                "/opt/traffic-e2e (deleted)"
+            )))
+            .unwrap(),
+            PathBuf::from("/opt/traffic-e2e")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    mod unlinked;
 }

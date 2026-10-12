@@ -171,7 +171,7 @@ async fn run_managed_runtime(options: PreflightRecordingOptions) -> Result<Manag
         config.target_port
     );
     let recording_origin = format!("http://127.0.0.1:{}", recorder.http_gateway.listen.port());
-    let executable = crate::engine_binary::executable()?;
+    let executable = crate::engine_binary::installed_executable()?;
     ensure_executable(&executable, "traffic-e2e binary")?;
     let encryption_key = encryption_key::load_or_create(&target_root)?;
     let assets = stage_assets(&target_root)?;

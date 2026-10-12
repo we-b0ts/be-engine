@@ -11,7 +11,7 @@ use serde::Deserialize;
 
 use super::{
     super::{E2eRunContext, config, model::RunLayout, store, support},
-    ActiveRunState, session,
+    ActiveRunState, RunStatus, session,
 };
 
 #[derive(Default)]
@@ -162,6 +162,16 @@ impl RunSnapshot {
             .states
             .get(api)
             .with_context(|| format!("prepared API group not found: {api}"))?;
+        // An interrupted startup can publish an attempt before Replay is ready.
+        // It has no session to reclassify; retain its original failure diagnosis.
+        if primary.status == RunStatus::Interrupted
+            && primary.session_id.is_none()
+            && !primary.replay_finalized
+            && primary.case_source == layout.case_source
+            && primary.run_key == layout.run_key
+        {
+            return Ok(false);
+        }
         session::validate_primary(layout, primary)?;
         let session_id = primary
             .session_id

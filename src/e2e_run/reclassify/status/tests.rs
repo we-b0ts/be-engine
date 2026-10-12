@@ -2,6 +2,40 @@ use super::*;
 use crate::e2e_run::{reclassify, test_session};
 
 #[test]
+fn interrupted_startup_without_a_session_does_not_block_status_or_authorize_revision() {
+    let target = tempfile::tempdir().unwrap();
+    let context = test_session::install(target.path());
+    let path = test_session::state_path(&context, "GET /api");
+    let mut primary: ActiveRunState = store::read_yaml(&path).unwrap();
+    primary.status = RunStatus::Interrupted;
+    primary.session_id = None;
+    primary.replay_finalized = false;
+    primary.aggregate_complete = false;
+    primary.aggregate_clean = false;
+    primary.errors = vec!["failed to start Replay: executable unavailable".into()];
+    store::write_yaml(&path, &primary).unwrap();
+    fs::remove_file(&primary.replay_report).unwrap();
+    let before = fs::read(&path).unwrap();
+    assert!(
+        !with_background_reclassification_snapshot(|| {
+            focused_background_reclassification_pending(context.clone(), "GET /api")
+        })
+        .unwrap()
+    );
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert!(
+        reclassify::ensure_focused_background_reclassification_revisable(
+            context.clone(),
+            "GET /api"
+        )
+        .is_err()
+    );
+    primary.replay_finalized = true;
+    store::write_yaml(&path, &primary).unwrap();
+    assert!(focused_background_reclassification_pending(context, "GET /api").is_err());
+}
+
+#[test]
 fn status_detects_legacy_split_without_opening_recording_cases() {
     let target = tempfile::tempdir().unwrap();
     let context = test_session::install(target.path());

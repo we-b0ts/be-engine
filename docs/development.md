@@ -47,6 +47,14 @@ mirror. Do not replace that registry configuration unless explicitly asked.
 The build produces sibling `traffic-e2e`, `backend-rewrite`, and
 `backend-rewrite-admin` executables. Keep them together in installed packages
 because detached coordinator actions delegate engine work to `traffic-e2e`.
+On Linux, a running `traffic-e2e` reexecs through `/proc/<pid>/exe`, retaining its
+running inode and engine revision even when its installed executable is replaced.
+Companion resolution also recognizes a replaced `backend-rewrite` executable.
+Container bind mounts continue to use installed filesystem paths rather than
+process-specific reexec handles.
+An interrupted focused attempt that failed before Replay readiness has no
+session to reclassify. Status retains its failure state without requesting
+session reclassification; actual evidence revision still requires session identity.
 
 `traffic-e2e record` is built normally and supports optional Redis coordination.
 See [standalone recording](recording.md) for its container contract, direct
