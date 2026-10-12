@@ -1834,6 +1834,22 @@ sidecar alongside assertions and aggregate reports. Each focused method snapshot
 owns a complete copy, and aggregates refer to the published copy. Removing an
 external `.replay` directory therefore does not invalidate newly published rule
 evidence. A finalized attempt with a missing original report cannot be published.
+Dependency failures remain shared across method snapshots. A dirty-cluster
+representative can therefore belong to another method in the same session;
+the query resolves its case directory within the same immutable recording,
+preserving the session's dirty counts and gates. Unknown or duplicate recorded
+case IDs remain errors.
+
+Rule reclassification aggregates the retained runner report within its owning
+snapshot, validates its session and recorded case identities, and keeps the
+complete shared session when rebuilding one method's evidence. Unresolved
+dependencies in a sibling method continue to fail the shared dependency gate.
+If `dependency-rule apply PLAN_ID` stops after writing the policy or report,
+retry the same pending plan. Ownership planners recover original unused-case
+witnesses from the engine's reversible reclassification markers in memory;
+policy application and reclassification can then complete without duplicate
+rules or lost exchanges. Native Global exchanges do not authorize a Case rule,
+and unmatched, unsupported, unsafe, and header-mismatch checks still apply.
 
 For a legacy pending rule whose Replay report or sidecar is already unavailable,
 `next` returns `rule recover PLAN_ID`. This command retires only the matching plan,
@@ -1841,6 +1857,8 @@ returns its selector and source proof, and requests fresh Replay with the existi
 recordings. It does not apply the stale plan or fabricate evidence. After Replay,
 query current evidence and plan again. `dependency-rule recover PLAN_ID` is an
 alias for the same recovery transaction.
+This recovery is for missing evidence; a partially applied ownership rule with
+available evidence resumes through `dependency-rule apply`.
 
 Use `backend-rewrite route` for a source-proven missing recorded resource,
 Recorder/Replay capability gap, external-data blocker, or source change. For a

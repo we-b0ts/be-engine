@@ -177,7 +177,7 @@ pub(crate) fn reclassify_focused_background_dependencies(
     ensure_replay_progress_revisable(&base_layout.progress_path, &index, &state)?;
     let previous_state = state.clone();
 
-    let reclassified = refresh_background_evidence(&config, &state)?;
+    let reclassified = refresh_background_evidence(&config, &state, &inventory)?;
     apply_reclassified_case_outcomes(&mut state, &reclassified);
     let mut focused_layout = base_layout.clone();
     focused_layout.run_root = focused_root;

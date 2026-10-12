@@ -15,6 +15,10 @@ use crate::config::{BackgroundDependencyRuleConfig, SourceTrafficPolicyConfig};
 use crate::recorder::background::BackgroundDependencyMatcher;
 
 mod mysql;
+mod original_evidence;
+
+pub(crate) use original_evidence::parse_background_dependency_evidence;
+use original_evidence::restore_previous_reclassification;
 
 const ORIGINAL_CASE_ID: &str = "background_original_case_id";
 const MATCHED_RULE: &str = "background_rule";
@@ -257,55 +261,6 @@ fn decode_capture(value: &Value) -> Option<Vec<u8>> {
         "base64" => STANDARD.decode(data.as_bytes()).ok(),
         _ => None,
     }
-}
-
-fn restore_previous_reclassification(report: &mut Value) {
-    restore_array(report, "unused_global_exchanges", "unused_case_exchanges");
-    restore_array(
-        report,
-        "unused_global_http_exchanges",
-        "unused_case_http_exchanges",
-    );
-    for protocol in ["redis", "memcached", "motan"] {
-        let Some(protocol_report) = report.get_mut(protocol) else {
-            continue;
-        };
-        restore_array(protocol_report, "unused_global", "unused_case");
-    }
-}
-
-fn restore_array(report: &mut Value, global_field: &str, case_field: &str) {
-    let Some(object) = report.as_object_mut() else {
-        return;
-    };
-    let mut global = object
-        .remove(global_field)
-        .and_then(|value| value.as_array().cloned())
-        .unwrap_or_default();
-    let mut case = object
-        .remove(case_field)
-        .and_then(|value| value.as_array().cloned())
-        .unwrap_or_default();
-    let mut retained = Vec::with_capacity(global.len());
-    for mut event in global.drain(..) {
-        let original_case = event
-            .get(ORIGINAL_CASE_ID)
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        if let Some(original_case) = original_case {
-            if let Some(event) = event.as_object_mut() {
-                event.insert("case_id".to_string(), Value::String(original_case));
-                event.insert("source".to_string(), Value::String("case".to_string()));
-                event.remove(ORIGINAL_CASE_ID);
-                event.remove(MATCHED_RULE);
-            }
-            case.push(event);
-        } else {
-            retained.push(event);
-        }
-    }
-    object.insert(global_field.to_string(), Value::Array(retained));
-    object.insert(case_field.to_string(), Value::Array(case));
 }
 
 fn reclassify_http(

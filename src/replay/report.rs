@@ -17,7 +17,8 @@ pub(super) use dependency_evidence::report_has_case_dirty_events;
 pub(crate) use dependency_evidence::{build_dependency_evidence, dependency_evidence_path};
 
 pub(crate) use background_overlay::{
-    BackgroundReclassification, reclassify_background_dependencies,
+    BackgroundReclassification, parse_background_dependency_evidence,
+    reclassify_background_dependencies,
 };
 pub(crate) use dependency_evidence::{
     ReplayDependencyCluster, ReplayDependencyDifference, ReplayDependencyEndpoint,

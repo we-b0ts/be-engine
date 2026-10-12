@@ -9,8 +9,7 @@ use super::store;
 use crate::case_group::CaseGroupInventory;
 use crate::replay::{
     BackgroundReclassification, ReplayAggregateCounts, ReplayAggregateOptions,
-    ReplayAggregateReport, aggregate_replay_report_with_options,
-    reclassify_background_dependencies,
+    ReplayAggregateReport, aggregate_runner_replay_report, reclassify_background_dependencies,
 };
 
 pub(super) fn build_final_evidence(
@@ -19,7 +18,7 @@ pub(super) fn build_final_evidence(
     inventory: &CaseGroupInventory,
     state: &mut ActiveRunState,
 ) -> Result<()> {
-    let reclassified = refresh_background_evidence(config, state)?;
+    let reclassified = refresh_background_evidence(config, state, inventory)?;
     apply_reclassified_case_outcomes(state, &reclassified);
     build_final_evidence_from_current_report(config, layout, inventory, state)?;
     clear_resolved_dependency_errors(state);
@@ -29,12 +28,30 @@ pub(super) fn build_final_evidence(
 pub(super) fn refresh_background_evidence(
     config: &ResolvedProjectConfig,
     state: &ActiveRunState,
+    inventory: &CaseGroupInventory,
 ) -> Result<BackgroundReclassification> {
-    let case_dirs = state
-        .cases
+    let report: serde_json::Value = serde_json::from_slice(&std::fs::read(&state.replay_report)?)?;
+    let session_cases = report["cases"]
+        .as_array()
+        .context("replay report has no session cases")?
         .iter()
+        .map(|case| {
+            case["case_id"]
+                .as_str()
+                .context("replay session case has no id")
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    let case_dirs = inventory
+        .groups
+        .iter()
+        .flat_map(|group| &group.cases)
+        .filter(|case| session_cases.contains(case.case_id.as_str()))
         .map(|case| (case.case_id.clone(), case.case_dir.clone()))
         .collect::<BTreeMap<_, _>>();
+    ensure!(
+        case_dirs.len() == session_cases.len(),
+        "replay session references cases outside the prepared recording inventory"
+    );
     reclassify_background_dependencies(
         &config.source_traffic_policy,
         &state.replay_report,
@@ -135,9 +152,10 @@ pub(super) fn build_final_evidence_from_current_report(
         .iter()
         .flat_map(|group| group.cases.iter().map(|case| case.case_id.clone()))
         .collect::<BTreeSet<_>>();
-    let aggregate = aggregate_replay_report_with_options(
+    let aggregate = aggregate_runner_replay_report(
         &layout.case_source,
         &state.replay_report,
+        &layout.active_dir,
         &ReplayAggregateOptions {
             case_ids: all_case_ids,
             session_ids: BTreeSet::from([session_id.clone()]),
@@ -359,69 +377,4 @@ pub(super) fn summarize_apis_without_aggregate(
 }
 
 #[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use super::*;
-    use crate::case_group::{CanonicalCase, CanonicalCaseGroup};
-
-    #[test]
-    fn assertion_report_omits_cases_without_an_assertion_result() {
-        let inventory = CaseGroupInventory {
-            case_source: PathBuf::from("/cases"),
-            source_revision: "source".to_string(),
-            case_inventory_id: "inventory".to_string(),
-            groups: vec![CanonicalCaseGroup {
-                group_id: "GET /api/devices".to_string(),
-                method: "GET".to_string(),
-                source_route: "/api/devices".to_string(),
-                pattern: None,
-                case_inventory_id: "inventory".to_string(),
-                cases: ["passed", "failed", "pending"]
-                    .into_iter()
-                    .map(|case_id| CanonicalCase {
-                        case_id: case_id.to_string(),
-                        case_dir: PathBuf::from("/cases").join(case_id),
-                        recorded_at: None,
-                    })
-                    .collect(),
-            }],
-        };
-        let temp = tempfile::tempdir().unwrap();
-        let mut state = ActiveRunState::new("run".to_string(), 1, &inventory, temp.path());
-        let passed = state
-            .cases
-            .iter_mut()
-            .find(|case| case.case_id == "passed")
-            .unwrap();
-        passed.assertion_passed = Some(true);
-        passed.status = CaseStatus::Passed;
-        let failed = state
-            .cases
-            .iter_mut()
-            .find(|case| case.case_id == "failed")
-            .unwrap();
-        failed.assertion_passed = Some(false);
-        failed.status = CaseStatus::Failed;
-
-        let report = assertion_report(
-            &state,
-            true,
-            state.cases.iter().map(|case| case.case_id.as_str()),
-        );
-
-        assert_eq!(report.cases.len(), 2);
-        assert!(
-            report
-                .cases
-                .iter()
-                .any(|case| case.case_id == "passed" && case.passed)
-        );
-        assert!(
-            report
-                .cases
-                .iter()
-                .any(|case| case.case_id == "failed" && !case.passed)
-        );
-    }
-}
+mod tests;

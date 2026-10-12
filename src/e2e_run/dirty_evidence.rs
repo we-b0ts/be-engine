@@ -109,7 +109,7 @@ pub struct E2eSourcePreReadinessEndpoint {
 
 pub(super) fn build(state: &ActiveRunState, complete: bool, dirty: bool) -> Result<E2eDirtyCounts> {
     let evidence = read_dependency_evidence(&state.replay_report)?;
-    let case_dirs = state
+    let mut case_dirs = state
         .cases
         .iter()
         .map(|case| {
@@ -122,6 +122,29 @@ pub(super) fn build(state: &ActiveRunState, complete: bool, dirty: bool) -> Resu
             Ok((case.case_id.clone(), case_dir))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
+    // Method snapshots retain dependency evidence for the shared Replay session.
+    // Its bounded representatives may belong to another method in this recording.
+    for representative in evidence
+        .clusters
+        .iter()
+        .filter_map(|cluster| cluster.representative.as_ref())
+    {
+        if let std::collections::btree_map::Entry::Vacant(entry) =
+            case_dirs.entry(representative.case_id.clone())
+        {
+            let case_dir = crate::case_group::resolve_published_case_dir(
+                &state.case_source,
+                &representative.case_id,
+            )
+            .with_context(|| {
+                format!(
+                    "dirty dependency references unknown case {:?}",
+                    representative.case_id
+                )
+            })?;
+            entry.insert(case_dir);
+        }
+    }
     let source_pre_readiness = source_pre_readiness(state)?;
     let pre_readiness_counts = source_pre_readiness
         .iter()
@@ -290,80 +313,4 @@ fn stable_cluster_id(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::replay::report::{
-        ReplayDependencyDifference, ReplayDependencyObservation, ReplayDependencyRepresentative,
-    };
-
-    #[test]
-    fn enriches_case_cluster_with_exact_case_dir_and_startup_reference_count() {
-        let cluster = ReplayDependencyCluster {
-            protocol: "memcached".to_string(),
-            endpoint: Some(ReplayDependencyEndpoint {
-                host: "cache.internal".to_string(),
-                port: 11211,
-            }),
-            reason: "unused_recorded".to_string(),
-            count: 2,
-            case_count: 1,
-            case_ids: vec!["case-a".to_string()],
-            omitted_case_ids: 0,
-            operations: BTreeMap::from([("get".to_string(), 2)]),
-            omitted_operations: 0,
-            representative: Some(ReplayDependencyRepresentative {
-                case_id: "case-a".to_string(),
-                difference: ReplayDependencyDifference {
-                    kind: "unused_recorded".to_string(),
-                    expected: ReplayDependencyObservation {
-                        presence: "present".to_string(),
-                        signature: Some(serde_json::json!({"command":"get"})),
-                    },
-                    actual: ReplayDependencyObservation {
-                        presence: "missing".to_string(),
-                        signature: None,
-                    },
-                },
-                target_matches: Vec::new(),
-                target_matches_may_be_truncated: false,
-            }),
-        };
-        let case_dirs =
-            BTreeMap::from([("case-a".to_string(), PathBuf::from("/recording/case-a"))]);
-        let startup = BTreeMap::from([("cache.internal:11211".to_string(), 9)]);
-
-        let cluster = enrich_cluster(cluster, &case_dirs, &startup).unwrap();
-
-        assert_eq!(cluster.cluster_id, "dirty-ebf71141ecbd6508");
-        assert_eq!(cluster.scope, "case");
-        assert_eq!(cluster.source_pre_readiness_interactions, 9);
-        let representative = cluster.representative.unwrap();
-        assert_eq!(representative.case_id, "case-a");
-        assert_eq!(representative.case_dir, PathBuf::from("/recording/case-a"));
-        assert_eq!(representative.difference.kind, "unused_recorded");
-    }
-
-    #[test]
-    fn unscoped_network_cluster_is_run_scoped_without_a_representative() {
-        let cluster = ReplayDependencyCluster {
-            protocol: "network".to_string(),
-            endpoint: Some(ReplayDependencyEndpoint {
-                host: "breeze.recording".to_string(),
-                port: 9301,
-            }),
-            reason: "unrecorded_endpoint".to_string(),
-            count: 1,
-            case_count: 0,
-            case_ids: Vec::new(),
-            omitted_case_ids: 0,
-            operations: BTreeMap::from([("unknown".to_string(), 1)]),
-            omitted_operations: 0,
-            representative: None,
-        };
-
-        let cluster = enrich_cluster(cluster, &BTreeMap::new(), &BTreeMap::new()).unwrap();
-
-        assert_eq!(cluster.scope, "run");
-        assert!(cluster.representative.is_none());
-    }
-}
+mod tests;

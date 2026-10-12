@@ -10,6 +10,9 @@ use super::dependency_evidence::report_has_case_dirty_events;
 
 mod counts;
 mod policy;
+mod runner;
+
+pub(crate) use runner::aggregate_runner_replay_report;
 
 const AGGREGATE_VERSION: u8 = 1;
 const REPLAY_REPORT_VERSION: u64 = 6;
@@ -160,18 +163,10 @@ pub fn aggregate_replay_reports_with_options(
 ) -> Result<ReplayAggregateReport> {
     let case_source = canonical_dir(case_source, "case source")?;
     let canonical_reports = discover_replay_reports(&case_source)?;
+    for report in &canonical_reports {
+        ensure_within(report, &case_source, "replay report")?;
+    }
     aggregate_canonical_reports(case_source, canonical_reports, options)
-}
-
-pub(crate) fn aggregate_replay_report_with_options(
-    case_source: &Path,
-    report_path: &Path,
-    options: &ReplayAggregateOptions,
-) -> Result<ReplayAggregateReport> {
-    let case_source = canonical_dir(case_source, "case source")?;
-    let report_path = canonical_file(report_path, "replay report")?;
-    ensure_within(&report_path, &case_source, "replay report")?;
-    aggregate_canonical_reports(case_source, vec![report_path], options)
 }
 
 fn aggregate_canonical_reports(
@@ -192,7 +187,6 @@ fn aggregate_canonical_reports(
     let mut aggregate_counts = ReplayAggregateCounts::default();
 
     for report_path in canonical_reports {
-        ensure_within(&report_path, &case_source, "replay report")?;
         let payload = fs::read(&report_path)
             .with_context(|| format!("failed to read replay report {}", report_path.display()))?;
         let report: Value = serde_json::from_slice(&payload)

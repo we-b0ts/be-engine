@@ -182,7 +182,7 @@ pub use policy::{
     ResponseHeaderDateRuleFeedback, plan_dynamic_value_rule, plan_response_header_date_rule,
 };
 pub(crate) use redis::snapshot_overlay::inspect_case_source_snapshot_overlay;
-pub(crate) use report::aggregate::aggregate_replay_report_with_options;
+pub(crate) use report::aggregate::aggregate_runner_replay_report;
 pub use report::aggregate::{
     ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,
     aggregate_replay_reports_with_options,
