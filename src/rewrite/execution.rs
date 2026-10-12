@@ -424,14 +424,28 @@ fn running_summary(target_root: &Path) -> String {
     else {
         return "running coordinator operation".into();
     };
-    traffic_summary(&active, replay_progress(target_root))
+    let state = RewriteStore::new(target_root)
+        .ok()
+        .and_then(|store| store.load_snapshot().ok().flatten());
+    let methods = recorded_methods(
+        state
+            .as_ref()
+            .and_then(|state| state.case_source.as_deref()),
+        active.api.as_deref(),
+    );
+    traffic_summary(
+        &active,
+        replay_progress(target_root, state.as_ref()),
+        &methods,
+    )
 }
 
 fn traffic_summary(
     active: &super::traffic_operation::TrafficOperationMarker,
     replay_progress: Option<crate::e2e_run::E2eActiveProgress>,
+    recorded_methods: &[String],
 ) -> String {
-    let api = active.api.as_deref().unwrap_or("the workflow");
+    let api = recorded_api_label(active.api.as_deref(), recorded_methods);
     match active.kind {
         super::traffic_operation::TrafficOperationKind::Replay => match replay_progress {
             Some(crate::e2e_run::E2eActiveProgress::PreparingIndex) => {
@@ -458,11 +472,40 @@ fn traffic_summary(
     }
 }
 
-fn replay_progress(target_root: &Path) -> Option<crate::e2e_run::E2eActiveProgress> {
-    let state = RewriteStore::new(target_root)
-        .ok()?
-        .load_snapshot()
-        .ok()??;
+fn recorded_api_label(api: Option<&str>, methods: &[String]) -> String {
+    let route = api
+        .map(super::api_selector::public_api)
+        .unwrap_or("the workflow");
+    if !route.starts_with('/') {
+        return route.into();
+    }
+    match methods {
+        [] => route.into(),
+        [method] => format!("{method} {route}"),
+        _ => format!("[{}] {route}", methods.join(", ")),
+    }
+}
+
+fn recorded_methods(case_source: Option<&Path>, api: Option<&str>) -> Vec<String> {
+    let Some(route) = api
+        .map(super::api_selector::public_api)
+        .filter(|route| route.starts_with('/'))
+    else {
+        return Vec::new();
+    };
+    let Some(case_source) = case_source else {
+        return Vec::new();
+    };
+    crate::recording_api::methods::load(case_source)
+        .map(|index| crate::recording_api::methods::for_route(&index, route))
+        .unwrap_or_default()
+}
+
+fn replay_progress(
+    target_root: &Path,
+    state: Option<&RewriteState>,
+) -> Option<crate::e2e_run::E2eActiveProgress> {
+    let state = state?;
     let case_source = state.case_source.as_ref()?.clone();
     let api_key = state.group_id.as_deref()?;
     crate::e2e_run::focused_active_progress(

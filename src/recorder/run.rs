@@ -19,6 +19,8 @@ struct RecorderRunReport {
     output_dir: String,
     recording_apis: Vec<String>,
     observed_api_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    api_methods: Option<crate::recording_api::methods::ApiMethods>,
     access_policy: &'static str,
     traffic_jsonl: &'static str,
     published_cases: usize,
@@ -444,6 +446,9 @@ impl Recorder {
             output_dir: self.run_dir.display().to_string(),
             recording_apis: state.recording_apis.clone(),
             observed_api_count: state.observed_apis.len(),
+            api_methods: state
+                .finished
+                .then(|| crate::recording_api::methods::from_observed(&state.observed_apis)),
             access_policy: self.access_policy.as_str(),
             traffic_jsonl: self.traffic_jsonl.as_str(),
             published_cases: state.published_cases,
@@ -610,6 +615,48 @@ mod tests {
         assert_eq!(report["published_cases"], 3);
         assert_eq!(report["failed_cases"], 1);
         assert_eq!(report["observed_api_count"], 0);
+    }
+
+    #[tokio::test]
+    async fn final_manifest_persists_per_api_methods_from_successfully_published_cases() {
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        for api in [
+            "GET /api/teams",
+            "OPTIONS /api/teams",
+            "GET /api/teams",
+            "POST /api/users",
+        ] {
+            recorder
+                .publish_case_for_api(&case("api"), Some(api))
+                .await
+                .unwrap();
+        }
+        let path = recorder.run_dir.join("recording-run.json");
+        let running: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
+        assert!(running.get("api_methods").is_none());
+        recorder
+            .fail_case(&case("failed-only-api"), "failed", "failed case")
+            .await
+            .unwrap();
+        recorder.finish_run().await.unwrap();
+        let methods = crate::recording_api::methods::load(&recorder.run_dir).unwrap();
+        assert_eq!(
+            serde_json::to_value(methods).unwrap(),
+            serde_json::json!({
+                "/api/teams": ["GET", "OPTIONS"], "/api/users": ["POST"]
+            })
+        );
+        let finalized = tokio::fs::read(&path).await.unwrap();
+        // The finalized metadata cannot be changed by a late case.
+        assert!(
+            recorder
+                .publish_case_for_api(&case("api"), Some("DELETE /api/teams"))
+                .await
+                .is_err()
+        );
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), finalized);
     }
 
     #[tokio::test]

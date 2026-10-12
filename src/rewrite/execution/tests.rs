@@ -33,7 +33,11 @@ fn busy_summary_reports_the_current_traffic_phase_concisely() {
         pid: std::process::id(),
     };
     assert_eq!(
-        traffic_summary(&active, Some(crate::e2e_run::E2eActiveProgress::Building)),
+        traffic_summary(
+            &active,
+            Some(crate::e2e_run::E2eActiveProgress::Building),
+            &["GET".into()]
+        ),
         "building target for GET /api/teams"
     );
     assert_eq!(
@@ -42,13 +46,66 @@ fn busy_summary_reports_the_current_traffic_phase_concisely() {
             Some(crate::e2e_run::E2eActiveProgress::Replaying {
                 completed: 932,
                 total: 941,
-            })
+            }),
+            &["GET".into()]
         ),
         "replaying GET /api/teams (932/941)"
     );
     assert_eq!(
-        traffic_summary(&active, Some(crate::e2e_run::E2eActiveProgress::Finalizing)),
+        traffic_summary(
+            &active,
+            Some(crate::e2e_run::E2eActiveProgress::Finalizing),
+            &["GET".into()]
+        ),
         "finalizing replay for GET /api/teams"
+    );
+}
+
+#[test]
+fn busy_summary_reads_the_selected_recording_api_methods_and_keeps_legacy_scope_empty() {
+    let root = tempfile::tempdir().unwrap();
+    let active = super::super::traffic_operation::TrafficOperationMarker {
+        operation_id: "traffic-test".into(),
+        kind: super::super::traffic_operation::TrafficOperationKind::Replay,
+        api: Some("OPTIONS /api/teams".into()),
+        started_at: "2026-10-12T00:00:00Z".into(),
+        pid: std::process::id(),
+    };
+    let path = root.path().join("recording-run.json");
+    fs::write(&path, r#"{"status":"completed","api_methods":{"/api/teams":["GET","OPTIONS","POST"],"/api/users":["DELETE"]}}"#).unwrap();
+    let methods = recorded_methods(Some(root.path()), active.api.as_deref());
+    assert_eq!(
+        traffic_summary(
+            &active,
+            Some(crate::e2e_run::E2eActiveProgress::Building),
+            &methods
+        ),
+        "building target for [GET, OPTIONS, POST] /api/teams"
+    );
+    assert_eq!(
+        recorded_methods(Some(root.path()), Some("GET /api/users")),
+        ["DELETE"]
+    );
+    // The owner method and existing cases must not backfill historical metadata.
+    fs::write(&path, r#"{"status":"completed"}"#).unwrap();
+    fs::write(
+        root.path().join("request.json"),
+        r#"{"method":"POST","uri":"/api/teams"}"#,
+    )
+    .unwrap();
+    let methods = recorded_methods(Some(root.path()), active.api.as_deref());
+    assert!(methods.is_empty());
+    assert_eq!(
+        traffic_summary(
+            &active,
+            Some(crate::e2e_run::E2eActiveProgress::Building),
+            &methods
+        ),
+        "building target for /api/teams"
+    );
+    assert_eq!(
+        traffic_summary(&active, None, &methods),
+        "replaying /api/teams"
     );
 }
 

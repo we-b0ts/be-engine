@@ -8,6 +8,7 @@ use hyper::{Method, Uri};
 use crate::config::HttpGatewayRuleConfig;
 use crate::path_pattern::{matches_path_pattern, path_patterns_overlap, validate_path_pattern};
 
+pub(crate) mod methods;
 mod scope;
 pub use scope::RecordingApiScope;
 pub(crate) use scope::identity;

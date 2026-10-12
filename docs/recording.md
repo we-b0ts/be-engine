@@ -13,6 +13,14 @@ overlay at startup, including HTTP case patterns, allowed unused HTTP hosts,
 HTTP response rewrites and process-owned dependency rules. HTTP include/exclude rules continue to apply. An explicit policy overrides the project's policy reference
 and is applied once. Without project configuration or a policy, HTTP cases use literal URI paths.
 
+Recorder accumulates observed method/path identities only after successful case
+publication. At recording finalization, `recording-run.json` adds `api_methods`,
+mapping each recorded HTTP path or pattern to its sorted, unique method list.
+For example: `{"/api/teams":["GET","OPTIONS"],"/api/users":["POST"]}`.
+This optional display metadata is fixed with the recording. Historical recordings
+without it retain an empty method set; readers never scan or rewrite old cases
+to populate it. It does not change Replay selection or verification gates.
+
 Build the normal engine binary. The gateway SDK uses published
 `brz-http-gateway = 0.1.6`; Redis uses published `brz-redis`.
 
