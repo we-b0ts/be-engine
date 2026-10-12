@@ -44,6 +44,9 @@ is unclear.
   query-scoped shared-session snapshot and compact report classification codec;
   `reclassify/session` retains the common identity/membership checks and full
   execution preflight. Coordinator status scopes snapshots to one query.
+  `rewrite/case_patterns` canonicalizes persisted recording observations while
+  pattern identification waits; `rewrite/regression_scope/recording` validates
+  the pin and selectors against that adopted snapshot without rediscovery.
 
 - `config/mysql_tables` owns shared bounded physical-table selection for
   process-owned reads and SQL-time rules. `replay/policy/sql_template/table`

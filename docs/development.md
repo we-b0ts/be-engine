@@ -2406,6 +2406,13 @@ action projections reuse one snapshot per query; the next query reloads changed
 rules, sessions, and reports. Report checks deserialize only classification
 metadata and skip unrelated JSON values. Actual evidence revision still loads
 and validates the recording inventory and progress before writing anything.
+While case pattern identification waits, a pinned recording reuses the pending
+batch's persisted API observations even before installing the API inventory.
+Status still checks the completed recording manifest and current selectors;
+pattern apply and initial adoption retain full case validation.
+Legacy selectors resolved only by recorded `api_pattern` metadata fall back to
+validated discovery when the current policy and observation snapshot cannot
+establish membership.
 
 The committed file contains only business aggregates and the latest batch
 summary. Replay provenance, pending state, failure barriers,

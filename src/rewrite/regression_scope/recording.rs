@@ -56,11 +56,18 @@ pub(super) fn apply(
         // Explicit new-traffic purpose supersedes the old local recording pin.
         return Ok(false);
     }
+    let pending_patterns = state
+        .case_pattern_identification
+        .as_ref()
+        .filter(|pending| {
+            state.phase == RewritePhase::RecordingRequired
+                && pending.recording_run_id == state.recording_run_id
+        });
     if policy
         .recording_run_id
         .as_deref()
         .is_some_and(|run_id| run_id == state.recording_run_id)
-        && !state.api_inventory.is_empty()
+        && (!state.api_inventory.is_empty() || pending_patterns.is_some())
     {
         // Cases are immutable once adopted. Keep checking the selected run's
         // finalized manifest and newly edited selectors, without rediscovering
@@ -73,12 +80,33 @@ pub(super) fn apply(
                 )
             },
         )?;
+        let apis = if state.api_inventory.is_empty() {
+            crate::rewrite::case_patterns::canonical_observed_apis(
+                target_root,
+                &pending_patterns
+                    .expect("adopted observation snapshot")
+                    .observed_apis,
+            )?
+        } else {
+            state
+                .api_inventory
+                .iter()
+                .map(|item| item.api.clone())
+                .collect()
+        };
         for api in policy.selectors() {
+            let present = apis
+                .iter()
+                .any(|item| crate::recording_api::identity(item) == api);
+            if !present && state.api_inventory.is_empty() {
+                // Older recordings can carry api_pattern values absent from
+                // today's policy and the raw observation snapshot. Preserve
+                // their selector semantics through the validated discovery path.
+                load(target_root, policy)?;
+                return Ok(false);
+            }
             ensure!(
-                state
-                    .api_inventory
-                    .iter()
-                    .any(|item| crate::recording_api::identity(&item.api) == api),
+                present,
                 "{PATH}: API {api:?} is absent from the selected recording inventory"
             );
         }

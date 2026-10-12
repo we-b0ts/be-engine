@@ -89,6 +89,132 @@ fn policy(root: &Path, id: &str, extra: &str) {
     .unwrap();
 }
 
+fn pending_pattern_state(root: &Path) -> RewriteState {
+    record(
+        root,
+        A,
+        &[],
+        &["/users/1", "/orders/2", "/new-static"],
+        "completed",
+    );
+    policy(root, A, "only: [/users/*]\n");
+    let mut state = test_support::test_state();
+    super::super::apply(root, &mut state).unwrap();
+    assert!(rewrite::case_patterns::identify_after_finalized_recording(root, &mut state).unwrap());
+    assert!(state.api_inventory.is_empty());
+    assert_eq!(state.phase, RewritePhase::RecordingRequired);
+    state
+}
+
+#[test]
+fn pinned_pattern_wait_reuses_observations_but_apply_still_validates_cases() {
+    let root = target();
+    let state = pending_pattern_state(root.path());
+    let batch_id = state
+        .case_pattern_identification
+        .as_ref()
+        .unwrap()
+        .id
+        .clone();
+    let store = RewriteStore::new(root.path()).unwrap();
+    store.save(&state).unwrap();
+    let state_path = crate::internal_runtime::root(root.path()).join("rewrite/state.json");
+    let state_before = fs::read(&state_path).unwrap();
+    let policy_path = root.path().join(".traffic-e2e/source-traffic-policy.yaml");
+    let policy_before = fs::read(&policy_path).unwrap();
+    fs::write(
+        artifacts::recording_run(root.path(), A).join("apis/cases/case-0/request.json"),
+        "invalid request",
+    )
+    .unwrap();
+
+    for _ in 0..2 {
+        let status = rewrite::status_rewrite(RewriteContext {
+            target_root: root.path().into(),
+        })
+        .unwrap();
+        assert!(matches!(
+            status.action,
+            RewriteAction::CasePatternIdentificationRequired { .. }
+        ));
+    }
+    assert_eq!(fs::read(&state_path).unwrap(), state_before);
+    assert!(
+        rewrite::case_patterns::apply(rewrite::RewriteCasePatternApplyOptions {
+            target_root: root.path().into(),
+            batch_id,
+            patterns: vec![],
+        })
+        .is_err()
+    );
+    assert_eq!(fs::read(&state_path).unwrap(), state_before);
+    assert_eq!(fs::read(&policy_path).unwrap(), policy_before);
+}
+
+#[test]
+fn pinned_pattern_snapshot_rechecks_selectors_rules_manifest_and_recording_identity() {
+    let root = target();
+    let mut state = pending_pattern_state(root.path());
+    let request = artifacts::recording_run(root.path(), A).join("apis/cases/case-0/request.json");
+    fs::write(&request, "invalid request").unwrap();
+    let original = serde_json::to_value(&state).unwrap();
+    policy(root.path(), A, "only: [/absent]\n");
+    assert!(super::super::apply(root.path(), &mut state).is_err());
+    policy(root.path(), A, "only: [/users/*]\n");
+    assert!(!super::super::apply(root.path(), &mut state).unwrap());
+    let path = root.path().join(".traffic-e2e/source-traffic-policy.yaml");
+    let original_policy = fs::read(&path).unwrap();
+    let mut policy_document = crate::config::SourceTrafficPolicyConfig::empty();
+    policy_document.http.case_path_patterns = vec!["/orders/*".into()];
+    fs::write(&path, policy_document.render().unwrap()).unwrap();
+    assert!(super::super::apply(root.path(), &mut state).is_err());
+    fs::write(&path, original_policy).unwrap();
+    policy(root.path(), B, "");
+    assert!(super::super::apply(root.path(), &mut state).is_err());
+    assert_eq!(serde_json::to_value(&state).unwrap(), original);
+    policy(root.path(), A, "");
+    state
+        .case_pattern_identification
+        .as_mut()
+        .unwrap()
+        .recording_run_id = B.into();
+    assert!(super::super::apply(root.path(), &mut state).is_err());
+    state
+        .case_pattern_identification
+        .as_mut()
+        .unwrap()
+        .recording_run_id = A.into();
+    fs::remove_file(artifacts::recording_manifest(root.path(), A)).unwrap();
+    assert!(super::super::apply(root.path(), &mut state).is_err());
+}
+
+#[test]
+fn pinned_pattern_snapshot_preserves_legacy_recorded_pattern_selectors() {
+    let root = target();
+    record(
+        root.path(),
+        A,
+        &[],
+        &["/legacy/1", "/new-static"],
+        "completed",
+    );
+    fs::write(
+        artifacts::recording_run(root.path(), A).join("apis/cases/case-0/request.json"),
+        r#"{"method":"GET","uri":"/legacy/1","api_pattern":"/legacy/*"}"#,
+    )
+    .unwrap();
+    policy(root.path(), A, "only: [/legacy/*]\n");
+    let mut state = test_support::test_state();
+    super::super::apply(root.path(), &mut state).unwrap();
+    assert!(
+        rewrite::case_patterns::identify_after_finalized_recording(root.path(), &mut state)
+            .unwrap()
+    );
+    let original = serde_json::to_value(&state).unwrap();
+    assert!(!super::super::apply(root.path(), &mut state).unwrap());
+    assert_eq!(serde_json::to_value(&state).unwrap(), original);
+}
+
 async fn next(root: &Path) -> Result<rewrite::RewriteActionEnvelope> {
     rewrite::next_rewrite(RewriteNextOptions {
         target_root: root.into(),
