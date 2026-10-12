@@ -25,6 +25,7 @@ pub(super) fn from_e2e_result(
     let reused = !matches!(transition, AttemptTransition::Append);
     let current = !reused || state.replay_identity.as_ref() == Some(&replay_identity);
     let summary = RewriteAttemptSummary {
+        engine_fingerprint: result.engine_fingerprint.clone(),
         attempt: result.attempt,
         passed: result.passed,
         gates: result.gates.clone(),
@@ -54,6 +55,7 @@ pub(super) fn from_e2e_result(
         state.target_fingerprint = Some(target_fingerprint.clone());
     }
     state.e2e_current = result.passed && current;
+    state.engine_retry_running = false;
     state.route = None;
     state.system_repair_accepted = false;
     state.rule_replay_pending = false;

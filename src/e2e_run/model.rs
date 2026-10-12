@@ -310,6 +310,8 @@ pub(super) struct ApiExecution {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct ActiveRunState {
     pub version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_fingerprint: Option<String>,
     pub run_key: String,
     pub sequence: u64,
     pub status: RunStatus,
@@ -395,6 +397,7 @@ impl ActiveRunState {
             replay_report: reports.join("replay-report.json"),
             aggregate_report: reports.join("aggregate.json"),
             assertions_report: reports.join("assertions.json"),
+            engine_fingerprint: Some(crate::build_info::ENGINE_FINGERPRINT.into()),
             session_id: None,
             replay_pid: None,
             target_started: false,

@@ -96,7 +96,7 @@ fn route_selection_prefers_an_admitted_method_over_its_blocked_active_sibling() 
         let selector = "/api".parse().unwrap();
         assert_eq!(select(&state, &selector).unwrap().to_string(), "POST /api");
         // A precise rule/repair admission never releases the other dirty method.
-        assert!(!crate::rewrite::rule_replay::admitted(
+        assert!(!crate::rewrite::replay_admission::admitted(
             &state,
             &work_scope(&state, &state.api)
         ));

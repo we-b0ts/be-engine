@@ -123,9 +123,9 @@ ancestry and no unrelated working-tree changes. Respect the engine's live
 verification/traffic owner. If any prerequisite changed, return to status or
 the integrator instead of resolving a source conflict yourself.
 
-The integrator must run `review check --integration` on the final candidate,
-using the original work-item selector and accepted `--handoff-id` for one handoff.
-For two or more API handoffs, write a JSON array of exact accepted identities,
+The integrator must run `review check --integration` on the final candidate.
+For one handoff, it may use the original work-item selector and accepted `--handoff-id`.
+For one or more API handoffs, write a nonempty JSON array of exact accepted identities,
 for example
 `[{"scope":{"kind":"api","api":"GET /a"},"handoff_id":"id-a"},{"scope":{"kind":"api","api":"GET /b"},"handoff_id":"id-b"}]`,
 and run `review check --integration --batch-handoffs /absolute/handoffs.json`.

@@ -43,6 +43,13 @@ is unclear.
   unfinished recording coverage; `e2e_run/progress` compares that merged view
   before permitting focused evidence revision.
 
+- `rewrite/engine_retry` owns per-method retry eligibility and durable consumption
+  after an engine Git revision change. `rewrite/replay_admission` combines exact
+  method permits without releasing unaccepted route siblings; `rule_replay` owns
+  rule-application requests. `rewrite/verification` owns reservation, Replay and
+  result-transition cleanup. E2E state/result publication preserves the actual
+  executor revision; `build_info` exposes its build-time constant without status I/O.
+
 - `case_group/snapshot` reads prepared membership for read-only projections
   without discovering recording cases. `e2e_run/reclassify/status` owns the
   query-scoped shared-session snapshot and compact report classification codec;

@@ -10,6 +10,7 @@ mod case_group_rebuild;
 mod case_patterns;
 mod configuration_commit;
 mod coordination;
+mod engine_retry;
 mod execution;
 mod expert;
 pub use api_selector::{RewriteApiSelector, status_rewrite_for_selector};
@@ -62,6 +63,7 @@ pub use regression::{
     RewriteRegressionBeginOptions, RewriteRegressionBeginReport, begin as begin_rewrite_regression,
 };
 mod repair;
+mod replay_admission;
 mod response_url_evidence;
 mod revalidation;
 mod route;
@@ -90,6 +92,7 @@ mod test_support;
 mod tests;
 mod traffic_operation;
 mod transition;
+mod verification;
 mod worker;
 
 use std::path::{Path, PathBuf};
@@ -157,7 +160,7 @@ use store::{RewriteLockState, RewriteStore};
 #[cfg(test)]
 pub(in crate::rewrite) use test_support::test_state;
 
-use crate::{E2eRunContext, RecordingApi};
+use crate::RecordingApi;
 
 #[derive(Debug, Clone)]
 pub struct RewriteNextOptions {
@@ -401,50 +404,6 @@ pub fn verify_rewrite_repair(
 
 pub async fn recover_rewrite(context: RewriteContext) -> Result<RewriteRecoveryReport> {
     recovery::recover(context).await
-}
-
-async fn run_and_transition(
-    target_root: &Path,
-    state: &mut RewriteState,
-    route_batch: bool,
-) -> Result<bool> {
-    let in_round = state.revalidation_round.is_some();
-    let replay_target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
-    let case_source = state
-        .case_source
-        .clone()
-        .context("rewrite workflow has no case source")?;
-    let api = state
-        .group_id
-        .clone()
-        .context("rewrite workflow has no prepared API group")?;
-    let context = E2eRunContext {
-        target_root: target_root.to_path_buf(),
-        case_source,
-        run_key: None,
-    };
-    let prepared = route_batch
-        .then(|| api_batch::prepare(target_root, state))
-        .transpose()?;
-    let apis = prepared
-        .as_ref()
-        .map_or_else(|| vec![api.clone()], |batch| batch.apis.clone());
-    let results = crate::e2e_run::run_e2e_apis(context.clone(), &apis).await?;
-    let current_target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
-    if current_target_fingerprint != replay_target_fingerprint {
-        state.phase = RewritePhase::ApiPending;
-        state.target_fingerprint = None;
-        state.active_issue = None;
-        state.rule_replay_pending = false;
-        state.e2e_current = false;
-        state.bump();
-        return Ok(false);
-    }
-    let (_, _project) = crate::e2e_run::resolve_project(target_root)?;
-    api_batch::apply_results(target_root, state, &results, prepared.as_ref())?;
-    Ok(!results.is_empty()
-        && (results.iter().all(|result| result.passed)
-            || in_round && state.revalidation_round.is_some()))
 }
 
 fn validate_single_line(label: &str, value: &str) -> Result<()> {

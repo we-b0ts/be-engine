@@ -33,6 +33,7 @@ fn pending(root: &Path, apis: &[&str]) {
 
 fn result(api: &str, passed: bool) -> crate::E2eApiRunResult {
     crate::E2eApiRunResult {
+        engine_fingerprint: None,
         run_key: "test-replay".into(),
         api: api.into(),
         attempt: 1,

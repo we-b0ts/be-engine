@@ -45,8 +45,8 @@ pub fn check_batch(
         "batch review requires --integration without a single work-item selector"
     );
     ensure!(
-        handoffs.len() >= 2,
-        "batch review requires at least two handoffs"
+        !handoffs.is_empty(),
+        "batch review requires at least one handoff"
     );
     let (target_root, project) = crate::e2e_run::resolve_project(&options.target_root)?;
     let state = RewriteStore::new(&target_root)?

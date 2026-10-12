@@ -29,7 +29,7 @@ fn a_rule_for_one_method_does_not_release_the_worker_for_another_dirty_method() 
     put.rule_replay_pending = false;
     put.system_repair_accepted = true;
     assert!(!ready(&state, &scope));
-    assert!(admitted(&state, &scope));
+    assert!(crate::rewrite::replay_admission::admitted(&state, &scope));
     assert!(crate::rewrite::worker::runtime::scopes(&state).is_empty());
 }
 use crate::rewrite::{self, RewriteAction, store::RewriteStore, worker};
@@ -232,6 +232,7 @@ fn finalized_replay_consumes_the_request_for_passed_and_dirty_results() {
         let mut state = implementation_state_with_inventory(false);
         request(&mut state);
         let result = crate::E2eApiRunResult {
+            engine_fingerprint: None,
             run_key: "recording".into(),
             api: state.api.clone(),
             attempt: 2,

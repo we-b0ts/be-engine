@@ -309,6 +309,7 @@ fn reclassification_fixture() -> (
     state.case_source = Some(PathBuf::from("recording-cases"));
     state.group_id = Some("GET /api".to_string());
     state.attempts.push(model::RewriteAttemptSummary {
+        engine_fingerprint: None,
         attempt: 3,
         passed: false,
         gates: crate::E2eVerificationGates {
@@ -319,6 +320,7 @@ fn reclassification_fixture() -> (
         counts: counts.clone(),
     });
     let result = crate::E2eApiRunResult {
+        engine_fingerprint: None,
         run_key: "20260803023812".to_string(),
         api: "GET /api".to_string(),
         attempt: 3,

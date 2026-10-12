@@ -274,8 +274,8 @@ original accepted handoff, not its earlier worker report. Global evidence-only
 or final quality review uses `review check --integration --worktree
 /absolute/integration` without scope or handoff ID; after publication the
 coordinator admits it using `review accept --report /absolute/report.json`.
-For two or more current API handoffs, `--batch-handoffs /absolute/handoffs.json`
-accepts a JSON array of exact `{scope, handoff_id}` entries with at least one
+For one or more current API handoffs, `--batch-handoffs /absolute/handoffs.json`
+accepts a nonempty JSON array of exact `{scope, handoff_id}` entries with at least one
 `handoff_ready` item. Already `integrated` items may be included as retained
 deliveries: build on their published code, merge only new deliveries, and review
 the complete candidate once. After publication, report `integrated` only for
@@ -1481,6 +1481,19 @@ the current action immediately. Continue dispatching workers and reporting
 handoffs while verification runs. `execution_failed` retains a bounded error
 and exact `operation retry <operation-id>` command; resolve its cause before
 retrying. A stopped executor requires recovery. Neither condition is completion.
+For a `target_runtime` issue, changing the committed engine revision permits one
+fresh coordinator Replay of the same API method and immutable recording without
+a target-code handoff. Legacy failed attempts without an engine identity receive
+one compatibility retry. Each attempt records the executing engine's Git revision,
+embedded at build time; rebuilding the same commit or changing only target code
+does not renew this permit. Status compares persisted strings without running Git
+for engine identity, hashing executables, or scanning recording cases.
+Next still requires current configuration and delivery review and acquires the
+ordinary traffic lease. It durably consumes each method's revision permit before
+starting Replay, preserving the prior issue and attempt history. A running retry
+does not dispatch its old issue again. Failure, process restart, and recovery never
+refund the permit; a new result determines the next action. Other issue kinds and
+unaccepted sibling methods retain their existing handoff and repair gates.
 Quality gates execute during worker and integration review before delivery.
 The coordinator admits version-bound integration reports; the legacy
 `target-quality run` entry point only validates an existing receipt.

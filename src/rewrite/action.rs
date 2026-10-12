@@ -170,7 +170,7 @@ pub(super) fn for_scoped_status(
         api: state.api.clone(),
     };
     if state.phase == RewritePhase::ImplementationRequired
-        && !super::rule_replay::admitted(state, &method_scope)
+        && !super::replay_admission::admitted(state, &method_scope)
         && let Some(scope) = worker::runtime::scopes(state)
             .into_iter()
             .find(|scope| match scope {
@@ -370,6 +370,13 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
             target_root,
             &selected_api,
             "verification rule applied; replay the same API and immutable cases".into(),
+        );
+    }
+    if super::engine_retry::pending(&state.active_slice) {
+        return replay_advance(
+            target_root,
+            &selected_api,
+            "engine build changed or legacy runtime failure has no build identity; retry the same API and immutable cases once with this engine build".into(),
         );
     }
     if state.system_repair_accepted {

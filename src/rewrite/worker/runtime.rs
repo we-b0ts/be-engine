@@ -273,8 +273,8 @@ pub(in crate::rewrite) fn scopes(state: &RewriteState) -> Vec<RewriteWorkScope> 
     if !super::super::regression_scope::is_skipped(state, &state.api)
         && state.phase == RewritePhase::ImplementationRequired
         && state.active_issue.is_some()
-        && !state.system_repair_accepted
-        && !super::super::rule_replay::pending(&state.active_slice)
+        && !super::super::replay_admission::slice_ready(&state.active_slice)
+        && !state.engine_retry_running
     {
         scopes.push(super::super::api_selector::work_scope(state, &state.api));
     }
@@ -283,8 +283,8 @@ pub(in crate::rewrite) fn scopes(state: &RewriteState) -> Vec<RewriteWorkScope> 
             && api != &state.api
             && slice.phase == RewritePhase::ImplementationRequired
             && slice.active_issue.is_some()
-            && !slice.system_repair_accepted
-            && !super::super::rule_replay::pending(slice)
+            && !super::super::replay_admission::slice_ready(slice)
+            && !slice.engine_retry_running
         {
             let scope = super::super::api_selector::work_scope(state, api);
             if !scopes.contains(&scope) {
@@ -380,7 +380,7 @@ pub(in crate::rewrite) fn record_running_for_test(
 }
 
 pub(in crate::rewrite) fn acceptance_ready(state: &RewriteState, scope: &RewriteWorkScope) -> bool {
-    super::super::rule_replay::admitted(state, scope)
+    super::super::replay_admission::admitted(state, scope)
         || (super::issue_for_scope(state, scope).is_some()
             && coverage(state, scope) == RewriteWorkerCoverageState::VerificationRequired)
 }

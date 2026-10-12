@@ -100,6 +100,7 @@ pub(in crate::rewrite) fn required_action(
         && !state.api_inventory.is_empty()
         && state.api_inventory.iter().all(|a| a.status.is_done());
     let ready = super::super::rule_replay::any_ready(state)
+        || super::super::engine_retry::any_pending(state)
         || worker::runtime::scopes(state)
             .iter()
             .any(|scope| worker::runtime::acceptance_ready(state, scope));

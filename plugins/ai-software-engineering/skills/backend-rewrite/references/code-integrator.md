@@ -42,7 +42,7 @@ integrator evidence endpoint or engine integration activity to invent.
      --api '/api' --handoff-id ACCEPTED_HANDOFF_ID
    ```
 
-   For two or more current API handoffs, write a JSON array of their exact
+   For one or more current API handoffs, write a nonempty JSON array of their exact
    `scope` and `handoff_id` pairs and replace `--api ... --handoff-id ...` with
    `--batch-handoffs /absolute/handoffs.json`. This one check freezes membership
    and reviews the complete combined candidate. The batch must include at least

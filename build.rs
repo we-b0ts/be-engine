@@ -21,6 +21,8 @@ fn main() {
         env!("CARGO_PKG_VERSION")
     );
     println!("cargo:rustc-env=TRAFFIC_E2E_BUILD_VERSION={version}");
+    let fingerprint = format!("engine-revision-v1:{}", revision.trim_end_matches("-dirty"));
+    println!("cargo:rustc-env=TRAFFIC_E2E_ENGINE_FINGERPRINT={fingerprint}");
     println!("cargo:rustc-env=TRAFFIC_E2E_TARGET_RUNTIME_IMAGE={TARGET_RUNTIME_IMAGE}");
 }
 

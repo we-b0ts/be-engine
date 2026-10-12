@@ -250,6 +250,7 @@ fn out_of_band_retry_state(target_fingerprint: &str) -> RewriteState {
     state.case_inventory_id = Some("inventory".to_string());
     state.target_fingerprint = Some(target_fingerprint.to_string());
     state.attempts.push(RewriteAttemptSummary {
+        engine_fingerprint: None,
         attempt: 12,
         passed: false,
         gates: E2eVerificationGates {
