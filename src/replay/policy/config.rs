@@ -1,4 +1,5 @@
 mod mysql;
+pub(in crate::replay) mod mysql_response;
 mod mysql_time;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -125,6 +126,8 @@ pub(super) struct MysqlSelector {
     pub(super) params: BTreeMap<usize, DynamicValueRule>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) sql_values: BTreeMap<usize, MysqlTimeValueRule>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) response_time_shift: BTreeMap<String, mysql_response::MysqlResponseTimeField>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -368,6 +371,14 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
             document.version >= 3 || rule.redis.is_none(),
             "Redis value rules require policy version 3"
         );
+        ensure!(
+            document.version >= 3
+                || rule
+                    .mysql
+                    .as_ref()
+                    .is_none_or(|mysql| mysql.response_time_shift.is_empty()),
+            "MySQL response time shift requires policy version 3"
+        );
         validate_rule(rule)?;
         super::request_contract::validate(rule)?;
         super::http_json::validate(rule)?;
@@ -461,7 +472,12 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
         }
     } else {
         ensure!(
-            rule.source_evidence.is_empty() || super::request_contract::is_request_rule(rule),
+            rule.source_evidence.is_empty()
+                || super::request_contract::is_request_rule(rule)
+                || rule
+                    .mysql
+                    .as_ref()
+                    .is_some_and(|mysql| !mysql.response_time_shift.is_empty()),
             "dependency source_evidence requires recording_run scope"
         );
     }
@@ -506,11 +522,15 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
                 rule.id
             );
             ensure!(
-                !mysql.params.is_empty() || !mysql.sql_values.is_empty(),
-                "MySQL rule {:?} must configure at least one params or sql_values field",
+                !mysql.params.is_empty()
+                    || !mysql.sql_values.is_empty()
+                    || !mysql.response_time_shift.is_empty(),
+                "MySQL rule {:?} must configure params, sql_values or response_time_shift",
                 rule.id
             );
-            if !mysql.sql_values.is_empty() {
+            if !mysql.response_time_shift.is_empty() {
+                mysql_response::validate_rule(rule)?;
+            } else if !mysql.sql_values.is_empty() {
                 mysql::validate_selector(mysql)?;
             } else {
                 ensure!(

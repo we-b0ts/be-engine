@@ -38,6 +38,7 @@ pub(in crate::replay) enum OptionalSessionExchange {
 
 #[derive(Debug, Clone)]
 pub(in crate::replay) struct MatchedExchange {
+    pub(in crate::replay) response_time_shift_rules: Vec<String>,
     #[allow(dead_code)]
     pub(in crate::replay) source: ReplaySource,
     #[allow(dead_code)]

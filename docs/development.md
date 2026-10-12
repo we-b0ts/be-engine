@@ -1820,6 +1820,28 @@ argv or write an ad hoc artifact parser.
 Use `backend-rewrite rule plan|apply` for source-proven inbound request,
 dependency request or response rules. Generated dependency request fields use
 `rule plan --dependency-request`; see [dependency request rules](dependency-request-rules.md).
+MySQL result expiry timestamps use the same plan/apply transaction; see
+[MySQL result time shifts](mysql-response-time-shift.md).
+
+Fast Replay does not currently reproduce process-local TTL expiry between
+recorded requests. If compressed request intervals keep a target cache warm and
+omit recorded dependency calls, retain the strict unused-dependency evidence and
+report the engine capability gap. Replay does not wait the original recording
+intervals, clear application caches, or relax dependency consumption to hide it.
+
+Terminal runner snapshots retain `reports/replay-report.json` and its dependency
+sidecar alongside assertions and aggregate reports. Each focused method snapshot
+owns a complete copy, and aggregates refer to the published copy. Removing an
+external `.replay` directory therefore does not invalidate newly published rule
+evidence. A finalized attempt with a missing original report cannot be published.
+
+For a legacy pending rule whose Replay report or sidecar is already unavailable,
+`next` returns `rule recover PLAN_ID`. This command retires only the matching plan,
+returns its selector and source proof, and requests fresh Replay with the existing
+recordings. It does not apply the stale plan or fabricate evidence. After Replay,
+query current evidence and plan again. `dependency-rule recover PLAN_ID` is an
+alias for the same recovery transaction.
+
 Use `backend-rewrite route` for a source-proven missing recorded resource,
 Recorder/Replay capability gap, external-data blocker, or source change. For a
 missing dependency, use `--cause missing-recorded-resource --endpoint

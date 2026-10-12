@@ -22,6 +22,7 @@ mod rollback_tests;
 mod select_time_tests;
 mod sql_values_tests;
 mod subquery_tests;
+mod time_shift_tests;
 mod tuple_tests;
 
 fn exchange(sql: &str, response: Value) -> Value {

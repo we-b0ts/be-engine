@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+pub(in crate::replay::policy) mod mysql_response;
 pub(super) mod mysql_values;
 use std::fs;
 use std::path::Path;
@@ -297,6 +298,10 @@ impl ReplayPolicyRuntime {
             .iter()
             .filter(|rule| {
                 rule.protocol == DependencyProtocol::Mysql
+                    && rule
+                        .mysql
+                        .as_ref()
+                        .is_some_and(|mysql| mysql.response_time_shift.is_empty())
                     && rule_matches_case(rule, case)
                     && rule_matches_mysql(rule, context.identity, context.command, context.sql)
                     && rule_matches_mysql_sql_pattern(rule, context.recorded_sql)
@@ -391,6 +396,10 @@ impl ReplayPolicyRuntime {
         };
         self.loaded.document.dependency_rules.iter().any(|rule| {
             rule.protocol == DependencyProtocol::Mysql
+                && rule
+                    .mysql
+                    .as_ref()
+                    .is_some_and(|mysql| mysql.response_time_shift.is_empty())
                 && rule_matches_case(rule, case)
                 && rule_matches_mysql(rule, context.identity, context.command, context.sql)
                 && rule_matches_mysql_sql_pattern(rule, context.recorded_sql)
@@ -750,7 +759,8 @@ fn rule_matches_mysql(
         return false;
     };
     if !(mysql.command.eq_ignore_ascii_case(command)
-        || (!mysql.sql_values.is_empty() && matches!(command, "COM_QUERY" | "COM_STMT_EXECUTE")))
+        || ((!mysql.sql_values.is_empty() || !mysql.response_time_shift.is_empty())
+            && matches!(command, "COM_QUERY" | "COM_STMT_EXECUTE")))
         || !rule_matches_target(rule, identity.target.as_ref())
         || mysql
             .database
@@ -766,7 +776,7 @@ fn rule_matches_mysql(
     let Some(sql) = sql else {
         return false;
     };
-    if !mysql.sql_values.is_empty() {
+    if !mysql.sql_values.is_empty() || !mysql.response_time_shift.is_empty() {
         return super::sql_template::SqlValueTemplate::new(
             &mysql.sql,
             &mysql.tables,
@@ -785,7 +795,7 @@ fn rule_matches_mysql_sql_pattern(rule: &ReplayDependencyRule, sql: Option<&str>
     let (Some(mysql), Some(sql)) = (&rule.mysql, sql) else {
         return false;
     };
-    if !mysql.sql_values.is_empty() {
+    if !mysql.sql_values.is_empty() || !mysql.response_time_shift.is_empty() {
         return super::sql_template::SqlValueTemplate::new(
             &mysql.sql,
             &mysql.tables,

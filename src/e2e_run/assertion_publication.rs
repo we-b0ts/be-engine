@@ -21,6 +21,8 @@ pub(super) fn prepare(
     staging: &Path,
     published: &Path,
 ) -> Result<ActiveRunState> {
+    let staged = super::replay_publication::prepare(state, old, staging, published)?;
+    let state = &staged;
     let mut reports = BTreeMap::new();
     for path in std::iter::once(state.assertions_report.clone()).chain(
         state

@@ -379,6 +379,9 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
         };
     }
     if state.phase == RewritePhase::ImplementationRequired {
+        if let Some(action) = super::plan_recovery::required_action(target_root, state) {
+            return action;
+        }
         if let Some(action) = recorder_capture::pending_plan_action(target_root, state) {
             return action;
         }
