@@ -51,11 +51,17 @@ pub(super) fn status_base(target_root: &Path, state: &RewriteState) -> Result<Re
         return Ok(review);
     }
     let target_change = target_quality::status_action(target_root, state)?;
+    let reclassification = if target_change.is_none() {
+        super::background_reclassification::required_action(target_root, state)?
+    } else {
+        None
+    };
     Ok(match state.phase {
         RewritePhase::RecordingRequired if recording_status.is_some() => {
             recording_status.expect("recording status was checked")
         }
         _ if target_change.is_some() => target_change.expect("target change was checked"),
+        _ if reclassification.is_some() => reclassification.expect("reclassification was checked"),
         _ => state_action(target_root, state),
     })
 }
@@ -65,6 +71,15 @@ pub(super) fn select_action(
     state: &RewriteState,
     base: RewriteAction,
 ) -> RewriteAction {
+    if matches!(
+        base,
+        RewriteAction::AdvanceRequired {
+            kind: RewriteAdvanceKind::ReclassifyDependencies,
+            ..
+        }
+    ) {
+        return base;
+    }
     if !matches!(
         base,
         RewriteAction::SourceReviewRequired { .. } | RewriteAction::TargetQualityRequired { .. }
@@ -141,6 +156,16 @@ pub(super) fn for_scoped_status(
     target_root: &Path,
     state: &RewriteState,
 ) -> Result<RewriteActionEnvelope> {
+    if let Some(refresh) = super::background_reclassification::required_action(target_root, state)?
+    {
+        if let Some(review) = super::review::required_action(target_root, state)? {
+            return Ok(envelope(target_root, state, review));
+        }
+        if let Some(quality) = target_quality::status_action(target_root, state)? {
+            return Ok(envelope(target_root, state, quality));
+        }
+        return Ok(envelope(target_root, state, refresh));
+    }
     let method_scope = super::RewriteWorkScope::Api {
         api: state.api.clone(),
     };

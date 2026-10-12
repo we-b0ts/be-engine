@@ -298,7 +298,7 @@ pub fn apply_rewrite_dependency_rule(
             )
         }))
     })?;
-    let (mut report, cache_snapshot_refresh) =
+    let (mut report, cache_snapshot_refresh, reclassify) =
         inventory::with_slice_mut(&mut state, &owner_api, |state| {
             let requires_fresh_replay = state
                 .dependency_rule_plan
@@ -323,10 +323,8 @@ pub fn apply_rewrite_dependency_rule(
                             "recording_required": false,
                             "overlay": overlay,
                         }));
-                        report.evidence_reclassification =
-                            Some(background_reclassification::apply(&target_root, state)?);
                         report.next_command = action::next_command(&target_root);
-                        return Ok((report, false));
+                        return Ok((report, false, true));
                     }
                     Err(error) => {
                         report.cache_snapshot_overlay = Some(serde_json::json!({
@@ -340,18 +338,23 @@ pub fn apply_rewrite_dependency_rule(
                             applied,
                         )?;
                         report.next_command = action::next_command(&target_root);
-                        return Ok((report, true));
+                        return Ok((report, true, false));
                     }
                 }
             }
             if requires_fresh_replay {
-                return Ok((report, false));
+                return Ok((report, false, false));
             }
-            report.evidence_reclassification =
-                Some(background_reclassification::apply(&target_root, state)?);
             report.next_command = action::next_command(&target_root);
-            Ok((report, false))
+            Ok((report, false, true))
         })?;
+    if reclassify {
+        report.evidence_reclassification = Some(background_reclassification::apply(
+            &target_root,
+            &mut state,
+            &owner_api,
+        )?);
+    }
     if changes_dependency_matching {
         dependency_rule::invalidate_dependency_matching_validation(&mut state);
     }

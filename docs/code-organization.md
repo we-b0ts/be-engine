@@ -81,6 +81,11 @@ is unclear.
   recomputing method evidence. `replay/report/background_overlay/original_evidence`
   owns reversible overlay restoration shared by reclassification and ownership
   planners, so interrupted applies can resume from original unused witnesses.
+  `e2e_run/reclassify/session` selects exact shared-session method projections and
+  owns revision checkpoints for snapshot, index, and progress publication.
+  `rewrite/background_reclassification` projects those results into matching
+  coordinator slices; `rewrite/fingerprint` separates executed behavior identity
+  from process-owned traffic classification when reusing Replay responses.
   `rewrite/plan_recovery` retires a pending rule with unavailable Replay evidence
   and requests fresh verification while returning its selector and source proof.
 - `replay/assertion/time` owns the shared timestamp formats and fixed request

@@ -79,7 +79,7 @@ pub(super) fn restore_legacy_background_rule_recording_request(
         target_root,
         state,
         &reclassification.result,
-        transition::AttemptTransition::Append,
+        transition::AttemptTransition::RestoreReclassified,
     )?;
     Ok(true)
 }
@@ -108,13 +108,8 @@ pub(super) fn restore_stale_dependency_finalize_result(
     if !focused_background_reclassification_recovery_required(context.clone(), &api)? {
         return Ok(false);
     }
-    let reclassification = reclassify_focused_background_dependencies(context, &api)?;
-    transition::from_e2e_result(
-        target_root,
-        state,
-        &reclassification.result,
-        transition::AttemptTransition::ReclassifyCurrent,
-    )?;
+    let owner_api = state.api.clone();
+    super::background_reclassification::apply(target_root, state, &owner_api)?;
     Ok(true)
 }
 

@@ -27,6 +27,8 @@ mod startup_inputs;
 mod store;
 mod support;
 mod target_quality_config;
+#[cfg(test)]
+pub(crate) mod test_session;
 
 use std::path::PathBuf;
 
@@ -67,6 +69,7 @@ use model::{CaseStatus, RunStatus};
 pub(crate) use model::{ResolvedProjectConfig, TargetBuildContext, TargetQualityGateConfig};
 pub(crate) use reclassify::{
     FocusedBackgroundReclassification, ensure_focused_background_reclassification_revisable,
+    focused_background_reclassification_pending,
     focused_background_reclassification_recovery_required, latest_focused_api,
     reclassify_focused_background_dependencies,
 };

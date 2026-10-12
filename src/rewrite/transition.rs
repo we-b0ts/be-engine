@@ -10,6 +10,8 @@ use crate::E2eApiRunResult;
 pub(super) enum AttemptTransition {
     Append,
     ReclassifyCurrent,
+    /// Legacy evidence can restore diagnosis, never an unproven execution identity.
+    RestoreReclassified,
 }
 
 pub(super) fn from_e2e_result(
@@ -19,6 +21,9 @@ pub(super) fn from_e2e_result(
     transition: AttemptTransition,
 ) -> Result<()> {
     let target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
+    let replay_identity = fingerprint::replay_identity(target_root)?;
+    let reused = !matches!(transition, AttemptTransition::Append);
+    let current = !reused || state.replay_identity.as_ref() == Some(&replay_identity);
     let summary = RewriteAttemptSummary {
         attempt: result.attempt,
         passed: result.passed,
@@ -26,7 +31,9 @@ pub(super) fn from_e2e_result(
         counts: result.diagnosis.counts.clone(),
     };
     match transition {
-        AttemptTransition::Append => state.attempts.push(summary),
+        AttemptTransition::Append | AttemptTransition::RestoreReclassified => {
+            state.attempts.push(summary)
+        }
         AttemptTransition::ReclassifyCurrent => {
             let current = state
                 .attempts
@@ -40,15 +47,23 @@ pub(super) fn from_e2e_result(
         }
     }
     state.attempt_delta = current_attempt_delta(&state.attempts);
-    state.target_fingerprint = Some(target_fingerprint.clone());
-    state.e2e_current = result.passed;
+    if !reused {
+        state.replay_identity = Some(replay_identity);
+    }
+    if current {
+        state.target_fingerprint = Some(target_fingerprint.clone());
+    }
+    state.e2e_current = result.passed && current;
     state.route = None;
     state.system_repair_accepted = false;
     state.rule_replay_pending = false;
     state.rule_plan = None;
     state.dependency_rule_plan = None;
     state.recorder_capture_plan = None;
-    if result.passed {
+    if !current {
+        state.active_issue = None;
+        state.phase = RewritePhase::ApiPending;
+    } else if result.passed {
         state.active_issue = None;
         state.phase = RewritePhase::SliceComplete;
     } else {
