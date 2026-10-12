@@ -246,6 +246,7 @@ fn identifies_fresh_and_reused_standard_cases() {
 
 fn test_attempt(attempt: u64, passed: bool) -> RewriteAttemptSummary {
     RewriteAttemptSummary {
+        engine_fingerprint: None,
         attempt,
         passed,
         gates: E2eVerificationGates {

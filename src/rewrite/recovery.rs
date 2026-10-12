@@ -23,20 +23,27 @@ pub(super) async fn recover(context: RewriteContext) -> Result<RewriteRecoveryRe
     let _lock = store.lock()?;
     let state = store.load()?;
     let recovered_focused_attempt = match state {
-        Some(state) => match (state.case_source.clone(), state.group_id.clone()) {
-            (Some(case_source), Some(group_id)) => {
-                crate::e2e_run::recover_focused_e2e_api(
-                    E2eRunContext {
-                        target_root: target_root.clone(),
-                        case_source,
-                        run_key: None,
-                    },
-                    &group_id,
-                )
-                .await?
+        Some(mut state) => {
+            let recovered = match (state.case_source.clone(), state.group_id.clone()) {
+                (Some(case_source), Some(group_id)) => {
+                    crate::e2e_run::recover_focused_e2e_api(
+                        E2eRunContext {
+                            target_root: target_root.clone(),
+                            case_source,
+                            run_key: None,
+                        },
+                        &group_id,
+                    )
+                    .await?
+                }
+                _ => false,
+            };
+            if super::engine_retry::clear_running(&mut state) {
+                state.bump();
+                store.save(&state)?;
             }
-            _ => false,
-        },
+            recovered
+        }
         None => false,
     };
     Ok(RewriteRecoveryReport {

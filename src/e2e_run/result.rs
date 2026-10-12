@@ -54,6 +54,8 @@ pub struct E2eVerificationGates {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct E2eRunResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_fingerprint: Option<String>,
     pub run_key: String,
     pub sequence: u64,
     pub status: String,
@@ -67,6 +69,8 @@ pub struct E2eRunResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct E2eApiRunResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_fingerprint: Option<String>,
     pub run_key: String,
     pub api: String,
     pub attempt: u64,
@@ -81,6 +85,7 @@ pub struct E2eApiRunResult {
 
 pub(super) fn run_result(layout: &RunLayout, state: &ActiveRunState) -> E2eRunResult {
     E2eRunResult {
+        engine_fingerprint: state.engine_fingerprint.clone(),
         run_key: state.run_key.clone(),
         sequence: state.sequence,
         status: status_label(state.status).to_string(),
@@ -99,6 +104,7 @@ pub(super) fn api_result(
     attempt: u64,
 ) -> E2eApiRunResult {
     E2eApiRunResult {
+        engine_fingerprint: state.engine_fingerprint.clone(),
         run_key: state.run_key.clone(),
         api: api.to_string(),
         attempt,

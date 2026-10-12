@@ -25,7 +25,13 @@ fn resolve_handle(
             std::iter::once(&state.active_slice)
                 .chain(state.parked_slices.values())
                 .map(|slice| super::super::api_selector::work_scope(state, &slice.api))
-                .filter(|scope| super::super::rule_replay::ready(state, scope)),
+                .filter(|scope| {
+                    super::super::rule_replay::ready(state, scope)
+                        || super::super::replay_admission::admitted(state, scope)
+                        || super::super::replay_admission::all_ready(state, scope, |slice| {
+                            slice.engine_retry_running
+                        })
+                }),
         );
     }
     let mut unique = Vec::new();

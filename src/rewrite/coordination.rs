@@ -130,8 +130,7 @@ pub(super) fn details(
         .collect::<std::collections::BTreeSet<_>>();
     if !state.api.is_empty()
         && (state.phase == RewritePhase::ApiPending
-            || state.system_repair_accepted
-            || super::rule_replay::pending(&state.active_slice))
+            || super::replay_admission::slice_ready(&state.active_slice))
     {
         unverified.insert(super::api_selector::public_api(&state.api));
     }
@@ -140,7 +139,7 @@ pub(super) fn details(
             .parked_slices
             .values()
             .filter(|slice| {
-                (slice.system_repair_accepted || super::rule_replay::pending(slice))
+                super::replay_admission::slice_ready(slice)
                     && !super::regression_scope::is_skipped(state, &slice.api)
             })
             .map(|slice| super::api_selector::public_api(&slice.api)),
@@ -204,7 +203,10 @@ pub(super) fn details(
         | RewriteAction::SourceReviewRequired { .. }
             if !busy =>
         {
-            let previous = if state.system_repair_accepted || super::rule_replay::any_ready(state) {
+            let previous = if state.system_repair_accepted
+                || super::rule_replay::any_ready(state)
+                || super::engine_retry::any_pending(state)
+            {
                 "verify_api"
             } else {
                 "verify_handoff"

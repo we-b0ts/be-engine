@@ -70,7 +70,7 @@ pub(super) fn select(state: &RewriteState, selector: &RewriteApiSelector) -> Res
                     || item.status == RewriteApiStatus::Active
                         && slice
                             .is_some_and(|slice| slice.phase == super::RewritePhase::ApiPending)
-                    || super::rule_replay::admitted(
+                    || super::replay_admission::admitted(
                         state,
                         &super::RewriteWorkScope::Api {
                             api: (*api).clone(),

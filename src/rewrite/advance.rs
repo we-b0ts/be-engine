@@ -1,4 +1,5 @@
 //! Atomic API/recording transition; worker feedback is folded into persisted state.
+use super::verification::run_and_transition;
 use super::*;
 
 pub(super) struct AdvanceResult {

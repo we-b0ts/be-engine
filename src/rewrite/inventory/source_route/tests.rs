@@ -133,6 +133,7 @@ fn source_route_repair_cannot_change_grouped_or_verified_work() {
             5 => state.api_inventory[0].e2e_current = true,
             7 => state.api_inventory[0].verified_target_fingerprint = Some("verified".into()),
             8 => state.attempts.push(rewrite::model::RewriteAttemptSummary {
+                engine_fingerprint: None,
                 attempt: 1,
                 passed: false,
                 gates: crate::E2eVerificationGates {

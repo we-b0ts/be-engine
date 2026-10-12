@@ -168,6 +168,8 @@ impl Default for RewriteRecordingSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RewriteAttemptSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_fingerprint: Option<String>,
     pub attempt: u64,
     pub passed: bool,
     pub gates: E2eVerificationGates,
@@ -339,6 +341,11 @@ pub(super) struct RewriteSliceState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replay_identity: Option<String>,
     pub attempts: Vec<RewriteAttemptSummary>,
+    /// Engine-upgrade retry permits consumed before starting execution.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub engine_retry_fingerprints: std::collections::BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub engine_retry_running: bool,
     pub attempt_delta: Option<RewriteAttemptDelta>,
     pub active_issue: Option<RewriteIssue>,
     pub rule_plan: Option<RewriteRulePlanRecord>,
@@ -368,6 +375,8 @@ impl RewriteSliceState {
             target_fingerprint: None,
             replay_identity: None,
             attempts: Vec::new(),
+            engine_retry_fingerprints: Default::default(),
+            engine_retry_running: false,
             attempt_delta: None,
             active_issue: None,
             rule_plan: None,

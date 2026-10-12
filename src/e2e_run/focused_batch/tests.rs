@@ -48,6 +48,28 @@ fn state(root: &Path) -> ActiveRunState {
 }
 
 #[test]
+fn executor_revision_survives_projection_and_legacy_state_stays_unknown() {
+    let temporary = tempfile::tempdir().unwrap();
+    let mut executed = state(temporary.path());
+    assert_eq!(
+        executed.engine_fingerprint.as_deref(),
+        Some(crate::build_info::ENGINE_FINGERPRINT)
+    );
+    executed.engine_fingerprint = Some("engine-revision-v1:previous-executor".into());
+    let projected = project(&executed, "GET /api");
+    let result =
+        super::super::result::api_result(&layout(temporary.path()), &projected, "GET /api", 3);
+    assert_eq!(result.engine_fingerprint, executed.engine_fingerprint);
+    let mut legacy = serde_json::to_value(&executed).unwrap();
+    legacy.as_object_mut().unwrap().remove("engine_fingerprint");
+    let legacy: ActiveRunState = serde_json::from_value(legacy).unwrap();
+    assert!(legacy.engine_fingerprint.is_none());
+    let result =
+        super::super::result::api_result(&layout(temporary.path()), &legacy, "GET /api", 3);
+    assert!(result.engine_fingerprint.is_none());
+}
+
+#[test]
 fn route_response_failure_keeps_passing_method_evidence() {
     let mut state = state(Path::new("/runtime"));
     state.errors.push(

@@ -344,6 +344,7 @@ fn final_reclassification_keeps_an_unexecuted_case_pending() {
 
 fn clean_state() -> ActiveRunState {
     ActiveRunState {
+        engine_fingerprint: None,
         version: STATE_VERSION,
         run_key: "recording-run".to_string(),
         sequence: 6,

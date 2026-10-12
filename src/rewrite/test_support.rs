@@ -45,6 +45,8 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
             target_fingerprint: None,
             replay_identity: None,
             attempts: Vec::new(),
+            engine_retry_fingerprints: Default::default(),
+            engine_retry_running: false,
             attempt_delta: None,
             active_issue: None,
             rule_plan: None,

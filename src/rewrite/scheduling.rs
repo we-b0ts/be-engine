@@ -68,7 +68,7 @@ pub(super) fn idle_action(target_root: &Path, state: &RewriteState) -> Option<Re
         .values()
         .find(|slice| {
             slice.api != state.api
-                && (slice.system_repair_accepted || super::rule_replay::pending(slice))
+                && super::replay_admission::slice_ready(slice)
                 && !super::regression_scope::is_skipped(state, &slice.api)
         })
         .map(|slice| slice.api.as_str());
