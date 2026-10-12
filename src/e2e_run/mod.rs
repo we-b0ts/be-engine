@@ -19,6 +19,7 @@ mod model;
 mod progress;
 mod project_validation;
 mod reclassify;
+mod replay_publication;
 mod request_view;
 mod result;
 mod runtime;

@@ -11,6 +11,7 @@ pub(in crate::replay) mod sql_match;
 mod sqlx_tests;
 #[cfg(test)]
 mod tests;
+pub(in crate::replay) mod time_shift;
 mod values;
 
 pub(super) use broker::handle_connection;

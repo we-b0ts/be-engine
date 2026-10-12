@@ -232,7 +232,7 @@ pub(crate) fn read_dependency_evidence(report_path: &Path) -> Result<ReplayDepen
     Ok(evidence)
 }
 
-pub(in crate::replay) fn build_dependency_evidence(report: &Value) -> ReplayDependencyEvidence {
+pub(crate) fn build_dependency_evidence(report: &Value) -> ReplayDependencyEvidence {
     let mut builders = BTreeMap::<ClusterKey, ClusterBuilder>::new();
     collect_arrays(report, NETWORK_EVENTS.iter().copied(), true, &mut builders);
     collect_arrays(report, MYSQL_EVENTS.iter().copied(), false, &mut builders);

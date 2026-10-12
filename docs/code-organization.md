@@ -72,6 +72,10 @@ is unclear.
   details, summary references and their fingerprints for both ordinary terminal
   publication and focused method projections. Store owns atomic directory
   replacement; published consumers never need the transient active directory.
+  `e2e_run/replay_publication` stages the original Replay report and dependency
+  sidecar into that same snapshot and retargets aggregate report references.
+  `rewrite/plan_recovery` retires a pending rule with unavailable Replay evidence
+  and requests fresh verification while returning its selector and source proof.
 - `replay/assertion/time` owns the shared timestamp formats and fixed request
   time windows consumed by response assertions and dependency-header rules.
   `replay/policy/http_headers` owns typed selectors/schema validation, its
@@ -484,6 +488,12 @@ explicit repository-wide audit.
   `replay/policy/feedback/mysql_time` owns atomic policy plan/apply; its evidence
   child correlates immutable writes. Coordinator dependency rules persist the plan
   and invalidate validation without changing dependency ownership.
+  `replay/mysql/time_shift` translates selected datetime result cells on delivery
+  copies. `replay/policy/config/mysql_response` owns bounded result selectors;
+  `matcher/mysql_response` selects rules and accounts for successful delivery.
+  `feedback/generated_values/mysql_response` proves matched immutable result
+  evidence and reuses the generated-value plan/apply transaction. None of these
+  owners authorizes request SQL differences or changes recorded result payloads.
 
 - `request_rules` owns explicit inbound-request transformation policy and the
   per-send runtime. Its `jwt` child owns compact HMAC JWT verification,

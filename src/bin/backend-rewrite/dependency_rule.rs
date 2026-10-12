@@ -27,6 +27,8 @@ enum DependencyRuleCommand {
     Plan(Box<DependencyRulePlanArgs>),
     /// Atomically apply the persisted, evidence-validated pending plan.
     Apply(DependencyRuleApplyArgs),
+    /// Recover missing plan evidence through fresh Replay without applying the rule.
+    Recover(DependencyRuleApplyArgs),
 }
 
 #[derive(Debug, Args)]
@@ -238,6 +240,10 @@ pub(super) fn run(target_root: PathBuf, args: DependencyRuleArgs, pretty: bool) 
         },
         DependencyRuleCommand::Apply(args) => super::print_json(
             &apply_rewrite_dependency_rule(RewriteContext { target_root }, &args.plan_id)?,
+            pretty,
+        ),
+        DependencyRuleCommand::Recover(args) => super::print_json(
+            &traffic_e2e::recover_rewrite_rule_plan(RewriteContext { target_root }, &args.plan_id)?,
             pretty,
         ),
     }

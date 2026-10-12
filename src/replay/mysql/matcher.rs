@@ -376,6 +376,21 @@ impl ReplayState {
                     }) {
                         exchange.record.response = response;
                     }
+                    let mut response_time_shift_rules = Vec::new();
+                    if exchange.source == ReplaySource::Case
+                        && let Some(policy) = &self.replay_policy
+                    {
+                        let Ok((response, ids)) = policy.shift_mysql_response(
+                            active_case_id.as_deref(),
+                            identity,
+                            &self.mysql.exchanges[index].record,
+                            &exchange.record.response,
+                        ) else {
+                            continue;
+                        };
+                        exchange.record.response = response;
+                        response_time_shift_rules = ids;
+                    }
                     self.mysql.exchanges[index].status =
                         if exchange.record.outcome.is_client_terminated() {
                             ReplayExchangeStatus::AwaitingClientTermination
@@ -406,6 +421,7 @@ impl ReplayState {
                         target_event_index: None,
                     };
                     return Some(MatchedExchange {
+                        response_time_shift_rules,
                         source: exchange.source,
                         index,
                         record: exchange.record,
@@ -623,6 +639,9 @@ impl ReplayState {
             return;
         };
         exchange.status = ReplayExchangeStatus::Consumed;
+        if let Some(policy) = &mut self.replay_policy {
+            policy.commit_mysql_response_shift(&matched.response_time_shift_rules);
+        }
         let case_id = matched.report.case_id.clone();
         push_success_detail(
             &mut self.mysql.events.matched_query_count,

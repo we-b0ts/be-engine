@@ -13,6 +13,15 @@ pub fn plan_dependency_request_rule(
     feedback: DependencyRequestRuleFeedback,
 ) -> Result<GeneratedValueRulePlan> {
     let rule: ReplayDependencyRule = serde_json::from_value(feedback.rule)?;
+    if super::mysql_response::is_rule(&rule) {
+        return super::mysql_response::plan(
+            DependencyRequestRuleFeedback {
+                rule: serde_json::to_value(&rule)?,
+                ..feedback
+            },
+            rule,
+        );
+    }
     ensure!(
         request_contract::is_request_rule(&rule),
         "dependency request planning requires a Redis argument or HTTP multipart contract"

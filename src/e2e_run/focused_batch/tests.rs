@@ -102,6 +102,11 @@ fn method_publication_retains_separate_readable_snapshots() {
     )
     .unwrap();
     fs::create_dir_all(primary.active_dir.join("reports")).unwrap();
+    store::write_json(
+        &state.replay_report,
+        &serde_json::json!({"version":6,"finalized":true,"cases":[]}),
+    )
+    .unwrap();
     fs::create_dir_all(primary.active_dir.join("tmp")).unwrap();
     for (index, case) in state.cases.iter_mut().enumerate() {
         let actual = primary.active_dir.join(format!("tmp/actual-{index}.json"));
@@ -132,6 +137,13 @@ fn method_publication_retains_separate_readable_snapshots() {
             })
             .collect();
         store::write_json(&api.report_dir.join("assertions.json"), &report).unwrap();
+        store::write_json(
+            &api.report_dir.join("aggregate.json"),
+            &serde_json::json!({
+                "reports":[{"path":state.replay_report}]
+            }),
+        )
+        .unwrap();
     }
     publish(&global, &primary, &state).unwrap();
     for (api, expected) in [
@@ -148,6 +160,17 @@ fn method_publication_retains_separate_readable_snapshots() {
         assert_eq!(snapshot.cases.len(), 1);
         assert_eq!(snapshot.apis[0].group_id, api);
         assert!(snapshot.aggregate_report.starts_with(&latest));
+        assert_eq!(
+            snapshot.replay_report,
+            latest.join("reports/replay-report.json")
+        );
+        crate::replay::report::read_dependency_evidence(&snapshot.replay_report).unwrap();
+        let aggregate: serde_json::Value =
+            serde_json::from_slice(&fs::read(&snapshot.aggregate_report).unwrap()).unwrap();
+        assert_eq!(
+            aggregate["reports"][0]["path"],
+            serde_json::json!(snapshot.replay_report)
+        );
         assert!(latest.join("target.log").is_file());
         assert!(!latest.parent().unwrap().join(".active").exists());
         let response = snapshot.cases[0].response_assertion.as_ref().unwrap();

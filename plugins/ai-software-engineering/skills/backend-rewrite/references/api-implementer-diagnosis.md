@@ -156,6 +156,8 @@ their absence does not mean a documented capability is unavailable.
 | Random SET NX ownership tokens differ from recordings, or a script/DELEX references that token | Redis `lock`; inspect `redis_lock_candidates`, prove random tokens and conditional release from source, and return host, port, key selector plus source evidence. One rule correlates all supported references; never remove the lock or independently ignore token arguments. |
 | Redis writes differ at a source-generated ZADD score or ZREMRANGEBYSCORE cutoff | Dependency request `time: preserve_relative`; inspect `dependency_request_candidates` from `dirty_clusters`, then return endpoint/key, `commands.argument_values` (ZADD index 1, ZREMRANGEBYSCORE index 2), timestamp format and source proof for `rule plan --dependency-request`. See [dependency request rules](../../../../../docs/dependency-request-rules.md). |
 | A recorded Redis response timestamp makes an otherwise correct cache expire during Replay, causing extra reads or an error branch | Redis `time-shift`; inspect earlier successfully matched GET/HGET responses, including previous cases, and prove their time semantics. |
+| A matched MySQL SELECT returns an absolute lease or expiry that is stale during Replay | Explicit MySQL `response_time_shift` through `rule plan --dependency-request`; prove exact UTC result columns and fixed sentinel values. See [MySQL result time shifts](../../../../../docs/mysql-response-time-shift.md). |
+| Fast Replay keeps a process TTL cache warm across requests that were farther apart in recording | Currently unsupported. Retain strict unused-dependency evidence and return source-proven TTL semantics as an engine capability gap. |
 | Shared HTTP initialization was recorded in another case | HTTP `cross-case`; verify same-run request identity and source sharing semantics. |
 | An outbound HTTP array or Redis write collection differs only in order | Protocol-specific `unordered`; prove collection semantics and inspect exact order witnesses. |
 
@@ -164,7 +166,7 @@ categories. Both can author `verification.yaml` `dependency_rules`.
 
 | Entrypoint | Examples of supported planners |
 | --- | --- |
-| `rule plan/apply` | Inbound JWT time translation, response assertions, generated identities (`--dynamic-value`), and dependency request contracts (`--dependency-request`). |
+| `rule plan/apply` | Inbound JWT time translation, response assertions, generated identities (`--dynamic-value`), dependency request contracts and MySQL result time shifts (`--dependency-request`). |
 | `dependency-rule plan/apply` | Protocol-specific ownership, cross-case scope, HTTP/Redis unordered values, Redis lock/publish/response time-shift, and MySQL time values. |
 
 Check both `rule plan --help` and the relevant protocol's `dependency-rule plan`

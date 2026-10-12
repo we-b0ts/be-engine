@@ -227,6 +227,8 @@ enum RuleCommand {
     Plan(Box<RulePlanArgs>),
     /// Atomically apply the persisted, evidence-validated pending plan.
     Apply(RuleApplyArgs),
+    /// Retire a plan whose evidence is missing and request fresh Replay without applying it.
+    Recover(RuleApplyArgs),
 }
 
 #[derive(Debug, Args)]
@@ -563,6 +565,13 @@ async fn run(cli: Cli) -> Result<()> {
             ),
             RuleCommand::Apply(args) => print_json(
                 &apply_rewrite_rule(RewriteContext { target_root }, &args.plan_id)?,
+                pretty,
+            ),
+            RuleCommand::Recover(args) => print_json(
+                &traffic_e2e::recover_rewrite_rule_plan(
+                    RewriteContext { target_root },
+                    &args.plan_id,
+                )?,
                 pretty,
             ),
         },

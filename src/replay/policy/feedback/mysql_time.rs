@@ -334,6 +334,7 @@ pub fn plan_mysql_time_rule(feedback: MysqlTimeRuleFeedback) -> Result<MysqlTime
         protocol: DependencyProtocol::Mysql,
         target: TargetSelector::default(),
         mysql: Some(MysqlSelector {
+            response_time_shift: BTreeMap::new(),
             command: "COM_QUERY".into(),
             sql: s.sql.clone(),
             tables: s.tables.clone(),

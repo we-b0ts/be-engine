@@ -13,7 +13,8 @@ mod writer;
 mod writer_tests;
 
 #[cfg(test)]
-pub(super) use dependency_evidence::{build_dependency_evidence, report_has_case_dirty_events};
+pub(super) use dependency_evidence::report_has_case_dirty_events;
+pub(crate) use dependency_evidence::{build_dependency_evidence, dependency_evidence_path};
 
 pub(crate) use background_overlay::{
     BackgroundReclassification, reclassify_background_dependencies,
