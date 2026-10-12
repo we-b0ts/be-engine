@@ -114,6 +114,176 @@ fn git_ok(repository: &Path, args: &[&str]) {
 
 #[test]
 fn clean_reclassification_advances_without_replacing_standard_recording() {
+    let (target, mut state, result) = reclassification_fixture();
+    let mut failed = result.clone();
+    failed.passed = false;
+    failed.gates.dependencies = crate::E2eDependencyGate::Dirty;
+    state.attempts.clear();
+    transition::from_e2e_result(
+        target.path(),
+        &mut state,
+        &failed,
+        transition::AttemptTransition::Append,
+    )
+    .unwrap();
+
+    transition::from_e2e_result(
+        target.path(),
+        &mut state,
+        &result,
+        transition::AttemptTransition::ReclassifyCurrent,
+    )
+    .unwrap();
+    assert_eq!(state.phase, RewritePhase::SliceComplete);
+    assert_eq!(state.recording_run_id, "20260803023812");
+    assert_eq!(state.recording_request_reason, None);
+    assert_eq!(state.attempts.len(), 1);
+    assert!(state.attempts[0].passed);
+}
+
+#[test]
+fn reclassification_after_code_change_requests_replay_without_stamping_new_code() {
+    let (target, mut state, result) = reclassification_fixture();
+    let mut failed = result.clone();
+    failed.passed = false;
+    failed.gates.dependencies = crate::E2eDependencyGate::Dirty;
+    state.attempts.clear();
+    transition::from_e2e_result(
+        target.path(),
+        &mut state,
+        &failed,
+        transition::AttemptTransition::Append,
+    )
+    .unwrap();
+    let original = state.target_fingerprint.clone();
+    fs::write(
+        target.path().join("Cargo.toml"),
+        "[package]\nname='changed-target'\n",
+    )
+    .unwrap();
+    assert_ne!(
+        original.as_deref(),
+        Some(
+            fingerprint::repository_fingerprint(target.path())
+                .unwrap()
+                .as_str()
+        )
+    );
+    transition::from_e2e_result(
+        target.path(),
+        &mut state,
+        &result,
+        transition::AttemptTransition::ReclassifyCurrent,
+    )
+    .unwrap();
+    assert_eq!(state.target_fingerprint, original);
+    assert!(!state.e2e_current);
+    assert_eq!(state.phase, RewritePhase::ApiPending);
+    assert!(state.active_issue.is_none());
+    assert_eq!(state.attempts.len(), 1);
+}
+
+#[test]
+fn reclassification_reuses_only_classification_changes_and_never_upgrades_legacy_evidence() {
+    for change in [
+        "classification",
+        "verification",
+        "startup",
+        "environment",
+        "legacy",
+    ] {
+        let (target, mut state, result) = reclassification_fixture();
+        state.attempts.clear();
+        let mut failed = result.clone();
+        failed.passed = false;
+        failed.gates.dependencies = crate::E2eDependencyGate::Dirty;
+        transition::from_e2e_result(
+            target.path(),
+            &mut state,
+            &failed,
+            transition::AttemptTransition::Append,
+        )
+        .unwrap();
+        let original = state.target_fingerprint.clone();
+        match change {
+            "classification" => {
+                fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
+                fs::write(
+                    target
+                        .path()
+                        .join(".traffic-e2e/source-traffic-policy.yaml"),
+                    "version: 2\n",
+                )
+                .unwrap();
+            }
+            "verification" => {
+                fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
+                fs::write(
+                    target.path().join(".traffic-e2e/verification.yaml"),
+                    "version: 3\nexpected_response: assertions_only\n",
+                )
+                .unwrap();
+            }
+            "startup" => {
+                let path = target
+                    .path()
+                    .join(crate::repository::LOCAL_STARTUP_MANIFEST_PATH);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(
+                    path,
+                    serde_json::to_vec(&serde_json::json!({
+                        "schema_version": 4,
+                        "snapshot_id": "new-snapshot",
+                        "content_revision": "new-content",
+                        "source_snapshot_id": "source",
+                        "source_image_id": "image",
+                        "mounts": []
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+            }
+            "environment" => {
+                crate::startup::ensure_startup_environment(
+                    target.path(),
+                    "REGRESSION_MODE",
+                    "changed",
+                )
+                .unwrap();
+            }
+            _ => {
+                let mut encoded = serde_json::to_value(&state).unwrap();
+                encoded.as_object_mut().unwrap().remove("replay_identity");
+                state = serde_json::from_value(encoded).unwrap();
+            }
+        }
+        transition::from_e2e_result(
+            target.path(),
+            &mut state,
+            &result,
+            transition::AttemptTransition::ReclassifyCurrent,
+        )
+        .unwrap();
+        if change == "classification" {
+            assert!(state.e2e_current);
+            assert_eq!(state.phase, RewritePhase::SliceComplete);
+            assert_eq!(
+                state.target_fingerprint,
+                Some(fingerprint::repository_fingerprint(target.path()).unwrap())
+            );
+        } else {
+            assert!(!state.e2e_current);
+            assert_eq!(state.phase, RewritePhase::ApiPending);
+            assert_eq!(state.target_fingerprint, original);
+        }
+    }
+}
+
+fn reclassification_fixture() -> (
+    tempfile::TempDir,
+    model::RewriteState,
+    crate::E2eApiRunResult,
+) {
     let target = tempfile::tempdir().unwrap();
     fs::write(
         target.path().join("Cargo.toml"),
@@ -176,17 +346,5 @@ fn clean_reclassification_advances_without_replacing_standard_recording() {
         runtime_outputs: Vec::new(),
     };
 
-    transition::from_e2e_result(
-        target.path(),
-        &mut state,
-        &result,
-        transition::AttemptTransition::ReclassifyCurrent,
-    )
-    .unwrap();
-
-    assert_eq!(state.phase, RewritePhase::SliceComplete);
-    assert_eq!(state.recording_run_id, "20260803023812");
-    assert_eq!(state.recording_request_reason, None);
-    assert_eq!(state.attempts.len(), 1);
-    assert!(state.attempts[0].passed);
+    (target, state, result)
 }

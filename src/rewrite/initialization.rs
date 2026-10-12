@@ -49,6 +49,7 @@ pub(super) fn new_state(
             source_revision: None,
             group_id: None,
             target_fingerprint: None,
+            replay_identity: None,
             attempts: Vec::new(),
             attempt_delta: None,
             active_issue: None,

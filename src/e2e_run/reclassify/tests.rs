@@ -15,6 +15,155 @@ use crate::e2e_run::model::{
 use crate::replay::BackgroundReclassification;
 
 #[test]
+fn ownership_reclassification_updates_every_method_in_the_same_session() {
+    let target = tempfile::tempdir().unwrap();
+    let context = crate::e2e_run::test_session::install(target.path());
+    let original = std::fs::read(context.case_source.join("get-case/dependencies.jsonl")).unwrap();
+    crate::e2e_run::test_session::classify_stream(target.path());
+    let result =
+        super::reclassify_focused_background_dependencies(context.clone(), "GET /api").unwrap();
+    assert!(result.passed);
+    for api in ["GET /api", "OPTIONS /api"] {
+        let path = crate::e2e_run::test_session::state_path(&context, api);
+        let state: ActiveRunState = crate::e2e_run::store::read_yaml(&path).unwrap();
+        assert!(
+            state.aggregate_clean,
+            "{api} retained stale shared dependency evidence"
+        );
+        assert_eq!(state.status, RunStatus::Successful);
+        assert_eq!(state.cases.len(), 1);
+        assert_eq!(state.cases[0].group_id, api);
+    }
+    assert_eq!(
+        original,
+        std::fs::read(context.case_source.join("get-case/dependencies.jsonl")).unwrap()
+    );
+}
+
+#[test]
+fn interrupted_shared_reclassification_retries_without_recounting_the_recording() {
+    use crate::e2e_run::{config, store, test_session};
+    let target = tempfile::tempdir().unwrap();
+    let context = test_session::install(target.path());
+    test_session::classify_stream(target.path());
+    let path = test_session::state_path(&context, "OPTIONS /api");
+    let state: ActiveRunState = store::read_yaml(&path).unwrap();
+    std::fs::remove_file(&state.assertions_report).unwrap();
+    std::fs::create_dir(&state.assertions_report).unwrap();
+    let (_, layout) = config::resolve_layout(target.path(), &context.case_source, None).unwrap();
+    let progress = std::fs::read(&layout.progress_path).unwrap();
+    assert!(
+        super::reclassify_focused_background_dependencies(context.clone(), "GET /api").is_err()
+    );
+    assert_eq!(std::fs::read(&layout.progress_path).unwrap(), progress);
+    assert!(
+        layout
+            .run_root
+            .join("focused-reclassification.pending.yaml")
+            .is_file()
+    );
+    std::fs::remove_dir(&state.assertions_report).unwrap();
+    let result =
+        super::reclassify_focused_background_dependencies(context.clone(), "GET /api").unwrap();
+    assert_eq!(result.updated_apis, ["GET /api", "OPTIONS /api"]);
+    assert!(result.results.iter().all(|result| result.passed));
+    let index = std::fs::read(&layout.index_path).unwrap();
+    let progress = std::fs::read(&layout.progress_path).unwrap();
+    super::reclassify_focused_background_dependencies(context, "OPTIONS /api").unwrap();
+    assert_eq!(std::fs::read(&layout.index_path).unwrap(), index);
+    assert_eq!(std::fs::read(&layout.progress_path).unwrap(), progress);
+    assert!(
+        !layout
+            .run_root
+            .join("focused-reclassification.pending.yaml")
+            .exists()
+    );
+}
+
+#[test]
+fn shared_reclassification_recovers_after_index_publication_before_progress() {
+    use crate::e2e_run::{config, store, test_session};
+    let target = tempfile::tempdir().unwrap();
+    let context = test_session::install(target.path());
+    let (_, layout) = config::resolve_layout(target.path(), &context.case_source, None).unwrap();
+    let inventory =
+        crate::case_group::load_case_group_inventory(&layout.group_index_path, &layout.case_source)
+            .unwrap();
+    let members = super::session::members(&layout, &inventory, "GET /api").unwrap();
+    let index = store::load_or_create_index(&layout, &layout.run_key, &layout.case_source).unwrap();
+    let revision = super::session::preflight(&layout, &members, &index).unwrap();
+    let old_progress = std::fs::read(&layout.progress_path).unwrap();
+    test_session::classify_stream(target.path());
+    super::reclassify_focused_background_dependencies(context.clone(), "GET /api").unwrap();
+    let final_index = std::fs::read(&layout.index_path).unwrap();
+    let final_progress = std::fs::read(&layout.progress_path).unwrap();
+    // A crash after snapshots and index commit leaves the baseline progress and checkpoint.
+    std::fs::write(&layout.progress_path, old_progress).unwrap();
+    super::session::begin(&layout, &revision).unwrap();
+    super::reclassify_focused_background_dependencies(context, "OPTIONS /api").unwrap();
+    assert_eq!(std::fs::read(&layout.index_path).unwrap(), final_index);
+    assert_eq!(
+        std::fs::read(&layout.progress_path).unwrap(),
+        final_progress
+    );
+}
+
+#[test]
+fn shared_reclassification_preserves_method_response_failures_and_unrelated_attempts() {
+    use crate::e2e_run::{store, test_session};
+    for same_session in [true, false] {
+        let target = tempfile::tempdir().unwrap();
+        let context = test_session::install(target.path());
+        let path = test_session::state_path(&context, "OPTIONS /api");
+        let mut state: ActiveRunState = store::read_yaml(&path).unwrap();
+        state.cases[0].assertion_passed = Some(false);
+        if !same_session {
+            state.session_id = Some("later-session".into());
+            state.sequence += 1;
+        }
+        store::write_yaml(&path, &state).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        test_session::classify_stream(target.path());
+        let result =
+            super::reclassify_focused_background_dependencies(context, "GET /api").unwrap();
+        let updated: ActiveRunState = store::read_yaml(&path).unwrap();
+        assert_eq!(updated.status, RunStatus::Failed);
+        assert_eq!(updated.cases[0].assertion_passed, Some(false));
+        if same_session {
+            assert!(updated.aggregate_clean);
+            assert_eq!(result.results.len(), 2);
+            assert!(!result.results[1].passed);
+        } else {
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+            assert_eq!(result.results.len(), 1);
+        }
+    }
+}
+
+#[test]
+fn shared_reclassification_rejects_active_or_inconsistent_sibling_before_writing_reports() {
+    use crate::e2e_run::{store, test_session};
+    for active in [true, false] {
+        let target = tempfile::tempdir().unwrap();
+        let context = test_session::install(target.path());
+        let path = test_session::state_path(&context, "OPTIONS /api");
+        let mut state: ActiveRunState = store::read_yaml(&path).unwrap();
+        if active {
+            std::fs::create_dir(path.parent().unwrap().parent().unwrap().join(".active")).unwrap();
+        } else {
+            state.case_inventory_id = "foreign-inventory".into();
+            store::write_yaml(&path, &state).unwrap();
+        }
+        let primary: ActiveRunState =
+            store::read_yaml(&test_session::state_path(&context, "GET /api")).unwrap();
+        let original = std::fs::read(&primary.replay_report).unwrap();
+        test_session::classify_stream(target.path());
+        assert!(super::reclassify_focused_background_dependencies(context, "GET /api").is_err());
+        assert_eq!(std::fs::read(&primary.replay_report).unwrap(), original);
+    }
+}
+
+#[test]
 fn recognizes_only_the_defined_strict_dependency_finalize_failure() {
     assert!(is_strict_dependency_finalize_error(
         "strict replay finalize failed: cannot finalize replay with unmatched, unused, or unsupported exchanges; complete=true; dirty=true"

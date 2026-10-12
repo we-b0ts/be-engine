@@ -335,6 +335,9 @@ pub(super) struct RewriteSliceState {
     pub source_revision: Option<String>,
     pub group_id: Option<String>,
     pub target_fingerprint: Option<String>,
+    /// Code, verification policy and startup inputs used by the actual Replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_identity: Option<String>,
     pub attempts: Vec<RewriteAttemptSummary>,
     pub attempt_delta: Option<RewriteAttemptDelta>,
     pub active_issue: Option<RewriteIssue>,
@@ -363,6 +366,7 @@ impl RewriteSliceState {
             source_revision: None,
             group_id: None,
             target_fingerprint: None,
+            replay_identity: None,
             attempts: Vec::new(),
             attempt_delta: None,
             active_issue: None,
@@ -566,6 +570,7 @@ pub struct RewriteTrafficOperationView {
 pub enum RewriteAdvanceKind {
     Replay,
     Workflow,
+    ReclassifyDependencies,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

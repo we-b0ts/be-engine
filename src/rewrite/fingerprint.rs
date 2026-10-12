@@ -33,6 +33,34 @@ pub(super) fn review_fingerprint(target_root: &Path) -> Result<String> {
     runtime_inputs_fingerprint(target_root, repository_files_hash(target_root, true)?)
 }
 
+/// Identity of executed behavior. Only process-owned traffic classification may
+/// change when reusing responses from a finalized Replay.
+pub(super) fn replay_identity(target_root: &Path) -> Result<String> {
+    let mut hash = Fnv1a::default();
+    hash.update(b"rewrite-replay-identity-v1");
+    hash.update(review_fingerprint(target_root)?.as_bytes());
+    let policy = if target_root.join(".traffic-e2e/project.yaml").is_file() {
+        crate::e2e_run::resolve_project(target_root)?
+            .1
+            .replay_policy
+    } else {
+        target_root.join(".traffic-e2e/verification.yaml")
+    };
+    match fs::read(&policy) {
+        Ok(bytes) => {
+            hash.update(b"verification-policy");
+            hash.update(&bytes);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            hash.update(b"no-verification-policy")
+        }
+        Err(error) => {
+            return Err(error).context("failed to fingerprint Replay verification policy");
+        }
+    }
+    Ok(hash.finish())
+}
+
 fn runtime_inputs_fingerprint(target_root: &Path, mut hash: Fnv1a) -> Result<String> {
     hash.update(b"startup-snapshot");
     hash.update(crate::startup::startup_snapshot_revision(target_root)?.as_bytes());

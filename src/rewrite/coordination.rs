@@ -187,6 +187,16 @@ pub(super) fn details(
         | RewriteAction::ExpertRequired { .. }
         | RewriteAction::WorkerStatusRequired { .. }
         | RewriteAction::IntegrationRequired { .. } => {}
+        RewriteAction::AdvanceRequired {
+            kind: super::model::RewriteAdvanceKind::ReclassifyDependencies,
+            ..
+        } if !busy => {
+            replace_one(
+                &mut result.ready,
+                "resume_worker",
+                "refresh_dependency_evidence",
+            );
+        }
         RewriteAction::AdvanceRequired { .. }
             if result.ready.contains_key("verify_api")
                 || result.ready.contains_key("verify_handoff") => {}

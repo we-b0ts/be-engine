@@ -1844,6 +1844,19 @@ Rule reclassification aggregates the retained runner report within its owning
 snapshot, validates its session and recorded case identities, and keeps the
 complete shared session when rebuilding one method's evidence. Unresolved
 dependencies in a sibling method continue to fail the shared dependency gate.
+Process-owned ownership changes rebuild every retained method projection of the
+same session and attempt, preserving each method's response assertions. Other
+sessions are left untouched. Publication retains a revision checkpoint until all
+method snapshots, the run index, and progress agree; retrying does not count a
+second Replay. If an older engine refreshed only one method, `status` requests
+`next` with `reclassify_dependencies` before resuming a stale implementation issue.
+Status itself does not rewrite evidence.
+
+Each coordinator attempt records a separate Replay execution identity. Reusing
+responses requires unchanged managed code, verification policy, startup snapshot,
+and effective environment. Process-owned classification alone may change. When
+execution inputs changed, or legacy state has no execution identity, reclassification
+refreshes diagnosis but requests fresh Replay and preserves the old target fingerprint.
 If `dependency-rule apply PLAN_ID` stops after writing the policy or report,
 retry the same pending plan. Ownership planners recover original unused-case
 witnesses from the engine's reversible reclassification markers in memory;

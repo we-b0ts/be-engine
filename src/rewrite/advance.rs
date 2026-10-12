@@ -250,6 +250,13 @@ async fn advance_atomic(
         store.save(&state)?;
     }
 
+    if let Some(api) = background_reclassification::pending_api(&target_root, &state)?
+        && api_selector::public_api(&api) == api_selector::public_api(&state.api)
+    {
+        background_reclassification::apply(&target_root, &mut state, &api)?;
+        store.save(&state)?;
+    }
+
     if state.phase == RewritePhase::RecordingRequired
         && !regression_scope::has_active_pin(&target_root, &state)?
     {

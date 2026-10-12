@@ -9,12 +9,60 @@ use super::final_evidence::{
     is_strict_dependency_finalize_error, refresh_background_evidence,
 };
 use super::model::{ActiveRunState, CaseStatus, RunStatus};
-use super::progress::{
-    ensure_replay_progress_revisable, revise_replay_progress, update_focused_index,
-};
+use super::progress::update_focused_index;
 use super::result::{E2eApiRunResult, E2eVerificationGates, api_result};
 use super::{E2eRunContext, config, store, support};
 use crate::case_group::{load_case_group_inventory, load_complete_case_group_inventory};
+
+mod session;
+
+/// Detect the old one-method publication bug without changing evidence in status.
+pub(crate) fn focused_background_reclassification_pending(
+    context: E2eRunContext,
+    api: &str,
+) -> Result<bool> {
+    let (config, layout) = config::resolve_layout(
+        &context.target_root,
+        &context.case_source,
+        context.run_key.as_deref(),
+    )?;
+    let path = layout
+        .run_root
+        .join("focused")
+        .join(support::api_directory(api))
+        .join("latest/state.yaml");
+    if !path.is_file() || !layout.group_index_path.is_file() {
+        return Ok(false);
+    }
+    if layout.active_dir.exists() || !store::focused_active_directories(&layout)?.is_empty() {
+        return Ok(false);
+    }
+    let inventory = load_case_group_inventory(&layout.group_index_path, &layout.case_source)?;
+    let members = session::members(&layout, &inventory, api)?;
+    if session::pending(&layout, &members)? {
+        return Ok(true);
+    }
+    let rules = crate::config::SourceTrafficPolicyConfig::load(&config.source_traffic_policy)?
+        .process_owned_dependencies;
+    let current = crate::verification_progress::fingerprint(&serde_json::to_vec(&rules)?);
+    let mut fresh = false;
+    let mut stale = false;
+    for member in members {
+        if !member.state.replay_report.is_file() {
+            return Ok(false);
+        }
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&member.state.replay_report)?)?;
+        if report["background_reclassification"]["rules_fingerprint"].as_str()
+            == Some(current.as_str())
+        {
+            fresh = true;
+        } else {
+            stale = true;
+        }
+    }
+    Ok(fresh && stale)
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct FocusedBackgroundReclassification {
@@ -27,8 +75,11 @@ pub(crate) struct FocusedBackgroundReclassification {
     pub attempt: u64,
     pub passed: bool,
     pub gates: E2eVerificationGates,
+    pub updated_apis: Vec<String>,
     #[serde(skip)]
     pub result: E2eApiRunResult,
+    #[serde(skip)]
+    pub results: Vec<E2eApiRunResult>,
 }
 
 pub(crate) fn latest_focused_api(context: E2eRunContext) -> Result<Option<String>> {
@@ -101,32 +152,13 @@ pub(crate) fn ensure_focused_background_reclassification_revisable(
         &context.case_source,
         context.run_key.as_deref(),
     )?;
-    ensure!(
-        !base_layout.active_dir.exists(),
-        "cannot reclassify dependency evidence while an E2E attempt is active"
-    );
-    let focused_root = base_layout
-        .run_root
-        .join("focused")
-        .join(support::api_directory(api));
-    ensure!(
-        !focused_root.join(".active").exists(),
-        "cannot reclassify dependency evidence while focused API {api:?} is active"
-    );
-    let state_path = focused_root.join("latest/state.yaml");
-    let state: ActiveRunState = store::read_yaml(&state_path)
-        .with_context(|| format!("no finalized focused E2E state exists for API {api:?}"))?;
-    ensure!(
-        state.status.is_terminal(),
-        "focused E2E evidence is not terminal"
-    );
-    ensure!(
-        state.case_source == base_layout.case_source,
-        "focused E2E evidence belongs to another case source"
-    );
+    let inventory =
+        load_case_group_inventory(&base_layout.group_index_path, &base_layout.case_source)?;
+    let members = session::members(&base_layout, &inventory, api)?;
     let index =
         store::load_or_create_index(&base_layout, &base_layout.run_key, &base_layout.case_source)?;
-    ensure_replay_progress_revisable(&base_layout.progress_path, &index, &state)
+    session::preflight(&base_layout, &members, &index)?;
+    Ok(())
 }
 
 pub(crate) fn reclassify_focused_background_dependencies(
@@ -147,64 +179,44 @@ pub(crate) fn reclassify_focused_background_dependencies(
     let inventory_complete =
         load_complete_case_group_inventory(&base_layout.group_index_path, &base_layout.case_source)
             .is_ok();
-    let group = inventory
-        .groups
-        .iter()
-        .find(|group| group.group_id == api)
-        .with_context(|| format!("prepared API group not found: {api}"))?;
-    let focused_root = base_layout
-        .run_root
-        .join("focused")
-        .join(support::api_directory(api));
-    ensure!(
-        !focused_root.join(".active").exists(),
-        "cannot reclassify dependency evidence while focused API {api:?} is active"
-    );
-    let latest_dir = focused_root.join("latest");
-    let state_path = latest_dir.join("state.yaml");
-    let mut state: ActiveRunState = store::read_yaml(&state_path)
-        .with_context(|| format!("no finalized focused E2E state exists for API {api:?}"))?;
-    ensure!(
-        state.status.is_terminal(),
-        "focused E2E evidence is not terminal"
-    );
-    ensure!(
-        state.case_source == base_layout.case_source,
-        "focused E2E evidence belongs to another case source"
-    );
-    let mut index =
+    let mut members = session::members(&base_layout, &inventory, api)?;
+    let original_index =
         store::load_or_create_index(&base_layout, &base_layout.run_key, &base_layout.case_source)?;
-    ensure_replay_progress_revisable(&base_layout.progress_path, &index, &state)?;
-    let previous_state = state.clone();
-
-    let reclassified = refresh_background_evidence(&config, &state, &inventory)?;
-    apply_reclassified_case_outcomes(&mut state, &reclassified);
-    let mut focused_layout = base_layout.clone();
-    focused_layout.run_root = focused_root;
-    focused_layout.latest_dir = latest_dir.clone();
-    focused_layout.active_dir = latest_dir;
-    build_final_evidence_from_current_report(
-        &config,
-        &focused_layout,
-        &crate::case_group::CaseGroupInventory {
-            case_source: inventory.case_source.clone(),
-            source_revision: inventory.source_revision.clone(),
-            case_inventory_id: inventory.case_inventory_id.clone(),
-            groups: vec![group.clone()],
-        },
-        &mut state,
-    )?;
-    clear_resolved_dependency_errors(&mut state);
-    state.status = terminal_status(&state);
-    store::write_yaml(&state_path, &state)?;
-
-    update_focused_index(&mut index, &state, &inventory, inventory_complete);
-    store::write_yaml(&base_layout.index_path, &index)?;
-    revise_replay_progress(&base_layout.progress_path, &index, &previous_state, &state)?;
-    let result = api_result(&focused_layout, &state, api, state.sequence);
+    let revision = session::preflight(&base_layout, &members, &original_index)?;
+    session::begin(&base_layout, &revision)?;
+    let mut index = revision.index.clone();
+    let mut selected = None;
+    let mut results = Vec::new();
+    for member in &mut members {
+        let reclassified = refresh_background_evidence(&config, &member.state, &inventory)?;
+        apply_reclassified_case_outcomes(&mut member.state, &reclassified);
+        let mut method_inventory = inventory.clone();
+        method_inventory.groups = vec![member.group.clone()];
+        build_final_evidence_from_current_report(
+            &config,
+            &member.layout,
+            &method_inventory,
+            &mut member.state,
+        )?;
+        clear_resolved_dependency_errors(&mut member.state);
+        member.state.status = terminal_status(&member.state);
+        update_focused_index(&mut index, &member.state, &inventory, inventory_complete);
+        let result = api_result(
+            &member.layout,
+            &member.state,
+            &member.group.group_id,
+            member.state.sequence,
+        );
+        if member.group.group_id == api {
+            selected = Some((reclassified, result.clone()));
+        }
+        results.push(result);
+    }
+    session::publish(&base_layout, &revision, &original_index, &index, &members)?;
+    let (reclassified, result) = selected.context("requested method was not reclassified")?;
     Ok(FocusedBackgroundReclassification {
         recording_reused: true,
-        recording_run_id: state.run_key.clone(),
+        recording_run_id: base_layout.run_key.clone(),
         rules_fingerprint: reclassified.rules_fingerprint,
         matched_unused_case: reclassified.matched_unused_case,
         matched_by_protocol: reclassified.by_protocol,
@@ -212,7 +224,9 @@ pub(crate) fn reclassify_focused_background_dependencies(
         attempt: result.attempt,
         passed: result.passed,
         gates: result.gates.clone(),
+        updated_apis: results.iter().map(|result| result.api.clone()).collect(),
         result,
+        results,
     })
 }
 
