@@ -162,7 +162,8 @@ pub(super) fn ensure_replay_progress_revisable(
 ) -> Result<()> {
     let report = load(progress_path, VerificationStage::Progress)?
         .context("replay progress is missing for focused evidence revision")?;
-    let logical = logical_observation(index, state)?;
+    let logical = report
+        .merge_logical_run_scope(logical_observation(index, state)?, index.inventory_complete)?;
     if let Some(counted) = report.counted_observations.get(&logical.key) {
         ensure!(
             counted.observation.apis.len() == logical.apis.len()

@@ -41,6 +41,40 @@ fn workflow() -> (tempfile::TempDir, RewriteState) {
 }
 
 #[test]
+fn coordinator_status_preserves_an_interrupted_attempt_without_a_replay_session() {
+    let (target, state) = workflow();
+    let context = E2eRunContext {
+        target_root: target.path().into(),
+        case_source: state.case_source.clone().unwrap(),
+        run_key: None,
+    };
+    let path = test_session::state_path(&context, &state.api);
+    let mut focused: serde_yaml::Value =
+        serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    focused["status"] = "interrupted".into();
+    focused.as_mapping_mut().unwrap().remove("session_id");
+    for field in ["replay_finalized", "aggregate_complete", "aggregate_clean"] {
+        focused[field] = false.into();
+    }
+    focused["errors"] = serde_yaml::to_value(vec!["failed to start Replay"]).unwrap();
+    std::fs::write(&path, serde_yaml::to_string(&focused).unwrap()).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    RewriteStore::new(target.path())
+        .unwrap()
+        .save(&state)
+        .unwrap();
+    assert!(required_action(target.path(), &state).unwrap().is_none());
+    let status = rewrite::status_rewrite(rewrite::RewriteContext {
+        target_root: target.path().into(),
+    })
+    .unwrap();
+    assert!(status.initialized);
+    assert!(!status.e2e_current);
+    assert!(!status.terminal_allowed);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+#[test]
 fn applying_a_parked_method_rule_refreshes_the_active_sibling_and_releases_the_route_worker() {
     let (target, state) = workflow();
     let store = RewriteStore::new(target.path()).unwrap();

@@ -350,6 +350,96 @@ fn revises_an_older_focused_attempt_after_another_api_advances() {
 }
 
 #[test]
+fn focused_revision_merges_partial_scope_and_preserves_unprepared_api_progress() {
+    let directory = tempfile::tempdir().unwrap();
+    let progress_path = directory.path().join("progress.yaml");
+    let legacy_path = directory.path().join("e2e-progress.yaml");
+    let previous = state(2, 1, 1);
+    let mut index = RunIndex::empty("run".into(), PathBuf::from("/cases"));
+    update_focused_index(&mut index, &previous, &inventory_with_friends(), false);
+    write_replay_progress(&progress_path, &legacy_path, &index, &previous).unwrap();
+    update_focused_index(&mut index, &previous, &inventory(), false);
+    write_replay_progress(&progress_path, &legacy_path, &index, &previous).unwrap();
+    let report = load(&progress_path, VerificationStage::Progress)
+        .unwrap()
+        .unwrap();
+    let before = report.counted_observations["run"].observation.clone();
+    assert_eq!(before.apis.len(), 2);
+    assert_eq!(index.current_run.api_keys.len(), 1);
+    let original = fs::read(&progress_path).unwrap();
+
+    ensure_replay_progress_revisable(&progress_path, &index, &previous).unwrap();
+    assert_eq!(fs::read(&progress_path).unwrap(), original);
+    let current = state(3, 0, 1);
+    update_focused_index(&mut index, &current, &inventory(), false);
+    revise_replay_progress(&progress_path, &index, &previous, &current).unwrap();
+    let report = load(&progress_path, VerificationStage::Progress)
+        .unwrap()
+        .unwrap();
+    let observation = &report.counted_observations["run"].observation;
+    assert_eq!(
+        observation.apis["GET /api/friends"],
+        before.apis["GET /api/friends"]
+    );
+    assert!(observation.apis["GET /api/orders/*"].passed);
+    assert!(!observation.finalized);
+    assert_eq!(observation.passed, None);
+    assert_eq!(report.totals.runs.executed, 1);
+    assert_eq!(report.totals.cases.executed, 4);
+    assert_eq!(report.totals.cases.passed, 3);
+    let revised = fs::read(&progress_path).unwrap();
+    ensure_replay_progress_revisable(&progress_path, &index, &current).unwrap();
+    revise_replay_progress(&progress_path, &index, &previous, &current).unwrap();
+    assert_eq!(fs::read(&progress_path).unwrap(), revised);
+}
+
+#[test]
+fn partial_revision_still_rejects_changed_counts_results_and_authoritative_scope() {
+    let directory = tempfile::tempdir().unwrap();
+    let progress_path = directory.path().join("progress.yaml");
+    let previous = state(2, 1, 1);
+    let mut index = RunIndex::empty("run".into(), PathBuf::from("/cases"));
+    update_focused_index(&mut index, &previous, &inventory_with_friends(), false);
+    write_replay_progress(
+        &progress_path,
+        &directory.path().join("legacy.yaml"),
+        &index,
+        &previous,
+    )
+    .unwrap();
+    update_focused_index(&mut index, &previous, &inventory(), false);
+    let original = fs::read(&progress_path).unwrap();
+    for change in 0..5 {
+        let mut changed = index.clone();
+        match change {
+            0 => changed.apis.get_mut("GET /api/orders/*").unwrap().cases += 1,
+            1 => {
+                changed
+                    .current_run
+                    .apis
+                    .get_mut("GET /api/orders/*")
+                    .unwrap()
+                    .passed_cases += 1
+            }
+            2 => {
+                changed
+                    .current_run
+                    .apis
+                    .get_mut("GET /api/orders/*")
+                    .unwrap()
+                    .passed = true
+            }
+            3 => {
+                changed.current_run.api_keys.insert("GET /unknown".into());
+            }
+            _ => changed.inventory_complete = true,
+        }
+        assert!(ensure_replay_progress_revisable(&progress_path, &changed, &previous).is_err());
+        assert_eq!(fs::read(&progress_path).unwrap(), original);
+    }
+}
+
+#[test]
 fn migrates_legacy_e2e_progress_before_counting_the_next_attempt() {
     let directory = tempfile::tempdir().unwrap();
     let progress_path = directory.path().join("progress.yaml");

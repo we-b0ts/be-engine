@@ -47,6 +47,14 @@ mirror. Do not replace that registry configuration unless explicitly asked.
 The build produces sibling `traffic-e2e`, `backend-rewrite`, and
 `backend-rewrite-admin` executables. Keep them together in installed packages
 because detached coordinator actions delegate engine work to `traffic-e2e`.
+On Linux, a running `traffic-e2e` reexecs through `/proc/<pid>/exe`, retaining its
+running inode and engine revision even when its installed executable is replaced.
+Companion resolution also recognizes a replaced `backend-rewrite` executable.
+Container bind mounts continue to use installed filesystem paths rather than
+process-specific reexec handles.
+An interrupted focused attempt that failed before Replay readiness has no
+session to reclassify. Status retains its failure state without requesting
+session reclassification; actual evidence revision still requires session identity.
 
 `traffic-e2e record` is built normally and supports optional Redis coordination.
 See [standalone recording](recording.md) for its container contract, direct
@@ -2394,6 +2402,25 @@ present in the recording keep their streaks. A terminal result then updates
 only when the batch never failed; after any failed attempt, later success for
 the same batch starts at one run and that batch's successful case count. A
 retry never increases `executed`.
+
+Focused dependency reclassification compares progress after applying the same
+scope merge used by publication. A partial prepared inventory retains the
+unfinished recording's other API observations; different case counts or results
+still reject revision, and a complete inventory still requires matching scope.
+
+Read-only coordinator status checks shared-session reclassification against the
+published group membership rather than discovering recording cases. Methods and
+action projections reuse one snapshot per query; the next query reloads changed
+rules, sessions, and reports. Report checks deserialize only classification
+metadata and skip unrelated JSON values. Actual evidence revision still loads
+and validates the recording inventory and progress before writing anything.
+While case pattern identification waits, a pinned recording reuses the pending
+batch's persisted API observations even before installing the API inventory.
+Status still checks the completed recording manifest and current selectors;
+pattern apply and initial adoption retain full case validation.
+Legacy selectors resolved only by recorded `api_pattern` metadata fall back to
+validated discovery when the current policy and observation snapshot cannot
+establish membership.
 
 The committed file contains only business aggregates and the latest batch
 summary. Replay provenance, pending state, failure barriers,

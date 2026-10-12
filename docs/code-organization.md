@@ -30,9 +30,27 @@ is unclear.
 
 ## Current Boundaries
 
+- `engine_binary` resolves companion executables and Linux reexec paths for a
+  replaced running engine. Replay, coordinator workers and local interception
+  share that resolver; process lifecycle remains with each caller.
+
 - `recording_api/methods` owns the optional per-route method metadata codec and
   lookup. Recorder run finalization projects its existing observed API set into
   the recording manifest once; coordinator execution summaries only read it.
+
+- `verification_progress/revision` owns logical-run scope merging shared by
+  publication and revision preflight. Partial prepared inventories retain
+  unfinished recording coverage; `e2e_run/progress` compares that merged view
+  before permitting focused evidence revision.
+
+- `case_group/snapshot` reads prepared membership for read-only projections
+  without discovering recording cases. `e2e_run/reclassify/status` owns the
+  query-scoped shared-session snapshot and compact report classification codec;
+  `reclassify/session` retains the common identity/membership checks and full
+  execution preflight. Coordinator status scopes snapshots to one query.
+  `rewrite/case_patterns` canonicalizes persisted recording observations while
+  pattern identification waits; `rewrite/regression_scope/recording` validates
+  the pin and selectors against that adopted snapshot without rediscovery.
 
 - `config/mysql_tables` owns shared bounded physical-table selection for
   process-owned reads and SQL-time rules. `replay/policy/sql_template/table`

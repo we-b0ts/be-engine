@@ -101,6 +101,24 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> Option<R
     })
 }
 
+/// Canonicalize an adopted recording's observation snapshot without reopening cases.
+pub(super) fn canonical_observed_apis(
+    target_root: &Path,
+    observed: &[String],
+) -> Result<BTreeSet<String>> {
+    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
+    let config = crate::config::AppConfig::load(&project.recorder_config)?;
+    observed
+        .iter()
+        .map(|api| {
+            Ok(canonical_api(
+                &api.parse()?,
+                &config.http_gateway.case_path_patterns,
+            ))
+        })
+        .collect()
+}
+
 pub fn apply(options: RewriteCasePatternApplyOptions) -> Result<RewriteActionEnvelope> {
     let (target_root, project) = crate::e2e_run::resolve_project(&options.target_root)?;
     let store = super::store::RewriteStore::new(&target_root)?;
@@ -129,6 +147,13 @@ pub fn apply(options: RewriteCasePatternApplyOptions) -> Result<RewriteActionEnv
         &project.recorder_config,
         &pending.candidates,
         options.patterns,
+    )?;
+    // Read-only status reuses the adopted observation snapshot. Mutation still
+    // verifies that the selected recording has canonical usable case members.
+    artifacts::standard_recording_apis_for_scope(
+        &target_root,
+        &state.recording_run_id,
+        inventory::recording_scope(&state),
     )?;
     let effective_patterns = apply_patterns(
         &project.recorder_config,

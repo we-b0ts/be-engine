@@ -71,7 +71,7 @@ pub(crate) use reclassify::{
     FocusedBackgroundReclassification, ensure_focused_background_reclassification_revisable,
     focused_background_reclassification_pending,
     focused_background_reclassification_recovery_required, latest_focused_api,
-    reclassify_focused_background_dependencies,
+    reclassify_focused_background_dependencies, with_background_reclassification_snapshot,
 };
 pub use result::{
     E2eApiRunResult, E2eDependencyGate, E2eDiagnosis, E2eDiagnosisCounts, E2eFailureCluster,
