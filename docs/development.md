@@ -274,8 +274,8 @@ original accepted handoff, not its earlier worker report. Global evidence-only
 or final quality review uses `review check --integration --worktree
 /absolute/integration` without scope or handoff ID; after publication the
 coordinator admits it using `review accept --report /absolute/report.json`.
-For two or more current API handoffs, `--batch-handoffs /absolute/handoffs.json`
-accepts a JSON array of exact `{scope, handoff_id}` entries with at least one
+For one or more current API handoffs, `--batch-handoffs /absolute/handoffs.json`
+accepts a nonempty JSON array of exact `{scope, handoff_id}` entries with at least one
 `handoff_ready` item. Already `integrated` items may be included as retained
 deliveries: build on their published code, merge only new deliveries, and review
 the complete candidate once. After publication, report `integrated` only for

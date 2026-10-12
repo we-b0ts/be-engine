@@ -1,6 +1,67 @@
 //! Complete candidate review and incremental batch admission.
 use super::*;
 
+#[test]
+fn batch_review_rejects_an_empty_selection() {
+    let directory = tempfile::tempdir().unwrap();
+    let error = check_batch(options(directory.path(), directory.path(), None), vec![]).unwrap_err();
+    assert!(error.to_string().contains("at least one handoff"));
+}
+
+#[test]
+fn singleton_batch_reviews_publishes_and_admits_one_api_handoff() {
+    let target = target();
+    let root = target.path();
+    let store = RewriteStore::new(root).unwrap();
+    let state = store.load().unwrap().unwrap();
+    let scope = crate::rewrite::api_selector::work_scope(&state, &state.api);
+    let directory = tempfile::tempdir().unwrap();
+    let (selection, mut delivery) = prepare_delivery(root, directory.path(), &scope, 0);
+    let candidate_tree = worktree(root, directory.path(), "singleton-batch-candidate");
+    git(
+        &candidate_tree,
+        &["merge", "--ff-only", &selection.handoff_id],
+    );
+
+    let mut wrong = selection.clone();
+    wrong.handoff_id = "wrong-handoff".into();
+    assert!(check_batch(options(root, &candidate_tree, None), vec![wrong]).is_err());
+
+    let report = check_batch(
+        options(root, &candidate_tree, None),
+        vec![selection.clone()],
+    )
+    .unwrap();
+    assert_eq!(report.status, ReviewStatus::Passed);
+    let integration = report.integration.as_ref().unwrap();
+    assert_eq!(integration.handoffs.len(), 1);
+    assert_eq!(integration.handoffs[0].scope, scope);
+    assert_eq!(integration.handoffs[0].handoff_id, selection.handoff_id);
+    assert!(integration.handoff_id.is_none());
+
+    delivery.activity = RewriteWorkerActivity::Integrated;
+    delivery.review_report = Some(report.report_path.clone());
+    // A one-entry batch still requires publication of the exact reviewed commit.
+    assert!(worker::runtime::report(delivery.clone()).is_err());
+    git(root, &["merge", "--ff-only", &report.head_revision]);
+    worker::runtime::report(delivery.clone()).unwrap();
+    worker::runtime::report(delivery).unwrap();
+    let accepted = store.load().unwrap().unwrap();
+    assert_eq!(
+        worker::runtime::coverage(&accepted, &scope),
+        worker::model::RewriteWorkerCoverageState::VerificationRequired
+    );
+    assert!(terminal_current(root, &accepted));
+
+    // A batch containing only an integrated handoff uses global receipt refresh.
+    let error = check_batch(options(root, &candidate_tree, None), vec![selection]).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("all selected handoffs are already integrated")
+    );
+}
+
 fn prepare_delivery(
     root: &Path,
     directory: &Path,

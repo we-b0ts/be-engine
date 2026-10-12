@@ -31,8 +31,9 @@ enum ReviewCommand {
         /// Accepted worker handoff; pair with its scope for an integration delivery.
         #[arg(long, requires = "integration")]
         handoff_id: Option<String>,
-        /// JSON array of current API {scope, handoff_id} entries, including at least
-        /// one handoff_ready item; integrated items may be retained in the batch.
+        /// Nonempty JSON array of current API {scope, handoff_id} entries; a single
+        /// entry is supported. Include at least one handoff_ready item; integrated
+        /// items may be retained in the batch.
         /// Review checks the whole candidate. For receipt refresh only, omit this
         /// option and all scope/handoff selectors, then use review accept.
         #[arg(long, requires = "integration", conflicts_with_all = ["api", "handoff_id"])]
