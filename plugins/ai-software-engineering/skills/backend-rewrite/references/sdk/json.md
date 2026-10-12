@@ -2,26 +2,27 @@
 
 目标 Rust 项目统一通过 `brz-json` 使用 JSON 能力。保留 Serde 的
 `Serialize` / `Deserialize` 派生与字段属性，避免直接依赖、导入或调用
-`serde_json::*`（下述原始值和存量动态修改边界除外）。避免在项目中重复实现
+`serde_json::*`（下述存量动态修改边界除外）。避免在项目中重复实现
 缺失/null、宽松转换、原样透传等通用逻辑。
 
-使用固定发布版本，例如 `brz-json = "=0.0.8"`。联调可按用户要求临时使用
+使用固定发布版本，例如 `brz-json = "=0.0.9"`。联调可按用户要求临时使用
 `path` 依赖；交付时切回发布版本并更新锁文件。
 
 ## 类型选择
 
 - 已知结构：优先 `struct`，用 `brz_json::from_str` / `from_slice` 和
   `to_string` / `to_vec`；分片 HTTP 输入继续用 `JsonReader`。
-- 不读取内容、需要原样透传：用标准 `&serde_json::value::RawValue` 或 `Box<RawValue>`。
+- 不读取内容、需要原样透传：用 `brz_json::RawJson`，借用输入使用 `RawJsonRef<'a>`。
   借用字段加 `#[serde(borrow)]`；保留 Reader 生命周期。
 - 历史 JSON 需要 Value 的数值校验和规范化：用 `OpaqueJson`。
   `decode::<T>()` 返回错误，`project::<T>()` 明确容忍投影不匹配。
-  `RawValue` 可以保留 `1e400`，`OpaqueJson` 反序列化会拒绝它，迁移时不能混用。
+  `RawJson` 可以保留 `1e400`，`OpaqueJson` 反序列化会拒绝它，迁移时不能混用。
 - 动态键且需保持顺序：用 `Object<T>`。存量代码确需动态修改 schema-free
   文档时，可保留边界内的 `serde_json::Value`，不要只换 import。
 
 `brz-json` 不重导出 `Value`、`Map`、`Number`、`json!` 或 `RawValue`。
-原样捕获边界直接使用标准 `RawValue`，解析仍由 `JsonReader` 完成。
+`RawJson` 负责校验、原样序列化与 `decode::<T>()` 类型投影；`RawJsonRef`
+支持 Reader 借用和 `to_owned()`。底层 `RawValue` 留在模块内部。
 新需求出现后再补充有实际处理逻辑的能力，避免预先增加同义包装。
 
 ## 缺失与 null
