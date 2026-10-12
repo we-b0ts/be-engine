@@ -2400,6 +2400,13 @@ scope merge used by publication. A partial prepared inventory retains the
 unfinished recording's other API observations; different case counts or results
 still reject revision, and a complete inventory still requires matching scope.
 
+Read-only coordinator status checks shared-session reclassification against the
+published group membership rather than discovering recording cases. Methods and
+action projections reuse one snapshot per query; the next query reloads changed
+rules, sessions, and reports. Report checks deserialize only classification
+metadata and skip unrelated JSON values. Actual evidence revision still loads
+and validates the recording inventory and progress before writing anything.
+
 The committed file contains only business aggregates and the latest batch
 summary. Replay provenance, pending state, failure barriers,
 idempotency keys, and ordered observations remain in the ignored

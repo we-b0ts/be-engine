@@ -1,5 +1,8 @@
 mod discovery;
 mod index;
+mod snapshot;
+
+pub(crate) use snapshot::load_prepared_case_ids;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;

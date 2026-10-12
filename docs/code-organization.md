@@ -39,6 +39,12 @@ is unclear.
   unfinished recording coverage; `e2e_run/progress` compares that merged view
   before permitting focused evidence revision.
 
+- `case_group/snapshot` reads prepared membership for read-only projections
+  without discovering recording cases. `e2e_run/reclassify/status` owns the
+  query-scoped shared-session snapshot and compact report classification codec;
+  `reclassify/session` retains the common identity/membership checks and full
+  execution preflight. Coordinator status scopes snapshots to one query.
+
 - `config/mysql_tables` owns shared bounded physical-table selection for
   process-owned reads and SQL-time rules. `replay/policy/sql_template/table`
   binds whole table identifiers and qualifiers for SQL-time rules; matcher and

@@ -22,20 +22,8 @@ pub(super) struct Revision {
     pub previous: Vec<ActiveRunState>,
 }
 
-fn revision_path(base: &RunLayout) -> PathBuf {
+pub(super) fn revision_path(base: &RunLayout) -> PathBuf {
     base.run_root.join("focused-reclassification.pending.yaml")
-}
-
-pub(super) fn pending(base: &RunLayout, members: &[Member]) -> Result<bool> {
-    if !revision_path(base).is_file() {
-        return Ok(false);
-    }
-    let revision: Revision = store::read_yaml(&revision_path(base))?;
-    Ok(revision
-        .previous
-        .first()
-        .zip(members.first())
-        .is_some_and(|(previous, member)| previous.session_id == member.state.session_id))
 }
 
 pub(super) fn members(
@@ -54,18 +42,7 @@ pub(super) fn members(
         .join("latest/state.yaml");
     let primary: ActiveRunState = store::read_yaml(&primary_path)
         .with_context(|| format!("no finalized focused E2E state exists for API {api:?}"))?;
-    ensure!(
-        primary.status.is_terminal(),
-        "focused E2E evidence is not terminal"
-    );
-    ensure!(
-        primary.case_source == base.case_source && primary.run_key == base.run_key,
-        "focused E2E evidence belongs to another case source"
-    );
-    ensure!(
-        primary.session_id.is_some(),
-        "focused E2E evidence has no Replay session identity"
-    );
+    validate_primary(base, &primary)?;
     let mut selected = Vec::new();
     for group in &inventory.groups {
         let mut layout = base.clone();
@@ -83,36 +60,12 @@ pub(super) fn members(
         if state.session_id != primary.session_id {
             continue;
         }
-        ensure!(
-            state.run_key == primary.run_key
-                && state.sequence == primary.sequence
-                && state.case_source == primary.case_source
-                && state.case_inventory_id == primary.case_inventory_id
-                && state.source_revision == primary.source_revision,
-            "focused projections disagree on shared Replay session identity"
-        );
-        ensure!(
-            state.status.is_terminal(),
-            "shared Replay projection is not terminal"
-        );
-        let case_ids = state
-            .cases
-            .iter()
-            .map(|case| case.case_id.as_str())
-            .collect::<BTreeSet<_>>();
-        ensure!(
-            state
-                .cases
-                .iter()
-                .all(|case| case.group_id == group.group_id)
-                && case_ids
-                    == group
-                        .cases
-                        .iter()
-                        .map(|case| case.case_id.as_str())
-                        .collect(),
-            "shared Replay projection does not match its prepared method inventory"
-        );
+        validate_projection(
+            &primary,
+            &state,
+            &group.group_id,
+            group.cases.iter().map(|case| case.case_id.as_str()),
+        )?;
         selected.push(Member {
             group: group.clone(),
             layout,
@@ -124,6 +77,53 @@ pub(super) fn members(
         "prepared API group not found: {api}"
     );
     Ok(selected)
+}
+
+pub(super) fn validate_primary(base: &RunLayout, primary: &ActiveRunState) -> Result<()> {
+    ensure!(
+        primary.status.is_terminal(),
+        "focused E2E evidence is not terminal"
+    );
+    ensure!(
+        primary.case_source == base.case_source && primary.run_key == base.run_key,
+        "focused E2E evidence belongs to another case source"
+    );
+    ensure!(
+        primary.session_id.is_some(),
+        "focused E2E evidence has no Replay session identity"
+    );
+    Ok(())
+}
+
+pub(super) fn validate_projection<'a>(
+    primary: &ActiveRunState,
+    state: &ActiveRunState,
+    group_id: &str,
+    prepared_case_ids: impl Iterator<Item = &'a str>,
+) -> Result<()> {
+    ensure!(
+        state.run_key == primary.run_key
+            && state.sequence == primary.sequence
+            && state.case_source == primary.case_source
+            && state.case_inventory_id == primary.case_inventory_id
+            && state.source_revision == primary.source_revision,
+        "focused projections disagree on shared Replay session identity"
+    );
+    ensure!(
+        state.status.is_terminal(),
+        "shared Replay projection is not terminal"
+    );
+    let case_ids = state
+        .cases
+        .iter()
+        .map(|case| case.case_id.as_str())
+        .collect::<BTreeSet<_>>();
+    ensure!(
+        state.cases.iter().all(|case| case.group_id == group_id)
+            && case_ids == prepared_case_ids.collect(),
+        "shared Replay projection does not match its prepared method inventory"
+    );
+    Ok(())
 }
 
 pub(super) fn preflight(

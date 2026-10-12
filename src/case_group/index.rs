@@ -352,6 +352,16 @@ pub(super) fn validate_loaded_index(
     case_source: &Path,
     cases: &[PublishedCase],
 ) -> Result<()> {
+    validate_index_origin(index, storage, output, case_source)?;
+    validate_index(index, storage, case_source, cases)
+}
+
+pub(super) fn validate_index_origin(
+    index: &CaseGroupIndex,
+    storage: &IndexPathStorage,
+    output: &Path,
+    case_source: &Path,
+) -> Result<()> {
     ensure!(
         matches!(index.version, LEGACY_INDEX_VERSION | INDEX_VERSION),
         "unsupported group index version {}",
@@ -369,7 +379,7 @@ pub(super) fn validate_loaded_index(
             group.group_id
         );
     }
-    validate_index(index, storage, case_source, cases)
+    Ok(())
 }
 
 pub(super) fn case_inventory_id(

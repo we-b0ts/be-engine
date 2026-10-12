@@ -15,54 +15,11 @@ use super::{E2eRunContext, config, store, support};
 use crate::case_group::{load_case_group_inventory, load_complete_case_group_inventory};
 
 mod session;
+mod status;
 
-/// Detect the old one-method publication bug without changing evidence in status.
-pub(crate) fn focused_background_reclassification_pending(
-    context: E2eRunContext,
-    api: &str,
-) -> Result<bool> {
-    let (config, layout) = config::resolve_layout(
-        &context.target_root,
-        &context.case_source,
-        context.run_key.as_deref(),
-    )?;
-    let path = layout
-        .run_root
-        .join("focused")
-        .join(support::api_directory(api))
-        .join("latest/state.yaml");
-    if !path.is_file() || !layout.group_index_path.is_file() {
-        return Ok(false);
-    }
-    if layout.active_dir.exists() || !store::focused_active_directories(&layout)?.is_empty() {
-        return Ok(false);
-    }
-    let inventory = load_case_group_inventory(&layout.group_index_path, &layout.case_source)?;
-    let members = session::members(&layout, &inventory, api)?;
-    if session::pending(&layout, &members)? {
-        return Ok(true);
-    }
-    let rules = crate::config::SourceTrafficPolicyConfig::load(&config.source_traffic_policy)?
-        .process_owned_dependencies;
-    let current = crate::verification_progress::fingerprint(&serde_json::to_vec(&rules)?);
-    let mut fresh = false;
-    let mut stale = false;
-    for member in members {
-        if !member.state.replay_report.is_file() {
-            return Ok(false);
-        }
-        let report: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&member.state.replay_report)?)?;
-        if report["background_reclassification"]["rules_fingerprint"].as_str()
-            == Some(current.as_str())
-        {
-            fresh = true;
-        } else {
-            stale = true;
-        }
-    }
-    Ok(fresh && stale)
-}
+pub(crate) use status::{
+    focused_background_reclassification_pending, with_background_reclassification_snapshot,
+};
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct FocusedBackgroundReclassification {
