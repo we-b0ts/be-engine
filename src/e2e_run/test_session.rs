@@ -10,6 +10,14 @@ use std::{
 };
 
 pub(crate) fn install(root: &Path) -> super::E2eRunContext {
+    install_with_recorded_coverage(root, false)
+}
+
+pub(crate) fn install_with_unprepared_api(root: &Path) -> super::E2eRunContext {
+    install_with_recorded_coverage(root, true)
+}
+
+fn install_with_recorded_coverage(root: &Path, unprepared_api: bool) -> super::E2eRunContext {
     use std::process::{Command, Stdio};
     fs::create_dir_all(root.join(".traffic-e2e")).unwrap();
     fs::write(
@@ -73,6 +81,17 @@ pub(crate) fn install(root: &Path) -> super::E2eRunContext {
         );
     }
     let (synthetic, _, original) = session(root);
+    if unprepared_api {
+        let dir = synthetic.case_source.join("unprepared-case");
+        fs::create_dir_all(&dir).unwrap();
+        store::write_json(
+            &dir.join("request.json"),
+            &json!({"method":"GET","uri":"/unprepared"}),
+        )
+        .unwrap();
+        fs::write(dir.join("expected-response.json"), "{}").unwrap();
+        fs::write(dir.join("dependencies.jsonl"), "").unwrap();
+    }
     let mut report: serde_json::Value =
         serde_json::from_slice(&fs::read(&original.replay_report).unwrap()).unwrap();
     report["replay_policy"] = json!({"path":root.join(".traffic-e2e/verification.yaml"),
@@ -95,10 +114,14 @@ pub(crate) fn install(root: &Path) -> super::E2eRunContext {
         .unwrap();
     }
     let (config, layout) = super::config::resolve_layout(root, &context.case_source, None).unwrap();
-    let inventory = crate::case_group::load_complete_case_group_inventory(
-        &layout.group_index_path,
-        &context.case_source,
-    )
+    let inventory = if unprepared_api {
+        crate::case_group::load_case_group_inventory(&layout.group_index_path, &context.case_source)
+    } else {
+        crate::case_group::load_complete_case_group_inventory(
+            &layout.group_index_path,
+            &context.case_source,
+        )
+    }
     .unwrap();
     let mut primary = layout.clone();
     primary.run_root = layout
@@ -122,7 +145,20 @@ pub(crate) fn install(root: &Path) -> super::E2eRunContext {
     super::final_evidence::build_final_evidence(&config, &primary, &inventory, &mut state).unwrap();
     let mut index =
         RunIndex::empty_managed(layout.run_key.clone(), layout.case_source.clone(), root).unwrap();
-    super::progress::update_focused_index(&mut index, &state, &inventory, true);
+    if unprepared_api {
+        crate::verification_progress::record_completed_batch(
+            &layout.progress_path,
+            &layout.run_key,
+            chrono::Utc::now().to_rfc3339(),
+            std::collections::BTreeMap::from([
+                ("GET /api".into(), 1),
+                ("OPTIONS /api".into(), 1),
+                ("GET /unprepared".into(), 1),
+            ]),
+        )
+        .unwrap();
+    }
+    super::progress::update_focused_index(&mut index, &state, &inventory, !unprepared_api);
     super::progress::write_replay_progress(
         &layout.progress_path,
         &layout.legacy_progress_path,

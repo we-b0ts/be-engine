@@ -2395,6 +2395,11 @@ only when the batch never failed; after any failed attempt, later success for
 the same batch starts at one run and that batch's successful case count. A
 retry never increases `executed`.
 
+Focused dependency reclassification compares progress after applying the same
+scope merge used by publication. A partial prepared inventory retains the
+unfinished recording's other API observations; different case counts or results
+still reject revision, and a complete inventory still requires matching scope.
+
 The committed file contains only business aggregates and the latest batch
 summary. Replay provenance, pending state, failure barriers,
 idempotency keys, and ordered observations remain in the ignored

@@ -34,6 +34,11 @@ is unclear.
   lookup. Recorder run finalization projects its existing observed API set into
   the recording manifest once; coordinator execution summaries only read it.
 
+- `verification_progress/revision` owns logical-run scope merging shared by
+  publication and revision preflight. Partial prepared inventories retain
+  unfinished recording coverage; `e2e_run/progress` compares that merged view
+  before permitting focused evidence revision.
+
 - `config/mysql_tables` owns shared bounded physical-table selection for
   process-owned reads and SQL-time rules. `replay/policy/sql_template/table`
   binds whole table identifiers and qualifiers for SQL-time rules; matcher and

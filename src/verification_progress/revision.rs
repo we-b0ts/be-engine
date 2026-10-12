@@ -8,52 +8,17 @@ use super::{
 impl ProgressReport {
     pub(crate) fn upsert_logical_run(
         &mut self,
-        mut current: ProgressObservation,
+        current: ProgressObservation,
         legacy_key_prefix: Option<&str>,
         authoritative_scope: bool,
     ) -> Result<bool> {
-        self.validate_observation(&current)?;
+        let current = self.merge_logical_run_scope(current, authoritative_scope)?;
 
         if let Some(previous) = self
             .counted_observations
             .get(&current.key)
             .map(|counted| counted.observation.clone())
         {
-            ensure!(
-                current.apis.iter().all(|(api, result)| {
-                    previous
-                        .apis
-                        .get(api)
-                        .is_none_or(|recorded| recorded.cases.executed == result.cases.executed)
-                }),
-                "logical progress run {:?} changed its recorded API case inventory",
-                current.key
-            );
-            if !previous.finalized && !authoritative_scope {
-                let mut merged = previous.clone();
-                merged.evidence_fingerprint = current.evidence_fingerprint.clone();
-                merged.finished_at.clone_from(&current.finished_at);
-                for (api, result) in current.apis {
-                    merged.apis.insert(api, result);
-                }
-                merged.finalized =
-                    current.finalized && merged.apis.values().all(|api| api.finalized);
-                merged.passed = merged
-                    .finalized
-                    .then(|| merged.apis.values().all(|api| api.passed));
-                current = merged;
-            }
-            if !authoritative_scope {
-                ensure!(
-                    previous.apis.iter().all(|(api, previous)| {
-                        current.apis.get(api).is_some_and(|current| {
-                            current.cases.executed == previous.cases.executed
-                        })
-                    }),
-                    "logical progress run {:?} changed its recorded API case inventory",
-                    current.key
-                );
-            }
             if previous.evidence_fingerprint == current.evidence_fingerprint {
                 return Ok(false);
             }
@@ -126,6 +91,57 @@ impl ProgressReport {
         );
         self.rebuild_aggregates()?;
         Ok(true)
+    }
+
+    /// Preserve unfinished recording coverage outside a partial prepared inventory.
+    /// Revision preflight must compare the same scope that publication will persist.
+    pub(crate) fn merge_logical_run_scope(
+        &self,
+        mut current: ProgressObservation,
+        authoritative_scope: bool,
+    ) -> Result<ProgressObservation> {
+        self.validate_observation(&current)?;
+        let Some(previous) = self
+            .counted_observations
+            .get(&current.key)
+            .map(|counted| &counted.observation)
+        else {
+            return Ok(current);
+        };
+        ensure!(
+            current.apis.iter().all(|(api, result)| {
+                previous
+                    .apis
+                    .get(api)
+                    .is_none_or(|recorded| recorded.cases.executed == result.cases.executed)
+            }),
+            "logical progress run {:?} changed its recorded API case inventory",
+            current.key
+        );
+        if !previous.finalized && !authoritative_scope {
+            let mut merged = previous.clone();
+            merged.evidence_fingerprint = current.evidence_fingerprint;
+            merged.finished_at = current.finished_at;
+            merged.apis.extend(current.apis);
+            merged.finalized = current.finalized && merged.apis.values().all(|api| api.finalized);
+            merged.passed = merged
+                .finalized
+                .then(|| merged.apis.values().all(|api| api.passed));
+            current = merged;
+        }
+        if !authoritative_scope {
+            ensure!(
+                previous.apis.iter().all(|(api, previous)| {
+                    current
+                        .apis
+                        .get(api)
+                        .is_some_and(|current| current.cases.executed == previous.cases.executed)
+                }),
+                "logical progress run {:?} changed its recorded API case inventory",
+                current.key
+            );
+        }
+        Ok(current)
     }
 
     pub(crate) fn ensure_revisable(&self, key: &str) -> Result<()> {

@@ -41,6 +41,50 @@ fn ownership_reclassification_updates_every_method_in_the_same_session() {
 }
 
 #[test]
+fn shared_reclassification_accepts_a_partial_index_without_losing_recorded_coverage() {
+    use crate::e2e_run::{config, store, test_session};
+    use crate::verification_progress::{VerificationStage, load};
+    let target = tempfile::tempdir().unwrap();
+    let context = test_session::install_with_unprepared_api(target.path());
+    let (_, layout) = config::resolve_layout(target.path(), &context.case_source, None).unwrap();
+    let index = store::load_or_create_index(&layout, &layout.run_key, &layout.case_source).unwrap();
+    let report = load(&layout.progress_path, VerificationStage::Progress)
+        .unwrap()
+        .unwrap();
+    let before = report.counted_observations[&layout.run_key]
+        .observation
+        .clone();
+    assert_eq!(before.apis.len(), 3);
+    assert_eq!(index.current_run.api_keys.len(), 2);
+
+    test_session::classify_stream(target.path());
+    super::ensure_focused_background_reclassification_revisable(context.clone(), "GET /api")
+        .unwrap();
+    let result =
+        super::reclassify_focused_background_dependencies(context.clone(), "GET /api").unwrap();
+    assert!(result.passed);
+    let report = load(&layout.progress_path, VerificationStage::Progress)
+        .unwrap()
+        .unwrap();
+    let observation = &report.counted_observations[&layout.run_key].observation;
+    assert_eq!(result.updated_apis, ["GET /api", "OPTIONS /api"]);
+    assert_eq!(observation.apis.len(), 3);
+    assert_eq!(
+        observation.apis["GET /unprepared"],
+        before.apis["GET /unprepared"]
+    );
+    assert!(observation.apis["GET /api"].passed);
+    assert!(observation.apis["OPTIONS /api"].passed);
+    assert!(!observation.finalized);
+    assert_eq!(report.totals.runs.executed, 1);
+    assert_eq!(report.totals.cases.executed, 3);
+    assert_eq!(report.totals.cases.passed, 2);
+    let finalized = std::fs::read(&layout.progress_path).unwrap();
+    super::reclassify_focused_background_dependencies(context, "GET /api").unwrap();
+    assert_eq!(std::fs::read(&layout.progress_path).unwrap(), finalized);
+}
+
+#[test]
 fn interrupted_shared_reclassification_retries_without_recounting_the_recording() {
     use crate::e2e_run::{config, store, test_session};
     let target = tempfile::tempdir().unwrap();
