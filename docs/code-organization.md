@@ -30,6 +30,10 @@ is unclear.
 
 ## Current Boundaries
 
+- `recording_api/methods` owns the optional per-route method metadata codec and
+  lookup. Recorder run finalization projects its existing observed API set into
+  the recording manifest once; coordinator execution summaries only read it.
+
 - `config/mysql_tables` owns shared bounded physical-table selection for
   process-owned reads and SQL-time rules. `replay/policy/sql_template/table`
   binds whole table identifiers and qualifiers for SQL-time rules; matcher and

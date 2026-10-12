@@ -1320,6 +1320,11 @@ only when every included method completes, and counts as skipped only when all
 methods are skipped. Stored `.traffic-e2e/progress.yaml` remains method-keyed.
 Normal coordinator commands and unscoped Replay advancement operate on routes;
 HTTP method-qualified selectors are rejected.
+Busy Replay summaries annotate each HTTP route with its method set from the
+adopted recording, for example `building target for [GET, OPTIONS] /api/teams`.
+This is the API's recorded method set, independent of which methods are being
+reverified in this attempt. Historical recordings without method metadata show
+the route alone; Replay and status do not backfill the recording.
 The state-machine coordinator consumes the global action while top-level
 `pending > 0`, executes the indicated command or runtime dispatch, and continues
 from its response. When only asynchronous work remains, `pending=1` selects
