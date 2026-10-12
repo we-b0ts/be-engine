@@ -74,6 +74,13 @@ is unclear.
   replacement; published consumers never need the transient active directory.
   `e2e_run/replay_publication` stages the original Replay report and dependency
   sidecar into that same snapshot and retargets aggregate report references.
+  `replay/report/aggregate/runner` validates runner-selected report locations,
+  session identity and complete shared-session coverage while preserving the
+  public recording report discovery boundary. `e2e_run/final_evidence` selects
+  the prepared recording witnesses for every case in that session before
+  recomputing method evidence. `replay/report/background_overlay/original_evidence`
+  owns reversible overlay restoration shared by reclassification and ownership
+  planners, so interrupted applies can resume from original unused witnesses.
   `rewrite/plan_recovery` retires a pending rule with unavailable Replay evidence
   and requests fresh verification while returning its selector and source proof.
 - `replay/assertion/time` owns the shared timestamp formats and fixed request

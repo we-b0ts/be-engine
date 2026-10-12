@@ -261,8 +261,9 @@ fn parse_replay_evidence(
     key_separator: u8,
     key_suffix: &[u8],
 ) -> Result<EvidenceMatch> {
-    let report: ReplayEvidenceReport = serde_json::from_str(raw)
-        .with_context(|| format!("failed to parse replay report {}", report_path.display()))?;
+    let report: ReplayEvidenceReport =
+        crate::replay::report::parse_background_dependency_evidence(raw)
+            .with_context(|| format!("failed to parse replay report {}", report_path.display()))?;
     ensure!(
         report.version == 6,
         "Memcached process-owned dependency evidence requires replay report version 6"

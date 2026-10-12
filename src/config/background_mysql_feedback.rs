@@ -78,7 +78,7 @@ pub fn plan_mysql_background_dependency(
     };
     process_owned_dependencies::validate(std::slice::from_ref(&requested))?;
     let raw = read(&feedback.replay_report_path)?;
-    let evidence: Value = serde_json::from_str(&raw)?;
+    let evidence: Value = crate::replay::report::parse_background_dependency_evidence(&raw)?;
     ensure!(
         evidence["version"] == 6 && evidence["finalized"] == true,
         "MySQL ownership planning requires a finalized version-6 replay report"

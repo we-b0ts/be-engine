@@ -84,6 +84,62 @@ fn report_with_unused() -> Value {
 }
 
 #[test]
+fn retries_policy_application_after_report_reclassification() {
+    let fixture = Fixture::new(report_with_unused());
+    plan_background_dependency(fixture.feedback())
+        .unwrap()
+        .apply()
+        .unwrap();
+    crate::replay::reclassify_background_dependencies(
+        &fixture.config,
+        &fixture.replay_report,
+        &Default::default(),
+    )
+    .unwrap();
+    let classified = fs::read(&fixture.replay_report).unwrap();
+    let rules = fs::read(&fixture.config).unwrap();
+
+    let retry = plan_background_dependency(fixture.feedback()).unwrap();
+    assert!(retry.report().reused_existing);
+    assert!(!retry.report().changed);
+    assert_eq!(retry.report().matched_unused_exchanges, 2);
+    assert_eq!(retry.report().matched_case_ids, ["case-a", "case-b"]);
+    assert!(retry.apply().unwrap().applied);
+    assert_eq!(fs::read(&fixture.config).unwrap(), rules);
+    assert_eq!(fs::read(&fixture.replay_report).unwrap(), classified);
+
+    let mut report: Value = serde_json::from_slice(&classified).unwrap();
+    report["http_request_header_mismatches"] = json!([evidence(
+        "case-a",
+        "config.api.demo.test",
+        80,
+        "GET",
+        "/1/config/service"
+    )]);
+    fs::write(&fixture.replay_report, report.to_string()).unwrap();
+    assert!(
+        plan_background_dependency(fixture.feedback())
+            .unwrap_err()
+            .to_string()
+            .contains("request-header mismatch")
+    );
+}
+
+#[test]
+fn ordinary_global_exchanges_cannot_replace_unused_case_evidence() {
+    let mut report = report_with_unused();
+    report["unused_global_http_exchanges"] = report["unused_case_http_exchanges"].take();
+    report["unused_case_http_exchanges"] = json!([]);
+    let fixture = Fixture::new(report);
+    assert!(
+        plan_background_dependency(fixture.feedback())
+            .unwrap_err()
+            .to_string()
+            .contains("matches no unused case")
+    );
+}
+
+#[test]
 fn header_mismatch_cannot_be_hidden_by_a_background_rule() {
     let mut report = report_with_unused();
     report["http_request_header_mismatches"] = json!([evidence(

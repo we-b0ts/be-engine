@@ -6,8 +6,8 @@ use serde_json::{Map, Value, json};
 use tempfile::TempDir;
 
 use super::aggregate::{
-    ReplayAggregateOptions, aggregate_replay_report_with_options, aggregate_replay_reports,
-    aggregate_replay_reports_with_options,
+    ReplayAggregateOptions, aggregate_replay_reports, aggregate_replay_reports_with_options,
+    aggregate_runner_replay_report,
 };
 
 #[test]
@@ -352,11 +352,88 @@ fn exact_report_aggregation_ignores_unrelated_historical_reports() {
         session_ids: BTreeSet::from([session.to_string()]),
     };
 
-    let aggregate = aggregate_replay_report_with_options(&source, &selected, &options).unwrap();
+    let aggregate = aggregate_runner_replay_report(&source, &selected, &source, &options).unwrap();
 
     assert!(aggregate.complete);
     assert_eq!(aggregate.counts.reports, 1);
     assert_eq!(aggregate.reports[0].path, selected.display().to_string());
+}
+
+#[test]
+fn runner_snapshot_aggregates_shared_session_and_preserves_sibling_dirty_evidence() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    let snapshot = temp.path().join("runtime/focused/latest");
+    fs::create_dir_all(&snapshot).unwrap();
+    let mut report = report_value_v6(
+        &source,
+        &[("case-a", "ended"), ("case-b", "ended")],
+        "session",
+        true,
+    );
+    report["unused_case_http_exchanges"] = json!([{"case_id":"case-b"}]);
+    write_case(&source.join("case-a"), true);
+    write_case(&source.join("case-b"), true);
+    let retained = snapshot.join("replay-report.json");
+    fs::write(&retained, report.to_string()).unwrap();
+    let options = ReplayAggregateOptions {
+        case_ids: BTreeSet::from(["case-a".into()]),
+        session_ids: BTreeSet::from(["session".into()]),
+    };
+    let aggregate =
+        aggregate_runner_replay_report(&source, &retained, &snapshot, &options).unwrap();
+    assert!(aggregate.complete);
+    assert!(aggregate.dirty);
+    assert_eq!(aggregate.counts.reported_cases, 2);
+    assert_eq!(aggregate.counts.events.http.unused_case_exchanges, 1);
+    assert_eq!(aggregate.selected_case_ids, ["case-a", "case-b"]);
+
+    let mut stale = options.clone();
+    stale.session_ids = BTreeSet::from(["other-session".into()]);
+    assert!(aggregate_runner_replay_report(&source, &retained, &snapshot, &stale).is_err());
+    let mut missing = options.clone();
+    missing.case_ids.insert("missing".into());
+    assert!(aggregate_runner_replay_report(&source, &retained, &snapshot, &missing).is_err());
+
+    let foreign = temp.path().join("other-recording");
+    fs::create_dir(&foreign).unwrap();
+    report["case_dir"] = json!(foreign);
+    fs::write(&retained, report.to_string()).unwrap();
+    assert!(
+        aggregate_runner_replay_report(&source, &retained, &snapshot, &options)
+            .unwrap_err()
+            .to_string()
+            .contains("outside case source")
+    );
+    report["case_dir"] = json!(source);
+    report["cases"][1]["case_id"] = json!("foreign-case");
+    report["selected_case_ids"] = json!(["case-a", "foreign-case"]);
+    fs::write(&retained, report.to_string()).unwrap();
+    assert!(aggregate_runner_replay_report(&source, &retained, &snapshot, &options).is_err());
+}
+
+#[test]
+fn runner_report_path_must_stay_in_recording_or_selected_snapshot() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    let snapshot = temp.path().join("snapshot");
+    fs::create_dir(&snapshot).unwrap();
+    let report = report_value_v6(&source, &[("case-a", "ended")], "session", true);
+    write_case(&source.join("case-a"), true);
+    let outside = temp.path().join("replay-report.json");
+    fs::write(&outside, report.to_string()).unwrap();
+    let options = ReplayAggregateOptions {
+        case_ids: BTreeSet::from(["case-a".into()]),
+        session_ids: BTreeSet::from(["session".into()]),
+    };
+    assert!(aggregate_runner_replay_report(&source, &outside, &snapshot, &options).is_err());
+    let linked = snapshot.join("replay-report.json");
+    std::os::unix::fs::symlink(&outside, &linked).unwrap();
+    assert!(aggregate_runner_replay_report(&source, &linked, &snapshot, &options).is_err());
+    // Public discovery retains its original confinement, even via a symlink.
+    let discovered = source.join("replay-report.json");
+    std::os::unix::fs::symlink(&outside, &discovered).unwrap();
+    assert!(aggregate_replay_reports(&source).is_err());
 }
 
 #[test]

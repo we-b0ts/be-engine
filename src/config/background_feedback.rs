@@ -251,8 +251,9 @@ fn parse_replay_evidence(
     method: &str,
     path_prefix: &str,
 ) -> Result<EvidenceMatch> {
-    let report: ReplayEvidenceReport = serde_json::from_str(raw)
-        .with_context(|| format!("failed to parse replay report {}", path.display()))?;
+    let report: ReplayEvidenceReport =
+        crate::replay::report::parse_background_dependency_evidence(raw)
+            .with_context(|| format!("failed to parse replay report {}", path.display()))?;
     ensure!(
         report.finalized,
         "process-owned dependency evidence requires a finalized replay report"
