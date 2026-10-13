@@ -691,6 +691,8 @@ async fn snapshot_test_state() -> (AppState, TempDir) {
     config
         .process_owned_dependencies
         .push(BackgroundDependencyRuleConfig::Redis {
+            key_sequence: Vec::new(),
+            script: None,
             trigger_source: None,
             key_templates: Vec::new(),
             arguments: Vec::new(),

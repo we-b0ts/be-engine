@@ -65,7 +65,13 @@ pub(crate) fn reclassify_background_dependencies(
     restore_previous_reclassification(&mut report);
 
     let mut by_protocol = BTreeMap::new();
-    mysql::reclassify(&mut report, rules, &mut matched.mysql, &mut by_protocol);
+    mysql::reclassify(
+        &mut report,
+        rules,
+        &mut matched.mysql,
+        &mut by_protocol,
+        &origins,
+    );
     reclassify_http(&mut report, rules, &mut by_protocol);
     for protocol in ["redis", "memcached", "motan"] {
         reclassify_command_protocol(&mut report, protocol, &matched.commands, &mut by_protocol);
@@ -482,11 +488,12 @@ fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
 }
 
 fn annotate_api_origins(report: &mut Value, origins: &crate::api_trigger::OriginIndex) {
-    for event in report["redis"]["unused_global"]
-        .as_array_mut()
-        .into_iter()
-        .flatten()
-    {
+    annotate_origins(&mut report["redis"]["unused_global"], origins);
+    annotate_origins(&mut report["unused_global_exchanges"], origins);
+}
+
+fn annotate_origins(events: &mut Value, origins: &crate::api_trigger::OriginIndex) {
+    for event in events.as_array_mut().into_iter().flatten() {
         let witness = event["background_original_case_id"]
             .as_str()
             .and_then(|case| origins.witness(case, event))

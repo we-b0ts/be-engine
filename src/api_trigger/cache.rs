@@ -13,7 +13,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const VERSION: u32 = 2;
+const VERSION: u32 = 7;
 #[derive(Serialize, Deserialize)]
 struct Envelope {
     checksum: String,
@@ -81,6 +81,9 @@ pub(crate) fn load(source: &Path, rules: &[BackgroundDependencyRuleConfig]) -> R
         .filter_map(|r| r.trigger_source())
         .flat_map(|source| source.request_body_json.keys().cloned())
         .collect();
+    let mysql = rules
+        .iter()
+        .any(|r| matches!(r, BackgroundDependencyRuleConfig::Mysql { .. }));
     let mut evidence = Vec::new();
     for path in files {
         let Some(request) = request::read(&path.with_file_name("request.json"), &pointers)? else {
@@ -88,7 +91,11 @@ pub(crate) fn load(source: &Path, rules: &[BackgroundDependencyRuleConfig]) -> R
         };
         evidence.push(EvidenceFile {
             request,
-            index: crate::dependency_index::load_file(&path)?,
+            index: if mysql {
+                crate::dependency_index::store::load_mysql_file(&path)?
+            } else {
+                crate::dependency_index::load_file(&path)?
+            },
             path,
         });
     }

@@ -2,7 +2,10 @@
 //! Ownership changes only unused foreign-case evidence; no live response is synthesized.
 mod cache;
 mod evidence;
+pub(crate) mod mysql_plan;
+mod mysql_transaction;
 pub(crate) mod plan;
+mod redis_script;
 mod request;
 #[cfg(test)]
 mod tests;
@@ -33,6 +36,7 @@ pub(crate) fn redis_args(value: &Value) -> Option<Vec<Vec<u8>>> {
         || value["replay_safe"] != true
         || value["session_setup"] == true
         || value["outcome"] != "response"
+        || value["response"]["truncated"] == true
     {
         return None;
     }

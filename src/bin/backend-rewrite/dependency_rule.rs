@@ -1,5 +1,7 @@
 mod http;
 use http::{HttpDependencyRuleArgs, http_options};
+mod mysql;
+use mysql::MysqlDependencyRuleArgs;
 mod mysql_tables;
 mod redis;
 use mysql_tables::MysqlTableArgs;
@@ -41,7 +43,7 @@ struct DependencyRulePlanArgs {
 enum DependencyRuleProtocolArgs {
     /// Validate a source-generated time value in a MySQL SQL template across text/prepared protocols.
     MysqlTime(Box<MysqlTimeArgs>),
-    /// Classify source-proven MySQL reads using bounded tables and a SELECT template.
+    /// Classify MySQL reads or API-origin UPDATEs using --trigger-source and an identity slot.
     Mysql(Box<MysqlDependencyRuleArgs>),
     /// Classify HTTP ownership or plan cross-case replay scope.
     Http(HttpDependencyRuleArgs),
@@ -136,27 +138,6 @@ impl From<DependencyOwnershipArg> for RewriteDependencyOwnership {
 }
 
 #[derive(Debug, Args)]
-struct MysqlDependencyRuleArgs {
-    #[command(flatten)]
-    common: DependencyRuleCommonArgs,
-    #[arg(long)]
-    target_host: String,
-    #[arg(long, default_value_t = 3306)]
-    target_port: u16,
-    #[arg(long)]
-    database: String,
-    #[arg(long)]
-    username: String,
-    #[arg(
-        long,
-        help = "Single SELECT with {{table}}, AS {{table}}_suffix aliases and ? for variable literals"
-    )]
-    sql: String,
-    #[command(flatten)]
-    table_scope: MysqlTableArgs,
-}
-
-#[derive(Debug, Args)]
 struct MemcachedDependencyRuleArgs {
     #[command(subcommand)]
     mode: MemcachedDependencyRuleModeArgs,
@@ -230,7 +211,7 @@ pub(super) fn run(target_root: PathBuf, args: DependencyRuleArgs, pretty: bool) 
     match args.command {
         DependencyRuleCommand::Plan(args) => match DependencyPlan::try_from(args.protocol)? {
             DependencyPlan::Ownership(options) => super::print_json(
-                &plan_rewrite_dependency_rule(RewriteContext { target_root }, options)?,
+                &plan_rewrite_dependency_rule(RewriteContext { target_root }, *options)?,
                 pretty,
             ),
             DependencyPlan::Payload(options) => super::print_json(
@@ -250,7 +231,7 @@ pub(super) fn run(target_root: PathBuf, args: DependencyRuleArgs, pretty: bool) 
 }
 
 enum DependencyPlan {
-    Ownership(RewriteDependencyRulePlanOptions),
+    Ownership(Box<RewriteDependencyRulePlanOptions>),
     Payload(RewriteDependencyPayloadRulePlanOptions),
 }
 
@@ -258,7 +239,7 @@ impl TryFrom<DependencyRuleProtocolArgs> for DependencyPlan {
     type Error = anyhow::Error;
 
     fn try_from(value: DependencyRuleProtocolArgs) -> Result<Self> {
-        Ok(Self::Ownership(match value {
+        Ok(Self::Ownership(Box::new(match value {
             DependencyRuleProtocolArgs::MysqlTime(args) => RewriteDependencyRulePlanOptions {
                 evidence_id: args.evidence_id,
                 ownership: RewriteDependencyOwnership::RequestOwned,
@@ -299,24 +280,7 @@ impl TryFrom<DependencyRuleProtocolArgs> for DependencyPlan {
                     },
                 },
             },
-            DependencyRuleProtocolArgs::Mysql(args) => {
-                let table_series = args.table_scope.series();
-                dependency_rule_options(
-                    args.common,
-                    RewriteDependencyRuleSelector::Mysql {
-                        selector: traffic_e2e::MysqlBackgroundSelector {
-                            target_host: args.target_host,
-                            target_port: args.target_port,
-                            database: args.database,
-                            username: args.username,
-                            sql: args.sql,
-                            tables: args.table_scope.tables,
-                            table_patterns: args.table_scope.table_patterns,
-                            table_series,
-                        },
-                    },
-                )
-            }
+            DependencyRuleProtocolArgs::Mysql(args) => mysql::options(*args),
             DependencyRuleProtocolArgs::Http(args) => http_options(args)?,
             DependencyRuleProtocolArgs::Memcached(args) => match args.mode {
                 MemcachedDependencyRuleModeArgs::Get(args) => dependency_rule_options(
@@ -352,7 +316,7 @@ impl TryFrom<DependencyRuleProtocolArgs> for DependencyPlan {
                 },
             ),
             DependencyRuleProtocolArgs::Redis(args) => redis::options(args)?,
-        }))
+        })))
     }
 }
 

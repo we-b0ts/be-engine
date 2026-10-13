@@ -2,6 +2,7 @@
 //! This module never authorizes matching, sharing, consumption or responses.
 mod build;
 mod model;
+mod mysql;
 mod reader;
 pub(crate) mod store;
 #[cfg(test)]

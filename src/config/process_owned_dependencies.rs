@@ -1,3 +1,4 @@
+mod matching;
 pub(crate) mod mysql;
 pub use mysql::{MysqlBackgroundSelector, MysqlBackgroundTableSeries};
 
@@ -28,6 +29,14 @@ pub struct RedisKeyPatternConfig {
 #[serde(tag = "protocol", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BackgroundDependencyRuleConfig {
     Mysql {
+        #[serde(default, skip_serializing_if = "super::api_trigger::mysql::disabled")]
+        include_transaction_boundaries: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        transaction_members: Vec<MysqlBackgroundSelector>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trigger_source: Option<super::api_trigger::ApiTriggerSource>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        identity_value_index: Option<usize>,
         name: String,
         selector: MysqlBackgroundSelector,
         source_revision: String,
@@ -56,6 +65,10 @@ pub enum BackgroundDependencyRuleConfig {
         source_evidence: String,
     },
     Redis {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        key_sequence: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        script: Option<super::api_trigger::redis_script::ApiTriggerRedisScript>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trigger_source: Option<super::api_trigger::ApiTriggerSource>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -95,7 +108,9 @@ pub enum BackgroundDependencyRuleConfig {
 impl BackgroundDependencyRuleConfig {
     pub(crate) fn trigger_source(&self) -> Option<&super::api_trigger::ApiTriggerSource> {
         match self {
-            Self::Redis { trigger_source, .. } => trigger_source.as_ref(),
+            Self::Redis { trigger_source, .. } | Self::Mysql { trigger_source, .. } => {
+                trigger_source.as_ref()
+            }
             _ => None,
         }
     }
@@ -111,85 +126,7 @@ impl BackgroundDependencyRuleConfig {
     }
 
     pub(crate) fn matches(&self, event: &RecorderEvent) -> bool {
-        match (self, event) {
-            (Self::Mysql { selector, .. }, RecorderEvent::MysqlExchange(exchange)) => {
-                selector.matches(exchange)
-            }
-            (
-                Self::Http {
-                    authorities,
-                    methods,
-                    path_prefixes,
-                    ..
-                },
-                RecorderEvent::HttpExchange(exchange),
-            ) => {
-                let Some(authority) = exchange
-                    .authority
-                    .as_deref()
-                    .and_then(normalize_authority)
-                    .or_else(|| {
-                        exchange
-                            .uri
-                            .parse::<Uri>()
-                            .ok()
-                            .and_then(|uri| uri.authority().map(ToString::to_string))
-                            .as_deref()
-                            .and_then(normalize_authority)
-                    })
-                else {
-                    return false;
-                };
-                let path = exchange
-                    .uri
-                    .parse::<Uri>()
-                    .ok()
-                    .map(|uri| uri.path().to_string())
-                    .unwrap_or_else(|| {
-                        exchange
-                            .uri
-                            .split('?')
-                            .next()
-                            .unwrap_or(&exchange.uri)
-                            .to_string()
-                    });
-
-                authorities
-                    .iter()
-                    .any(|candidate| normalize_authority(candidate).as_deref() == Some(&authority))
-                    && methods
-                        .iter()
-                        .any(|candidate| candidate.eq_ignore_ascii_case(&exchange.method))
-                    && path_prefixes.iter().any(|prefix| path.starts_with(prefix))
-            }
-            (Self::Redis { .. }, RecorderEvent::RedisExchange(exchange)) => {
-                let args = exchange
-                    .args
-                    .iter()
-                    .map(decode_capture)
-                    .collect::<Option<Vec<_>>>();
-                !exchange.session_setup
-                    && exchange.replay_safe
-                    && args.as_deref().is_some_and(|args| {
-                        redis_rule_matches(self, exchange.target_port, &exchange.command, args)
-                    })
-            }
-            (
-                Self::Motan {
-                    group,
-                    interface_name,
-                    method_name,
-                    ..
-                },
-                RecorderEvent::MotanExchange(exchange),
-            ) => {
-                !exchange.heartbeat
-                    && exchange.group.as_deref() == Some(group)
-                    && exchange.interface_name.as_deref() == Some(interface_name)
-                    && exchange.method_name.as_deref() == Some(method_name)
-            }
-            _ => false,
-        }
+        matching::matches(self, event)
     }
 }
 
@@ -210,7 +147,12 @@ pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 source_evidence,
                 ..
             } => {
-                selector.validate()?;
+                if rule.trigger_source().is_some() {
+                    selector.validate_api()?;
+                } else {
+                    selector.validate()?;
+                }
+                super::api_trigger::mysql::validate(rule)?;
                 validate_source_revision(source_revision)?;
                 validate_source_evidence(source_evidence)?;
             }
@@ -284,11 +226,16 @@ pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 if let BackgroundDependencyRuleConfig::Redis {
                     key_templates,
                     arguments,
+                    key_sequence,
+                    script,
                     ..
                 } = rule
                 {
                     anyhow::ensure!(
-                        key_templates.is_empty() && arguments.is_empty(),
+                        key_templates.is_empty()
+                            && arguments.is_empty()
+                            && key_sequence.is_empty()
+                            && script.is_none(),
                         "key_templates and arguments require trigger_source"
                     );
                 }

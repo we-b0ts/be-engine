@@ -4,6 +4,9 @@ use super::*;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(in crate::rewrite) enum RewriteDependencyRuleSpec {
+    MysqlApiTriggered {
+        selector: crate::ApiTriggeredMysqlSelector,
+    },
     RedisApiTriggered {
         selector: crate::ApiTriggeredRedisSelector,
     },

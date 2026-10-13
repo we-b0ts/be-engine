@@ -7,25 +7,40 @@ pub(super) fn reclassify(
     rules: &[BackgroundDependencyRuleConfig],
     dependencies: &mut BTreeMap<String, Vec<Value>>,
     counts: &mut BTreeMap<String, usize>,
+    origins: &crate::api_trigger::OriginIndex,
 ) {
     let rules = rules
         .iter()
         .filter_map(|rule| match rule {
-            BackgroundDependencyRuleConfig::Mysql { name, selector, .. } => {
-                Some((name.as_str(), selector))
-            }
+            BackgroundDependencyRuleConfig::Mysql {
+                name,
+                selector,
+                trigger_source: None,
+                ..
+            } => Some((name.as_str(), selector)),
             _ => None,
         })
         .collect::<Vec<_>>();
-    if rules.is_empty() {
+    if rules.is_empty() && origins.witnesses.is_empty() {
         return;
     }
+    let mut remaining = BTreeMap::<String, usize>::new();
     move_matching_events(
         report,
         "unused_case_exchanges",
         "unused_global_exchanges",
         |unused| {
-            let events = dependencies.get_mut(unused.get("case_id")?.as_str()?)?;
+            let case = unused.get("case_id")?.as_str()?;
+            if let Some(witness) = origins.witness(case, unused) {
+                let key = crate::config::api_trigger::mysql::key(case, unused)?;
+                let used = remaining.entry(key).or_default();
+                if *used < witness.exchanges {
+                    *used += 1;
+                    return Some(witness.rule.as_str());
+                }
+                return None;
+            }
+            let events = dependencies.get_mut(case)?;
             rules.iter().find_map(|(name, selector)| {
                 // Missing, failed, incomplete or ambiguous immutable evidence
                 // stays Case-owned; no SQL preview can authorize reclassification.

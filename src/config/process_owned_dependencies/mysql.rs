@@ -4,6 +4,7 @@ use crate::recorder::MysqlExchangeEvent;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
+mod api;
 pub(crate) mod evidence;
 pub use crate::config::mysql_tables::MysqlTableSeries as MysqlBackgroundTableSeries;
 use crate::config::mysql_tables::TableMatcher;
@@ -29,7 +30,7 @@ pub struct MysqlBackgroundSelector {
 const TABLE_MARKER: &str = "__traffic_background_table__";
 
 impl MysqlBackgroundSelector {
-    pub(super) fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         super::validate_single_line("MySQL target host", &self.target_host, 253)?;
         ensure!(
             self.target_host
@@ -58,7 +59,7 @@ impl MysqlBackgroundSelector {
         Ok(())
     }
 
-    fn template(&self) -> Option<Vec<Token>> {
+    pub(crate) fn template(&self) -> Option<Vec<Token>> {
         if !self.sql.contains("{{table}}") || self.sql.contains(TABLE_MARKER) {
             return None;
         }
@@ -155,7 +156,7 @@ impl MysqlBackgroundSelector {
             })
     }
 
-    pub(super) fn matches(&self, event: &MysqlExchangeEvent) -> bool {
+    pub(crate) fn matches(&self, event: &MysqlExchangeEvent) -> bool {
         event.parse_warnings.is_empty()
             && !event.response.rows_truncated
             && event.response.status == "resultset"
@@ -177,7 +178,7 @@ impl MysqlBackgroundSelector {
         {
             return false;
         }
-        let (Some(left), Some(right)) = (self.template(), other.template()) else {
+        let (Some(left), Some(right)) = (self.api_template(), other.api_template()) else {
             return false;
         };
         let (Ok(a), Ok(b)) = (

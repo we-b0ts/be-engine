@@ -76,7 +76,7 @@ pub(crate) fn consume_unused(
     Ok(true)
 }
 
-fn complete_response(event: &Value) -> bool {
+pub(crate) fn complete_response(event: &Value) -> bool {
     let response = &event["response"];
     let Some(columns) = response["columns"].as_array().filter(|c| !c.is_empty()) else {
         return false;

@@ -116,6 +116,27 @@ fn load_file_cancellable(
     Ok(index)
 }
 
+/// Only configured API-origin MySQL discovery requests this optional extension.
+pub(crate) fn load_mysql_file(path: &Path) -> Result<FileIndex> {
+    let base = load_file(path)?;
+    let stamp = base.stamp.clone();
+    let directory = cache_directory(path);
+    private_directory(&directory)?;
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+    let _lock = Lock::acquire(&directory.join("build.lock"), &cancelled)?;
+    let cache = directory.join("file-mysql-v4.json");
+    if let Ok(index) = read_json::<FileIndex>(&cache)
+        && index.version == VERSION
+        && index.stamp == stamp
+        && index.mysql.is_some()
+    {
+        return Ok(index);
+    }
+    let index = super::mysql::extend(path, base)?;
+    write_json(&cache, &index)?;
+    Ok(index)
+}
+
 pub(crate) fn prepare(source: &Path) -> Result<(RunIndex, DependencyIndexReport)> {
     prepare_cancellable(source, &std::sync::atomic::AtomicBool::new(false))
 }

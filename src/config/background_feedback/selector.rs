@@ -372,12 +372,33 @@ fn api_trigger_same(
 ) -> bool {
     match (a, b) {
         (
+            BackgroundDependencyRuleConfig::Mysql {
+                trigger_source: Some(at),
+                identity_value_index: ai,
+                include_transaction_boundaries: ati,
+                transaction_members: atm,
+                selector: a,
+                ..
+            },
+            BackgroundDependencyRuleConfig::Mysql {
+                trigger_source: Some(bt),
+                identity_value_index: bi,
+                include_transaction_boundaries: bti,
+                transaction_members: btm,
+                selector: b,
+                ..
+            },
+        ) => at == bt && ai == bi && a == b && ati == bti && atm == btm,
+
+        (
             BackgroundDependencyRuleConfig::Redis {
                 trigger_source: Some(at),
                 ports: ap,
                 command: ac,
                 key_templates: ak,
                 arguments: aa,
+                key_sequence: aks,
+                script: asc,
                 ..
             },
             BackgroundDependencyRuleConfig::Redis {
@@ -386,11 +407,24 @@ fn api_trigger_same(
                 command: bc,
                 key_templates: bk,
                 arguments: ba,
+                key_sequence: bks,
+                script: bsc,
                 ..
             },
-        ) => at == bt && ap == bp && ac == bc && ak == bk && aa == ba,
+        ) => at == bt && ap == bp && ac == bc && ak == bk && aa == ba && aks == bks && asc == bsc,
         _ => false,
     }
+}
+
+/// A same-name ordinary SELECT rule may be narrowed to the exact same shape
+/// with a verified API origin. The reverse operation is never an implicit merge.
+pub(super) fn narrows_mysql_origin(
+    existing: &BackgroundDependencyRuleConfig,
+    requested: &BackgroundDependencyRuleConfig,
+) -> bool {
+    matches!((existing, requested),
+        (BackgroundDependencyRuleConfig::Mysql {trigger_source: None, selector: a, ..},
+         BackgroundDependencyRuleConfig::Mysql {trigger_source: Some(_), selector: b, ..}) if a == b)
 }
 
 #[cfg(test)]
@@ -406,6 +440,8 @@ mod tests {
         fields: &[&str],
     ) -> BackgroundDependencyRuleConfig {
         BackgroundDependencyRuleConfig::Redis {
+            key_sequence: Vec::new(),
+            script: None,
             trigger_source: None,
             key_templates: Vec::new(),
             arguments: Vec::new(),

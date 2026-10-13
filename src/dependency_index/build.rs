@@ -90,6 +90,7 @@ impl Builder {
                 metadata: Vec::new(),
                 http: Vec::new(),
                 redis: Vec::new(),
+                mysql: None,
                 redis_lanes: Default::default(),
             },
             endpoints: BTreeSet::new(),
