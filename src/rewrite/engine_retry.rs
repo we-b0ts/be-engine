@@ -1,4 +1,4 @@
-//! One fresh runtime verification per changed engine build, including legacy failures.
+//! One fresh verification of runtime or dependency-only failures per changed engine build.
 use super::model::{RewriteIssueKind, RewritePhase, RewriteSliceState, RewriteState};
 
 pub(super) fn pending(slice: &RewriteSliceState) -> bool {
@@ -9,12 +9,14 @@ fn eligible(slice: &RewriteSliceState, engine: &str) -> bool {
     slice.phase == RewritePhase::ImplementationRequired
         && !slice.engine_retry_running
         && slice.active_issue.as_ref().is_some_and(|issue| {
-            issue.kind == RewriteIssueKind::TargetRuntime
-                && slice.attempts.last().is_some_and(|attempt| {
-                    !attempt.passed
-                        && attempt.attempt == issue.attempt
-                        && attempt.engine_fingerprint.as_deref() != Some(engine)
-                })
+            slice.attempts.last().is_some_and(|attempt| {
+                !attempt.passed
+                    && attempt.attempt == issue.attempt
+                    && attempt.engine_fingerprint.as_deref() != Some(engine)
+                    && (issue.kind == RewriteIssueKind::TargetRuntime
+                        || issue.kind == RewriteIssueKind::Dependency
+                            && super::replay_admission::dependency_only(attempt))
+            })
         })
         && !slice.engine_retry_fingerprints.contains(engine)
         && slice.rule_plan.is_none()

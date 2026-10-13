@@ -412,3 +412,93 @@ fn skips_and_active_traffic_are_not_replayed_by_status() {
         RewriteAction::AdvanceRequired { .. }
     ));
 }
+
+fn dependency_state(engine: Option<&str>) -> RewriteState {
+    let mut state = runtime_state(engine);
+    state.active_issue.as_mut().unwrap().kind = RewriteIssueKind::Dependency;
+    state.active_issue.as_mut().unwrap().owner = RewriteIssueOwner::SourceInvestigation;
+    state.attempts[0].gates = crate::E2eVerificationGates {
+        responses: crate::E2eResponseGate::Passed,
+        replay: crate::E2eReplayGate::Complete,
+        dependencies: crate::E2eDependencyGate::Dirty,
+    };
+    state.attempts[0].counts.executed = 1;
+    state.attempts[0].counts.response_passed = 1;
+    state.attempts[0].counts.response_incomplete = 0;
+    state
+}
+
+#[test]
+fn dependency_only_failures_get_one_durable_retry_after_an_engine_change() {
+    let target = worker::tests::configured_target();
+    for old in [None, Some("engine-revision-v1:older")] {
+        let mut state = dependency_state(old);
+        let issue = serde_json::to_value(&state.active_issue).unwrap();
+        let current = crate::build_info::ENGINE_FINGERPRINT;
+        assert!(pending(&state.active_slice));
+        assert!(worker::runtime::scopes(&state).is_empty());
+        let scope = api_selector::work_scope(&state, &state.api);
+        assert!(replay_admission::admitted(&state, &scope));
+        assert!(matches!(
+            action::state_action(target.path(), &state),
+            RewriteAction::AdvanceRequired { .. }
+        ));
+        assert!(reserve(&mut state, None));
+        let store = RewriteStore::new(target.path()).unwrap();
+        store.save(&state).unwrap();
+        let mut restored = store.load().unwrap().unwrap();
+        clear_running(&mut restored);
+        assert!(!pending(&restored.active_slice));
+        assert!(restored.engine_retry_fingerprints.contains(current));
+        assert_eq!(serde_json::to_value(&restored.active_issue).unwrap(), issue);
+        assert_eq!(restored.attempts.len(), 1);
+        assert!(!restored.e2e_current);
+        assert!(eligible(&restored.active_slice, "engine-revision-v1:next"));
+    }
+    assert!(!pending(
+        &dependency_state(Some(crate::build_info::ENGINE_FINGERPRINT)).active_slice
+    ));
+}
+
+#[test]
+fn dependency_retry_requires_complete_passing_responses_and_only_dirty_dependencies() {
+    for mode in 0..9 {
+        let mut state = dependency_state(None);
+        let a = &mut state.attempts[0];
+        match mode {
+            0 => a.gates.responses = crate::E2eResponseGate::Nonpassing,
+            1 => a.gates.responses = crate::E2eResponseGate::Incomplete,
+            2 => a.gates.replay = crate::E2eReplayGate::Incomplete,
+            3 => a.gates.dependencies = crate::E2eDependencyGate::Unknown,
+            4 => a.counts.executed = 0,
+            5 => a.counts.response_nonpassing = 1,
+            6 => a.counts.response_incomplete = 1,
+            7 => a.counts.response_passed = 0,
+            _ => a.gates.dependencies = crate::E2eDependencyGate::Clean,
+        }
+        assert!(!pending(&state.active_slice), "mode={mode}");
+    }
+}
+
+#[test]
+fn dependency_retry_admits_each_route_method_independently_without_worker_reclassification() {
+    let mut state = dependency_state(Some("old-engine"));
+    sibling(&mut state, "OPTIONS /api", RewriteIssueKind::Dependency);
+    let scope = api_selector::work_scope(&state, &state.api);
+    assert!(replay_admission::admitted(&state, &scope));
+    assert!(worker::runtime::scopes(&state).is_empty());
+    state
+        .parked_slices
+        .get_mut("OPTIONS /api")
+        .unwrap()
+        .attempts[0]
+        .engine_fingerprint = Some(crate::build_info::ENGINE_FINGERPRINT.into());
+    assert!(!replay_admission::admitted(&state, &scope));
+    assert_eq!(worker::runtime::scopes(&state), vec![scope]);
+    assert!(replay_admission::admitted(
+        &state,
+        &RewriteWorkScope::Api {
+            api: "GET /api".into()
+        }
+    ));
+}

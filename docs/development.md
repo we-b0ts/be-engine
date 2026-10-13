@@ -50,6 +50,19 @@ mirror. Do not replace that registry configuration unless explicitly asked.
 The build produces sibling `traffic-e2e`, `backend-rewrite`, and
 `backend-rewrite-admin` executables. Keep them together in installed packages
 because detached coordinator actions delegate engine work to `traffic-e2e`.
+After an engine build changes, the coordinator permits one fresh Replay per API
+method for a runtime failure or a dependency-only failure with complete Replay
+and all responses passed. Historical attempts without an engine identity also
+receive one refresh. The permit is persisted before execution and survives
+restarts; failure retains the issue and cannot retry again on the same build.
+A changed process-owned policy first reclassifies the finalized report. If only
+dependencies remain dirty, successful apply also requests one real Replay for
+the affected route methods; unchanged reapplication does not renew it. Recomputing
+an old failed report preserves an unused Replay request. Other
+rule-application Replay requests remain independent. No worker claim
+that target code is correct is needed to refresh stale engine evidence; source
+review, target quality, worker activity and traffic leases still apply.
+
 On Linux, a running `traffic-e2e` reexecs through `/proc/<pid>/exe`, retaining its
 running inode and engine revision even when its installed executable is replaced.
 Companion resolution also recognizes a replaced `backend-rewrite` executable.

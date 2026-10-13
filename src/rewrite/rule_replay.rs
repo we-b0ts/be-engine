@@ -9,6 +9,32 @@ pub(super) fn request(state: &mut RewriteState) {
     state.e2e_current = false;
 }
 
+/// A changed process rule first reclassifies existing evidence. If only
+/// dependencies remain dirty, request one real Replay for affected route methods.
+/// Unchanged/idempotent application cannot renew a consumed request.
+pub(super) fn after_process_rule(state: &mut RewriteState, api: &str, changed: bool) {
+    if !changed {
+        return;
+    }
+    let route = super::api_selector::public_api(api);
+    for slice in std::iter::once(&mut state.active_slice).chain(state.parked_slices.values_mut()) {
+        if super::api_selector::public_api(&slice.api) == route
+            && slice.phase == RewritePhase::ImplementationRequired
+            && slice.active_issue.as_ref().is_some_and(|issue| {
+                issue.kind == super::model::RewriteIssueKind::Dependency
+                    && slice.attempts.last().is_some_and(|attempt| {
+                        !attempt.passed
+                            && attempt.attempt == issue.attempt
+                            && super::replay_admission::dependency_only(attempt)
+                    })
+            })
+        {
+            slice.rule_replay_pending = true;
+            slice.e2e_current = false;
+        }
+    }
+}
+
 pub(super) fn pending(slice: &RewriteSliceState) -> bool {
     slice.rule_replay_pending
         && slice.phase == RewritePhase::ImplementationRequired
