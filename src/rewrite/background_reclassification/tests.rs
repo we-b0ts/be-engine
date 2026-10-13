@@ -225,3 +225,76 @@ fn reclassification_keeps_its_issue_owner_when_route_selection_prefers_a_pending
     assert_eq!(sibling.phase, RewritePhase::SliceComplete);
     assert!(worker::runtime::scopes(&state).is_empty());
 }
+
+#[test]
+fn partial_process_rule_apply_schedules_real_replay_while_retaining_the_dirty_issue() {
+    let (target, state) = workflow();
+    let context = E2eRunContext {
+        target_root: target.path().into(),
+        case_source: state.case_source.clone().unwrap(),
+        run_key: None,
+    };
+    let focused: serde_yaml::Value = serde_yaml::from_slice(
+        &std::fs::read(test_session::state_path(&context, "GET /api")).unwrap(),
+    )
+    .unwrap();
+    let path = Path::new(focused["replay_report"].as_str().unwrap());
+    let mut value: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    value["unused_case_http_exchanges"][0]["uri"] = "/unclassified".into();
+    std::fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let store = RewriteStore::new(target.path()).unwrap();
+    store.save(&state).unwrap();
+    let owner = "GET /api";
+    let latest = store.load().unwrap().unwrap();
+    let selected = inventory::scoped(&latest, Some(&owner.parse().unwrap())).unwrap();
+    let command = rewrite::evidence::commands(target.path(), &selected)
+        .into_iter()
+        .find(|c| c.query_id.ends_with("dirty-clusters"))
+        .unwrap();
+    let evidence = rewrite::evidence::query(target.path(), &selected, &command.query_id).unwrap();
+    let planned = rewrite::plan_rewrite_dependency_rule(
+        rewrite::RewriteContext {
+            target_root: target.path().into(),
+        },
+        rewrite::RewriteDependencyRulePlanOptions {
+            evidence_id: evidence.evidence_id,
+            ownership: rewrite::RewriteDependencyOwnership::ProcessOwned,
+            name: Some("partial-stream-startup".into()),
+            source_evidence: Some("startup.rs starts the process-wide connection".into()),
+            selector: rewrite::RewriteDependencyRuleSelector::Http {
+                authority: "stream.test".into(),
+                method: "GET".into(),
+                path_prefix: "/connect".into(),
+            },
+        },
+    )
+    .unwrap();
+    let applied = rewrite::apply_rewrite_dependency_rule(
+        rewrite::RewriteContext {
+            target_root: target.path().into(),
+        },
+        &planned.plan_id.unwrap(),
+    )
+    .unwrap();
+    assert_eq!(applied.traffic_e2e_report["changed"], true);
+    let mut updated = store.load().unwrap().unwrap();
+    let remaining = inventory::scoped(&updated, Some(&"GET /api".parse().unwrap())).unwrap();
+    assert_eq!(remaining.phase, RewritePhase::ImplementationRequired);
+    assert!(remaining.rule_replay_pending);
+    assert!(remaining.active_issue.is_some());
+    assert!(!remaining.e2e_current);
+    assert_eq!(remaining.attempts.len(), 1);
+    assert!(rewrite::replay_admission::admitted(
+        &updated,
+        &rewrite::api_selector::work_scope(&updated, &updated.api)
+    ));
+    assert!(worker::runtime::scopes(&updated).is_empty());
+    // An automatic reclassification of the same old failed session cannot
+    // consume the request, even though it does not change policy again.
+    apply(target.path(), &mut updated, "OPTIONS /api").unwrap();
+    rewrite::rule_replay::after_process_rule(&mut updated, owner, false);
+    let remaining = inventory::scoped(&updated, Some(&"GET /api".parse().unwrap())).unwrap();
+    assert!(remaining.rule_replay_pending);
+    assert!(!remaining.e2e_current);
+    assert_eq!(remaining.attempts.len(), 1);
+}

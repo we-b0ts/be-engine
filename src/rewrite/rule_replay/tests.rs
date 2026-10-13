@@ -232,7 +232,8 @@ fn finalized_replay_consumes_the_request_for_passed_and_dirty_results() {
         let mut state = implementation_state_with_inventory(false);
         request(&mut state);
         let result = crate::E2eApiRunResult {
-            engine_fingerprint: None,
+            // A completed fresh Replay retains the actual executor identity.
+            engine_fingerprint: Some(crate::build_info::ENGINE_FINGERPRINT.into()),
             run_key: "recording".into(),
             api: state.api.clone(),
             attempt: 2,
@@ -294,3 +295,38 @@ fn old_snapshots_do_not_create_a_replay_request() {
 }
 
 mod header_apply;
+
+#[test]
+fn changed_process_policy_requests_one_replay_for_a_remaining_dependency_only_failure() {
+    let target = configured_target();
+    let mut state = implementation_state_with_inventory(false);
+    state.active_issue.as_mut().unwrap().kind = rewrite::model::RewriteIssueKind::Dependency;
+    state.attempts = vec![serde_json::from_value(serde_json::json!({
+        "attempt": state.active_issue.as_ref().unwrap().attempt,
+        "engine_fingerprint": crate::build_info::ENGINE_FINGERPRINT,
+        "passed": false,
+        "gates": {"responses":"passed", "replay":"complete", "dependencies":"dirty"},
+        "counts": {"selected":1, "executed":1, "response_passed":1, "response_nonpassing":0, "response_incomplete":0}
+    })).unwrap()];
+    let api = state.api.clone();
+    let scope = rewrite::api_selector::work_scope(&state, &api);
+    after_process_rule(&mut state, &api, false);
+    assert!(!pending(&state.active_slice));
+    assert!(!rewrite::engine_retry::pending(&state.active_slice));
+    after_process_rule(&mut state, &api, true);
+    assert!(ready(&state, &scope));
+    assert!(!state.e2e_current);
+    let store = RewriteStore::new(target.path()).unwrap();
+    store.save(&state).unwrap();
+    let mut restored = store.load().unwrap().unwrap();
+    assert!(pending(&restored.active_slice));
+    // A finished Replay clears this existing one-shot request (covered above).
+    restored.rule_replay_pending = false;
+    after_process_rule(&mut restored, &api, false);
+    assert!(!pending(&restored.active_slice));
+    restored.attempts[0].gates.responses = crate::E2eResponseGate::Nonpassing;
+    after_process_rule(&mut restored, &api, true);
+    assert!(!pending(&restored.active_slice));
+    assert_eq!(restored.attempts.len(), 1);
+    assert!(restored.active_issue.is_some());
+}

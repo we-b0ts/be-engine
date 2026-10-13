@@ -376,7 +376,7 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
         return replay_advance(
             target_root,
             &selected_api,
-            "engine build changed or legacy runtime failure has no build identity; retry the same API and immutable cases once with this engine build".into(),
+            "engine build changed or the failed attempt has no build identity; retry the same API and immutable cases once with this engine build".into(),
         );
     }
     if state.system_repair_accepted {

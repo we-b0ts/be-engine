@@ -33,3 +33,14 @@ pub(super) fn all_ready(
         .peekable();
     dirty.peek().is_some() && dirty.all(admitted)
 }
+
+pub(super) fn dependency_only(attempt: &super::model::RewriteAttemptSummary) -> bool {
+    attempt.gates.responses == crate::E2eResponseGate::Passed
+        && attempt.gates.replay == crate::E2eReplayGate::Complete
+        && attempt.gates.dependencies == crate::E2eDependencyGate::Dirty
+        && attempt.counts.selected > 0
+        && attempt.counts.executed == attempt.counts.selected
+        && attempt.counts.response_passed == attempt.counts.executed
+        && attempt.counts.response_nonpassing == 0
+        && attempt.counts.response_incomplete == 0
+}

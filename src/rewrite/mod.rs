@@ -357,6 +357,11 @@ pub fn apply_rewrite_dependency_rule(
             &mut state,
             &owner_api,
         )?);
+        rule_replay::after_process_rule(
+            &mut state,
+            &owner_api,
+            report.traffic_e2e_report["changed"] == true,
+        );
     }
     if changes_dependency_matching {
         dependency_rule::invalidate_dependency_matching_validation(&mut state);
