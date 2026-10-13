@@ -362,3 +362,104 @@ fn wire_summaries_disambiguate_owned_and_unrelated_identical_commits() {
         5
     );
 }
+
+#[test]
+fn old_summary_diagnoses_ambiguous_commit_without_broadening_ownership() {
+    let f = fixture();
+    let mut ev = events();
+    let mut partial = ev[2..4].to_vec();
+    for e in &mut partial {
+        e["connection_id"] = "partial-lane".into();
+    }
+    ev.extend(partial);
+    f.mysql_events(&ev);
+    let plan = plan_api_triggered_mysql(
+        &f.policy,
+        &f.report,
+        &f.root,
+        "write",
+        "0123456789abcdef",
+        PROOF,
+        &write_selector(),
+    )
+    .unwrap();
+    let reasons = &plan.report().unmatched_evidence_reasons;
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.contains("rerun Replay") && r.contains("rerecording is unnecessary"))
+    );
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.contains("transaction start or contiguous prefix"))
+    );
+    assert_eq!(plan.report().matched_unused_exchanges, 4);
+    let mut rules = f.mysql_rules();
+    rules.push(write_selector().rule("write", "0123456789abcdef", PROOF));
+    let index = load(&f.root, &rules).unwrap();
+    assert!(index.witness("victim", &ev[3]).is_some());
+    assert!(index.witness("victim", ev.last().unwrap()).is_none());
+    assert!(index.cache_reused);
+    let mut report: Value = serde_json::from_slice(&fs::read(&f.report).unwrap()).unwrap();
+    report["unused_case_exchanges"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|e| {
+            e["sql_summary"]["fingerprint"]
+                == crate::config::process_owned_dependencies::mysql::evidence::fingerprint("COMMIT")
+        });
+    fs::write(&f.report, report.to_string()).unwrap();
+    let error = plan_api_triggered_mysql(
+        &f.policy,
+        &f.report,
+        &f.root,
+        "write",
+        "0123456789abcdef",
+        PROOF,
+        &write_selector(),
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(error.contains("rerun Replay"), "{error}");
+    assert!(
+        error.contains("transaction start or contiguous prefix"),
+        "{error}"
+    );
+}
+
+#[test]
+fn current_summary_diagnoses_missing_start_without_requesting_another_replay() {
+    let f = fixture();
+    f.mysql_events(&events()[2..4]);
+    let mut report: Value = serde_json::from_slice(&fs::read(&f.report).unwrap()).unwrap();
+    for (summary, e) in report["unused_case_exchanges"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .skip(1)
+        .zip(&events()[2..4])
+    {
+        summary["connection_id"] = e["connection_id"].clone();
+        summary["query_sequence"] = e["query_sequence"].clone();
+        summary["status"] = e["response"]["status"].clone();
+    }
+    fs::write(&f.report, report.to_string()).unwrap();
+    let plan = plan_api_triggered_mysql(
+        &f.policy,
+        &f.report,
+        &f.root,
+        "write",
+        "0123456789abcdef",
+        PROOF,
+        &write_selector(),
+    )
+    .unwrap();
+    assert_eq!(plan.report().matched_unused_exchanges, 1);
+    assert_eq!(plan.report().unmatched_evidence_reasons.len(), 1);
+    assert!(
+        plan.report().unmatched_evidence_reasons[0]
+            .contains("transaction start or contiguous prefix")
+    );
+}

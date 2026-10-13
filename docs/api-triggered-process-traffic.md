@@ -189,6 +189,10 @@ has compatible proof. If those reports are ambiguous, rerun Replay against the
 existing recording to obtain wire identities; rerecording is unnecessary. Missing
 transaction starts or sequence gaps still remain required. Duplicate summaries
 cannot authorize more exchanges than were recorded.
+The plan's `unmatched_evidence_reasons` reports missing transaction prefixes and
+ambiguous historical summaries even when other exchanges match. A missing wire
+identity requests a fresh Replay, whereas a missing immutable transaction prefix
+remains required after Replay; neither case authorizes a COMMIT allowlist.
 
 An existing ordinary rule with the same name and exact SELECT selector can be
 replaced by this narrower origin-bound rule through plan/apply. It is never

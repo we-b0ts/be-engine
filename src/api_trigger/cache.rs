@@ -13,7 +13,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const VERSION: u32 = 8;
+const VERSION: u32 = 9;
 #[derive(Serialize, Deserialize)]
 struct Envelope {
     checksum: String,

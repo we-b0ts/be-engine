@@ -70,6 +70,7 @@ pub struct ApiTriggeredDependencyReport {
     pub ambiguous_triggers: usize,
     pub ambiguous_references: usize,
     pub ambiguous_transactions: usize,
+    pub unmatched_evidence_reasons: Vec<String>,
     pub evidence_fingerprint: String,
     pub changed: bool,
     pub applied: bool,
@@ -203,23 +204,39 @@ pub(super) fn plan(
         triggers.insert(witness.trigger_case_id.clone());
     }
     let mut rejections = BTreeSet::new();
-    if let Some(reasons) = index.selector_rejections.get(&config.effective_name) {
-        for event in unused.as_array().into_iter().flatten() {
-            if let Some(case) = event["case_id"].as_str()
-                && let Some(key) = super::evidence::key(case, event)
-                && let Some(reason) = reasons.get(&key)
+    for event in unused.as_array().into_iter().flatten() {
+        let Some(case) = event["case_id"].as_str() else {
+            continue;
+        };
+        if index.witness(case, event).is_some() {
+            continue;
+        }
+        if let Some(key) = super::evidence::key(case, event) {
+            if let Some(reason) = index
+                .selector_rejections
+                .get(&config.effective_name)
+                .and_then(|r| r.get(&key))
             {
                 rejections.insert(reason.clone());
             }
+            if mysql
+                && crate::config::api_trigger::mysql::wire_key(case, event).is_none()
+                && index.wire_witnesses.iter().any(|(wire, witness)| {
+                    witness.rule == config.effective_name && wire.starts_with(&format!("{key}/"))
+                })
+            {
+                rejections.insert("Replay summary lacks connection_id/query_sequence and identical SQL has ambiguous ownership; rerun Replay with the current engine using the existing recording; rerecording is unnecessary".into());
+            }
         }
     }
+    let rejections: Vec<_> = rejections.into_iter().take(8).collect();
     ensure!(
         matched > 0,
         "no unused foreign-case dependency has a unique API trigger; origins={}, ambiguous_origins={}, ambiguous_references={}; selector_rejections={:?}; inspect source capture predicates and selector fields",
         index.triggers,
         index.ambiguous_triggers,
         index.ambiguous_references,
-        rejections.into_iter().take(8).collect::<Vec<_>>()
+        rejections
     );
     // Classification never repairs target-side dependency failures.
     if let BackgroundDependencyRuleConfig::Mysql { selector, .. } = &rule {
@@ -270,6 +287,7 @@ pub(super) fn plan(
             ambiguous_triggers: index.ambiguous_triggers,
             ambiguous_references: index.ambiguous_references,
             ambiguous_transactions: index.ambiguous_transactions,
+            unmatched_evidence_reasons: rejections,
             evidence_fingerprint: index.evidence_fingerprint,
             changed: config.changed,
             applied: false,

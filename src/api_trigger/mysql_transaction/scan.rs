@@ -3,6 +3,14 @@ use super::*;
 
 type Sequences = BTreeSet<(String, u64)>;
 
+struct State<'a> {
+    before: Option<u64>,
+    after: Option<u64>,
+    anchor: Option<String>,
+    file: usize,
+    event: &'a Value,
+}
+
 pub(super) fn selected(summary: &Value, sequences: &Sequences) -> bool {
     summary["connection_id"]
         .as_str()
@@ -10,11 +18,10 @@ pub(super) fn selected(summary: &Value, sequences: &Sequences) -> bool {
         .is_some_and(|(conn, seq)| sequences.contains(&(conn.to_owned(), seq)))
 }
 
-pub(super) fn candidates(files: &[EvidenceFile], index: &OriginIndex) -> Result<Sequences> {
-    let mut connections =
-        BTreeMap::<String, BTreeMap<u64, (Option<u64>, Option<u64>, bool)>>::new();
+pub(super) fn candidates(files: &[EvidenceFile], index: &mut OriginIndex) -> Result<Sequences> {
+    let mut connections = BTreeMap::<String, BTreeMap<u64, State<'_>>>::new();
     let mut duplicates = BTreeSet::new();
-    for file in files {
+    for (file_index, file) in files.iter().enumerate() {
         let case = case_id(&file.path)?;
         for record in file.index.mysql.iter().flatten() {
             let e = &record.summary;
@@ -24,11 +31,13 @@ pub(super) fn candidates(files: &[EvidenceFile], index: &OriginIndex) -> Result<
             else {
                 continue;
             };
-            let state = (
-                e["server_status_before"].as_u64(),
-                e["server_status_after"].as_u64(),
-                index.witness(&case, e).is_some(),
-            );
+            let state = State {
+                before: e["server_status_before"].as_u64(),
+                after: e["server_status_after"].as_u64(),
+                anchor: index.witness(&case, e).map(|w| w.rule.clone()),
+                file: file_index,
+                event: e,
+            };
             if connections
                 .entry(connection.into())
                 .or_default()
@@ -45,36 +54,64 @@ pub(super) fn candidates(files: &[EvidenceFile], index: &OriginIndex) -> Result<
             continue;
         }
         let mut group = Vec::new();
-        let mut anchored = false;
+        let mut anchors = BTreeSet::new();
+        let mut known_start = false;
         let mut previous: Option<(u64, u64)> = None;
-        for (seq, (before, after, anchor)) in records {
+        for (
+            seq,
+            State {
+                before,
+                after,
+                anchor,
+                file,
+                event,
+            },
+        ) in records
+        {
             let consecutive = previous.is_some_and(|(p, state)| {
                 p.checked_add(1) == Some(seq)
                     && before.is_some_and(|b| b & 0x200b == state & 0x200b)
             });
             if !consecutive {
                 group.clear();
-                anchored = false;
+                anchors.clear();
+                known_start = false;
             }
             if before.is_some_and(|b| b & 0x2009 == 0) && after.is_some_and(|a| a & 0x2009 == 1) {
                 group.clear();
-                anchored = false;
+                anchors.clear();
                 group.push(seq);
-            } else if !group.is_empty() {
+                known_start = true;
+            } else if !group.is_empty() || before.is_some_and(|b| b & 0x2009 == 1) {
                 group.push(seq);
             }
             if !group.is_empty() {
-                anchored |= anchor;
+                anchors.extend(anchor);
             }
             if after.is_some_and(|a| a & 0x2009 == 0) && !group.is_empty() {
-                if anchored {
+                if !anchors.is_empty() && known_start {
                     selected.extend(group.iter().map(|s| (connection.clone(), *s)));
                     if let Some(cleanup) = seq.checked_add(1) {
                         selected.insert((connection.clone(), cleanup));
                     }
+                } else if !anchors.is_empty() {
+                    let case = case_id(&files[file].path)?;
+                    for rule in &anchors {
+                        let reasons = index.selector_rejections.entry(rule.clone()).or_default();
+                        for key in [
+                            crate::config::api_trigger::mysql::key(&case, event),
+                            crate::config::api_trigger::mysql::wire_key(&case, event),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        {
+                            reasons.insert(key, "transaction start or contiguous prefix is missing from immutable dependencies; boundary remains required".into());
+                        }
+                    }
                 }
                 group.clear();
-                anchored = false;
+                anchors.clear();
+                known_start = false;
             }
             previous = after.map(|a| (seq, a));
         }
