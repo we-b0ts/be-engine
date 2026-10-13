@@ -187,12 +187,14 @@ transaction boundary even when another connection records identical COMMIT SQL.
 Fingerprint-only historical reports remain usable when every identical exchange
 has compatible proof. If those reports are ambiguous, rerun Replay against the
 existing recording to obtain wire identities; rerecording is unnecessary. Missing
-transaction starts or sequence gaps still remain required. Duplicate summaries
+transaction starts or sequence gaps do not authorize the missing prefix or its members.
+A direct source-proven UPDATE-to-COMMIT handoff can independently establish
+the COMMIT caller as described below. Duplicate summaries
 cannot authorize more exchanges than were recorded.
 The plan's `unmatched_evidence_reasons` reports missing transaction prefixes and
 ambiguous historical summaries even when other exchanges match. A missing wire
 identity requests a fresh Replay, whereas a missing immutable transaction prefix
-remains required after Replay; neither case authorizes a COMMIT allowlist.
+remains required after Replay unless the narrow direct-write handoff is proven.
 
 An existing ordinary rule with the same name and exact SELECT selector can be
 replaced by this narrower origin-bound rule through plan/apply. It is never
@@ -267,12 +269,23 @@ unbounded writes, joins, INSERT/DELETE and ordinary process-owned write rules
 are rejected. Live matching, write access gates and transaction execution are
 unchanged; only source-proven unused foreign-case evidence is reclassified.
 
-Add `--include-transaction-boundaries` to include related COMMIT/ROLLBACK. The
-engine requires a complete sequence on one recorded connection, consistent
+`include_transaction_boundaries` also recognizes a direct UPDATE-to-COMMIT handoff
+when the transaction prefix is absent. The immediately preceding exchange must
+be a successful single-row UPDATE with its own unique API-origin proof, on the
+same connection at the preceding sequence. Both exchanges require complete
+responses, clean transaction flags and independent foreign-request scope; the
+write must remain in a transaction and COMMIT must finish it. Source evidence
+must establish that the detached task owns that database session and commits
+its write. This attributes only the COMMIT call. Missing-prefix statements and
+unbound reads do not inherit ownership. No extra rule or option is required;
+without `include_transaction_boundaries`, COMMIT remains required.
+
+For complete-transaction inheritance, `--include-transaction-boundaries` requires
+a complete sequence on one recorded connection, consistent
 server transaction flags, successful complete responses, a known start and end,
 and origin-bound statement witnesses identifying one trigger case. Missing
 sequences, reused/ambiguous connections, mixed origins and incomplete groups
-keep the transaction evidence required.
+keep unbound transaction members required.
 
 A helper read without a task ID may be admitted through repeatable
 `--transaction-member JSON` (persisted as `transaction_members`). Each value

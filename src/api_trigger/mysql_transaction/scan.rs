@@ -95,6 +95,9 @@ pub(super) fn candidates(files: &[EvidenceFile], index: &mut OriginIndex) -> Res
                         selected.insert((connection.clone(), cleanup));
                     }
                 } else if !anchors.is_empty() {
+                    // Read only the final pair to test a direct UPDATE -> COMMIT
+                    // handoff. This does not admit any missing-prefix members.
+                    selected.extend(group.iter().rev().take(2).map(|s| (connection.clone(), *s)));
                     let case = case_id(&files[file].path)?;
                     for rule in &anchors {
                         let reasons = index.selector_rejections.entry(rule.clone()).or_default();

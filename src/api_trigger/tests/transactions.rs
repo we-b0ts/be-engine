@@ -82,7 +82,7 @@ fn complete_origin_transactions_include_only_explicit_members_and_boundaries() {
 }
 
 #[test]
-fn incomplete_or_unanchored_transactions_do_not_authorize_members_or_commits() {
+fn incomplete_transactions_keep_members_required_and_only_direct_write_handoffs_own_commits() {
     for mode in 0..7 {
         let f = fixture();
         let mut ev = events();
@@ -101,9 +101,14 @@ fn incomplete_or_unanchored_transactions_do_not_authorize_members_or_commits() {
         let mut rules = f.mysql_rules();
         rules.push(write_selector().rule("job-write", "0123456789abcdef", PROOF));
         let index = load(&f.root, &rules).unwrap();
-        for event in [&ev[1], &ev[3], &ev[4]] {
+        for event in [&ev[1], &ev[4]] {
             assert!(index.witness("victim", event).is_none(), "mode={mode}");
         }
+        assert_eq!(
+            index.witness("victim", &ev[3]).is_some(),
+            matches!(mode, 0 | 2 | 4),
+            "mode={mode}"
+        );
     }
 }
 
@@ -367,9 +372,10 @@ fn wire_summaries_disambiguate_owned_and_unrelated_identical_commits() {
 fn old_summary_diagnoses_ambiguous_commit_without_broadening_ownership() {
     let f = fixture();
     let mut ev = events();
-    let mut partial = ev[2..4].to_vec();
-    for e in &mut partial {
+    let mut partial = vec![ev[2].clone(), ev[1].clone(), ev[3].clone()];
+    for (i, e) in partial.iter_mut().enumerate() {
         e["connection_id"] = "partial-lane".into();
+        e["query_sequence"] = (20 + i).into();
     }
     ev.extend(partial);
     f.mysql_events(&ev);
@@ -394,7 +400,7 @@ fn old_summary_diagnoses_ambiguous_commit_without_broadening_ownership() {
             .iter()
             .any(|r| r.contains("transaction start or contiguous prefix"))
     );
-    assert_eq!(plan.report().matched_unused_exchanges, 4);
+    assert_eq!(plan.report().matched_unused_exchanges, 3);
     let mut rules = f.mysql_rules();
     rules.push(write_selector().rule("write", "0123456789abcdef", PROOF));
     let index = load(&f.root, &rules).unwrap();
@@ -432,14 +438,27 @@ fn old_summary_diagnoses_ambiguous_commit_without_broadening_ownership() {
 #[test]
 fn current_summary_diagnoses_missing_start_without_requesting_another_replay() {
     let f = fixture();
-    f.mysql_events(&events()[2..4]);
+    let ev = vec![
+        events()[2].clone(),
+        events()[1].clone(),
+        events()[3].clone(),
+    ];
+    let ev: Vec<_> = ev
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut e)| {
+            e["query_sequence"] = (20 + i).into();
+            e
+        })
+        .collect();
+    f.mysql_events(&ev);
     let mut report: Value = serde_json::from_slice(&fs::read(&f.report).unwrap()).unwrap();
     for (summary, e) in report["unused_case_exchanges"]
         .as_array_mut()
         .unwrap()
         .iter_mut()
         .skip(1)
-        .zip(&events()[2..4])
+        .zip(&ev)
     {
         summary["connection_id"] = e["connection_id"].clone();
         summary["query_sequence"] = e["query_sequence"].clone();
@@ -462,4 +481,45 @@ fn current_summary_diagnoses_missing_start_without_requesting_another_replay() {
         plan.report().unmatched_evidence_reasons[0]
             .contains("transaction start or contiguous prefix")
     );
+}
+
+#[test]
+fn missing_transaction_prefix_allows_only_direct_proven_update_commit_handoff() {
+    for mode in 0..8 {
+        let f = fixture();
+        let mut ev = events()[2..4].to_vec();
+        match mode {
+            0 => {}
+            1 => ev[1]["query_sequence"] = 99.into(),
+            2 => ev[1]["parse_warnings"] = json!(["incomplete"]),
+            3 => ev[1]["response"]["status"] = "error".into(),
+            4 => ev[0]["sql"] = "UPDATE jobs_0001 SET status='DONE' WHERE id=99".into(),
+            5 => ev[0]["server_status_before"] = 0x2001.into(),
+            6 => ev[1]["server_status_before"] = 0x2001.into(),
+            _ => ev[1]["sql"] = "SELECT value FROM audit WHERE owner=7".into(),
+        }
+        f.mysql_events(&ev);
+        let selector = write_selector();
+        let index = load(
+            &f.root,
+            &[selector.rule("write", "0123456789abcdef", PROOF)],
+        )
+        .unwrap();
+        assert_eq!(
+            index.witness("victim", &ev[1]).is_some(),
+            mode == 0,
+            "mode={mode}"
+        );
+        if mode == 0 {
+            let mut no_boundaries = selector;
+            no_boundaries.include_transaction_boundaries = false;
+            no_boundaries.transaction_members.clear();
+            let index = load(
+                &f.root,
+                &[no_boundaries.rule("write", "0123456789abcdef", PROOF)],
+            )
+            .unwrap();
+            assert!(index.witness("victim", &ev[1]).is_none());
+        }
+    }
 }
