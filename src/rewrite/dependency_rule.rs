@@ -75,6 +75,9 @@ pub struct RewriteDependencyRulePlanReport {
 
 #[derive(Debug, Clone)]
 pub enum RewriteDependencyRuleSelector {
+    MysqlApiTriggered {
+        selector: crate::ApiTriggeredMysqlSelector,
+    },
     RedisApiTriggered {
         selector: crate::ApiTriggeredRedisSelector,
     },
@@ -217,7 +220,8 @@ pub(super) fn plan(
     let report = plan.report()?;
     if matches!(
         record.spec,
-        RewriteDependencyRuleSpec::RedisApiTriggered { .. }
+        RewriteDependencyRuleSpec::MysqlApiTriggered { .. }
+            | RewriteDependencyRuleSpec::RedisApiTriggered { .. }
             | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
             | RewriteDependencyRuleSpec::RedisLock { .. }
             | RewriteDependencyRuleSpec::RedisPublish { .. }
@@ -390,6 +394,7 @@ pub(super) fn apply(
         record.spec,
         RewriteDependencyRuleSpec::HttpCrossCase { .. }
             | RewriteDependencyRuleSpec::HttpUnordered { .. }
+            | RewriteDependencyRuleSpec::MysqlApiTriggered { .. }
             | RewriteDependencyRuleSpec::RedisApiTriggered { .. }
             | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
             | RewriteDependencyRuleSpec::RedisLock { .. }
@@ -508,6 +513,7 @@ fn validate_plan_evidence(
         spec,
         RewriteDependencyRuleSpec::HttpCrossCase { .. }
             | RewriteDependencyRuleSpec::HttpUnordered { .. }
+            | RewriteDependencyRuleSpec::MysqlApiTriggered { .. }
             | RewriteDependencyRuleSpec::RedisApiTriggered { .. }
             | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
             | RewriteDependencyRuleSpec::RedisLock { .. }

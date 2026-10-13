@@ -62,6 +62,8 @@ fn event(port: u16, command: &str, key: &[u8]) -> RecorderEvent {
 
 fn redis_get_rule() -> BackgroundDependencyRuleConfig {
     BackgroundDependencyRuleConfig::Redis {
+        key_sequence: Vec::new(),
+        script: None,
         trigger_source: None,
         key_templates: Vec::new(),
         arguments: Vec::new(),

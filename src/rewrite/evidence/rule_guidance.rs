@@ -76,15 +76,31 @@ pub(super) fn rule_hints(
             cluster["protocol"] == "redis"
                 && cluster["reason"] == "unused_recorded"
                 && cluster["operations"].as_object().is_some_and(|ops| {
-                    ops.keys()
-                        .any(|command| matches!(command.as_str(), "GET" | "DEL" | "LRANGE"))
+                    ops.keys().any(|command| {
+                        matches!(
+                            command.as_str(),
+                            "GET" | "DEL" | "LRANGE" | "EVALSHA" | "SCRIPT"
+                        )
+                    })
                 })
         })
     }) {
         hints.push(RewriteRuleHint {
             capability: "api_triggered_process_traffic".into(), rule: "api-triggered".into(),
-            hint: "Unused Redis GET/DEL/LRANGE can be another recorded API's asynchronous work. Trace source spawning and cleanup; identify an explicit single-row MySQL INSERT and its integer identity before proposing trigger_source. request_body_json selects typed fields in the trigger REQUEST BODY (JSON Pointer), never query or response. A shared task ID is a candidate, not ownership proof. Plan verifies unique recorded origins, foreign-case references and conflicts; it preserves trigger/resource API calls, target failures and finite responses. Existing complete recordings are reusable. See docs/api-triggered-process-traffic.md.".into(),
+            hint: "Unused Redis GET/DEL/LRANGE/EVALSHA and linked SCRIPT EXISTS can be another API's asynchronous work. DEL key_sequence binds every key to one identity; script binds an exact digest/KEYS envelope to identity_argv_index. Trace source spawning and cleanup; identify an explicit single-row MySQL INSERT and its integer identity before proposing trigger_source. request_body_json selects typed fields in the trigger REQUEST BODY (JSON Pointer), never query or response. A shared task ID is a candidate, not ownership proof. Plan verifies unique recorded origins, foreign-case references and conflicts; it preserves trigger/resource API calls, target failures and finite responses. Existing complete recordings are reusable. See docs/api-triggered-process-traffic.md.".into(),
             help: super::super::action::command(target_root, vec!["dependency-rule".into(),"plan".into(),"redis".into(),"api-triggered".into(),"--help".into()], Vec::new()),
+        });
+    }
+
+    if facts["clusters"].as_array().is_some_and(|clusters| {
+        clusters
+            .iter()
+            .any(|c| c["protocol"] == "mysql" && c["reason"] == "unused_recorded")
+    }) {
+        hints.push(RewriteRuleHint {
+            capability: "api_triggered_process_traffic".into(), rule: "mysql-api-triggered".into(),
+            hint: "A source-proven detached API task can produce unused MySQL SELECTs/UPDATEs inside another API case. Trace direct and indirect terminal-result collectors, not only polling/cancel endpoints. Use mysql --trigger-source JSON --identity-value-index N to bind a SELECT template '?' slot to one uniquely captured INSERT identity. request_body_json selects the trigger request BODY. Plan verifies identity and foreign-case evidence; source_evidence must prove caller ownership. Complete transaction boundaries require --include-transaction-boundaries and wire/status evidence; explicit read-only --transaction-member selectors cover only helpers inside that anchored transaction. Same-name ordinary SELECT rules with the exact selector may be narrowed; target failures and direct trigger/resource calls remain required. See docs/api-triggered-process-traffic.md.".into(),
+            help: super::super::action::command(target_root, vec!["dependency-rule".into(),"plan".into(),"mysql".into(),"--help".into()], Vec::new()),
         });
     }
 

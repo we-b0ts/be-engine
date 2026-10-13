@@ -12,9 +12,11 @@ pub mod command_output;
 mod config;
 mod dependency;
 mod dependency_index;
+pub use api_trigger::mysql_plan::{ApiTriggeredMysqlSelector, plan_api_triggered_mysql};
 pub use api_trigger::plan::{
-    ApiTriggeredRedisPlan, ApiTriggeredRedisReport, ApiTriggeredRedisSelector,
-    plan_api_triggered_redis,
+    ApiTriggeredDependencyPlan, ApiTriggeredDependencyReport, ApiTriggeredMysqlPlan,
+    ApiTriggeredMysqlReport, ApiTriggeredRedisPlan, ApiTriggeredRedisReport,
+    ApiTriggeredRedisSelector, plan_api_triggered_redis,
 };
 pub use dependency_index::{DependencyIndexReport, prepare_dependency_index};
 mod dns_mock;
@@ -99,9 +101,10 @@ pub use case_group::{
 };
 pub use config::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
-    ApiCaptureOperation, ApiCaptureProtocol, ApiTriggerCapture, ApiTriggerKind, ApiTriggerSource,
-    AppConfig, ArtifactsConfig, BackgroundDependencyFeedback, BackgroundDependencyPlan,
-    BackgroundDependencyReport, BackgroundDependencyRuleConfig, BreezeEndpointCaptureFeedback,
+    ApiCaptureOperation, ApiCaptureProtocol, ApiTriggerCapture, ApiTriggerKind,
+    ApiTriggerRedisScript, ApiTriggerSource, AppConfig, ArtifactsConfig,
+    BackgroundDependencyFeedback, BackgroundDependencyPlan, BackgroundDependencyReport,
+    BackgroundDependencyRuleConfig, BreezeEndpointCaptureFeedback,
     BreezeMemcachedBackgroundDependencyFeedback, BreezeMemcachedBackgroundDependencyPlan,
     BreezeMemcachedBackgroundDependencyReport, BreezeResourceCaptureFeedback,
     BreezeResourceCapturePlan, BreezeResourceCaptureReport, CasePathPatternAuthority,

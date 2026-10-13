@@ -361,6 +361,13 @@ using that same table, and `?` selects a variable literal position.
 Every other projection, predicate and constant remains exact. Do not classify a
 query as process-owned merely because replay reports it unused.
 
+Reads from a detached API task can instead use an explicit API origin and a
+captured identity bound to a SELECT predicate. See [API-triggered process
+traffic](api-triggered-process-traffic.md#mysql-selects-from-the-same-api-origin)
+for `--trigger-source`, `--identity-value-index`, old-recording reuse and
+same-name narrowing of an ordinary rule. Direct polling/cancel requests keep
+their case ownership; a background task's terminal collection is a separate caller.
+
 Table selectors can be combined (their union is used):
 
 - Repeat `--table` for exact table names.

@@ -50,6 +50,13 @@ pub(crate) struct IndexedRecord {
     pub connection_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct IndexedMysqlRecord {
+    pub location: RecordLocation,
+    /// Compact endpoint, SQL fingerprint and prefilter facts, without query text or rows.
+    pub summary: serde_json::Value,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct Endpoint {
     pub host: String,
@@ -67,6 +74,8 @@ pub(crate) struct FileIndex {
     pub metadata: Vec<(usize, serde_json::Value)>,
     pub http: Vec<IndexedRecord>,
     pub redis: Vec<IndexedRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mysql: Option<Vec<IndexedMysqlRecord>>,
     pub redis_lanes: BTreeMap<String, usize>,
 }
 

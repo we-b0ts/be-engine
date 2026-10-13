@@ -203,6 +203,8 @@ fn mixed_mysql_and_redis_rules_reclassify_the_same_immutable_case() {
     policy
         .process_owned_dependencies
         .push(BackgroundDependencyRuleConfig::Redis {
+            key_sequence: Vec::new(),
+            script: None,
             trigger_source: None,
             key_templates: Vec::new(),
             arguments: Vec::new(),

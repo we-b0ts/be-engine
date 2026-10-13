@@ -618,6 +618,8 @@ impl ReplayState {
                 exchange.source == source && !exchange.status.is_consumed() && optional == allowed
             })
             .map(|(index, exchange)| RecordedExchangeSummary {
+                connection_id: exchange.record.connection_id,
+                query_sequence: exchange.record.query_sequence,
                 index,
                 case_id: exchange.case_id.clone(),
                 target: Some(exchange.identity.target.clone()),

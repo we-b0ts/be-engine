@@ -71,6 +71,10 @@ pub fn plan_mysql_background_dependency(
     feedback: MysqlBackgroundDependencyFeedback,
 ) -> Result<MysqlBackgroundDependencyPlan> {
     let requested = BackgroundDependencyRuleConfig::Mysql {
+        include_transaction_boundaries: false,
+        transaction_members: Vec::new(),
+        trigger_source: None,
+        identity_value_index: None,
         name: feedback.name.clone(),
         selector: feedback.selector.clone(),
         source_revision: feedback.source_revision.clone(),

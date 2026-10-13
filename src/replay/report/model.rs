@@ -188,6 +188,10 @@ pub(in crate::replay) struct MatchedQueryReport {
 
 #[derive(Debug, Clone, Serialize)]
 pub(in crate::replay) struct RecordedExchangeSummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) connection_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) query_sequence: Option<u64>,
     pub(in crate::replay) index: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) case_id: Option<String>,

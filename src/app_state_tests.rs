@@ -380,6 +380,8 @@ async fn background_redis_uses_ports_without_domain_and_stays_out_of_cases() {
     let mut config = AppConfig::default();
     config.recording.output_dir = temp.path().join("recordings");
     config.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Redis {
+        key_sequence: Vec::new(),
+        script: None,
         trigger_source: None,
         key_templates: Vec::new(),
         arguments: Vec::new(),
@@ -442,6 +444,8 @@ async fn redis_get_background_rule_records_without_response_role_metadata() {
     let mut config = AppConfig::default();
     config.recording.output_dir = temp.path().join("recordings");
     config.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Redis {
+        key_sequence: Vec::new(),
+        script: None,
         trigger_source: None,
         key_templates: Vec::new(),
         arguments: Vec::new(),
@@ -484,6 +488,10 @@ async fn background_mysql_scan_enters_global_while_user_query_remains_case_owned
     let mut config = case_limit_test_config(&temp);
     config.http_gateway.ready.enabled = false;
     config.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Mysql {
+        include_transaction_boundaries: false,
+        transaction_members: Vec::new(),
+        trigger_source: None,
+        identity_value_index: None,
         name: "task-recovery".into(),
         selector: MysqlBackgroundSelector {
             target_host: "mysql.internal".into(),

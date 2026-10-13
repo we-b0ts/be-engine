@@ -30,9 +30,13 @@ is unclear.
 
 ## Current Boundaries
 
-- `config/api_trigger` owns API-origin process-rule schema and bounded key-template
+- `config/api_trigger` owns API-origin process-rule schema, SQL identity slots and bounded key-template
   validation; `api_trigger` owns immutable origin evidence and disposable index
-  persistence. Its `plan` child owns stale-safe policy planning. MySQL literal
+  persistence. Its `plan` child owns the shared stale-safe policy transaction;
+  `mysql_plan` adapts bounded SELECT/UPDATE selectors. `mysql_transaction` owns
+  complete wire-sequence provenance; `redis_script` owns adjacent script-probe
+  association. Optional MySQL record locations and SQL prefilter facts belong to `dependency_index/mysql`
+  and are built only for configured API-origin discovery. MySQL literal
   INSERT parsing belongs to `mysql/sql/insert`. The existing report overlay owns
   unused-only reclassification and provenance, while Recorder retains idle
   candidates without changing active case ownership or Redis snapshots. Status

@@ -1,4 +1,7 @@
 //! Explicit API origins and bounded identity selectors for process traffic.
+pub(crate) mod mysql;
+pub(crate) mod redis_script;
+pub use redis_script::ApiTriggerRedisScript;
 use std::collections::BTreeMap;
 
 use anyhow::{Result, ensure};
@@ -134,6 +137,8 @@ pub(crate) fn validate_redis(rule: &BackgroundDependencyRuleConfig) -> Result<()
     let BackgroundDependencyRuleConfig::Redis {
         trigger_source: Some(source),
         key_templates,
+        key_sequence,
+        script,
         arguments,
         command,
         keys,
@@ -148,9 +153,25 @@ pub(crate) fn validate_redis(rule: &BackgroundDependencyRuleConfig) -> Result<()
         return Ok(());
     };
     source.validate()?;
+    if let Some(script) = script {
+        ensure!(
+            command == "EVALSHA"
+                && key_templates.is_empty()
+                && key_sequence.is_empty()
+                && arguments.is_empty()
+                && keys.is_empty()
+                && key_patterns.is_empty()
+                && key_prefix.is_empty()
+                && key_suffix.is_empty()
+                && fields.is_empty()
+                && initial_load_timeout_ms.is_none(),
+            "API script rules use only script and trigger_source, without key selectors or snapshots"
+        );
+        return script.validate();
+    }
     ensure!(
         matches!(command.as_str(), "GET" | "DEL" | "LRANGE"),
-        "API-triggered Redis traffic supports GET, single-key DEL and LRANGE"
+        "API-triggered Redis traffic supports GET, DEL, LRANGE and identity-bound EVALSHA"
     );
     ensure!(
         keys.is_empty()
@@ -162,11 +183,16 @@ pub(crate) fn validate_redis(rule: &BackgroundDependencyRuleConfig) -> Result<()
         "API-triggered Redis rules use key_templates without startup snapshots or legacy selectors"
     );
     ensure!(
-        !key_templates.is_empty() && key_templates.len() <= 64,
-        "API-triggered Redis requires 1..64 key_templates"
+        (!key_templates.is_empty() && key_sequence.is_empty())
+            || (command == "DEL" && key_templates.is_empty() && !key_sequence.is_empty()),
+        "API-triggered Redis requires key_templates or an exact DEL key_sequence"
     );
     let (binding, _) = source.binding();
-    for template in key_templates {
+    ensure!(
+        key_templates.len() <= 64 && key_sequence.len() <= 64,
+        "too many Redis key templates"
+    );
+    for template in key_templates.iter().chain(key_sequence) {
         let (prefix, suffix) = template_affixes(template, binding).ok_or_else(|| {
             anyhow::anyhow!("key_template requires one {{{binding}}} identity and nonempty affixes")
         })?;
@@ -217,12 +243,42 @@ pub(crate) fn redis_identity(
         ports,
         command: selected,
         key_templates,
+        key_sequence,
+        script,
         arguments,
         ..
     } = rule
     else {
         return None;
     };
+    if !ports.contains(&port) || selected != &command.to_ascii_uppercase() {
+        return None;
+    }
+    if let Some(script) = script {
+        return script.identity(args);
+    }
+    if !key_sequence.is_empty() {
+        if args.len() != key_sequence.len() {
+            return None;
+        }
+        let mut id = None;
+        for (template, key) in key_sequence.iter().zip(args) {
+            let (prefix, suffix) = template_affixes(template, source.binding().0)?;
+            let actual = std::str::from_utf8(key)
+                .ok()?
+                .strip_prefix(prefix)?
+                .strip_suffix(suffix)?;
+            actual
+                .parse::<u64>()
+                .ok()
+                .filter(|n| *n > 0 && n.to_string() == actual)?;
+            if id.is_some_and(|id| id != actual) {
+                return None;
+            }
+            id = Some(actual);
+        }
+        return id.map(str::to_owned);
+    }
     if !ports.contains(&port)
         || selected != &command.to_ascii_uppercase()
         || args.len() != arguments.len() + 1
@@ -298,6 +354,8 @@ pub(crate) fn overlap(
         let BackgroundDependencyRuleConfig::Redis {
             trigger_source,
             key_templates,
+            key_sequence,
+            script,
             keys,
             key_patterns,
             key_prefix,
@@ -308,8 +366,12 @@ pub(crate) fn overlap(
             return Vec::new();
         };
         if let Some(source) = trigger_source {
+            if let Some(script) = script {
+                return vec![(script.sha1.clone(), String::new())];
+            }
             return key_templates
                 .iter()
+                .chain(key_sequence)
                 .filter_map(|t| template_affixes(t, source.binding().0))
                 .map(|(a, b)| (a.into(), b.into()))
                 .collect();

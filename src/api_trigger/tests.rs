@@ -2,6 +2,9 @@ use super::{
     load,
     plan::{ApiTriggeredRedisSelector, plan_api_triggered_redis},
 };
+mod mysql;
+mod redis_extended;
+mod transactions;
 use crate::config::{ApiTriggerSource, SourceTrafficPolicyConfig};
 use serde_json::{Value, json};
 use std::{
@@ -37,6 +40,8 @@ fn source() -> ApiTriggerSource {
 
 fn selector(command: &str) -> ApiTriggeredRedisSelector {
     ApiTriggeredRedisSelector {
+        key_sequence: Vec::new(),
+        script: None,
         ports: vec![6379],
         command: command.into(),
         key_templates: vec!["cancel:{job_id}".into()],

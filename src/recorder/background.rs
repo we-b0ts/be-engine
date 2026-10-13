@@ -107,10 +107,7 @@ impl BackgroundDependencyMatcher {
         let mut initial_loads = InitialLoads::default();
         for rule in rules {
             match rule {
-                BackgroundDependencyRuleConfig::Redis {
-                    trigger_source: Some(_),
-                    ..
-                } => {
+                rule if rule.trigger_source().is_some() => {
                     api_rules.push(rule.clone());
                 }
                 BackgroundDependencyRuleConfig::Mysql { .. }
@@ -269,13 +266,31 @@ impl BackgroundDependencyMatcher {
         if self.api_rules.is_empty() {
             return None;
         }
+        if let RecorderEvent::MysqlExchange(exchange) = event {
+            if !self.api_rules.iter().any(|r| {
+                matches!(r, BackgroundDependencyRuleConfig::Mysql {selector, ..}
+                if exchange.target_port == Some(selector.target_port))
+            }) {
+                return None;
+            }
+            let mut value = serde_json::to_value(exchange).ok()?;
+            value["event_type"] = "mysql_exchange".into();
+            return self
+                .api_rules
+                .iter()
+                .find(|rule| {
+                    crate::config::api_trigger::mysql::identity(rule, &value).is_some()
+                        && crate::config::api_trigger::mysql::complete(&value)
+                })
+                .map(|rule| rule.name());
+        }
         let RecorderEvent::RedisExchange(exchange) = event else {
             return None;
         };
         if exchange.session_setup || !exchange.replay_safe
             || !self.api_rules.iter().any(|rule| matches!(rule,
                 BackgroundDependencyRuleConfig::Redis { ports, command, .. }
-                if ports.contains(&exchange.target_port) && command.eq_ignore_ascii_case(&exchange.command))) {
+                if ports.contains(&exchange.target_port) && (command.eq_ignore_ascii_case(&exchange.command) || (command == "EVALSHA" && exchange.command == "SCRIPT")))) {
             return None;
         }
         let args = exchange
@@ -286,6 +301,17 @@ impl BackgroundDependencyMatcher {
         self.api_rules
             .iter()
             .find(|rule| {
+                if let BackgroundDependencyRuleConfig::Redis {
+                    ports,
+                    script: Some(script),
+                    ..
+                } = rule
+                    && ports.contains(&exchange.target_port)
+                    && exchange.command == "SCRIPT"
+                    && script.exists(&args)
+                {
+                    return true;
+                }
                 crate::config::api_trigger::redis_identity(
                     rule,
                     exchange.target_port,

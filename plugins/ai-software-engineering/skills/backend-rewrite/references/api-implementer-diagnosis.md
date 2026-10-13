@@ -396,3 +396,31 @@ ambiguous origins/references and target failures remain strict. Complete old
 recordings are reusable; the engine caches correlation outside immutable evidence.
 Status performs no origin scan or cache build. This rule does not verify the
 background task's eventual result or enable reusable Redis snapshots.
+
+MySQL API-origin SELECT rules use `dependency-rule plan mysql --trigger-source
+JSON --identity-value-index N`. The zero-based template `?` slot must be an
+identity equality or singleton IN predicate; other endpoint/table/SQL bounds
+remain exact. Use the same origin capture as related Redis rules. An ordinary
+same-name, exact-selector rule may be narrowed through plan/apply, never reused
+as API-origin proof. Do not classify every SELECT on a task table as background.
+
+When a helper has polling/cancel callers, also trace indirect detached-task
+callers such as terminal result collectors and accumulated-content helpers.
+Protect direct inbound polling/cancel requests; a task reacting to cancellation
+in its own detached lifecycle can still produce process-owned dependencies.
+Plan proves recording correlation and scope, while source evidence proves
+caller ownership.
+
+API-origin Redis DEL accepts an exact ordered `key_sequence` through repeated
+`--key-sequence-template`; every key must bind the same captured identity.
+For EVALSHA, `--script JSON` declares an exact SHA-1, ordered KEYS envelope,
+ARGV count and `identity_argv_index`. Date-keyed metrics may still carry the task
+ID in ARGV. SCRIPT EXISTS requires a proven adjacent same-connection invocation.
+
+API-origin MySQL also supports bounded single-row UPDATEs. Complete transaction
+boundaries require `--include-transaction-boundaries`, consistent wire sequences
+and server flags. `--transaction-member JSON` can admit explicit read-only helper
+selectors only inside a fully proven transaction. Ordinary write rules, broad
+COMMIT/ROLLBACK exceptions and standalone member matches remain unsupported.
+Inspect actual dirty summaries: source-recorded ROLLBACKs may already be optional
+cleanup and do not by themselves establish a missing capability.

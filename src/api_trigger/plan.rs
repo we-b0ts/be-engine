@@ -1,10 +1,10 @@
-//! Stale-safe planning for API-origin Redis classification using existing recordings.
+//! Shared stale-safe policy transaction for API-origin dependency classification.
 use crate::config::{ApiTriggerSource, BackgroundDependencyRuleConfig};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -14,7 +14,12 @@ use std::{
 pub struct ApiTriggeredRedisSelector {
     pub ports: Vec<u16>,
     pub command: String,
+    #[serde(default)]
     pub key_templates: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub key_sequence: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<crate::ApiTriggerRedisScript>,
     #[serde(default)]
     pub arguments: Vec<String>,
     pub trigger_source: ApiTriggerSource,
@@ -32,6 +37,8 @@ impl ApiTriggeredRedisSelector {
         let mut templates = self.key_templates.clone();
         templates.sort();
         BackgroundDependencyRuleConfig::Redis {
+            key_sequence: self.key_sequence.clone(),
+            script: self.script.clone(),
             name: name.into(),
             ports,
             command: self.command.to_ascii_uppercase(),
@@ -51,7 +58,7 @@ impl ApiTriggeredRedisSelector {
 }
 
 #[derive(Debug, Serialize)]
-pub struct ApiTriggeredRedisReport {
+pub struct ApiTriggeredDependencyReport {
     pub name: String,
     pub effective_name: String,
     pub reused_existing: bool,
@@ -62,28 +69,29 @@ pub struct ApiTriggeredRedisReport {
     pub omitted_trigger_case_ids: usize,
     pub ambiguous_triggers: usize,
     pub ambiguous_references: usize,
+    pub ambiguous_transactions: usize,
     pub evidence_fingerprint: String,
     pub changed: bool,
     pub applied: bool,
     pub diff: String,
 }
 
-pub struct ApiTriggeredRedisPlan {
+pub struct ApiTriggeredDependencyPlan {
     rules_path: PathBuf,
     replay_path: PathBuf,
     source: PathBuf,
-    rule: BackgroundDependencyRuleConfig,
+    rules: Vec<BackgroundDependencyRuleConfig>,
     original_rules: String,
     original_replay: Vec<u8>,
     updated_rules: String,
-    report: ApiTriggeredRedisReport,
+    report: ApiTriggeredDependencyReport,
 }
 
-impl ApiTriggeredRedisPlan {
-    pub fn report(&self) -> &ApiTriggeredRedisReport {
+impl ApiTriggeredDependencyPlan {
+    pub fn report(&self) -> &ApiTriggeredDependencyReport {
         &self.report
     }
-    pub fn apply(self) -> Result<ApiTriggeredRedisReport> {
+    pub fn apply(self) -> Result<ApiTriggeredDependencyReport> {
         ensure!(
             fs::read_to_string(&self.rules_path)? == self.original_rules,
             "process-owned rules changed after planning; rerun plan"
@@ -92,7 +100,7 @@ impl ApiTriggeredRedisPlan {
             fs::read(&self.replay_path)? == self.original_replay,
             "Replay evidence changed after planning; rerun plan"
         );
-        let index = super::load(&self.source, std::slice::from_ref(&self.rule))?;
+        let index = super::load(&self.source, &self.rules)?;
         ensure!(
             index.evidence_fingerprint == self.report.evidence_fingerprint,
             "API trigger recording changed after planning; rerun plan"
@@ -106,6 +114,11 @@ impl ApiTriggeredRedisPlan {
     }
 }
 
+pub type ApiTriggeredRedisReport = ApiTriggeredDependencyReport;
+pub type ApiTriggeredRedisPlan = ApiTriggeredDependencyPlan;
+pub type ApiTriggeredMysqlReport = ApiTriggeredDependencyReport;
+pub type ApiTriggeredMysqlPlan = ApiTriggeredDependencyPlan;
+
 pub fn plan_api_triggered_redis(
     rules_path: &Path,
     replay_path: &Path,
@@ -115,9 +128,32 @@ pub fn plan_api_triggered_redis(
     proof: &str,
     selector: &ApiTriggeredRedisSelector,
 ) -> Result<ApiTriggeredRedisPlan> {
-    let rule = selector.rule(name, revision, proof);
+    plan(
+        rules_path,
+        replay_path,
+        source,
+        selector.rule(name, revision, proof),
+    )
+}
+
+pub(super) fn plan(
+    rules_path: &Path,
+    replay_path: &Path,
+    source: &Path,
+    rule: BackgroundDependencyRuleConfig,
+) -> Result<ApiTriggeredDependencyPlan> {
+    let name = rule.name().to_string();
+    let mysql = matches!(rule, BackgroundDependencyRuleConfig::Mysql { .. });
+
     crate::config::process_owned_dependencies::validate(std::slice::from_ref(&rule))?;
-    let index = super::load(source, std::slice::from_ref(&rule))?;
+    let config = crate::config::background_feedback::plan_rule_config(rules_path, rule.clone())?;
+    let proposed = crate::config::SourceTrafficPolicyConfig::parse(&config.updated, rules_path)?;
+    let rules: Vec<_> = proposed
+        .process_owned_dependencies
+        .into_iter()
+        .filter(|r| r.trigger_source().is_some())
+        .collect();
+    let index = super::load(source, &rules)?;
     let original_replay = fs::read(replay_path)?;
     let raw = std::str::from_utf8(&original_replay)?;
     let replay: Value = crate::replay::report::parse_background_dependency_evidence(raw)?;
@@ -128,25 +164,29 @@ pub fn plan_api_triggered_redis(
     let mut case_ids = BTreeSet::new();
     let mut triggers = BTreeSet::new();
     let mut matched = 0;
-    for event in replay["redis"]["unused_case"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
+    let mut consumed = BTreeMap::<String, usize>::new();
+    let unused = if mysql {
+        &replay["unused_case_exchanges"]
+    } else {
+        &replay["redis"]["unused_case"]
+    };
+    for event in unused.as_array().into_iter().flatten() {
         let Some(case) = event["case_id"].as_str() else {
             continue;
         };
         let Some(witness) = index.witness(case, event) else {
             continue;
         };
-        if event["command"] != selector.command.to_ascii_uppercase()
-            || !selector
-                .ports
-                .iter()
-                .any(|p| event["target"]["port"].as_u64() == Some(u64::from(*p)))
-        {
+        if witness.rule != config.effective_name {
             continue;
         }
+        let key = super::evidence::key(case, event).expect("witness key");
+        let count = consumed.entry(key).or_default();
+        *count += 1;
+        ensure!(
+            *count <= witness.exchanges,
+            "Replay unused summaries exceed immutable API trigger witnesses"
+        );
         let membership = replay["cases"]
             .as_array()
             .into_iter()
@@ -162,41 +202,64 @@ pub fn plan_api_triggered_redis(
         case_ids.insert(case.to_string());
         triggers.insert(witness.trigger_case_id.clone());
     }
+    let mut rejections = BTreeSet::new();
+    if let Some(reasons) = index.selector_rejections.get(&config.effective_name) {
+        for event in unused.as_array().into_iter().flatten() {
+            if let Some(case) = event["case_id"].as_str()
+                && let Some(key) = super::evidence::key(case, event)
+                && let Some(reason) = reasons.get(&key)
+            {
+                rejections.insert(reason.clone());
+            }
+        }
+    }
     ensure!(
         matched > 0,
-        "no unused foreign-case Redis exchange has a unique API trigger; origins={}, ambiguous_origins={}, ambiguous_references={}; inspect source capture predicates",
+        "no unused foreign-case dependency has a unique API trigger; origins={}, ambiguous_origins={}, ambiguous_references={}; selector_rejections={:?}; inspect source capture predicates and selector fields",
         index.triggers,
         index.ambiguous_triggers,
-        index.ambiguous_references
+        index.ambiguous_references,
+        rejections.into_iter().take(8).collect::<Vec<_>>()
     );
-    // No rule can suppress target-side failures on this command/resource.
-    for field in ["unmatched", "unsupported", "unsafe_events"] {
-        ensure!(
-            !replay["redis"][field]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|event| event["command"]
-                    .as_str()
-                    .is_some_and(|s| s.eq_ignore_ascii_case(&selector.command))
-                    && selector
-                        .ports
-                        .iter()
-                        .any(|p| event["target"]["port"].as_u64() == Some(u64::from(*p)))),
-            "API trigger selector overlaps {field} target Redis traffic"
-        );
+    // Classification never repairs target-side dependency failures.
+    if let BackgroundDependencyRuleConfig::Mysql { selector, .. } = &rule {
+        for field in ["unmatched_queries", "unsupported_commands"] {
+            ensure!(
+                !replay[field].as_array().into_iter().flatten().any(|event| {
+                    crate::config::process_owned_dependencies::mysql::evidence::identity_matches(
+                        selector, event,
+                    )
+                }),
+                "API trigger selector overlaps {field} target MySQL traffic"
+            );
+        }
+    } else if let BackgroundDependencyRuleConfig::Redis { ports, command, .. } = &rule {
+        for field in ["unmatched", "unsupported", "unsafe_events"] {
+            ensure!(
+                !replay["redis"][field]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|event| event["command"]
+                        .as_str()
+                        .is_some_and(|s| s.eq_ignore_ascii_case(command))
+                        && ports
+                            .iter()
+                            .any(|p| event["target"]["port"].as_u64() == Some(u64::from(*p)))),
+                "API trigger selector overlaps {field} target Redis traffic"
+            );
+        }
     }
-    let config = crate::config::background_feedback::plan_rule_config(rules_path, rule.clone())?;
-    Ok(ApiTriggeredRedisPlan {
+    Ok(ApiTriggeredDependencyPlan {
         rules_path: rules_path.into(),
         replay_path: replay_path.into(),
         source: source.into(),
-        rule,
+        rules,
         original_rules: config.original,
         original_replay,
         updated_rules: config.updated,
-        report: ApiTriggeredRedisReport {
-            name: name.into(),
+        report: ApiTriggeredDependencyReport {
+            name,
             effective_name: config.effective_name,
             reused_existing: config.reused_existing,
             matched_unused_exchanges: matched,
@@ -206,6 +269,7 @@ pub fn plan_api_triggered_redis(
             trigger_case_ids: triggers.into_iter().take(32).collect(),
             ambiguous_triggers: index.ambiguous_triggers,
             ambiguous_references: index.ambiguous_references,
+            ambiguous_transactions: index.ambiguous_transactions,
             evidence_fingerprint: index.evidence_fingerprint,
             changed: config.changed,
             applied: false,

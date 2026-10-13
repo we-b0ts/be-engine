@@ -41,7 +41,8 @@ pub use allowed_unused_http::{
     plan_allowed_unused_http_hosts,
 };
 pub use api_trigger::{
-    ApiCaptureOperation, ApiCaptureProtocol, ApiTriggerCapture, ApiTriggerKind, ApiTriggerSource,
+    ApiCaptureOperation, ApiCaptureProtocol, ApiTriggerCapture, ApiTriggerKind,
+    ApiTriggerRedisScript, ApiTriggerSource,
 };
 pub use artifacts::ArtifactsConfig;
 pub use background_feedback::{

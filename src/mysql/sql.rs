@@ -357,6 +357,16 @@ fn hex_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
         .collect()
 }
 
+/// Convert the lexer's exact decimal form (including positive exponents) to
+/// a positive integral identity without passing through floating point.
+pub(crate) fn positive_integer(number: &str) -> Option<String> {
+    let (digits, exponent) = number.split_once('e').unwrap_or((number, "0"));
+    let value = digits.parse::<u64>().ok()?;
+    let exponent = exponent.parse::<u32>().ok()?;
+    let value = value.checked_mul(10_u64.checked_pow(exponent)?)?;
+    (value > 0).then(|| value.to_string())
+}
+
 /// Exact decimal normalization without converting through floating point.
 pub(crate) fn number(text: &str) -> Option<String> {
     let negative = text.starts_with('-');

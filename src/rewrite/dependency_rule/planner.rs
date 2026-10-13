@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 pub(super) enum DependencyRulePlan {
     RedisApiTriggered(crate::ApiTriggeredRedisPlan),
+    MysqlApiTriggered(crate::ApiTriggeredMysqlPlan),
     RedisCrossCase(crate::RedisCrossCasePlan),
     HttpCrossCase(crate::HttpCrossCasePlan),
     HttpUnordered(crate::HttpUnorderedPlan),
@@ -46,6 +47,7 @@ impl DependencyRulePlan {
     pub(super) fn report(&self) -> Result<Value> {
         match self {
             Self::RedisApiTriggered(plan) => Ok(serde_json::to_value(plan.report())?),
+            Self::MysqlApiTriggered(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::RedisCrossCase(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::HttpCrossCase(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::RedisLock(plan) => Ok(serde_json::to_value(plan.report())?),
@@ -67,6 +69,7 @@ impl DependencyRulePlan {
     pub(super) fn apply(self) -> Result<Value> {
         match self {
             Self::RedisApiTriggered(plan) => Ok(serde_json::to_value(plan.apply()?)?),
+            Self::MysqlApiTriggered(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::RedisCrossCase(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::HttpCrossCase(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::RedisLock(plan) => Ok(serde_json::to_value(plan.apply()?)?),
@@ -87,6 +90,9 @@ impl DependencyRulePlan {
 
     pub(super) fn reused_existing(&self) -> Option<&str> {
         match self {
+            Self::MysqlApiTriggered(plan) if plan.report().reused_existing => {
+                Some(&plan.report().effective_name)
+            }
             Self::RedisApiTriggered(plan) if plan.report().reused_existing => {
                 Some(&plan.report().effective_name)
             }
@@ -142,6 +148,7 @@ impl DependencyRulePlan {
     pub(super) fn effective_name(&self) -> &str {
         match self {
             Self::RedisApiTriggered(plan) => &plan.report().effective_name,
+            Self::MysqlApiTriggered(plan) => &plan.report().effective_name,
             Self::RedisCrossCase(plan) => &plan.report().effective_rule_id,
             Self::HttpCrossCase(plan) => &plan.report().effective_rule_id,
             Self::HttpUnordered(plan) => &plan.report().effective_rule_id,
@@ -165,6 +172,9 @@ pub(super) fn spec_from_selector(
     selector: RewriteDependencyRuleSelector,
 ) -> RewriteDependencyRuleSpec {
     match selector {
+        RewriteDependencyRuleSelector::MysqlApiTriggered { selector } => {
+            RewriteDependencyRuleSpec::MysqlApiTriggered { selector }
+        }
         RewriteDependencyRuleSelector::RedisApiTriggered { selector } => {
             RewriteDependencyRuleSpec::RedisApiTriggered { selector }
         }
@@ -451,6 +461,17 @@ pub(super) fn build_plan(
         .join(crate::repository::TRAFFIC_E2E_ROOT)
         .join(crate::config::SOURCE_TRAFFIC_POLICY_FILE);
     match &record.spec {
+        RewriteDependencyRuleSpec::MysqlApiTriggered { selector } => Ok(
+            DependencyRulePlan::MysqlApiTriggered(crate::plan_api_triggered_mysql(
+                &rules_path,
+                &replay_report_path,
+                &case_source,
+                &record.name,
+                &source_revision,
+                &record.source_evidence,
+                selector,
+            )?),
+        ),
         RewriteDependencyRuleSpec::RedisApiTriggered { selector } => Ok(
             DependencyRulePlan::RedisApiTriggered(crate::plan_api_triggered_redis(
                 &rules_path,

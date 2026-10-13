@@ -8,6 +8,8 @@ use crate::recorder::{RecorderEvent, RedisExchangeEvent, capture_body};
 
 fn rule() -> BackgroundDependencyRuleConfig {
     BackgroundDependencyRuleConfig::Redis {
+        key_sequence: Vec::new(),
+        script: None,
         trigger_source: None,
         key_templates: Vec::new(),
         arguments: Vec::new(),
@@ -27,6 +29,8 @@ fn rule() -> BackgroundDependencyRuleConfig {
 
 fn get_rule() -> BackgroundDependencyRuleConfig {
     BackgroundDependencyRuleConfig::Redis {
+        key_sequence: Vec::new(),
+        script: None,
         trigger_source: None,
         key_templates: Vec::new(),
         arguments: Vec::new(),
@@ -186,6 +190,8 @@ fn rejects_unlisted_exact_key_redis_commands() {
 #[test]
 fn matches_bootstrap_hash_reads_by_numeric_key_shape_and_exact_fields() {
     let rule = BackgroundDependencyRuleConfig::Redis {
+        key_sequence: Vec::new(),
+        script: None,
         trigger_source: None,
         key_templates: Vec::new(),
         arguments: Vec::new(),
@@ -243,6 +249,8 @@ fn matches_bootstrap_hash_reads_by_numeric_key_shape_and_exact_fields() {
 #[test]
 fn matches_process_owned_hscan_by_numeric_key_shape_without_fields() {
     let rule = BackgroundDependencyRuleConfig::Redis {
+        key_sequence: Vec::new(),
+        script: None,
         trigger_source: None,
         key_templates: Vec::new(),
         arguments: Vec::new(),
@@ -287,6 +295,8 @@ fn matches_process_owned_hscan_by_numeric_key_shape_without_fields() {
 #[test]
 fn hscan_rejects_initial_load_timeout_and_fields() {
     let mut rule = BackgroundDependencyRuleConfig::Redis {
+        key_sequence: Vec::new(),
+        script: None,
         trigger_source: None,
         key_templates: Vec::new(),
         arguments: Vec::new(),
