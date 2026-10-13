@@ -34,7 +34,8 @@ is unclear.
   validation; `api_trigger` owns immutable origin evidence and disposable index
   persistence. Its `plan` child owns the shared stale-safe policy transaction;
   `mysql_plan` adapts bounded SELECT/UPDATE selectors. `mysql_transaction` owns
-  complete wire-sequence provenance; `redis_script` owns adjacent script-probe
+  complete wire-sequence provenance; its `tail` child attributes only a direct
+  successful UPDATE-to-COMMIT handoff when the prefix is missing. `redis_script` owns adjacent script-probe
   association. Optional MySQL record locations and SQL prefilter facts belong to `dependency_index/mysql`
   and are built only for configured API-origin discovery. MySQL literal
   INSERT parsing belongs to `mysql/sql/insert`. The existing report overlay owns

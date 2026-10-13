@@ -1,5 +1,6 @@
 //! Complete wire-ordered transactions inherit only source-proven API ownership.
 mod scan;
+mod tail;
 use super::{
     OriginIndex,
     evidence::{EvidenceFile, OriginWitness, case_id, timestamp},
@@ -184,6 +185,7 @@ pub(super) fn associate(
             continue;
         }
         let mut group = Vec::new();
+        let mut known_start = false;
         let mut previous: Option<(u64, u16)> = None;
         let mut cleanup: Option<OriginWitness> = None;
         for (&seq, event) in events {
@@ -196,6 +198,7 @@ pub(super) fn associate(
             let terminal = matches!(event.command.as_str(), "commit" | "rollback");
             if !consecutive {
                 group.clear();
+                known_start = false;
                 cleanup = None;
             }
             if event.before.is_some_and(|s| s & 0x2009 == 0)
@@ -204,11 +207,17 @@ pub(super) fn associate(
                 group.clear();
                 cleanup = None;
                 group.push(event);
-            } else if !group.is_empty() {
+                known_start = true;
+            } else if !group.is_empty() || event.before.is_some_and(|s| s & 0x2009 == 1) {
                 group.push(event);
             }
             if terminal && !group.is_empty() {
-                if let Some(origin) = prove(&group, files, &owners) {
+                let proof = if known_start {
+                    prove(&group, files, &owners)
+                } else {
+                    tail::prove(&group, files, &owners)
+                };
+                if let Some(origin) = proof {
                     add_boundary(
                         event,
                         &origin,
@@ -233,6 +242,7 @@ pub(super) fn associate(
                     cleanup = None;
                 }
                 group.clear();
+                known_start = false;
             } else if event.command == "rollback"
                 && consecutive
                 && event.before.is_some_and(|s| s & 0x2009 == 0)
