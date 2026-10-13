@@ -2,6 +2,7 @@ mod replay_exports;
 pub use replay_exports::*;
 mod access_policy;
 mod active_case;
+mod api_trigger;
 mod artifact_file;
 mod artifact_owner;
 mod breeze;
@@ -11,6 +12,10 @@ pub mod command_output;
 mod config;
 mod dependency;
 mod dependency_index;
+pub use api_trigger::plan::{
+    ApiTriggeredRedisPlan, ApiTriggeredRedisReport, ApiTriggeredRedisSelector,
+    plan_api_triggered_redis,
+};
 pub use dependency_index::{DependencyIndexReport, prepare_dependency_index};
 mod dns_mock;
 mod e2e_run;
@@ -94,6 +99,7 @@ pub use case_group::{
 };
 pub use config::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
+    ApiCaptureOperation, ApiCaptureProtocol, ApiTriggerCapture, ApiTriggerKind, ApiTriggerSource,
     AppConfig, ArtifactsConfig, BackgroundDependencyFeedback, BackgroundDependencyPlan,
     BackgroundDependencyReport, BackgroundDependencyRuleConfig, BreezeEndpointCaptureFeedback,
     BreezeMemcachedBackgroundDependencyFeedback, BreezeMemcachedBackgroundDependencyPlan,
@@ -812,6 +818,13 @@ impl AppState {
         let (probe_attribution, suppress_default_global) = self.preflight_probe_attribution(&event);
         let background_attributed =
             probe_attribution.is_none() && !suppress_default_global && background_match.is_some();
+        let api_idle = if targets.cases.is_empty() && !targets.bootstrap_open {
+            self.inner
+                .process_owned_dependencies
+                .matching_api_candidate(&event)
+        } else {
+            None
+        };
         let global_attribution = probe_attribution.or_else(|| {
             (!suppress_default_global)
                 .then(|| {
@@ -828,6 +841,16 @@ impl AppState {
                     })
                 })
                 .flatten()
+        });
+        let global_attribution = global_attribution.or_else(|| {
+            (!suppress_default_global)
+                .then_some(api_idle)
+                .flatten()
+                .map(|name| crate::recorder::GlobalDependencyAttribution {
+                    reason: "api_trigger_candidate",
+                    phase: "runtime",
+                    matched_by: name.to_string(),
+                })
         });
         let event_type = event.kind();
         if let Err(err) = self.recorder().try_record_event(

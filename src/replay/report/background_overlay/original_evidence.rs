@@ -56,6 +56,7 @@ fn restore_array(report: &mut Value, global_field: &str, case_field: &str) {
                 event.insert("source".to_string(), Value::String("case".to_string()));
                 event.remove(ORIGINAL_CASE_ID);
                 event.remove(MATCHED_RULE);
+                event.remove("api_trigger_source");
             }
             case.push(event);
         } else {

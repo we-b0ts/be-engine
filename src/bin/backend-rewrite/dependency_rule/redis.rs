@@ -1,5 +1,6 @@
 //! Redis dependency rule CLI selectors and conversion.
 use super::*;
+mod api_triggered;
 mod lock;
 mod publish;
 mod time_shift;
@@ -14,6 +15,8 @@ pub(super) struct RedisDependencyRuleArgs {
 
 #[derive(Debug, Subcommand)]
 enum RedisDependencyRuleModeArgs {
+    /// Classify source-proven GET/DEL/LRANGE from another API background task using a recorded INSERT identity.
+    ApiTriggered(api_triggered::ApiTriggeredArgs),
     /// Correlate source-proven random SET NX tokens with single-key release references.
     Lock(lock::RedisLockArgs),
     /// Bind source-proven UUID v4 identities at an explicit PUBLISH payload position.
@@ -109,6 +112,7 @@ struct RedisScanDependencyRuleArgs {
 
 pub(super) fn options(args: RedisDependencyRuleArgs) -> Result<RewriteDependencyRulePlanOptions> {
     Ok(match args.mode {
+        RedisDependencyRuleModeArgs::ApiTriggered(args) => return api_triggered::options(args),
         RedisDependencyRuleModeArgs::CrossCase(args) => {
             return Ok(RewriteDependencyRulePlanOptions {
                 evidence_id: args.evidence_id,

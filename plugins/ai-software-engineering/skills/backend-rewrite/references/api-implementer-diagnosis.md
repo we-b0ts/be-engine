@@ -379,3 +379,20 @@ dependency streams, or tool errors do not prove that blocker.
 End the turn after the result; do not wait for acceptance. If two repairs do not
 improve the active issue, stop adding local patches and return a bounded
 structural replan from the current issue and attempt delta.
+
+## API-triggered asynchronous process traffic
+
+A source-proven detached API task may produce unused dependencies inside another
+API's recording window. Redis GET, single-key DEL and LRANGE can use
+`dependency-rule plan redis api-triggered` and the existing apply transaction.
+See [API-origin process rules](../../../../../docs/api-triggered-process-traffic.md).
+`trigger_source.request_body_json` selects typed scalars by JSON Pointer in the
+triggering inbound REQUEST BODY: `/background: true` means JSON
+`{"background":true}`, never URL query, response JSON, or the victim API's body.
+Trace spawning and cleanup in source, then supply one explicit successful
+COM_QUERY INSERT identity capture and exact Redis key template/arguments. A shared
+ID or unused exchange is not source ownership proof. Trigger/resource API calls,
+ambiguous origins/references and target failures remain strict. Complete old
+recordings are reusable; the engine caches correlation outside immutable evidence.
+Status performs no origin scan or cache build. This rule does not verify the
+background task's eventual result or enable reusable Redis snapshots.

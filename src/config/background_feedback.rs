@@ -55,13 +55,13 @@ pub struct BackgroundDependencyPlan {
     report: BackgroundDependencyReport,
 }
 
-pub(super) struct RuleConfigPlan {
-    pub(super) original: String,
-    pub(super) updated: String,
-    pub(super) changed: bool,
-    pub(super) diff: String,
-    pub(super) effective_name: String,
-    pub(super) reused_existing: bool,
+pub(crate) struct RuleConfigPlan {
+    pub(crate) original: String,
+    pub(crate) updated: String,
+    pub(crate) changed: bool,
+    pub(crate) diff: String,
+    pub(crate) effective_name: String,
+    pub(crate) reused_existing: bool,
 }
 
 impl BackgroundDependencyPlan {
@@ -145,7 +145,7 @@ pub fn plan_background_dependency(
     })
 }
 
-pub(super) fn plan_rule_config(
+pub(crate) fn plan_rule_config(
     rules_path: &Path,
     requested: BackgroundDependencyRuleConfig,
 ) -> Result<RuleConfigPlan> {

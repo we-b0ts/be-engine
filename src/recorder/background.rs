@@ -26,6 +26,7 @@ const INITIAL_LOAD_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 #[derive(Debug)]
 pub(crate) struct BackgroundDependencyMatcher {
     rules: Vec<BackgroundDependencyRuleConfig>,
+    api_rules: Vec<BackgroundDependencyRuleConfig>,
     socks_dir: PathBuf,
     memcached: Mutex<MemcachedRules>,
     redis_initial_load_rules: Vec<RedisInitialLoadRule>,
@@ -100,11 +101,18 @@ impl BackgroundDependencyMatcher {
 
     fn from_rules_in(rules: &[BackgroundDependencyRuleConfig], socks_dir: &Path) -> Result<Self> {
         let mut rules_without_specialized_matching = Vec::new();
+        let mut api_rules = Vec::new();
         let mut memcached = MemcachedRules::default();
         let mut redis_initial_load_rules = Vec::new();
         let mut initial_loads = InitialLoads::default();
         for rule in rules {
             match rule {
+                BackgroundDependencyRuleConfig::Redis {
+                    trigger_source: Some(_),
+                    ..
+                } => {
+                    api_rules.push(rule.clone());
+                }
                 BackgroundDependencyRuleConfig::Mysql { .. }
                 | BackgroundDependencyRuleConfig::Http { .. }
                 | BackgroundDependencyRuleConfig::Motan { .. } => {
@@ -179,6 +187,7 @@ impl BackgroundDependencyMatcher {
 
         let matcher = Self {
             rules: rules_without_specialized_matching,
+            api_rules,
             socks_dir: socks_dir.to_path_buf(),
             memcached: Mutex::new(memcached),
             redis_initial_load_rules,
@@ -256,6 +265,38 @@ impl BackgroundDependencyMatcher {
             })
     }
 
+    pub(crate) fn matching_api_candidate(&self, event: &RecorderEvent) -> Option<&str> {
+        if self.api_rules.is_empty() {
+            return None;
+        }
+        let RecorderEvent::RedisExchange(exchange) = event else {
+            return None;
+        };
+        if exchange.session_setup || !exchange.replay_safe
+            || !self.api_rules.iter().any(|rule| matches!(rule,
+                BackgroundDependencyRuleConfig::Redis { ports, command, .. }
+                if ports.contains(&exchange.target_port) && command.eq_ignore_ascii_case(&exchange.command))) {
+            return None;
+        }
+        let args = exchange
+            .args
+            .iter()
+            .map(decode_capture)
+            .collect::<Option<Vec<_>>>()?;
+        self.api_rules
+            .iter()
+            .find(|rule| {
+                crate::config::api_trigger::redis_identity(
+                    rule,
+                    exchange.target_port,
+                    &exchange.command,
+                    &args,
+                )
+                .is_some()
+            })
+            .map(|rule| rule.name())
+    }
+
     pub(crate) fn matching_redis_snapshot_rule(
         &self,
         target_port: u16,
@@ -292,7 +333,7 @@ impl BackgroundDependencyMatcher {
             || self.rules.iter().any(|rule| {
                 matches!(
                     rule,
-                    BackgroundDependencyRuleConfig::Redis { ports, .. }
+                    BackgroundDependencyRuleConfig::Redis { ports, trigger_source: None, .. }
                         if ports.contains(&port)
                 )
             })

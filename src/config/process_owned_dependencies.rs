@@ -56,6 +56,12 @@ pub enum BackgroundDependencyRuleConfig {
         source_evidence: String,
     },
     Redis {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trigger_source: Option<super::api_trigger::ApiTriggerSource>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        key_templates: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        arguments: Vec<String>,
         name: String,
         ports: Vec<u16>,
         command: String,
@@ -87,6 +93,13 @@ pub enum BackgroundDependencyRuleConfig {
 }
 
 impl BackgroundDependencyRuleConfig {
+    pub(crate) fn trigger_source(&self) -> Option<&super::api_trigger::ApiTriggerSource> {
+        match self {
+            Self::Redis { trigger_source, .. } => trigger_source.as_ref(),
+            _ => None,
+        }
+    }
+
     pub fn name(&self) -> &str {
         match self {
             Self::Mysql { name, .. }
@@ -180,7 +193,7 @@ impl BackgroundDependencyRuleConfig {
     }
 }
 
-pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
+pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
     let mut names = HashSet::new();
     for rule in rules {
         let name = rule.name();
@@ -260,6 +273,25 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 ..
             } => {
                 validate_redis_ports(name, ports)?;
+                if rule.trigger_source().is_some() {
+                    super::api_trigger::validate_redis(rule)?;
+                    if !source_revision.is_empty() {
+                        validate_source_revision(source_revision)?;
+                    }
+                    validate_source_evidence(source_evidence)?;
+                    continue;
+                }
+                if let BackgroundDependencyRuleConfig::Redis {
+                    key_templates,
+                    arguments,
+                    ..
+                } = rule
+                {
+                    anyhow::ensure!(
+                        key_templates.is_empty() && arguments.is_empty(),
+                        "key_templates and arguments require trigger_source"
+                    );
+                }
                 match command.as_str() {
                     "ZCOUNT" => {
                         if !keys.is_empty()
@@ -405,6 +437,10 @@ fn rules_overlap(
     left: &BackgroundDependencyRuleConfig,
     right: &BackgroundDependencyRuleConfig,
 ) -> bool {
+    if let Some(overlap) = super::api_trigger::overlap(left, right) {
+        return overlap;
+    }
+
     match (left, right) {
         (
             BackgroundDependencyRuleConfig::Mysql { selector: left, .. },
@@ -761,6 +797,10 @@ pub(crate) fn redis_rule_matches(
     command: &str,
     args: &[Vec<u8>],
 ) -> bool {
+    if rule.trigger_source().is_some() {
+        return false;
+    }
+
     let BackgroundDependencyRuleConfig::Redis {
         ports,
         command: expected_command,

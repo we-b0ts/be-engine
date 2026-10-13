@@ -9,6 +9,9 @@ fn cache_snapshot_seed_can_satisfy_repeated_logical_reads() {
     let mut state = RedisReplayState::default();
     let mut targets = BTreeMap::new();
     let rule = BackgroundDependencyRuleConfig::Redis {
+        trigger_source: None,
+        key_templates: Vec::new(),
+        arguments: Vec::new(),
         name: "snapshot-get".to_string(),
         ports: vec![6379],
         command: "GET".to_string(),

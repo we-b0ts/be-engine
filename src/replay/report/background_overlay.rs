@@ -48,7 +48,16 @@ pub(crate) fn reclassify_background_dependencies(
     let rules = &config.process_owned_dependencies;
     let matcher = BackgroundDependencyMatcher::from_rules(rules)?;
     let memcached_ports = matcher.resolved_memcached_rule_ports();
-    let mut matched = matched_recorded_exchanges(case_dirs, rules, &memcached_ports)?;
+    let origins = if rules.iter().any(|r| r.trigger_source().is_some()) {
+        let source = case_dirs
+            .values()
+            .next()
+            .context("API trigger reclassification requires case evidence")?;
+        crate::api_trigger::load(source, rules)?
+    } else {
+        crate::api_trigger::OriginIndex::default()
+    };
+    let mut matched = matched_recorded_exchanges(case_dirs, rules, &memcached_ports, &origins)?;
     let payload = fs::read(report_path)
         .with_context(|| format!("failed to read replay report {}", report_path.display()))?;
     let mut report: Value = serde_json::from_slice(&payload)
@@ -61,6 +70,7 @@ pub(crate) fn reclassify_background_dependencies(
     for protocol in ["redis", "memcached", "motan"] {
         reclassify_command_protocol(&mut report, protocol, &matched.commands, &mut by_protocol);
     }
+    annotate_api_origins(&mut report, &origins);
     by_protocol.retain(|_, count| *count > 0);
     let matched_unused_case = by_protocol.values().sum();
     let rules_payload = serde_json::to_vec(rules)?;
@@ -92,6 +102,7 @@ fn matched_recorded_exchanges(
     case_dirs: &BTreeMap<String, PathBuf>,
     rules: &[BackgroundDependencyRuleConfig],
     memcached_ports: &BTreeMap<String, BTreeSet<u16>>,
+    origins: &crate::api_trigger::OriginIndex,
 ) -> Result<RecordedMatches> {
     let mut matched = RecordedMatches::default();
     let has_mysql = rules
@@ -125,7 +136,11 @@ fn matched_recorded_exchanges(
             let Some(protocol) = dependency_protocol(&value) else {
                 continue;
             };
-            let Some(rule) = matching_rule(&value, rules, memcached_ports) else {
+            let Some(rule) = origins
+                .witness(case_id, &value)
+                .map(|w| w.rule.as_str())
+                .or_else(|| matching_rule(&value, rules, memcached_ports))
+            else {
                 continue;
             };
             let Some(connection_id) = value.get("connection_id").and_then(Value::as_str) else {
@@ -464,6 +479,23 @@ fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
     fs::write(&temporary, payload)?;
     fs::rename(&temporary, path)?;
     Ok(())
+}
+
+fn annotate_api_origins(report: &mut Value, origins: &crate::api_trigger::OriginIndex) {
+    for event in report["redis"]["unused_global"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+    {
+        let witness = event["background_original_case_id"]
+            .as_str()
+            .and_then(|case| origins.witness(case, event))
+            .cloned();
+        if let Some(w) = witness {
+            event["api_trigger_source"] =
+                json!({"api":w.trigger_api,"case_id":w.trigger_case_id,"binding":w.binding});
+        }
+    }
 }
 
 #[cfg(test)]

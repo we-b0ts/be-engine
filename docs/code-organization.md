@@ -30,6 +30,14 @@ is unclear.
 
 ## Current Boundaries
 
+- `config/api_trigger` owns API-origin process-rule schema and bounded key-template
+  validation; `api_trigger` owns immutable origin evidence and disposable index
+  persistence. Its `plan` child owns stale-safe policy planning. MySQL literal
+  INSERT parsing belongs to `mysql/sql/insert`. The existing report overlay owns
+  unused-only reclassification and provenance, while Recorder retains idle
+  candidates without changing active case ownership or Redis snapshots. Status
+  remains a summary/fingerprint reader and never invokes origin discovery.
+
 - `engine_binary` resolves companion executables and Linux reexec paths for a
   replaced running engine. Replay, coordinator workers and local interception
   share that resolver; process lifecycle remains with each caller.

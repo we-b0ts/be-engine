@@ -19,6 +19,9 @@ pub(super) fn covers(
     existing: &BackgroundDependencyRuleConfig,
     requested: &BackgroundDependencyRuleConfig,
 ) -> bool {
+    if existing.trigger_source().is_some() || requested.trigger_source().is_some() {
+        return api_trigger_same(existing, requested);
+    }
     match (existing, requested) {
         (
             BackgroundDependencyRuleConfig::Mysql { selector: left, .. },
@@ -79,7 +82,7 @@ pub(super) fn merge_compatible_redis_key_selector_rule(
     else {
         return Ok(None);
     };
-    if !supports_key_selectors(requested_command) {
+    if requested.trigger_source().is_some() || !supports_key_selectors(requested_command) {
         return Ok(None);
     }
 
@@ -193,6 +196,9 @@ fn compatible(
     requested: &BackgroundDependencyRuleConfig,
     require_exact_sets: bool,
 ) -> bool {
+    if existing.trigger_source().is_some() || requested.trigger_source().is_some() {
+        return api_trigger_same(existing, requested);
+    }
     match (existing, requested) {
         (
             BackgroundDependencyRuleConfig::Mysql { selector: left, .. },
@@ -360,6 +366,33 @@ fn supports_key_selectors(command: &str) -> bool {
     )
 }
 
+fn api_trigger_same(
+    a: &BackgroundDependencyRuleConfig,
+    b: &BackgroundDependencyRuleConfig,
+) -> bool {
+    match (a, b) {
+        (
+            BackgroundDependencyRuleConfig::Redis {
+                trigger_source: Some(at),
+                ports: ap,
+                command: ac,
+                key_templates: ak,
+                arguments: aa,
+                ..
+            },
+            BackgroundDependencyRuleConfig::Redis {
+                trigger_source: Some(bt),
+                ports: bp,
+                command: bc,
+                key_templates: bk,
+                arguments: ba,
+                ..
+            },
+        ) => at == bt && ap == bp && ac == bc && ak == bk && aa == ba,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,6 +406,9 @@ mod tests {
         fields: &[&str],
     ) -> BackgroundDependencyRuleConfig {
         BackgroundDependencyRuleConfig::Redis {
+            trigger_source: None,
+            key_templates: Vec::new(),
+            arguments: Vec::new(),
             name: name.to_string(),
             ports: ports.to_vec(),
             command: command.to_string(),

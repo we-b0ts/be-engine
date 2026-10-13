@@ -691,6 +691,9 @@ async fn snapshot_test_state() -> (AppState, TempDir) {
     config
         .process_owned_dependencies
         .push(BackgroundDependencyRuleConfig::Redis {
+            trigger_source: None,
+            key_templates: Vec::new(),
+            arguments: Vec::new(),
             name: "snapshot-get".to_string(),
             ports: vec![6379],
             command: "GET".to_string(),

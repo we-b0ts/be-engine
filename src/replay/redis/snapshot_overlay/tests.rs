@@ -10,6 +10,9 @@ use crate::replay::redis::RecordedCapture;
 
 fn rule() -> BackgroundDependencyRuleConfig {
     BackgroundDependencyRuleConfig::Redis {
+        trigger_source: None,
+        key_templates: Vec::new(),
+        arguments: Vec::new(),
         name: "big-list-version".to_string(),
         ports: vec![50_600],
         command: "HGET".to_string(),

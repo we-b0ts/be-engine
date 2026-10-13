@@ -171,6 +171,9 @@ async fn configured_bootstrap_hget_is_connection_independent() {
         .await
         .unwrap();
     let rule = BackgroundDependencyRuleConfig::Redis {
+        trigger_source: None,
+        key_templates: Vec::new(),
+        arguments: Vec::new(),
         name: "experiment-bootstrap".to_string(),
         ports: vec![6379],
         command: "HGET".to_string(),

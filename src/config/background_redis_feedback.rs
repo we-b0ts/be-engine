@@ -116,6 +116,9 @@ pub fn plan_redis_background_dependency(
     });
     let command = feedback.command.to_ascii_uppercase();
     let requested = BackgroundDependencyRuleConfig::Redis {
+        trigger_source: None,
+        key_templates: Vec::new(),
+        arguments: Vec::new(),
         name: feedback.name.clone(),
         ports: ports.clone(),
         command: command.clone(),
