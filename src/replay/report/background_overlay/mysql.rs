@@ -21,7 +21,7 @@ pub(super) fn reclassify(
             _ => None,
         })
         .collect::<Vec<_>>();
-    if rules.is_empty() && origins.witnesses.is_empty() {
+    if rules.is_empty() && origins.witnesses.is_empty() && origins.wire_witnesses.is_empty() {
         return;
     }
     let mut remaining = BTreeMap::<String, usize>::new();
@@ -32,7 +32,7 @@ pub(super) fn reclassify(
         |unused| {
             let case = unused.get("case_id")?.as_str()?;
             if let Some(witness) = origins.witness(case, unused) {
-                let key = crate::config::api_trigger::mysql::key(case, unused)?;
+                let key = crate::config::api_trigger::mysql::summary_key(case, unused)?;
                 let used = remaining.entry(key).or_default();
                 if *used < witness.exchanges {
                     *used += 1;

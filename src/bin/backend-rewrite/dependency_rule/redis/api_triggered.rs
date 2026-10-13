@@ -19,6 +19,7 @@ pub(super) struct ApiTriggeredArgs {
     #[arg(long = "key-sequence-template")]
     key_sequence: Vec<String>,
     /// JSON: sha1, ordered keys, argv_count and zero-based identity_argv_index.
+    /// Key numeric_middle=false (default) means exact prefix+suffix, never a wildcard.
     #[arg(long, value_name = "JSON", value_parser = parse_script)]
     script: Option<traffic_e2e::ApiTriggerRedisScript>,
     /// Exact trailing command arguments; LRANGE requires start and stop. Use --argument=-1.

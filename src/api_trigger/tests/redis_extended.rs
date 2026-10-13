@@ -166,3 +166,49 @@ fn script_plan_apply_preserves_finite_responses_and_unmatched_calls() {
         .is_err()
     );
 }
+
+#[test]
+fn script_plan_explains_nonempty_middle_for_an_exact_key() {
+    let f = Fixture::new("DEL");
+    let events = script_events();
+    write_lines(&f.victim.join("dependencies.jsonl"), &events);
+    let mut report: Value = serde_json::from_slice(&fs::read(&f.report).unwrap()).unwrap();
+    report["redis"]["unused_case"] = events.iter().map(|e| json!({"case_id":"victim","command":e["command"],"connection_id":e["connection_id"],"sequence":e["sequence"],"target":{"host":"redis.test","port":6379}})).collect::<Vec<_>>().into();
+    fs::write(&f.report, report.to_string()).unwrap();
+    let mut selector = script_selector();
+    let key = &mut selector.script.as_mut().unwrap().keys[1];
+    key.prefix = "metrics:as-".into();
+    key.suffix = "f".into();
+    let error = plan_api_triggered_redis(
+        &f.policy,
+        &f.report,
+        &f.root,
+        "metrics",
+        "0123456789abcdef",
+        PROOF,
+        &selector,
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(error.contains("KEYS[1]"));
+    assert!(error.contains("numeric_middle=false requires an exact prefix+suffix"));
+    let key = &mut selector.script.as_mut().unwrap().keys[1];
+    key.prefix = "metrics:as-of".into();
+    key.suffix.clear();
+    assert_eq!(
+        plan_api_triggered_redis(
+            &f.policy,
+            &f.report,
+            &f.root,
+            "metrics",
+            "0123456789abcdef",
+            PROOF,
+            &selector
+        )
+        .unwrap()
+        .report()
+        .matched_unused_exchanges,
+        2
+    );
+}

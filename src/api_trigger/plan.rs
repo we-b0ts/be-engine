@@ -202,12 +202,24 @@ pub(super) fn plan(
         case_ids.insert(case.to_string());
         triggers.insert(witness.trigger_case_id.clone());
     }
+    let mut rejections = BTreeSet::new();
+    if let Some(reasons) = index.selector_rejections.get(&config.effective_name) {
+        for event in unused.as_array().into_iter().flatten() {
+            if let Some(case) = event["case_id"].as_str()
+                && let Some(key) = super::evidence::key(case, event)
+                && let Some(reason) = reasons.get(&key)
+            {
+                rejections.insert(reason.clone());
+            }
+        }
+    }
     ensure!(
         matched > 0,
-        "no unused foreign-case dependency has a unique API trigger; origins={}, ambiguous_origins={}, ambiguous_references={}; inspect source capture predicates",
+        "no unused foreign-case dependency has a unique API trigger; origins={}, ambiguous_origins={}, ambiguous_references={}; selector_rejections={:?}; inspect source capture predicates and selector fields",
         index.triggers,
         index.ambiguous_triggers,
-        index.ambiguous_references
+        index.ambiguous_references,
+        rejections.into_iter().take(8).collect::<Vec<_>>()
     );
     // Classification never repairs target-side dependency failures.
     if let BackgroundDependencyRuleConfig::Mysql { selector, .. } = &rule {

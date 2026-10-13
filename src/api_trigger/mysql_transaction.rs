@@ -2,7 +2,7 @@
 mod scan;
 use super::{
     OriginIndex,
-    evidence::{EvidenceFile, OriginWitness, case_id, key, timestamp},
+    evidence::{EvidenceFile, OriginWitness, case_id, timestamp},
     request,
 };
 use crate::{
@@ -17,6 +17,7 @@ struct Exchange {
     case: String,
     file: usize,
     key: String,
+    wire_key: Option<String>,
     sha: String,
     command: String,
     wire_command: String,
@@ -75,7 +76,7 @@ pub(super) fn associate(
                 if record.summary["target_host"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(&selector.target_host))
                     && record.summary["target_port"].as_u64()==Some(u64::from(selector.target_port))
                     && record.summary["database"]==selector.database && record.summary["username"]==selector.username)) { continue; }
-            if let Some(key) = key(&case, &record.summary) {
+            if let Some(key) = crate::config::api_trigger::mysql::key(&case, &record.summary) {
                 *fingerprints.entry(key).or_default() += 1;
             }
             if !scan::selected(&record.summary, &candidates) {
@@ -89,7 +90,7 @@ pub(super) fn associate(
             }
             let bytes = reader.read(&file.path, &file.index.stamp, &record.location)?;
             let event: Value = serde_json::from_slice(&bytes)?;
-            let Some(key) = key(&case, &event) else {
+            let Some(key) = crate::config::api_trigger::mysql::key(&case, &event) else {
                 continue;
             };
             let sql_text = event["sql"]
@@ -148,6 +149,7 @@ pub(super) fn associate(
             let exchange = Exchange {
                 case: case.clone(),
                 file: file_index,
+                wire_key: crate::config::api_trigger::mysql::wire_key(&case, &event),
                 key,
                 sha: record.location.sha256.clone(),
                 command: sql,
@@ -207,10 +209,22 @@ pub(super) fn associate(
             }
             if terminal && !group.is_empty() {
                 if let Some(origin) = prove(&group, files, &owners) {
-                    add_boundary(event, &origin, files, &mut boundaries);
+                    add_boundary(
+                        event,
+                        &origin,
+                        files,
+                        &mut boundaries,
+                        &mut index.wire_witnesses,
+                    );
                     for member in &group {
                         if member.origin.is_none() && member.members.contains(&origin.rule) {
-                            add_boundary(member, &origin, files, &mut boundaries);
+                            add_boundary(
+                                member,
+                                &origin,
+                                files,
+                                &mut boundaries,
+                                &mut index.wire_witnesses,
+                            );
                         }
                     }
                     cleanup = Some(origin);
@@ -228,7 +242,13 @@ pub(super) fn associate(
                 if let Some(origin) = cleanup.take()
                     && independent(event, &origin, files, &owners)
                 {
-                    add_boundary(event, &origin, files, &mut boundaries);
+                    add_boundary(
+                        event,
+                        &origin,
+                        files,
+                        &mut boundaries,
+                        &mut index.wire_witnesses,
+                    );
                 }
             } else if !terminal {
                 cleanup = None;
@@ -325,12 +345,16 @@ fn add_boundary(
     origin: &OriginWitness,
     files: &[EvidenceFile],
     boundaries: &mut BTreeMap<String, Vec<Option<OriginWitness>>>,
+    wire_witnesses: &mut BTreeMap<String, OriginWitness>,
 ) {
     let mut proof = origin.clone();
     proof.command = event.wire_command.clone();
     proof.dependencies_path = files[event.file].path.clone();
     proof.dependency_sha256 = event.sha.clone();
     proof.exchanges = 1;
+    if let Some(key) = &event.wire_key {
+        wire_witnesses.insert(key.clone(), proof.clone());
+    }
     if let Some(slot) = boundaries
         .get_mut(&event.key)
         .and_then(|v| v.iter_mut().find(|p| p.is_none()))

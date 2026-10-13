@@ -238,7 +238,11 @@ fn duplicate_commit_on_an_unrelated_connection_prevents_fingerprint_exemption() 
     rules.push(write_selector().rule("write", "0123456789abcdef", PROOF));
     let index = load(&f.root, &rules).unwrap();
     assert!(index.witness("victim", &ev[2]).is_some());
-    assert!(index.witness("victim", &ev[3]).is_none());
+    assert!(index.witness("victim", &ev[3]).is_some());
+    let mut legacy = ev[3].clone();
+    legacy.as_object_mut().unwrap().remove("connection_id");
+    legacy.as_object_mut().unwrap().remove("query_sequence");
+    assert!(index.witness("victim", &legacy).is_none());
 }
 
 #[test]
@@ -260,5 +264,101 @@ fn reused_connections_do_not_load_large_unanchored_transactions() {
     let index = load(&f.root, &rules).unwrap();
     assert!(index.source_bytes < 1024 * 1024);
     assert!(index.witness("victim", &ev[2]).is_some());
-    assert!(index.witness("victim", &ev[3]).is_none());
+    assert!(index.witness("victim", &ev[3]).is_some());
+    let mut legacy = ev[3].clone();
+    legacy.as_object_mut().unwrap().remove("connection_id");
+    legacy.as_object_mut().unwrap().remove("query_sequence");
+    assert!(index.witness("victim", &legacy).is_none());
+}
+
+#[test]
+fn transaction_scope_updates_use_plan_apply_without_deleting_the_anchor_rule() {
+    let f = fixture();
+    let mut base = write_selector();
+    base.include_transaction_boundaries = false;
+    base.transaction_members.clear();
+    plan_api_triggered_mysql(
+        &f.policy,
+        &f.report,
+        &f.root,
+        "write",
+        "0123456789abcdef",
+        PROOF,
+        &base,
+    )
+    .unwrap()
+    .apply()
+    .unwrap();
+    let extended = write_selector();
+    let plan = plan_api_triggered_mysql(
+        &f.policy,
+        &f.report,
+        &f.root,
+        "write",
+        "0123456789abcdef",
+        PROOF,
+        &extended,
+    )
+    .unwrap();
+    assert!(plan.report().changed);
+    assert_eq!(plan.report().matched_unused_exchanges, 4);
+    plan.apply().unwrap();
+    let mut different = extended;
+    different.trigger_source.path = "/different".into();
+    assert!(
+        plan_api_triggered_mysql(
+            &f.policy,
+            &f.report,
+            &f.root,
+            "write",
+            "0123456789abcdef",
+            PROOF,
+            &different
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn wire_summaries_disambiguate_owned_and_unrelated_identical_commits() {
+    let f = fixture();
+    let mut ev = events();
+    let mut unrelated = ev[3].clone();
+    unrelated["connection_id"] = "unrelated".into();
+    unrelated["query_sequence"] = 1.into();
+    ev.push(unrelated);
+    f.mysql_events(&ev);
+    let mut report: Value = serde_json::from_slice(&fs::read(&f.report).unwrap()).unwrap();
+    for (summary, e) in report["unused_case_exchanges"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .skip(1)
+        .zip(&ev)
+    {
+        summary["connection_id"] = e["connection_id"].clone();
+        summary["query_sequence"] = e["query_sequence"].clone();
+        summary["status"] = e["response"]["status"].clone();
+    }
+    fs::write(&f.report, report.to_string()).unwrap();
+    let plan = plan_api_triggered_mysql(
+        &f.policy,
+        &f.report,
+        &f.root,
+        "write",
+        "0123456789abcdef",
+        PROOF,
+        &write_selector(),
+    )
+    .unwrap();
+    assert_eq!(plan.report().matched_unused_exchanges, 4);
+    plan.apply().unwrap();
+    let after = f.mysql_overlay();
+    let unused = after["unused_case_exchanges"].as_array().unwrap();
+    assert_eq!(unused.len(), 2);
+    assert!(unused.iter().any(|e| e["connection_id"] == "unrelated"));
+    assert_eq!(
+        after["unused_global_exchanges"].as_array().unwrap().len(),
+        5
+    );
 }

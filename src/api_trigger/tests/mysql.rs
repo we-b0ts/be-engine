@@ -140,7 +140,9 @@ impl Fixture {
 #[test]
 fn mysql_old_recording_plan_apply_cache_and_removal_preserve_owner_and_finite_counts() {
     let f = Fixture::mysql();
-    f.mysql_events(&[read(12), read(12)]);
+    let mut second = read(12);
+    second["query_sequence"] = 2.into();
+    f.mysql_events(&[read(12), second]);
     let original = fs::read(f.victim.join("dependencies.jsonl")).unwrap();
     let cold = load(&f.root, &f.mysql_rules()).unwrap();
     assert_eq!(cold.witnesses.len(), 1);

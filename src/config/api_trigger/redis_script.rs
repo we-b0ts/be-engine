@@ -39,33 +39,53 @@ impl ApiTriggerRedisScript {
     }
 
     pub(crate) fn identity(&self, args: &[Vec<u8>]) -> Option<String> {
-        if args.len() != 2 + self.keys.len() + self.argv_count
-            || args.first()? != self.sha1.as_bytes()
-            || args.get(1)? != self.keys.len().to_string().as_bytes()
-        {
-            return None;
-        }
-        for (pattern, key) in self.keys.iter().zip(args.iter().skip(2)) {
-            let key = std::str::from_utf8(key).ok()?;
+        self.check_identity(args).ok()
+    }
+
+    pub(crate) fn check_identity(&self, args: &[Vec<u8>]) -> Result<String> {
+        ensure!(
+            args.len() == 2 + self.keys.len() + self.argv_count,
+            "script argument count does not match KEYS/ARGV declaration"
+        );
+        ensure!(
+            args[0] == self.sha1.as_bytes(),
+            "script SHA-1 does not match"
+        );
+        ensure!(
+            args[1] == self.keys.len().to_string().as_bytes(),
+            "script numkeys does not match declared KEYS count"
+        );
+        for (i, (pattern, key)) in self.keys.iter().zip(args.iter().skip(2)).enumerate() {
+            let key = std::str::from_utf8(key)
+                .map_err(|_| anyhow::anyhow!("script KEYS[{i}] is not UTF-8"))?;
             let middle = key
-                .strip_prefix(&pattern.prefix)?
-                .strip_suffix(&pattern.suffix)?;
-            if if pattern.numeric_middle {
-                middle.is_empty()
-                    || middle.len() > 20
-                    || !middle.bytes().all(|b| b.is_ascii_digit())
+                .strip_prefix(&pattern.prefix)
+                .and_then(|s| s.strip_suffix(&pattern.suffix))
+                .ok_or_else(|| {
+                    anyhow::anyhow!("script KEYS[{i}] does not match declared prefix/suffix")
+                })?;
+            if pattern.numeric_middle {
+                ensure!(
+                    !middle.is_empty()
+                        && middle.len() <= 20
+                        && middle.bytes().all(|b| b.is_ascii_digit()),
+                    "script KEYS[{i}] requires a nonempty numeric middle"
+                );
             } else {
-                !middle.is_empty()
-            } {
-                return None;
+                ensure!(
+                    middle.is_empty(),
+                    "script KEYS[{i}]: numeric_middle=false requires an exact prefix+suffix key; the recorded key has a nonempty middle"
+                );
             }
         }
-        let id =
-            std::str::from_utf8(args.get(2 + self.keys.len() + self.identity_argv_index)?).ok()?;
-        id.parse::<u64>()
-            .ok()
-            .filter(|n| *n > 0 && n.to_string() == id)?;
-        Some(id.into())
+        let id = std::str::from_utf8(&args[2 + self.keys.len() + self.identity_argv_index])
+            .map_err(|_| anyhow::anyhow!("script identity ARGV is not UTF-8"))?;
+        ensure!(
+            id.parse::<u64>()
+                .is_ok_and(|n| n > 0 && n.to_string() == id),
+            "script identity ARGV must be a canonical positive integer"
+        );
+        Ok(id.into())
     }
 
     pub(crate) fn exists(&self, args: &[Vec<u8>]) -> bool {

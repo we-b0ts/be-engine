@@ -427,6 +427,18 @@ pub(super) fn narrows_mysql_origin(
          BackgroundDependencyRuleConfig::Mysql {trigger_source: Some(_), selector: b, ..}) if a == b)
 }
 
+/// Only transaction options may change on the same explicitly named API anchor.
+/// The shared planner validates the proposed policy and immutable affected evidence.
+pub(super) fn updates_mysql_transaction_scope(
+    existing: &BackgroundDependencyRuleConfig,
+    requested: &BackgroundDependencyRuleConfig,
+) -> bool {
+    matches!((existing, requested),
+        (BackgroundDependencyRuleConfig::Mysql {trigger_source: Some(a), selector: sa, identity_value_index: ia, ..},
+         BackgroundDependencyRuleConfig::Mysql {trigger_source: Some(b), selector: sb, identity_value_index: ib, ..})
+            if a == b && sa == sb && ia == ib)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

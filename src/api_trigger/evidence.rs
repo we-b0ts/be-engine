@@ -36,6 +36,8 @@ pub(crate) struct OriginWitness {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct OriginIndex {
     pub witnesses: BTreeMap<String, OriginWitness>,
+    pub wire_witnesses: BTreeMap<String, OriginWitness>,
+    pub selector_rejections: BTreeMap<String, BTreeMap<String, String>>,
     pub evidence_fingerprint: String,
     pub triggers: usize,
     pub ambiguous_triggers: usize,
@@ -49,7 +51,12 @@ pub(crate) struct OriginIndex {
 
 impl OriginIndex {
     pub(crate) fn witness(&self, case_id: &str, event: &Value) -> Option<&OriginWitness> {
-        let witness = self.witnesses.get(&key(case_id, event)?)?;
+        let witness = if let Some(key) = crate::config::api_trigger::mysql::wire_key(case_id, event)
+        {
+            self.wire_witnesses.get(&key)?
+        } else {
+            self.witnesses.get(&key(case_id, event)?)?
+        };
         if event["status"]
             .as_str()
             .is_some_and(|s| !matches!(s, "resultset" | "ok"))
@@ -232,6 +239,7 @@ pub(super) fn build(
     for state in states {
         for key in state.invalid {
             index.witnesses.remove(&key);
+            index.wire_witnesses.remove(&key);
         }
     }
     super::redis_script::associate(files, rules, &mut index)?;
@@ -285,15 +293,35 @@ fn observe(
         crate::config::api_trigger::mysql::identity(rule, event)
     } else {
         redis_args(event).and_then(|args| {
-            crate::config::api_trigger::redis_identity(
-                rule,
-                event["target_port"]
-                    .as_u64()
-                    .and_then(|v| u16::try_from(v).ok())
-                    .unwrap_or(0),
-                event["command"].as_str().unwrap_or_default(),
-                &args,
-            )
+            let port = event["target_port"]
+                .as_u64()
+                .and_then(|v| u16::try_from(v).ok())
+                .unwrap_or(0);
+            let command = event["command"].as_str().unwrap_or_default();
+            if let BackgroundDependencyRuleConfig::Redis {
+                script: Some(script),
+                ports,
+                command: selected,
+                ..
+            } = rule
+                && ports.contains(&port)
+                && selected.eq_ignore_ascii_case(command)
+                && let Err(reason) = script.check_identity(&args)
+                && let Some(key) = key(victim, event)
+                && index
+                    .selector_rejections
+                    .values()
+                    .map(BTreeMap::len)
+                    .sum::<usize>()
+                    < 100_000
+            {
+                index
+                    .selector_rejections
+                    .entry(rule.name().into())
+                    .or_default()
+                    .insert(key, reason.to_string());
+            }
+            crate::config::api_trigger::redis_identity(rule, port, command, &args)
         })
     };
     let Some(identity) = identity else {
@@ -302,7 +330,12 @@ fn observe(
     let Some(origin) = origins.get(&identity) else {
         return Ok(());
     };
-    let Some(key) = key(victim, event) else {
+    let event_key = if mysql {
+        crate::config::api_trigger::mysql::key(victim, event)
+    } else {
+        key(victim, event)
+    };
+    let Some(key) = event_key else {
         return Ok(());
     };
     if victim == origin.case_id {
@@ -314,6 +347,9 @@ fn observe(
     {
         index.ambiguous_references += 1;
         invalid.insert(key);
+        if mysql && let Some(key) = crate::config::api_trigger::mysql::wire_key(victim, event) {
+            invalid.insert(key);
+        }
         return Ok(());
     }
     let source = rule.trigger_source().expect("API origin");
@@ -345,6 +381,19 @@ fn observe(
         index.witnesses.len() < 100_000,
         "API trigger witness inventory exceeds limit"
     );
+    if mysql && let Some(wire_key) = crate::config::api_trigger::mysql::wire_key(victim, event) {
+        ensure!(
+            index.wire_witnesses.len() < 100_000,
+            "MySQL wire origin inventory exceeds limit"
+        );
+        ensure!(
+            index
+                .wire_witnesses
+                .insert(wire_key, witness.clone())
+                .is_none(),
+            "duplicate MySQL wire origin"
+        );
+    }
     if let Some(existing) = index.witnesses.get_mut(&key) {
         ensure!(
             mysql
@@ -454,7 +503,7 @@ pub(super) fn case_id(path: &Path) -> Result<String> {
 
 pub(super) fn key(case: &str, event: &Value) -> Option<String> {
     if event["event_type"] == "mysql_exchange" || event["sql_summary"].is_object() {
-        return crate::config::api_trigger::mysql::key(case, event);
+        return crate::config::api_trigger::mysql::summary_key(case, event);
     }
     let connection = event["connection_id"].as_str()?;
     let sequence = event["sequence"].as_u64()?;

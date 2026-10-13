@@ -188,3 +188,18 @@ pub(crate) fn key(case: &str, event: &Value) -> Option<String> {
 pub(crate) fn disabled(value: &bool) -> bool {
     !value
 }
+
+/// New summaries preserve immutable wire identity. Never fall back to an
+/// ambiguous SQL-only match when an explicit identity is present.
+pub(crate) fn wire_key(case: &str, event: &Value) -> Option<String> {
+    Some(format!(
+        "{}/{}/{}",
+        key(case, event)?,
+        event["connection_id"].as_str()?,
+        event["query_sequence"].as_u64()?
+    ))
+}
+
+pub(crate) fn summary_key(case: &str, event: &Value) -> Option<String> {
+    wire_key(case, event).or_else(|| key(case, event))
+}

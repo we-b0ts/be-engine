@@ -181,9 +181,14 @@ WHERE. OR/NOT, multiple identities, locks and identity slots in a
 projection or LIMIT are rejected. COM_QUERY and COM_STMT_EXECUTE require
 recorded SQL with literal values already bound; unbound parameters are not
 guessed. Only successful complete resultsets with full row metadata qualify.
-MySQL summaries identify SQL fingerprints rather than individual wire events,
-so every identical exchange in that case must have compatible complete origin
-evidence. Duplicate summaries cannot authorize more exchanges than were recorded.
+New MySQL Replay summaries preserve `connection_id` and `query_sequence` together
+with the endpoint and SQL fingerprint. Classification can identify a proven
+transaction boundary even when another connection records identical COMMIT SQL.
+Fingerprint-only historical reports remain usable when every identical exchange
+has compatible proof. If those reports are ambiguous, rerun Replay against the
+existing recording to obtain wire identities; rerecording is unnecessary. Missing
+transaction starts or sequence gaps still remain required. Duplicate summaries
+cannot authorize more exchanges than were recorded.
 
 An existing ordinary rule with the same name and exact SELECT selector can be
 replaced by this narrower origin-bound rule through plan/apply. It is never
@@ -224,6 +229,13 @@ script:
 ```
 
 Pass this descriptor as `--script JSON`, with the normal `--trigger-source`.
+For each key, `numeric_middle: true` requires 1–20 decimal digits between its
+fixed affixes. `numeric_middle: false` (the default) requires the exact key
+`prefix + suffix`; it does **not** mean a wildcard middle. For a fixed key such
+as `metrics:as-of`, use `prefix: metrics:as-of` and an empty suffix. Splitting it
+as `prefix: metrics:as-`, `suffix: f` leaves an unallowed `o` in the middle.
+Plan failures report the specific `KEYS[index]` and the violated condition,
+without exposing dependency argument values.
 SHA-1, numkeys, ordered key families and total ARGV count remain exact; numeric
 middles are bounded decimal strings. `identity_argv_index` counts ARGV only,
 starting at zero. Lua is never evaluated by classification. Other arguments
@@ -266,6 +278,12 @@ match those explicit members. Members cannot authorize writes and never match
 outside a complete origin-anchored transaction. For example, a task update
 may read its team configuration in the same exclusive database transaction.
 Source evidence must establish that call chain and session ownership.
+
+On an existing named API-origin MySQL rule, plan/apply can update
+`include_transaction_boundaries` and `transaction_members` while keeping the
+source, SQL selector and identity slot unchanged. This produces a reviewed diff
+and rechecks immutable evidence; no delete/recreate step is needed. Changing
+the anchor still conflicts.
 
 Existing configured API-origin MySQL rules can jointly prove a transaction;
 all anchors must name the same trigger case. No wildcard transaction rule is

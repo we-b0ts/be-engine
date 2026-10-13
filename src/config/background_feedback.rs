@@ -166,7 +166,9 @@ pub(crate) fn plan_rule_config(
                 .iter_mut()
                 .find(|rule| rule.name() == requested.name())
         {
-            if !selector::narrows_mysql_origin(existing, &requested) {
+            if !selector::narrows_mysql_origin(existing, &requested)
+                && !selector::updates_mysql_transaction_scope(existing, &requested)
+            {
                 selector::ensure_same(existing, &requested)?;
             }
             *existing = requested;
