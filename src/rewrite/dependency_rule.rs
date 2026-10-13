@@ -75,6 +75,9 @@ pub struct RewriteDependencyRulePlanReport {
 
 #[derive(Debug, Clone)]
 pub enum RewriteDependencyRuleSelector {
+    RedisApiTriggered {
+        selector: crate::ApiTriggeredRedisSelector,
+    },
     RedisCrossCase {
         rule_id: String,
     },
@@ -214,7 +217,8 @@ pub(super) fn plan(
     let report = plan.report()?;
     if matches!(
         record.spec,
-        RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
+        RewriteDependencyRuleSpec::RedisApiTriggered { .. }
+            | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
             | RewriteDependencyRuleSpec::RedisLock { .. }
             | RewriteDependencyRuleSpec::RedisPublish { .. }
             | RewriteDependencyRuleSpec::RedisUnordered { .. }
@@ -386,6 +390,7 @@ pub(super) fn apply(
         record.spec,
         RewriteDependencyRuleSpec::HttpCrossCase { .. }
             | RewriteDependencyRuleSpec::HttpUnordered { .. }
+            | RewriteDependencyRuleSpec::RedisApiTriggered { .. }
             | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
             | RewriteDependencyRuleSpec::RedisLock { .. }
             | RewriteDependencyRuleSpec::RedisPublish { .. }
@@ -503,6 +508,7 @@ fn validate_plan_evidence(
         spec,
         RewriteDependencyRuleSpec::HttpCrossCase { .. }
             | RewriteDependencyRuleSpec::HttpUnordered { .. }
+            | RewriteDependencyRuleSpec::RedisApiTriggered { .. }
             | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
             | RewriteDependencyRuleSpec::RedisLock { .. }
             | RewriteDependencyRuleSpec::RedisPublish { .. }

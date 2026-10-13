@@ -62,6 +62,9 @@ fn event(port: u16, command: &str, key: &[u8]) -> RecorderEvent {
 
 fn redis_get_rule() -> BackgroundDependencyRuleConfig {
     BackgroundDependencyRuleConfig::Redis {
+        trigger_source: None,
+        key_templates: Vec::new(),
+        arguments: Vec::new(),
         name: "startup-cache-warm".to_string(),
         ports: vec![20917, 20918],
         command: "GET".to_string(),

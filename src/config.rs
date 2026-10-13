@@ -11,8 +11,9 @@ pub const DEFAULT_FAKE_CIDR: &str = "198.19.0.0/16";
 pub(crate) const DEFAULT_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 
 mod allowed_unused_http;
+pub(crate) mod api_trigger;
 mod artifacts;
-mod background_feedback;
+pub(crate) mod background_feedback;
 mod background_memcached_feedback;
 mod background_motan_feedback;
 mod background_mysql_feedback;
@@ -38,6 +39,9 @@ pub(crate) mod source_traffic_policy;
 pub use allowed_unused_http::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
     plan_allowed_unused_http_hosts,
+};
+pub use api_trigger::{
+    ApiCaptureOperation, ApiCaptureProtocol, ApiTriggerCapture, ApiTriggerKind, ApiTriggerSource,
 };
 pub use artifacts::ArtifactsConfig;
 pub use background_feedback::{

@@ -203,6 +203,9 @@ fn mixed_mysql_and_redis_rules_reclassify_the_same_immutable_case() {
     policy
         .process_owned_dependencies
         .push(BackgroundDependencyRuleConfig::Redis {
+            trigger_source: None,
+            key_templates: Vec::new(),
+            arguments: Vec::new(),
             name: "cache-refresh".into(),
             ports: vec![6379],
             command: "SCARD".into(),

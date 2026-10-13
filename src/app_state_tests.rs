@@ -380,6 +380,9 @@ async fn background_redis_uses_ports_without_domain_and_stays_out_of_cases() {
     let mut config = AppConfig::default();
     config.recording.output_dir = temp.path().join("recordings");
     config.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Redis {
+        trigger_source: None,
+        key_templates: Vec::new(),
+        arguments: Vec::new(),
         name: "interest-tag-mining-cache-refresh".to_string(),
         ports: vec![20917, 20918, 20919],
         command: "ZCOUNT".to_string(),
@@ -439,6 +442,9 @@ async fn redis_get_background_rule_records_without_response_role_metadata() {
     let mut config = AppConfig::default();
     config.recording.output_dir = temp.path().join("recordings");
     config.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Redis {
+        trigger_source: None,
+        key_templates: Vec::new(),
+        arguments: Vec::new(),
         name: "startup-cache-warm".to_string(),
         ports: vec![20917],
         command: "GET".to_string(),

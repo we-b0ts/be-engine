@@ -3,6 +3,9 @@
 Use this file for local commands, runtime behavior, recording, replay, and
 testing details. Keep `AGENTS.md` as the short navigation map.
 
+API-triggered asynchronous process traffic uses [API-origin rules](api-triggered-process-traffic.md),
+including request-body conditions, recorded identity capture and old-recording reclassification.
+
 MySQL replay driver compatibility and process-owned read rules are documented in
 [mysql-replay.md](mysql-replay.md).
 

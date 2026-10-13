@@ -384,6 +384,9 @@ fn hash_read_plans_merge_keys_and_patterns_into_compatible_existing_rules() {
         rules
             .process_owned_dependencies
             .push(BackgroundDependencyRuleConfig::Redis {
+                trigger_source: None,
+                key_templates: Vec::new(),
+                arguments: Vec::new(),
                 name: name.to_string(),
                 ports: vec![50_600],
                 command: command.to_string(),
