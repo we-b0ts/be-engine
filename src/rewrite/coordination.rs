@@ -130,7 +130,7 @@ pub(super) fn details(
         .collect::<std::collections::BTreeSet<_>>();
     if !state.api.is_empty()
         && (state.phase == RewritePhase::ApiPending
-            || super::replay_admission::slice_ready(&state.active_slice))
+            || super::replay_admission::slice_ready(state, &state.active_slice))
     {
         unverified.insert(super::api_selector::public_api(&state.api));
     }
@@ -139,7 +139,7 @@ pub(super) fn details(
             .parked_slices
             .values()
             .filter(|slice| {
-                super::replay_admission::slice_ready(slice)
+                super::replay_admission::slice_ready(state, slice)
                     && !super::regression_scope::is_skipped(state, &slice.api)
             })
             .map(|slice| super::api_selector::public_api(&slice.api)),

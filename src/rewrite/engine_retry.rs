@@ -1,11 +1,47 @@
-//! One fresh verification of runtime or dependency-only failures per changed engine build.
-use super::model::{RewriteIssueKind, RewritePhase, RewriteSliceState, RewriteState};
+//! Durable changed-engine retries, including the last unfinished API route.
+use super::model::{
+    RewriteApiStatus, RewriteIssueKind, RewritePhase, RewriteSliceState, RewriteState,
+};
 
-pub(super) fn pending(slice: &RewriteSliceState) -> bool {
-    eligible(slice, crate::build_info::ENGINE_FINGERPRINT)
+#[cfg(test)]
+fn eligible(slice: &RewriteSliceState, engine: &str) -> bool {
+    eligible_failure(slice, engine, false)
 }
 
-fn eligible(slice: &RewriteSliceState, engine: &str) -> bool {
+/// The final route may refresh any failed Replay after a known engine change.
+/// Inventory-only checks keep status independent of recording/report I/O.
+pub(super) fn pending(state: &RewriteState, slice: &RewriteSliceState) -> bool {
+    eligible_failure(
+        slice,
+        crate::build_info::ENGINE_FINGERPRINT,
+        last_unfinished_route(state, &slice.api),
+    )
+}
+
+fn last_unfinished_route(state: &RewriteState, api: &str) -> bool {
+    if super::regression_scope::is_skipped(state, api) {
+        return false;
+    }
+    let route = super::api_selector::public_api(api);
+    let mut found = false;
+    for item in &state.api_inventory {
+        if matches!(
+            item.status,
+            RewriteApiStatus::Complete
+                | RewriteApiStatus::RevalidationPending
+                | RewriteApiStatus::Skipped
+        ) {
+            continue;
+        }
+        if super::api_selector::public_api(&item.api) != route {
+            return false;
+        }
+        found = true;
+    }
+    found
+}
+
+fn eligible_failure(slice: &RewriteSliceState, engine: &str, final_route: bool) -> bool {
     slice.phase == RewritePhase::ImplementationRequired
         && !slice.engine_retry_running
         && slice.active_issue.as_ref().is_some_and(|issue| {
@@ -15,7 +51,11 @@ fn eligible(slice: &RewriteSliceState, engine: &str) -> bool {
                     && attempt.engine_fingerprint.as_deref() != Some(engine)
                     && (issue.kind == RewriteIssueKind::TargetRuntime
                         || issue.kind == RewriteIssueKind::Dependency
-                            && super::replay_admission::dependency_only(attempt))
+                            && super::replay_admission::dependency_only(attempt)
+                        || final_route
+                            && issue.kind != RewriteIssueKind::TargetQuality
+                            && attempt.engine_fingerprint.is_some()
+                            && attempt.counts.selected > 0)
             })
         })
         && !slice.engine_retry_fingerprints.contains(engine)
@@ -28,13 +68,15 @@ fn eligible(slice: &RewriteSliceState, engine: &str) -> bool {
 pub(super) fn any_pending(state: &RewriteState) -> bool {
     std::iter::once(&state.active_slice)
         .chain(state.parked_slices.values())
-        .any(|slice| pending(slice) && !super::regression_scope::is_skipped(state, &slice.api))
+        .any(|slice| {
+            pending(state, slice) && !super::regression_scope::is_skipped(state, &slice.api)
+        })
 }
 
 /// Called under coordinator lock after review/resource admission and before Replay.
 /// Saving the mutated state precedes starting a new Replay attempt.
-pub(super) fn consume(slice: &mut RewriteSliceState) -> bool {
-    if !pending(slice) {
+fn consume(slice: &mut RewriteSliceState, final_route: bool) -> bool {
+    if !eligible_failure(slice, crate::build_info::ENGINE_FINGERPRINT, final_route) {
         return false;
     }
     slice.engine_retry_running = true;
@@ -48,11 +90,12 @@ pub(super) fn reserve(
     prepared: Option<&mut super::api_batch::PreparedRoute>,
 ) -> bool {
     let Some(prepared) = prepared else {
-        return consume(&mut state.active_slice);
+        let final_route = last_unfinished_route(state, &state.api);
+        return consume(&mut state.active_slice, final_route);
     };
     let mut changed = false;
     for (api, slice) in &mut prepared.slices {
-        if consume(slice) {
+        if consume(slice, last_unfinished_route(state, api)) {
             let persisted = if state.api == *api {
                 &mut state.active_slice
             } else {
