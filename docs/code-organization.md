@@ -427,6 +427,10 @@ is unclear.
   target-relative and Git tree paths. Source diff expands over the target plus
   configured same-repository managed directories and rejects tracked candidate
   changes outside that delivery scope.
+  Its `cache` child reuses successful Git identity/history reads and PR-base
+  resolution only within a status/inventory query, keyed by directory and exact
+  arguments. Other Git commands invalidate those reads; later queries inspect
+  Git again.
   `rewrite/review` owns the complete worker/integrator review
   pipeline, spawn evidence, handoff admission, and quality rework routing. Its `scan`
   child owns Rust syntax findings and complete-file line limits; `evidence`
