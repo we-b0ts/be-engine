@@ -60,6 +60,7 @@ struct RecorderOptions {
 
 #[derive(Clone)]
 pub struct Recorder {
+    pub(crate) redis_rpc: Arc<std::sync::Mutex<redis::rpc::CaptureState>>,
     artifact_owner: Option<ArtifactOwner>,
     traffic_jsonl: TrafficJsonlMode,
     writer: writer::RecorderWriter,
@@ -188,6 +189,7 @@ impl Recorder {
             .map(|(api, _)| api.clone())
             .collect();
         let recorder = Self {
+            redis_rpc: Default::default(),
             artifact_owner,
             traffic_jsonl,
             writer,
@@ -305,6 +307,7 @@ pub(super) fn should_write_traffic_event(mode: TrafficJsonlMode, event: &Recorde
             | RecorderEvent::ReadonlyRejection(_)
             | RecorderEvent::ProxyError(_) => true,
             RecorderEvent::RedisExchange(_)
+            | RecorderEvent::RedisPubSubPush(_)
             | RecorderEvent::MemcachedExchange(_)
             | RecorderEvent::KafkaProduce(_)
             | RecorderEvent::KafkaFetch(_)

@@ -81,6 +81,8 @@ pub(crate) struct CommandSnapshotOverlayReport {
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub(in crate::replay) struct CommandProtocolReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) pubsub: Option<PubSubReport>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) time_shifts: Vec<crate::replay::redis::time_shift::TimeShiftObservation>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -101,6 +103,15 @@ pub(in crate::replay) struct CommandProtocolReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) snapshot_overlays: Vec<CommandSnapshotOverlayReport>,
     pub(in crate::replay) warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(in crate::replay) struct PubSubReport {
+    pub recorded_pushes: usize,
+    pub delivered_pushes: usize,
+    pub recorded_rpc_callbacks: usize,
+    pub delivered_rpc_callbacks: usize,
+    pub failed_pushes: usize,
 }
 
 impl CommandProtocolReport {

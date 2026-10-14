@@ -757,3 +757,6 @@ fn enable_abortive_close(stream: &TcpStream) {
     };
     assert_eq!(result, 0, "failed to enable abortive close");
 }
+
+#[path = "tests/pubsub_rpc.rs"]
+mod pubsub_rpc;

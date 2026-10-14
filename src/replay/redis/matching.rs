@@ -8,6 +8,9 @@ use crate::replay::report::command::CommandMatchDiagnostic;
 
 impl RedisReplayState {
     fn arguments_match(&self, exchange: &ReplayExchange, args: &[Vec<u8>]) -> bool {
+        if exchange.rpc_push.is_some() {
+            return self.pubsub.matches(exchange, args).unwrap_or(false);
+        }
         let normalized =
             if exchange.source == ReplaySource::Case && exchange.shared_rule_id.is_none() {
                 match self
@@ -62,13 +65,17 @@ impl RedisReplayState {
     }
 
     fn arguments_match_plain(&self, exchange: &ReplayExchange, args: &[Vec<u8>]) -> bool {
-        self.publish_rules
-            .arguments_match(exchange, args)
-            .unwrap_or_else(|| {
-                self.lock_tokens
-                    .arguments_match(exchange, &self.exchanges, args)
-                    .unwrap_or_else(|| value::arguments_match(exchange, args, &self.value_rules))
-            })
+        self.pubsub.matches(exchange, args).unwrap_or_else(|| {
+            self.publish_rules
+                .arguments_match(exchange, args)
+                .unwrap_or_else(|| {
+                    self.lock_tokens
+                        .arguments_match(exchange, &self.exchanges, args)
+                        .unwrap_or_else(|| {
+                            value::arguments_match(exchange, args, &self.value_rules)
+                        })
+                })
+        })
     }
 
     pub(in crate::replay) fn configure_lock_tokens(&mut self, rules: &[lock::LockTokenRule]) {
@@ -278,6 +285,7 @@ impl RedisReplayState {
         if let Some(decision) = request_decision {
             self.request_contracts.commit(decision);
         }
+        let rpc_response = self.pubsub.claim(&self.exchanges[index], args);
         let requires_binding =
             self.connection_scopes
                 .claim(&self.exchanges[index], active_case_id, connection);
@@ -295,6 +303,9 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Ok(MatchedRedisExchange {
+            rpc_push: exchange.rpc_push,
+            rpc_response,
+            publish_duration_ms: exchange.record.duration_ms,
             response_time_shift: exchange.response_time_shift.clone(),
             rule_ids,
             index,
@@ -367,6 +378,9 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Some(MatchedRedisExchange {
+            rpc_push: None,
+            rpc_response: None,
+            publish_duration_ms: exchange.record.duration_ms,
             response_time_shift: None,
             rule_ids: Vec::new(),
             index,

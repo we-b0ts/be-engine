@@ -45,6 +45,7 @@ pub enum RecorderEvent {
     UdpDatagram(UdpDatagramEvent),
     RedisConnection(RedisConnectionEvent),
     RedisExchange(RedisExchangeEvent),
+    RedisPubSubPush(RedisPubSubPushEvent),
     MemcachedConnection(MemcachedConnectionEvent),
     MemcachedExchange(MemcachedExchangeEvent),
     KafkaConnection(KafkaConnectionEvent),
@@ -72,6 +73,7 @@ impl RecorderEvent {
             Self::UdpDatagram(_) => "udp_datagram",
             Self::RedisConnection(_) => "redis_connection",
             Self::RedisExchange(_) => "redis_exchange",
+            Self::RedisPubSubPush(_) => "redis_pub_sub_push",
             Self::MemcachedConnection(_) => "memcached_connection",
             Self::MemcachedExchange(_) => "memcached_exchange",
             Self::KafkaConnection(_) => "kafka_connection",
@@ -199,6 +201,29 @@ pub struct RedisExchangeEvent {
     pub duration_ms: u128,
     pub replay_safe: bool,
     pub parse_warnings: Vec<String>,
+}
+
+/// An asynchronous reply linked to the original PUBLISH, across TCP connections.
+#[derive(Debug, Clone, Serialize)]
+pub struct RedisPubSubPushEvent {
+    pub timestamp: DateTime<Utc>,
+    pub target_host: String,
+    pub target_port: u16,
+    pub database: i64,
+    pub username: Option<String>,
+    pub connection_id: Uuid,
+    pub subscription_sequence: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rpc_request: Option<RedisRpcRequestRef>,
+    pub response: BodyCapture,
+    pub duration_ms: u64,
+    pub replay_safe: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RedisRpcRequestRef {
+    pub connection_id: Uuid,
+    pub sequence: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]

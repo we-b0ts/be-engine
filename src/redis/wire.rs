@@ -26,7 +26,7 @@ pub(crate) struct RedisCommand {
     pub(crate) args: Vec<Vec<u8>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum RedisSubscriptionKind {
     Channel,
     Pattern,
@@ -37,6 +37,8 @@ pub(crate) enum RedisSubscriptionKind {
 pub(crate) struct RedisPubSubPush {
     pub(crate) subscription_kind: RedisSubscriptionKind,
     pub(crate) subject: Vec<u8>,
+    pub(crate) channel: Vec<u8>,
+    pub(crate) payload: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -282,6 +284,12 @@ pub(crate) fn parse_pubsub_push(raw: &[u8]) -> Result<Option<RedisPubSubPush>> {
     Ok(Some(RedisPubSubPush {
         subscription_kind,
         subject: subject.to_vec(),
+        channel: resp2_bytes_ref(&values[channel_index])
+            .expect("validated channel")
+            .to_vec(),
+        payload: resp2_bytes_ref(values.last().expect("validated length"))
+            .expect("validated payload")
+            .to_vec(),
     }))
 }
 
@@ -308,6 +316,16 @@ fn resp2_kind(frame: &Resp2Frame) -> RedisFrameKind {
         Resp2Frame::Array(_) => RedisFrameKind::Array,
         Resp2Frame::Null => RedisFrameKind::Null,
     }
+}
+
+pub(crate) fn encode_array(parts: &[&[u8]]) -> Vec<u8> {
+    let mut raw = format!("*{}\r\n", parts.len()).into_bytes();
+    for part in parts {
+        raw.extend_from_slice(format!("${}\r\n", part.len()).as_bytes());
+        raw.extend_from_slice(part);
+        raw.extend_from_slice(b"\r\n");
+    }
+    raw
 }
 
 #[cfg(test)]

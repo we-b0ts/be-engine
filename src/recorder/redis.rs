@@ -24,7 +24,10 @@ use crate::redis::{
     read_frame, redis_command, validate_subscription_confirmation,
 };
 
+mod events;
 mod pubsub;
+pub(crate) mod rpc;
+use events::{record_connection, record_exchange};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectionContext {
@@ -43,8 +46,8 @@ struct RedisSession {
     subscriptions: pubsub::Subscriptions,
 }
 
-#[derive(Debug)]
 struct PendingRedisExchange {
+    targets: crate::active_case::DependencyTargets,
     sequence: u64,
     command: RedisCommand,
     recorded_args: Vec<Vec<u8>>,
@@ -66,7 +69,7 @@ struct SequencedRedisOutput {
 
 enum RedisOutput {
     Sequenced(Box<SequencedRedisOutput>),
-    PubSubPush { bytes: Bytes },
+    PubSubPush { capture: Box<pubsub::CapturedPush> },
 }
 
 pub(crate) async fn handle_connected(
@@ -245,7 +248,29 @@ pub(crate) async fn handle_connected(
             let cache_snapshot_key = cache_snapshot_rule.as_ref().map(|rule| {
                 redis_snapshot_key(rule, &current_session, &command.name, &command.args)
             });
+            let targets = c2s_state.capture_dependency_targets();
+            if let Err(error) = rpc::observe(
+                &c2s_state,
+                &c2s_context,
+                &targets,
+                &command,
+                connection_id,
+                sequence,
+            ) {
+                c2s_state.record_event(RecorderEvent::ProxyError(
+                    crate::recorder::ProxyErrorEvent {
+                        id: Uuid::new_v4(),
+                        connection_id: Some(connection_id),
+                        timestamp: Utc::now(),
+                        protocol: "redis".into(),
+                        client_addr: c2s_context.client_addr.clone(),
+                        target: Some(c2s_context.target_addr.clone()),
+                        error: error.to_string(),
+                    },
+                ));
+            }
             let mut pending_exchange = PendingRedisExchange {
+                targets,
                 sequence,
                 command,
                 recorded_args,
@@ -303,6 +328,7 @@ pub(crate) async fn handle_connected(
     });
 
     let s2c_state = state.clone();
+    let s2c_context = context.clone();
     let s2c_pending = pending.clone();
     let s2c_session = session.clone();
     let s2c_capture_health = capture_health.clone();
@@ -357,9 +383,25 @@ pub(crate) async fn handle_connected(
                     if subscriptions_active
                         && s2c_session.lock().await.subscriptions.accepts(&push) =>
                 {
+                    let session = s2c_session.lock().await.clone();
+                    let (subscription_sequence, elapsed_ms) =
+                        session
+                            .subscriptions
+                            .anchor(&push)
+                            .context("missing subscription anchor")?;
+                    let capture = pubsub::capture(
+                        &s2c_state,
+                        &s2c_context,
+                        &session,
+                        connection_id,
+                        &push,
+                        frame.raw.clone(),
+                        subscription_sequence,
+                        elapsed_ms,
+                    )?;
                     s2c_output
                         .send(RedisOutput::PubSubPush {
-                            bytes: frame.raw.clone(),
+                            capture: Box::new(capture),
                         })
                         .map_err(|_| anyhow!("Redis client response writer closed"))?;
                     bytes += frame.raw.len() as u64;
@@ -435,7 +477,13 @@ pub(crate) async fn handle_connected(
                     .await?;
             }
             if !response_is_error {
-                apply_successful_setup(&s2c_session, &exchange.command, &frame.raw).await;
+                apply_successful_setup(
+                    &s2c_session,
+                    &exchange.command,
+                    &frame.raw,
+                    response_sequence,
+                )
+                .await;
             }
             s2c_output
                 .send(RedisOutput::Sequenced(Box::new(SequencedRedisOutput {
@@ -554,7 +602,7 @@ async fn run_ordered_writer(
     let mut next_sequence = 1_u64;
     let mut buffered =
         BTreeMap::<u64, (Bytes, Option<(PendingRedisExchange, RedisFrameKind)>)>::new();
-    let mut deferred_pushes = VecDeque::<Bytes>::new();
+    let mut deferred_pushes = VecDeque::<Box<pubsub::CapturedPush>>::new();
     let mut bytes = 0_u64;
     let mut client_open = true;
     while let Some(output) = output_rx.recv().await {
@@ -621,29 +669,35 @@ async fn run_ordered_writer(
                 }
                 if buffered.is_empty() {
                     while let Some(push) = deferred_pushes.pop_front() {
-                        pubsub::write_push(
+                        if pubsub::write_push(
                             &client_write,
                             &termination,
                             &mut client_open,
                             &mut bytes,
-                            &push,
+                            &push.bytes,
                         )
-                        .await?;
+                        .await?
+                        {
+                            push.record(&state).await?;
+                        }
                     }
                 }
             }
-            RedisOutput::PubSubPush { bytes: payload } => {
+            RedisOutput::PubSubPush { capture } => {
                 if buffered.is_empty() {
-                    pubsub::write_push(
+                    if pubsub::write_push(
                         &client_write,
                         &termination,
                         &mut client_open,
                         &mut bytes,
-                        &payload,
+                        &capture.bytes,
                     )
-                    .await?;
+                    .await?
+                    {
+                        capture.record(&state).await?;
+                    }
                 } else {
-                    deferred_pushes.push_back(payload);
+                    deferred_pushes.push_back(capture);
                 }
             }
         }
@@ -699,94 +753,6 @@ fn is_abortive_close_between_frames<R>(reader: &BufferedReader<R>, error: &anyho
         })
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn record_exchange(
-    state: &AppState,
-    connection_id: Uuid,
-    context: &ConnectionContext,
-    mut pending: PendingRedisExchange,
-    response_kind: RedisFrameKind,
-    response: &[u8],
-    outcome: DependencyExchangeOutcome,
-    max_frame_bytes: usize,
-) -> Result<()> {
-    let subscription_replay_safe = if is_pubsub_command(&pending.command.name)
-        && pending.session.resp_version != 2
-    {
-        pending
-            .warnings
-            .push("Redis Pub/Sub replay requires RESP2".to_string());
-        false
-    } else if is_pubsub_command(&pending.command.name) {
-        match response_kind {
-            RedisFrameKind::Error => true,
-            RedisFrameKind::Array => {
-                if let Err(error) = validate_subscription_confirmation(&pending.command, response) {
-                    pending.warnings.push(format!(
-                        "Redis {} confirmation is unsafe for replay: {error}",
-                        pending.command.name
-                    ));
-                    false
-                } else {
-                    true
-                }
-            }
-            _ => {
-                pending.warnings.push(format!(
-                    "Redis {} did not receive a supported subscription confirmation",
-                    pending.command.name
-                ));
-                false
-            }
-        }
-    } else {
-        true
-    };
-    let args = pending
-        .recorded_args
-        .iter()
-        .map(|value| capture_body(value, max_frame_bytes))
-        .collect::<Vec<_>>();
-    let response = capture_body(response, max_frame_bytes);
-    let terminal_quit = is_terminal_quit(&pending.command);
-    let replay_safe = pending.replay_safe
-        && subscription_replay_safe
-        && !response.truncated
-        && args.iter().all(|argument| !argument.truncated)
-        && (response_kind != RedisFrameKind::Other
-            || outcome.is_client_terminated()
-            || terminal_quit);
-    record_event(
-        state,
-        RecorderEvent::RedisExchange(RedisExchangeEvent {
-            id: Uuid::new_v4(),
-            connection_id,
-            sequence: pending.sequence,
-            timestamp: Utc::now(),
-            client_addr: context.client_addr.clone(),
-            target_host: context.target_host.clone(),
-            target_port: context.target_port,
-            target_addr: context.target_addr.clone(),
-            upstream_addr: context.upstream_addr.clone(),
-            resp_version: pending.session.resp_version,
-            database: pending.session.database,
-            username: pending.session.username,
-            command: pending.command.name,
-            args,
-            response_kind: response_kind.as_str().to_string(),
-            response,
-            cache_snapshot_rule: pending.cache_snapshot_rule,
-            cache_snapshot_hit: pending.cache_snapshot_hit,
-            session_setup: pending.session_setup,
-            outcome,
-            duration_ms: pending.started.elapsed().as_millis(),
-            replay_safe,
-            parse_warnings: pending.warnings,
-        }),
-    )
-    .await
-}
-
 fn redis_snapshot_key(
     rule: &str,
     session: &RedisSession,
@@ -816,43 +782,6 @@ fn push_snapshot_component(target: &mut Vec<u8>, value: &[u8]) {
 
 fn is_terminal_quit(command: &RedisCommand) -> bool {
     command.name == "QUIT"
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn record_connection(
-    state: &AppState,
-    id: Uuid,
-    context: &ConnectionContext,
-    phase: &str,
-    session: &RedisSession,
-    duration_ms: Option<u128>,
-    client_to_server_bytes: u64,
-    server_to_client_bytes: u64,
-    replay_safe: bool,
-    error: Option<String>,
-) -> Result<()> {
-    record_event(
-        state,
-        RecorderEvent::RedisConnection(RedisConnectionEvent {
-            id,
-            timestamp: Utc::now(),
-            phase: phase.to_string(),
-            client_addr: context.client_addr.clone(),
-            target_host: context.target_host.clone(),
-            target_port: context.target_port,
-            target_addr: context.target_addr.clone(),
-            upstream_addr: context.upstream_addr.clone(),
-            resp_version: session.resp_version,
-            database: session.database,
-            username: session.username.clone(),
-            duration_ms,
-            client_to_server_bytes,
-            server_to_client_bytes,
-            replay_safe,
-            error,
-        }),
-    )
-    .await
 }
 
 fn sanitize_and_classify(command: &RedisCommand) -> (Vec<Vec<u8>>, bool, bool, Vec<String>) {
@@ -927,6 +856,7 @@ async fn apply_successful_setup(
     session: &Arc<Mutex<RedisSession>>,
     command: &RedisCommand,
     response: &[u8],
+    sequence: u64,
 ) {
     let mut session = session.lock().await;
     match command.name.as_str() {
@@ -972,6 +902,7 @@ async fn apply_successful_setup(
         "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" | "UNSUBSCRIBE" | "PUNSUBSCRIBE"
         | "SUNSUBSCRIBE" => {
             session.subscriptions.record_confirmation(command, response);
+            session.subscriptions.set_anchor(command, sequence);
         }
         _ => {}
     }

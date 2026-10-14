@@ -7,6 +7,7 @@ pub(super) enum DependencyRecord {
     TcpGatewayConnection(Box<http::RecordedTcpGatewayConnection>),
     RedisConnection(Box<redis::RecordedConnection>),
     RedisExchange(Box<redis::RecordedExchange>),
+    RedisPubSubPush(Box<redis::pubsub::RecordedPush>),
     MemcachedConnection(Box<memcached::RecordedConnection>),
     MemcachedExchange(Box<memcached::RecordedExchange>),
     KafkaConnection(Box<kafka::RecordedKafkaConnection>),
@@ -118,6 +119,9 @@ pub(super) fn register_dependency_records(
                     connection_identities.insert(connection.id, identity);
                 }
             }
+            DependencyRecord::RedisPubSubPush(push) => {
+                redis.pubsub.register((**push).clone(), source, case_id)?;
+            }
             DependencyRecord::RedisConnection(connection) => {
                 redis.register_connection((**connection).clone(), targets)?;
             }
@@ -199,6 +203,7 @@ pub(super) fn register_dependency_records(
                 continue;
             }
             DependencyRecord::MysqlConnection(_)
+            | DependencyRecord::RedisPubSubPush(_)
             | DependencyRecord::RedisConnection(_)
             | DependencyRecord::MemcachedConnection(_)
             | DependencyRecord::KafkaConnection(_)
@@ -241,6 +246,7 @@ pub(super) fn register_dependency_records(
             timing,
         });
     }
+    redis.pubsub.validate_links(source, case_id)?;
     Ok(())
 }
 

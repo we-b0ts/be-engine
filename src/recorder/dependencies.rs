@@ -95,6 +95,7 @@ impl Recorder {
                 event_type,
                 "redis_connection"
                     | "redis_exchange"
+                    | "redis_pub_sub_push"
                     | "memcached_connection"
                     | "memcached_exchange"
                     | "kafka_connection"
