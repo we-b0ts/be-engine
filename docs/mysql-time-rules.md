@@ -88,7 +88,10 @@ case, endpoint and username selectors remain supported, but the planner generate
 only database/SQL scope. Source-code proof stays in the plan report and
 coordinator plan record, rather than the runtime configuration.
 
-Templates are limited to one statement, 64 KiB and 4096 tokens. Executable comments
+Templates are limited to one statement, 64 KiB and 8192 tokens. Recorded and
+target SQL statements may contain up to 256 KiB, including scalar/JSON literals,
+and retain the same one-statement and 8192-token limits. Bound parameters retain
+their existing validation; this byte limit applies to SQL text. Executable comments
 and optimizer hints remain unsupported. Quoted `?` does not create a slot;
 `*` is a SQL token, not a glob. Functions cannot replace scalar slots. Legacy
 `params` rules retain their behavior and cannot be combined with `sql_values`

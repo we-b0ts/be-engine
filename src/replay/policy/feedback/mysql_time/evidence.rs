@@ -4,7 +4,7 @@ use crate::replay::policy::config::MysqlTimeValueRule;
 use crate::replay::policy::matcher::mysql_values::{
     selected_times, template_values, validate_selected_time,
 };
-use crate::replay::policy::sql_template::{SqlValueTemplate, bounded_tokens};
+use crate::replay::policy::sql_template::{SqlValueTemplate, bounded_statement_tokens};
 use serde_json::Value;
 
 fn complete_response(event: &Value) -> bool {
@@ -188,7 +188,8 @@ pub(super) fn validate(
             // A template covers several physical tables, never a source/target
             // routing difference within the same exchange.
             let binding = |event: &Value| {
-                bounded_tokens(event["sql"].as_str()?).and_then(|tokens| template.bind(&tokens))
+                bounded_statement_tokens(event["sql"].as_str()?)
+                    .and_then(|tokens| template.bind(&tokens))
             };
             if binding(&event) != binding(actual) {
                 continue;

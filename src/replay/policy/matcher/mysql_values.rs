@@ -6,7 +6,9 @@ use super::*;
 use crate::mysql::sql::Token;
 use crate::replay::mysql::sql_match::materialize;
 use crate::replay::policy::config::{MysqlTimeValueRule, TimeRule};
-use crate::replay::policy::sql_template::{SqlValueTemplate, bounded_tokens, extract};
+use crate::replay::policy::sql_template::{
+    SqlValueTemplate, bounded_statement_tokens, bounded_tokens, extract,
+};
 use crate::replay::policy::value::validate_relative_time;
 
 fn materialized(
@@ -14,7 +16,7 @@ fn materialized(
     params: Option<&[RecordedMysqlValue]>,
 ) -> Result<Vec<Token>, String> {
     let sql = sql.ok_or("MySQL SQL is absent")?;
-    bounded_tokens(sql).ok_or("invalid or oversized MySQL SQL")?;
+    bounded_statement_tokens(sql).ok_or("invalid or oversized MySQL SQL")?;
     materialize(sql, params.unwrap_or_default())
         .ok_or_else(|| "MySQL SQL parameters are incomplete".into())
 }
@@ -189,7 +191,7 @@ impl ReplayPolicyRuntime {
         Some((|| {
             let recorded = materialized(context.recorded_sql, context.recorded)?;
             let actual = if metadata {
-                bounded_tokens(context.sql.ok_or("MySQL SQL is absent")?)
+                bounded_statement_tokens(context.sql.ok_or("MySQL SQL is absent")?)
                     .ok_or("invalid or oversized MySQL SQL")?
             } else {
                 materialized(context.sql, context.actual)?

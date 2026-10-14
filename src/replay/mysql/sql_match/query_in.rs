@@ -1,5 +1,6 @@
 //! Bounded full-AST matching for unordered IN lists in supported complex queries.
 //! The complete query AST stays exact; only scalar/flat-tuple list order changes.
+use super::MAX_SQL_TOKENS;
 use crate::mysql::sql::{Token, render};
 use sqlparser::{
     ast::{
@@ -23,7 +24,7 @@ pub(super) struct Key {
 
 impl Template {
     pub(super) fn parse(tokens: &[Token]) -> Option<Self> {
-        if tokens.len() > 4096 || !bounded_parentheses(tokens) {
+        if tokens.len() > MAX_SQL_TOKENS || !bounded_parentheses(tokens) {
             return None;
         }
         let parser_tokens = tokens

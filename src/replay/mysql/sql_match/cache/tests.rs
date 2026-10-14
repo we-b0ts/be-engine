@@ -5,6 +5,7 @@ use serde_json::json;
 mod join_tests;
 mod or_tests;
 mod query_in_tests;
+mod token_limit_tests;
 mod truth_tests;
 mod tuple_tests;
 
