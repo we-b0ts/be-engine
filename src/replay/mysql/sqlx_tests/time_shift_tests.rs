@@ -18,7 +18,17 @@ async fn mysql_time_shift_delivers_relative_expiry_through_tls_text_and_prepared
         let mut projection_rule = rule.clone();
         projection_rule["id"] = json!("lease-expiry-projection");
         projection_rule["mysql"]["sql"] = json!("SELECT expires_at,owner FROM leases WHERE id=?");
-        let policy = serde_yaml::to_string(&json!({"version":3,"expected_response":"assertions_only","dependency_rules":[rule,projection_rule]})).unwrap();
+        let write_rule: serde_yaml::Value = serde_yaml::from_str(r#"
+id: unrelated-write-time
+protocol: mysql
+mysql:
+  database: appdb
+  sql: UPDATE leases SET updated_at=? WHERE id=?
+  sql_values: {0: {time: preserve_relative}}
+"#).unwrap();
+        let mut policy = serde_yaml::to_value(json!({"version":3,"expected_response":"assertions_only","dependency_rules":[rule,projection_rule]})).unwrap();
+        policy["dependency_rules"].as_sequence_mut().unwrap().push(write_rule);
+        let policy = serde_yaml::to_string(&policy).unwrap();
         let (temp,addr,runtime,task) = fixture_with_policy(&records,Some(&policy)).await;
         let before = chrono::Utc::now().naive_utc();
         let mut client = connect(addr,&temp.path().join("case-id/.replay/ca.pem")).await;
@@ -39,6 +49,9 @@ async fn mysql_time_shift_delivers_relative_expiry_through_tls_text_and_prepared
         let report = state.replay_policy.as_ref().unwrap().report();
         let usage = report.dependency_rules.iter().find(|rule| rule.id == "lease-expiry").unwrap();
         assert_eq!(usage.matches,2);
+        let unused = report.dependency_rules.iter().find(|rule| rule.id == "unrelated-write-time").unwrap();
+        assert_eq!(unused.matches,0);
+        assert_eq!(unused.time_validations,0);
         assert!(state.mysql.exchanges.iter().all(|exchange| exchange.record.response.rows[0][0].value == Some(json!("2020-01-01 00:05:00.123456"))));
         drop(state);
         client.close().await.unwrap();

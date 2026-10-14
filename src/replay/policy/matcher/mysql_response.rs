@@ -23,7 +23,11 @@ impl ReplayPolicyRuntime {
         let mut fields = BTreeMap::new();
         let mut ids = Vec::new();
         for rule in &self.loaded.document.dependency_rules {
-            if rule.protocol != DependencyProtocol::Mysql
+            if rule.protocol != DependencyProtocol::Mysql {
+                continue;
+            }
+            let mysql = rule.mysql.as_ref().expect("validated MySQL rule");
+            if mysql.response_time_shift.is_empty()
                 || !rule_matches_case(rule, case)
                 || !self.mysql_selectors.matches(
                     rule,
@@ -32,10 +36,6 @@ impl ReplayPolicyRuntime {
                     record.sql.as_deref(),
                 )
             {
-                continue;
-            }
-            let mysql = rule.mysql.as_ref().expect("validated MySQL rule");
-            if mysql.response_time_shift.is_empty() {
                 continue;
             }
             let count = fields.len();
