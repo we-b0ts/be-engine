@@ -177,6 +177,45 @@ the inbound request. For manual low-level Replay, call
 immediately before sending that request. Beginning a case alone does not supply
 a time anchor, and missing anchors fail closed.
 
+## HTTP JSON request timestamps
+
+```yaml
+- id: query-window
+  protocol: http
+  case: {method: POST, path: /windows/*}
+  target: {host: metrics.internal, port: 443}
+  source_evidence: 'WindowClient:query sets end to current seconds and start to end minus its lookback'
+  http:
+    method: POST
+    path: /query
+    json:
+      time:
+        /start: {time: preserve_relative, format: unix_seconds}
+        /end: {time: preserve_relative, format: unix_seconds}
+```
+
+Each selected field preserves its offset from its own **dependency request**
+start, with the fixed inclusive 5s tolerance. The recorded anchor is
+`request_started_at`, or recorded completion minus duration for older captures;
+Replay captures the target anchor when the outbound HTTP request starts. Missing
+clocks fail closed. No configured clock, business-specific offset or outgoing
+request rewrite is involved. All selected fields must share the same shift
+within 1 microsecond, preserving the recorded start/end window.
+
+Supported formats are `unix_seconds`, `unix_milliseconds` and `rfc3339`.
+JSON numeric categories remain checked. Select 1..32 exact non-root JSON
+pointers; wildcard and overlapping pointers are rejected. Bodies must be complete
+unique-member JSON of at most 1 MiB. Other JSON members, array ordering, path,
+query and identity headers remain exact, including authentication. The rule
+requires an explicit inbound case method/path and exact dependency host/port.
+Overlapping HTTP normalizations or dynamic captures at that endpoint and case
+are rejected. Case ownership and finite response consumption are unchanged.
+
+Discovery exposes `http_json_request_time` failure candidates without body or
+header values. Use the existing `rule plan --dependency-request RULE_JSON`,
+apply, then fresh Replay workflow below. Complete existing HTTP recordings can
+be reused without recording again.
+
 ## HTTP multipart boundary
 
 ```yaml
@@ -207,7 +246,7 @@ Bodies are bounded to 16 MiB, 128 parts and 16 KiB of headers per part.
    locations. JWT candidates also expose the existing `signing_key_discovery`
    projection of startup variable names and mount paths.
 2. Use `backend-rewrite rule plan --evidence-id ID --dynamic-value RULE_JSON`
-   for the integer rule, or `--dependency-request RULE_JSON` for the other three.
+   for the integer rule, or `--dependency-request RULE_JSON` for request contracts.
    Supply `--source-evidence 'file:function explains generation and semantics'`.
    The coordinator supplies the active inbound API scope. Plan one family at a
    time; no response body codec is needed.

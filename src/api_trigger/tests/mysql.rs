@@ -233,13 +233,8 @@ fn mysql_requires_exact_identity_endpoint_shape_and_complete_duplicates() {
 }
 
 #[test]
-fn mysql_preserves_explicit_query_cancel_and_same_identity_victims() {
-    for uri in [
-        "/jobs",
-        "/jobs/resp_99/cancel",
-        "/jobs/resp_99",
-        "/items?job=12",
-    ] {
+fn mysql_preserves_same_identity_query_and_cancel_victims() {
+    for uri in ["/jobs/resp_12/cancel", "/jobs/resp_12", "/items?job=12"] {
         let f = Fixture::mysql();
         f.change_request(&f.victim, json!({}), uri);
         assert!(
@@ -253,6 +248,21 @@ fn mysql_preserves_explicit_query_cancel_and_same_identity_victims() {
     let f = Fixture::mysql();
     f.change_request(&f.victim, json!({"id":12}), "/items");
     assert!(f.mysql_plan().is_err());
+}
+
+#[test]
+fn same_route_and_other_resources_allow_proven_foreign_mysql_calls() {
+    for uri in ["/jobs", "/jobs/resp_99", "/jobs/resp_99/cancel"] {
+        let f = Fixture::mysql();
+        f.change_request(&f.victim, json!({}), uri);
+        assert_eq!(load(&f.root, &f.mysql_rules()).unwrap().witnesses.len(), 1);
+        f.mysql_plan().unwrap().apply().unwrap();
+        let overlay = f.mysql_overlay();
+        assert_eq!(
+            overlay["unused_case_exchanges"].as_array().unwrap().len(),
+            1
+        );
+    }
 }
 
 #[test]

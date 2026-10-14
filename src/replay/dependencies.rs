@@ -151,7 +151,8 @@ pub(super) fn register_dependency_records(
 
     // Classification always sees the complete original case/connection sequence.
     let (lines, records): (Vec<_>, Vec<_>) = records.into_iter().unzip();
-    let optional_sessions = mysql::optional_session::classify(&records);
+    let optional_sessions =
+        mysql::optional_session::classify(&records, source, &mut mysql.read_prefixes);
     for (record_index, (line, record)) in lines.into_iter().zip(records).enumerate() {
         if skip.contains(&line) {
             continue;

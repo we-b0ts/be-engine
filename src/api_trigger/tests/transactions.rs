@@ -82,6 +82,41 @@ fn complete_origin_transactions_include_only_explicit_members_and_boundaries() {
 }
 
 #[test]
+fn same_route_transactions_require_a_distinct_captured_resource() {
+    for (uri, foreign) in [("/jobs/99", true), ("/jobs/12", false)] {
+        let f = fixture();
+        f.change_request(&f.victim, json!({}), uri);
+        let plan = plan_api_triggered_mysql(
+            &f.policy,
+            &f.report,
+            &f.root,
+            "job-write",
+            "0123456789abcdef",
+            PROOF,
+            &write_selector(),
+        );
+        if foreign {
+            plan.unwrap().apply().unwrap();
+            let report = f.mysql_overlay();
+            assert_eq!(
+                report["unused_global_exchanges"].as_array().unwrap().len(),
+                5
+            );
+            assert_eq!(report["unused_case_exchanges"].as_array().unwrap().len(), 1);
+        } else {
+            assert!(plan.is_err());
+            assert_eq!(
+                f.mysql_overlay()["unused_case_exchanges"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                6
+            );
+        }
+    }
+}
+
+#[test]
 fn incomplete_transactions_keep_members_required_and_only_direct_write_handoffs_own_commits() {
     for mode in 0..7 {
         let f = fixture();

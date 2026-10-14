@@ -1,4 +1,4 @@
-//! Explicit Redis request locations and multipart transport comparison contracts.
+//! Explicit Redis/HTTP request timestamps, signed values and multipart contracts.
 use crate::replay::redis::key_selector::RedisValueKeySelector;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};

@@ -1,9 +1,11 @@
 //! Dependency request contracts: comparison copies, protected witnesses and case-local state.
 pub(crate) mod config;
 pub(in crate::replay::policy) mod evidence;
+mod http_json;
 mod overlap;
 mod redis;
 mod script;
+mod time;
 pub(in crate::replay::policy) use overlap::validate as validate_overlaps;
 #[cfg(test)]
 mod tests;
@@ -394,7 +396,10 @@ pub(in crate::replay::policy) fn is_request_rule(rule: &ReplayDependencyRule) ->
     matches!(
         rule.redis,
         Some(super::redis_value::RedisSelector::Requests(_))
-    ) || rule.http.as_ref().is_some_and(|h| h.multipart.is_some())
+    ) || rule
+        .http
+        .as_ref()
+        .is_some_and(|h| h.multipart.is_some() || !h.json.time.is_empty())
 }
 pub(in crate::replay::policy) fn validate(rule: &ReplayDependencyRule) -> Result<()> {
     if !is_request_rule(rule) {
@@ -417,10 +422,14 @@ pub(in crate::replay::policy) fn validate(rule: &ReplayDependencyRule) -> Result
         redis.validate()?;
     }
     if let Some(http) = &rule.http {
-        ensure!(
-            http.json.is_empty() && http.query.is_empty() && http.headers.is_empty(),
-            "multipart contracts cannot carry another HTTP normalization"
-        );
+        if http.multipart.is_some() {
+            ensure!(
+                http.json.is_empty() && http.query.is_empty() && http.headers.is_empty(),
+                "multipart contracts cannot carry another HTTP normalization"
+            );
+        } else {
+            http_json::validate(http)?;
+        }
     }
     Ok(())
 }

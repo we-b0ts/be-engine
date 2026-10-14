@@ -1,19 +1,22 @@
-//! Configuration contract for explicit HTTP request JSON array ordering.
+//! Configuration for explicit HTTP request JSON array ordering and timestamps.
 use super::config::{ReplayDependencyRule, ReplayScope};
 use crate::replay::HttpUnorderedSelector;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct HttpJsonRules {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) unordered: Vec<HttpUnorderedField>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) time: BTreeMap<String, super::request_contract::config::TimeField>,
 }
 
 impl HttpJsonRules {
     pub(super) fn is_empty(&self) -> bool {
-        self.unordered.is_empty()
+        self.unordered.is_empty() && self.time.is_empty()
     }
 }
 
@@ -25,7 +28,7 @@ pub(super) struct HttpUnorderedField {
 }
 
 pub(super) fn validate(rule: &ReplayDependencyRule) -> Result<()> {
-    let Some(http) = rule.http.as_ref().filter(|h| !h.json.is_empty()) else {
+    let Some(http) = rule.http.as_ref().filter(|h| !h.json.unordered.is_empty()) else {
         return Ok(());
     };
     ensure!(

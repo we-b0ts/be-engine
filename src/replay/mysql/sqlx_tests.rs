@@ -13,6 +13,7 @@ mod autocommit_tests;
 mod continuation_tests;
 mod distinct_tests;
 mod dynamic_values_tests;
+mod foreign_cleanup_tests;
 mod large_predicate_tests;
 mod large_sql_values_tests;
 mod matching_benchmark;
@@ -62,6 +63,19 @@ async fn fixture_with_policy(
     Arc<ReplayRuntime>,
     tokio::task::JoinHandle<()>,
 ) {
+    fixture_with_global(records, &[], policy).await
+}
+
+async fn fixture_with_global(
+    records: &[Value],
+    global: &[Value],
+    policy: Option<&str>,
+) -> (
+    tempfile::TempDir,
+    SocketAddr,
+    Arc<ReplayRuntime>,
+    tokio::task::JoinHandle<()>,
+) {
     let temp = tempdir().unwrap();
     let case = temp.path().join("case-id");
     std::fs::create_dir(&case).unwrap();
@@ -74,6 +88,17 @@ async fn fixture_with_policy(
             .join("\n"),
     )
     .unwrap();
+    if !global.is_empty() {
+        std::fs::write(
+            temp.path().join("global-dependencies.jsonl"),
+            global
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+    }
     let policy_path = if let Some(policy) = policy {
         std::fs::write(
             case.join("request.json"),

@@ -41,7 +41,7 @@ pub(super) struct RulePlanArgs {
     /// Signed JWT in a JSON HTTP response. Declares algorithm, key source and optional UUID v4 jti.
     #[arg(long = "response-jwt", value_name = "RULE_JSON", value_parser = parse_response_jwt, conflicts_with_all = ["header_dates", "dynamic_value", "dependency_request", "request_kind", "kind", "json_pointer", "unordered_paths", "unordered_joined_string_paths", "docx_timestamps"])]
     pub(super) response_jwts: Vec<traffic_e2e::ResponseJwtRule>,
-    /// Source-proven Redis argument, HTTP multipart, or MySQL result timestamp contract.
+    /// Source-proven Redis argument, HTTP JSON time/multipart, or MySQL result timestamp contract.
     #[arg(long, value_name = "RULE_JSON", value_parser = parse_dependency_request, conflicts_with_all = ["dynamic_value", "header_dates", "request_kind", "kind", "json_pointer", "unordered_paths", "unordered_joined_string_paths", "docx_timestamps"])]
     pub(super) dependency_request: Option<serde_json::Value>,
     /// Source-proven captured identity rule; references are automatic across scoped endpoints.

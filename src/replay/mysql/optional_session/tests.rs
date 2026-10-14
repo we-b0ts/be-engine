@@ -2,6 +2,7 @@ use super::*;
 use serde_json::json;
 
 mod complex_read_tests;
+mod foreign_cleanup_tests;
 mod read_exclusions_tests;
 
 fn exchange(sequence: u64, sql: &str) -> Value {
@@ -18,6 +19,8 @@ fn optional(records: &[Value]) -> BTreeSet<usize> {
             .cloned()
             .map(|v| serde_json::from_value(v).unwrap())
             .collect::<Vec<_>>(),
+        ReplaySource::Global,
+        &mut ReadPrefixes::default(),
     )
     .into_iter()
     .filter_map(|(index, kind)| (kind == OptionalSessionExchange::Rollback).then_some(index))

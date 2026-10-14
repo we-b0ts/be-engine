@@ -33,6 +33,7 @@ pub(in crate::replay) struct ReplayExchange {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::replay) enum OptionalSessionExchange {
     Rollback,
+    Commit,
     Autocommit,
 }
 

@@ -16,7 +16,10 @@ impl ReplayPolicyRuntime {
             .iter()
             .filter(|rule| {
                 rule.protocol == DependencyProtocol::Http
-                    && rule.http.as_ref().is_some_and(|h| !h.json.is_empty())
+                    && rule
+                        .http
+                        .as_ref()
+                        .is_some_and(|h| !h.json.unordered.is_empty())
                     && rule_matches_http(rule, context.target, context.method, context.recorded_uri)
             })
             .collect();

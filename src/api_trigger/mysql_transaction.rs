@@ -337,15 +337,11 @@ fn independent(
     files: &[EvidenceFile],
     owners: &BTreeMap<String, &BackgroundDependencyRuleConfig>,
 ) -> bool {
-    let Some(rule) = owners.get(&origin.rule) else {
+    if !owners.contains_key(&origin.rule) {
         return false;
-    };
-    let source = rule.trigger_source().expect("transaction API origin");
+    }
     let request = &files[event.file].request;
-    let path = request.uri.split('?').next().unwrap_or_default();
     event.case != origin.trigger_case_id
-        && path != source.path
-        && !path.starts_with(&format!("{}/", source.path))
         && !request::references(request, &origin.captured_identity)
         && event.time.is_some_and(|t| t >= origin.captured_at)
 }

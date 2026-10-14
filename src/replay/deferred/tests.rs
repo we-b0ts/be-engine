@@ -165,6 +165,57 @@ async fn complete_mysql_connection_is_classified_at_case_preparation() {
 }
 
 #[tokio::test]
+async fn global_read_prefixes_are_available_to_eager_and_lazy_case_cleanup() {
+    for lazy in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        fixture(temp.path()).await;
+        let read = |seq, before| {
+            json!({"event_type":"mysql_exchange",
+            "connection_id":Uuid::nil(), "query_sequence":seq, "target_addr":"db.test:3306",
+            "database":"app", "username":"user", "command":"COM_QUERY",
+            "sql":"SELECT id FROM users", "server_status_before":before,
+            "response":{"status":"resultset", "server_status":1,
+                "columns":[{"name":"id","family":"integer","sql_type":"INT"}], "rows":[]}})
+        };
+        let globals = [read(100, 0), read(101, 1), read(200, 0), read(201, 1)];
+        std::fs::write(
+            temp.path().join("global-dependencies.jsonl"),
+            globals
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        for (id, seq) in [("a", 102), ("b", 202)] {
+            let mut end = read(seq, 1);
+            end["sql"] = json!("COMMIT");
+            end["response"] = json!({"status":"ok", "server_status":0,
+                "affected_rows":0, "last_insert_id":0});
+            std::fs::write(
+                temp.path().join(id).join("dependencies.jsonl"),
+                end.to_string(),
+            )
+            .unwrap();
+        }
+        let (runtime, _) = load(temp.path(), lazy).await;
+        for id in ["a", "b"] {
+            assert_eq!(
+                begin_case(&request("begin", id), runtime.state.clone()).await["ok"],
+                true
+            );
+            assert_eq!(
+                end_case(&request("end", id), runtime.state.clone()).await["dirty"],
+                false
+            );
+        }
+        let state = runtime.state.lock().await;
+        assert_eq!(state.allowed_unused_commits().len(), 2);
+        assert_eq!(state.unused_exchanges(ReplaySource::Global).len(), 4);
+    }
+}
+
+#[tokio::test]
 async fn read_ahead_warms_bytes_without_installing_exchanges() {
     let temp = tempfile::tempdir().unwrap();
     fixture(temp.path()).await;

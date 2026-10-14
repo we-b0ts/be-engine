@@ -6,6 +6,7 @@ pub(in crate::replay) struct MysqlReplayState {
     case_exchange_index: CaseExchangeIndex,
     pub(in crate::replay) events: ReplayEvents,
     pub(super) sql_cache: sql_match::cache::SqlCache,
+    pub(in crate::replay) read_prefixes: optional_session::ReadPrefixes,
 }
 
 impl MysqlReplayState {
@@ -22,8 +23,10 @@ impl MysqlReplayState {
                 self.exchanges.get(index).is_some_and(|exchange| {
                     let optional = exchange.optional_session.filter(|kind| {
                         exchange.status.is_available()
-                            || *kind == OptionalSessionExchange::Rollback
-                                && exchange.status == ReplayExchangeStatus::Responding
+                            || matches!(
+                                kind,
+                                OptionalSessionExchange::Rollback | OptionalSessionExchange::Commit
+                            ) && exchange.status == ReplayExchangeStatus::Responding
                     });
                     !exchange.status.is_consumed() && optional.is_none()
                 })
@@ -155,11 +158,21 @@ impl ReplayState {
                     && params.is_none_or(<[_]>::is_empty)
             });
         let active_case_id = self.active_case_id.clone();
+        let preferred_end = cleanup_selection::preferred_end(
+            &self.mysql.exchanges,
+            active_case_id.as_deref(),
+            identity,
+            command,
+            baseline_normalized_sql.as_deref(),
+        );
         for source in [ReplaySource::Case, ReplaySource::Global] {
             // Preserve existing candidate precedence before trying compatible
             // projections, without allowing Global to outrank the active Case.
             for (project_columns, semantic) in [(false, false), (true, false), (false, true)] {
-                for index in 0..self.mysql.exchanges.len() {
+                for index in preferred_end
+                    .into_iter()
+                    .chain(0..self.mysql.exchanges.len())
+                {
                     let exchange = &self.mysql.exchanges[index];
                     if exchange.source != source
                         || !exchange.status.is_available()
@@ -584,6 +597,10 @@ impl ReplayState {
         self.allowed_unused_session_exchanges(OptionalSessionExchange::Rollback)
     }
 
+    pub(in crate::replay) fn allowed_unused_commits(&self) -> Vec<RecordedExchangeSummary> {
+        self.allowed_unused_session_exchanges(OptionalSessionExchange::Commit)
+    }
+
     pub(in crate::replay) fn allowed_unused_autocommit(&self) -> Vec<RecordedExchangeSummary> {
         self.allowed_unused_session_exchanges(OptionalSessionExchange::Autocommit)
     }
@@ -612,8 +629,10 @@ impl ReplayState {
                     // Successful cleanup stays optional during delivery.
                     // Failed delivery still reports an error and stays required.
                     exchange.status.is_available()
-                        || *kind == OptionalSessionExchange::Rollback
-                            && exchange.status == ReplayExchangeStatus::Responding
+                        || matches!(
+                            kind,
+                            OptionalSessionExchange::Rollback | OptionalSessionExchange::Commit
+                        ) && exchange.status == ReplayExchangeStatus::Responding
                 });
                 exchange.source == source && !exchange.status.is_consumed() && optional == allowed
             })

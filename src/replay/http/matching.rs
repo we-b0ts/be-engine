@@ -192,6 +192,32 @@ impl ReplayState {
                             }
                         }
                     }
+                    let clocks = crate::replay::assertion::RequestTimes {
+                        source: request_headers::time_reference::source(&exchange.record),
+                        target: Some(request_started_at),
+                    };
+                    if let Some(result) = policy.request_contracts.preview_http_json_time(
+                        case,
+                        target,
+                        method.as_str(),
+                        &exchange.record.uri,
+                        &uri.to_string(),
+                        &source_body,
+                        &exchange.record.request_headers,
+                        body,
+                        headers,
+                        clocks,
+                    ) {
+                        match result {
+                            Ok(decision) => {
+                                mismatch = None;
+                                request_decision = Some(decision);
+                            }
+                            Err(_) => {
+                                mismatch = Some("HTTP JSON time request contract differs".into())
+                            }
+                        }
+                    }
                     if mismatch.is_some() {
                         let mut source_headers = exchange.record.request_headers.clone();
                         let mut actual_headers = headers.clone();
@@ -207,6 +233,8 @@ impl ReplayState {
                                 &exchange.record.request_headers,
                                 body,
                                 headers,
+                                clocks,
+                                &uri.to_string(),
                             );
                         }
                     }

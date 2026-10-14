@@ -30,6 +30,8 @@ fn optional(records: &[Value]) -> BTreeMap<usize, OptionalSessionExchange> {
             .cloned()
             .map(|record| serde_json::from_value(record).unwrap())
             .collect::<Vec<_>>(),
+        ReplaySource::Global,
+        &mut super::super::ReadPrefixes::default(),
     )
 }
 

@@ -171,13 +171,9 @@ pub(super) fn build(
     // Read and decode each candidate once, regardless of how many rules share a source.
     for file in files {
         let victim = case_id(&file.path)?;
-        let path = file.request.uri.split('?').next().unwrap_or_default();
-        let eligible = |state: &&mut RuleOrigins<'_>| {
-            let source = state.rule.trigger_source().expect("API source");
-            !state.origins.is_empty()
-                && path != source.path
-                && !path.starts_with(&format!("{}/", source.path))
-        };
+        // Independence is checked against the captured identity in observe().
+        // Another resource on the trigger's route is still a foreign request.
+        let eligible = |state: &&mut RuleOrigins<'_>| !state.origins.is_empty();
         for record in file.index.mysql.iter().flatten() {
             let candidates: Vec<_> = states
                 .iter_mut()

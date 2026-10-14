@@ -58,15 +58,15 @@ missing or duplicate sequence evidence,
 intervening statements, explicit transaction chaining, and parse warnings prevent
 this compatibility.
 
-Replay also permits the first bare ROLLBACK that closes a proven implicit
+Replay also permits a bare COMMIT or ROLLBACK that closes a proven implicit
 read-only session. Recorder preserves `server_status_before` from the immediately
 preceding completed command, including maintenance such as COM_PING, and records
 the final resultset EOF status in `response.server_status`. The first ordinary
 SELECT must start with confirmed absence of an active transaction. Every
-subsequent exchange through ROLLBACK must have consecutive sequence numbers,
+subsequent exchange through the transaction end must have consecutive sequence numbers,
 the same complete connection/endpoint/database/username identity, consistent
 before/after transaction flags, and complete successful responses. Successful
-PREPARE preserves the read proof because it does not execute SQL. The rollback
+PREPARE preserves the read proof because it does not execute SQL. The transaction end
 must confirm transaction completion without chaining or further results.
 
 The independent SQL classifier parses one bounded query (at most 1 MiB and
@@ -91,10 +91,34 @@ SQL query matching remains independent and strict. Business reads are still
 required dependencies; this classification only governs optional session
 setup/cleanup. Writes, explicit BEGIN, locks, savepoints and excluded calls
 interrupt the read span. Unknown transaction starts, sequence gaps, errors or
-truncated evidence keep the first rollback required. Classification stays within
-one dependency file and caches SQL checks only during that load. It neither
-joins transactions across cases/Global nor proves concurrency/isolation
-equivalence. A SELECT-only case without transaction-state evidence is insufficient.
+truncated evidence prevent a read-only proof. Replay retains compact tails of
+complete read spans from `global-dependencies.jsonl` once at load time. Only a
+case's first exchange on the same recorded connection can continue such a tail;
+its query sequence, endpoint/database/username and transaction flags must agree.
+This handles a Global read session whose close falls inside a later HTTP case.
+Case files never supply prefixes for other cases, so eager/lazy loading order
+does not affect the result. SQL checks are cached only during each file load.
+This does not prove concurrency/isolation equivalence. A SELECT-only case
+without transaction-state evidence is insufficient.
+
+A successful bare ROLLBACK that is the first recorded MySQL exchange on its
+connection in a case is also optional foreign/empty cleanup. It requires a
+complete identity, unique query sequence and known before/after transaction
+state with no pending results or chaining. Other SQL on different connections
+or in later transactions does not prevent this classification. An earlier
+exchange on that connection prevents the leading-cleanup exemption, including
+when a sequence gap makes the earlier transaction unknown. This is a practical
+recorded-scope classification, not coroutine tracing: it assumes the semantic
+recording has not lost that case's preceding SQL. It never uses HTTP response
+contents or a target-specific rule. A leading COMMIT with unknown preceding
+effects remains required; COMMIT needs the complete read-only proof described
+above, or existing source-proven API-origin transaction rules.
+
+An identical optional close does not outrank a required business transaction
+end whose immediately preceding exchange has already been consumed on the
+same recorded connection, identity and transaction state. Before that prefix
+is consumed, a startup cleanup still matches the optional exchange. This
+preserves finite consumption without forcing targets to issue extra closes.
 
 Targets can retain their normal pooled client after read-only requests; do not
 add `pool.execute("ROLLBACK")` merely to consume ORM session-close traffic.
@@ -103,7 +127,8 @@ transaction's rollback. Preserve business transactions on one connection: a
 missing rollback can change persisted data even when the HTTP response agrees.
 
 Optional cleanup stays matchable and appears separately in
-`allowed_unused_mysql_rollback_exchanges` when omitted or while its recorded
+`allowed_unused_mysql_rollback_exchanges` or
+`allowed_unused_mysql_commit_exchanges` when omitted or while its recorded
 response is being delivered. In-flight cleanup is not counted as a completed
 target call. Failed delivery remains a required unused exchange and reports an
 unmatched error; ordinary in-flight business responses remain required.

@@ -40,6 +40,8 @@ pub(in crate::replay) struct ReplayReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) allowed_unused_mysql_rollback_exchanges: Vec<RecordedExchangeSummary>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) allowed_unused_mysql_commit_exchanges: Vec<RecordedExchangeSummary>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) allowed_unused_mysql_autocommit_exchanges: Vec<RecordedExchangeSummary>,
     pub(in crate::replay) matched_http_exchange_count: usize,
     pub(in crate::replay) matched_http_exchanges: Vec<http::MatchedHttpExchangeReport>,
