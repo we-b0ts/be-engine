@@ -217,8 +217,13 @@ fn query_response_and_string_true_do_not_substitute_for_typed_request_body() {
 }
 
 #[test]
-fn preserves_owner_resource_routes_and_victims_referencing_the_same_identity() {
-    for uri in ["/jobs", "/jobs/12/cancel", "/items/12", "/items?job=12"] {
+fn preserves_victims_referencing_the_same_identity() {
+    for uri in [
+        "/jobs/12/cancel",
+        "/items/12",
+        "/items?job=12",
+        "/items?job=%31%32",
+    ] {
         let f = Fixture::new("GET");
         f.change_request(&f.victim, json!({}), uri);
         assert!(
@@ -229,6 +234,22 @@ fn preserves_owner_resource_routes_and_victims_referencing_the_same_identity() {
     let f = Fixture::new("GET");
     f.change_request(&f.victim, json!({"job_id":12}), "/items");
     assert!(load(&f.root, &f.rules("GET")).unwrap().witnesses.is_empty());
+}
+
+#[test]
+fn same_route_and_other_resources_allow_proven_foreign_redis_calls() {
+    for uri in ["/jobs", "/jobs/99", "/jobs/99/cancel"] {
+        for command in ["GET", "DEL", "LRANGE"] {
+            let f = Fixture::new(command);
+            f.change_request(&f.victim, json!({}), uri);
+            let rules = f.rules(command);
+            let index = load(&f.root, &rules).unwrap();
+            assert_eq!(index.witnesses.len(), 1, "{uri}: {command}");
+            assert!(load(&f.root, &rules).unwrap().cache_reused);
+            f.plan(command).apply().unwrap();
+            assert!(!f.plan(command).report().changed);
+        }
+    }
 }
 
 #[test]

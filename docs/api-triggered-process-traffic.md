@@ -67,17 +67,18 @@ reused identities do not authorize classification. Capture does
 not inspect expected responses or make recording values available to target code.
 
 The planner correlates exact Redis key identities after the INSERT. It retains
-the original trigger case and every request on the trigger's resource path
-(including polling/cancellation descendants). Foreign requests explicitly
-referencing the same identity in their URI or body are ambiguous and remain
-case-owned. Nonempty uninspectable victim bodies also remain case-owned.
+the original trigger case. Foreign requests explicitly referencing the same
+captured identity in their URI or body are ambiguous and remain case-owned,
+including polling/cancellation descendants for that resource. Requests on the
+same route or its descendants for a different resource can contain proven
+foreign dependencies. Nonempty uninspectable victim bodies remain case-owned.
 A common ID alone does not prove the caller: source review must establish that
 the selected operation is the detached task's operation and identify any APIs
 that can perform the same operation. Do not use this rule when that ownership
 cannot be established. Never infer ownership just from an unused exchange.
 
-This route protection refers to inbound polling or cancellation requests and
-their own dependencies. A detached task may itself react to cancellation or
+This identity protection refers to inbound polling or cancellation requests and
+their own dependencies, rather than excluding a whole route prefix. A detached task may itself react to cancellation or
 failure and collect its terminal result after the original HTTP response.
 Those background cleanup calls can still be process-owned. Trace indirect
 callers as well as direct ones: a result collector may call an accumulated-content
