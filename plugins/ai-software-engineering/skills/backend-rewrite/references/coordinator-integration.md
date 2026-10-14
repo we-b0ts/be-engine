@@ -135,7 +135,7 @@ The integrator must run `review check --integration` on the final candidate.
 For one handoff, it may use the original work-item selector and accepted `--handoff-id`.
 For one or more API handoffs, write a nonempty JSON array of exact accepted identities,
 for example
-`[{"scope":{"kind":"api","api":"GET /a"},"handoff_id":"id-a"},{"scope":{"kind":"api","api":"GET /b"},"handoff_id":"id-b"}]`,
+`[{"scope":{"kind":"api","api":"/a"},"handoff_id":"id-a"},{"scope":{"kind":"api","api":"/b"},"handoff_id":"id-b"}]`,
 and run `review check --integration --batch-handoffs /absolute/handoffs.json`.
 The engine checks every current dispatch and handoff before issuing one report.
 The report

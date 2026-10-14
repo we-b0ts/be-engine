@@ -19,8 +19,10 @@ issue and evidence. Read only the relevant specialty document when its signal ap
 | --- | --- |
 | Missing recorded dependency, dirty dependency, MySQL or Redis compatibility | [Dependency diagnosis](api-implementer-dependency-diagnosis.md) |
 | Rejected egress, local cache, target runtime or incomplete Replay | [Runtime and Replay diagnosis](api-implementer-runtime-diagnosis.md) |
+| Source-generated time/random values, non-contractual order, a rule hint, or a possible rule capability gap | [Rule diagnosis](api-implementer-rule-diagnosis.md) |
+| Unused dependencies may come from a source-detached API task | [API-triggered asynchronous process traffic](api-implementer-dependency-diagnosis.md#api-triggered-asynchronous-process-traffic) |
 
-An issue may require both specialty documents to distinguish causes. Follow
+An issue may require more than one specialty document to distinguish causes. Follow
 the response, Replay, and dependency gate order below when choosing a repair.
 
 ## Work-Scope Contract
@@ -64,10 +66,9 @@ unpublished candidate's findings need not appear in canonical `review show`.
 For a quality rework alongside an existing behavioral issue, read the assigned
 findings in `context.review.rework.findings` and address them as well. These
 retain the routing evidence if a later integration makes `review show` stale.
-Every changed-code handoff requires a `passed` review after the final
-edit and commit; include its absolute `report_path` and any spawn ownership
-evidence. Follow the delivery steps in
-[api-implementer-review.md](api-implementer-review.md).
+Every changed-code handoff requires a `passed` review after the final edit and
+commit. Follow [api-implementer-review.md](api-implementer-review.md) for the
+complete delivery and evidence contract.
 Do not run integration-candidate checks or report your own handoff.
 
 Retain the initial overview's workflow/recording, scope, issue, binding and
@@ -78,18 +79,11 @@ work with the new identity. A workflow revision change alone does not replace
 this assignment. Opaque detail-query IDs remain valid only for their original
 evidence; use newly returned IDs when evidence changes within the same assignment.
 
-For either scope, prove one cause from source and target code. When it requires
-code changes, make one coherent repair and run focused local tests; return the
-commit, passing review, and local results. For a rule, startup input, or external
-repair without code changes, return proof and exact inputs without a code handoff.
-Both results include the original identity, cause, evidence, shared impact,
-necessary coordinator inputs, and unresolved risks. Do not return or execute an
-acceptance command. End your turn after returning the result.
-
-If resumed after input application while an implementation handoff is still
-required, review the current target even when no code repair remains. Follow
-[api-implementer-review.md](api-implementer-review.md) and return the existing commit and passing
-report; no artificial patch or new commit is needed.
+Prove one cause from source and target code, then follow
+[Return The Proven Cause](#return-the-proven-cause). A post-input resume still
+requiring implementation delivery follows
+[api-implementer-review.md](api-implementer-review.md), even when no code repair
+remains; retain the existing commit rather than creating an artificial patch.
 
 For `work_scope.kind=api`, exact further evidence-query argv are under the
 overview's `queries`. Traffic facts come only from the overview, returned queries
@@ -126,183 +120,81 @@ contents differ, repair the target behavior instead.
 
 ## Rule Discovery From Source Diagnosis
 
-For a random identity shared across protocols, return one capture (MySQL SQL
-template/value index, Redis SET/HSET value, or HTTP dependency JSON pointer),
-exact allowed host/port
-endpoints and source generator/lifetime proof. `rule plan --dynamic-value`
-correlates later decoded references without enumerating every decoded request reference;
-format is optional. See [dynamic value rules](../../../../../docs/dynamic-value-rules.md).
-For a current-date filename in `Content-Disposition`, return the header parameter,
-calendar format, timezone and exporter proof for `rule plan --header-date`.
-It checks `filename*` too and retains static filename/header/body assertions;
-see [header date rules](../../../../../docs/response-header-date-rules.md).
-Only the coordinator plans/applies these rules, followed by fresh verification.
+Before recommending any rule plan, check `facts.policy_freshness`. If it requires
+fresh Replay, retain the diagnosis and return its `refresh_command` to the
+coordinator. A stale policy does not establish a recording or capability gap.
 
-Check `facts.policy_freshness` before recommending a plan. If it requires fresh
-Replay, keep the source diagnosis and return the structured `refresh_command`
-to the coordinator. Any policy edit can stale earlier evidence, including a
-rule for another API. The coordinator follows normal review/scheduling gates,
-reuses the recording run, and obtains new evidence. Changing evidence IDs or
-selectors cannot fix this mismatch; it does not prove an engine capability gap.
+After tracing source and target behavior, read
+[Rule diagnosis](api-implementer-rule-diagnosis.md) for generated identities,
+JWT expiry, DOCX/header dates, Redis locks or time values, MySQL result time
+shifts, cross-case HTTP initialization, unordered collections, and protocol
+value rules. Source proof determines applicability; engine hints are additional
+evidence, and their absence does not mean a documented capability is unavailable.
 
-For API issues, consult these capabilities after tracing source and target
-behavior. Engine hints and mechanical candidates are additional evidence;
-their absence does not mean a documented capability is unavailable.
-
-| Proven scenario | Capability and next investigation |
-| --- | --- |
-| An inbound JWT in a Bearer header or named URL query parameter expired between capture and Replay | JWT `preserve_relative`; inspect the returned `jwt-time-validity` query and prove the exact token location, authentication path, expiry leeway, and signing-key source. |
-| A DOCX download differs because OPC ZIP metadata and `docProps/core.xml` creation time are generated per request | DOCX response-body rule; prove the generated XML timestamp in source, select it explicitly, verify that its source-to-target delta tracks elapsed request time, and keep every other decompressed package part exact. |
-| Random SET NX ownership tokens differ from recordings, or a script/DELEX references that token | Redis `lock`; inspect `redis_lock_candidates`, prove random tokens and conditional release from source, and return host, port, key selector plus source evidence. One rule correlates all supported references; never remove the lock or independently ignore token arguments. |
-| Redis writes differ at a source-generated ZADD score or ZREMRANGEBYSCORE cutoff | Dependency request `time: preserve_relative`; inspect `dependency_request_candidates` from `dirty_clusters`, then return endpoint/key, `commands.argument_values` (ZADD index 1, ZREMRANGEBYSCORE index 2), timestamp format and source proof for `rule plan --dependency-request`. See [dependency request rules](../../../../../docs/dependency-request-rules.md). |
-| A recorded Redis response timestamp makes an otherwise correct cache expire during Replay, causing extra reads or an error branch | Redis `time-shift`; inspect earlier successfully matched GET/HGET responses, including previous cases, and prove their time semantics. |
-| A matched MySQL SELECT returns an absolute lease or expiry that is stale during Replay | Explicit MySQL `response_time_shift` through `rule plan --dependency-request`; prove exact UTC result columns and fixed sentinel values. See [MySQL result time shifts](../../../../../docs/mysql-response-time-shift.md). |
-| Fast Replay keeps a process TTL cache warm across requests that were farther apart in recording | Currently unsupported. Retain strict unused-dependency evidence and return source-proven TTL semantics as an engine capability gap. |
-| Shared HTTP initialization was recorded in another case | HTTP `cross-case`; verify same-run request identity and source sharing semantics. |
-| An outbound HTTP array or Redis write collection differs only in order | Protocol-specific `unordered`; prove collection semantics and inspect exact order witnesses. |
-
-The two CLI entrypoints group supported planners; they are not disjoint policy
-categories. Both can author `verification.yaml` `dependency_rules`.
-
-| Entrypoint | Examples of supported planners |
-| --- | --- |
-| `rule plan/apply` | Inbound JWT time translation, response assertions, generated identities (`--dynamic-value`), dependency request contracts and MySQL result time shifts (`--dependency-request`). |
-| `dependency-rule plan/apply` | Protocol-specific ownership, cross-case scope, HTTP/Redis unordered values, Redis lock/publish/response time-shift, and MySQL time values. |
-
-Check both `rule plan --help` and the relevant protocol's `dependency-rule plan`
-help before declaring a capability gap, even when dynamic candidates or planner
-hints are absent. The coordinator plans and applies with current evidence and
-source proof, followed by fresh Replay.
-
-Redis `time-shift` has no automatic hint: a numeric value, field name, elapsed
-time, extra read, or missing exchange cannot establish business time semantics.
-Its documented read-only entrypoint is
-`backend-rewrite dependency-rule plan redis time-shift --help`. Return the current
-dirty-cluster evidence ID, source-selected endpoint/key/hash-field, response JSON
-Pointer, timestamp format, and source proof to the coordinator. Proof establishes
-the expiry/cache calculation, units, and downstream uses, including signatures.
-An absent `applicable_rule_planners` hint does not rule out this documented
-capability. Supply the expiry proof and exact inputs; immutable response matching
-alone does not establish expiry causality. Use exact JSON Pointers and explicit
-Unix seconds or milliseconds; prove any broader key/field selector shares those
-semantics. A signed timestamp or downstream dependency argument needs additional
-compatibility proof; this rule neither re-signs Redis tokens nor relaxes matching.
-
-JWT diagnosis uses the failed attempt's time and `signing_key_discovery`, never
-the current clock or raw tokens in notes. A 401, missing key, or unverified
-signature is insufficient proof. Trace authentication and configuration
-precedence; return current evidence, header, supported HMAC algorithm, key alias,
-expiry leeway, source proof, and either the effective environment variable name
-or read-only mounted dotenv path and field. Existing bindings may be reused.
-The capability supports Bearer HS256/HS384/HS512 with integer NumericDate claims;
-it preserves relative validity and does not justify weakening authentication.
-Do not apply rules or run Replay.
+In particular, Redis `time-shift` has no automatic hint. When an earlier matched
+Redis timestamp may cause expiry, extra reads, or an error branch, read its
+[proof contract](api-implementer-rule-diagnosis.md#rule-discovery-from-source-diagnosis)
+and use `backend-rewrite dependency-rule plan redis time-shift --help`.
+Check both planner families before declaring a capability gap. Only the
+coordinator plans/applies rules and runs fresh verification.
 
 ## API Evidence Queries
 
-Run only query IDs returned by the overview's `queries` or a subsequent
-evidence report:
+Execute only the exact opaque argv returned by the current overview's `queries`
+or a subsequent evidence report. Select by the current problem and returned
+purpose; never reconstruct a query ID or cursor.
 
-| Problem signal | Evidence | Command |
-| --- | --- | --- |
-| Response differences need complete case context | `case_response_differences` | Execute the returned evidence command whose query ID ends with `case-response-differences-...-page-0`. |
-| Case-scoped dependency evidence is dirty | `dirty_clusters` | Execute the returned evidence command whose query ID ends with `dirty-clusters`. |
-| Startup, background refresh, or local-cache state may affect behavior | `source_process_traffic` | Execute the returned evidence command whose query ID ends with `source-process-traffic`. |
-| Target startup or lifecycle failed | `target_runtime_diagnostics` | Execute the returned evidence command whose query ID ends with `target-runtime-diagnostics`. |
+| Problem signal | Evidence |
+| --- | --- |
+| Response differences need complete case context | `case_response_differences` |
+| Case-scoped dependency evidence is dirty | `dirty_clusters` |
+| Startup, background refresh, or local-cache state may affect behavior | `source_process_traffic` |
+| Target startup or lifecycle failed | `target_runtime_diagnostics` |
 
-Always execute the exact opaque command returned by the current action or
-evidence report. The suffixes above are discovery labels; never reconstruct a
-query ID.
+For a response issue, execute the returned `case_response_differences` first
+page before changing target code. It distinguishes expected/actual value
+presence. `response_unavailable` at `$response` means no usable target response
+assertion evidence, not zero differences. An `unavailable_reason` describes
+observed transport behavior: `target_connection_closed` does not distinguish a
+panic from another target abort. When more differences are needed to identify
+one coherent cause, execute only the current `facts.next_page.command`.
 
-- `case_response_differences`: for a response issue, the first entry in the
-  overview's `queries` returns one fixed-size page of every structured response difference in the
-  representative case, including normalized Pointer patterns and explicit
-  expected/actual value presence. A case that produced no usable target
-  response assertion evidence appears as one `response_unavailable` difference
-  at `$response`, not as zero response differences. Its optional
-  `unavailable_reason` is an observed transport classification: for example,
-  `target_connection_closed` proves that the target-side HTTP connection ended
-  before a complete response, but does not by itself distinguish a panic from
-  another target abort. Execute the first page before changing target code.
-  When more differences are needed to distinguish a coherent cause, execute
-  only the exact `facts.next_page.command`; never construct a cursor;
-- `representatives`: the representative case ID, exact immutable standard `case_dir`, and bounded structured response or dependency
-  difference; it does not prove the cause;
-- `source_variation`: source values across recorded cases; variation alone
-  does not prove nondeterminism or cache ownership;
-- `collection_equivalence`: array multiset equality; equality does not prove
-  that source order is irrelevant;
-- `dependency_correlation`: response outcomes against dependency cleanliness;
-  correlation does not prove response causality;
-- `source_process_traffic`: recording-global, bounded source bootstrap and
-  configured process-owned traffic grouped by protocol, endpoint, and
-  operation, including Redis snapshot counts. Timing, frequency, and configured
-  rule matches do not prove response causality or replace request-owned target
-  behavior;
-- `dirty_clusters`: case-scoped dirty events grouped by protocol and endpoint,
-  with a stable `cluster_id`, bounded operation counts, an exact representative
-  case, and a correlated source pre-readiness count. The complete
-  recording-global source-process summary remains in `source_process_traffic`.
-  It excludes `unused_global` and case-external target activity, and does not
-  prove request or process ownership. For a dependency issue it also returns
-  `applicable_rule_planners` only for supported protocols present in those
-  clusters. Whenever a supported dependency-value rule exists for a protocol
-  present in the clusters, it separately returns `rule_hints` with a short
-  applicability hint and an exact read-only help command. Rule availability
-  does not prove applicability. It also returns the selected case's exact
-  `representative_dependencies_command` when available;
-  MySQL supports source-proven process-owned SELECT templates with exact
-  connection identity and exact, numeric-series, or patterned physical tables,
-  including `AS {{table}}_id` aliases tied to the selected table. Return the
-  source-proven selector inputs. Such rules can reclassify existing unused
-  evidence without a new recording; target unmatched queries and incomplete
-  evidence remain dirty.
-- `policy_applicability`: structural rule eligibility; eligibility does not
-  authorize a rule;
-- `attempt_delta`: convergence against the previous attempt; improvement does
-  not identify the cause.
+Interpret diagnostic evidence within these limits:
+
+- `representatives` selects immutable case evidence; it does not prove cause.
+- `source_variation` alone proves neither nondeterminism nor cache ownership.
+- `collection_equivalence` establishes array multiset equality, not that source
+  order is irrelevant.
+- `dependency_correlation` does not prove response causality.
+- `source_process_traffic` covers recording-global bootstrap and configured
+  process-owned traffic. Timing, frequency, and configured rule matches do not
+  prove response causality or replace request-owned target behavior.
+- `dirty_clusters` covers case-scoped dirty events, excluding `unused_global`
+  and case-external target activity. It does not prove request/process ownership.
+  Inspect returned `applicable_rule_planners` and `rule_hints` using their exact
+  read-only help commands; availability does not prove applicability. For value
+  mechanisms and capabilities without hints, follow [Rule diagnosis](api-implementer-rule-diagnosis.md).
+- `policy_applicability` establishes structural eligibility, not authorization.
+- `attempt_delta` measures convergence, not cause.
 
 Use the smallest query set that can distinguish the current hypotheses. Then
 inspect the representative case and trace the corresponding source and target
 path. Read other artifact cases only when the representative is insufficient.
 Do not run every query merely because it is available.
 
-### Supported Protocol Rules
+### Dependency Topology
 
-Use this table only to discover a rule worth investigating. A listed rule does
-not prove that the observed difference is safe to ignore.
+Execute the representative result's `dependencies_command`, or the
+dirty-cluster result's `representative_dependencies_command`. From the
+target-grouped summary, execute only the relevant returned `detail_command`
+before reading raw `dependencies.jsonl`. Do not recreate this projection with
+Python or shell parsing; inspect raw immutable evidence only when omitted or
+truncated facts block diagnosis.
 
-| Problem stage | Protocol | Rule | Repairs |
-| --- | --- | --- | --- |
-| `dirty_clusters` with positive rejection-count evidence; source-proven `ip_capture` preflight | HTTP JSON | Response URL pointers | Capture later HTTP(S) calls to an IP obtained from an upstream JSON URL; requires source proof and fresh recording. |
-| `dirty_clusters` during a response, Replay, or dependency issue | Memcached | `protobuf-timestamp` | A `SET` value mismatch where source proves that one selected top-level protobuf varint field is current Unix seconds; all other protobuf fields must remain equal, and each timestamp must be within the engine-owned fixed five-second window around its own `SET`. |
-
-Run the exact `help` command returned with the rule before planning it. Add a
-row only when the corresponding evidence hint, help command, planner, and
-runtime behavior are all implemented.
-
-Memcached `SET` exptime is not a protocol rule. Replay already keeps `0` and
-relative expirations exact and compares absolute expirations by the remaining
-TTL at each `SET`, with a fixed five-second tolerance. Do not plan a rule for an
-exptime-only mismatch.
-
-For dependency topology, execute the representative result's
-`dependencies_command`, or the dirty-cluster result's
-`representative_dependencies_command`. The compact summary groups by target and
-returns one exact `detail_command` per target. Execute only the relevant target
-detail before reading raw `dependencies.jsonl`; do not recreate this projection
-with Python or shell parsing. The tool reads the recording internally; raw-file
-inspection is only needed when omitted or truncated facts block the diagnosis.
-The detail contains bounded representative MySQL
-exchanges with SQL (up to 8192 bytes), typed parameters, database, username,
-attribution, result status, row counts, column names, warnings, and an original
-record locator. It omits row payloads and explicitly marks truncated previews
-and omitted examples. Redis details preserve each key/argument/response
-association, and Memcached details preserve key/outcome associations. A dependency response preview is at most 256 bytes
-and carries its encoding, original length, and truncation state. Memcached flags
-are intentionally neither interpreted nor returned. Complete small Redis scalar
-responses also carry a decoded `response_value`; larger or structured responses
-retain only their bounded frame preview.
+Preserve each MySQL exchange's SQL/parameter/session context, Redis
+key/argument/response association, and Memcached key/outcome association.
+Respect omitted payloads and marked preview encodings/truncation; a preview is
+not a complete response. Memcached flags are neither interpreted nor returned.
 
 Only a dependency event attributed to an active case participates in that
 case's cleanliness gate. Treat source pre-readiness traffic as reference for
@@ -355,7 +247,8 @@ ordering contract; map/set iteration is a hypothesis, not proof.
 
 ## Return The Proven Cause
 
-Return one supported result with the original evidence/dispatch identity:
+Return one supported result with the original evidence/dispatch identity,
+source proof, shared impact, necessary coordinator inputs, and unresolved risks:
 
 - Target API, cache, or startup defect: make one
   coherent repair, run focused tests, and complete [api-implementer-review.md](api-implementer-review.md).
@@ -376,51 +269,13 @@ available runtime evidence prove that a required external response-driving value
 is unavailable and completion would require invention. Repeated failures, empty
 dependency streams, or tool errors do not prove that blocker.
 
-End the turn after the result; do not wait for acceptance. If two repairs do not
+Do not return or execute an acceptance command. End the turn after the result;
+do not wait for acceptance. If two repairs do not
 improve the active issue, stop adding local patches and return a bounded
 structural replan from the current issue and attempt delta.
 
 ## API-triggered asynchronous process traffic
 
-A source-proven detached API task may produce unused dependencies inside another
-API's recording window. Redis GET, single-key DEL and LRANGE can use
-`dependency-rule plan redis api-triggered` and the existing apply transaction.
-See [API-origin process rules](../../../../../docs/api-triggered-process-traffic.md).
-`trigger_source.request_body_json` selects typed scalars by JSON Pointer in the
-triggering inbound REQUEST BODY: `/background: true` means JSON
-`{"background":true}`, never URL query, response JSON, or the victim API's body.
-Trace spawning and cleanup in source, then supply one explicit successful
-COM_QUERY INSERT identity capture and exact Redis key template/arguments. A shared
-ID or unused exchange is not source ownership proof. Trigger/resource API calls,
-ambiguous origins/references and target failures remain strict. Complete old
-recordings are reusable; the engine caches correlation outside immutable evidence.
-Status performs no origin scan or cache build. This rule does not verify the
-background task's eventual result or enable reusable Redis snapshots.
-
-MySQL API-origin SELECT rules use `dependency-rule plan mysql --trigger-source
-JSON --identity-value-index N`. The zero-based template `?` slot must be an
-identity equality or singleton IN predicate; other endpoint/table/SQL bounds
-remain exact. Use the same origin capture as related Redis rules. An ordinary
-same-name, exact-selector rule may be narrowed through plan/apply, never reused
-as API-origin proof. Do not classify every SELECT on a task table as background.
-
-When a helper has polling/cancel callers, also trace indirect detached-task
-callers such as terminal result collectors and accumulated-content helpers.
-Protect direct inbound polling/cancel requests; a task reacting to cancellation
-in its own detached lifecycle can still produce process-owned dependencies.
-Plan proves recording correlation and scope, while source evidence proves
-caller ownership.
-
-API-origin Redis DEL accepts an exact ordered `key_sequence` through repeated
-`--key-sequence-template`; every key must bind the same captured identity.
-For EVALSHA, `--script JSON` declares an exact SHA-1, ordered KEYS envelope,
-ARGV count and `identity_argv_index`. Date-keyed metrics may still carry the task
-ID in ARGV. SCRIPT EXISTS requires a proven adjacent same-connection invocation.
-
-API-origin MySQL also supports bounded single-row UPDATEs. Complete transaction
-boundaries require `--include-transaction-boundaries`, consistent wire sequences
-and server flags. `--transaction-member JSON` can admit explicit read-only helper
-selectors only inside a fully proven transaction. Ordinary write rules, broad
-COMMIT/ROLLBACK exceptions and standalone member matches remain unsupported.
-Inspect actual dirty summaries: source-recorded ROLLBACKs may already be optional
-cleanup and do not by themselves establish a missing capability.
+When unused dependencies may come from a source-detached API task, read
+[the dependency diagnosis](api-implementer-dependency-diagnosis.md#api-triggered-asynchronous-process-traffic)
+for source ownership proof, supported protocol selectors, and strict boundaries.
