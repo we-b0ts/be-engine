@@ -1,5 +1,5 @@
 //! Bind one declared physical table without changing SQL values or predicates.
-use super::{bounded_tokens, extract};
+use super::{bounded_statement_tokens, bounded_tokens, extract};
 use crate::config::mysql_tables::TableMatcher;
 use crate::mysql::sql::Token;
 use anyhow::{Context, Result, ensure};
@@ -101,7 +101,7 @@ impl SqlValueTemplate {
     }
 
     pub(in crate::replay::policy) fn matches(&self, sql: &str) -> bool {
-        bounded_tokens(sql).is_some_and(|actual| {
+        bounded_statement_tokens(sql).is_some_and(|actual| {
             self.bind(&actual)
                 .is_some_and(|bound| extract(&bound, &actual).is_some())
         })

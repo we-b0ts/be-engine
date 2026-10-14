@@ -1,5 +1,6 @@
 //! Bounded MySQL predicate equivalence. sqlparser owns grammar; this module
 //! admits only pure predicates and retains the rest of each query verbatim.
+use super::MAX_SQL_TOKENS;
 use crate::mysql::sql::{Token, render};
 use sqlparser::{
     ast::{BinaryOperator, Distinct, Expr, SelectItem, SetExpr, Statement, TableFactor, Value},
@@ -52,7 +53,7 @@ pub(super) struct Key {
 
 impl Template {
     pub(super) fn parse(tokens: &[Token], whole_query: bool) -> Option<Self> {
-        if tokens.len() > 4096 {
+        if tokens.len() > MAX_SQL_TOKENS {
             return None;
         }
         let mut depth = 0_usize;

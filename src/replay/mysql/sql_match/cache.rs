@@ -1,7 +1,7 @@
 //! Replay-local SQL compilation cache. Only immutable parsing/normalization is
 //! cached; identity, policy, runtime parameters and exchange availability are not.
 use super::{
-    bound_value,
+    MAX_SQL_TOKENS, bound_value,
     predicate::{Key, Template},
     query_in,
 };
@@ -82,7 +82,7 @@ impl CompiledSql {
         let tokens = (sql.len() <= MAX_SINGLE_SQL_BYTES)
             .then(|| tokens(sql))
             .flatten()
-            .filter(|tokens| tokens.len() <= 4096)
+            .filter(|tokens| tokens.len() <= MAX_SQL_TOKENS)
             .unwrap_or_default();
         let mut predicate = Template::parse(&tokens, true);
         let query_in = predicate

@@ -330,7 +330,7 @@ The Replay-local FIFO cache retains compiled SQL templates, negative parsing
 results, parameter-independent metadata shapes and normalized constant queries.
 It holds at most 256 SQL strings and 1 MiB of original SQL text (the associated
 compiled representations consume additional bounded memory). A single SQL is
-limited to 64 KiB and 4096 tokens for this compatibility path, with bounded
+limited to 64 KiB and 8192 tokens for this compatibility path, with bounded
 parenthesis/parser depth. Flat AND/OR groups are traversed iteratively; their
 term count does not consume the predicate nesting budget. PREPARE uses a linear
 path when every branch has the same parameter template, including common fixed
