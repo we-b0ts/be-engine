@@ -53,6 +53,14 @@ Send only the data needed for the assignment:
   worker base, delivery commit, accepted review and local-test results;
 - shared impact, previous integration provenance, and required-input references.
 
+Accepted worker handoffs have already passed the same complete quality suite.
+Do not add independent business-logic verification to integration assignments;
+worker explanations support actual conflicts and required quality evidence.
+Assign `review check --integration` for the merged candidate; it includes Rust
+fmt, test, and clippy. Do not also request manual full-suite execution before
+that check. Focused checks for conflict resolutions or reported failures and
+fresh complete review after candidate or relevant input changes still apply.
+
 For `review`, supply the same role, roots, base and assignment ID, plus exact
 findings/report when available and available work-item provenance. Missing or
 stale final quality reports also use this assignment. Match the inspected target
