@@ -4,8 +4,10 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
+mod cache;
 mod layout;
 
+pub(super) use cache::scope as with_git_read_cache;
 pub(super) use layout::{git_object_path, managed_file_path, project_root_in_worktree};
 
 const IGNORED_DIRECTORIES: &[&str] = &[".git", ".traffic-e2e", "node_modules", "target", "vendor"];
@@ -391,6 +393,9 @@ fn untracked_added_lines(target_root: &Path, relative: &Path) -> Result<Vec<Adde
 }
 
 pub(super) fn resolve_pr_base(target_root: &Path, pr_base: &str) -> Result<String> {
+    if let Some(base) = cache::pr_base(target_root, pr_base) {
+        return Ok(base);
+    }
     for candidate in [
         format!("refs/heads/{pr_base}"),
         format!("refs/remotes/origin/{pr_base}"),
@@ -405,6 +410,7 @@ pub(super) fn resolve_pr_base(target_root: &Path, pr_base: &str) -> Result<Strin
             .status()
             .with_context(|| format!("failed to resolve pull-request base {candidate:?}"))?;
         if status.success() {
+            cache::insert_pr_base(target_root, pr_base, &candidate);
             return Ok(candidate);
         }
     }
@@ -419,6 +425,16 @@ pub(super) fn git_text(target_root: &Path, args: &[&str]) -> Result<String> {
 }
 
 pub(super) fn git_bytes(target_root: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    // Only identity/history reads participate in a status snapshot. Other Git
+    // commands may mutate refs or files, so execute them and discard prior reads.
+    let cacheable = matches!(args.first(), Some(&"rev-parse" | &"merge-base" | &"log"));
+    if cacheable {
+        if let Some(output) = cache::output(target_root, args) {
+            return Ok(output);
+        }
+    } else {
+        cache::clear();
+    }
     let output = Command::new("git")
         .arg("-C")
         .arg(target_root)
@@ -430,5 +446,8 @@ pub(super) fn git_bytes(target_root: &Path, args: &[&str]) -> Result<Vec<u8>> {
         "Git command failed while inspecting changed target files: {}",
         String::from_utf8_lossy(&output.stderr).trim()
     );
+    if cacheable {
+        cache::insert_output(target_root, args, &output.stdout);
+    }
     Ok(output.stdout)
 }

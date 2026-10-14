@@ -146,7 +146,9 @@ fn with_read_snapshot<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
     crate::repository::with_git_root_cache(|| {
         crate::e2e_run::with_project_resolution_cache(|| {
             crate::e2e_run::with_background_reclassification_snapshot(|| {
-                fingerprint::with_repository_cache(operation)
+                super::source_diff::with_git_read_cache(|| {
+                    fingerprint::with_repository_cache(operation)
+                })
             })
         })
     })
