@@ -6,16 +6,17 @@ use anyhow::{Context, Result, ensure};
 
 const TABLE: &str = "__traffic_time_table__";
 
-pub(in crate::replay::policy) struct SqlValueTemplate<'a> {
+#[derive(Debug)]
+pub(in crate::replay::policy) struct SqlValueTemplate {
     tokens: Vec<Token>,
-    tables: Option<TableMatcher<'a>>,
+    tables: Option<TableMatcher>,
 }
 
-impl<'a> SqlValueTemplate<'a> {
+impl SqlValueTemplate {
     pub(in crate::replay::policy) fn new(
         sql: &str,
         tables: &[String],
-        patterns: &'a [String],
+        patterns: &[String],
         series: Option<&crate::MysqlTableSeries>,
     ) -> Result<Self> {
         ensure!(sql.len() <= 64 * 1024, "oversized MySQL SQL template");
