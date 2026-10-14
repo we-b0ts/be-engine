@@ -30,6 +30,10 @@ pub(super) struct ConnectionScopes {
 }
 
 impl ConnectionScopes {
+    pub(super) fn is_stateful(&self, connection_id: Uuid) -> bool {
+        self.stateful.contains(&connection_id)
+    }
+
     pub(super) fn register(&mut self, record: &RecordedExchange, args: &[Vec<u8>]) {
         if record.session_setup || !pool_compatible(&record.command, args) {
             self.stateful.insert(record.connection_id);

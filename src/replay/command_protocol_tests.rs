@@ -16,6 +16,7 @@ use crate::{BackgroundDependencyRuleConfig, RedisKeyPatternConfig};
 mod dynamic_values_tests;
 mod memcached_connection_tests;
 mod motan_concurrency_tests;
+mod redis_api_origin_tests;
 mod redis_authentication_tests;
 mod redis_client_info_tests;
 mod redis_connection_tests;

@@ -42,6 +42,9 @@ is unclear.
   unused-only reclassification and provenance, while Recorder retains idle
   candidates without changing active case ownership or Redis snapshots. Status
   remains a summary/fingerprint reader and never invokes origin discovery.
+  `replay/redis/api_origin` applies that same immutable proof to foreign-case
+  command ordering before listeners are ready; stateful lanes stay strict and
+  recording attribution and finite consumption remain unchanged.
 
 - `engine_binary` resolves companion executables and Linux reexec paths for a
   replaced running engine. Replay, coordinator workers and local interception
