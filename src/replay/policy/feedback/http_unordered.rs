@@ -93,6 +93,7 @@ pub fn plan_http_unordered(feedback: HttpUnorderedFeedback) -> Result<HttpUnorde
                     pointer: feedback.selector.pointer.clone(),
                     source_evidence: feedback.source_evidence.clone(),
                 }],
+                ..Default::default()
             },
             method: feedback.selector.method.clone(),
             path: feedback.selector.path.clone(),

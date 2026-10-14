@@ -24,7 +24,7 @@ pub fn plan_dependency_request_rule(
     }
     ensure!(
         request_contract::is_request_rule(&rule),
-        "dependency request planning requires a Redis argument or HTTP multipart contract"
+        "dependency request planning requires a Redis argument, HTTP JSON time or multipart contract"
     );
     request_contract::validate(&rule)?;
     let original = fs::read_to_string(&feedback.policy_path)?;

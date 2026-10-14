@@ -2,6 +2,7 @@
 use super::super::config::fingerprint;
 use super::*;
 use serde::{Deserialize, Serialize};
+mod http_json;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::replay) struct Candidate {
@@ -84,10 +85,25 @@ impl RequestContracts {
         source_headers: &BTreeMap<String, Vec<String>>,
         actual: &[u8],
         headers: &BTreeMap<String, Vec<String>>,
+        clocks: crate::replay::assertion::RequestTimes,
+        actual_uri: &str,
     ) {
-        if source == actual
-            || crate::replay::http::multipart::compare(source, source_headers, actual, headers)
-                .is_err()
+        if source == actual {
+            return;
+        }
+        self.observe_http_json(
+            case,
+            target,
+            method,
+            path,
+            source,
+            source_headers,
+            actual,
+            headers,
+            clocks,
+            actual_uri,
+        );
+        if crate::replay::http::multipart::compare(source, source_headers, actual, headers).is_err()
         {
             return;
         }
@@ -195,7 +211,10 @@ pub(in crate::replay::policy) fn verify(
         .flatten()
     {
         let candidate: Candidate = serde_json::from_value(item.clone())?;
-        let protocol = if candidate.capability == "http_multipart" {
+        let protocol = if matches!(
+            candidate.capability.as_str(),
+            "http_multipart" | "http_json_request_time"
+        ) {
             DependencyProtocol::Http
         } else {
             DependencyProtocol::Redis
@@ -362,9 +381,15 @@ pub(in crate::replay::policy) fn verify(
                 validated.insert(candidate.command.clone());
                 matched_cases.insert(candidate.case_id.clone());
             } else {
+                let uri_matches = if candidate.capability == "http_json_request_time" {
+                    super::super::pattern::uri_path(event["uri"].as_str().unwrap_or_default())
+                        == candidate.path
+                } else {
+                    event["uri"] == candidate.path
+                };
                 if event["event_type"] != "http_exchange"
                     || event["method"] != candidate.command
-                    || event["uri"] != candidate.path
+                    || !uri_matches
                     || !event["error"].is_null()
                     || !event["response_status"].is_number()
                 {
@@ -393,6 +418,13 @@ pub(in crate::replay::policy) fn verify(
                     continue;
                 }
                 decode(&event["response_body"])?;
+                if candidate.capability == "http_json_request_time" {
+                    if http_json::verify(rule, &candidate, &event, &source, &actual, &dir)? {
+                        validated.insert(candidate.command.clone());
+                        matched_cases.insert(candidate.case_id.clone());
+                    }
+                    continue;
+                }
                 let actual: HttpWitness = serde_json::from_slice(&actual)?;
                 let mut headers: BTreeMap<String, Vec<String>> =
                     serde_json::from_value(event["request_headers"].clone())?;
@@ -412,7 +444,8 @@ pub(in crate::replay::policy) fn verify(
                     "multipart witness identity headers differ"
                 );
                 let selector = rule.http.as_ref().context("missing HTTP selector")?;
-                if selector.method != candidate.command
+                if selector.multipart.is_none()
+                    || selector.method != candidate.command
                     || !super::super::pattern::path_pattern_matches(
                         &selector.path,
                         &super::super::pattern::uri_path(&candidate.path),
@@ -528,7 +561,7 @@ fn validate_source_commands(
                 .context("source selected argument missing")?;
             match field {
                 config::ArgumentRule::Time(field) => {
-                    super::redis::timestamp(&serde_json::from_slice(bytes)?, field.format)?;
+                    super::time::timestamp(&serde_json::from_slice(bytes)?, field.format)?;
                 }
                 config::ArgumentRule::Json(fields) => {
                     let json = crate::replay::json_order::parse(bytes)
@@ -539,7 +572,7 @@ fn validate_source_commands(
                             .context("source selected JSON field missing")?;
                         match field {
                             config::JsonField::Time(field) => {
-                                super::redis::timestamp(value, field.format)?;
+                                super::time::timestamp(value, field.format)?;
                             }
                             config::JsonField::Jwt(_) => {
                                 ensure!(value.is_string(), "source JWT field must be a string");

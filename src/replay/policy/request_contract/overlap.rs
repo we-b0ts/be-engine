@@ -53,7 +53,9 @@ pub(in crate::replay::policy) fn validate(
                     .as_ref()
                     .zip(other.http.as_ref())
                     .is_some_and(|(a, b)| {
-                        b.multipart.is_some()
+                        (b.multipart.is_some()
+                            || !a.json.time.is_empty()
+                            || !b.json.time.is_empty())
                             && a.method == b.method
                             && crate::path_pattern::path_patterns_overlap(&a.path, &b.path)
                     }),

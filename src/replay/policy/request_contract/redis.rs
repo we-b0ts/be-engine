@@ -1,67 +1,6 @@
 //! Atomic validation of Redis argument copies, JSON timestamps and signed JWT claims.
 use super::*;
-use config::{ArgumentRule, JsonField, JwtContract, RedisRequestSelector, TimeField};
-
-pub(super) fn number(value: &Value) -> Result<f64> {
-    let value = value.as_f64().context("timestamp must be numeric")?;
-    ensure!(
-        value.is_finite() && (-62_135_596_800.0..=253_402_300_799.0).contains(&value),
-        "timestamp must be finite Unix seconds within years 1..9999"
-    );
-    Ok(value)
-}
-fn relative(source: f64, actual: f64, anchor: &CaseAnchor, tolerance: f64) -> Result<()> {
-    let recorded = anchor
-        .recorded
-        .context("request time rule requires recorded request timestamp")?;
-    let replay = anchor
-        .actual
-        .context("request time rule requires an active case")?;
-    let seconds = |time: DateTime<Utc>| {
-        time.timestamp() as f64 + f64::from(time.timestamp_subsec_nanos()) / 1e9
-    };
-    ensure!(
-        ((actual - seconds(replay)) - (source - seconds(recorded))).abs() <= tolerance,
-        "request timestamp differs from its recorded relative time"
-    );
-    Ok(())
-}
-fn time(
-    source: &Value,
-    actual: &Value,
-    rule: &TimeField,
-    anchor: &CaseAnchor,
-) -> Result<(f64, f64)> {
-    ensure!(
-        source.is_i64() == actual.is_i64() && source.is_u64() == actual.is_u64(),
-        "timestamp numeric category changed"
-    );
-    let pair = (
-        timestamp(source, rule.format)?,
-        timestamp(actual, rule.format)?,
-    );
-    relative(pair.0, pair.1, anchor, config::tolerance(&rule.tolerance)?)?;
-    Ok(pair)
-}
-
-pub(super) fn timestamp(value: &Value, format: config::RequestTimestampFormat) -> Result<f64> {
-    if matches!(format, config::RequestTimestampFormat::Rfc3339) {
-        let value = DateTime::parse_from_rfc3339(
-            value
-                .as_str()
-                .context("timestamp must be an RFC3339 string")?,
-        )?;
-        return Ok(value.timestamp() as f64 + f64::from(value.timestamp_subsec_nanos()) / 1e9);
-    }
-    let unit = match format {
-        config::RequestTimestampFormat::UnixSeconds => 1.0,
-        config::RequestTimestampFormat::UnixMilliseconds => 1000.0,
-        config::RequestTimestampFormat::Rfc3339 => unreachable!("handled string timestamp"),
-    };
-    number(&Value::from(
-        value.as_f64().context("timestamp must be numeric")? / unit,
-    ))
-}
+use config::{ArgumentRule, JsonField, JwtContract, RedisRequestSelector};
 
 impl RequestContracts {
     pub(in crate::replay) fn preview_redis(
@@ -139,7 +78,7 @@ impl RequestContracts {
                 "time maximum requires one plain ZREMRANGEBYSCORE range"
             );
         }
-        let anchor = self.anchor(case)?;
+        let anchor = self.request_times(case);
         let mut decision = Decision {
             ids: vec![rule.id.clone()],
             ..Default::default()
@@ -151,7 +90,7 @@ impl RequestContracts {
                 Some(ArgumentRule::Time(field)) => {
                     let source = serde_json::from_slice(source)?;
                     let actual = serde_json::from_slice(actual)?;
-                    times.push(time(&source, &actual, field, &anchor)?);
+                    times.push(super::time::compare(&source, &actual, field, anchor)?);
                     decision.time_validations += 1;
                 }
                 Some(ArgumentRule::Json(fields)) => {
@@ -170,7 +109,7 @@ impl RequestContracts {
                             .context("target request field is missing")?;
                         match field {
                             JsonField::Time(field) => {
-                                times.push(time(a, b, field, &anchor)?);
+                                times.push(super::time::compare(a, b, field, anchor)?);
                                 decision.time_validations += 1;
                             }
                             JsonField::Jwt(field) => {
@@ -260,12 +199,12 @@ impl RequestContracts {
             .get(&(rule.into(), pointer.into()))
             .context("request JWT signing key is unavailable")?
             .bytes();
-        let a = number(
+        let a = super::time::number(
             source_document
                 .pointer(&config.relative_to)
                 .context("source JWT time anchor missing")?,
         )?;
-        let b = number(
+        let b = super::time::number(
             actual_document
                 .pointer(&config.relative_to)
                 .context("target JWT time anchor missing")?,
