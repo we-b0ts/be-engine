@@ -216,6 +216,13 @@ header values. Use the existing `rule plan --dependency-request RULE_JSON`,
 apply, then fresh Replay workflow below. Complete existing HTTP recordings can
 be reused without recording again.
 
+When several request bodies share an endpoint, planning pairs witnesses by all
+JSON fields outside the declared time pointers before validating timestamps.
+Candidates with different stable fields are skipped. A matching pair still
+requires valid timestamp types, request-relative times and parameter differences;
+planning requires at least one verified same-case pair. Fresh Replay continues
+to enforce stable fields and finite response consumption.
+
 ## HTTP multipart boundary
 
 ```yaml

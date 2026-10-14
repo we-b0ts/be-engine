@@ -2,8 +2,19 @@
 use super::*;
 use crate::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
 use serde_json::json;
+#[path = "json_request_time/pairing.rs"]
+mod pairing;
 
 async fn send(addr: SocketAddr, uri: &str, body: String, auth: &str) -> StatusCode {
+    send_response(addr, uri, body, auth).await.0
+}
+
+async fn send_response(
+    addr: SocketAddr,
+    uri: &str,
+    body: String,
+    auth: &str,
+) -> (StatusCode, Bytes) {
     let (mut sender, connection) =
         http1::handshake(TokioIo::new(TcpStream::connect(addr).await.unwrap()))
             .await
@@ -25,8 +36,8 @@ async fn send(addr: SocketAddr, uri: &str, body: String, auth: &str) -> StatusCo
         .await
         .unwrap();
     let status = response.status();
-    response.into_body().collect().await.unwrap();
-    status
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (status, body)
 }
 fn body(end: i64) -> Value {
     json!({"query":"private-expression", "start":end-300, "end":end, "step":"1m", "ordered":[1,2]})
