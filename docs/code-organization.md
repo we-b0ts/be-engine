@@ -520,9 +520,13 @@ explicit repository-wide audit.
   `replay/mysql/optional_session` classifies optional transaction setup and
   cleanup from immutable connection sequence/status evidence; its `read` child
   owns bounded query classification with common locking/side-effect exclusions,
-  independently of SQL equivalence. SELECT expressions do not require per-shape
+  independently of SQL equivalence. It owns compact immutable Global read-span
+  tails used to classify a case's leading transaction end, and keeps case-to-case
+  transaction inference out of the loader. SELECT expressions do not require per-shape
   registration. Its `autocommit` child checks setup omission over the loaded
-  read-only span. Recorder's MySQL semantic
+  read-only span. `replay/mysql/cleanup_selection` gives a required transaction
+  end precedence over identical optional cleanup only after its immediately
+  preceding recorded exchange has been consumed. Recorder's MySQL semantic
   tracker owns before-command status continuity and final resultset status
   capture. Neither infers transaction
   boundaries from HTTP responses or ORM names.
