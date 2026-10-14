@@ -5,6 +5,16 @@ Time-window recording can place those calls inside a later API's case. An
 API-origin process rule reclassifies only source-proven, unused foreign-case
 dependencies. The triggering API continues to execute and record normally.
 
+Redis Replay also applies this origin proof before admitting target requests,
+including focused runs whose triggering API is not selected. A proven foreign
+Redis exchange in an ordinary pooled source lane does not block current-case
+commands on that lane. Eager and lazy loading use the same proof. Original case
+attribution and single-use responses remain intact; the report overlay still
+reclassifies only unused evidence. A retained stateful command, incomplete or
+ambiguous origin, or a request referencing the captured identity retains strict
+lane ordering. No new recording or additional rule is needed when the existing
+recording and configured API-origin rule already contain complete proof.
+
 ## Contract and first supported selectors
 
 An ordinary process-owned rule remains unchanged. A Redis rule can additionally
@@ -91,7 +101,9 @@ Only `unused_recorded` entries are moved to the process-level diagnostic view.
 Unmatched target calls, unsupported/unsafe traffic, response differences and
 trigger-owned required dependencies remain failures. API-triggered rules do
 not enable Redis first-value snapshots, repeat responses, interpret scripts,
-or alter dependency arguments, delivery, lane ordering or finite consumption.
+or alter dependency arguments, delivery or finite consumption. Redis ordering
+excludes only proven foreign work on ordinary pooled lanes; current-request
+commands and retained stateful lanes keep their original order.
 
 ## Plan and apply
 

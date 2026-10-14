@@ -211,6 +211,9 @@ impl ReplayRuntime {
         let redis_cases = cases.clone();
         let redis_process_rules = process_owned_dependencies.to_vec();
         let (mut redis, mut targets) = tokio::task::spawn_blocking(move || -> Result<_> {
+            // Eager and lazy loading have registered all selected Redis lanes.
+            // Apply ownership proof before any target request can be admitted.
+            redis.apply_api_origin_order(&redis_root, &redis_process_rules)?;
             redis::load_cross_case(
                 &mut redis,
                 &redis_root,
