@@ -10,11 +10,24 @@ worker; do not trace source or execute diagnostic evidence queries yourself.
 
 ## Contents
 
-- Recorder-capture planning and refresh
-- Typed response-rule planning
-- Process-owned dependency-rule planning and reclassification
-- Evidence gate and ownership invariants
-- Bootstrap dependency overlays
+Read the common requirements above and
+[Evidence And Ownership Invariants](#evidence-and-ownership-invariants), then only
+the section matching the current planner or worker-returned inputs. Do not load
+unrelated rule protocols. Redis time-shift accepts source-proven inputs even
+without an engine hint or applicable-planner entry; follow its section below.
+
+| Current planner or source-proven inputs | Protocol |
+| --- | --- |
+| Typed response normalization | [Typed Response Rules](#typed-response-rules) |
+| Missing recorded resource | [Recorder Capture](#recorder-capture) |
+| IP endpoint acquired from an HTTP response | [HTTP Response URL Capture](#http-response-url-capture) |
+| `http_json_unordered` | [Unordered HTTP Dependency JSON](#unordered-http-dependency-json) |
+| `http_cross_case` | [Cross-Case HTTP Dependency Scope](#cross-case-http-dependency-scope) |
+| Dependency ownership classification | [Process-Owned Dependency Rules](#process-owned-dependency-rules) |
+| Redis bootstrap dependency overlay | [Bootstrap Dependency Overlay](#bootstrap-dependency-overlay) |
+| Redis response time-shift | [Redis response time drift during Replay](#redis-response-time-drift-during-replay) |
+| JWT expiry | [JWT expiration during Replay](#jwt-expiration-during-replay) |
+| `redis_value_unordered` | [Unordered Redis Dependency Values](#unordered-redis-dependency-values) |
 
 ## Typed Response Rules
 

@@ -53,6 +53,14 @@ Send only the data needed for the assignment:
   worker base, delivery commit, accepted review and local-test results;
 - shared impact, previous integration provenance, and required-input references.
 
+Accepted worker handoffs have already passed the same complete quality suite.
+Do not add independent business-logic verification to integration assignments;
+worker explanations support actual conflicts and required quality evidence.
+Assign `review check --integration` for the merged candidate; it includes Rust
+fmt, test, and clippy. Do not also request manual full-suite execution before
+that check. Focused checks for conflict resolutions or reported failures and
+fresh complete review after candidate or relevant input changes still apply.
+
 For `review`, supply the same role, roots, base and assignment ID, plus exact
 findings/report when available and available work-item provenance. Missing or
 stale final quality reports also use this assignment. Match the inspected target
@@ -127,7 +135,7 @@ The integrator must run `review check --integration` on the final candidate.
 For one handoff, it may use the original work-item selector and accepted `--handoff-id`.
 For one or more API handoffs, write a nonempty JSON array of exact accepted identities,
 for example
-`[{"scope":{"kind":"api","api":"GET /a"},"handoff_id":"id-a"},{"scope":{"kind":"api","api":"GET /b"},"handoff_id":"id-b"}]`,
+`[{"scope":{"kind":"api","api":"/a"},"handoff_id":"id-a"},{"scope":{"kind":"api","api":"/b"},"handoff_id":"id-b"}]`,
 and run `review check --integration --batch-handoffs /absolute/handoffs.json`.
 The engine checks every current dispatch and handoff before issuing one report.
 The report

@@ -139,10 +139,10 @@ and keep each choice compatible with the source submission contract.
   changed file's size, not the diff size. If a touched file already exceeds the
   limit, extract the touched responsibility before adding behavior.
 
-JSON uses the published `brz-json` version described in [json.md](sdk/json.md).
-Other used Breeze or platform SDK capabilities MUST be added as a Git dependency
-pinned to its documented release tag and exposed through the corresponding
-`brz-<capability>` dependency name. Use the canonical capability names `http`,
+For each used Breeze or platform SDK, follow its SDK reference for dependency
+source, exact release/version, package name, and features. Preserve the project's
+registry configuration and expose capabilities through their documented
+`brz-<capability>` dependency names. Use the canonical capability names `http`,
 `memcache`, `redis`, `mysql`, `vintage`, `motan`, `auth`, `mcq`, `kafka`, and
 `logs`. `brz-auth` owns authentication SDK implementations, including TAuth
 and TAuth2; Memcache-backed MCQ belongs in `brz-mcq`. Product code MUST use the

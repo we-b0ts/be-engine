@@ -170,11 +170,8 @@ execute those engine actions even when the API implementer is running.
 
 Check for arrived events after every action, even while `pending` stays positive;
 report handoffs immediately instead of holding their runtime events until the queue
-drains or a sixty-minute activity report expires. The engine may keep a reported
-handoff's integration waiting while it completes the first verification attempt for
-every recorded API, allowing all independent implementation work to be dispatched
-before ordinary integration begins. Dispatch experts only through engine-issued
-[API expert assistance](coordinator-agent-protocol.md#api-expert-assistance);
+drains or a sixty-minute activity report expires. Dispatch experts only through
+[engine-issued API expert assistance](coordinator-agent-protocol.md#api-expert-assistance);
 do not initiate it yourself. Forward arrived expert reports on the same loop.
 Report responses replace the previous scheduling action. Preserve each
 event's actual worker handle, dispatch identity, and delivered handoff identity;
@@ -183,17 +180,10 @@ with a newer dispatch or another handoff ID. An unknown worker activity is not
 a running or idle observation.
 
 When no productive action is ready but workers or engine operations remain,
-`pending=1` selects `commands.wait`. Before waiting on agents, complete the
-[mandatory runtime query pass](coordinator-agent-protocol.md#mandatory-runtime-queries)
-and handle its results. Execute the returned wait only if it is still appropriate;
-the command waits at most 30 seconds and may return sooner when engine-observable
-state changes. On `worker_events_required`, actually invoke the runtime's
-list/status tools again for all outstanding assignments, reconcile results and
-events, report actual changes, then execute global `commands.status`. Use
-`commands.inventory` to recover missing bindings or coverage. Querying every
-worker does not require re-reporting every unchanged running observation.
-The sixty-minute engine expiry never waives this per-wait query requirement.
-Unknown runtime state is never reported as running.
+`pending=1` selects `commands.wait`. Follow the
+[wait action handling](#wait_required-and-worker_events_required) before executing
+it. The returned engine wait lasts at most 30 seconds and may return sooner when
+engine-observable state changes.
 
 A zero-pending `blocked` action stops this coordinator run without completing
 the workflow. Retain bindings, worktrees and blocker context. Resume through
@@ -227,10 +217,10 @@ its returned retry, without a hot loop.
 
 Use `inventory` when a scheduling breakdown or binding recovery is needed.
 `details.ready` counts sum to `pending`; `details.waiting` describes outstanding
-work. When waiting is the selected coordinator operation, `details.ready.wait=1`. Scoped
-status retains global `pending` while showing one item's action. After inspecting
-an item, return to global status for the loop. Worker event, dispatch, and handoff
-mechanics are in [coordinator-agent-protocol.md](coordinator-agent-protocol.md).
+work. Scoped status retains global `pending` while showing one item's action.
+After inspecting an item, return to global status for the loop. Worker event,
+dispatch, and handoff mechanics are in
+[coordinator-agent-protocol.md](coordinator-agent-protocol.md).
 
 ## Engine Phase Order
 
@@ -267,19 +257,20 @@ investigate business source in the coordinator.
 
 ### `wait_required` and `worker_events_required`
 
-Execute `commands.wait` when verification resources are occupied or all workers
-have just been queried and are running/queued. Follow the
-[mandatory runtime query pass](coordinator-agent-protocol.md#mandatory-runtime-queries)
-before waiting on agents and after each wait returns. Preserve the reported
-blocking API and operation as context;
-never start another traffic operation or recover a live owner. Wait returns
-`worker_events_required`: a runtime list/status tool invocation is mandatory even
-if no completion, failure or interruption event arrived. Reconcile all returned
-worker states, report changes with their original dispatch/handoff identities,
-then execute `commands.status`. Use `commands.inventory` to restore missing
-bindings or coverage. The engine does not inspect the task runtime itself.
-The coordinator performs coordination while idle; implementation and diagnosis
-remain assigned to workers.
+Before waiting on outstanding agents and after every bounded engine or task-runtime
+wait, actually invoke runtime list/status tools for all outstanding assignments.
+Follow the complete [runtime query protocol](coordinator-agent-protocol.md#mandatory-runtime-queries),
+including parked workers and retained non-implementation tasks. Events, historical
+observations and the sixty-minute engine expiry do not replace this pass. Unknown
+runtime state is neither running nor idle.
+
+Execute `commands.wait` only while its returned prerequisite still holds. On
+`worker_events_required`, reconcile the required query pass and arrived results,
+report changes with their original dispatch/handoff identities, then execute
+`commands.status`. Use `commands.inventory` to restore missing bindings or coverage;
+unchanged running observations need not be reported again. Preserve the blocking
+API and operation; a wait never authorizes another traffic operation or recovery
+of a live owner. Implementation and diagnosis remain assigned to workers.
 
 ### `blocked`
 
@@ -459,40 +450,25 @@ method cases and runs one Replay/target session; each method keeps its own
 focused evidence and progress. Excluded methods stay skipped. HTTP coordinator
 selectors accept only the route; `METHOD API` selectors are rejected.
 
-Every initialized action or status includes a bounded `api_inventory` summary:
-`total`, `completed`, `unverified`, `implementation_required`,
-`system_repair_required`, `awaiting_recording_refresh`, `revalidation_pending`, `current_index`, and
-`current_api`. Every count is a route count for HTTP. `current_api` is the
-canonical path/pattern without a method; `current_index` addresses the stable
-route `items` order, determined by each route's first occurrence in the
-recorded method ledger. Expanded `inventory` items contain `api`, aggregate
-`status`, and `methods` with the individual `METHOD API` verification states.
-Only fully skipped routes count as skipped. All included methods must be
-complete before a route counts as completed. Otherwise each route counts once
-under its highest-priority outstanding state: system repair, recording refresh,
-implementation, active verification, revalidation, then unverified. MOTAN
-entries retain their existing protocol-qualified identity.
-The engine owns this read-only projection; it does not change stored progress,
-worker bindings, or receipts. In expanded `inventory`,
-`workflow.scope` selects work from the adopted standard recording and is separate
-from the selected API. An
-omitted selector produces `recorded_api_inventory`: every API that actually
-publishes a case in the selected standard recording enters the inventory, while
-an API with no observed traffic is not required and does not block completion.
-The scope remains stable as selected workers change.
+`api_inventory` counts HTTP routes. All included methods must be complete before
+a route counts as completed; only fully skipped routes count as skipped. Use
+expanded `inventory` for aggregate route status and individual `METHOD API`
+verification states. MOTAN entries retain their protocol-qualified identity.
+These are engine-owned projections, not a coordinator scheduling queue.
+
+`workflow.scope` selects work from the adopted standard recording independently
+of the currently selected API. Without a selector, every API with a published
+case enters the inventory; unobserved APIs do not block completion. The scope
+remains stable as selected workers change.
 
 Normal issued API commands use route selectors, including rule/repair Replay,
 API completion and round revalidation. `verification request --api
 '/path-or-pattern' --reason '<shared change>'` reports included stale methods
 through the same all-accepted-or-gap and round-membership gates; it never promotes
-them to ordinary pending work or selects skipped methods. An unscoped `next`
+them to ordinary pending work, selects skipped methods, interrupts the current
+round or repeats a consumed member. An unscoped `next`
 uses the same route batch as an explicit route command. Methods are implementation
 and verification details, never separate coordinator work items.
-
-Route selection prefers a pending first attempt or a method with precise
-rule/system-repair Replay admission over a sibling awaiting implementation.
-The unaccepted sibling retains its issue and worker binding; its route-wide
-worker does not block the admitted method's Replay.
 
 Every `implementation_required` action uses a worker. Inventory size controls
 only how much work the engine can make ready. Worker concurrency belongs to
@@ -502,10 +478,10 @@ tests may overlap; only one traffic operation may be live.
 
 While any recorded API has no focused verification attempt, the engine gives that
 first-pass Replay priority over ready worker handoff integration and integrated
-handoff acceptance. Worker dispatch, resume, status reconciliation, and feedback
-remain immediately actionable. Once every API has an attempt, ordinary integration
-and acceptance resume; final fingerprint revalidation still proves the combined
-target.
+handoff acceptance; do not bypass that priority. Worker dispatch, resume, status
+reconciliation, and feedback remain immediately actionable. Once every API has an
+attempt, ordinary integration and acceptance resume; final fingerprint revalidation
+still proves the combined target.
 
 Use the [coordinator loop](#coordinator-loop) for advancing ready work,
 resuming from status, and waiting for handoffs.
@@ -519,29 +495,20 @@ batch is required or a consolidated capture refresh is pending.
 If the target fingerprint changes during focused Replay, discard that unaccepted
 result and keep the API eligible for a valid attempt. Later content changes mark
 completed APIs `revalidation_pending` without immediately repeating Replay.
-Start revalidation only after every included method is complete, stale awaiting
-revalidation, or at a confirmed system gap. Pending workers, handoffs, delivery
-acceptance and recording refresh must finish first.
+Follow the engine's revalidation actions only after pending workers, handoffs,
+delivery acceptance and recording refresh finish and each included method is
+complete, stale awaiting revalidation, or at a confirmed system gap.
 
-The engine persists a complete round of stale methods in stable inventory order.
-Drain that round even when an API fails: record every failure and continue the
-remaining APIs before dispatching repairs or integrating their handoffs. A method
-runs once in that round; later fingerprint changes mark evidence stale for the
-next round without restoring consumed membership. Route batches select only
-remaining methods. Resume/recovery preserves the unfinished round.
-
+Drain the current round even when an API fails: record the failure and continue
+remaining members before dispatching repairs or integrating handoffs. Each method
+runs once per round; later fingerprint changes affect the next round rather than
+restoring consumed membership. Resume/recovery retains unfinished membership.
 After the round, repair and accept all failures or confirm their system gaps
-before starting another round for stale evidence. An individual successful repair
-never starts revalidation while another implementation/acceptance is unfinished.
-If no stale evidence remains, finish normally with the existing publication gate;
-if only system gaps remain, use the existing `blocked` stop. Final success still
-requires current passing evidence for every included method. Content-preserving
-commits do not invalidate evidence.
-
-`verification request --api '/api/a' --reason 'shared response mapper changed'`
-remains available to inspect/request selected stale APIs. Follow its returned
-action, including waits: it obeys the same readiness and membership gates and
-cannot interrupt the current round or cause a member to repeat.
+before another round. One successful repair cannot start another round while
+other implementation/acceptance remains unfinished. Follow `blocked` if only
+system gaps remain; success still requires current passing evidence for every
+included method and the final publication gate. Content-preserving commits do not
+invalidate evidence.
 
 `awaiting_recording_refresh` is parked, not complete or blocked. Continue other
 pending APIs and resume existing workers until the engine returns one

@@ -39,17 +39,12 @@ use that exact version for a global quality refresh without manufacturing a
 worker handoff. Follow the integration protocol to synchronize a retained
 worktree after external changes.
 
-The integrator returns a passing report for its exact candidate. Publish only
-that candidate after checking assignment, base and configuration freshness.
-For an accepted work-item handoff, use `worker report --activity integrated
---review-report /absolute/report.json` with the original handoff and dispatch.
-For a batch report, repeat this command for every listed handoff with its own
-original worker handle and handoff ID; the report path is shared.
-For global evidence work or final quality refresh, execute the returned accept
-command with `BACKEND_REWRITE_REVIEW_REPORT`, or `review accept --report
-/absolute/report.json`. The engine verifies published code and frozen quality
-inputs without executing the checks again. Missing, failing or stale reports
-return to the integrator; they cannot make Replay or final delivery eligible.
+The integrator returns a passing report for its exact candidate. Follow
+[Publish A Ready Candidate](coordinator-integration.md#publish-a-ready-candidate)
+for assignment/base/input freshness, exact-commit publication, batch handoff
+reports and global report admission. The engine validates the published candidate
+and frozen quality inputs without executing checks again. Missing, failing or
+stale reports return to the integrator; they cannot make Replay or delivery eligible.
 
 Admission requires the exact reviewed commit. Once admitted, the engine can
 retain that receipt across progress-only commits when the reviewed commit is
@@ -59,11 +54,8 @@ status; progress publication alone does not
 require another integration task or quality run. This reuse applies only to an
 already accepted receipt, never to a candidate awaiting admission.
 
-A HEAD mismatch at admission is a publication/reconciliation issue. Compare the
-report's reviewed commit and canonical base with the actual canonical HEAD, then
-follow [Resume Publication](coordinator-integration.md#resume-publication).
-Identical file content does not satisfy exact-commit admission, and rerunning
-checks alone cannot complete a missing publication.
+For a HEAD mismatch or interrupted publication, follow
+[Resume Publication](coordinator-integration.md#resume-publication) before retrying admission.
 
 For missing semantic evidence or unknown ownership, delegate a `review` task
 through [coordinator-integration.md](coordinator-integration.md). Supply the exact

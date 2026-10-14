@@ -8,12 +8,11 @@ description: "Orchestrate, verify, and deliver backend rewrites from source beha
 Use `backend-rewrite` as the authority for workflow state, legal actions,
 verification, and completion. The target is the service being rewritten.
 
-Recording runs independently. The deployment caller runs `traffic-e2e record`
-and supplies completed immutable batches under the target's
-`.traffic-e2e/local/artifacts/recordings/<run-id>/`. Backend rewrite discovers
-or selects that evidence; it does not start recording, allocate capture IDs,
-import batches, or manage recording containers. For missing evidence and capture
-refreshes, read [external recording evidence](references/coordinator-recording.md).
+The deployment caller owns `traffic-e2e record` and its containers. Backend
+rewrite consumes completed immutable batches under the target's
+`.traffic-e2e/local/artifacts/recordings/<run-id>/`; it does not start capture or
+import batches. For missing evidence or capture refreshes, read
+[external recording evidence](references/coordinator-recording.md).
 
 ## Actor Model
 
@@ -45,51 +44,24 @@ they are outside this agent-role model.
 
 ## HTTP Route Work Scope
 
-HTTP implementers are assigned one canonical path/pattern, for example
-`/api/subscriptions/*`, with one worker handle and worktree. The engine derives
-its method contracts from the full recorded case inventory. Do not split this
-work into GET/PUT/DELETE workers or construct `GET|PUT /path` selectors.
-`next`, `status`, `evidence`, worker confirmation and review accept route scopes;
-use the exact scope returned by the engine. A route acceptance replays its
-included methods in one session. Each case keeps its recorded method, and
-`.traffic-e2e/progress.yaml` and the verification ledger remain keyed by `METHOD API`.
-The public API inventory counts HTTP routes: `current_api` omits the method,
-`current_index` addresses route items, and expanded items retain `methods` with
-each recorded method's verification state. A route is complete only when all
-included methods are complete; it is skipped only when all methods are skipped.
-Normal coordinator commands use the route as the API identity throughout
-dispatch, delivery, acceptance and revalidation. An unscoped `next` also
-verifies the selected route's included methods in one Replay session. Method
-identities belong to case/worker diagnostics and the verification ledger.
-A passing method does not complete a failing sibling. HTTP coordinator
-selectors accept only paths/patterns; `METHOD API` and combined method selectors
-are rejected. One API route owns one worker, worktree and delivery.
-The local `.traffic-e2e/regression.yaml` `only` and `skip` lists use the same
-route identities and affect all recorded HTTP methods on each route. `skip`
-takes precedence; use exact inventory patterns and preserve the user's scope.
-Returned `next` commands omit `--api`; use them as returned and let the engine
-choose the route. Local `auto_next: true` optionally continues passing Replay
-only when the existing global scheduler selects Replay again. Explicit `--api`
-always executes one scope. Respect the returned wait or non-Replay action.
+Use the engine's exact canonical path/pattern, for example
+`/api/subscriptions/*`, for dispatch, evidence, review, and acceptance. One route
+owns one worker, worktree, and delivery covering every included recorded method.
+Do not split methods into workers or use `METHOD API` or combined selectors.
 
-## Select Your Agent Role
+Inventory counts routes; method-specific evidence and progress retain `METHOD
+API` identities. Acceptance replays a route's included methods in one session.
+The route is complete only when all included methods are complete and skipped
+only when all methods are skipped; a passing method does not complete a failing
+sibling. Local `.traffic-e2e/regression.yaml` `only` and `skip` use the same routes;
+`skip` takes precedence. Preserve the user's scope and execute returned commands
+unchanged; the engine selects the next route and any wait or non-Replay action.
+
+## Role And Document Routing
 
 Role comes from the assignment and persists through missing inputs, failures,
 resumed turns, and completed handoffs. Read only your role's entrypoint and the
 references it requests.
-
-| Assignment | Responsibility | Entrypoint |
-| --- | --- | --- |
-| Main/root workflow task: `coordinator` | Dispatch, reconcile results, execute engine transitions, invoke acceptance, deliver | [coordinator.md](references/coordinator.md) |
-| API implementer: `api-implementer` | Diagnose and implement the assigned API; return evidence and checked code | [api-implementer.md](references/api-implementer.md) |
-| Code integrator: `code-integrator` | Prepare the assigned integration or inspect assigned source findings; return a version-bound result | [code-integrator.md](references/code-integrator.md) |
-| Engine-requested API expert: `api-expert` | Investigate the assigned API read-only; return findings and evidence to the coordinator | [api-expert.md](references/api-expert.md) |
-
-For an explicit request to initialize an uninitialized target, read
-[project-init.md](references/project-init.md). Ordinary rewrite sessions never
-rerun initialization.
-
-## Document Routing
 
 Role entrypoints remain separate because they define different authorities.
 Do not merge coordinator, API-implementer, code-integrator, or API-expert
@@ -102,12 +74,9 @@ instructions into one operating guide.
 | Code integrator | [code-integrator.md](references/code-integrator.md) | [target-code-rules.md](references/target-code-rules.md), [source-review-rules.md](references/source-review-rules.md), and `code-integrator-*.md` as directed |
 | API expert | [api-expert.md](references/api-expert.md) | Relevant read-only diagnostic methods in [api-implementer-diagnosis.md](references/api-implementer-diagnosis.md) and its routed specialty documents as directed; never code-repair or delivery instructions |
 
-Neutral shared contracts such as target-code and source-review rules keep
-capability-based names because more than one role consumes them. Task-mode
-documents use their owning role as a prefix, for example
-`api-implementer-route-analysis.md`. Coordinator action documents use the
-`coordinator-` prefix. These naming rules are documentation routing, not new
-engine roles or action kinds.
+For an explicit request to initialize an uninitialized target, read
+[project-init.md](references/project-init.md). Ordinary rewrite sessions never
+rerun initialization.
 
 ## Shared Constraints
 
@@ -122,33 +91,16 @@ engine roles or action kinds.
 - Recordings and `.traffic-e2e/local/artifacts/` are immutable evidence. Preserve
   engine-generated `progress.yaml`. Do not synthesize evidence, rewrite source
   behavior to manufacture a pass, or replace engine aggregation with scripts.
-- Source-proven Redis lock tokens use the existing dependency-rule plan/apply
-  lifecycle with explicit host, port and key scope. Current dirty evidence
-  exposes token-only candidates; source diagnosis proves random ownership and
-  conditional release. Preserve token correlation, scripts and finite calls;
-  never remove locking or independently ignore token arguments.
-- Source-generated identities reused across SQL/JSON and Redis keys use one
-  case-local `dependency_rules` entry with `kind: dynamic_value` and a capture with explicit host/port scope and optional
-  format. Source-generated filename dates use `response_rules.headers` with
-  format/timezone and parameter selection. The worker proves semantics and
-  returns selectors; the coordinator uses current `rule plan` evidence, applies
-  the rule and runs fresh verification. Existing recordings are reusable.
-- Before rule planning, check `facts.policy_freshness`. Stale or unavailable
-  policy identity retains diagnosis but suppresses applicable planners. Return
-  its `refresh_command` to the coordinator, which follows the normal gates and
-  verifies the existing recordings before obtaining new evidence. Do not treat
-  a policy mismatch as a recording-version or missing-capability diagnosis.
+- Rule diagnosis and source proof belong to the API implementer; planning,
+  application, and fresh verification follow the coordinator's rule protocol.
+  Use current evidence and follow required policy-refresh actions.
 - Target behavior must use normal product code and configuration, never recorded
   results, expected responses, Replay sessions, reports, or private engine state.
 - Only the coordinator executes workflow mutations and formal acceptance.
   Worker-local reports and integrator results do not mark a work item complete.
-- Coordinators must actually invoke the task runtime's agent-list/status tool
-  for a fresh pass over all outstanding worker assignments before waiting and
-  after each bounded wait. In Claude Code, invoke the built-in `ListAgents`
-  (`/list-agents`) when available. Historical reports and absent stop events do
-  not satisfy this requirement. Follow the
+- Coordinators must actually query runtime status for all outstanding worker
+  assignments before waiting and after each bounded wait. Follow the
   [runtime query protocol](references/coordinator-agent-protocol.md#mandatory-runtime-queries).
-- Coordinators must not invoke `sleep` or wrap or loop engine commands. Execute
-  engine commands directly, one at a time, and process each complete response
-  before the next command. Follow the
+- Coordinators execute engine commands directly, one at a time, without sleep,
+  wrappers, or loops, and process each complete response. Follow the
   [coordinator execution rules](references/coordinator.md#execution-rules).

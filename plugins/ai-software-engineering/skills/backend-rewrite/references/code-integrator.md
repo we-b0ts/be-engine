@@ -69,6 +69,15 @@ configuration and runtime inputs, and exact candidate code. A batch report binds
 every included handoff to that candidate. Never reuse a
 worker report for integration or a candidate report after subsequent changes.
 
+Each accepted worker handoff has already passed the same complete quality suite.
+Do not independently re-prove its business logic; inspect code as needed for
+actual merge conflicts or required quality evidence. After merging, invoke
+`review check --integration` directly: it runs Rust fmt,
+test, and clippy for every managed Rust project. Do not manually run those same
+full-suite commands before it. Use the candidate report to identify any failures;
+focused checks for conflict resolutions or reported failures remain appropriate.
+Candidate or relevant input changes still require a fresh complete review.
+
 When the reviewed handoff needs no code change after input application, the
 candidate may equal the assigned base. Return the identity and checks without
 creating an empty merge or commit.
