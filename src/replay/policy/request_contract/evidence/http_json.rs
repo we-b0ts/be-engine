@@ -91,11 +91,17 @@ pub(super) fn verify(
         crate::replay::http::request_headers::exact_contract_match(&headers, &actual.headers),
         "HTTP JSON witness identity headers differ"
     );
+    let comparison = super::super::http_json::TimeComparison::new(http, source, &actual.body)?;
+    // Discovery retains all same-endpoint pairs before the time fields are known.
+    // Different stable bodies belong to different requests, not an invalid rule.
+    if !comparison.stable_fields_match() {
+        return Ok(false);
+    }
     let record = serde_json::from_value(event.clone())?;
     let clocks = RequestTimes {
         source: crate::replay::http::request_headers::time_reference::source(&record),
         target: Some(actual.request_started_at),
     };
-    super::super::http_json::compare(http, source, &actual.body, clocks)?;
+    comparison.validate_times(clocks)?;
     Ok(true)
 }

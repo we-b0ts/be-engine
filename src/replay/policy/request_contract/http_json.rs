@@ -29,38 +29,69 @@ pub(super) fn validate(http: &HttpSelector) -> Result<()> {
     Ok(())
 }
 
+/// Separate request pairing from time validation without parsing a body twice.
+pub(super) struct TimeComparison<'a> {
+    stable_fields_match: bool,
+    fields: Vec<(&'a config::TimeField, Value, Value)>,
+}
+
+impl<'a> TimeComparison<'a> {
+    pub(super) fn new(http: &'a HttpSelector, source: &[u8], actual: &[u8]) -> Result<Self> {
+        let mut source = crate::replay::json_order::parse(source)
+            .context("source request requires bounded complete unique-member JSON")?;
+        let mut actual = crate::replay::json_order::parse(actual)
+            .context("target request requires bounded complete unique-member JSON")?;
+        let mut fields = Vec::with_capacity(http.json.time.len());
+        for (pointer, field) in &http.json.time {
+            let a = source
+                .pointer_mut(pointer)
+                .context("source time field is missing")?;
+            let b = actual
+                .pointer_mut(pointer)
+                .context("target time field is missing")?;
+            fields.push((field, std::mem::take(a), std::mem::take(b)));
+        }
+        Ok(Self {
+            stable_fields_match: source == actual,
+            fields,
+        })
+    }
+
+    pub(super) fn stable_fields_match(&self) -> bool {
+        self.stable_fields_match
+    }
+
+    pub(super) fn validate_times(&self, clocks: RequestTimes) -> Result<usize> {
+        let times = self
+            .fields
+            .iter()
+            .map(|(field, source, actual)| super::time::compare(source, actual, field, clocks))
+            .collect::<Result<Vec<_>>>()?;
+        if let Some(first) = times.first() {
+            ensure!(
+                times
+                    .iter()
+                    .all(|pair| ((pair.1 - first.1) - (pair.0 - first.0)).abs() <= 0.000_001),
+                "HTTP JSON time parameter relationship changed"
+            );
+        }
+        Ok(times.len())
+    }
+}
+
 pub(super) fn compare(
     http: &HttpSelector,
     source: &[u8],
     actual: &[u8],
     clocks: RequestTimes,
 ) -> Result<usize> {
-    let mut source = crate::replay::json_order::parse(source)
-        .context("source request requires bounded complete unique-member JSON")?;
-    let mut actual = crate::replay::json_order::parse(actual)
-        .context("target request requires bounded complete unique-member JSON")?;
-    let mut times = Vec::new();
-    for (pointer, field) in &http.json.time {
-        let a = source
-            .pointer_mut(pointer)
-            .context("source time field is missing")?;
-        let b = actual
-            .pointer_mut(pointer)
-            .context("target time field is missing")?;
-        times.push(super::time::compare(a, b, field, clocks)?);
-        *a = Value::Null;
-        *b = Value::Null;
-    }
-    if let Some(first) = times.first() {
-        ensure!(
-            times
-                .iter()
-                .all(|pair| ((pair.1 - first.1) - (pair.0 - first.0)).abs() <= 0.000_001),
-            "HTTP JSON time parameter relationship changed"
-        );
-    }
-    ensure!(source == actual, "unselected HTTP JSON fields differ");
-    Ok(times.len())
+    let comparison = TimeComparison::new(http, source, actual)?;
+    let validations = comparison.validate_times(clocks)?;
+    ensure!(
+        comparison.stable_fields_match(),
+        "unselected HTTP JSON fields differ"
+    );
+    Ok(validations)
 }
 
 impl RequestContracts {

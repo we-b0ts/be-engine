@@ -132,8 +132,9 @@ is unclear.
   envelopes without evaluating Lua. Redis compares dynamic-identity copies
   before disjoint request-time contracts; overlapping field ownership is rejected.
   Its `time` child shares timestamp parsing and relative-clock validation across
-  protocols; `http_json` owns JSON body time comparisons using dependency-local
-  clocks, and `evidence/http_json` protects and verifies failed target witnesses.
+  protocols; `http_json` owns JSON body stable-field pairing and time comparisons
+  using dependency-local clocks, and `evidence/http_json` protects and verifies
+  failed target witnesses before planning.
 - `e2e_run/assertion_publication` owns staging-time retargeting of assertion
   details, summary references and their fingerprints for both ordinary terminal
   publication and focused method projections. Store owns atomic directory
