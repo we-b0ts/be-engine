@@ -101,9 +101,35 @@ impl SqlValueTemplate {
     }
 
     pub(in crate::replay::policy) fn matches(&self, sql: &str) -> bool {
+        // This is only a rejection shortcut. Ambiguous prefixes still use the
+        // full tokenizer, and matching verbs still require every normal check.
+        if let (Some(actual), Some(Token::Word(expected))) =
+            (plain_statement_verb(sql), self.tokens.first())
+            && !expected.eq_ignore_ascii_case(actual)
+        {
+            return false;
+        }
         bounded_statement_tokens(sql).is_some_and(|actual| {
             self.bind(&actual)
                 .is_some_and(|bound| extract(&bound, &actual).is_some())
         })
     }
+}
+
+fn plain_statement_verb(sql: &str) -> Option<&str> {
+    // Bound the peek even for oversized or whitespace-only input. Comments,
+    // quoted words and unusual separators intentionally fall back to parsing.
+    let start = sql
+        .as_bytes()
+        .iter()
+        .take(64)
+        .position(|byte| !byte.is_ascii_whitespace())?;
+    let verb = sql.get(start..start + 6)?;
+    if !sql.as_bytes().get(start + 6)?.is_ascii_whitespace() {
+        return None;
+    }
+    ["select", "insert", "update", "delete"]
+        .iter()
+        .any(|expected| expected.eq_ignore_ascii_case(verb))
+        .then_some(verb)
 }

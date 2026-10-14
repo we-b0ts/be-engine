@@ -1,5 +1,67 @@
 use super::*;
 
+const STATEMENT_PAIRS: [(&str, &str); 4] = [
+    (
+        "SELECT id FROM entries WHERE id=?",
+        "SELECT id FROM entries WHERE id=7",
+    ),
+    (
+        "INSERT INTO entries (id) VALUES (?)",
+        "INSERT INTO entries (id) VALUES (7)",
+    ),
+    (
+        "UPDATE entries SET stamp=? WHERE id=?",
+        "UPDATE entries SET stamp='Stable' WHERE id=7",
+    ),
+    (
+        "DELETE FROM entries WHERE id=?",
+        "DELETE FROM entries WHERE id=7",
+    ),
+];
+
+#[test]
+fn statement_verb_prefilter_preserves_comments_case_and_whitespace_matching() {
+    for (template, sql) in STATEMENT_PAIRS {
+        let template = SqlValueTemplate::new(template, &[], &[], None).unwrap();
+        let verb = sql.split_ascii_whitespace().next().unwrap();
+        for actual in [
+            sql.to_string(),
+            sql.replacen(verb, &verb.to_ascii_lowercase(), 1),
+            format!(" \t\r\n{sql}"),
+            format!("/* SELECT INSERT UPDATE DELETE */{sql}"),
+            format!("# SELECT UPDATE\n{sql}"),
+            format!("-- INSERT DELETE\n{sql}"),
+            format!("{}{sql}", " ".repeat(80)),
+            sql.replacen(' ', "/**/", 1),
+        ] {
+            assert!(template.matches(&actual), "{actual}");
+        }
+    }
+}
+
+#[test]
+fn statement_verb_prefilter_retains_kind_table_and_unsafe_sql_rejections() {
+    for (index, (template, sql)) in STATEMENT_PAIRS.into_iter().enumerate() {
+        let template = SqlValueTemplate::new(template, &[], &[], None).unwrap();
+        for (other, (_, actual)) in STATEMENT_PAIRS.into_iter().enumerate() {
+            if index != other {
+                assert!(!template.matches(actual), "{actual}");
+            }
+        }
+        let verb = sql.split_ascii_whitespace().next().unwrap();
+        for actual in [
+            format!("/*! SELECT */ {sql}"),
+            format!("/*+ optimizer_hint */ {sql}"),
+            format!("{sql}; DELETE FROM entries"),
+            sql.replace("entries", "other_entries"),
+            sql.replacen(verb, &format!("{verb}_suffix"), 1),
+            format!("'{verb}'{}", &sql[verb.len()..]),
+        ] {
+            assert!(!template.matches(&actual), "{actual}");
+        }
+    }
+}
+
 fn literal_statement(bytes: usize) -> String {
     let prefix = "UPDATE entries SET payload='";
     let suffix = "', updated_at=? WHERE id=7";

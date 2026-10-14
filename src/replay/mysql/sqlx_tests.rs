@@ -15,6 +15,7 @@ mod distinct_tests;
 mod dynamic_values_tests;
 mod large_predicate_tests;
 mod large_sql_values_tests;
+mod matching_benchmark;
 mod or_tests;
 mod path_capture_tests;
 mod predicate_tests;
