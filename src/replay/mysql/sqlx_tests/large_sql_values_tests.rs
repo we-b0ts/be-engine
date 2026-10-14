@@ -31,12 +31,12 @@ dependency_rules:
       2: {time: replay_now, tolerance: 5s}
 "#;
         let recorded_payload = json!({
-            "name":"stable", "data":"x".repeat(175_000),
+            "name":"stable", "data":"x".repeat(300_000),
             "status":{"updatedAt":"2020-01-01T00:00:00+00:00"}
         })
         .to_string();
         let recorded_sql = text_sql(&recorded_payload, "2020-01-01 00:00:00", 7);
-        assert!(recorded_sql.len() > 64 * 1024 && recorded_sql.len() < 256 * 1024);
+        assert!(recorded_sql.len() > 256 * 1024 && recorded_sql.len() < 1024 * 1024);
         for source_prepared in [false, true] {
             for target_prepared in [false, true] {
                 let mut write = exchange(&recorded_sql, json!({"status":"ok","affected_rows":1}));
@@ -66,7 +66,7 @@ dependency_rules:
                     };
                     let payload = json!({
                         "name":if attempt == 0 {"changed"} else {"stable"},
-                        "data":"x".repeat(175_000), "status":{"updatedAt":observed}
+                        "data":"x".repeat(300_000), "status":{"updatedAt":observed}
                     })
                     .to_string();
                     let id = if attempt == 1 { 8_i64 } else { 7 };
