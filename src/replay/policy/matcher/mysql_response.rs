@@ -25,7 +25,12 @@ impl ReplayPolicyRuntime {
         for rule in &self.loaded.document.dependency_rules {
             if rule.protocol != DependencyProtocol::Mysql
                 || !rule_matches_case(rule, case)
-                || !rule_matches_mysql(rule, identity, &record.command, record.sql.as_deref())
+                || !self.mysql_selectors.matches(
+                    rule,
+                    identity,
+                    &record.command,
+                    record.sql.as_deref(),
+                )
             {
                 continue;
             }

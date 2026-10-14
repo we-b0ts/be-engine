@@ -43,7 +43,7 @@ pub(in crate::replay::policy) fn values(
 }
 
 pub(in crate::replay::policy) fn template_values(
-    template: &SqlValueTemplate<'_>,
+    template: &SqlValueTemplate,
     sql: Option<&str>,
     params: Option<&[RecordedMysqlValue]>,
 ) -> Result<Vec<Token>, String> {
@@ -170,8 +170,13 @@ impl ReplayPolicyRuntime {
             .filter(|rule| {
                 rule.protocol == DependencyProtocol::Mysql
                     && rule_matches_case(rule, case)
-                    && rule_matches_mysql(rule, context.identity, context.command, context.sql)
-                    && rule_matches_mysql_sql_pattern(rule, context.recorded_sql)
+                    && self.mysql_selectors.matches(
+                        rule,
+                        context.identity,
+                        context.command,
+                        context.sql,
+                    )
+                    && self.mysql_selectors.matches_sql(rule, context.recorded_sql)
             })
             .collect::<Vec<_>>();
         if !rules.iter().any(|rule| {
@@ -198,13 +203,10 @@ impl ReplayPolicyRuntime {
                 if !mysql.params.is_empty() {
                     return Err("overlapping MySQL params and sql_values rules".into());
                 }
-                let compiled = SqlValueTemplate::new(
-                    &mysql.sql,
-                    &mysql.tables,
-                    &mysql.table_patterns,
-                    mysql.table_series.as_ref(),
-                )
-                .map_err(|error| error.to_string())?;
+                let compiled = self
+                    .mysql_selectors
+                    .template(&rule.id)
+                    .ok_or("MySQL SQL time selector has no compiled template")?;
                 let template = compiled
                     .bind(&recorded)
                     .ok_or("recorded SQL differs from table template")?;

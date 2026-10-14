@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 pub(in crate::replay::policy) mod mysql_response;
+mod mysql_selectors;
 pub(super) mod mysql_values;
 use std::fs;
 use std::path::Path;
@@ -48,6 +49,7 @@ pub(in crate::replay) struct ReplayPolicyRuntime {
     pub(in crate::replay) request_contracts: super::request_contract::RequestContracts,
     pub(in crate::replay) dynamic_values: super::dynamic_values::DynamicValues,
     loaded: LoadedReplayPolicy,
+    mysql_selectors: mysql_selectors::MysqlSelectors,
     cases: BTreeMap<String, CaseIdentity>,
     applicable_dependency_rule_ids: BTreeSet<String>,
     usage: BTreeMap<String, DependencyRuleUsage>,
@@ -143,6 +145,9 @@ impl ReplayPolicyRuntime {
             .map(|rule| (rule.id.clone(), DependencyRuleUsage::default()))
             .collect();
         let runtime = Self {
+            mysql_selectors: mysql_selectors::MysqlSelectors::new(
+                &loaded.document.dependency_rules,
+            )?,
             request_contracts: super::request_contract::RequestContracts::load(
                 &loaded.document.dependency_rules,
                 path,
@@ -193,7 +198,7 @@ impl ReplayPolicyRuntime {
                 .filter(|rule| {
                     rule.protocol == DependencyProtocol::Mysql
                         && rule_matches_case(rule, case)
-                        && rule_matches_mysql(rule, identity, command, sql)
+                        && self.mysql_selectors.matches(rule, identity, command, sql)
                 })
                 .map(|rule| rule.id.clone()),
         );
@@ -303,8 +308,13 @@ impl ReplayPolicyRuntime {
                         .as_ref()
                         .is_some_and(|mysql| mysql.response_time_shift.is_empty())
                     && rule_matches_case(rule, case)
-                    && rule_matches_mysql(rule, context.identity, context.command, context.sql)
-                    && rule_matches_mysql_sql_pattern(rule, context.recorded_sql)
+                    && self.mysql_selectors.matches(
+                        rule,
+                        context.identity,
+                        context.command,
+                        context.sql,
+                    )
+                    && self.mysql_selectors.matches_sql(rule, context.recorded_sql)
             })
             .collect::<Vec<_>>();
         if matching_rules.is_empty() {
@@ -401,8 +411,13 @@ impl ReplayPolicyRuntime {
                     .as_ref()
                     .is_some_and(|mysql| mysql.response_time_shift.is_empty())
                 && rule_matches_case(rule, case)
-                && rule_matches_mysql(rule, context.identity, context.command, context.sql)
-                && rule_matches_mysql_sql_pattern(rule, context.recorded_sql)
+                && self.mysql_selectors.matches(
+                    rule,
+                    context.identity,
+                    context.command,
+                    context.sql,
+                )
+                && self.mysql_selectors.matches_sql(rule, context.recorded_sql)
         })
     }
 
@@ -747,67 +762,6 @@ fn load_case_identity(case_dir: &Path, request_path: &Path) -> Result<CaseIdenti
         method: Some(request.method),
         path: Some(path),
     })
-}
-
-fn rule_matches_mysql(
-    rule: &ReplayDependencyRule,
-    identity: &ReplaySessionIdentity,
-    command: &str,
-    sql: Option<&str>,
-) -> bool {
-    let Some(mysql) = &rule.mysql else {
-        return false;
-    };
-    if !(mysql.command.eq_ignore_ascii_case(command)
-        || ((!mysql.sql_values.is_empty() || !mysql.response_time_shift.is_empty())
-            && matches!(command, "COM_QUERY" | "COM_STMT_EXECUTE")))
-        || !rule_matches_target(rule, identity.target.as_ref())
-        || mysql
-            .database
-            .as_deref()
-            .is_some_and(|database| identity.database.as_deref() != Some(database))
-        || mysql
-            .username
-            .as_deref()
-            .is_some_and(|username| identity.username.as_deref() != Some(username))
-    {
-        return false;
-    }
-    let Some(sql) = sql else {
-        return false;
-    };
-    if !mysql.sql_values.is_empty() || !mysql.response_time_shift.is_empty() {
-        return super::sql_template::SqlValueTemplate::new(
-            &mysql.sql,
-            &mysql.tables,
-            &mysql.table_patterns,
-            mysql.table_series.as_ref(),
-        )
-        .is_ok_and(|template| template.matches(sql));
-    }
-    text_pattern_matches(
-        &crate::mysql::sql::normalize_pattern(&mysql.sql),
-        &normalize_sql(sql),
-    )
-}
-
-fn rule_matches_mysql_sql_pattern(rule: &ReplayDependencyRule, sql: Option<&str>) -> bool {
-    let (Some(mysql), Some(sql)) = (&rule.mysql, sql) else {
-        return false;
-    };
-    if !mysql.sql_values.is_empty() || !mysql.response_time_shift.is_empty() {
-        return super::sql_template::SqlValueTemplate::new(
-            &mysql.sql,
-            &mysql.tables,
-            &mysql.table_patterns,
-            mysql.table_series.as_ref(),
-        )
-        .is_ok_and(|template| template.matches(sql));
-    }
-    text_pattern_matches(
-        &crate::mysql::sql::normalize_pattern(&mysql.sql),
-        &normalize_sql(sql),
-    )
 }
 
 fn rule_matches_http(

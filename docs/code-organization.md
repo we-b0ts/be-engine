@@ -77,6 +77,11 @@ is unclear.
   binds whole table identifiers and qualifiers for SQL-time rules; matcher and
   evidence planning retain source/target physical-table equality. CLI table
   bounds live in `bin/backend-rewrite/dependency_rule/mysql_tables`.
+  Runtime table-series matching keeps numeric bounds and canonical zero-padding
+  without expanding physical names. `replay/policy/matcher/mysql_selectors`
+  owns immutable per-policy SQL selector compilation shared by observation,
+  PREPARE metadata, request-value validation and response-time selection; case
+  scope, request anchors, parameter values and consumption remain live state.
 
 - `dependency_index` owns disposable semantic evidence locations, source identity,
   atomic index persistence, cancellation and immutable byte caching. Protocol
