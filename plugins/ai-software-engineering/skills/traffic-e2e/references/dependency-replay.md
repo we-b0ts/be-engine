@@ -185,8 +185,14 @@ only the confirmed channel, pattern, or shard channel; errors leave state intact
 Replay returns that recorded confirmation and leaves the connection open, with
 the entire source lane still bound to one target connection. Recorder forwards a
 subsequent well-formed RESP2 `message`, `pmessage`, or `smessage` only when its
-channel or pattern matches the active subscription; these process notifications
-do not become semantic Replay evidence, and Replay does not synthesize them.
+channel or pattern matches the active subscription. Confirmed pushes become
+finite semantic evidence: ordinary notifications remain Global process inputs,
+while an RPC adapter can retain exact request ownership across connections.
+Replay schedules captured pushes only for a matching confirmed subscription.
+The Socket.IO Redis-adapter JSON RPC adapter translates publisher UUIDs and
+callback counters while retaining exact command/result semantics. Missing or
+inconsistent ACK evidence requires a refreshed recording. See
+[Redis Pub/Sub](../../../../../docs/redis-pubsub.md).
 Malformed or unbound pushes remain dirty. Multiple subject arguments,
 no-argument unsubscribe-all commands, and RESP3 push frames remain unsupported.
 Cases rejected by an older Recorder for unsubscription need a new recording;

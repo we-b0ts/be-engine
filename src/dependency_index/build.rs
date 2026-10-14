@@ -109,7 +109,10 @@ impl Builder {
         };
         self.index.events += 1;
         let tag = value["event_type"].as_str().unwrap_or_default();
-        let location = if matches!(tag, "http_exchange" | "redis_exchange") {
+        let location = if matches!(
+            tag,
+            "http_exchange" | "redis_exchange" | "redis_pub_sub_push"
+        ) {
             Some(RecordLocation {
                 line,
                 offset,
@@ -154,6 +157,7 @@ impl Builder {
                     | "mysql_exchange"
                     | "redis_connection"
                     | "redis_exchange"
+                    | "redis_pub_sub_push"
                     | "memcached_connection"
                     | "memcached_exchange"
                     | "kafka_connection"
@@ -205,6 +209,13 @@ impl Builder {
                         .to_ascii_lowercase(),
                     port,
                     protocol: "mysql".into(),
+                });
+            }
+            if tag == "redis_pub_sub_push" {
+                self.index.redis.push(IndexedRecord {
+                    location: location.clone().expect("Pub/Sub location"),
+                    key: digest(raw),
+                    connection_id: value["connection_id"].as_str().map(str::to_owned),
                 });
             }
             if tag == "redis_exchange" {

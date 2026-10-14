@@ -40,6 +40,10 @@ pub(super) fn is_client_library_info_exchange(
 pub(super) struct RedisDependencySummary {
     connections: usize,
     exchanges: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pubsub_pushes: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    rpc_callbacks: usize,
     unsafe_exchanges: usize,
     errors: usize,
     client_terminated: usize,
@@ -64,6 +68,19 @@ impl RedisSummaryBuilder {
             self.connection_ids.insert(id.to_string());
         }
         record_target(&mut self.summary.targets, value);
+    }
+
+    pub(super) fn record_push(&mut self, value: &Value) {
+        self.summary.pubsub_pushes += 1;
+        if value.get("rpc_request").is_some_and(|v| !v.is_null()) {
+            self.summary.rpc_callbacks += 1;
+        }
+        if value["replay_safe"] != true {
+            self.summary.unsafe_exchanges += 1;
+        }
+        record_target(&mut self.summary.targets, value);
+        self.summary.response_bytes +=
+            value["response"]["original_len"].as_u64().unwrap_or(0) as usize;
     }
 
     pub(super) fn record_exchange(&mut self, value: &Value) {
@@ -111,7 +128,9 @@ impl RedisSummaryBuilder {
     }
 
     pub(super) fn has_activity(&self) -> bool {
-        !self.connection_ids.is_empty() || self.summary.exchanges > 0
+        !self.connection_ids.is_empty()
+            || self.summary.exchanges > 0
+            || self.summary.pubsub_pushes > 0
     }
 }
 
@@ -141,4 +160,8 @@ fn json_u64(value: &Value, key: &str) -> Option<u64> {
 
 fn json_bool(value: &Value, key: &str) -> Option<bool> {
     value.get(key).and_then(Value::as_bool)
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }

@@ -289,6 +289,7 @@ impl DependencySummaryBuilder {
             "mysql_tls_rejected" => record_mysql_tls_rejected_summary(&mut self.mysql, value),
             "redis_connection" => self.redis.record_connection(value),
             "redis_exchange" => self.redis.record_exchange(value),
+            "redis_pub_sub_push" => self.redis.record_push(value),
             "memcached_connection" => self.memcached.record_connection(value),
             "memcached_exchange" => self.memcached.record_exchange(value),
             "kafka_connection" => record_kafka_connection_summary(&mut self.kafka, value),

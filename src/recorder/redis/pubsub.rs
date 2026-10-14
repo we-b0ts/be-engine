@@ -1,3 +1,5 @@
+mod capture;
+pub(super) use capture::{CapturedPush, capture};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -12,6 +14,7 @@ use crate::redis::{
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct Subscriptions {
+    anchors: std::collections::HashMap<(RedisSubscriptionKind, Vec<u8>), (u64, std::time::Instant)>,
     channels: BTreeSet<Vec<u8>>,
     patterns: BTreeSet<Vec<u8>>,
     shard_channels: BTreeSet<Vec<u8>>,
@@ -28,6 +31,31 @@ impl Subscriptions {
             RedisSubscriptionKind::Pattern => self.patterns.contains(&push.subject),
             RedisSubscriptionKind::ShardChannel => self.shard_channels.contains(&push.subject),
         }
+    }
+
+    pub(super) fn set_anchor(&mut self, command: &RedisCommand, sequence: u64) {
+        let Some(subject) = command.args.first() else {
+            return;
+        };
+        let kind = match command.name.as_str() {
+            "SUBSCRIBE" | "UNSUBSCRIBE" => RedisSubscriptionKind::Channel,
+            "PSUBSCRIBE" | "PUNSUBSCRIBE" => RedisSubscriptionKind::Pattern,
+            "SSUBSCRIBE" | "SUNSUBSCRIBE" => RedisSubscriptionKind::ShardChannel,
+            _ => return,
+        };
+        let key = (kind, subject.clone());
+        if command.name.starts_with('U') || command.name.contains("UNSUBSCRIBE") {
+            self.anchors.remove(&key);
+        } else {
+            self.anchors
+                .insert(key, (sequence, std::time::Instant::now()));
+        }
+    }
+
+    pub(super) fn anchor(&self, push: &RedisPubSubPush) -> Option<(u64, u64)> {
+        self.anchors
+            .get(&(push.subscription_kind, push.subject.clone()))
+            .map(|(sequence, time)| (*sequence, time.elapsed().as_millis() as u64))
     }
 
     pub(super) fn record_confirmation(&mut self, command: &RedisCommand, response: &[u8]) {
@@ -67,17 +95,20 @@ pub(super) async fn write_push(
     client_open: &mut bool,
     bytes: &mut u64,
     payload: &[u8],
-) -> Result<()> {
+) -> Result<bool> {
     if !*client_open || termination.client_ended_first() {
         *client_open = false;
-        return Ok(());
+        return Ok(false);
     }
     match client_write.lock().await.write_all(payload).await {
-        Ok(()) => *bytes += payload.len() as u64,
+        Ok(()) => {
+            *bytes += payload.len() as u64;
+            return Ok(true);
+        }
         Err(error) if termination.observe_client_io_error(&error) => *client_open = false,
         Err(error) => return Err(error.into()),
     }
-    Ok(())
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -140,6 +171,8 @@ mod tests {
                 subscriptions.record_confirmation(&command, response.as_bytes());
                 assert!(subscriptions.accepts(&RedisPubSubPush {
                     subscription_kind: kind,
+                    channel: Vec::new(),
+                    payload: Vec::new(),
                     subject: b"events".to_vec(),
                 }));
             }
@@ -147,10 +180,14 @@ mod tests {
                 .record_confirmation(&command, confirmation(unsubscribe, "events", 1).as_bytes());
             assert!(!subscriptions.accepts(&RedisPubSubPush {
                 subscription_kind: kind,
+                channel: Vec::new(),
+                payload: Vec::new(),
                 subject: b"events".to_vec(),
             }));
             assert!(subscriptions.accepts(&RedisPubSubPush {
                 subscription_kind: kind,
+                channel: Vec::new(),
+                payload: Vec::new(),
                 subject: b"other".to_vec(),
             }));
             assert!(subscriptions.is_active());
@@ -190,6 +227,8 @@ mod tests {
         ] {
             assert!(subscriptions.accepts(&RedisPubSubPush {
                 subscription_kind: kind,
+                channel: Vec::new(),
+                payload: Vec::new(),
                 subject: b"events".to_vec(),
             }));
         }

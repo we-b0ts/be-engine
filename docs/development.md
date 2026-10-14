@@ -9,6 +9,9 @@ including request-body conditions, recorded identity capture and old-recording r
 MySQL replay driver compatibility and process-owned read rules are documented in
 [mysql-replay.md](mysql-replay.md).
 
+Redis Pub/Sub notifications and correlated RPC callbacks are documented in
+[redis-pubsub.md](redis-pubsub.md).
+
 Cross-case HTTP initialization dependencies use explicit Replay scope rules; see
 [HTTP cross-case replay](http-cross-case-replay.md) for discovery, plan/apply,
 strict matching and fresh verification.
@@ -2933,9 +2936,10 @@ match the request, with a positive subscription count or a nonnegative
 unsubscription count. Successful confirmations add or remove only that channel,
 pattern, or shard channel; errors do not change subscriptions. Recorder forwards
 matching RESP2 `message`, `pmessage`, or `smessage` pushes without treating them as ordinary
-request responses. These process notifications are not semantic Replay evidence;
-Replay returns the recorded confirmation and keeps the connection open without
-synthesizing pushes. The entire recorded Pub/Sub lane stays bound to one target
+request responses. Confirmed pushes are retained as finite semantic evidence;
+Replay delivers them after the matching subscription, and correlated RPC
+callbacks retain their request admission. See [Redis Pub/Sub](redis-pubsub.md)
+for process ownership, identity translation and historical-recording limits. The entire recorded Pub/Sub lane stays bound to one target
 connection, including ordinary commands after unsubscription. Removing the last
 subscription restores ordinary response handling on the recorded connection.
 A malformed push or one that does not match an active subscription remains a

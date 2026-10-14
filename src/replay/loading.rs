@@ -189,6 +189,7 @@ impl ReplayRuntime {
                 next_progress_percent = (progress_percent / 5 + 1).saturating_mul(5);
             }
         }
+        redis.validate_pubsub()?;
         let shared_root = root_dir.clone();
         let shared_policy = config.policy_path.clone();
         let shared_cases = if lazy { BTreeMap::new() } else { cases.clone() };

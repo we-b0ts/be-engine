@@ -35,6 +35,7 @@ mod lane_tests;
 pub(crate) mod lock;
 mod matching;
 pub(crate) mod publish;
+pub(in crate::replay) mod pubsub;
 pub(crate) mod time_shift;
 pub(crate) mod value;
 use connection_scope::{ConnectionScopes, TargetConnection};
@@ -93,6 +94,7 @@ struct RecordedCapture {
 
 #[derive(Debug, Clone)]
 struct ReplayExchange {
+    rpc_push: Option<usize>,
     response_time_shift: Option<time_shift::ResponseShift>,
     shared_rule_id: Option<String>,
     source: ReplaySource,
@@ -109,6 +111,9 @@ struct ReplayExchange {
 
 #[derive(Debug, Clone)]
 struct MatchedRedisExchange {
+    rpc_push: Option<usize>,
+    rpc_response: Option<Vec<u8>>,
+    publish_duration_ms: u64,
     response_time_shift: Option<time_shift::ResponseShift>,
     index: usize,
     connection_id: Uuid,
@@ -121,6 +126,7 @@ struct MatchedRedisExchange {
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayState {
+    pub(in crate::replay) pubsub: pubsub::PubSubState,
     pub(super) request_contracts: super::policy::request_contract::RequestContracts,
     pub(super) dynamic_values: super::policy::dynamic_values::DynamicValues,
     time_shifts: Vec<time_shift::TimeShiftObservation>,
@@ -151,6 +157,9 @@ pub(super) struct RedisReplayEvents {
 }
 
 impl RedisReplayState {
+    pub(in crate::replay) fn validate_pubsub(&self) -> Result<()> {
+        self.pubsub.validate_subscriptions(&self.exchanges)
+    }
     pub(super) fn register_connection(
         &mut self,
         record: RecordedConnection,
@@ -256,7 +265,9 @@ impl RedisReplayState {
         let exchange_index = self.exchanges.len();
         self.case_exchange_index
             .register(source, case_id, exchange_index);
+        let rpc_push = self.pubsub.link(&record, source, case_id, &args)?;
         self.exchanges.push(ReplayExchange {
+            rpc_push,
             response_time_shift: None,
             shared_rule_id: None,
             source,
@@ -313,6 +324,7 @@ impl RedisReplayState {
 
     pub(super) fn snapshot(&self) -> CommandProtocolReport {
         CommandProtocolReport {
+            pubsub: self.pubsub.report(),
             time_shifts: self.time_shifts.clone(),
             unordered_value: Some(self.unordered_value.clone()),
             lock_tokens: Some(self.lock_evidence.clone()),
@@ -323,15 +335,22 @@ impl RedisReplayState {
             unmatched: self.events.unmatched.clone(),
             unsupported: self.events.unsupported.clone(),
             unsafe_events: self.events.unsafe_events.clone(),
-            unused_case: unused(&self.exchanges, ReplaySource::Case),
-            unused_global: unused(&self.exchanges, ReplaySource::Global),
+            unused_case: unused(&self.exchanges, ReplaySource::Case)
+                .into_iter()
+                .chain(self.pubsub.unused(ReplaySource::Case))
+                .collect(),
+            unused_global: unused(&self.exchanges, ReplaySource::Global)
+                .into_iter()
+                .chain(self.pubsub.unused(ReplaySource::Global))
+                .collect(),
             snapshot_overlays: self.snapshot_overlays.clone(),
             warnings: self.snapshot_overlay_warnings.clone(),
         }
     }
 
     pub(super) fn case_is_dirty(&self, case_id: &str) -> bool {
-        self.events.dirty_case_ids.contains(case_id)
+        self.pubsub.case_is_dirty(case_id)
+            || self.events.dirty_case_ids.contains(case_id)
             || self.case_exchange_index.any(case_id, |index| {
                 self.exchanges.get(index).is_some_and(|exchange| {
                     if exchange.source != ReplaySource::Case {
@@ -363,8 +382,42 @@ pub(super) async fn handle_connection(
     let mut username: Option<String> = None;
     let mut connection_binding = CaseConnectionBinding::default();
     let client_id = Uuid::new_v4();
+    let (push_tx, mut push_rx) = tokio::sync::mpsc::channel::<pubsub::Delivery>(256);
     loop {
-        let frame = match read_redis_frame(&mut reader).await {
+        let read = tokio::select! {
+            frame = read_redis_frame(&mut reader) => frame,
+            Some(delivery) = push_rx.recv() => {
+                let mut replay = state.lock().await;
+                if delivery.matched.as_ref().is_some_and(|m| m.report.case_id != replay.active_case_id) || replay.finalized_at.is_some()
+                    || !replay.redis.pubsub.is_subscribed(client_id, delivery.push) {
+                    replay.redis.pubsub.fail(delivery.push);
+                    if let Some(m) = &delivery.matched { replay.redis.fail_exchange(m, "callback case already ended".into()); }
+                    continue;
+                }
+                drop(replay);
+                let sent = tokio::time::timeout(std::time::Duration::from_secs(5), reader.inner.write_all(&delivery.bytes)).await;
+                let mut replay = state.lock().await;
+                let sent = sent.map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "Pub/Sub push delivery timed out")).and_then(|r| r);
+                match sent {
+                    Ok(()) => {
+                        if delivery.matched.as_ref().is_some_and(|m| m.report.case_id != replay.active_case_id) {
+                            replay.redis.pubsub.fail(delivery.push);
+                            if let Some(m) = &delivery.matched { replay.redis.fail_exchange(m, "callback case changed during delivery".into()); }
+                            continue;
+                        }
+                        replay.redis.pubsub.complete(delivery.push);
+                        if let Some(m) = &delivery.matched { replay.redis.complete_exchange(m); }
+                    }
+                    Err(error) => {
+                        replay.redis.pubsub.fail(delivery.push);
+                        if let Some(m) = &delivery.matched { replay.redis.fail_exchange(m, error.to_string()); }
+                        return Err(error.into());
+                    }
+                }
+                continue;
+            }
+        };
+        let frame = match read {
             Ok(Some(frame)) => frame,
             Ok(None) => break,
             Err(error) => {
@@ -509,8 +562,20 @@ pub(super) async fn handle_connection(
         };
         match response {
             Ok(matched) => {
+                let deliveries = state.lock().await.redis.pubsub.subscription(
+                    client_id,
+                    &target_key,
+                    database,
+                    username.as_deref(),
+                    &command,
+                    &matched,
+                    push_tx.clone(),
+                )?;
                 if deliver_redis_exchange(&mut reader, &state, &matched).await? {
                     break;
+                }
+                for (delay, delivery, sender) in deliveries {
+                    pubsub::schedule(state.clone(), delay, delivery, Some(sender));
                 }
             }
             Err(reason) => {
@@ -584,7 +649,8 @@ async fn deliver_redis_exchange(
         );
         return Err(error.into());
     }
-    let mut state = state.lock().await;
+    let state_ref = state;
+    let mut state = state_ref.lock().await;
     if let (Some(shift), Some((_, offset_milliseconds))) = (&matched.response_time_shift, rendered)
     {
         if let Some(policy) = state.replay_policy.as_mut() {
@@ -606,7 +672,21 @@ async fn deliver_redis_exchange(
                 });
         }
     }
-    state.redis.complete_exchange(matched);
+    if let Some(push) = matched.rpc_push {
+        let delivery = state.redis.pubsub.rpc_delivery(matched);
+        match delivery {
+            Ok((delay, delivery)) => {
+                drop(state);
+                pubsub::schedule(state_ref.clone(), delay, delivery, None);
+            }
+            Err(error) => {
+                state.redis.pubsub.fail(push);
+                state.redis.fail_exchange(matched, error.to_string());
+            }
+        }
+    } else {
+        state.redis.complete_exchange(matched);
+    }
     Ok(false)
 }
 
