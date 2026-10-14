@@ -312,7 +312,7 @@ fn changed_process_policy_requests_one_replay_for_a_remaining_dependency_only_fa
     let scope = rewrite::api_selector::work_scope(&state, &api);
     after_process_rule(&mut state, &api, false);
     assert!(!pending(&state.active_slice));
-    assert!(!rewrite::engine_retry::pending(&state.active_slice));
+    assert!(!rewrite::engine_retry::pending(&state, &state.active_slice));
     after_process_rule(&mut state, &api, true);
     assert!(ready(&state, &scope));
     assert!(!state.e2e_current);

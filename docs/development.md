@@ -56,7 +56,13 @@ because detached coordinator actions delegate engine work to `traffic-e2e`.
 After an engine build changes, the coordinator permits one fresh Replay per API
 method for a runtime failure or a dependency-only failure with complete Replay
 and all responses passed. Historical attempts without an engine identity also
-receive one refresh. The permit is persisted before execution and survives
+receive one refresh within those categories. A route with a failed Replay on a
+known older engine also receives one refresh regardless of Replay failure kind
+when every other route is Complete, RevalidationPending or Skipped. Route
+methods share this inventory condition but retain independent durable permits;
+quality review failures are not Replay failures. RevalidationPending routes
+still require their ordinary verification and do not become completed through
+this eligibility check. The permit is persisted before execution and survives
 restarts; failure retains the issue and cannot retry again on the same build.
 A changed process-owned policy first reclassifies the finalized report. If only
 dependencies remain dirty, successful apply also requests one real Replay for

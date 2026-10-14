@@ -372,7 +372,7 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
             "verification rule applied; replay the same API and immutable cases".into(),
         );
     }
-    if super::engine_retry::pending(&state.active_slice) {
+    if super::engine_retry::pending(state, &state.active_slice) {
         return replay_advance(
             target_root,
             &selected_api,

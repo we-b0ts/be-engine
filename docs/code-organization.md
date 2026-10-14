@@ -60,7 +60,10 @@ is unclear.
   before permitting focused evidence revision.
 
 - `rewrite/engine_retry` owns per-method retry eligibility and durable consumption
-  after an engine Git revision change. `rewrite/replay_admission` combines exact
+  after an engine Git revision change, including an inventory-only final-route
+  fallback that treats Complete/RevalidationPending/Skipped siblings as
+  nonblocking without changing their verification status.
+  `rewrite/replay_admission` combines exact
   method permits without releasing unaccepted route siblings; `rule_replay` owns
   rule-application requests. `rewrite/verification` owns reservation, Replay and
   result-transition cleanup. E2E state/result publication preserves the actual

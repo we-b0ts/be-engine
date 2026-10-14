@@ -1,4 +1,10 @@
 use super::*;
+mod final_route;
+
+fn traditional_pending(slice: &RewriteSliceState) -> bool {
+    eligible(slice, crate::build_info::ENGINE_FINGERPRINT)
+}
+
 use crate::rewrite::{
     self, RewriteAction, RewriteWorkScope, action, api_selector, inventory,
     model::{RewriteApiStatus, RewriteIssueOwner},
@@ -45,9 +51,9 @@ fn changed_engine_and_legacy_attempts_get_one_permit_without_target_changes() {
         if let Some(previous) = previous {
             assert!(!eligible(&state.active_slice, previous));
         }
-        assert!(consume(&mut state.active_slice));
-        assert!(!consume(&mut state.active_slice));
-        assert!(!pending(&state.active_slice));
+        assert!(consume(&mut state.active_slice, false));
+        assert!(!consume(&mut state.active_slice, false));
+        assert!(!traditional_pending(&state.active_slice));
         assert_eq!(
             serde_json::to_value(&state.active_issue).unwrap(),
             original_issue
@@ -59,7 +65,9 @@ fn changed_engine_and_legacy_attempts_get_one_permit_without_target_changes() {
         assert!(eligible(&state.active_slice, "engine-revision-v1:later"));
         assert!(!eligible(&state.active_slice, current));
     }
-    assert!(!pending(&runtime_state(Some(current)).active_slice));
+    assert!(!traditional_pending(
+        &runtime_state(Some(current)).active_slice
+    ));
 }
 
 #[test]
@@ -72,7 +80,7 @@ fn only_runtime_issues_with_a_matching_failed_attempt_are_eligible() {
     ] {
         let mut state = runtime_state(None);
         state.active_issue.as_mut().unwrap().kind = kind;
-        assert!(!pending(&state.active_slice), "{kind:?}");
+        assert!(!traditional_pending(&state.active_slice), "{kind:?}");
     }
     for phase in [
         RewritePhase::ApiPending,
@@ -83,16 +91,16 @@ fn only_runtime_issues_with_a_matching_failed_attempt_are_eligible() {
     ] {
         let mut state = runtime_state(None);
         state.phase = phase;
-        assert!(!pending(&state.active_slice), "{phase:?}");
+        assert!(!traditional_pending(&state.active_slice), "{phase:?}");
     }
     let mut state = runtime_state(None);
     state.attempts[0].passed = true;
-    assert!(!pending(&state.active_slice));
+    assert!(!traditional_pending(&state.active_slice));
     state.attempts[0].passed = false;
     state.active_issue.as_mut().unwrap().attempt = 2;
-    assert!(!pending(&state.active_slice));
+    assert!(!traditional_pending(&state.active_slice));
     state.attempts.clear();
-    assert!(!pending(&state.active_slice));
+    assert!(!traditional_pending(&state.active_slice));
 }
 
 #[test]
@@ -104,7 +112,7 @@ fn target_changes_and_same_commit_rebuilds_do_not_grant_an_engine_retry() {
         .as_mut()
         .unwrap()
         .observed_target_fingerprint = "old-target".into();
-    assert!(!pending(&state.active_slice));
+    assert!(!traditional_pending(&state.active_slice));
 }
 
 #[tokio::test]
@@ -121,7 +129,7 @@ async fn recovery_clears_a_crashed_retry_without_refunding_its_permit() {
     .unwrap();
     let recovered = store.load().unwrap().unwrap();
     assert!(!recovered.engine_retry_running);
-    assert!(!pending(&recovered.active_slice));
+    assert!(!traditional_pending(&recovered.active_slice));
     assert_eq!(recovered.attempts.len(), 1);
     assert_eq!(worker::runtime::scopes(&recovered).len(), 1);
 }
@@ -149,7 +157,7 @@ async fn execution_preflight_error_keeps_the_consumed_permit_and_releases_runnin
             .contains(crate::build_info::ENGINE_FINGERPRINT)
     );
     assert!(!restored.engine_retry_running);
-    assert!(!pending(&restored.active_slice));
+    assert!(!traditional_pending(&restored.active_slice));
     assert_eq!(restored.attempts.len(), 1);
     assert_eq!(worker::runtime::scopes(&restored).len(), 1);
 }
@@ -198,18 +206,18 @@ fn consumed_legacy_retry_survives_restart_even_without_a_new_result() {
         .unwrap()
         .remove("engine_fingerprint");
     let mut state: RewriteState = serde_json::from_value(value).unwrap();
-    assert!(pending(&state.active_slice));
+    assert!(traditional_pending(&state.active_slice));
     assert!(reserve(&mut state, None));
     let store = RewriteStore::new(target.path()).unwrap();
     store.save(&state).unwrap();
     let mut restored = store.load().unwrap().unwrap();
-    assert!(!pending(&restored.active_slice));
+    assert!(!traditional_pending(&restored.active_slice));
     assert_eq!(restored.attempts.len(), 1);
     assert_eq!(restored.active_issue.as_ref().unwrap().attempt, 1);
     assert!(worker::runtime::scopes(&restored).is_empty());
     assert!(clear_running(&mut restored));
     assert_eq!(worker::runtime::scopes(&restored).len(), 1);
-    assert!(!pending(&restored.active_slice));
+    assert!(!traditional_pending(&restored.active_slice));
 }
 
 #[test]
@@ -266,7 +274,9 @@ async fn next_keeps_review_gate_and_does_not_consume_a_retry_before_admission() 
         next.action,
         RewriteAction::SourceReviewRequired { .. }
     ));
-    assert!(pending(&store.load().unwrap().unwrap().active_slice));
+    assert!(traditional_pending(
+        &store.load().unwrap().unwrap().active_slice
+    ));
 }
 
 #[test]
@@ -315,9 +325,14 @@ fn route_reservation_persists_every_selected_method_before_execution() {
     let store = RewriteStore::new(target.path()).unwrap();
     store.save(&state).unwrap();
     let restored = store.load().unwrap().unwrap();
-    assert!(!pending(&restored.active_slice));
-    assert!(!pending(&restored.parked_slices["PUT /api"]));
-    assert!(prepared.slices.values().all(|slice| !pending(slice)));
+    assert!(!traditional_pending(&restored.active_slice));
+    assert!(!traditional_pending(&restored.parked_slices["PUT /api"]));
+    assert!(
+        prepared
+            .slices
+            .values()
+            .all(|slice| !traditional_pending(slice))
+    );
     assert!(!reserve(&mut state, Some(&mut prepared)));
 }
 
@@ -326,7 +341,7 @@ fn new_pass_and_runtime_failure_keep_the_actual_executor_identity_and_consume_th
     let target = worker::tests::configured_target();
     for passed in [false, true] {
         let mut state = runtime_state(None);
-        assert!(consume(&mut state.active_slice));
+        assert!(consume(&mut state.active_slice, false));
         let result = serde_json::from_value(serde_json::json!({
             "engine_fingerprint": crate::build_info::ENGINE_FINGERPRINT,
             "run_key": "recording", "api": state.api, "attempt": 2,
@@ -354,7 +369,7 @@ fn new_pass_and_runtime_failure_keep_the_actual_executor_identity_and_consume_th
             state.attempts[1].engine_fingerprint.as_deref(),
             Some(crate::build_info::ENGINE_FINGERPRINT)
         );
-        assert!(!pending(&state.active_slice));
+        assert!(!traditional_pending(&state.active_slice));
         if passed {
             assert!(state.active_issue.is_none());
             assert_eq!(state.phase, RewritePhase::SliceComplete);
@@ -399,7 +414,7 @@ fn skips_and_active_traffic_are_not_replayed_by_status() {
         status.action,
         RewriteAction::AdvanceRequired { .. }
     ));
-    assert!(pending(
+    assert!(traditional_pending(
         &RewriteStore::new(target.path())
             .unwrap()
             .load()
@@ -435,7 +450,7 @@ fn dependency_only_failures_get_one_durable_retry_after_an_engine_change() {
         let mut state = dependency_state(old);
         let issue = serde_json::to_value(&state.active_issue).unwrap();
         let current = crate::build_info::ENGINE_FINGERPRINT;
-        assert!(pending(&state.active_slice));
+        assert!(traditional_pending(&state.active_slice));
         assert!(worker::runtime::scopes(&state).is_empty());
         let scope = api_selector::work_scope(&state, &state.api);
         assert!(replay_admission::admitted(&state, &scope));
@@ -448,14 +463,14 @@ fn dependency_only_failures_get_one_durable_retry_after_an_engine_change() {
         store.save(&state).unwrap();
         let mut restored = store.load().unwrap().unwrap();
         clear_running(&mut restored);
-        assert!(!pending(&restored.active_slice));
+        assert!(!traditional_pending(&restored.active_slice));
         assert!(restored.engine_retry_fingerprints.contains(current));
         assert_eq!(serde_json::to_value(&restored.active_issue).unwrap(), issue);
         assert_eq!(restored.attempts.len(), 1);
         assert!(!restored.e2e_current);
         assert!(eligible(&restored.active_slice, "engine-revision-v1:next"));
     }
-    assert!(!pending(
+    assert!(!traditional_pending(
         &dependency_state(Some(crate::build_info::ENGINE_FINGERPRINT)).active_slice
     ));
 }
@@ -476,7 +491,7 @@ fn dependency_retry_requires_complete_passing_responses_and_only_dirty_dependenc
             7 => a.counts.response_passed = 0,
             _ => a.gates.dependencies = crate::E2eDependencyGate::Clean,
         }
-        assert!(!pending(&state.active_slice), "mode={mode}");
+        assert!(!traditional_pending(&state.active_slice), "mode={mode}");
     }
 }
 

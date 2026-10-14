@@ -273,7 +273,7 @@ pub(in crate::rewrite) fn scopes(state: &RewriteState) -> Vec<RewriteWorkScope> 
     if !super::super::regression_scope::is_skipped(state, &state.api)
         && state.phase == RewritePhase::ImplementationRequired
         && state.active_issue.is_some()
-        && !super::super::replay_admission::slice_ready(&state.active_slice)
+        && !super::super::replay_admission::slice_ready(state, &state.active_slice)
         && !state.engine_retry_running
     {
         scopes.push(super::super::api_selector::work_scope(state, &state.api));
@@ -283,7 +283,7 @@ pub(in crate::rewrite) fn scopes(state: &RewriteState) -> Vec<RewriteWorkScope> 
             && api != &state.api
             && slice.phase == RewritePhase::ImplementationRequired
             && slice.active_issue.is_some()
-            && !super::super::replay_admission::slice_ready(slice)
+            && !super::super::replay_admission::slice_ready(state, slice)
             && !slice.engine_retry_running
         {
             let scope = super::super::api_selector::work_scope(state, api);

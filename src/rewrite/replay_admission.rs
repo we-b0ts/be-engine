@@ -4,14 +4,14 @@ use super::{
     model::{RewritePhase, RewriteSliceState, RewriteState},
 };
 
-pub(super) fn slice_ready(slice: &RewriteSliceState) -> bool {
+pub(super) fn slice_ready(state: &RewriteState, slice: &RewriteSliceState) -> bool {
     super::rule_replay::pending(slice)
-        || super::engine_retry::pending(slice)
+        || super::engine_retry::pending(state, slice)
         || slice.system_repair_accepted
 }
 
 pub(super) fn admitted(state: &RewriteState, scope: &RewriteWorkScope) -> bool {
-    all_ready(state, scope, slice_ready)
+    all_ready(state, scope, |slice| slice_ready(state, slice))
 }
 
 pub(super) fn all_ready(
