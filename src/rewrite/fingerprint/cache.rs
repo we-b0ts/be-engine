@@ -8,6 +8,7 @@ use super::Fnv1a;
 struct FingerprintCache {
     repository_files: HashMap<(PathBuf, bool), Fnv1a>,
     repositories: HashMap<PathBuf, String>,
+    revision_matches: HashMap<(PathBuf, String), bool>,
 }
 
 thread_local! {
@@ -54,6 +55,24 @@ pub(super) fn insert_repository(root: PathBuf, fingerprint: String) {
     CACHE.with(|slot| {
         if let Some(cache) = slot.borrow_mut().as_mut() {
             cache.repositories.insert(root, fingerprint);
+        }
+    });
+}
+
+pub(super) fn revision_matches(root: &Path, revision: &str) -> Option<bool> {
+    CACHE.with(|slot| {
+        slot.borrow()
+            .as_ref()?
+            .revision_matches
+            .get(&(root.to_path_buf(), revision.to_owned()))
+            .copied()
+    })
+}
+
+pub(super) fn insert_revision_matches(root: PathBuf, revision: String, matches: bool) {
+    CACHE.with(|slot| {
+        if let Some(cache) = slot.borrow_mut().as_mut() {
+            cache.revision_matches.insert((root, revision), matches);
         }
     });
 }

@@ -141,12 +141,18 @@ fn directory_files_hash(target_root: &Path, review: bool) -> Result<Fnv1a> {
 /// Compare a purpose's committed baseline with the current tracked and untracked
 /// files. Traffic policy, progress publication and private runtime are not code changes.
 pub(super) fn matches_revision(target_root: &Path, revision: &str) -> Result<bool> {
+    if let Some(matches) = cache::revision_matches(target_root, revision) {
+        return Ok(matches);
+    }
+    let mut matches = true;
     for directory in crate::e2e_run::resolve_managed_directories(target_root)? {
         if !directory_matches_revision(&directory.root, revision)? {
-            return Ok(false);
+            matches = false;
+            break;
         }
     }
-    Ok(true)
+    cache::insert_revision_matches(target_root.to_path_buf(), revision.to_owned(), matches);
+    Ok(matches)
 }
 
 fn directory_matches_revision(target_root: &Path, revision: &str) -> Result<bool> {
@@ -568,9 +574,14 @@ mod tests {
         git_ok(repository.path(), &["add", "."]);
         git_ok(repository.path(), &["commit", "-m", "baseline"]);
 
+        let revision =
+            String::from_utf8(git_bytes(repository.path(), &["rev-parse", "HEAD"]).unwrap())
+                .unwrap();
+        let revision = revision.trim();
         let (repository_before, code_before) = with_repository_cache(|| {
             let repository_before = repository_fingerprint(repository.path()).unwrap();
             let code_before = code_fingerprint(repository.path()).unwrap();
+            assert!(matches_revision(repository.path(), revision).unwrap());
             fs::write(
                 repository.path().join("src/lib.rs"),
                 "pub fn value() -> u8 { 2 }\n",
@@ -582,6 +593,10 @@ mod tests {
                 repository_before
             );
             assert_eq!(code_fingerprint(repository.path()).unwrap(), code_before);
+            with_repository_cache(|| {
+                assert!(matches_revision(repository.path(), revision).unwrap());
+            });
+            assert!(matches_revision(repository.path(), revision).unwrap());
             (repository_before, code_before)
         });
 
@@ -590,6 +605,52 @@ mod tests {
             repository_before
         );
         assert_ne!(code_fingerprint(repository.path()).unwrap(), code_before);
+        assert!(!matches_revision(repository.path(), revision).unwrap());
+        with_repository_cache(|| {
+            assert!(!matches_revision(repository.path(), revision).unwrap());
+        });
+        fs::write(
+            repository.path().join("src/lib.rs"),
+            "pub fn value() -> u8 { 1 }\n",
+        )
+        .unwrap();
+        with_repository_cache(|| {
+            assert!(matches_revision(repository.path(), revision).unwrap());
+        });
+    }
+
+    #[test]
+    fn revision_match_cache_separates_roots_and_revisions() {
+        let repository = tempfile::tempdir().unwrap();
+        let first = repository.path().join("first");
+        let second = repository.path().join("second");
+        for root in [&first, &second] {
+            fs::create_dir(root).unwrap();
+            fs::write(root.join("lib.rs"), "pub fn original() {}\n").unwrap();
+        }
+        git_ok(repository.path(), &["init", "-q"]);
+        git_ok(
+            repository.path(),
+            &["config", "user.email", "test@example.com"],
+        );
+        git_ok(repository.path(), &["config", "user.name", "Test"]);
+        git_ok(repository.path(), &["add", "."]);
+        git_ok(repository.path(), &["commit", "-qm", "baseline"]);
+        let baseline =
+            String::from_utf8(git_bytes(repository.path(), &["rev-parse", "HEAD"]).unwrap())
+                .unwrap();
+        fs::write(first.join("lib.rs"), "pub fn changed() {}\n").unwrap();
+        git_ok(repository.path(), &["add", "."]);
+        git_ok(repository.path(), &["commit", "-qm", "change first"]);
+        let current =
+            String::from_utf8(git_bytes(repository.path(), &["rev-parse", "HEAD"]).unwrap())
+                .unwrap();
+        with_repository_cache(|| {
+            assert!(!matches_revision(&first, baseline.trim()).unwrap());
+            assert!(matches_revision(&second, baseline.trim()).unwrap());
+            assert!(matches_revision(&first, current.trim()).unwrap());
+            assert!(!matches_revision(&first, baseline.trim()).unwrap());
+        });
     }
 
     fn git_ok(repository: &Path, args: &[&str]) {
