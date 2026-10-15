@@ -760,3 +760,6 @@ fn enable_abortive_close(stream: &TcpStream) {
 
 #[path = "tests/pubsub_rpc.rs"]
 mod pubsub_rpc;
+
+#[path = "tests/subscription_evidence.rs"]
+mod subscription_evidence;

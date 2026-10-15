@@ -58,6 +58,13 @@ pub(super) async fn record_exchange(
         && (response_kind != RedisFrameKind::Other
             || outcome.is_client_terminated()
             || terminal_quit);
+    let confirmed_subscription = replay_safe
+        && matches!(
+            pending.command.name.as_str(),
+            "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE"
+        )
+        && response_kind == RedisFrameKind::Array
+        && outcome == DependencyExchangeOutcome::Response;
     let event = RecorderEvent::RedisExchange(RedisExchangeEvent {
         id: Uuid::new_v4(),
         connection_id,
@@ -83,7 +90,11 @@ pub(super) async fn record_exchange(
         replay_safe,
         parse_warnings: pending.warnings,
     });
-    state.record_event_for_targets(event, pending.targets);
+    if confirmed_subscription {
+        pubsub::record_subscription(state, event, pending.targets).await?;
+    } else {
+        state.record_event_for_targets(event, pending.targets);
+    }
     Ok(())
 }
 

@@ -188,7 +188,6 @@ impl ReplayRuntime {
                 next_progress_percent = (progress_percent / 5 + 1).saturating_mul(5);
             }
         }
-        redis.validate_pubsub()?;
         let shared_root = root_dir.clone();
         let shared_policy = config.policy_path.clone();
         let shared_cases = if lazy { BTreeMap::new() } else { cases.clone() };
@@ -209,7 +208,14 @@ impl ReplayRuntime {
         let redis_policy = config.policy_path.clone();
         let redis_cases = cases.clone();
         let redis_process_rules = process_owned_dependencies.to_vec();
+        let subscription_reader = reader.clone();
         let (mut redis, mut targets) = tokio::task::spawn_blocking(move || -> Result<_> {
+            redis.resolve_pubsub_subscriptions(
+                &redis_root,
+                &mut targets,
+                &redis_process_rules,
+                subscription_reader,
+            )?;
             // Eager and lazy loading have registered all selected Redis lanes.
             // Apply ownership proof before any target request can be admitted.
             redis.apply_api_origin_order(&redis_root, &redis_process_rules)?;

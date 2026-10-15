@@ -39,6 +39,7 @@ fn capture(data: &str) -> RecordedCapture {
 
 fn record(reason: Option<&str>, response: &str) -> RecordedExchange {
     RecordedExchange {
+        id: None,
         timestamp: None,
         connection_id: Uuid::new_v4(),
         sequence: 1,

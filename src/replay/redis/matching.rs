@@ -319,7 +319,11 @@ impl RedisReplayState {
             timing,
             requires_binding,
             report: CommandMatchedReport {
-                case_id: active_case_id.map(ToOwned::to_owned),
+                case_id: if exchange.subscription_alias && exchange.source == ReplaySource::Case {
+                    exchange.case_id.clone()
+                } else {
+                    active_case_id.map(ToOwned::to_owned)
+                },
                 source: exchange.source,
                 index,
                 target: target.clone(),
@@ -412,6 +416,10 @@ impl RedisReplayState {
 impl CommandExchangeScope for ReplayExchange {
     fn source(&self) -> ReplaySource {
         self.source
+    }
+
+    fn available_in_global_scope(&self) -> bool {
+        self.source == ReplaySource::Global || self.subscription_alias
     }
 
     fn case_id(&self) -> Option<&str> {
