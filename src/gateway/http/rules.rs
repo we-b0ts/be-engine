@@ -102,6 +102,10 @@ fn rule_matches(
         }
     }
 
+    if !rule.paths.is_empty() && !rule.paths.iter().any(|path| path == uri.path()) {
+        return false;
+    }
+
     if !rule.path_prefixes.is_empty()
         && !rule
             .path_prefixes
@@ -157,6 +161,7 @@ mod tests {
             name: Some("api".to_string()),
             hosts: vec!["api.example.com".to_string()],
             methods: vec!["POST".to_string()],
+            paths: Vec::new(),
             path_prefixes: vec!["/v1/".to_string()],
             headers: [("x-record".to_string(), "yes".to_string())].into(),
         };
@@ -253,6 +258,62 @@ mod tests {
                 name: "skip-health".to_string()
             }
         );
+    }
+
+    #[test]
+    fn exact_exclusion_preserves_children_siblings_and_other_methods() {
+        let exclude = [HttpGatewayRuleConfig {
+            name: Some("skip-job-list".to_string()),
+            methods: vec!["GET".to_string()],
+            paths: vec!["/api/jobs".to_string()],
+            ..Default::default()
+        }];
+        for (method, path, excluded) in [
+            (Method::GET, "/api/jobs", true),
+            (Method::GET, "/api/jobs?limit=10", true),
+            (Method::GET, "/api/jobs/", false),
+            (Method::GET, "/api/jobs/42", false),
+            (Method::GET, "/api/jobs-archive", false),
+            (Method::POST, "/api/jobs", false),
+        ] {
+            let decision = evaluate_request(
+                &exclude,
+                &[],
+                &method,
+                &path.parse().unwrap(),
+                &HeaderMap::new(),
+            );
+            assert_eq!(
+                matches!(decision, RuleDecision::Excluded { .. }),
+                excluded,
+                "{method} {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_paths_and_prefixes_must_both_match_when_configured() {
+        let rule = HttpGatewayRuleConfig {
+            paths: vec!["/api/jobs".to_string(), "/admin/jobs".to_string()],
+            path_prefixes: vec!["/api".to_string()],
+            ..Default::default()
+        };
+        for (path, expected) in [
+            ("/api/jobs", true),
+            ("/api/jobs/42", false),
+            ("/admin/jobs", false),
+        ] {
+            assert_eq!(
+                rule_matches(
+                    &rule,
+                    &Method::GET,
+                    &path.parse().unwrap(),
+                    &HeaderMap::new()
+                ),
+                expected,
+                "{path}"
+            );
+        }
     }
 
     #[test]

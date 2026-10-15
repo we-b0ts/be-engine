@@ -73,6 +73,61 @@ async fn fixed_response_handles_not_ready_excluded_and_unmatched_requests() {
 }
 
 #[tokio::test]
+async fn exact_exclusion_returns_fixed_404_and_records_other_paths_and_methods() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let temp = tempdir().unwrap();
+    let upstream = spawn_http_upstream("matched", "200 OK", Duration::ZERO, Some(4)).await;
+    let gateway_addr = free_addr();
+    let mut config = fixed_response_config(
+        &temp,
+        gateway_addr,
+        upstream,
+        404,
+        r#"{"code":"not_recorded"}"#,
+    );
+    config.http_gateway.exclude_rules = vec![HttpGatewayRuleConfig {
+        methods: vec!["GET".to_string()],
+        paths: vec!["/api/jobs".to_string()],
+        ..Default::default()
+    }];
+    let state = AppState::new(config).await.unwrap();
+    let gateway = tokio::spawn(async move { state.run().await });
+    wait_for_port(gateway_addr).await;
+    for path in ["/api/jobs", "/api/jobs?limit=10"] {
+        let response = raw_http_get(gateway_addr, path).await;
+        assert!(response.contains("404 Not Found"), "{response}");
+        assert!(response.contains(r#"{"code":"not_recorded"}"#));
+    }
+    let run_dir = std::fs::read_dir(temp.path().join("recordings"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert!(!run_dir.join("apis").exists());
+    assert!(!run_dir.join("staging").exists());
+    for (method, path) in [
+        ("GET", "/api/jobs/42"),
+        ("GET", "/api/jobs/"),
+        ("GET", "/api/jobs-archive"),
+        ("POST", "/api/jobs"),
+    ] {
+        let response = raw_http_request(gateway_addr, method, path, "", "").await;
+        assert!(
+            response.contains("200 OK") && response.ends_with("matched"),
+            "{response}"
+        );
+    }
+    let published_count: usize = std::fs::read_dir(run_dir.join("apis"))
+        .unwrap()
+        .map(|group| std::fs::read_dir(group.unwrap().path()).unwrap().count())
+        .sum();
+    assert_eq!(published_count, 4);
+    gateway.abort();
+}
+
+#[tokio::test]
 async fn fixed_response_handles_concurrent_case_rejection_without_fallback_upstream() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();

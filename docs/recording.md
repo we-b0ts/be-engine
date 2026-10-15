@@ -7,6 +7,24 @@ post-ready settle window. Optional `--config PATH` / `TRAFFIC_E2E_PROJECT_CONFIG
 reuses the Recorder section of `project.yaml` and its source traffic policy.
 The app does not inspect Git or start the rewrite coordinator. Ingress selects API traffic. Recorder preserves the configured HTTP include/exclude
 rules; their default permits all methods and paths.
+
+HTTP include and exclude rules support `paths` for exact, case-sensitive URI
+path matching. Query strings are ignored when matching requests and must not
+appear in configured paths. `/api/jobs` does not match `/api/jobs/` or
+`/api/jobs/42`. Existing `path_prefixes` retain their subtree behavior. All
+nonempty filters on one rule must match, including both `paths` and
+`path_prefixes` when both are present. Exclusions take priority and use the
+configured fallback without recording a case or forwarding to Source:
+
+```yaml
+recorder:
+  http_gateway:
+    exclude_rules:
+    - name: skip-job-list
+      methods: [GET]
+      paths: [/api/jobs]
+```
+
 An optional `--source-traffic-policy PATH` /
 `TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY` applies the existing source traffic policy
 overlay at startup, including HTTP case patterns, allowed unused HTTP hosts,

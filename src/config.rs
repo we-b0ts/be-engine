@@ -221,6 +221,9 @@ pub struct HttpGatewayRuleConfig {
     pub name: Option<String>,
     pub hosts: Vec<String>,
     pub methods: Vec<String>,
+    /// Exact URI paths, excluding the query string; combined with other filters.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<String>,
     pub path_prefixes: Vec<String>,
     pub headers: BTreeMap<String, String>,
 }
