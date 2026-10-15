@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use std::path::Path;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
+mod scale;
 
 const SOURCE: &str = "30b6569f34c2486dafd3bf29b09a071f";
 const TARGET: &str = "59629c1606fa4011b698ef82621b84b5";
@@ -59,6 +60,11 @@ async fn runtime(
     let jsonl = |records: &[Value]| records.iter().map(|v| format!("{v}\n")).collect::<String>();
     tokio::fs::write(case.join("dependencies.jsonl"), jsonl(cases)).await?;
     tokio::fs::write(root.join("global-dependencies.jsonl"), jsonl(globals)).await?;
+    load_runtime(root, lazy).await
+}
+
+async fn load_runtime(root: &Path, lazy: bool) -> Result<Arc<ReplayRuntime>> {
+    let case = root.join("case");
     crate::replay::write_test_recording_network_manifest(root);
     let addr = "127.0.0.1:0".parse().unwrap();
     Ok(Arc::new(

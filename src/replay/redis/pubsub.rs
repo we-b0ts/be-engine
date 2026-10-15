@@ -1,9 +1,12 @@
 //! Finite RESP2 notifications and subscription delivery; RPC codecs are adapters.
 use super::*;
 use crate::redis::{RedisSubscriptionKind, parse_pubsub_push, socketio_rpc as rpc};
+use std::path::Path;
 use tokio::sync::mpsc;
 mod adapter;
-pub(super) type ScheduledDelivery = (u64, Delivery, mpsc::Sender<Delivery>);
+mod inventory;
+mod notifications;
+pub(super) use notifications::{NotificationJob, schedule_notifications};
 #[cfg(test)]
 mod tests;
 
@@ -29,6 +32,10 @@ pub(in crate::replay) struct RequestRef {
 
 #[derive(Debug)]
 struct Push {
+    evidence: Option<crate::dependency_index::RecordRef>,
+    report_index: Option<usize>,
+    kind: RedisSubscriptionKind,
+    subject: Vec<u8>,
     record: RecordedPush,
     raw: Vec<u8>,
     source: ReplaySource,
@@ -39,13 +46,20 @@ struct Push {
 
 #[derive(Debug, Clone)]
 pub(super) struct Delivery {
-    pub(super) push: usize,
+    pub(super) push: PushId,
     pub(super) bytes: Vec<u8>,
     pub(super) matched: Option<MatchedRedisExchange>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) enum PushId {
+    Inline(usize),
+    Indexed { lane: usize, index: usize },
+}
+
 #[derive(Debug)]
 struct Subscription {
+    _cancel: tokio::sync::watch::Sender<()>,
     client: Uuid,
     target: TargetKey,
     database: i64,
@@ -59,14 +73,48 @@ struct Subscription {
 
 #[derive(Debug, Default)]
 pub(in crate::replay) struct PubSubState {
+    indexed: inventory::IndexedNotifications,
     pushes: Vec<Push>,
     subscriptions: Vec<Subscription>,
     bindings: adapter::Bindings,
-    notifications: std::collections::HashMap<(Uuid, u64), Vec<usize>>,
+    notifications: std::collections::HashMap<(Uuid, u64), Arc<Vec<usize>>>,
+    delivered: usize,
+    failed: usize,
+    callbacks: usize,
+    delivered_callbacks: usize,
     cases: std::collections::HashMap<String, Vec<usize>>,
 }
 
 impl PubSubState {
+    pub(in crate::replay) fn register_indexed(
+        &mut self,
+        record: RecordedPush,
+        reference: crate::dependency_index::RecordRef,
+    ) -> Result<()> {
+        if record.rpc_request.is_none() {
+            return self.indexed.register(record, reference);
+        }
+        self.register(record, ReplaySource::Global, None)?;
+        let push = self.pushes.last_mut().expect("registered push");
+        push.report_index = Some(reference.location.line - 1);
+        push.evidence = Some(reference);
+        push.raw = Vec::new();
+        push.record.response.data = String::new();
+        Ok(())
+    }
+
+    pub(in crate::replay) fn finish_indexed(&mut self) -> Result<()> {
+        self.indexed.seal()
+    }
+    pub(in crate::replay) fn restore_indexed(
+        &mut self,
+        lanes: Vec<crate::dependency_index::global::NotificationLane>,
+        root: &Path,
+        source: Arc<crate::dependency_index::RecordSource>,
+    ) -> Result<()> {
+        self.indexed.restore(lanes, root, source)
+    }
+
     pub(super) fn validate_subscriptions(&self, exchanges: &[ReplayExchange]) -> Result<()> {
         let mut subscriptions = std::collections::HashMap::new();
         for exchange in exchanges.iter().filter(|e| {
@@ -86,23 +134,33 @@ impl PubSubState {
                 "ambiguous recorded Redis subscription identity"
             );
         }
-        for push in &self.pushes {
-            let subscription = subscriptions.get(&(push.record.connection_id, push.record.subscription_sequence))
-                .context("Redis Pub/Sub subscription evidence missing from selection; refresh the recording with its startup subscription")?;
-            let frame = parse_pubsub_push(&push.raw)?.expect("validated push");
-            let command = match frame.subscription_kind {
+        for (record, kind, subject) in self
+            .pushes
+            .iter()
+            .map(|push| (&push.record, push.kind, &push.subject))
+            .chain(
+                self.indexed
+                    .lanes
+                    .iter()
+                    .map(|lane| (&lane.record, lane.kind, &lane.subject)),
+            )
+        {
+            let subscription = subscriptions.get(&(record.connection_id, record.subscription_sequence))
+                .with_context(|| format!("Redis Pub/Sub subscription evidence missing from selection: connection {}, sequence {}, target {}:{}; refresh the recording with its startup subscription",
+                    record.connection_id, record.subscription_sequence, record.target_host, record.target_port))?;
+            let command = match kind {
                 RedisSubscriptionKind::Channel => "SUBSCRIBE",
                 RedisSubscriptionKind::Pattern => "PSUBSCRIBE",
                 RedisSubscriptionKind::ShardChannel => "SSUBSCRIBE",
             };
             ensure!(
                 subscription.record.command == command
-                    && subscription.args.first() == Some(&frame.subject)
+                    && subscription.args.first() == Some(subject)
                     && normalize_host(&subscription.record.target_host)
-                        == normalize_host(&push.record.target_host)
-                    && subscription.record.target_port == push.record.target_port
-                    && subscription.record.database == push.record.database
-                    && subscription.record.username == push.record.username,
+                        == normalize_host(&record.target_host)
+                    && subscription.record.target_port == record.target_port
+                    && subscription.record.database == record.database
+                    && subscription.record.username == record.username,
                 "Redis Pub/Sub push does not match its recorded subscription"
             );
         }
@@ -117,38 +175,25 @@ impl PubSubState {
         })
     }
     pub(super) fn report(&self) -> Option<crate::replay::report::command::PubSubReport> {
-        (!self.pushes.is_empty()).then(|| crate::replay::report::command::PubSubReport {
-            recorded_pushes: self.pushes.len(),
-            delivered_pushes: self
-                .pushes
-                .iter()
-                .filter(|p| p.status == ReplayExchangeStatus::Consumed)
-                .count(),
-            recorded_rpc_callbacks: self
-                .pushes
-                .iter()
-                .filter(|p| p.record.rpc_request.is_some())
-                .count(),
-            delivered_rpc_callbacks: self
-                .pushes
-                .iter()
-                .filter(|p| {
-                    p.record.rpc_request.is_some() && p.status == ReplayExchangeStatus::Consumed
-                })
-                .count(),
-            failed_pushes: self
-                .pushes
-                .iter()
-                .filter(|p| p.status == ReplayExchangeStatus::Failed)
-                .count(),
+        (!self.pushes.is_empty() || self.indexed.total > 0).then(|| {
+            crate::replay::report::command::PubSubReport {
+                recorded_pushes: self.pushes.len() + self.indexed.total,
+                delivered_pushes: self.delivered + self.indexed.delivered,
+                recorded_rpc_callbacks: self.callbacks,
+                delivered_rpc_callbacks: self.delivered_callbacks,
+                failed_pushes: self.failed + self.indexed.failed,
+            }
         })
     }
-    pub(super) fn is_subscribed(&self, client: Uuid, index: usize) -> bool {
-        let push = &self.pushes[index];
+    pub(super) fn is_subscribed(&self, client: Uuid, index: PushId) -> bool {
+        let record = match index {
+            PushId::Inline(index) => &self.pushes[index].record,
+            PushId::Indexed { lane, .. } => &self.indexed.lanes[lane].record,
+        };
         self.subscriptions.iter().any(|s| {
             s.client == client
-                && s.source_connection == push.record.connection_id
-                && s.sequence == push.record.subscription_sequence
+                && s.source_connection == record.connection_id
+                && s.sequence == record.subscription_sequence
                 && !s.sender.is_closed()
         })
     }
@@ -162,10 +207,6 @@ impl PubSubState {
         ensure!(
             record.replay_safe && !record.response.truncated,
             "unsafe/truncated Redis Pub/Sub evidence"
-        );
-        ensure!(
-            self.pushes.len() < 65536,
-            "Redis Pub/Sub inventory exceeds 65536 messages"
         );
         let raw = record.response.decode()?;
         ensure!(
@@ -190,15 +231,24 @@ impl PubSubState {
                 source == ReplaySource::Global,
                 "uncorrelated Redis Pub/Sub notifications require Global process ownership"
             );
-            self.notifications
-                .entry((record.connection_id, record.subscription_sequence))
-                .or_default()
-                .push(index);
+            Arc::make_mut(
+                self.notifications
+                    .entry((record.connection_id, record.subscription_sequence))
+                    .or_default(),
+            )
+            .push(index);
         }
         if let Some(case) = case_id {
             self.cases.entry(case.to_owned()).or_default().push(index);
         }
+        self.callbacks += usize::from(record.rpc_request.is_some());
+        let kind = push.subscription_kind;
+        let subject = push.subject.clone();
         self.pushes.push(Push {
+            evidence: None,
+            report_index: None,
+            kind,
+            subject,
             record,
             raw,
             source,
@@ -219,9 +269,9 @@ impl PubSubState {
         command: &RedisCommand,
         matched: &MatchedRedisExchange,
         sender: mpsc::Sender<Delivery>,
-    ) -> Result<Vec<ScheduledDelivery>> {
+    ) -> Result<Option<NotificationJob>> {
         if matched.response.starts_with(b"-") || !is_pubsub_command(&command.name) {
-            return Ok(Vec::new());
+            return Ok(None);
         }
         let kind = match command.name.as_str() {
             "SUBSCRIBE" | "UNSUBSCRIBE" => RedisSubscriptionKind::Channel,
@@ -233,13 +283,15 @@ impl PubSubState {
             !s.sender.is_closed() && !(s.client == client && s.kind == kind && s.subject == subject)
         });
         if command.name.contains("UNSUBSCRIBE") {
-            return Ok(Vec::new());
+            return Ok(None);
         }
         ensure!(
             self.subscriptions.len() < 4096,
             "Redis Pub/Sub subscription limit exceeded"
         );
+        let (cancel, cancelled) = tokio::sync::watch::channel(());
         self.subscriptions.push(Subscription {
+            _cancel: cancel,
             client,
             target: target.clone(),
             database,
@@ -250,46 +302,74 @@ impl PubSubState {
             subject,
             sender: sender.clone(),
         });
-        let mut deliveries = Vec::new();
-        for index in self
+        let indexed = self
+            .indexed
+            .job(matched.connection_id, matched.report.sequence);
+        let indices = self
             .notifications
             .get(&(matched.connection_id, matched.report.sequence))
-            .into_iter()
-            .flatten()
-        {
-            let i = *index;
-            let push = &mut self.pushes[i];
-            if !push.status.is_available() {
-                continue;
-            }
-            push.status = ReplayExchangeStatus::Responding;
-            deliveries.push((
-                push.record.duration_ms,
-                Delivery {
-                    push: i,
-                    bytes: push.raw.clone(),
-                    matched: None,
-                },
-                sender.clone(),
-            ));
-        }
-        Ok(deliveries)
+            .cloned()
+            .unwrap_or_default();
+        Ok(
+            (indexed.is_some() || !indices.is_empty()).then_some(NotificationJob {
+                indices,
+                indexed,
+                sender,
+                cancelled,
+                client,
+            }),
+        )
     }
 
-    pub(super) fn complete(&mut self, index: usize) {
+    pub(super) fn complete(&mut self, id: PushId) {
+        let index = match id {
+            PushId::Inline(index) => index,
+            PushId::Indexed { lane, index } => {
+                self.indexed.complete(lane, index);
+                return;
+            }
+        };
+        if self.pushes[index].status == ReplayExchangeStatus::Consumed {
+            return;
+        }
+        if self.pushes[index].status == ReplayExchangeStatus::Failed {
+            self.failed -= 1;
+        }
+        self.delivered += 1;
+        self.delivered_callbacks += usize::from(self.pushes[index].record.rpc_request.is_some());
         self.pushes[index].status = ReplayExchangeStatus::Consumed;
     }
-    pub(super) fn fail(&mut self, index: usize) {
+    pub(super) fn fail(&mut self, id: PushId) {
+        let index = match id {
+            PushId::Inline(index) => index,
+            PushId::Indexed { lane, index } => {
+                self.indexed.fail(lane, index);
+                return;
+            }
+        };
+        if matches!(
+            self.pushes[index].status,
+            ReplayExchangeStatus::Failed | ReplayExchangeStatus::Consumed
+        ) {
+            return;
+        }
+        self.failed += 1;
         self.pushes[index].status = ReplayExchangeStatus::Failed;
     }
 
     pub(super) fn unused(&self, source: ReplaySource) -> Vec<CommandUnusedReport> {
-        self.pushes
+        let mut result: Vec<_> = self
+            .pushes
             .iter()
             .enumerate()
             .filter(|(_, p)| p.source == source && p.status != ReplayExchangeStatus::Consumed)
+            .take(if source == ReplaySource::Global {
+                100
+            } else {
+                usize::MAX
+            })
             .map(|(index, p)| CommandUnusedReport {
-                index,
+                index: p.report_index.unwrap_or(index),
                 case_id: p.case_id.clone(),
                 source,
                 target: TargetKey {
@@ -300,7 +380,48 @@ impl PubSubState {
                 sequence: p.record.subscription_sequence,
                 command: "PUBSUB_PUSH".into(),
             })
-            .collect()
+            .collect();
+        if source == ReplaySource::Global {
+            result.extend(self.indexed.unused(100usize.saturating_sub(result.len())));
+        }
+        result
+    }
+
+    pub(super) fn global_unused_count(&self) -> usize {
+        self.pushes
+            .iter()
+            .filter(|p| {
+                p.source == ReplaySource::Global && p.status != ReplayExchangeStatus::Consumed
+            })
+            .count()
+            + self.indexed.total
+            - self.indexed.delivered
+    }
+
+    pub(super) fn visit_global_unused(
+        &self,
+        visitor: &mut dyn FnMut(serde_json::Value) -> Result<()>,
+    ) -> Result<()> {
+        for (index, push) in self
+            .pushes
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.source == ReplaySource::Global && !p.status.is_consumed())
+        {
+            visitor(serde_json::to_value(CommandUnusedReport {
+                index: push.report_index.unwrap_or(index),
+                case_id: None,
+                source: ReplaySource::Global,
+                target: TargetKey {
+                    host: normalize_host(&push.record.target_host),
+                    port: push.record.target_port,
+                },
+                connection_id: push.record.connection_id,
+                sequence: push.record.subscription_sequence,
+                command: "PUBSUB_PUSH".into(),
+            })?)?;
+        }
+        self.indexed.visit_unused(visitor)
     }
 }
 

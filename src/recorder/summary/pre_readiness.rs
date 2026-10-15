@@ -74,25 +74,12 @@ impl CandidateTracker {
 
 pub(super) async fn write(dir: &Path) -> Result<()> {
     let dependencies_path = dir.join(GLOBAL_DEPENDENCIES_FILENAME);
-    let raw = match super::super::storage::read_to_string(&dependencies_path).await {
-        Ok(raw) => raw,
-        Err(error)
-            if error
-                .downcast_ref::<std::io::Error>()
-                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
-        {
-            return Ok(());
-        }
-        Err(error) => {
-            return Err(error).with_context(|| {
-                format!(
-                    "failed to read global dependencies {}",
-                    dependencies_path.display()
-                )
-            });
-        }
+    let summary = tokio::task::spawn_blocking(move || build_file(&dependencies_path))
+        .await
+        .context("pre-readiness summary builder failed")??;
+    let Some(summary) = summary else {
+        return Ok(());
     };
-    let summary = build(&raw);
     let mut payload = serde_json::to_vec_pretty(&summary)
         .context("failed to serialize pre-readiness traffic summary")?;
     payload.push(b'\n');
@@ -130,21 +117,59 @@ pub(crate) fn load_or_build(dir: &Path) -> Result<Option<PreReadinessTrafficSumm
         }
     }
 
-    let dependencies_path = dir.join(GLOBAL_DEPENDENCIES_FILENAME);
-    match std::fs::read_to_string(&dependencies_path) {
-        Ok(raw) => Ok(Some(build(&raw))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).with_context(|| {
-            format!(
-                "failed to read global dependencies {}",
-                dependencies_path.display()
-            )
-        }),
-    }
+    build_file(&dir.join(GLOBAL_DEPENDENCIES_FILENAME))
 }
 
+fn build_file(path: &Path) -> Result<Option<PreReadinessTrafficSummary>> {
+    use std::io::{BufRead, BufReader};
+    let stamp = match crate::dependency_index::FileStamp::read(path) {
+        Ok(stamp) => stamp,
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    let summary = build_with(|visit| {
+        let mut input = BufReader::new(std::fs::File::open(path)?);
+        let mut line = String::new();
+        while input.read_line(&mut line)? != 0 {
+            if !line.trim().is_empty() {
+                visit(line.trim());
+            }
+            line.clear();
+        }
+        anyhow::ensure!(
+            crate::dependency_index::FileStamp::read(path)? == stamp,
+            "Global evidence changed while building pre-readiness summary"
+        );
+        Ok(())
+    })?;
+    Ok(Some(summary))
+}
+
+#[cfg(test)]
 fn build(raw_jsonl: &str) -> PreReadinessTrafficSummary {
-    let (candidates, discovery_parse_errors) = discover_candidates(raw_jsonl);
+    build_with(|visit| {
+        for line in raw_jsonl
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            visit(line);
+        }
+        Ok(())
+    })
+    .unwrap()
+}
+
+fn build_with(
+    mut lines: impl FnMut(&mut dyn FnMut(&str)) -> Result<()>,
+) -> Result<PreReadinessTrafficSummary> {
+    let (candidates, discovery_parse_errors) = discover_candidates(&mut lines)?;
     let candidate_endpoints = candidates
         .estimates
         .keys()
@@ -157,20 +182,16 @@ fn build(raw_jsonl: &str) -> PreReadinessTrafficSummary {
     let mut unresolved_interactions = 0_usize;
     let mut parse_errors = 0_usize;
 
-    for line in raw_jsonl
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
+    lines(&mut |line| {
         let value: Value = match serde_json::from_str(line) {
             Ok(value) => value,
             Err(_) => {
                 parse_errors += 1;
-                continue;
+                return;
             }
         };
         if value.get("global_dependency_phase").and_then(Value::as_str) != Some("bootstrap") {
-            continue;
+            return;
         }
         bootstrap_events += 1;
         let event_type = value
@@ -179,15 +200,15 @@ fn build(raw_jsonl: &str) -> PreReadinessTrafficSummary {
             .unwrap_or("unknown");
         if !is_data_interaction(event_type, &value) {
             excluded_events += 1;
-            continue;
+            return;
         }
         data_interactions += 1;
         let Some(endpoint) = endpoint(&value, event_type) else {
             unresolved_interactions += 1;
-            continue;
+            return;
         };
         if !candidate_endpoints.contains(&endpoint) {
-            continue;
+            return;
         }
         let counts = exact.entry(endpoint).or_default();
         counts.interactions += 1;
@@ -195,7 +216,7 @@ fn build(raw_jsonl: &str) -> PreReadinessTrafficSummary {
             .protocols
             .entry(protocol(event_type).to_string())
             .or_default() += 1;
-    }
+    })?;
 
     let resolved_interactions = data_interactions.saturating_sub(unresolved_interactions);
     let mut endpoints = exact.into_iter().collect::<Vec<_>>();
@@ -216,7 +237,7 @@ fn build(raw_jsonl: &str) -> PreReadinessTrafficSummary {
         .collect();
 
     debug_assert_eq!(discovery_parse_errors, parse_errors);
-    PreReadinessTrafficSummary {
+    Ok(PreReadinessTrafficSummary {
         version: 1,
         phase: "bootstrap".to_string(),
         source: GLOBAL_DEPENDENCIES_FILENAME.to_string(),
@@ -229,26 +250,24 @@ fn build(raw_jsonl: &str) -> PreReadinessTrafficSummary {
         truncated: candidates.overflowed || endpoint_overflow,
         parse_errors,
         interpretation: "pre-readiness data-interaction frequency is temporal evidence; connection lifecycle and known ping or setup traffic are excluded, and the result does not prove asynchronous ownership, local-cache behavior, or response causality".to_string(),
-    }
+    })
 }
 
-fn discover_candidates(raw_jsonl: &str) -> (CandidateTracker, usize) {
+fn discover_candidates(
+    lines: &mut impl FnMut(&mut dyn FnMut(&str)) -> Result<()>,
+) -> Result<(CandidateTracker, usize)> {
     let mut candidates = CandidateTracker::default();
     let mut parse_errors = 0;
-    for line in raw_jsonl
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
+    lines(&mut |line| {
         let value: Value = match serde_json::from_str(line) {
             Ok(value) => value,
             Err(_) => {
                 parse_errors += 1;
-                continue;
+                return;
             }
         };
         if value.get("global_dependency_phase").and_then(Value::as_str) != Some("bootstrap") {
-            continue;
+            return;
         }
         let event_type = value
             .get("event_type")
@@ -259,8 +278,8 @@ fn discover_candidates(raw_jsonl: &str) -> (CandidateTracker, usize) {
         {
             candidates.observe(endpoint);
         }
-    }
-    (candidates, parse_errors)
+    })?;
+    Ok((candidates, parse_errors))
 }
 
 fn is_data_interaction(event_type: &str, value: &Value) -> bool {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::dependency_index::global::{GLOBAL_FRAGMENT, GlobalBuilder, GlobalIndex};
 use crate::dependency_index::{Builder, FRAGMENT, FileStamp};
 
 pub(super) async fn write_dependency_summary(
@@ -7,8 +8,8 @@ pub(super) async fn write_dependency_summary(
     summary_filename: &str,
 ) -> Result<()> {
     let path = dir.join(dependencies_filename);
-    let raw = match super::super::storage::read_to_string(&path).await {
-        Ok(raw) => raw,
+    let input = match crate::dependency_index::RecordStream::open(&path) {
+        Ok(input) => input,
         Err(error)
             if error
                 .downcast_ref::<std::io::Error>()
@@ -24,31 +25,44 @@ pub(super) async fn write_dependency_summary(
         let dir = dir_owned;
         // Summary and index share the bytes already read before case publication.
         // Blank lines and the final line terminator participate in byte offsets.
-        let stamp = FileStamp::read(&path)?;
-        let mut index = Builder::new(stamp.clone());
+        let mut input = input;
+        let stamp = input.stamp.clone();
+        let mut case_index = case_dependencies.then(|| Builder::new(stamp.clone()));
+        let mut global_index = if case_dependencies {
+            None
+        } else {
+            Some(GlobalBuilder::new(&dir, stamp.clone())?)
+        };
         let mut summary = DependencySummaryBuilder::default();
-        for (line, raw) in raw.split_inclusive('\n').enumerate() {
-            let value = if raw.trim().is_empty() {
+        while let Some((location, raw)) = input.next()? {
+            let value = if raw.iter().all(u8::is_ascii_whitespace) {
                 None
             } else {
-                Some(serde_json::from_str::<Value>(raw)?)
+                Some(serde_json::from_slice::<Value>(raw)?)
             };
-            index.observe(line + 1, raw.as_bytes(), value.as_ref())?;
             if let Some(value) = &value {
                 summary.observe(value);
+            }
+            if let Some(index) = &mut case_index {
+                index.observe(location.line, raw, value.as_ref())?;
+            }
+            if let Some(index) = &mut global_index {
+                index.observe(location, raw, value)?;
             }
         }
         anyhow::ensure!(
             FileStamp::read(&path)? == stamp,
             "dependency file changed before publication"
         );
-        let index = index.finish()?;
-        let fragment = if case_dependencies {
-            dir.join(FRAGMENT)
-        } else {
-            dir.join(".global-dependency-index.json")
-        };
-        crate::dependency_index::store::write_json(&fragment, &index)?;
+        if let Some(index) = case_index {
+            crate::dependency_index::store::write_json(&dir.join(FRAGMENT), &index.finish()?)?;
+        }
+        if let Some(index) = global_index {
+            crate::dependency_index::store::write_json(
+                &dir.join(GLOBAL_FRAGMENT),
+                &index.finish()?,
+            )?;
+        }
         let summary = summary.finish();
         let mut payload = serde_json::to_vec_pretty(&summary)?;
         payload.push(b'\n');
@@ -86,6 +100,20 @@ pub(crate) async fn refresh_owned_dependency_indexes(
                 anyhow::ensure!(
                     previous == stamp,
                     "dependency bytes changed during artifact ownership assignment"
+                );
+                index.stamp = stamp;
+                crate::dependency_index::store::write_json(&fragment, &index)?;
+                refreshed.push(fragment);
+            }
+            let fragment = dir.join(GLOBAL_FRAGMENT);
+            if fragment.is_file() {
+                let mut index: GlobalIndex = crate::dependency_index::store::read_json(&fragment)?;
+                let stamp = FileStamp::read(&dir.join("global-dependencies.jsonl"))?;
+                let mut previous = index.stamp.clone();
+                previous.changed = stamp.changed;
+                anyhow::ensure!(
+                    previous == stamp,
+                    "Global dependency bytes changed during artifact ownership assignment"
                 );
                 index.stamp = stamp;
                 crate::dependency_index::store::write_json(&fragment, &index)?;

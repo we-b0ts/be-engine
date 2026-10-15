@@ -18,7 +18,7 @@ use crate::replay::report::command::CommandSnapshotOverlayReport;
 
 const MAX_MATCHING_EXCHANGES: usize = 16_384;
 const MAX_MATCHING_BYTES: usize = 32 * 1024 * 1024;
-const MAX_EVIDENCE_FILE_BYTES: u64 = 128 * 1024 * 1024;
+mod loading;
 
 #[derive(Debug, Clone)]
 struct SnapshotEvidence {
@@ -102,12 +102,13 @@ pub(crate) fn inspect_case_source_snapshot_overlay(
             case_source.display()
         )
     })?;
-    let mut evidence = read_snapshot_evidence(&global, ReplaySource::Global)?;
+    let mut evidence = loading::EvidenceCollector::default();
+    loading::read_snapshot_evidence(&global, ReplaySource::Global, rule, &mut evidence)?;
     for path in crate::case_group::published_case_dependency_paths(&case_source)? {
-        evidence.extend(read_snapshot_evidence(&path, ReplaySource::Case)?);
+        loading::read_snapshot_evidence(&path, ReplaySource::Case, rule, &mut evidence)?;
     }
     let binding = case_source.to_string_lossy();
-    Ok(analyze_snapshot_evidence(&binding, rule, &evidence)?.report)
+    Ok(analyze_snapshot_evidence(&binding, rule, &evidence.entries)?.report)
 }
 
 impl RedisReplayState {
@@ -121,12 +122,15 @@ impl RedisReplayState {
             if !matches!(rule, BackgroundDependencyRuleConfig::Redis { .. }) {
                 continue;
             }
-            let evidence = self
-                .exchanges
-                .iter()
-                .enumerate()
-                .map(|(index, exchange)| evidence_from_replay(index, exchange))
-                .collect::<Vec<_>>();
+            let evidence = loading::replay_evidence(&self.exchanges, rule);
+            let evidence = match evidence {
+                Ok(evidence) => evidence,
+                Err(error) => {
+                    self.snapshot_overlay_warnings
+                        .push(format!("Redis snapshot evidence unavailable: {error:#}"));
+                    continue;
+                }
+            };
             match analyze_snapshot_evidence(&binding, rule, &evidence) {
                 Ok(analysis) => {
                     for index in analysis.reusable_replay_indexes {
@@ -146,51 +150,8 @@ impl RedisReplayState {
     }
 }
 
-fn read_snapshot_evidence(path: &Path, source: ReplaySource) -> Result<Vec<SnapshotEvidence>> {
-    let metadata = fs::metadata(path).with_context(|| {
-        format!(
-            "failed to inspect Redis snapshot evidence {}",
-            path.display()
-        )
-    })?;
-    ensure!(
-        metadata.len() <= MAX_EVIDENCE_FILE_BYTES,
-        "Redis snapshot evidence {} exceeds {} bytes",
-        path.display(),
-        MAX_EVIDENCE_FILE_BYTES
-    );
-    let raw = fs::read_to_string(path)
-        .with_context(|| format!("failed to read Redis snapshot evidence {}", path.display()))?;
-    let mut evidence = Vec::new();
-    for (line_index, line) in raw.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let record: DependencyRecord = serde_json::from_str(line).with_context(|| {
-            format!(
-                "invalid dependency JSON at {} line {}",
-                path.display(),
-                line_index + 1
-            )
-        })?;
-        match record {
-            DependencyRecord::RedisExchange(exchange) => {
-                evidence.push(evidence_from_record(None, source, *exchange)?);
-            }
-            DependencyRecord::ProxyError(error) if error.protocol == "redis" => {
-                return Err(anyhow!(
-                    "Redis snapshot evidence contains a proxy error: {}",
-                    error.error
-                ));
-            }
-            _ => {}
-        }
-    }
-    Ok(evidence)
-}
-
-fn evidence_from_replay(index: usize, exchange: &ReplayExchange) -> SnapshotEvidence {
-    SnapshotEvidence {
+fn evidence_from_replay(index: usize, exchange: &ReplayExchange) -> Result<SnapshotEvidence> {
+    Ok(SnapshotEvidence {
         replay_index: Some(index),
         source: exchange.source,
         connection_id: exchange.record.connection_id,
@@ -203,14 +164,14 @@ fn evidence_from_replay(index: usize, exchange: &ReplayExchange) -> SnapshotEvid
         command: exchange.record.command.clone(),
         args: exchange.args.clone(),
         response_kind: exchange.record.response_kind.clone(),
-        response: exchange.response.clone(),
+        response: exchange.response_bytes()?,
         outcome: exchange.record.outcome,
         replay_safe: exchange.record.replay_safe,
         cache_snapshot_rule: exchange.record.cache_snapshot_rule.clone(),
         cache_snapshot_hit: exchange.record.cache_snapshot_hit,
         session_setup: exchange.record.session_setup,
         global_dependency_reason: exchange.record.global_dependency_reason.clone(),
-    }
+    })
 }
 
 fn evidence_from_record(

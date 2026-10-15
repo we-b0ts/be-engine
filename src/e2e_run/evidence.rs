@@ -129,6 +129,8 @@ pub struct E2eTargetLog {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct E2eTargetRuntimeDiagnostics {
     pub attempt: u64,
+    pub replay_stdout: E2eTargetLog,
+    pub replay_stderr: E2eTargetLog,
     pub stdout: E2eTargetLog,
     pub stderr: E2eTargetLog,
     pub state_path: PathBuf,
@@ -159,6 +161,8 @@ pub fn query_e2e_target_runtime_diagnostics(
     };
     Ok(E2eTargetRuntimeDiagnostics {
         attempt: state.sequence,
+        replay_stdout: read_target_log(reports.join("replay.stdout.log"))?,
+        replay_stderr: read_target_log(reports.join("replay.stderr.log"))?,
         stdout: read_target_log(reports.join("target.stdout.log"))?,
         stderr: read_target_log(reports.join("target.stderr.log"))?,
         state_path,
@@ -167,8 +171,9 @@ pub fn query_e2e_target_runtime_diagnostics(
 }
 
 fn read_target_log(path: PathBuf) -> Result<E2eTargetLog> {
-    let payload = match std::fs::read(&path) {
-        Ok(payload) => payload,
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = match std::fs::File::open(&path) {
+        Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(E2eTargetLog {
                 path,
@@ -183,14 +188,18 @@ fn read_target_log(path: PathBuf) -> Result<E2eTargetLog> {
                 .with_context(|| format!("failed to read target log {}", path.display()));
         }
     };
-    let bytes = payload.len();
+    let bytes = usize::try_from(file.metadata()?.len())?;
     let omitted_bytes = bytes.saturating_sub(MAX_TARGET_DIAGNOSTIC_BYTES);
+    file.seek(SeekFrom::Start(omitted_bytes as u64))?;
+    let mut payload = Vec::new();
+    file.take(MAX_TARGET_DIAGNOSTIC_BYTES as u64)
+        .read_to_end(&mut payload)?;
     Ok(E2eTargetLog {
         path,
         available: true,
         bytes,
         omitted_bytes,
-        tail: String::from_utf8_lossy(&payload[omitted_bytes..]).into_owned(),
+        tail: String::from_utf8_lossy(&payload).into_owned(),
     })
 }
 

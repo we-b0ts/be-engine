@@ -47,6 +47,7 @@ use super::report::command::{
     CommandMatchedReport, CommandProtocolReport, CommandRequestReport, CommandUnusedReport,
 };
 use builtins::{redis_builtin, redis_is_builtin, redis_is_unsupported};
+mod evidence;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct RecordedConnection {
@@ -95,6 +96,7 @@ struct RecordedCapture {
 
 #[derive(Debug, Clone)]
 struct ReplayExchange {
+    response_evidence: Option<crate::dependency_index::RecordRef>,
     rpc_push: Option<usize>,
     response_time_shift: Option<time_shift::ResponseShift>,
     shared_rule_id: Option<String>,
@@ -268,6 +270,7 @@ impl RedisReplayState {
             .register(source, case_id, exchange_index);
         let rpc_push = self.pubsub.link(&record, source, case_id, &args)?;
         self.exchanges.push(ReplayExchange {
+            response_evidence: None,
             rpc_push,
             response_time_shift: None,
             shared_rule_id: None,
@@ -340,9 +343,11 @@ impl RedisReplayState {
                 .into_iter()
                 .chain(self.pubsub.unused(ReplaySource::Case))
                 .collect(),
+            unused_global_count: Some(self.global_unused_count()),
             unused_global: unused(&self.exchanges, ReplaySource::Global)
                 .into_iter()
                 .chain(self.pubsub.unused(ReplaySource::Global))
+                .take(100)
                 .collect(),
             snapshot_overlays: self.snapshot_overlays.clone(),
             warnings: self.snapshot_overlay_warnings.clone(),
@@ -575,8 +580,8 @@ pub(super) async fn handle_connection(
                 if deliver_redis_exchange(&mut reader, &state, &matched).await? {
                     break;
                 }
-                for (delay, delivery, sender) in deliveries {
-                    pubsub::schedule(state.clone(), delay, delivery, Some(sender));
+                if let Some(deliveries) = deliveries {
+                    pubsub::schedule_notifications(state.clone(), deliveries);
                 }
             }
             Err(reason) => {
@@ -681,7 +686,7 @@ async fn deliver_redis_exchange(
                 pubsub::schedule(state_ref.clone(), delay, delivery, None);
             }
             Err(error) => {
-                state.redis.pubsub.fail(push);
+                state.redis.pubsub.fail(pubsub::PushId::Inline(push));
                 state.redis.fail_exchange(matched, error.to_string());
             }
         }
@@ -810,11 +815,14 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
         .map(|value| value.to_ascii_lowercase())
 }
 
-fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnusedReport> {
+fn unused_iter(
+    exchanges: &[ReplayExchange],
+    source: ReplaySource,
+) -> impl Iterator<Item = CommandUnusedReport> + '_ {
     exchanges
         .iter()
         .enumerate()
-        .filter(|(_, exchange)| {
+        .filter(move |(_, exchange)| {
             exchange.source == source
                 && if exchange.reusable_snapshot {
                     !exchange.matched_once
@@ -822,7 +830,7 @@ fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnus
                     !exchange.status.is_consumed()
                 }
         })
-        .map(|(index, exchange)| CommandUnusedReport {
+        .map(move |(index, exchange)| CommandUnusedReport {
             index,
             case_id: exchange.case_id.clone(),
             source,
@@ -833,6 +841,15 @@ fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnus
             connection_id: exchange.record.connection_id,
             sequence: exchange.record.sequence,
             command: exchange.record.command.clone(),
+        })
+}
+
+fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnusedReport> {
+    unused_iter(exchanges, source)
+        .take(if source == ReplaySource::Global {
+            100
+        } else {
+            usize::MAX
         })
         .collect()
 }

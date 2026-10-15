@@ -34,16 +34,18 @@ pub(super) fn query_response(
         _ => return None,
     };
     let mapping = mapping(record, sql, &forms.0, &forms.1, false)?;
-    Some(project_response(record, mapping))
+    project_response(record, mapping)
 }
 
-fn project_response(record: &RecordedMysqlExchange, mapping: Mapping) -> RecordedMysqlResponse {
-    let mut response = record.response.clone();
+fn project_response(
+    record: &RecordedMysqlExchange,
+    mapping: Mapping,
+) -> Option<RecordedMysqlResponse> {
+    let mut response = record.response.materialize().ok()?;
     response.columns = mapping.columns;
-    response.rows = record
-        .response
+    response.rows = response
         .rows
-        .iter()
+        .into_iter()
         .map(|row| {
             mapping
                 .indices
@@ -52,7 +54,7 @@ fn project_response(record: &RecordedMysqlExchange, mapping: Mapping) -> Recorde
                 .collect()
         })
         .collect();
-    response
+    Some(response)
 }
 
 pub(super) fn statement_columns(
@@ -106,11 +108,7 @@ fn complete_resultset(record: &RecordedMysqlExchange) -> bool {
         && record.parse_warnings.is_empty()
         && !record.outcome.is_client_terminated()
         && !record.response.columns.is_empty()
-        && record
-            .response
-            .rows
-            .iter()
-            .all(|row| row.len() == record.response.columns.len())
+        && record.response.valid_row_widths()
 }
 
 fn column_mapping(
@@ -127,12 +125,7 @@ fn column_mapping(
         return None;
     }
     let response = &record.response;
-    if recorded.columns.len() != response.columns.len()
-        || response
-            .rows
-            .iter()
-            .any(|row| row.len() != response.columns.len())
-    {
+    if recorded.columns.len() != response.columns.len() || !response.valid_row_widths() {
         return None;
     }
     let recorded_expressions = recorded
@@ -216,11 +209,12 @@ pub(super) fn semantic_response(
     if actual.projection_matches(recorded, false)
         && let Some((r, a)) = recorded.projection.as_ref().zip(actual.projection.as_ref())
     {
-        return Some(project_response(record, column_mapping(record, r, a)?));
+        return project_response(record, column_mapping(record, r, a)?);
     }
     actual
         .matches(recorded, false)
-        .then(|| record.response.clone())
+        .then(|| record.response.materialize().ok())
+        .flatten()
 }
 
 pub(super) fn semantic_columns(

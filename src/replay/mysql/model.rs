@@ -97,6 +97,10 @@ pub(in crate::replay) struct RecordedMysqlExchange {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(in crate::replay) struct RecordedMysqlResponse {
+    #[serde(skip)]
+    pub(in crate::replay) evidence: Option<crate::dependency_index::RecordRef>,
+    #[serde(skip)]
+    pub(in crate::replay) row_shape: Option<(usize, bool)>,
     pub(in crate::replay) server_status: Option<u16>,
     pub(in crate::replay) status: String,
     pub(in crate::replay) error_code: Option<u16>,

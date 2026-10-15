@@ -42,6 +42,8 @@ pub(in crate::replay) struct KafkaProtocolReport {
     pub(in crate::replay) unsupported: Vec<KafkaRequestReport>,
     pub(in crate::replay) unsafe_events: Vec<KafkaRequestReport>,
     pub(in crate::replay) unused_case: Vec<KafkaUnusedReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) unused_global_count: Option<usize>,
     pub(in crate::replay) unused_global: Vec<KafkaUnusedReport>,
 }
 

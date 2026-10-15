@@ -57,6 +57,26 @@ pub(super) fn from_e2e(
                 },
             )
         }
+        _ if result
+            .diagnosis
+            .lifecycle_errors
+            .iter()
+            .any(|error| is_replay_startup_failure(error)) =>
+        {
+            (
+                RewriteIssueKind::Replay,
+                RewriteIssueOwner::TrafficE2eSystem,
+                result
+                    .diagnosis
+                    .lifecycle_errors
+                    .iter()
+                    .find(|error| is_replay_startup_failure(error))
+                    .unwrap()
+                    .clone(),
+                None,
+                vec!["replay_startup_or_evidence_loading".into()],
+            )
+        }
         _ if result.diagnosis.counts.executed == 0 => {
             let lifecycle_error = result
                 .diagnosis
@@ -118,6 +138,13 @@ pub(super) fn from_e2e(
         observed_target_fingerprint: target_fingerprint,
         attempt: result.attempt,
     }
+}
+
+fn is_replay_startup_failure(error: &str) -> bool {
+    error.starts_with("Replay startup failed")
+        || error.starts_with("Replay dependency index preparation failed")
+        || error.starts_with("replay process exited before becoming ready")
+        || error.starts_with("replay server did not become ready")
 }
 
 pub(super) fn response_possible_causes(kind: Option<ResponseDifferenceKind>) -> Vec<String> {
@@ -234,6 +261,34 @@ fn kind_name(kind: RewriteIssueKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failures_before_any_request_keep_the_actual_engine_or_target_owner() {
+        for (error, expected) in [
+            (
+                "Replay startup failed: Redis subscription evidence missing",
+                RewriteIssueOwner::TrafficE2eSystem,
+            ),
+            (
+                "Replay dependency index preparation failed: changed evidence",
+                RewriteIssueOwner::TrafficE2eSystem,
+            ),
+            (
+                "target image build failed: compiler error",
+                RewriteIssueOwner::TargetRuntime,
+            ),
+        ] {
+            let result: E2eApiRunResult = serde_json::from_value(serde_json::json!({
+                "run_key":"run","api":"GET /api","attempt":1,"status":"failed","passed":false,"progress":"progress.yaml",
+                "gates":{"responses":"incomplete","replay":"incomplete","dependencies":"unknown"},
+                "diagnosis":{"counts":{"selected":1,"executed":0,"response_passed":0,"response_nonpassing":0,"response_incomplete":1},
+                    "response_differences":{"total_differences":0,"indexed_differences":0,"omitted_differences":0,"failure_clusters":[],"omitted_failure_clusters":0},
+                    "lifecycle_errors":[error]}
+            })).unwrap();
+            let issue = from_e2e("GET /api", &result, "target".into());
+            assert_eq!(issue.owner, expected);
+        }
+    }
 
     #[test]
     fn unavailable_response_causes_point_to_request_completion_failures() {

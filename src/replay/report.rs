@@ -6,6 +6,7 @@ mod aggregate_tests;
 mod background_overlay;
 pub(super) mod command;
 mod dependency_evidence;
+pub(in crate::replay) mod global_evidence;
 mod model;
 mod success;
 mod writer;
@@ -15,6 +16,7 @@ mod writer_tests;
 #[cfg(test)]
 pub(super) use dependency_evidence::report_has_case_dirty_events;
 pub(crate) use dependency_evidence::{build_dependency_evidence, dependency_evidence_path};
+pub(crate) use global_evidence::stage_global_evidence;
 
 pub(crate) use background_overlay::{
     BackgroundReclassification, parse_background_dependency_evidence,

@@ -137,16 +137,29 @@ pub(crate) fn load_mysql_file(path: &Path) -> Result<FileIndex> {
     Ok(index)
 }
 
-pub(crate) fn prepare(source: &Path) -> Result<(RunIndex, DependencyIndexReport)> {
-    prepare_cancellable(source, &std::sync::atomic::AtomicBool::new(false))
+pub(crate) fn prepare(
+    source: &Path,
+    validate: fn(&Value) -> Result<()>,
+) -> Result<(RunIndex, DependencyIndexReport)> {
+    prepare_cancellable(source, &std::sync::atomic::AtomicBool::new(false), validate)
 }
 
 fn prepare_cancellable(
     source: &Path,
     cancelled: &std::sync::atomic::AtomicBool,
+    validate: fn(&Value) -> Result<()>,
 ) -> Result<(RunIndex, DependencyIndexReport)> {
     check_cancelled(cancelled)?;
     let (root, files) = recording_files(source)?;
+    let global = root.join("global-dependencies.jsonl");
+    let global_bytes = if global.is_file() {
+        super::global::load_global_index_cancellable(&global, validate, cancelled)?
+            .0
+            .stamp
+            .size
+    } else {
+        0
+    };
     let run: Value = serde_json::from_slice(&fs::read(root.join("recording-run.json"))?)?;
     let run_id = run["run_id"].as_str().unwrap_or_default().to_owned();
     let storage = cache_directory(&root);
@@ -156,7 +169,8 @@ fn prepare_cancellable(
     if let Ok(index) = read_json::<RunIndex>(&output)
         && valid_run(&root, &files, &run_id, &index)?
     {
-        let report = report("reused", &output, &index);
+        let mut report = report("reused", &output, &index);
+        report.global_source_bytes = global_bytes;
         return Ok((index, report));
     }
     let started = Instant::now();
@@ -202,7 +216,8 @@ fn prepare_cancellable(
     );
     check_cancelled(cancelled)?;
     write_json(&output, &index)?;
-    let report = report("built", &output, &index);
+    let mut report = report("built", &output, &index);
+    report.global_source_bytes = global_bytes;
     Ok((index, report))
 }
 
@@ -212,6 +227,7 @@ fn report(status: &'static str, path: &Path, index: &RunIndex) -> DependencyInde
         files: index.files.len(),
         source_bytes: index.files.iter().map(|f| f.index.stamp.size).sum(),
         index_path: path.into(),
+        global_source_bytes: 0,
     }
 }
 
@@ -234,7 +250,7 @@ fn valid_run(root: &Path, files: &[PathBuf], run_id: &str, index: &RunIndex) -> 
     Ok(true)
 }
 
-fn private_directory(path: &Path) -> Result<()> {
+pub(crate) fn private_directory(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     fs::create_dir_all(path)?;
     ensure!(
@@ -287,9 +303,9 @@ pub(crate) fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<
     result
 }
 
-struct Lock(File);
+pub(super) struct Lock(File);
 impl Lock {
-    fn acquire(path: &Path, cancelled: &std::sync::atomic::AtomicBool) -> Result<Self> {
+    pub(super) fn acquire(path: &Path, cancelled: &std::sync::atomic::AtomicBool) -> Result<Self> {
         use std::os::unix::fs::OpenOptionsExt;
         let file = OpenOptions::new()
             .create(true)
@@ -334,6 +350,7 @@ pub(super) fn check_cancelled(cancelled: &std::sync::atomic::AtomicBool) -> Resu
 pub(crate) async fn prepare_with_timeout(
     source: std::path::PathBuf,
     seconds: u64,
+    validate: fn(&Value) -> Result<()>,
 ) -> Result<DependencyIndexReport> {
     struct Cancel(std::sync::Arc<std::sync::atomic::AtomicBool>);
     impl Drop for Cancel {
@@ -346,7 +363,7 @@ pub(crate) async fn prepare_with_timeout(
     )));
     let flag = cancel.0.clone();
     let task = tokio::task::spawn_blocking(move || {
-        prepare_cancellable(&source, &flag).map(|(_, report)| report)
+        prepare_cancellable(&source, &flag, validate).map(|(_, report)| report)
     });
     let report = tokio::time::timeout(std::time::Duration::from_secs(seconds), task)
         .await

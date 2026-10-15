@@ -1,4 +1,8 @@
-use super::store::prepare;
+fn prepare(
+    source: &std::path::Path,
+) -> anyhow::Result<(super::model::RunIndex, DependencyIndexReport)> {
+    super::store::prepare(source, |_| Ok(()))
+}
 use super::*;
 use std::fs;
 use tempfile::TempDir;
@@ -171,7 +175,7 @@ async fn preparation_deadline_cancels_lock_wait_without_publication() {
     fs::create_dir_all(&cache).unwrap();
     let lock = fs::File::create(cache.join("build.lock")).unwrap();
     assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
-    let error = super::store::prepare_with_timeout(dir.path().into(), 1)
+    let error = super::store::prepare_with_timeout(dir.path().into(), 1, |_| Ok(()))
         .await
         .unwrap_err();
     assert!(error.to_string().contains("readiness has not started"));

@@ -57,6 +57,9 @@ impl ReplayRuntime {
         let mut motan = motan::MotanReplayState::default();
         let mut targets = BTreeMap::new();
         let mut connection_identities = HashMap::new();
+        let reader = Arc::new(std::sync::Mutex::new(
+            crate::dependency_index::RecordReader::new(lifecycle.dependency_loading.cache_bytes),
+        ));
         let fake_cidr = Ipv4Cidr::parse(&config.fake_cidr)?;
         let total_cases = cases.len();
         let mut next_progress_percent = 5;
@@ -69,10 +72,8 @@ impl ReplayRuntime {
         );
 
         if let Some(path) = &global_path {
-            load_dependency_file(
+            global::load(
                 path,
-                ReplaySource::Global,
-                None,
                 &mut mysql,
                 &mut http_exchanges,
                 &mut http_blackholes,
@@ -83,6 +84,7 @@ impl ReplayRuntime {
                 &mut targets,
                 &mut connection_identities,
                 process_owned_dependencies,
+                reader.clone(),
             )
             .await?;
         }
@@ -98,9 +100,6 @@ impl ReplayRuntime {
             .iter()
             .map(|(_, s)| crate::dependency_index::http_key(&s.host, s.port, &s.method, &s.path))
             .collect();
-        let reader = Arc::new(std::sync::Mutex::new(
-            crate::dependency_index::RecordReader::new(lifecycle.dependency_loading.cache_bytes),
-        ));
         let mut deferred_files = BTreeMap::new();
         for (index, case) in cases.values().enumerate() {
             if lazy {

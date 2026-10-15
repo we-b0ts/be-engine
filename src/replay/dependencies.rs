@@ -21,6 +21,11 @@ pub(super) enum DependencyRecord {
     Other,
 }
 
+pub(crate) fn validate_index_record(value: &Value) -> Result<()> {
+    let _: DependencyRecord = serde_json::from_value(value.clone())?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct RecordedProxyError {
     pub(super) protocol: String,
@@ -264,8 +269,8 @@ pub(super) async fn load_motan_debug_file(
     motan: &mut motan::MotanReplayState,
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
 ) -> Result<()> {
-    let raw = match tokio::fs::read_to_string(path).await {
-        Ok(raw) => raw,
+    let file = match tokio::fs::File::open(path).await {
+        Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => {
             return Err(error).with_context(|| {
@@ -276,7 +281,10 @@ pub(super) async fn load_motan_debug_file(
             });
         }
     };
-    for (line_index, line) in raw.lines().enumerate() {
+    let mut input = BufReader::new(file).lines();
+    let mut line_index = 0;
+    while let Some(line) = input.next_line().await? {
+        line_index += 1;
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -284,7 +292,7 @@ pub(super) async fn load_motan_debug_file(
         let record: DebugDependencyRecord = serde_json::from_str(line).with_context(|| {
             format!(
                 "failed to parse dependency debug replay line {} in {}",
-                line_index + 1,
+                line_index,
                 path.display()
             )
         })?;

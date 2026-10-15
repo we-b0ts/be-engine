@@ -35,8 +35,10 @@ use super::{
 use crate::DiscoveredTcpTarget;
 
 pub(crate) mod cross_case;
+mod evidence;
 mod identity;
 mod recording;
+pub(super) use evidence::register_global_exchange;
 pub(in crate::replay) mod request_headers;
 mod selector;
 mod termination;
@@ -49,6 +51,8 @@ pub(super) use request_headers::HeaderDifferenceReport;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct RecordedHttpExchange {
+    #[serde(skip)]
+    response_evidence: Option<crate::dependency_index::RecordRef>,
     scheme: String,
     #[serde(default)]
     outcome: crate::DependencyExchangeOutcome,
@@ -407,15 +411,15 @@ impl ReplayState {
         });
     }
 
-    pub(super) fn unused_http_exchanges(
+    pub(super) fn unused_http_iter(
         &self,
         source: ReplaySource,
         allowed: bool,
-    ) -> Vec<RecordedHttpExchangeSummary> {
+    ) -> impl Iterator<Item = RecordedHttpExchangeSummary> + '_ {
         self.http_exchanges
             .iter()
             .enumerate()
-            .filter(|(_, exchange)| {
+            .filter(move |(_, exchange)| {
                 if exchange.source != source || exchange.status.is_consumed() {
                     return false;
                 }
@@ -425,7 +429,7 @@ impl ReplayState {
                     });
                 is_allowed == allowed
             })
-            .map(|(index, exchange)| RecordedHttpExchangeSummary {
+            .map(move |(index, exchange)| RecordedHttpExchangeSummary {
                 shared_origin: exchange.shared_origin.clone(),
                 index,
                 case_id: exchange.case_id.clone(),
@@ -434,6 +438,18 @@ impl ReplayState {
                 method: exchange.record.method.clone(),
                 uri: uri_path_only(&exchange.record.uri),
                 status: exchange.record.response_status,
+            })
+    }
+    pub(super) fn unused_http_exchanges(
+        &self,
+        source: ReplaySource,
+        allowed: bool,
+    ) -> Vec<RecordedHttpExchangeSummary> {
+        self.unused_http_iter(source, allowed)
+            .take(if source == ReplaySource::Global {
+                100
+            } else {
+                usize::MAX
             })
             .collect()
     }

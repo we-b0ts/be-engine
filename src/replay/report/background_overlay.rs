@@ -407,6 +407,7 @@ fn move_matching_events<'a>(
         .remove(global_field)
         .and_then(|value| value.as_array().cloned())
         .unwrap_or_default();
+    let original_global_len = global.len();
     let mut retained = Vec::with_capacity(case.len());
     for mut event in case.drain(..) {
         let Some(rule) = matching_rule(&event).map(ToOwned::to_owned) else {
@@ -429,6 +430,7 @@ fn move_matching_events<'a>(
         }
     }
     object.insert(case_field.to_string(), Value::Array(retained));
+    original_evidence::update_global_count(object, global_field, original_global_len, global.len());
     object.insert(global_field.to_string(), Value::Array(global));
 }
 

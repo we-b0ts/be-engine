@@ -24,6 +24,7 @@ use crate::memcached::{
 };
 
 mod builtins;
+mod evidence;
 mod expiration;
 use super::command_matching::{
     CommandExchangeScope, PreferredMatch, is_connection_independent_background,
@@ -90,6 +91,7 @@ fn default_recorded_timestamp() -> DateTime<Utc> {
 
 #[derive(Debug, Clone)]
 struct ReplayExchange {
+    response_evidence: Option<crate::dependency_index::RecordRef>,
     source: ReplaySource,
     case_id: Option<String>,
     record: RecordedExchange,
@@ -244,6 +246,7 @@ impl MemcachedReplayState {
         self.case_exchange_index
             .register(source, case_id, exchange_index);
         self.exchanges.push(ReplayExchange {
+            response_evidence: None,
             source,
             case_id: case_id.map(ToOwned::to_owned),
             record,
@@ -327,6 +330,11 @@ impl MemcachedReplayState {
                 ));
             }
         };
+        let response_frames = self.exchanges[index].response_bytes().map_err(|error| {
+            CommandMatchDiagnostic::EvidenceUnavailable {
+                reason: format!("response evidence unavailable: {error:#}"),
+            }
+        })?;
         let exchange = &mut self.exchanges[index];
         let policy_decision = policy
             .map(|policy| {
@@ -347,7 +355,7 @@ impl MemcachedReplayState {
         };
         Ok(MatchedMemcachedExchange {
             index,
-            response_frames: exchange.response_frames.clone(),
+            response_frames,
             timing: exchange.timing,
             policy_decision,
             report: CommandMatchedReport {
@@ -408,6 +416,7 @@ impl MemcachedReplayState {
             unsupported: self.events.unsupported.clone(),
             unsafe_events: self.events.unsafe_events.clone(),
             unused_case: unused(&self.exchanges, ReplaySource::Case),
+            unused_global_count: Some(self.global_unused_count()),
             unused_global: unused(&self.exchanges, ReplaySource::Global),
             ..Default::default()
         }
@@ -889,12 +898,15 @@ fn memcached_mismatch_fields(
     fields
 }
 
-fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnusedReport> {
+fn unused_iter(
+    exchanges: &[ReplayExchange],
+    source: ReplaySource,
+) -> impl Iterator<Item = CommandUnusedReport> + '_ {
     exchanges
         .iter()
         .enumerate()
-        .filter(|(_, exchange)| exchange.source == source && !exchange.status.is_consumed())
-        .map(|(index, exchange)| CommandUnusedReport {
+        .filter(move |(_, exchange)| exchange.source == source && !exchange.status.is_consumed())
+        .map(move |(index, exchange)| CommandUnusedReport {
             index,
             case_id: exchange.case_id.clone(),
             source,
@@ -905,6 +917,15 @@ fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnus
             connection_id: exchange.record.connection_id,
             sequence: exchange.record.sequence,
             command: exchange.record.command.clone(),
+        })
+}
+
+fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnusedReport> {
+    unused_iter(exchanges, source)
+        .take(if source == ReplaySource::Global {
+            100
+        } else {
+            usize::MAX
         })
         .collect()
 }

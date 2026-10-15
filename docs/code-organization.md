@@ -99,6 +99,14 @@ is unclear.
   `replay/snapshot` projects session state into reports. E2E execution owns the
   separate index preparation deadline and phase publication.
 
+  `dependency_index/global` projects portable Global metadata and groups generic
+  notification locations; `pages`, `stream` and `reference` own disk pages,
+  immutable traversal and shared original-byte reads. `replay/global` registers
+  these inventories through protocol-owned evidence adapters. Redis Pub/Sub's
+  `inventory` owns session consumption and its `notifications` child owns ordered
+  scheduling. `replay/report/global_evidence` publishes and queries complete
+  unused Global pages; runner Replay publication carries them into snapshots.
+
 - Supported dependency protocols are peer domains: MySQL, Redis, Memcached,
   Kafka, and Motan. Do not group protocols by a presumed business use such as
   cache or RPC.

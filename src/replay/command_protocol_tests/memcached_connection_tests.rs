@@ -2,53 +2,69 @@ use super::*;
 
 #[tokio::test]
 async fn replays_memcached_binary_with_live_opaque() {
-    let temp = tempfile::tempdir().unwrap();
-    let case_dir = temp.path().join("case");
-    tokio::fs::create_dir_all(&case_dir).await.unwrap();
-    let mut recorded_response = vec![0_u8; 24];
-    recorded_response[0] = 0x81;
-    recorded_response[1] = 0x00;
-    recorded_response[12..16].copy_from_slice(&1_u32.to_be_bytes());
-    let dependency = serde_json::json!({
-        "event_type": "memcached_exchange",
-        "connection_id": Uuid::new_v4(),
-        "sequence": 1,
-        "target_host": "cache.internal",
-        "target_port": 11211,
-        "wire_protocol": "binary",
-        "command": "get",
-        "opcode": 0,
-        "key": capture_json(b"key"),
-        "args": [],
-        "value": null,
-        "extras": null,
-        "cas": null,
-        "quiet": false,
-        "noreply": false,
-        "response_status": "0",
-        "response_frames": [capture_json(&recorded_response)],
-        "no_response": false,
-        "replay_safe": true
-    });
-    tokio::fs::write(
-        case_dir.join("dependencies.jsonl"),
-        serde_json::to_string(&dependency).unwrap(),
-    )
-    .await
-    .unwrap();
-    let report_path = temp.path().join("report.json");
-    let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
-    let mut client = TcpStream::connect(addr).await.unwrap();
-    let request = binary_get_request(42);
-    client.write_all(&request).await.unwrap();
-    let mut response = vec![0_u8; 24];
-    client.read_exact(&mut response).await.unwrap();
-    assert_eq!(u32::from_be_bytes(response[12..16].try_into().unwrap()), 42);
-    assert_eq!(u16::from_be_bytes(response[6..8].try_into().unwrap()), 0);
+    for global in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let case_dir = temp.path().join("case");
+        tokio::fs::create_dir_all(&case_dir).await.unwrap();
+        let mut recorded_response = vec![0_u8; 24];
+        recorded_response[0] = 0x81;
+        recorded_response[1] = 0x00;
+        recorded_response[12..16].copy_from_slice(&1_u32.to_be_bytes());
+        let dependency = serde_json::json!({
+            "event_type": "memcached_exchange",
+            "connection_id": Uuid::new_v4(),
+            "sequence": 1,
+            "target_host": "cache.internal",
+            "target_port": 11211,
+            "wire_protocol": "binary",
+            "command": "get",
+            "opcode": 0,
+            "key": capture_json(b"key"),
+            "args": [],
+            "value": null,
+            "extras": null,
+            "cas": null,
+            "quiet": false,
+            "noreply": false,
+            "response_status": "0",
+            "response_frames": [capture_json(&recorded_response)],
+            "no_response": false,
+            "replay_safe": true
+        });
+        tokio::fs::write(case_dir.join("dependencies.jsonl"), b"")
+            .await
+            .unwrap();
+        tokio::fs::write(
+            if global {
+                temp.path().join("global-dependencies.jsonl")
+            } else {
+                case_dir.join("dependencies.jsonl")
+            },
+            serde_json::to_string(&dependency).unwrap(),
+        )
+        .await
+        .unwrap();
+        let report_path = temp.path().join("report.json");
+        let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let request = binary_get_request(42);
+        client.write_all(&request).await.unwrap();
+        let mut response = vec![0_u8; 24];
+        client.read_exact(&mut response).await.unwrap();
+        assert_eq!(u32::from_be_bytes(response[12..16].try_into().unwrap()), 42);
+        assert_eq!(u16::from_be_bytes(response[6..8].try_into().unwrap()), 0);
 
-    let report = wait_for_matched_count(&report_path, "memcached", 1).await;
-    assert_eq!(report["memcached"]["matched"].as_array().unwrap().len(), 1);
-    task.abort();
+        let report = wait_for_matched_count(&report_path, "memcached", 1).await;
+        assert_eq!(report["memcached"]["matched"].as_array().unwrap().len(), 1);
+        client.write_all(&binary_get_request(43)).await.unwrap();
+        client.read_exact(&mut response).await.unwrap();
+        assert_ne!(
+            u16::from_be_bytes(response[6..8].try_into().unwrap()),
+            0,
+            "finite response evidence must not be reused"
+        );
+        task.abort();
+    }
 }
 
 #[tokio::test]

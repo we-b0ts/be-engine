@@ -377,24 +377,26 @@ pub(super) async fn handle_control_request(
             false,
         );
     }
-    if command == "finalize"
-        && should_stop
-        && let Err(error) = write_final_report_value(
-            report_path.expect("finalize report path checked"),
-            final_report
-                .as_ref()
-                .expect("successful finalize must produce a report"),
-        )
-        .await
-    {
-        state.lock().await.finalized_at = None;
-        return (
-            serde_json::json!({
-                "ok": false,
-                "error": format!("failed to persist replay report: {error:#}"),
-            }),
-            false,
-        );
+    if command == "finalize" && should_stop {
+        let path = report_path.expect("finalize report path checked");
+        let report = final_report
+            .as_mut()
+            .expect("successful finalize must produce a report");
+        let publication = async {
+            let details = report::global_evidence::prepare(state.clone(), &path).await?;
+            report["global_evidence"] = details.manifests.clone();
+            write_final_report_value(path, report).await?;
+            details.commit();
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        if let Err(error) = publication {
+            state.lock().await.finalized_at = None;
+            return (
+                serde_json::json!({"ok": false, "error": format!("failed to persist replay report: {error:#}")}),
+                false,
+            );
+        }
     }
     (response, should_stop)
 }

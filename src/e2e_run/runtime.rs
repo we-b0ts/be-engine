@@ -24,6 +24,29 @@ const _: () = assert!(
     "Replay target must retain the host namespace used by fake-IP interception"
 );
 
+pub(super) async fn replay_startup_failure(
+    layout: &RunLayout,
+    status: std::process::ExitStatus,
+) -> String {
+    let path = layout.active_dir.join("reports/replay.stderr.log");
+    let tail = async {
+        let mut file = tokio::fs::File::open(&path).await?;
+        let length = file.metadata().await?.len();
+        file.seek(SeekFrom::Start(length.saturating_sub(4096)))
+            .await?;
+        let mut bytes = Vec::new();
+        file.take(4096).read_to_end(&mut bytes).await?;
+        Ok::<_, std::io::Error>(String::from_utf8_lossy(&bytes).trim().to_owned())
+    }
+    .await;
+    let reason = match tail {
+        Ok(tail) if !tail.is_empty() => tail,
+        Ok(_) => "Replay stderr is empty".into(),
+        Err(error) => format!("Replay stderr unavailable: {error}"),
+    };
+    format!("replay process exited before becoming ready with {status}: {reason}")
+}
+
 #[derive(Debug, Serialize)]
 struct TargetRuntimeChecks {
     status: &'static str,

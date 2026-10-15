@@ -1,5 +1,6 @@
 mod broker;
 mod cleanup_selection;
+mod evidence;
 mod matcher;
 mod model;
 pub(in crate::replay) mod optional_session;

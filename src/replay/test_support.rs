@@ -16,6 +16,10 @@ pub(super) fn write_test_recording_network_manifest(root_dir: &Path) {
     }
     let mut endpoints = BTreeSet::new();
     collect_recording_endpoints(root_dir, &mut endpoints);
+    let (global, debug) = super::find_run_level_dependencies(root_dir);
+    for path in global.into_iter().chain(debug) {
+        collect_recording_endpoints(&path, &mut endpoints);
+    }
     let resolved_domains = endpoints
         .iter()
         .map(|endpoint: &RecordedEndpoint| endpoint.host.clone())

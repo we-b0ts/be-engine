@@ -18,7 +18,13 @@ pub use api_trigger::plan::{
     ApiTriggeredMysqlReport, ApiTriggeredRedisPlan, ApiTriggeredRedisReport,
     ApiTriggeredRedisSelector, plan_api_triggered_redis,
 };
-pub use dependency_index::{DependencyIndexReport, prepare_dependency_index};
+pub use dependency_index::DependencyIndexReport;
+
+pub fn prepare_dependency_index(source: &std::path::Path) -> anyhow::Result<DependencyIndexReport> {
+    dependency_index::store::prepare(source, replay::validate_index_record)
+        .map(|(_, report)| report)
+}
+pub use replay::{GlobalDependencyPage, read_global_dependency_page};
 mod dns_mock;
 mod e2e_run;
 mod engine_binary;
