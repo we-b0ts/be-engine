@@ -233,21 +233,17 @@ fn mysql_requires_exact_identity_endpoint_shape_and_complete_duplicates() {
 }
 
 #[test]
-fn mysql_preserves_same_identity_query_and_cancel_victims() {
+fn mysql_same_identity_reads_use_existing_origin_rules() {
     for uri in ["/jobs/resp_12/cancel", "/jobs/resp_12", "/items?job=12"] {
         let f = Fixture::mysql();
         f.change_request(&f.victim, json!({}), uri);
-        assert!(
-            load(&f.root, &f.mysql_rules())
-                .unwrap()
-                .witnesses
-                .is_empty(),
-            "{uri}"
-        );
+        let index = load(&f.root, &f.mysql_rules()).unwrap();
+        assert_eq!(index.witnesses.len(), 1, "{uri}");
+        assert!(index.witnesses.values().all(|w| w.same_resource_read));
     }
     let f = Fixture::mysql();
     f.change_request(&f.victim, json!({"id":12}), "/items");
-    assert!(f.mysql_plan().is_err());
+    assert_eq!(f.mysql_plan().unwrap().report().matched_unused_exchanges, 1);
 }
 
 #[test]

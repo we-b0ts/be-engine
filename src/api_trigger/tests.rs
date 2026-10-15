@@ -4,6 +4,7 @@ use super::{
 };
 mod mysql;
 mod redis_extended;
+mod same_resource;
 mod transactions;
 use crate::config::{ApiTriggerSource, SourceTrafficPolicyConfig};
 use serde_json::{Value, json};
@@ -217,7 +218,7 @@ fn query_response_and_string_true_do_not_substitute_for_typed_request_body() {
 }
 
 #[test]
-fn preserves_victims_referencing_the_same_identity() {
+fn preserves_same_identity_writes_and_accepts_report_only_reads() {
     for uri in [
         "/jobs/12/cancel",
         "/items/12",
@@ -226,14 +227,16 @@ fn preserves_victims_referencing_the_same_identity() {
     ] {
         let f = Fixture::new("GET");
         f.change_request(&f.victim, json!({}), uri);
-        assert!(
-            load(&f.root, &f.rules("GET")).unwrap().witnesses.is_empty(),
-            "{uri}"
-        );
+        let index = load(&f.root, &f.rules("GET")).unwrap();
+        assert!(index.witnesses.values().all(|w| w.same_resource_read));
+        assert_eq!(index.witnesses.len(), 1, "{uri}");
+        let f = Fixture::new("DEL");
+        f.change_request(&f.victim, json!({}), uri);
+        assert!(load(&f.root, &f.rules("DEL")).unwrap().witnesses.is_empty());
     }
     let f = Fixture::new("GET");
     f.change_request(&f.victim, json!({"job_id":12}), "/items");
-    assert!(load(&f.root, &f.rules("GET")).unwrap().witnesses.is_empty());
+    assert_eq!(load(&f.root, &f.rules("GET")).unwrap().witnesses.len(), 1);
 }
 
 #[test]
@@ -453,10 +456,12 @@ fn corrupted_disposable_cache_is_rebuilt_and_source_mutations_invalidate_it() {
 }
 
 #[test]
-fn percent_encoded_identity_and_duplicate_json_are_not_ownership_proof() {
+fn percent_encoded_reads_are_report_only_and_duplicate_json_never_proves_origins() {
     let f = Fixture::new("GET");
     f.change_request(&f.victim, json!({}), "/items?job=%31%32");
-    assert!(load(&f.root, &f.rules("GET")).unwrap().witnesses.is_empty());
+    let index = load(&f.root, &f.rules("GET")).unwrap();
+    assert_eq!(index.witnesses.len(), 1);
+    assert!(index.witnesses.values().all(|w| w.same_resource_read));
     let f = Fixture::new("GET");
     let p = f.origin.join("request.json");
     let mut value: Value = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();

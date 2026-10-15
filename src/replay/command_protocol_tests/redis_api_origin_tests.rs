@@ -298,6 +298,59 @@ async fn settled_report(state: &Arc<Mutex<ReplayState>>, matched: u64) -> Value 
 }
 
 #[tokio::test]
+async fn same_resource_reads_keep_finite_delivery_and_reclassify_only_the_leftover() {
+    for lazy in [false, true] {
+        let f = Fixture::new();
+        let path = f.victim.join("request.json");
+        let mut request_json: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        request_json["uri"] = "/jobs/12".into();
+        fs::write(path, request_json.to_string()).unwrap();
+        let records: Vec<_> = (1..=3)
+            .map(|sequence| f.command(sequence, "GET", &["job:12"], b"$-1\r\n"))
+            .collect();
+        f.write(&f.victim, &records);
+        let before = fs::read(f.victim.join("dependencies.jsonl")).unwrap();
+        let (addr, state, task) = f.spawn(lazy, f.rules()).await;
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        for _ in 0..2 {
+            request(&mut client, &["GET", "job:12"], b"$-1\r\n").await;
+        }
+        state.lock().await.finalized_at = Some(Utc::now());
+        let snapshot = settled_report(&state, 2).await;
+        assert_eq!(
+            snapshot["redis"]["unused_case"].as_array().unwrap().len(),
+            1
+        );
+        let report = f.root.join(".replay/same-resource-report.json");
+        fs::write(&report, snapshot.to_string()).unwrap();
+        let policy = f.root.join(".replay/same-resource-policy.yaml");
+        let mut config = crate::config::SourceTrafficPolicyConfig::empty();
+        config.process_owned_dependencies = f.rules();
+        fs::write(&policy, config.render().unwrap()).unwrap();
+        let result = super::super::reclassify_background_dependencies(
+            &policy,
+            &report,
+            &std::collections::BTreeMap::from([("victim".into(), f.victim.clone())]),
+        )
+        .unwrap();
+        assert_eq!(result.matched_unused_case, 1);
+        assert!(result.remaining_dirty_case_ids.is_empty());
+        let classified: Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+        assert_eq!(classified["redis"]["matched_count"], 2);
+        assert_eq!(classified["redis"]["unused_global"][0]["sequence"], 3);
+        request(&mut client, &["GET", "job:12"], b"$-1\r\n").await;
+        request(&mut client, &["GET", "job:12"], ERROR).await;
+        let snapshot = settled_report(&state, 3).await;
+        assert_eq!(snapshot["redis"]["unmatched"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            fs::read(f.victim.join("dependencies.jsonl")).unwrap(),
+            before
+        );
+        task.abort();
+    }
+}
+
+#[tokio::test]
 async fn redis_api_origin_keeps_current_business_order_and_exact_arguments() {
     for lazy in [false, true] {
         let f = Fixture::new();

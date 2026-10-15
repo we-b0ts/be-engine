@@ -7,6 +7,7 @@ mod mysql_transaction;
 pub(crate) mod plan;
 mod redis_script;
 mod request;
+mod same_resource;
 #[cfg(test)]
 mod tests;
 

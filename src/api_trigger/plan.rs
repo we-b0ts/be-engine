@@ -166,6 +166,7 @@ pub(super) fn plan(
     let mut triggers = BTreeSet::new();
     let mut matched = 0;
     let mut consumed = BTreeMap::<String, usize>::new();
+    let mut total_consumed = BTreeMap::<String, usize>::new();
     let unused = if mysql {
         &replay["unused_case_exchanges"]
     } else {
@@ -182,6 +183,17 @@ pub(super) fn plan(
             continue;
         }
         let key = super::evidence::key(case, event).expect("witness key");
+        if mysql
+            && let Some(fingerprint) = crate::config::api_trigger::mysql::key(case, event)
+            && let Some(total) = index.witnesses.get(&fingerprint)
+        {
+            let count = total_consumed.entry(fingerprint).or_default();
+            *count += 1;
+            ensure!(
+                *count <= total.exchanges,
+                "Replay unused summaries exceed immutable API trigger witnesses"
+            );
+        }
         let count = consumed.entry(key).or_default();
         *count += 1;
         ensure!(

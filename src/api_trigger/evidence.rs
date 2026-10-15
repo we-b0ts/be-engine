@@ -31,6 +31,8 @@ pub(crate) struct OriginWitness {
     pub exchanges: usize,
     pub captured_at: DateTime<Utc>,
     pub captured_identity: String,
+    /// Report-only permission; it cannot relax live ordering or prove a transaction.
+    pub same_resource_read: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -337,8 +339,11 @@ fn observe(
     if victim == origin.case_id {
         return Ok(());
     }
+    let references = request::references(&file.request, &origin.identity);
+    let same_resource_read =
+        references && super::same_resource::allows(rule, &file.request, &origin.identity);
     if timestamp(event).is_none_or(|time| time < origin.captured_at)
-        || request::references(&file.request, &origin.identity)
+        || (references && !same_resource_read)
         || (mysql && !crate::config::api_trigger::mysql::complete(event))
     {
         index.ambiguous_references += 1;
@@ -367,6 +372,7 @@ fn observe(
         )?,
         captured_at: origin.captured_at,
         captured_identity: origin.identity.clone(),
+        same_resource_read,
         command: event["command"]
             .as_str()
             .context("dependency command missing")?

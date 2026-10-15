@@ -32,7 +32,9 @@ is unclear.
 
 - `config/api_trigger` owns API-origin process-rule schema, SQL identity slots and bounded key-template
   validation; `api_trigger` owns immutable origin evidence and disposable index
-  persistence. Its `plan` child owns the shared stale-safe policy transaction;
+  persistence. Its `same_resource` child owns report-only read eligibility for
+  requests referencing an origin identity, separate from live ordering and
+  transaction proof. Its `plan` child owns the shared stale-safe policy transaction;
   `mysql_plan` adapts bounded SELECT/UPDATE selectors. `mysql_transaction` owns
   complete wire-sequence provenance; its `tail` child attributes only a direct
   successful UPDATE-to-COMMIT handoff when the prefix is missing. `redis_script` owns adjacent script-probe
