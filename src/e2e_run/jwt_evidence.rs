@@ -46,7 +46,14 @@ pub(crate) fn query(context: E2eRunContext, api: &str) -> Result<JwtTimeEvidence
         let actual: Value = serde_json::from_slice(&std::fs::read(&assertion.actual_response)?)?;
         let expected: Value =
             serde_json::from_slice(&std::fs::read(&assertion.expected_response)?)?;
-        if actual["status"] != 401 || expected["status"] == 401 {
+        // Candidates are request-auth failures: the recorded response succeeded
+        // while the replay rendered an authentication rejection. Sources differ
+        // in the rendered status (401 for WWW-Authenticate flows, 403 for
+        // bespoke token-verification endpoints), so key on the failure class
+        // instead of one literal status.
+        let target_status = actual["status"].as_u64().unwrap_or_default();
+        let recorded_status = expected["status"].as_u64().unwrap_or_default();
+        if !matches!(target_status, 401 | 403) || matches!(recorded_status, 401 | 403) {
             continue;
         }
         // Already transformed input cannot be diagnosed from the original token's exp.
@@ -57,9 +64,7 @@ pub(crate) fn query(context: E2eRunContext, api: &str) -> Result<JwtTimeEvidence
         }) {
             continue;
         }
-        let Some(source_status) = expected["status"].as_u64() else {
-            continue;
-        };
+        let source_status = recorded_status;
         let (replayed_at, time_source) = replay_time(
             &actual,
             &state.replay_report,
@@ -121,7 +126,7 @@ pub(crate) fn query(context: E2eRunContext, api: &str) -> Result<JwtTimeEvidence
                 location,
                 algorithm: token.algorithm,
                 source_status,
-                target_status: 401,
+                target_status,
                 recorded_at,
                 replayed_at,
                 replay_time_source: time_source.clone(),
