@@ -435,6 +435,11 @@ async fn finalize_replay(
     state.finalized_at = Some(finalized_at);
     report.finalized_at = Some(finalized_at);
     report.finalized = true;
+    let mut value = serde_json::to_value(report).expect("replay report must serialize");
+    // Rule planners (for example MySQL response time shift) require the
+    // persisted report to carry the finalized completeness verdict, so persist
+    // it alongside `finalized` instead of returning it only in the response.
+    value["complete"] = Value::Bool(complete);
     (
         serde_json::json!({
             "ok": true,
@@ -442,7 +447,7 @@ async fn finalize_replay(
             "dirty": dirty,
             "finalized": true,
         }),
-        Some(serde_json::to_value(report).expect("replay report must serialize")),
+        Some(value),
     )
 }
 
