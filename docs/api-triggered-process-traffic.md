@@ -77,25 +77,46 @@ reused identities do not authorize classification. Capture does
 not inspect expected responses or make recording values available to target code.
 
 The planner correlates exact Redis key identities after the INSERT. It retains
-the original trigger case. Foreign requests explicitly referencing the same
-captured identity in their URI or body are ambiguous and remain case-owned,
-including polling/cancellation descendants for that resource. Requests on the
-same route or its descendants for a different resource can contain proven
-foreign dependencies. Nonempty uninspectable victim bodies remain case-owned.
+the original trigger case. A later request referencing that same captured
+identity may reclassify unused Redis GET/LRANGE and bounded read-only MySQL
+SELECTs through the existing API-origin rule. No per-request API allowlist,
+additional rule, fixed background count or new recording is required. Identity,
+endpoint, operation template, timestamp and complete-record checks still apply;
+an unmatched identity cannot inherit another POST's origin. An independently
+recorded unique POST for another identity is evaluated as a separate origin.
+Same-resource DEL, Lua invocations, UPDATEs and transaction inheritance remain
+strict. Nonempty uninspectable victim bodies remain case-owned.
+
+Same-resource read permission applies only to unused report entries after
+matching. It does not relax Redis lane ordering, synthesize responses or change
+finite consumption. Reclassified entries identify the POST and include
+`api_trigger_source.same_resource_read: true`. Removing the existing rule
+restores their original case ownership.
+
+This is a rule-authorized read exemption, not coroutine attribution. When the
+background task and the current request issue identical reads, Replay may
+consume a recorded background read and leave an equivalent request read unused.
+The rule can classify the leftover without deciding which identical invocation
+it originally represented. The number of eligible entries follows each
+recording, and never exceeds immutable evidence. Consequently these shared
+reads no longer provide a strict missing-call-count check for the current
+request; precise caller/count verification requires additional recording
+provenance. Response differences and target-side failures remain failures.
 A common ID alone does not prove the caller: source review must establish that
 the selected operation is the detached task's operation and identify any APIs
 that can perform the same operation. Do not use this rule when that ownership
 cannot be established. Never infer ownership just from an unused exchange.
 
-This identity protection refers to inbound polling or cancellation requests and
-their own dependencies, rather than excluding a whole route prefix. A detached task may itself react to cancellation or
+The remaining identity protection covers mutation and transaction provenance,
+rather than excluding a whole route prefix. A detached task may itself react to cancellation or
 failure and collect its terminal result after the original HTTP response.
 Those background cleanup calls can still be process-owned. Trace indirect
 callers as well as direct ones: a result collector may call an accumulated-content
 helper, which reads streaming content and finalizes blocks. A helper also used
 by a polling/cancel endpoint does not establish the owner of every invocation.
-Plan verifies recorded identity and scope; source evidence must establish which
-caller owns the selected operation. It does not claim coroutine tracing.
+Plan verifies recorded identity and scope; source evidence must establish the
+background call chain and describe overlapping current-request callers. It
+does not claim coroutine tracing.
 
 Only `unused_recorded` entries are moved to the process-level diagnostic view.
 Unmatched target calls, unsupported/unsafe traffic, response differences and

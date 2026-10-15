@@ -42,7 +42,10 @@ impl RedisReplayState {
                 continue;
             };
             let event = serde_json::to_value(&exchange.record)?;
-            if origins.witness(case_id, &event).is_some() {
+            if origins
+                .witness(case_id, &event)
+                .is_some_and(|witness| !witness.same_resource_read)
+            {
                 // Preserve original case attribution and finite consumption.
                 // The report overlay still owns unused-only reclassification.
                 exchange.connection_independent = true;

@@ -25,6 +25,7 @@ pub(super) fn reclassify(
         return;
     }
     let mut remaining = BTreeMap::<String, usize>::new();
+    let mut total_remaining = BTreeMap::<String, usize>::new();
     move_matching_events(
         report,
         "unused_case_exchanges",
@@ -35,6 +36,14 @@ pub(super) fn reclassify(
                 let key = crate::config::api_trigger::mysql::summary_key(case, unused)?;
                 let used = remaining.entry(key).or_default();
                 if *used < witness.exchanges {
+                    let fingerprint = crate::config::api_trigger::mysql::key(case, unused)?;
+                    if let Some(total) = origins.witnesses.get(&fingerprint) {
+                        let used = total_remaining.entry(fingerprint).or_default();
+                        if *used >= total.exchanges {
+                            return None;
+                        }
+                        *used += 1;
+                    }
                     *used += 1;
                     return Some(witness.rule.as_str());
                 }

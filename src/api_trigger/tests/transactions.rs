@@ -110,7 +110,7 @@ fn same_route_transactions_require_a_distinct_captured_resource() {
                     .as_array()
                     .unwrap()
                     .len(),
-                6
+                5
             );
         }
     }

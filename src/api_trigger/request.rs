@@ -139,3 +139,7 @@ pub(super) fn matches(source: &ApiTriggerSource, request: &RequestFacts) -> bool
 pub(super) fn references(request: &RequestFacts, identity: &str) -> bool {
     request.ambiguous_body || request.references.contains(identity)
 }
+
+pub(super) fn same_resource_reference(request: &RequestFacts, identity: &str) -> bool {
+    !request.ambiguous_body && request.references.contains(identity)
+}

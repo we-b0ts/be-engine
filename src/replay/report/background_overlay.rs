@@ -501,6 +501,9 @@ fn annotate_origins(events: &mut Value, origins: &crate::api_trigger::OriginInde
         if let Some(w) = witness {
             event["api_trigger_source"] =
                 json!({"api":w.trigger_api,"case_id":w.trigger_case_id,"binding":w.binding});
+            if w.same_resource_read {
+                event["api_trigger_source"]["same_resource_read"] = true.into();
+            }
         }
     }
 }

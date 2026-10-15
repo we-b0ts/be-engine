@@ -89,6 +89,20 @@ fn script_events() -> Vec<Value> {
 }
 
 #[test]
+fn same_resource_lua_and_its_script_probe_remain_case_owned() {
+    let f = Fixture::new("DEL");
+    f.change_request(&f.victim, json!({}), "/jobs/12");
+    let selector = script_selector();
+    write_lines(&f.victim.join("dependencies.jsonl"), &script_events());
+    let index = load(
+        &f.root,
+        &[selector.rule("metrics", "0123456789abcdef", PROOF)],
+    )
+    .unwrap();
+    assert!(index.witnesses.is_empty());
+}
+
+#[test]
 fn scripts_bind_argv_identity_and_only_associate_adjacent_same_connection_exists() {
     let f = Fixture::new("DEL");
     let selector = script_selector();
