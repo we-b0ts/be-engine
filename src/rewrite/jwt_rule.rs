@@ -47,6 +47,13 @@ pub struct JwtPlanRecord {
     leeway_seconds: i64,
 }
 
+impl JwtPlanRecord {
+    /// Digest of the verification policy captured when this plan was created.
+    pub(super) fn policy_revision(&self) -> &str {
+        &self.policy_revision
+    }
+}
+
 pub(super) fn facts(root: &Path, state: &RewriteState) -> Result<JwtTimeEvidence> {
     let evidence = jwt_evidence::query(
         evidence::e2e_context(root, state)?,

@@ -18,8 +18,35 @@ pub(super) fn evidence_missing(target_root: &Path, state: &RewriteState) -> Resu
         },
         state.group_id.as_deref().context("plan has no API group")?,
     )?;
-    Ok(!evidence.replay.is_file()
-        || !crate::replay::report::dependency_evidence_path(&evidence.replay).is_file())
+    if !evidence.replay.is_file()
+        || !crate::replay::report::dependency_evidence_path(&evidence.replay).is_file()
+    {
+        return Ok(true);
+    }
+    // A generated-value plan freezes the policy identity its evidence was
+    // validated against. When the verification policy or the assertion report
+    // advanced afterwards, apply can never validate the frozen evidence again;
+    // recovery must retire the plan so fresh Replay and replanning can proceed
+    // instead of deadlocking the coordinator queue.
+    if let Some(plan) = state.rule_plan.as_ref() {
+        if let Some(spec) = plan.jwt.as_ref() {
+            let (_, config) = crate::e2e_run::resolve_project(target_root)?;
+            let current =
+                crate::e2e_run::jwt_evidence::digest(&std::fs::read(&config.replay_policy)?);
+            if current != spec.policy_revision() {
+                return Ok(true);
+            }
+        }
+        if !plan.response_jwts.is_empty() || !plan.header_dates.is_empty() {
+            let current =
+                crate::validate_replay_policy(&target_root.join(".traffic-e2e/verification.yaml"))?;
+            let assertions: Value = serde_json::from_slice(&std::fs::read(&evidence.assertions)?)?;
+            if assertions["policy_fingerprint"].as_str() != Some(current.fingerprint.as_str()) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 pub(super) fn required_action(
