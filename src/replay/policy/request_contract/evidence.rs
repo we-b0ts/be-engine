@@ -294,7 +294,37 @@ pub(in crate::replay::policy) fn verify(
         );
         let source = read(dir.join("dependencies.jsonl"), witnesses)?;
         if let Some(super::super::redis_value::RedisSelector::Requests(selector)) = &rule.redis {
-            validate_source_commands(selector, &candidate, &source)?;
+            // Skip candidates the selector does not cover, mirroring the
+            // runtime compare guards. Verifying an unrelated key family here
+            // would abort planning of a correctly scoped single-family rule.
+            let selector_covers_candidate = selector.database == candidate.database
+                && selector.commands.iter().any(|command| {
+                    command.command == candidate.command
+                        && source
+                            .split(|b| *b == b'\n')
+                            .filter(|line| !line.is_empty())
+                            .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
+                            .filter(|event| {
+                                event["event_type"] == "redis_exchange"
+                                    && event["command"] == candidate.command
+                            })
+                            .filter_map(|event| {
+                                let args = event["args"].as_array()?;
+                                let args =
+                                    args.iter().map(decode).collect::<Result<Vec<_>>>().ok()?;
+                                (fingerprint(&serde_json::to_vec(&args).ok()?)
+                                    == candidate.source_fingerprint)
+                                    .then_some(args)
+                            })
+                            .any(|args| {
+                                command
+                                    .key(&args)
+                                    .is_some_and(|key| selector.key.matches(key))
+                            })
+                });
+            if selector_covers_candidate {
+                validate_source_commands(selector, &candidate, &source)?;
+            }
         }
         for line in source
             .split(|b| *b == b'\n')
