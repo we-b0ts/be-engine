@@ -29,6 +29,7 @@ fn cache_snapshot_seed_can_satisfy_repeated_logical_reads() {
     state
         .register_exchange(
             RecordedExchange {
+                id: None,
                 timestamp: None,
                 connection_id: Uuid::new_v4(),
                 sequence: 1,
@@ -91,6 +92,7 @@ fn subscription_confirmation_registers_and_matches() {
     state
         .register_exchange(
             RecordedExchange {
+                id: None,
                 timestamp: None,
                 connection_id,
                 sequence: 1,
@@ -147,6 +149,7 @@ fn malformed_subscription_confirmation_is_rejected() {
     let error = state
         .register_exchange(
             RecordedExchange {
+                id: None,
                 timestamp: None,
                 connection_id: Uuid::new_v4(),
                 sequence: 1,

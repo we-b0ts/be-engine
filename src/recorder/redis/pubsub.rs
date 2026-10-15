@@ -1,5 +1,7 @@
 mod capture;
+mod evidence;
 pub(super) use capture::{CapturedPush, capture};
+pub(super) use evidence::record_subscription;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -58,12 +60,12 @@ impl Subscriptions {
             .map(|(sequence, time)| (*sequence, time.elapsed().as_millis() as u64))
     }
 
-    pub(super) fn record_confirmation(&mut self, command: &RedisCommand, response: &[u8]) {
+    pub(super) fn record_confirmation(&mut self, command: &RedisCommand, response: &[u8]) -> bool {
         if validate_subscription_confirmation(command, response).is_err() {
-            return;
+            return false;
         }
         let Some(subject) = command.args.first().cloned() else {
-            return;
+            return false;
         };
         match command.name.as_str() {
             "SUBSCRIBE" => {
@@ -84,8 +86,9 @@ impl Subscriptions {
             "SUNSUBSCRIBE" => {
                 self.shard_channels.remove(&subject);
             }
-            _ => {}
+            _ => return false,
         }
+        true
     }
 }
 

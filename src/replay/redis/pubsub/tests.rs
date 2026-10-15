@@ -5,6 +5,7 @@ use std::path::Path;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 mod scale;
+mod subscription_evidence;
 
 const SOURCE: &str = "30b6569f34c2486dafd3bf29b09a071f";
 const TARGET: &str = "59629c1606fa4011b698ef82621b84b5";

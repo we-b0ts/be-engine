@@ -58,6 +58,10 @@ pub(super) struct RecordedConnection {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(super) struct RecordedExchange {
+    // Subscription aliases retain event identity without changing existing
+    // Redis rule/evidence fingerprints, which serialize this projection.
+    #[serde(default, skip_serializing)]
+    id: Option<Uuid>,
     #[serde(default)]
     timestamp: Option<chrono::DateTime<chrono::Utc>>,
     connection_id: Uuid,
@@ -96,6 +100,7 @@ struct RecordedCapture {
 
 #[derive(Debug, Clone)]
 struct ReplayExchange {
+    subscription_alias: bool,
     response_evidence: Option<crate::dependency_index::RecordRef>,
     rpc_push: Option<usize>,
     response_time_shift: Option<time_shift::ResponseShift>,
@@ -270,6 +275,7 @@ impl RedisReplayState {
             .register(source, case_id, exchange_index);
         let rpc_push = self.pubsub.link(&record, source, case_id, &args)?;
         self.exchanges.push(ReplayExchange {
+            subscription_alias: false,
             response_evidence: None,
             rpc_push,
             response_time_shift: None,

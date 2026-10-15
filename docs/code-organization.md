@@ -114,11 +114,15 @@ is unclear.
 - `redis/wire` owns generic RESP2 Pub/Sub framing; `redis/socketio_rpc` owns the
   bounded Redis-adapter JSON codec without application semantics.
   `recorder/redis/pubsub` owns confirmed subscription state and its `capture`
-  child persists generic frames; `recorder/redis/rpc` retains RPC admission
+  child persists generic frames; its `evidence` child retains subscription
+  confirmations and same-command Global mirrors without changing Case ownership.
+  `recorder/redis/rpc` retains RPC admission
   across connections independently of application events. `recorder/redis/events`
   projects connection/exchange records. `replay/redis/pubsub` owns finite push
   evidence, subscription routing and delivery; its `adapter` child owns
-  Socket.IO Redis-adapter identity correlation. Payload semantics remain with
+  Socket.IO Redis-adapter identity correlation, while `subscription_evidence`
+  resolves exact recording-level anchors and canonical single-use aliases.
+  Payload semantics remain with
   the application. Source acquisition and Replay do not consume HTTP oracles.
 - Top-level `mysql`, `redis`, `memcached`, and `kafka` modules own reusable
   protocol parsing and encoding only. Top-level `motan` is a traffic-e2e

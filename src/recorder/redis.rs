@@ -907,8 +907,9 @@ async fn apply_successful_setup(
             }
         }
         "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" | "UNSUBSCRIBE" | "PUNSUBSCRIBE"
-        | "SUNSUBSCRIBE" => {
-            session.subscriptions.record_confirmation(command, response);
+        | "SUNSUBSCRIBE"
+            if session.subscriptions.record_confirmation(command, response) =>
+        {
             session.subscriptions.set_anchor(command, sequence);
         }
         _ => {}

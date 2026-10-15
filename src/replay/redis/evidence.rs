@@ -10,6 +10,9 @@ impl RedisReplayState {
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
         rules: &[crate::BackgroundDependencyRuleConfig],
     ) -> Result<()> {
+        if record.global_dependency_reason.as_deref() == Some("pubsub_subscription_mirror") {
+            return self.pubsub.retain_subscription_mirror(record);
+        }
         let identity = (record.connection_id, record.sequence);
         self.register_exchange(record, ReplaySource::Global, None, targets, rules)?;
         if let Some(exchange) = self.exchanges.last_mut()

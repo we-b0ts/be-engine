@@ -5,6 +5,11 @@ use super::report::command::{CommandExchangeRefReport, CommandMatchDiagnostic};
 
 pub(super) trait CommandExchangeScope {
     fn source(&self) -> ReplaySource;
+    /// Protocol control evidence can alias its original finite slot at startup.
+    /// This never changes the slot's owner or connection-order barriers.
+    fn available_in_global_scope(&self) -> bool {
+        self.source() == ReplaySource::Global
+    }
     fn case_id(&self) -> Option<&str>;
     fn connection_id(&self) -> Uuid;
     fn sequence(&self) -> u64;
@@ -193,7 +198,10 @@ fn scope_matches<T>(exchange: &T, source: ReplaySource, case_id: Option<&str>) -
 where
     T: CommandExchangeScope,
 {
-    exchange.source() == source && (source == ReplaySource::Global || exchange.case_id() == case_id)
+    match source {
+        ReplaySource::Global => exchange.available_in_global_scope(),
+        ReplaySource::Case => exchange.source() == source && exchange.case_id() == case_id,
+    }
 }
 
 fn exchange_ref<T>(exchange: &T) -> CommandExchangeRefReport

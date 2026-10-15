@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 mod adapter;
 mod inventory;
 mod notifications;
+pub(in crate::replay) mod subscription_evidence;
 pub(super) use notifications::{NotificationJob, schedule_notifications};
 #[cfg(test)]
 mod tests;
@@ -73,6 +74,7 @@ struct Subscription {
 
 #[derive(Debug, Default)]
 pub(in crate::replay) struct PubSubState {
+    subscription_mirrors: BTreeMap<(Uuid, u64), RecordedExchange>,
     indexed: inventory::IndexedNotifications,
     pushes: Vec<Push>,
     subscriptions: Vec<Subscription>,
@@ -113,58 +115,6 @@ impl PubSubState {
         source: Arc<crate::dependency_index::RecordSource>,
     ) -> Result<()> {
         self.indexed.restore(lanes, root, source)
-    }
-
-    pub(super) fn validate_subscriptions(&self, exchanges: &[ReplayExchange]) -> Result<()> {
-        let mut subscriptions = std::collections::HashMap::new();
-        for exchange in exchanges.iter().filter(|e| {
-            matches!(
-                e.record.command.as_str(),
-                "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE"
-            ) && e.record.response_kind != "error"
-                && e.record.outcome == DependencyExchangeOutcome::Response
-        }) {
-            ensure!(
-                subscriptions
-                    .insert(
-                        (exchange.record.connection_id, exchange.record.sequence),
-                        exchange
-                    )
-                    .is_none(),
-                "ambiguous recorded Redis subscription identity"
-            );
-        }
-        for (record, kind, subject) in self
-            .pushes
-            .iter()
-            .map(|push| (&push.record, push.kind, &push.subject))
-            .chain(
-                self.indexed
-                    .lanes
-                    .iter()
-                    .map(|lane| (&lane.record, lane.kind, &lane.subject)),
-            )
-        {
-            let subscription = subscriptions.get(&(record.connection_id, record.subscription_sequence))
-                .with_context(|| format!("Redis Pub/Sub subscription evidence missing from selection: connection {}, sequence {}, target {}:{}; refresh the recording with its startup subscription",
-                    record.connection_id, record.subscription_sequence, record.target_host, record.target_port))?;
-            let command = match kind {
-                RedisSubscriptionKind::Channel => "SUBSCRIBE",
-                RedisSubscriptionKind::Pattern => "PSUBSCRIBE",
-                RedisSubscriptionKind::ShardChannel => "SSUBSCRIBE",
-            };
-            ensure!(
-                subscription.record.command == command
-                    && subscription.args.first() == Some(subject)
-                    && normalize_host(&subscription.record.target_host)
-                        == normalize_host(&record.target_host)
-                    && subscription.record.target_port == record.target_port
-                    && subscription.record.database == record.database
-                    && subscription.record.username == record.username,
-                "Redis Pub/Sub push does not match its recorded subscription"
-            );
-        }
-        Ok(())
     }
 
     pub(super) fn case_is_dirty(&self, case: &str) -> bool {
