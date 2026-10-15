@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, ensure};
-use hyper::StatusCode;
 use hyper::header::{HeaderName, HeaderValue};
+use hyper::{StatusCode, Uri};
 use serde::{Deserialize, Serialize};
 
 use super::HttpGatewayConfig;
@@ -29,6 +29,20 @@ pub(super) fn validate_config(config: &HttpGatewayConfig) -> Result<()> {
         config.request_timeout_ms > 0,
         "http_gateway.request_timeout_ms must be greater than zero"
     );
+    for rule in config.rules.iter().chain(&config.exclude_rules) {
+        for path in &rule.paths {
+            ensure!(
+                path.starts_with('/')
+                    && path.parse::<Uri>().is_ok_and(|uri| {
+                        uri.scheme().is_none()
+                            && uri.authority().is_none()
+                            && uri.query().is_none()
+                            && uri.path() == path
+                    }),
+                "http_gateway rule paths must contain absolute paths without query strings: {path:?}"
+            );
+        }
+    }
     match config.fallback_mode {
         HttpGatewayFallbackMode::Upstream => {
             ensure!(
@@ -174,6 +188,31 @@ mod tests {
         assert_eq!(config.http_gateway.fixed_response.unwrap().status, 200);
         assert_eq!(config.http_gateway.request_timeout_ms, 15_000);
         assert!(!config.http_gateway.record_streaming);
+    }
+
+    #[test]
+    fn exact_paths_round_trip_and_reject_non_path_selectors() {
+        let config: crate::AppConfig = serde_yaml::from_str(
+            "http_gateway:\n  rules:\n  - paths: [/api/jobs]\n  exclude_rules:\n  - methods: [GET]\n    paths: [/api/jobs/private]\n",
+        )
+        .unwrap();
+        config.validate().unwrap();
+        let yaml = serde_yaml::to_string(&config).unwrap();
+        let mut reloaded: crate::AppConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(reloaded.http_gateway.rules[0].paths, ["/api/jobs"]);
+        assert_eq!(
+            reloaded.http_gateway.exclude_rules[0].paths,
+            ["/api/jobs/private"]
+        );
+        for path in [
+            "",
+            "api/jobs",
+            "/api/jobs?limit=10",
+            "https://example.com/api/jobs",
+        ] {
+            reloaded.http_gateway.rules[0].paths = vec![path.to_string()];
+            assert!(reloaded.validate().is_err(), "{path}");
+        }
     }
 
     #[test]

@@ -40,11 +40,22 @@ impl RecordingApi {
         rules.is_empty()
             || rules.iter().any(|rule| {
                 method_matches(rule, &self.method)
-                    && (rule.path_prefixes.is_empty()
-                        || rule
-                            .path_prefixes
-                            .iter()
-                            .any(|prefix| pattern_can_match_prefix(&self.path_pattern, prefix)))
+                    && if rule.paths.is_empty() {
+                        rule.path_prefixes.is_empty()
+                            || rule
+                                .path_prefixes
+                                .iter()
+                                .any(|prefix| pattern_can_match_prefix(&self.path_pattern, prefix))
+                    } else {
+                        rule.paths.iter().any(|path| {
+                            matches_path_pattern(&self.path_pattern, path)
+                                && (rule.path_prefixes.is_empty()
+                                    || rule
+                                        .path_prefixes
+                                        .iter()
+                                        .any(|prefix| pattern_can_match_prefix(path, prefix)))
+                        })
+                    }
             })
     }
 }
@@ -138,6 +149,30 @@ mod tests {
         assert!(!api.matches(&Method::GET, &"/api/users/42/posts".parse().unwrap()));
         assert!("get /api/users/*".parse::<RecordingApi>().is_err());
         assert!("GET  /api/users/*".parse::<RecordingApi>().is_err());
+    }
+
+    #[test]
+    fn selection_respects_exact_paths_and_their_prefix_intersection() {
+        let rules = [HttpGatewayRuleConfig {
+            methods: vec!["GET".to_string()],
+            paths: vec!["/api/jobs/42".to_string(), "/admin/jobs".to_string()],
+            path_prefixes: vec!["/api".to_string()],
+            ..Default::default()
+        }];
+        for (selector, expected) in [
+            ("GET /api/jobs/42", true),
+            ("GET /api/jobs/*", true),
+            ("GET /api/jobs", false),
+            ("GET /api/jobs/43", false),
+            ("GET /admin/jobs", false),
+            ("POST /api/jobs/42", false),
+        ] {
+            assert_eq!(
+                validate_selection(&[selector.parse().unwrap()], &rules).is_ok(),
+                expected,
+                "{selector}"
+            );
+        }
     }
 
     #[test]
