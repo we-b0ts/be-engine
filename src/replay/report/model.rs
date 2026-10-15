@@ -36,6 +36,7 @@ pub(in crate::replay) struct ReplayReport {
     pub(in crate::replay) unsupported_commands: Vec<QueryReport>,
     pub(in crate::replay) metadata_warnings: Vec<String>,
     pub(in crate::replay) unused_global_exchanges: Vec<RecordedExchangeSummary>,
+    pub(in crate::replay) unused_global_exchange_count: usize,
     pub(in crate::replay) unused_case_exchanges: Vec<RecordedExchangeSummary>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) allowed_unused_mysql_rollback_exchanges: Vec<RecordedExchangeSummary>,
@@ -51,6 +52,7 @@ pub(in crate::replay) struct ReplayReport {
     pub(in crate::replay) http_request_header_observations: Vec<http::HeaderDifferenceReport>,
     pub(in crate::replay) http_request_header_observation_count: usize,
     pub(in crate::replay) unused_global_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
+    pub(in crate::replay) unused_global_http_exchange_count: usize,
     pub(in crate::replay) unused_case_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
     pub(in crate::replay) allowed_unused_case_http_exchanges:
         Vec<http::RecordedHttpExchangeSummary>,

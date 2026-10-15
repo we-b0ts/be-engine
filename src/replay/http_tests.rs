@@ -81,6 +81,7 @@ fn one_fake_ip_is_reused_for_all_ports_on_a_host() {
 #[test]
 fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
     let record = RecordedHttpExchange {
+        response_evidence: None,
         outcome: crate::DependencyExchangeOutcome::Response,
         duration_ms: None,
         request_started_at: None,
@@ -142,6 +143,7 @@ fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
 #[test]
 fn response_discovered_http_target_reserves_its_recorded_fake_ip() {
     let record = RecordedHttpExchange {
+        response_evidence: None,
         outcome: crate::DependencyExchangeOutcome::Response,
         duration_ms: None,
         request_started_at: None,

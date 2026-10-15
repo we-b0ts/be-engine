@@ -99,4 +99,5 @@ pub struct DependencyIndexReport {
     pub files: usize,
     pub source_bytes: u64,
     pub index_path: PathBuf,
+    pub global_source_bytes: u64,
 }

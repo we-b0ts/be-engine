@@ -48,6 +48,7 @@ impl ReplayState {
             unsupported_commands: self.mysql.events.unsupported_commands.clone(),
             metadata_warnings: self.mysql.events.metadata_warnings.clone(),
             unused_global_exchanges: self.unused_exchanges(ReplaySource::Global),
+            unused_global_exchange_count: self.global_mysql_unused_count(),
             unused_case_exchanges: self.unused_exchanges(ReplaySource::Case),
             allowed_unused_mysql_rollback_exchanges: self.allowed_unused_rollbacks(),
             allowed_unused_mysql_commit_exchanges: self.allowed_unused_commits(),
@@ -60,6 +61,7 @@ impl ReplayState {
             http_request_header_observations: self.http_events.header_observations.clone(),
             http_request_header_observation_count: self.http_events.header_observation_count,
             unused_global_http_exchanges: self.unused_http_exchanges(ReplaySource::Global, false),
+            unused_global_http_exchange_count: self.global_http_unused_count(),
             unused_case_http_exchanges,
             allowed_unused_case_http_exchanges,
             protocols: ProtocolsReport {

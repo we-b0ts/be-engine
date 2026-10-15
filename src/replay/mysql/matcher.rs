@@ -390,6 +390,16 @@ impl ReplayState {
                         exchange.record.response = response;
                     }
                     let mut response_time_shift_rules = Vec::new();
+                    exchange.record.response = match exchange.record.response.materialize() {
+                        Ok(response) => response,
+                        Err(error) => {
+                            self.mysql
+                                .events
+                                .metadata_warnings
+                                .push(format!("MySQL response evidence unavailable: {error:#}"));
+                            return None;
+                        }
+                    };
                     if exchange.source == ReplaySource::Case
                         && let Some(policy) = &self.replay_policy
                     {
@@ -590,7 +600,13 @@ impl ReplayState {
         &self,
         source: ReplaySource,
     ) -> Vec<RecordedExchangeSummary> {
-        self.mysql_unused_exchanges(source, None)
+        self.mysql_unused_iter(source, None)
+            .take(if source == ReplaySource::Global {
+                100
+            } else {
+                usize::MAX
+            })
+            .collect()
     }
 
     pub(in crate::replay) fn allowed_unused_rollbacks(&self) -> Vec<RecordedExchangeSummary> {
@@ -611,21 +627,28 @@ impl ReplayState {
     ) -> Vec<RecordedExchangeSummary> {
         [ReplaySource::Case, ReplaySource::Global]
             .into_iter()
-            .flat_map(|source| self.mysql_unused_exchanges(source, Some(kind)))
+            .flat_map(|source| {
+                self.mysql_unused_iter(source, Some(kind))
+                    .take(if source == ReplaySource::Global {
+                        100
+                    } else {
+                        usize::MAX
+                    })
+            })
             .collect()
     }
 
-    fn mysql_unused_exchanges(
+    pub(super) fn mysql_unused_iter(
         &self,
         source: ReplaySource,
         allowed: Option<OptionalSessionExchange>,
-    ) -> Vec<RecordedExchangeSummary> {
+    ) -> impl Iterator<Item = RecordedExchangeSummary> + '_ {
         self.mysql
             .exchanges
             .iter()
             .enumerate()
-            .filter(|(_, exchange)| {
-                let optional = exchange.optional_session.filter(|kind| {
+            .filter(move |(_, exchange)| {
+                let optional = exchange.optional_session.filter(move |kind| {
                     // Successful cleanup stays optional during delivery.
                     // Failed delivery still reports an error and stays required.
                     exchange.status.is_available()
@@ -636,7 +659,7 @@ impl ReplayState {
                 });
                 exchange.source == source && !exchange.status.is_consumed() && optional == allowed
             })
-            .map(|(index, exchange)| RecordedExchangeSummary {
+            .map(move |(index, exchange)| RecordedExchangeSummary {
                 connection_id: exchange.record.connection_id,
                 query_sequence: exchange.record.query_sequence,
                 index,
@@ -648,7 +671,6 @@ impl ReplayState {
                 sql_summary: exchange.record.sql.as_deref().map(SqlSummary::new),
                 status: exchange.record.response.status.clone(),
             })
-            .collect()
     }
 
     fn active_case_matches(&self, exchange: &ReplayExchange) -> bool {

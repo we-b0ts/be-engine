@@ -8,6 +8,8 @@ pub(in crate::replay) fn builtin_response(
     if let Some(maintenance) = classify_mysql_maintenance_query(sql) {
         return Some(match maintenance {
             MysqlMaintenanceQuery::C3p0TableProbe => RecordedMysqlResponse {
+                evidence: None,
+                row_shape: None,
                 server_status: None,
                 rows_truncated: false,
                 status: "error".to_string(),
@@ -26,6 +28,8 @@ pub(in crate::replay) fn builtin_response(
     let normalized = normalize_sql(sql);
     if is_builtin_ok(&normalized) {
         return Some(RecordedMysqlResponse {
+            evidence: None,
+            row_shape: None,
             server_status: None,
             rows_truncated: false,
             status: "ok".to_string(),
@@ -51,6 +55,8 @@ pub(in crate::replay) fn builtin_response(
     }
     if normalized == "show warnings" {
         return Some(RecordedMysqlResponse {
+            evidence: None,
+            row_shape: None,
             server_status: None,
             rows_truncated: false,
             status: "resultset".to_string(),
@@ -68,6 +74,8 @@ pub(in crate::replay) fn builtin_response(
     }
     if normalized == "show variables" {
         return Some(RecordedMysqlResponse {
+            evidence: None,
+            row_shape: None,
             server_status: None,
             rows_truncated: false,
             status: "resultset".to_string(),
@@ -93,6 +101,8 @@ pub(in crate::replay) fn is_builtin_ok(normalized_sql: &str) -> bool {
 
 pub(in crate::replay) fn single_string_result(name: &str, value: &str) -> RecordedMysqlResponse {
     RecordedMysqlResponse {
+        evidence: None,
+        row_shape: None,
         server_status: None,
         rows_truncated: false,
         status: "resultset".to_string(),
@@ -107,6 +117,8 @@ pub(in crate::replay) fn single_string_result(name: &str, value: &str) -> Record
 
 fn single_integer_result(name: &str, value: i64) -> RecordedMysqlResponse {
     RecordedMysqlResponse {
+        evidence: None,
+        row_shape: None,
         server_status: None,
         rows_truncated: false,
         status: "resultset".to_string(),

@@ -426,11 +426,14 @@ async fn run_active(
     crate::dependency_index::store::prepare_with_timeout(
         layout.case_source.clone(),
         config.replay_loading.index_timeout_seconds,
+        crate::replay::validate_index_record,
     )
-    .await?;
+    .await
+    .context("Replay dependency index preparation failed")?;
     let _ = active_progress::write(layout, state, ActiveProgressPhase::Building);
     let target_image = build_target_image(config, layout).await?;
-    let mut replay = spawn_replay(config, layout, inventory, state)?;
+    let mut replay =
+        spawn_replay(config, layout, inventory, state).context("Replay startup failed")?;
     state.replay_pid = replay.id();
     store::write_active(layout, state)?;
     let _ = active_progress::write(layout, state, ActiveProgressPhase::PreparingReplay);
@@ -450,16 +453,21 @@ async fn run_active_with_replay(
     target_image: &crate::TargetImage,
     replay: &mut Child,
 ) -> Result<()> {
-    let ready = tokio::select! {
-        ready = wait_for_replay_ready(state, config.replay_startup_timeout) => {
-            ready.context("replay server did not become ready")?
+    let ready = async {
+        tokio::select! {
+            ready = wait_for_replay_ready(state, config.replay_startup_timeout) => {
+                ready.context("replay server did not become ready")
+            }
+            status = replay.wait() => {
+                let status = status.context("failed to wait for replay process during startup")?;
+                bail!("{}", super::runtime::replay_startup_failure(layout, status).await);
+            }
         }
-        status = replay.wait() => {
-            let status = status.context("failed to wait for replay process during startup")?;
-            bail!("replay process exited before becoming ready with {status}");
-        }
-    };
-    super::runtime::validate_replay_case_selection(&ready, state)?;
+    }
+    .await
+    .context("Replay startup failed")?;
+    super::runtime::validate_replay_case_selection(&ready, state)
+        .context("Replay startup failed")?;
     state.session_id = ready
         .pointer("/session/session_id")
         .and_then(serde_json::Value::as_str)

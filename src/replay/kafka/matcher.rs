@@ -17,6 +17,7 @@ use super::super::{
 use super::report::{
     KafkaMatchedReport, KafkaProtocolReport, KafkaRequestReport, KafkaUnusedReport,
 };
+mod evidence;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(in crate::replay) struct RecordedKafkaConnection {
@@ -100,6 +101,7 @@ impl RecordedCapture {
 
 #[derive(Debug, Clone)]
 struct ReplayKafkaProduce {
+    evidence: Option<crate::dependency_index::RecordRef>,
     source: ReplaySource,
     case_id: Option<String>,
     target: TargetKey,
@@ -124,6 +126,7 @@ struct ReplayKafkaFetch {
 
 #[derive(Debug, Clone)]
 struct ReplayKafkaDelivery {
+    evidence: Option<crate::dependency_index::RecordRef>,
     source: ReplaySource,
     case_id: Option<String>,
     target: TargetKey,
@@ -221,6 +224,7 @@ impl KafkaReplayState {
         self.produce_case_index
             .register(source, case_id, exchange_index);
         self.produces.push(ReplayKafkaProduce {
+            evidence: None,
             source,
             case_id: case_id.map(ToOwned::to_owned),
             target,
@@ -293,6 +297,7 @@ impl KafkaReplayState {
         self.delivery_case_index
             .register(source, case_id, exchange_index);
         self.deliveries.push(ReplayKafkaDelivery {
+            evidence: None,
             source,
             case_id: case_id.map(ToOwned::to_owned),
             target,
@@ -333,7 +338,7 @@ impl KafkaReplayState {
                     && &exchange.target == target
                     && (exchange.timing.outcome() == DependencyExchangeOutcome::NoResponse)
                         == no_response
-                    && semantic_record_matches(&exchange.record, first)
+                    && exchange.matches(first)
             })
             .map(|exchange| (exchange.connection_id, exchange.request_sequence))
             .collect::<Vec<_>>();
@@ -361,8 +366,7 @@ impl KafkaReplayState {
             let mut selected = Vec::with_capacity(records.len());
             for record in records {
                 let Some(index) = group.iter().copied().find(|index| {
-                    !selected.contains(index)
-                        && semantic_record_matches(&self.produces[*index].record, record)
+                    !selected.contains(index) && self.produces[*index].matches(record)
                 }) else {
                     selected.clear();
                     break;
@@ -466,8 +470,19 @@ impl KafkaReplayState {
             .collect::<Vec<_>>();
         let records = delivery_indices
             .iter()
-            .map(|index| self.deliveries[*index].record.clone())
-            .collect();
+            .map(|index| self.deliveries[*index].materialize())
+            .collect::<Result<Vec<_>>>();
+        let records = match records {
+            Ok(records) => records,
+            Err(error) => {
+                self.record_unsafe(
+                    target,
+                    "fetch",
+                    format!("Kafka delivery evidence unavailable: {error:#}"),
+                );
+                return None;
+            }
+        };
         let timing = fetch.timing;
         let status = reservation_status(timing.outcome());
         self.fetches[fetch_index].status = status;
@@ -564,6 +579,7 @@ impl KafkaReplayState {
             unsupported: self.events.unsupported.clone(),
             unsafe_events: self.events.unsafe_events.clone(),
             unused_case: self.unused(ReplaySource::Case),
+            unused_global_count: Some(self.global_unused_count()),
             unused_global: self.unused(ReplaySource::Global),
         }
     }
@@ -597,12 +613,14 @@ impl KafkaReplayState {
         });
     }
 
-    fn unused(&self, source: ReplaySource) -> Vec<KafkaUnusedReport> {
+    fn unused_iter(&self, source: ReplaySource) -> impl Iterator<Item = KafkaUnusedReport> + '_ {
         self.produces
             .iter()
             .enumerate()
-            .filter(|(_, exchange)| exchange.source == source && !exchange.status.is_consumed())
-            .map(|(index, exchange)| KafkaUnusedReport {
+            .filter(move |(_, exchange)| {
+                exchange.source == source && !exchange.status.is_consumed()
+            })
+            .map(move |(index, exchange)| KafkaUnusedReport {
                 index,
                 case_id: exchange.case_id.clone(),
                 source,
@@ -614,10 +632,10 @@ impl KafkaReplayState {
                 self.fetches
                     .iter()
                     .enumerate()
-                    .filter(|(_, exchange)| {
+                    .filter(move |(_, exchange)| {
                         exchange.source == source && !exchange.status.is_consumed()
                     })
-                    .map(|(index, exchange)| KafkaUnusedReport {
+                    .map(move |(index, exchange)| KafkaUnusedReport {
                         index,
                         case_id: exchange.case_id.clone(),
                         source,
@@ -635,10 +653,10 @@ impl KafkaReplayState {
                 self.deliveries
                     .iter()
                     .enumerate()
-                    .filter(|(_, exchange)| {
+                    .filter(move |(_, exchange)| {
                         exchange.source == source && !exchange.status.is_consumed()
                     })
-                    .map(|(index, exchange)| KafkaUnusedReport {
+                    .map(move |(index, exchange)| KafkaUnusedReport {
                         index,
                         case_id: exchange.case_id.clone(),
                         source,
@@ -647,6 +665,15 @@ impl KafkaReplayState {
                         topic: exchange.record.topic.clone(),
                     }),
             )
+    }
+
+    fn unused(&self, source: ReplaySource) -> Vec<KafkaUnusedReport> {
+        self.unused_iter(source)
+            .take(if source == ReplaySource::Global {
+                100
+            } else {
+                usize::MAX
+            })
             .collect()
     }
 }

@@ -171,11 +171,7 @@ fn complete_read(exchange: &RecordedMysqlExchange) -> bool {
         && exchange.response.error_message.is_none()
         && !exchange.response.rows_truncated
         && !exchange.response.columns.is_empty()
-        && exchange
-            .response
-            .rows
-            .iter()
-            .all(|row| row.len() == exchange.response.columns.len())
+        && exchange.response.valid_row_widths()
 }
 
 fn successful_end(exchange: &RecordedMysqlExchange, commands: &[&str]) -> bool {
@@ -201,7 +197,7 @@ fn successful_control(exchange: &RecordedMysqlExchange) -> bool {
         && exchange.response.affected_rows == Some(0)
         && exchange.response.last_insert_id == Some(0)
         && !exchange.response.rows_truncated
-        && exchange.response.rows.is_empty()
+        && exchange.response.no_rows()
         && exchange.response.columns.is_empty()
         && exchange.params.as_ref().is_none_or(Vec::is_empty)
 }

@@ -2,6 +2,51 @@ use super::*;
 
 use motan_codec::{Attachment, Attachments, Motan1RequestBuilder, Motan1RequestLimits};
 
+#[test]
+fn global_motan_response_is_loaded_from_evidence_and_consumed_once() {
+    let original = exchange(false);
+    let record = serde_json::json!({"event_type":"motan_exchange","connection_id":Uuid::nil(),"sequence":1,
+        "target_host":original.target_host,"target_port":original.target_port,"advertised_ip":original.advertised_ip,
+        "codec_version":1,"interface_name":original.interface_name,"method_name":original.method_name,"parameter_desc":original.parameter_desc,
+        "command":original.command,"request":{"encoding":"base64","data":original.request.data,"truncated":false},
+        "response":{"encoding":"base64","data":original.response.data,"truncated":false},"heartbeat":false,"outcome":"response","duration_ms":0,"replay_safe":true});
+    let (_dir, mut entries) = crate::replay::global_test_support::indexed(&[record]);
+    let (record, reference) = entries.remove(0);
+    let mut state = MotanReplayState::default();
+    state
+        .register_global_exchange(
+            serde_json::from_value(record).unwrap(),
+            reference,
+            &mut BTreeMap::new(),
+        )
+        .unwrap();
+    let request = request_match(business_request(2, 1, None));
+    let matched = state
+        .match_exchange(
+            None,
+            &business_target(),
+            None,
+            1,
+            &business_identity(),
+            Some(&request),
+        )
+        .unwrap();
+    assert_eq!(matched.response, frame(1, false, 1));
+    state.complete(&matched);
+    assert!(
+        state
+            .match_exchange(
+                None,
+                &business_target(),
+                None,
+                1,
+                &business_identity(),
+                Some(&request)
+            )
+            .is_err()
+    );
+}
+
 fn frame(request_id: u64, request: bool, inner_flag: u8) -> Vec<u8> {
     let body = b"payload";
     let mut inner = vec![0_u8; 16];

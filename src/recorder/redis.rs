@@ -116,7 +116,9 @@ pub(crate) async fn handle_connected(
     let (client_read, client_write) = client.into_split();
     let (upstream_read, mut upstream_write) = upstream.into_split();
     let client_write = Arc::new(Mutex::new(client_write));
-    let (output_tx, output_rx) = mpsc::unbounded_channel();
+    // Apply backpressure to long-lived notification streams while the client
+    // or recording writer is slower than the upstream. Ordering stays with the writer.
+    let (output_tx, output_rx) = mpsc::channel(256);
     let writer = tokio::spawn(run_ordered_writer(
         client_write.clone(),
         output_rx,
@@ -232,6 +234,7 @@ pub(crate) async fn handle_connected(
                         ),
                         completion: None,
                     })))
+                    .await
                     .map_err(|_| anyhow!("Redis client response writer closed"))?;
                 bytes += frame.raw.len() as u64;
                 continue;
@@ -298,6 +301,7 @@ pub(crate) async fn handle_connected(
                                 bytes: response,
                                 completion: Some((pending_exchange, kind)),
                             })))
+                            .await
                             .map_err(|_| anyhow!("Redis client response writer closed"))?;
                         bytes += frame.raw.len() as u64;
                         continue;
@@ -313,6 +317,7 @@ pub(crate) async fn handle_connected(
                                 bytes: response,
                                 completion: Some((pending_exchange, kind)),
                             })))
+                            .await
                             .map_err(|_| anyhow!("Redis client response writer closed"))?;
                         bytes += frame.raw.len() as u64;
                         continue;
@@ -403,6 +408,7 @@ pub(crate) async fn handle_connected(
                         .send(RedisOutput::PubSubPush {
                             capture: Box::new(capture),
                         })
+                        .await
                         .map_err(|_| anyhow!("Redis client response writer closed"))?;
                     bytes += frame.raw.len() as u64;
                     continue;
@@ -491,6 +497,7 @@ pub(crate) async fn handle_connected(
                     bytes: frame.raw.clone(),
                     completion: Some((exchange, frame.kind)),
                 })))
+                .await
                 .map_err(|_| anyhow!("Redis client response writer closed"))?;
             bytes += frame.raw.len() as u64;
         }
@@ -592,7 +599,7 @@ pub(crate) async fn handle_connected(
 
 async fn run_ordered_writer(
     client_write: Arc<Mutex<tokio::net::tcp::OwnedWriteHalf>>,
-    mut output_rx: mpsc::UnboundedReceiver<RedisOutput>,
+    mut output_rx: mpsc::Receiver<RedisOutput>,
     state: AppState,
     context: ConnectionContext,
     connection_id: Uuid,

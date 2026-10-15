@@ -25,6 +25,8 @@ enum DiagnoseCommand {
     Interception(super::interception::InterceptionArgs),
     /// Build or validate disposable dependency locations for a completed recording.
     DependencyIndex(DependencyIndexArgs),
+    /// Read one bounded page of finalized unused Global dependency evidence.
+    GlobalDependencies(GlobalDependenciesArgs),
     /// Run the low-level recorder service without local interception setup.
     Recorder(RecorderArgs),
     /// Run the low-level dependency replay service without interception setup.
@@ -49,6 +51,18 @@ struct PreflightArgs {
 struct DependencyIndexArgs {
     #[arg(long)]
     case_source: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct GlobalDependenciesArgs {
+    #[arg(long)]
+    report: PathBuf,
+    #[arg(long, value_parser = ["mysql", "redis", "memcached", "http", "kafka", "motan"])]
+    protocol: String,
+    #[arg(long, default_value_t = 0)]
+    offset: usize,
+    #[arg(long, default_value_t = 100)]
+    limit: usize,
 }
 
 #[derive(Debug, Args)]
@@ -197,6 +211,18 @@ pub(super) async fn run(args: DiagnoseArgs) -> Result<()> {
             serde_json::to_writer_pretty(io::stdout(), &report)?;
             println!();
             Ok(())
+        }
+        DiagnoseCommand::GlobalDependencies(args) => {
+            let page = tokio::task::spawn_blocking(move || {
+                traffic_e2e::read_global_dependency_page(
+                    &args.report,
+                    &args.protocol,
+                    args.offset,
+                    args.limit,
+                )
+            })
+            .await??;
+            super::output::stdout_line(format_args!("{}", serde_json::to_string(&page)?))
         }
         DiagnoseCommand::Interception(args) => super::interception::run(args),
         DiagnoseCommand::Recorder(args) => run_recorder(args.config).await,

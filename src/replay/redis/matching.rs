@@ -233,6 +233,11 @@ impl RedisReplayState {
                 ));
             }
         };
+        let response = self.exchanges[index].response_bytes().map_err(|error| {
+            CommandMatchDiagnostic::EvidenceUnavailable {
+                reason: format!("response evidence unavailable: {error:#}"),
+            }
+        })?;
         let exchange = &self.exchanges[index];
         let normalized = (exchange.source == ReplaySource::Case
             && exchange.shared_rule_id.is_none())
@@ -310,7 +315,7 @@ impl RedisReplayState {
             rule_ids,
             index,
             connection_id: exchange.record.connection_id,
-            response: exchange.response.clone(),
+            response,
             timing,
             requires_binding,
             report: CommandMatchedReport {
@@ -368,6 +373,7 @@ impl RedisReplayState {
             PreferredMatch::Matched(index) => index,
             PreferredMatch::LaneBlocked { .. } | PreferredMatch::NotFound => return None,
         };
+        let response = self.exchanges[index].response_bytes().ok()?;
         let requires_binding =
             self.connection_scopes
                 .claim(&self.exchanges[index], active_case_id, connection);
@@ -385,7 +391,7 @@ impl RedisReplayState {
             rule_ids: Vec::new(),
             index,
             connection_id: exchange.record.connection_id,
-            response: exchange.response.clone(),
+            response,
             timing: exchange.timing,
             requires_binding,
             report: CommandMatchedReport {

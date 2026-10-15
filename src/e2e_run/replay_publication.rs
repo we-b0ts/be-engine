@@ -29,6 +29,7 @@ pub(super) fn prepare(
     let destination = staging.join("reports/replay-report.json");
     fs::create_dir_all(destination.parent().expect("report directory"))?;
     if source != destination {
+        crate::replay::report::stage_global_evidence(&source, &destination)?;
         fs::copy(&source, &destination).context("failed to stage runner-owned Replay evidence")?;
     }
     let sidecar = dependency_evidence_path(&destination);

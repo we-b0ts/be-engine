@@ -39,6 +39,9 @@ pub(in crate::replay) struct CommandRequestReport {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(in crate::replay) enum CommandMatchDiagnostic {
+    EvidenceUnavailable {
+        reason: String,
+    },
     NoScopedCandidate,
     Mismatch {
         fields: Vec<String>,
@@ -99,6 +102,8 @@ pub(in crate::replay) struct CommandProtocolReport {
     pub(in crate::replay) unsupported: Vec<CommandRequestReport>,
     pub(in crate::replay) unsafe_events: Vec<CommandRequestReport>,
     pub(in crate::replay) unused_case: Vec<CommandUnusedReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) unused_global_count: Option<usize>,
     pub(in crate::replay) unused_global: Vec<CommandUnusedReport>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) snapshot_overlays: Vec<CommandSnapshotOverlayReport>,

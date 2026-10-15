@@ -52,7 +52,12 @@ pub(super) fn read(report: &Value, path: &Path) -> Result<ReplayEventCounts> {
             unmatched_queries: required_len(report, "unmatched_queries", path)?,
             unsupported_commands: required_len(report, "unsupported_commands", path)?,
             unused_case_exchanges: required_len(report, "unused_case_exchanges", path)?,
-            unused_global_exchanges: required_len(report, "unused_global_exchanges", path)?,
+            unused_global_exchanges: global_count(
+                report,
+                "unused_global_exchanges",
+                "unused_global_exchange_count",
+                path,
+            )?,
             metadata_warnings: required_len(report, "metadata_warnings", path)?,
         },
         http: HttpEventCounts {
@@ -83,7 +88,12 @@ pub(super) fn read(report: &Value, path: &Path) -> Result<ReplayEventCounts> {
                 "allowed_unused_case_http_exchanges",
                 path,
             )?,
-            unused_global_exchanges: required_len(report, "unused_global_http_exchanges", path)?,
+            unused_global_exchanges: global_count(
+                report,
+                "unused_global_http_exchanges",
+                "unused_global_http_exchange_count",
+                path,
+            )?,
         },
         redis: protocol_counts(
             report,
@@ -146,7 +156,7 @@ fn protocol_counts(
         unsupported: required_len(value, "unsupported", path)?,
         unsafe_events: required_len(value, "unsafe_events", path)?,
         unused_case: required_len(value, "unused_case", path)?,
-        unused_global: required_len(value, "unused_global", path)?,
+        unused_global: global_count(value, "unused_global", "unused_global_count", path)?,
         warnings: optional_len(value, "warnings", path)?,
     })
 }
@@ -225,6 +235,11 @@ fn optional_count(value: &Value, details: &str, count: &str, path: &Path) -> Res
         );
     }
     Ok(total)
+}
+
+fn global_count(value: &Value, details: &str, count: &str, path: &Path) -> Result<usize> {
+    required_array(value, details, path)?;
+    optional_count(value, details, count, path)
 }
 
 fn required_usize(value: &Value, field: &str, path: &Path) -> Result<usize> {

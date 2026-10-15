@@ -35,6 +35,9 @@ pub use loading_config::ReplayDependencyLoading;
 mod dns;
 mod egress_counter;
 mod exchange;
+mod global;
+#[cfg(test)]
+mod global_test_support;
 mod snapshot;
 pub use egress_counter::{
     ReplayEgressCounterReader, ReplayEgressCounterSnapshot, ReplayEgressRejections,
@@ -69,6 +72,7 @@ mod test_support;
 
 use case_index::*;
 use control::*;
+pub(crate) use dependencies::validate_index_record;
 use dependencies::*;
 use dns::*;
 use exchange::*;
@@ -187,6 +191,7 @@ pub use report::aggregate::{
     ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,
     aggregate_replay_reports_with_options,
 };
+pub use report::global_evidence::{GlobalDependencyPage, read_global_dependency_page};
 
 pub async fn run_replay_control(config: ReplayControlConfig) -> Result<Value> {
     send_control_request(config).await

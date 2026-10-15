@@ -59,7 +59,8 @@ impl PubSubState {
                 && push.record.target_port == record.target_port,
             "RPC callback endpoint/session mismatch"
         );
-        let frame = parse_pubsub_push(&push.raw)?.expect("validated push");
+        let raw = push.bytes()?;
+        let frame = parse_pubsub_push(&raw)?.expect("validated push");
         ensure!(frame.channel == args[0], "RPC callback channel mismatch");
         let (identity, _) = rpc::callback(&frame.payload)?.expect("validated callback");
         ensure!(
@@ -169,8 +170,8 @@ impl PubSubState {
         self.bindings
             .hosts
             .insert((realm, source.identity.host), actual.identity.host.clone());
-        let raw = &self.pushes[index].raw;
-        let frame = redis_command(&bytes::Bytes::copy_from_slice(raw)).expect("validated push");
+        let raw = self.pushes[index].bytes().ok()?;
+        let frame = redis_command(&bytes::Bytes::copy_from_slice(&raw)).expect("validated push");
         let mut parts = frame.args;
         let (_, mut payload) = rpc::callback(parts.last().expect("push payload"))
             .ok()
@@ -202,7 +203,7 @@ impl PubSubState {
                 .duration_ms
                 .saturating_sub(matched.publish_duration_ms),
             Delivery {
-                push: index,
+                push: PushId::Inline(index),
                 bytes,
                 matched: Some(matched.clone()),
             },
@@ -214,7 +215,8 @@ impl PubSubState {
         matched: &MatchedRedisExchange,
     ) -> Result<mpsc::Sender<Delivery>> {
         let push = &self.pushes[matched.rpc_push.context("missing RPC push")?];
-        let frame = parse_pubsub_push(&push.raw)?.expect("validated push");
+        let raw = push.bytes()?;
+        let frame = parse_pubsub_push(&raw)?.expect("validated push");
         let mut subscriptions = self.subscriptions.iter().filter(|s| {
             !s.sender.is_closed()
                 && s.source_connection == push.record.connection_id

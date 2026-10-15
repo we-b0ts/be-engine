@@ -249,6 +249,10 @@ user. The reserved Source UID cannot own recording artifacts.
 
 ## Rewrite handoff
 
+Finalization builds Case fragments and a paged Global index before publishing
+the completed run. See [large Global dependencies](global-dependencies.md) for
+legacy preparation, source checks, Replay memory and paginated report details.
+
 Expose the finalized recording tree under the target's conventional
 `.traffic-e2e/local/artifacts/recordings/<run-id>/`, with its key accessible
 privately at `.traffic-e2e/local/secrets/traffic-e2e-enc.sec` when encryption is

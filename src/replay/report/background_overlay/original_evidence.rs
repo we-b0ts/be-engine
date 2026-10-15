@@ -40,6 +40,7 @@ fn restore_array(report: &mut Value, global_field: &str, case_field: &str) {
         .and_then(|value| value.as_array().cloned())
         .unwrap_or_default();
     let mut retained = Vec::with_capacity(global.len());
+    let original_len = global.len();
     for mut event in global.drain(..) {
         let original_case = event
             .get(ORIGINAL_CASE_ID)
@@ -63,8 +64,32 @@ fn restore_array(report: &mut Value, global_field: &str, case_field: &str) {
             retained.push(event);
         }
     }
+    update_global_count(object, global_field, original_len, retained.len());
     object.insert(global_field.to_string(), Value::Array(retained));
     object.insert(case_field.to_string(), Value::Array(case));
+}
+
+pub(super) fn update_global_count(
+    object: &mut serde_json::Map<String, Value>,
+    global_field: &str,
+    before: usize,
+    after: usize,
+) {
+    let count = match global_field {
+        "unused_global_exchanges" => "unused_global_exchange_count",
+        "unused_global_http_exchanges" => "unused_global_http_exchange_count",
+        "unused_global" => "unused_global_count",
+        _ => return,
+    };
+    if let Some(total) = object.get(count).and_then(Value::as_u64) {
+        object.insert(
+            count.into(),
+            total
+                .saturating_sub(before as u64)
+                .saturating_add(after as u64)
+                .into(),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -83,8 +108,11 @@ mod tests {
             "unused_global_http_exchanges":[marked,native,incomplete],
             "unmatched_http_requests":[{"case_id":"case-a"}]
         });
+        report["unused_global_exchange_count"] = 10003.into();
+        report["unused_global_http_exchange_count"] = 20003.into();
         for protocol in ["redis", "memcached", "motan"] {
-            report[protocol] = json!({"unused_global":[marked,native,incomplete]});
+            report[protocol] =
+                json!({"unused_global":[marked,native,incomplete],"unused_global_count":30003});
         }
         let projected: Value = parse_background_dependency_evidence(&report.to_string()).unwrap();
         assert_eq!(
@@ -111,5 +139,8 @@ mod tests {
         }
         let repeated: Value = parse_background_dependency_evidence(&projected.to_string()).unwrap();
         assert_eq!(repeated, projected);
+        assert_eq!(projected["unused_global_exchange_count"], 10002);
+        assert_eq!(projected["unused_global_http_exchange_count"], 20002);
+        assert_eq!(projected["redis"]["unused_global_count"], 30002);
     }
 }

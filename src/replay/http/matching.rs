@@ -317,7 +317,12 @@ impl ReplayState {
                 .unordered_json = Some(evidence);
             return Err(HttpReplayMatchError::BadGateway(reason));
         };
-        let exchange = self.http_exchanges[index].clone();
+        let mut exchange = self.http_exchanges[index].clone();
+        if let Err(error) = exchange.record.materialize_response() {
+            let reason = format!("HTTP response evidence unavailable: {error:#}");
+            self.record_unmatched_http(scheme, target, method, uri, reason.clone());
+            return Err(HttpReplayMatchError::BadGateway(reason));
+        }
         if !exchange.record.outcome.is_client_terminated()
             && (exchange.record.error.is_some() || exchange.record.response_status.is_none())
         {
