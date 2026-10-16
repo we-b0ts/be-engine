@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, ensure};
 use clap::{Args, Subcommand};
-use traffic_e2e::{IntegrationHandoffSelection, RewriteReviewOptions, RewriteWorkScope};
+use traffic_e2e::{RewriteIntegrationBatchOptions, RewriteReviewOptions, RewriteWorkScope};
 
 #[cfg(test)]
 mod tests;
@@ -15,6 +15,14 @@ pub(super) struct ReviewArgs {
 
 #[derive(Debug, Subcommand)]
 enum ReviewCommand {
+    /// Export selected accepted handoffs and their complete candidate review command.
+    Batch {
+        #[arg(long, env = "BACKEND_REWRITE_REVIEW_WORKTREE")]
+        worktree: PathBuf,
+        /// Exact routes selected by the coordinator; repeat for each batch member.
+        #[arg(long, required = true, value_parser = super::parse_api_scope)]
+        api: Vec<String>,
+    },
     /// Run all source, isolation, and engine-standard quality checks before delivery.
     Check {
         #[arg(long, env = "BACKEND_REWRITE_REVIEW_WORKTREE")]
@@ -31,9 +39,9 @@ enum ReviewCommand {
         /// Accepted worker handoff; pair with its scope for an integration delivery.
         #[arg(long, requires = "integration")]
         handoff_id: Option<String>,
-        /// Nonempty JSON array of current API {scope, handoff_id} entries; a single
-        /// entry is supported. Include at least one handoff_ready item; integrated
-        /// items may be retained in the batch.
+        /// Engine-exported integration batch file; legacy nonempty JSON arrays of
+        /// API {scope, handoff_id} entries are also supported. Include at least one
+        /// handoff_ready item; integrated items may be retained in the batch.
         /// Review checks the whole candidate. For receipt refresh only, omit this
         /// option and all scope/handoff selectors, then use review accept.
         #[arg(long, requires = "integration", conflicts_with_all = ["api", "handoff_id"])]
@@ -70,6 +78,14 @@ enum ReviewCommand {
 
 pub(super) fn run(root: PathBuf, args: ReviewArgs, pretty: bool) -> Result<()> {
     match args.command {
+        ReviewCommand::Batch { worktree, api } => super::print_json(
+            &traffic_e2e::export_rewrite_integration_batch(RewriteIntegrationBatchOptions {
+                target_root: root,
+                worktree,
+                apis: api,
+            })?,
+            pretty,
+        ),
         ReviewCommand::Check {
             worktree,
             integration,
@@ -94,9 +110,7 @@ pub(super) fn run(root: PathBuf, args: ReviewArgs, pretty: bool) -> Result<()> {
                 hardcode_ai_verified,
             };
             let report = if let Some(path) = batch_handoffs {
-                let bytes = std::fs::read(&path)?;
-                let handoffs: Vec<IntegrationHandoffSelection> = serde_json::from_slice(&bytes)?;
-                traffic_e2e::check_batch_rewrite_review(options, handoffs)?
+                traffic_e2e::check_rewrite_review_batch_file(options, &path)?
             } else {
                 traffic_e2e::check_rewrite_review(options)?
             };

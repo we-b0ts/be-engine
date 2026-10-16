@@ -103,8 +103,8 @@ async fn rejected_http_dependency_invalidates_active_gateway_case() {
     recorder.flush_traffic().await.unwrap();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
-    assert!(!run_dir.join("apis").exists());
-    let failed_group = recording_groups::group_dir(&run_dir, "failed", "scenario-readonly");
+    assert!(!run_dir.join("readonly").exists());
+    let failed_group = run_dir.join("failed/scenario-readonly");
     let failed_cases = std::fs::read_dir(&failed_group)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -258,7 +258,7 @@ async fn mysql_query_inside_post_response_window_stays_with_case_and_late_query_
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
     assert!(!run_dir.join("failed").exists());
-    let published_group = recording_groups::group_dir(&run_dir, "apis", "scenario-mysql-log");
+    let published_group = run_dir.join("apis/scenario-mysql-log");
     let published_cases = std::fs::read_dir(&published_group)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -429,5 +429,3 @@ fn read_json_lines(path: &Path) -> Vec<Value> {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
 }
-#[path = "support/recording_groups.rs"]
-mod recording_groups;

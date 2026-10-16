@@ -21,6 +21,7 @@ mod redis_authentication_tests;
 mod redis_client_info_tests;
 mod redis_connection_tests;
 mod redis_joint_time_tests;
+mod redis_key_contract_tests;
 mod redis_lane_tests;
 mod redis_lock_tests;
 mod redis_process_owned_tests;
@@ -752,7 +753,12 @@ fn redis_hash_dependency(
     args: &[&str],
     response: &[u8],
 ) -> Value {
-    let mut value = redis_dependency(connection_id, sequence, args[0], response);
+    let mut value = redis_dependency(
+        connection_id,
+        sequence,
+        args.first().copied().unwrap_or_default(),
+        response,
+    );
     value["command"] = Value::String(command.to_string());
     value["args"] = Value::Array(
         args.iter()

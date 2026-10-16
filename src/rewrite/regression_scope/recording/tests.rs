@@ -18,9 +18,6 @@ fn target() -> tempfile::TempDir {
     );
     let mut source_policy = crate::config::SourceTrafficPolicyConfig::empty();
     source_policy.http.case_path_patterns = vec!["/users/*".into(), "/orders/*".into()];
-    source_policy.http.source_routes = vec!["GET /users/*".into(), "GET /orders/*".into()]
-        .try_into()
-        .unwrap();
     fs::write(
         target
             .path()
@@ -146,7 +143,7 @@ fn pinned_pattern_wait_reuses_observations_but_apply_still_validates_cases() {
         rewrite::case_patterns::apply(rewrite::RewriteCasePatternApplyOptions {
             target_root: root.path().into(),
             batch_id,
-            source_routes: vec![],
+            patterns: vec![],
         })
         .is_err()
     );
@@ -169,7 +166,6 @@ fn pinned_pattern_snapshot_rechecks_selectors_rules_manifest_and_recording_ident
     let original_policy = fs::read(&path).unwrap();
     let mut policy_document = crate::config::SourceTrafficPolicyConfig::empty();
     policy_document.http.case_path_patterns = vec!["/orders/*".into()];
-    policy_document.http.source_routes = vec!["GET /orders/*".into()].try_into().unwrap();
     fs::write(&path, policy_document.render().unwrap()).unwrap();
     assert!(super::super::apply(root.path(), &mut state).is_err());
     fs::write(&path, original_policy).unwrap();
@@ -193,7 +189,7 @@ fn pinned_pattern_snapshot_rechecks_selectors_rules_manifest_and_recording_ident
 }
 
 #[test]
-fn pinned_recording_cannot_promote_a_legacy_pattern_to_confirmed_source() {
+fn pinned_pattern_snapshot_preserves_legacy_recorded_pattern_selectors() {
     let root = target();
     record(
         root.path(),
@@ -209,8 +205,13 @@ fn pinned_recording_cannot_promote_a_legacy_pattern_to_confirmed_source() {
     .unwrap();
     policy(root.path(), A, "only: [/legacy/*]\n");
     let mut state = test_support::test_state();
+    super::super::apply(root.path(), &mut state).unwrap();
+    assert!(
+        rewrite::case_patterns::identify_after_finalized_recording(root.path(), &mut state)
+            .unwrap()
+    );
     let original = serde_json::to_value(&state).unwrap();
-    assert!(super::super::apply(root.path(), &mut state).is_err());
+    assert!(!super::super::apply(root.path(), &mut state).unwrap());
     assert_eq!(serde_json::to_value(&state).unwrap(), original);
 }
 

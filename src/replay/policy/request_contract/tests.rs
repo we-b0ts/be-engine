@@ -1,7 +1,7 @@
 use super::*;
 use serde_json::json;
 
-fn rule(redis: Value) -> ReplayDependencyRule {
+pub(super) fn rule(redis: Value) -> ReplayDependencyRule {
     serde_json::from_value(json!({"id":"write-contract","protocol":"redis","target":{"host":"cache.test","port":6379},"case":{"method":"PUT","path":"/presence/*"},"source_evidence":"Presence:update uses current Unix seconds and preserves its expiry interval","redis":redis})).unwrap()
 }
 fn time_rule() -> ReplayDependencyRule {
@@ -12,7 +12,7 @@ fn time_rule() -> ReplayDependencyRule {
         ]}),
     )
 }
-fn runtime(rule: ReplayDependencyRule) -> RequestContracts {
+pub(super) fn runtime(rule: ReplayDependencyRule) -> RequestContracts {
     let mut state = State::default();
     state.cases.insert(
         "case".into(),
@@ -31,13 +31,13 @@ fn runtime(rule: ReplayDependencyRule) -> RequestContracts {
         ..Default::default()
     }
 }
-fn target() -> TargetKey {
+pub(super) fn target() -> TargetKey {
     TargetKey {
         host: "cache.test".into(),
         port: 6379,
     }
 }
-fn args(values: &[&str]) -> Vec<Vec<u8>> {
+pub(super) fn args(values: &[&str]) -> Vec<Vec<u8>> {
     values.iter().map(|v| v.as_bytes().to_vec()).collect()
 }
 fn check(

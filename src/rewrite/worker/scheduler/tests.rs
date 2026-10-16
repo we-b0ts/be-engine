@@ -81,6 +81,23 @@ fn ready_handoff_integration_resumes_after_first_pass_discovery() {
         "ready handoff should resume after first-pass discovery: {:?}",
         status.action
     );
+    let action = serde_json::to_value(&status.action).unwrap();
+    assert_eq!(
+        action["commands"]["export_batch"]["argv"],
+        serde_json::json!([
+            "backend-rewrite",
+            "--target-root",
+            target.path(),
+            "review",
+            "batch",
+            "--api",
+            "/api"
+        ])
+    );
+    assert_eq!(
+        action["commands"]["export_batch"]["required_env_names"],
+        serde_json::json!(["BACKEND_REWRITE_REVIEW_WORKTREE"])
+    );
 }
 
 #[test]

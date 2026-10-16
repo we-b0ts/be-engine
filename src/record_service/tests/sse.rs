@@ -107,13 +107,7 @@ pub(super) async fn recording_policy_through_relay(record_streaming: bool) {
         source.await.unwrap();
         return;
     }
-    let group = std::fs::read_dir(run_dir.join("apis"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let case_dir = std::fs::read_dir(group)
+    let case_dir = std::fs::read_dir(run_dir.join("apis/api-example"))
         .unwrap()
         .next()
         .unwrap()

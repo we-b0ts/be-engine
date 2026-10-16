@@ -19,8 +19,8 @@ use self::discovery::{
     select_group_cases,
 };
 use self::index::{
-    CaseGroupRecord, IndexPathStorage, case_inventory_id, load_or_create_index,
-    prepare_output_path, register_source_routes, reject_membership_overlap, reject_route_overlap,
+    CaseGroupRecord, IndexPathStorage, case_inventory_id, legacy_index_locations,
+    load_or_create_index, prepare_output_path, reject_membership_overlap, reject_route_overlap,
     validate_index, validate_loaded_index, write_index,
 };
 
@@ -125,20 +125,7 @@ pub fn resolve_recording_api_case_ids(
     case_source: &Path,
     apis: &[crate::RecordingApi],
 ) -> Result<Vec<String>> {
-    resolve_recording_api_case_ids_with_routes(case_source, apis, &Default::default())
-}
-
-pub fn resolve_recording_api_case_ids_with_routes(
-    case_source: &Path,
-    apis: &[crate::RecordingApi],
-    registrations: &crate::config::HttpSourceRoutes,
-) -> Result<Vec<String>> {
     ensure!(!apis.is_empty(), "at least one replay API is required");
-    let registrations = registrations.merged(
-        apis.iter()
-            .filter(|api| api.method().as_str() != "MOTAN")
-            .map(ToString::to_string),
-    )?;
     let case_source = fs::canonicalize(case_source)
         .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
     let cases = discover_published_cases(&case_source)?;
@@ -173,15 +160,7 @@ pub fn resolve_recording_api_case_ids_with_routes(
         let owners = apis
             .iter()
             .enumerate()
-            .filter(|(_, api)| {
-                api.matches(&method, &uri)
-                    && (api.method().as_str() == "MOTAN"
-                        || registrations.selects(
-                            api.method().as_str(),
-                            &case.path,
-                            api.path_pattern(),
-                        ))
-            })
+            .filter(|(_, api)| api.matches(&method, &uri))
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
         ensure!(
@@ -211,15 +190,11 @@ pub fn resolve_recording_api_case_ids_with_routes(
 pub(crate) fn resolve_recording_api_seed_member(
     case_source: &Path,
     api: &crate::RecordingApi,
-    routes: &crate::config::HttpSourceRoutes,
 ) -> Result<PathBuf> {
-    resolve_recording_api_cases(case_source, api)?
+    let members = resolve_recording_api_members(case_source, api)?;
+    members
         .into_iter()
-        .find(|case| {
-            api.method().as_str() == "MOTAN"
-                || routes.selects(api.method().as_str(), &case.path, api.path_pattern())
-        })
-        .map(|case| case.member_dir)
+        .next()
         .context("recording API has no canonical member directory")
 }
 
@@ -391,20 +366,6 @@ fn ensure_case_group_impl(
 
     let mut index =
         load_or_create_index(&output, &case_source, &options.source_revision, target_root)?;
-    let configured_sources = options
-        .recorder_config
-        .as_deref()
-        .map(crate::config::AppConfig::load)
-        .transpose()?
-        .map(|config| config.http_gateway.source_routes)
-        .unwrap_or_default();
-    register_source_routes(
-        &mut index,
-        configured_sources
-            .entries()
-            .map(ToString::to_string)
-            .chain((method != "MOTAN").then(|| group_id.clone())),
-    )?;
     let storage = IndexPathStorage::for_index(&index, &case_source)?;
     validate_index(&index, &storage, &case_source, &cases)?;
 
@@ -428,13 +389,7 @@ fn ensure_case_group_impl(
         return result_from_record(existing, status, &index.source_revision, &storage, &output);
     }
 
-    reject_route_overlap(
-        &index.source_routes,
-        &index.groups,
-        &method,
-        &source_route,
-        pattern.as_deref(),
-    )?;
+    reject_route_overlap(&index.groups, &method, &source_route, pattern.as_deref())?;
 
     let selected = select_group_cases(
         &cases,
@@ -442,7 +397,6 @@ fn ensure_case_group_impl(
         &method,
         &source_route,
         pattern.as_deref(),
-        &index.source_routes,
     )?;
     let case_ids = selected
         .iter()
@@ -462,21 +416,6 @@ fn ensure_case_group_impl(
         &options.source_revision,
         options.recorder_config.as_deref(),
     )?;
-    if let Some(project_config) = options
-        .recorder_config
-        .as_deref()
-        .filter(|_| method != "MOTAN")
-    {
-        let policy_path = crate::config::source_traffic_policy::resolve_from_project_config(
-            project_config,
-            Path::new(crate::config::SOURCE_TRAFFIC_POLICY_FILE),
-        )?;
-        crate::config::source_traffic_policy::source_routes::register(
-            project_config,
-            &policy_path,
-            std::iter::once(group_id.clone()),
-        )?;
-    }
     let whole_directory = pattern.is_none()
         && member_dirs.len() == 1
         && cases
@@ -531,6 +470,31 @@ pub fn load_complete_case_group_inventory(
 
 pub fn load_case_group_inventory(output: &Path, case_source: &Path) -> Result<CaseGroupInventory> {
     load_case_group_inventory_impl(output, case_source, false)
+}
+
+pub(crate) fn load_legacy_complete_case_group_inventory(
+    copied_output: &Path,
+) -> Result<CaseGroupInventory> {
+    let copied_output = fs::canonicalize(copied_output).with_context(|| {
+        format!(
+            "failed to resolve copied group index {}",
+            copied_output.display()
+        )
+    })?;
+    let copied_index = index::read_index(&copied_output)?;
+    let (case_source, original_output) = legacy_index_locations(&copied_index)?;
+    validate_single_line("source revision", &copied_index.source_revision)?;
+    let original_output = fs::canonicalize(&original_output).with_context(|| {
+        format!(
+            "failed to resolve original legacy group index {}",
+            original_output.display()
+        )
+    })?;
+    ensure!(
+        fs::read(&copied_output)? == fs::read(&original_output)?,
+        "copied legacy group index differs from its original index"
+    );
+    load_case_group_inventory_impl(&original_output, &case_source, true)
 }
 
 pub(crate) fn portable_case_inventory_id(case_source: &Path) -> Result<String> {
@@ -803,7 +767,5 @@ fn result_from_record(
     })
 }
 
-#[cfg(test)]
-mod source_routes_tests;
 #[cfg(test)]
 mod tests;

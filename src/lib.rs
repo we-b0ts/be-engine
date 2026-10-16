@@ -103,8 +103,7 @@ pub use build_info::BINARY_VERSION;
 
 pub use case_group::{
     CaseGroupEnsureResult, CaseGroupOptions, CaseGroupStatus, PatternOutcome, PatternOutcomeStatus,
-    ensure_case_group, resolve_recording_api_case_ids, resolve_recording_api_case_ids_with_routes,
-    resolve_recording_api_member,
+    ensure_case_group, resolve_recording_api_case_ids, resolve_recording_api_member,
 };
 pub use config::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
@@ -203,7 +202,8 @@ pub use rewrite::{
     RewriteExpertInventoryItem, RewriteExpertOptions, RewriteExpertPrepareOptions,
     RewriteExpertState, RewriteExpertView, RewriteFocusedE2eExecution,
     RewriteFocusedE2eExecutionMode, RewriteHttpResponseCapturePlanOptions,
-    RewriteHttpResponseCaptureReport, RewriteInputRequiredReason, RewriteInventoryReport,
+    RewriteHttpResponseCaptureReport, RewriteInputRequiredReason, RewriteIntegrationBatchDelivery,
+    RewriteIntegrationBatchOptions, RewriteIntegrationBatchReport, RewriteInventoryReport,
     RewriteIpCaptureReport, RewriteIssue, RewriteIssueKind, RewriteIssueOwner,
     RewriteMemcachedExchangeDetail, RewriteMemcachedOperationDetail, RewriteMysqlExchangeDetail,
     RewriteMysqlOperationDetail, RewriteMysqlParameterDetail, RewriteNextOptions, RewritePhase,
@@ -227,14 +227,15 @@ pub use rewrite::{
     accept_rewrite_review, apply_rewrite_case_patterns, apply_rewrite_dependency_rule,
     apply_rewrite_recorder_capture, apply_rewrite_rule, begin_rewrite_regression,
     cancel_misrouted_rewrite_repair, check_batch_rewrite_review, check_rewrite_review,
-    close_rewrite_expert, confirm_rewrite_expert, confirm_rewrite_worker,
-    execute_rewrite_operation, inventory_rewrite, next_rewrite,
-    plan_rewrite_dependency_payload_rule, plan_rewrite_dependency_rule,
-    plan_rewrite_http_response_capture, plan_rewrite_recorder_capture, plan_rewrite_rule,
-    prepare_rewrite_expert, query_rewrite_case_dependencies, query_rewrite_evidence,
-    query_rewrite_evidence_for_scope, rebuild_rewrite_case_groups, recover_rewrite,
-    recover_rewrite_rule_plan, report_rewrite_expert_delivery, report_rewrite_worker,
-    request_rewrite_revalidation, resume_rewrite_replay_planning, retry_rewrite_operation,
+    check_rewrite_review_batch_file, close_rewrite_expert, confirm_rewrite_expert,
+    confirm_rewrite_worker, execute_rewrite_operation, export_rewrite_integration_batch,
+    inventory_rewrite, next_rewrite, plan_rewrite_dependency_payload_rule,
+    plan_rewrite_dependency_rule, plan_rewrite_http_response_capture,
+    plan_rewrite_recorder_capture, plan_rewrite_rule, prepare_rewrite_expert,
+    query_rewrite_case_dependencies, query_rewrite_evidence, query_rewrite_evidence_for_scope,
+    rebuild_rewrite_case_groups, recover_rewrite, recover_rewrite_rule_plan,
+    report_rewrite_expert_delivery, report_rewrite_worker, request_rewrite_revalidation,
+    resume_rewrite_replay_planning, retry_rewrite_operation,
     retry_rewrite_replay_after_out_of_band_run, rework_rewrite_review,
     rework_rewrite_review_with_report, route_rewrite, run_rewrite_target_quality,
     show_rewrite_review, start_rewrite_next, start_rewrite_target_quality, status_rewrite,
@@ -318,7 +319,7 @@ impl AppState {
     }
 
     pub async fn new_with_recording_options(
-        mut config: AppConfig,
+        config: AppConfig,
         run_id: Option<String>,
         recording_apis: Vec<RecordingApi>,
         artifact_owner: Option<ArtifactOwner>,
@@ -327,18 +328,8 @@ impl AppState {
         config
             .validate()
             .context("invalid recorder configuration")?;
-        config.http_gateway.source_routes = config.http_gateway.source_routes.merged(
-            recording_apis
-                .iter()
-                .filter(|api| api.method().as_str() != "MOTAN")
-                .map(ToString::to_string),
-        )?;
-        recording_api::validate_selection_with_routes(
-            &recording_apis,
-            &config.http_gateway.rules,
-            &config.http_gateway.source_routes,
-        )
-        .context("invalid recording API selection")?;
+        recording_api::validate_selection(&recording_apis, &config.http_gateway.rules)
+            .context("invalid recording API selection")?;
         let background_rules = config.process_owned_dependencies.clone();
         let process_owned_dependencies = tokio::task::spawn_blocking(move || {
             BackgroundDependencyMatcher::from_rules(&background_rules)
@@ -440,15 +431,7 @@ impl AppState {
         self.inner
             .recording_apis
             .iter()
-            .find(|api| {
-                api.matches(method, uri)
-                    && (method.as_str() == "MOTAN"
-                        || self.config().http_gateway.source_routes.selects(
-                            method.as_str(),
-                            uri.path(),
-                            api.path_pattern(),
-                        ))
-            })
+            .find(|api| api.matches(method, uri))
             .map(RecordingApi::path_pattern)
     }
 

@@ -119,6 +119,62 @@ fn invalid_signatures_and_non_jwt_credentials_are_not_reissued() {
 }
 
 #[test]
+fn raw_header_keeps_representation_and_validates_signature_and_relative_lifetime() {
+    let mut rule = rule();
+    rule.header = Some("x-download-token".into());
+    rule.scheme = Some("raw".into());
+    let runtime =
+        RequestRuleRuntime::with_test_keys(vec![(rule.clone(), profile(), b"test-key".to_vec())]);
+    for (key, claims, should_shift) in [
+        (
+            "test-key",
+            json!({"sub":"user","exp":1300,"iat":1000}),
+            true,
+        ),
+        ("wrong-key", json!({"sub":"user","exp":1300}), false),
+        ("test-key", json!({"sub":"user","exp":900}), true),
+    ] {
+        let original = token(claims.clone(), key);
+        let mut value = request(json!({"exp":1300}), "test-key", 1000);
+        value["headers"] = json!({"X-Download-Token":[original],"other":["stable"]});
+        let before = value.clone();
+        runtime
+            .apply(&mut value, DateTime::from_timestamp(10000, 0).unwrap())
+            .unwrap();
+        let raw = value["headers"]["X-Download-Token"][0].as_str().unwrap();
+        assert!(!raw.contains(' '));
+        assert_eq!(value["headers"]["other"], before["headers"]["other"]);
+        if should_shift {
+            let parsed = jwt::Token::parse(raw).unwrap().unwrap();
+            assert!(parsed.verify(b"test-key"));
+            assert_eq!(parsed.claims["exp"], claims["exp"].as_i64().unwrap() + 9000);
+            assert_eq!(parsed.claims["sub"], claims["sub"]);
+        } else {
+            assert_eq!(value, before);
+        }
+    }
+    let location = rule.location().unwrap();
+    let encoded = serde_json::to_string(&location).unwrap();
+    assert_eq!(
+        serde_json::from_str::<JwtTokenLocation>(&encoded).unwrap(),
+        location
+    );
+    for value in [json!(["first", "second"]), json!(["Bearer abc.def.ghi"])] {
+        let request = json!({"headers":{"x-download-token":value}});
+        if request["headers"]["x-download-token"]
+            .as_array()
+            .unwrap()
+            .len()
+            > 1
+        {
+            assert!(jwt::request_token(&request, &location).is_err());
+        } else {
+            assert!(jwt::request_token(&request, &location).unwrap().is_none());
+        }
+    }
+}
+
+#[test]
 fn key_rotation_applies_only_one_matching_rule_and_preserves_absent_claims() {
     let mut old = rule();
     old.id = "old".into();

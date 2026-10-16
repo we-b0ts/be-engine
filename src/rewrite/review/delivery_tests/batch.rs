@@ -62,7 +62,7 @@ fn singleton_batch_reviews_publishes_and_admits_one_api_handoff() {
     );
 }
 
-fn prepare_delivery(
+pub(super) fn prepare_delivery(
     root: &Path,
     directory: &Path,
     scope: &RewriteWorkScope,

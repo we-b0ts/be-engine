@@ -6,6 +6,17 @@ fn exposes_worker_and_integrated_review_commands() {
         vec![
             "test",
             "review",
+            "batch",
+            "--worktree",
+            "/integration",
+            "--api",
+            "/a",
+            "--api",
+            "/b",
+        ],
+        vec![
+            "test",
+            "review",
             "check",
             "--integration",
             "--worktree",
@@ -121,6 +132,8 @@ fn exposes_worker_and_integrated_review_commands() {
 #[test]
 fn review_requires_a_delivery_worktree_and_worker_scope() {
     for args in [
+        vec!["test", "review", "batch", "--worktree", "/integration"],
+        vec!["test", "review", "batch", "--api", "/api"],
         vec!["test", "review", "check"],
         vec!["test", "review", "check", "--integration"],
         vec!["test", "review", "check", "--worktree", "/worker"],

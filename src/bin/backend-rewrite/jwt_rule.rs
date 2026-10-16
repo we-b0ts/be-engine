@@ -11,6 +11,12 @@ pub(super) enum RequestKind {
     Jwt,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum HeaderScheme {
+    Bearer,
+    Raw,
+}
+
 #[derive(Debug, Args)]
 pub(super) struct JwtArgs {
     /// Plan an inbound request rule instead of a response rule.
@@ -20,6 +26,14 @@ pub(super) struct JwtArgs {
     rule_id: Option<String>,
     #[arg(long, requires = "request_kind", conflicts_with = "query_param")]
     header: Option<String>,
+    /// JWT header representation; raw is a compact token without a scheme prefix.
+    #[arg(
+        long,
+        value_enum,
+        requires = "request_kind",
+        conflicts_with = "query_param"
+    )]
+    header_scheme: Option<HeaderScheme>,
     /// URL query parameter carrying the JWT without a bearer scheme.
     #[arg(long, requires = "request_kind", conflicts_with = "header")]
     query_param: Option<String>,
@@ -61,6 +75,14 @@ impl JwtArgs {
             id: self.rule_id.unwrap_or_else(|| "session-jwt".into()),
             location: match self.query_param {
                 Some(query_param) => JwtTokenLocation::QueryParameter { query_param },
+                None if matches!(self.header_scheme, Some(HeaderScheme::Raw)) => {
+                    JwtTokenLocation::RawHeader {
+                        raw_header: self
+                            .header
+                            .unwrap_or_else(|| "authorization".into())
+                            .to_ascii_lowercase(),
+                    }
+                }
                 None => JwtTokenLocation::BearerHeader {
                     header: self
                         .header
@@ -77,5 +99,36 @@ impl JwtArgs {
             key_source,
             leeway_seconds,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::Cli;
+    use clap::Parser;
+
+    #[test]
+    fn raw_header_cli_is_explicit_and_does_not_mix_with_query_locations() {
+        let base = [
+            "test",
+            "rule",
+            "plan",
+            "--request-kind",
+            "jwt",
+            "--evidence-id",
+            "issue",
+            "--jwt-leeway-seconds",
+            "0",
+            "--header",
+            "X-Download-Token",
+        ];
+        let mut args = base.to_vec();
+        args.extend(["--header-scheme", "raw"]);
+        assert!(Cli::try_parse_from(&args).is_ok());
+        args.extend(["--query-param", "token"]);
+        assert!(Cli::try_parse_from(&args).is_err());
+        let mut args = base.to_vec();
+        args.extend(["--header-scheme", "basic"]);
+        assert!(Cli::try_parse_from(&args).is_err());
     }
 }

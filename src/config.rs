@@ -1,4 +1,3 @@
-pub use crate::recording_api::source_routes::HttpSourceRoutes;
 pub(crate) mod regression;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -72,6 +71,7 @@ pub use breeze_capture_feedback::{
 };
 pub use case_limits::HttpGatewayCaseLimitsConfig;
 pub use dns::{DnsBypassStrategyConfig, DnsMockConfig};
+pub(crate) use feedback::validate_case_path_pattern;
 pub use feedback::{
     CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport,
     plan_case_path_pattern_feedback,
@@ -200,8 +200,6 @@ pub struct HttpGatewayConfig {
     pub per_api_case_limits: HttpGatewayCaseLimitsConfig,
     #[serde(skip)]
     pub case_path_patterns: Vec<String>,
-    #[serde(skip)]
-    pub source_routes: HttpSourceRoutes,
     #[serde(skip)]
     pub allowed_unused_http_hosts: Vec<String>,
     pub exclude_rules: Vec<HttpGatewayRuleConfig>,
@@ -466,7 +464,6 @@ impl Default for HttpGatewayConfig {
             ready: HttpGatewayReadyConfig::default(),
             per_api_case_limits: HttpGatewayCaseLimitsConfig::default(),
             case_path_patterns: Vec::new(),
-            source_routes: HttpSourceRoutes::default(),
             allowed_unused_http_hosts: Vec::new(),
             exclude_rules: Vec::new(),
             rules: Vec::new(),

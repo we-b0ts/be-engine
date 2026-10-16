@@ -43,17 +43,21 @@ pub(crate) fn query(context: E2eRunContext, api: &str) -> Result<JwtTimeEvidence
         let Some(assertion) = &case.response_assertion else {
             continue;
         };
+        if assertion.passed {
+            continue;
+        }
         let actual: Value = serde_json::from_slice(&std::fs::read(&assertion.actual_response)?)?;
         let expected: Value =
             serde_json::from_slice(&std::fs::read(&assertion.expected_response)?)?;
-        // These status pairs only identify candidates for JWT time inspection.
-        // Sources may render 401 or 403 for expired tokens, but 403 may also be
-        // an authorization defect; neither status proves authentication causality.
+        // Status does not prove expiry causality: Source may render an HTML
+        // error with 200, or fail an earlier dependency with 503. These are
+        // mechanical time facts; planning still requires Source proof and verifies
+        // the original signature, leeway and immutable request.
         let target_status = actual["status"].as_u64().unwrap_or_default();
         let Some(recorded_status) = expected["status"].as_u64() else {
             continue;
         };
-        if !matches!(target_status, 401 | 403) || matches!(recorded_status, 401 | 403) {
+        if matches!(recorded_status, 401 | 403) {
             continue;
         }
         // Already transformed input cannot be diagnosed from the original token's exp.
@@ -78,8 +82,15 @@ pub(crate) fn query(context: E2eRunContext, api: &str) -> Result<JwtTimeEvidence
             .as_object()
             .into_iter()
             .flat_map(|headers| headers.keys())
-            .map(|header| JwtTokenLocation::BearerHeader {
-                header: header.to_ascii_lowercase(),
+            .flat_map(|header| {
+                [
+                    JwtTokenLocation::BearerHeader {
+                        header: header.to_ascii_lowercase(),
+                    },
+                    JwtTokenLocation::RawHeader {
+                        raw_header: header.to_ascii_lowercase(),
+                    },
+                ]
             });
         let query_locations = request["uri"]
             .as_str()
@@ -101,7 +112,10 @@ pub(crate) fn query(context: E2eRunContext, api: &str) -> Result<JwtTimeEvidence
             })
             .map(|query_param| JwtTokenLocation::QueryParameter { query_param });
         for location in header_locations.chain(query_locations) {
-            let Some(token) = jwt::request_token(&request, &location)? else {
+            // An unrelated multi-valued header must not hide a JWT in another
+            // header or query parameter. Ambiguous locations are never candidates;
+            // an explicitly selected runtime rule still rejects them.
+            let Ok(Some(token)) = jwt::request_token(&request, &location) else {
                 continue;
             };
             let Some(token) = Token::parse(&token)? else {

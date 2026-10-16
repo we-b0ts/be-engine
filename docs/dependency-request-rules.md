@@ -5,6 +5,11 @@ recorded responses. All entries below belong in version 3 `dependency_rules`.
 Normal protocol rules use `case: {method, path}` for the inbound HTTP API;
 `dynamic_value` retains its existing route-only `api` selector.
 
+Redis keys containing time-window indices or generated identities use explicit
+[Redis key contracts](redis-key-contracts.md). A key capture can compose JSON
+identity references and existing timestamp fields in the same atomic request
+contract. This preserves strict stable fields and avoids exempting an entire SET.
+
 ## Source request conditions
 
 Both rule families accept an optional top-level `when` to select the Source

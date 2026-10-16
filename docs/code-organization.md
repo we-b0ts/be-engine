@@ -71,15 +71,12 @@ is unclear.
   result-transition cleanup. E2E state/result publication preserves the actual
   executor revision; `build_info` exposes its build-time constant without status I/O.
 
-- `recording_api/source_routes` owns compiled method-specific Source registration,
-  exact-static precedence and unambiguous pattern coverage. `config/source_traffic_policy/source_routes`
-  publishes additive registrations under a local runtime lock. `rewrite/case_patterns/registration`
-  validates complete Source confirmations; observations never authorize methods.
-  `gateway/http/case_group` owns recording directory identity: confirmed methods
-  of one route share a directory, unconfirmed methods remain separate, and stable
-  suffixes avoid readable-name collisions. `case_group/index` persists the same
-  registry in version-three indexes and rejects mixed canonical API directories;
-  version-one/two grouping execution is unsupported.
+- `rewrite/review/batch` owns selected delivery export, private batch documents,
+  exact workflow/recording/dispatch binding and generated review commands.
+  It reuses `review/candidate` admission and the complete review pipeline;
+  export does not run quality checks, reserve handoffs or mutate workflow state.
+  The review CLI adapts route selection and batch-file input without rebuilding
+  identity or deciding which deliveries belong in an integration assignment.
 
 - `case_group/discovery` validates and retains raw recorded HTTP path identity;
   canonical route and pattern validation belongs to group selectors, so an
@@ -156,6 +153,10 @@ is unclear.
 - `replay/policy/request_contract` owns explicit dependency request selectors,
   atomic comparison decisions, case-local time/nonce state and protected failed
   request witnesses. Its config and overlap children validate ownership; its
+  `key` child owns bounded Redis key-window derivation, shaped key captures,
+  declared JSON/key identity references, atomic case-local bindings and their
+  fingerprint-only planning/audit projection. This is request comparison policy;
+  protocol lanes and finite consumption remain with the Redis matcher. Its
   evidence child validates immutable recording witnesses. Redis matching and
   HTTP matching call it only for case-owned exchanges. `replay/http/multipart`
   owns bounded multipart parsing; `replay/http/matching` owns HTTP selection.

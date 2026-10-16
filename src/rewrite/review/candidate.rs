@@ -54,9 +54,18 @@ pub(super) fn handoff(
         return Ok(None);
     };
     let scope = current_handoff_scope(state, scope)?;
-    worker::ensure_scope_confirmed(state, &scope, "integration review")?;
-    let observation = worker::runtime::observation(state, &scope)
-        .context("integration review requires an accepted worker handoff")?;
+    worker::ensure_scope_confirmed(state, &scope, "integration review").with_context(|| {
+        format!(
+            "integration handoff for {} is not confirmed; refresh inventory",
+            scope.label()
+        )
+    })?;
+    let observation = worker::runtime::observation(state, &scope).with_context(|| {
+        format!(
+            "integration review requires an accepted worker handoff for {}; refresh inventory",
+            scope.label()
+        )
+    })?;
     ensure!(
         handoff_id.is_some()
             && observation.handoff_id.as_deref() == handoff_id
@@ -64,12 +73,15 @@ pub(super) fn handoff(
                 observation.activity,
                 RewriteWorkerActivity::HandoffReady | RewriteWorkerActivity::Integrated
             ),
-        "integration review must match the accepted handoff and dispatch"
+        "integration review must match the accepted handoff and dispatch for {}; requested_handoff_id={handoff_id:?}, current_handoff_id={:?}, current_activity={:?}; refresh inventory and regenerate the selected batch; for a retained single-handoff command use the exact accepted handoff ID without expanding or shortening it",
+        scope.label(),
+        observation.handoff_id,
+        observation.activity
     );
     Ok(Some(worker::dispatch_view(state, scope, None).dispatch_id))
 }
 
-fn current_handoff_scope(
+pub(super) fn current_handoff_scope(
     state: &RewriteState,
     scope: &RewriteWorkScope,
 ) -> Result<RewriteWorkScope> {
@@ -102,7 +114,8 @@ pub(super) fn batch_handoffs(
             let scope = current_handoff_scope(state, &selection.scope)?;
             ensure!(
                 seen.insert(scope.binding_key()),
-                "batch integration contains a duplicate work item"
+                "batch integration contains a duplicate work item: {}",
+                scope.label()
             );
             let coverage = worker::runtime::coverage(state, &scope);
             ensure!(
