@@ -105,6 +105,11 @@ pub struct RewriteMysqlExchangeDetail {
     pub case_dependency_matched_by: Option<String>,
     pub connection_id: Option<String>,
     pub query_sequence: Option<u64>,
+    /// Captured wire flags, not inferred transaction or source-call ownership.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_status_before: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_status_after: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -19,6 +19,7 @@ use crate::{
 
 mod access;
 pub use access::{query_rewrite_evidence, query_rewrite_evidence_for_scope};
+mod mysql_diagnosis;
 mod overview;
 pub(super) mod policy_freshness;
 mod response_body;
@@ -286,12 +287,13 @@ fn facts(
                 facts["redis_publish_candidates"] = crate::e2e_run::query_redis_publish_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
             }
             if let Some(rejections) = &issue.egress_rejections { facts["egress_rejections"] = rejections.clone(); }
+            mysql_diagnosis::attach(&mut facts);
             let limitations = dirty_cluster_limitations(&facts);
+            let next_step = mysql_diagnosis::next_step(&facts);
             Ok((
                 facts,
                 limitations,
-                "Start with the largest endpoint cluster. Execute representative_dependencies_command when present to summarize that case's dependency targets, then select a returned detail_command before proving request or process ownership and response causality in source code."
-                    .to_string(),
+                next_step,
             ))
         }
         QUERY_POLICY_APPLICABILITY => Ok((
@@ -354,6 +356,7 @@ fn dirty_cluster_limitations(facts: &Value) -> Vec<String> {
         "dirty event counts do not prove process ownership".to_string(),
         "they do not prove response causality".to_string(),
     ];
+    limitations.extend(mysql_diagnosis::limitations(facts));
     if facts
         .get("clusters")
         .and_then(Value::as_array)

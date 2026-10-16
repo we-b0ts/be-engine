@@ -597,8 +597,12 @@ explicit repository-wide audit.
   validation, matching, and intersection independently of SQL template expansion.
 - `rewrite/case_dependencies` owns bounded, read-only per-target dependency
   projections. Its `mysql` child owns query, parameter, connection, and response
-  facts for diagnosis; it does not infer process ownership or implement rule
+  facts, including captured before/after server-status flags, for diagnosis;
+  it does not infer process ownership or implement rule
   planning. The shared summary/detail command flow also serves Redis and Memcached.
+  `rewrite/evidence/mysql_diagnosis` owns investigation guidance for unconsumed
+  MySQL calls. It distinguishes call-consumption facts from unresolved source
+  ownership and rule discovery; matching and omission decisions remain with Replay.
 
 - `replay/policy/matcher/mysql_values` owns explicit scalar and exact nested-JSON
   SQL time-location validation across text and prepared calls. It shares the fixed

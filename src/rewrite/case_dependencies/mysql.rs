@@ -71,6 +71,8 @@ impl OperationBuilder {
             case_dependency_matched_by: identifier(event, "case_dependency_matched_by")?,
             connection_id: None,
             query_sequence: None,
+            server_status_before: json_u64(event, "server_status_before"),
+            server_status_after: json_u64(response, "server_status"),
         };
         // Duplicate query/result facts should not crowd out other observations.
         // Add the original record locator after choosing a representative.
