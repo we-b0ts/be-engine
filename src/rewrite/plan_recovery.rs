@@ -45,6 +45,18 @@ pub(super) fn evidence_missing(target_root: &Path, state: &RewriteState) -> Resu
                 return Ok(true);
             }
         }
+        if plan.dependency_request.is_some() || plan.dynamic_value.is_some() {
+            // Dependency-request and dynamic-value plans validate the replay
+            // report's replay_policy fingerprint against the current policy at
+            // apply time; retire the plan when the report is policy-stale.
+            let current =
+                crate::validate_replay_policy(&target_root.join(".traffic-e2e/verification.yaml"))?;
+            let report: Value = serde_json::from_slice(&std::fs::read(&evidence.replay)?)?;
+            if report["replay_policy"]["fingerprint"].as_str() != Some(current.fingerprint.as_str())
+            {
+                return Ok(true);
+            }
+        }
     }
     Ok(false)
 }
