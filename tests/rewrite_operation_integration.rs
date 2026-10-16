@@ -100,7 +100,7 @@ fn detached_cli_operation_publishes_failure_and_status_does_not_restart_it() {
     if launched["action"]["kind"] == "wait_required" {
         assert_eq!(launched["action"]["details"]["execution_mode"], "single");
     }
-    assert_eq!(launched["schema_version"], 36);
+    assert_eq!(launched["schema_version"], 37);
     assert_eq!(
         launched["pending"],
         if launched["action"]["kind"] == "wait_required" {

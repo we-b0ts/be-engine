@@ -1,3 +1,6 @@
+#[path = "support/recording_groups.rs"]
+mod recording_groups;
+use recording_groups::group_dir;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
@@ -327,7 +330,7 @@ async fn disabled_streaming_uses_fixed_fallback_before_dispatch_and_keeps_case_c
     )
     .await;
     assert!(response.contains("200 OK"), "{response}");
-    assert!(run_dir.join("apis/api-mcp-knowledge-sse").is_dir());
+    assert!(group_dir(&run_dir, "apis", "api-mcp-knowledge-sse").is_dir());
     normal_source.await.unwrap();
     gateway.abort();
 }

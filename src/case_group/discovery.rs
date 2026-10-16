@@ -210,6 +210,7 @@ pub(super) fn select_group_cases(
     method: &str,
     source_route: &str,
     pattern: Option<&str>,
+    registrations: &crate::config::HttpSourceRoutes,
 ) -> Result<Vec<PublishedCase>> {
     // Membership belongs to cases, not physical directories. Recorder folders
     // are path-based and may contain several HTTP methods.
@@ -217,6 +218,8 @@ pub(super) fn select_group_cases(
         .iter()
         .filter(|case| {
             case.method == method
+                && (method == "MOTAN"
+                    || registrations.selects(method, &case.path, pattern.unwrap_or(source_route)))
                 && pattern.map_or(case.path == source_route, |value| {
                     matches_path_pattern(value, &case.path)
                 })
