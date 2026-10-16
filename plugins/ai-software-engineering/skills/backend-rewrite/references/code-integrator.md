@@ -98,6 +98,20 @@ Keep that exact scope in candidate reviews and batch handoff entries. Do not
 split one handoff into method deliveries. Formal acceptance remains coordinator
 owned; method progress and failures remain independently visible.
 
+## Waiting For Checks
+
+Do not invoke `sleep` to wait for reviews, builds, or other background commands,
+including loops of shorter sleeps. Do not invoke `wait` or `backend-rewrite wait`;
+engine waiting belongs to the coordinator.
+
+Use the task runtime's background execution support, retain the command's task
+ID, and resume result handling from its completion notification. Retrieve results
+through the execution tool's own result interface; any blocking result request
+must return within 30 seconds. Do not poll output files to detect completion.
+Process coordinator messages between tool calls so additional deliveries can use
+the existing cancel, append, and recheck path. While a check is still running,
+do not return `ready` or start another copy of that check.
+
 ## Review
 
 Inspect only the assigned findings at the supplied version. Read
