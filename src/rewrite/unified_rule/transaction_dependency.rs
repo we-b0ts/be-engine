@@ -311,6 +311,50 @@ fn missing_exchange_identity_does_not_multiply_a_target_observation() {
 }
 
 #[test]
+fn dependency_only_rules_cannot_replace_the_finished_primary_response_oracle() {
+    for (after_plan, binary_body) in [(false, false), (false, true), (true, false), (true, true)] {
+        let fixture = Fixture::new();
+        let mut rule = dependency_rule("redis", "cache.test:6379", "SET");
+        rule["match"]["key"] = json!({"exact":"session"});
+        write(&fixture.proposal, rule);
+        let event = json!({"event_type":"redis_exchange","connection_id":uuid::Uuid::nil(),"sequence":1,
+            "timestamp":"2026-10-16T00:00:00Z","duration_ms":0,
+            "target_host":"cache.test","target_port":6379,"command":"SET",
+            "args":[raw_body(b"session"),raw_body(br#"{"members":[1,2]}"#)],"response":raw_body(b"+OK\r\n")});
+        install(&fixture, event, |raw| {
+            let mut args: Vec<Vec<u8>> = serde_json::from_slice(&raw).unwrap();
+            args[1] = br#"{"members":[2,1]}"#.to_vec();
+            serde_json::to_vec(&args).unwrap()
+        });
+        fixture.confirm();
+        let plan = after_plan.then(|| fixture.plan().unwrap());
+        let oracle = fixture
+            .state()
+            .case_source
+            .as_ref()
+            .unwrap()
+            .join("apis/api/case-1/expected-response.json");
+        let mut source: serde_json::Value =
+            serde_json::from_slice(&fs::read(&oracle).unwrap()).unwrap();
+        if binary_body {
+            source["body"] = raw_body(b"\0\xffreplaced binary primary oracle");
+        } else {
+            source["status"] = json!(201);
+        }
+        write(&oracle, source);
+        let original_policy = fs::read(fixture.policy()).unwrap();
+        if let Some(plan) = plan {
+            assert!(apply_rewrite_rule(fixture.context(), &plan.plan_id).is_err());
+            assert!(fixture.state().rule_plan.is_some());
+        } else {
+            assert!(fixture.plan().is_err());
+            assert!(fixture.state().rule_plan.is_none());
+        }
+        assert_eq!(fs::read(fixture.policy()).unwrap(), original_policy);
+    }
+}
+
+#[test]
 fn response_compare_contract_does_not_implicitly_authorize_delivery_rewrites() {
     for unauthorized in [false, true] {
         let fixture = Fixture::new();

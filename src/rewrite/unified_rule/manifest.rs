@@ -13,6 +13,9 @@ use sha2::{Digest, Sha256};
 
 use super::super::{fingerprint, model::RewriteState};
 
+mod primary;
+pub(super) use primary::PrimaryResponse;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Artifact {
     pub path: PathBuf,
@@ -234,6 +237,7 @@ impl Bundle {
             for name in ["request.json", "dependencies.jsonl"] {
                 output.freeze(&case.case_dir.join(name))?;
             }
+            output.primary_response(&case.case_id, &case.case_dir)?;
             output.cases.insert(case.case_id, case.case_dir);
         }
         let (recording, _) = crate::dependency_index::recording_files(&case_source)?;

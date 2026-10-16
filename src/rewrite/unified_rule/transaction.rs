@@ -373,10 +373,7 @@ fn complete_source_with_missing_target_is_explicitly_unvalidated_until_replay() 
     fixture.confirm();
     let mut assertions: serde_json::Value =
         serde_json::from_slice(&fs::read(&fixture.paths.assertions).unwrap()).unwrap();
-    assertions["cases"][0]["response"]
-        .as_object_mut()
-        .unwrap()
-        .remove("actual_response");
+    assertions["cases"][0]["response"] = serde_json::Value::Null;
     write(&fixture.paths.assertions, assertions);
     let plan = fixture.plan().unwrap();
     assert_eq!(plan.traffic_e2e_report["status"], "planned_needs_replay");
@@ -391,6 +388,21 @@ fn complete_source_with_missing_target_is_explicitly_unvalidated_until_replay() 
     assert_eq!(plan.traffic_e2e_report["verified"], false);
     apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
     assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
+}
+
+#[test]
+fn a_partial_summary_cannot_hide_a_published_target_response() {
+    let fixture = Fixture::new();
+    fixture.confirm();
+    let mut assertions: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture.paths.assertions).unwrap()).unwrap();
+    assertions["cases"][0]["response"]
+        .as_object_mut()
+        .unwrap()
+        .remove("actual_response");
+    write(&fixture.paths.assertions, assertions);
+    assert!(fixture.plan().is_err());
+    assert!(fixture.state().rule_plan.is_none());
 }
 
 #[test]

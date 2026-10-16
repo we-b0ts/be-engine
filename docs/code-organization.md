@@ -814,6 +814,12 @@ explicit repository-wide audit.
   resolves the sole Target-root-relative `project.policy` path.
 - `rewrite/unified_rule/{manifest,preflight,discovery}` owns complete protected
   evidence, Source/Target role distinctions, reviewable plan/apply and recovery.
+  `manifest/primary` freezes each selected Case's original primary-response oracle
+  and published assertion/Target artifacts, including inline binary bodies, even
+  for dependency-only rules. `preflight/{api,dependency,session,source}` delegates
+  payload, native envelope, stateful Source trace and whole-recording proof to
+  their existing owners. Whole-recording Source effects explicitly enumerate
+  their broader inventory; ordinary payload rules retain their prepared API scope.
   Coordinator admission preserves write intents and fresh real verification
   obligations across crashes. Bounded hints never substitute for full coverage.
 - Historical feedback DTOs may remain as domain data or journal recovery inputs.

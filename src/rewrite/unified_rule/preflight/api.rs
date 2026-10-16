@@ -24,20 +24,8 @@ pub(super) fn verify(
     native: &[&CompiledNativeRule],
     result: &mut Preflight,
 ) -> Result<()> {
-    let summary = bundle.assertions["cases"]
-        .as_array()
-        .and_then(|items| items.iter().find(|item| item["case_id"] == case))
-        .map(|item| item["response"].clone())
-        .unwrap_or(Value::Null);
-    let expected = summary["expected_response"]
-        .as_str()
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| directory.join("expected-response.json"));
-    let source = bundle.json(&expected)?;
-    ensure!(
-        source == bundle.json(&directory.join("expected-response.json"))?,
-        "primary Source response does not match the prepared immutable Case"
-    );
+    let super::super::manifest::PrimaryResponse { source, target } =
+        bundle.primary_response(case, directory)?;
     let context = NativeResponseContext::from_rules(native, root, directory)?;
     for (path, digest) in context.key_witnesses() {
         bundle.freeze(path)?;
@@ -85,35 +73,10 @@ pub(super) fn verify(
     for id in &source_ids {
         *result.rules.entry(id.clone()).or_default() += 1;
     }
-    let Some(actual) = summary["actual_response"].as_str() else {
+    let Some(target) = target else {
         result.missing_target_witnesses += 1;
         return Ok(());
     };
-    let detail_path = summary["detail_report"]
-        .as_str()
-        .context("Target response has no runner-owned assertion detail")?;
-    let detail = bundle.json(Path::new(detail_path))?;
-    ensure!(
-        crate::verification_progress::fingerprint(&fs::read(detail_path)?)
-            == summary["detail_fingerprint"]
-                .as_str()
-                .context("assertion detail fingerprint missing")?
-            && detail["case_id"] == case
-            && detail["expected_response_path"] == expected.to_string_lossy().as_ref()
-            && detail["actual_response_path"] == actual,
-        "response assertion detail identity changed after publication"
-    );
-    let target = bundle.json(Path::new(actual))?;
-    for (path, field) in [
-        (expected.as_path(), "expected_response_fingerprint"),
-        (Path::new(actual), "actual_response_fingerprint"),
-    ] {
-        ensure!(
-            detail[field].as_str()
-                == Some(crate::verification_progress::fingerprint(&fs::read(path)?).as_str()),
-            "primary response bytes changed after assertion publication"
-        );
-    }
     let pair = crate::replay::response_payload_pair(request, &source, Some(&target))?;
     let clocks = AnchorClocks {
         case: pair.times,

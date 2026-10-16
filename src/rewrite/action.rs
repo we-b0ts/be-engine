@@ -419,23 +419,23 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
         }
         if let Some(plan) = &state.rule_plan {
             return RewriteAction::PlanApplyRequired {
-                summary: "apply the unchanged pending verification-rule plan".to_string(),
-                command: rule_apply_command(target_root, &plan.id),
+                summary: if plan.unified.is_some() {
+                    "apply the unchanged pending unified rule plan"
+                } else {
+                    "recover the retired pending rule plan after active traffic finishes"
+                }
+                .into(),
+                command: if plan.unified.is_some() {
+                    rule_apply_command(target_root, &plan.id)
+                } else {
+                    dependency_rule_apply_command(target_root, &plan.id)
+                },
             };
         }
         if let Some(plan) = &state.dependency_rule_plan {
             return RewriteAction::PlanApplyRequired {
-                summary: if plan.spec.requires_fresh_replay() {
-                    "apply or confirm the pending dependency rule, then run fresh Replay for this API".into()
-                } else if plan.reused_existing {
-                    format!(
-                        "confirm reused process-owned dependency rule {} and reclassify the current attempt",
-                        plan.effective_name.as_deref().unwrap_or(&plan.name)
-                    )
-                } else {
-                    "apply the unchanged pending process-owned dependency plan and reclassify the current attempt"
-                        .to_string()
-                },
+                summary: "recover the retired dependency rule plan after active traffic finishes"
+                    .into(),
                 command: dependency_rule_apply_command(target_root, &plan.id),
             };
         }
@@ -726,8 +726,8 @@ pub(super) fn dependency_rule_apply_command(
     command(
         target_root,
         vec![
-            "dependency-rule".to_string(),
-            "apply".to_string(),
+            "rule".to_string(),
+            "recover".to_string(),
             plan_id.to_string(),
         ],
         Vec::new(),

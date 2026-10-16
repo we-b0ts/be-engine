@@ -133,7 +133,7 @@ fn pending_rule_plans_are_recoverable_by_plan_id() {
             "--target-root",
             "/target",
             "rule",
-            "apply",
+            "recover",
             "plan-response"
         ]))
     );
@@ -161,8 +161,8 @@ fn pending_rule_plans_are_recoverable_by_plan_id() {
             "backend-rewrite",
             "--target-root",
             "/target",
-            "dependency-rule",
-            "apply",
+            "rule",
+            "recover",
             "plan-dependency"
         ]))
     );
@@ -181,8 +181,8 @@ fn pending_rule_plans_are_recoverable_by_plan_id() {
             "backend-rewrite",
             "--target-root",
             "/target",
-            "dependency-rule",
-            "apply",
+            "rule",
+            "recover",
             "plan-dependency"
         ]))
     );
@@ -190,7 +190,26 @@ fn pending_rule_plans_are_recoverable_by_plan_id() {
         reused
             .pointer("/action/summary")
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|summary| summary.contains("existing-cache-warm"))
+            .is_some_and(|summary| summary.contains("recover the plan"))
+    );
+    let target = tempfile::tempdir().unwrap();
+    let _claim = super::super::traffic_operation::claim_current(
+        target.path(),
+        "active-replay".into(),
+        super::super::traffic_operation::TrafficOperationKind::Replay,
+        Some("GET /api".into()),
+    )
+    .unwrap();
+    assert!(super::super::plan_recovery::required_action(target.path(), &state).is_none());
+    let waiting = serde_json::to_value(for_state(target.path(), &state)).unwrap();
+    assert!(!waiting.to_string().contains("dependency-rule"));
+    let command = waiting.pointer("/action/commands/apply/argv").unwrap();
+    assert!(
+        command
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .any(|pair| { pair == [serde_json::json!("rule"), serde_json::json!("recover")] })
     );
 }
 
