@@ -88,6 +88,7 @@ pub(super) fn record_request(
     );
     actual["opcode"] = serde_json::to_value(request.opcode)?;
     actual["observed_at"] = serde_json::to_value(observed_at)?;
+    actual["request_started_at"] = serde_json::to_value(observed_at)?;
     let clocks = policy.request_contracts.contract_clocks(
         Some(case),
         source_start(&exchange.record),
@@ -240,6 +241,8 @@ pub(super) fn materialize_response(
         target["response_frames"] = encoded_frames(&output);
         target["outcome"] = source["outcome"].clone();
         target["no_response"] = source["no_response"].clone();
+        target["delivery_request_started_at"] = serde_json::to_value(matched.request_observed_at)?;
+        target["response_delivered_at"] = serde_json::to_value(delivered_at)?;
         if exchange.record.wire_protocol == "binary" {
             target["delivery_request"] = serde_json::json!({"opcode": matched.request_opcode, "opaque": matched.request_opaque});
         }
@@ -261,6 +264,7 @@ pub(super) fn materialize_response(
             &serde_json::to_vec(&target)?,
             Surface::DependencyResponse,
             &allowed,
+            clocks,
         )?;
         policy.request_contracts.record_value_witness(
             metadata(
@@ -518,6 +522,7 @@ fn request_envelope(exchange: &ReplayExchange) -> serde_json::Value {
     );
     document["opcode"] = serde_json::json!(exchange.record.opcode);
     document["observed_at"] = serde_json::json!(exchange.record.timestamp);
+    document["request_started_at"] = serde_json::json!(source_start(&exchange.record));
     document
 }
 

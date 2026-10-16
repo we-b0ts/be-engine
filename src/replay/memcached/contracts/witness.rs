@@ -32,6 +32,7 @@ pub(crate) fn source_witness(event: &Value, surface: Surface) -> Result<Vec<u8>>
     );
     document["opcode"] = serde_json::to_value(record.opcode)?;
     document["observed_at"] = serde_json::to_value(record.timestamp)?;
+    document["request_started_at"] = serde_json::to_value(source_start(&record))?;
     if surface == Surface::DependencyResponse {
         let frames = record
             .response_frames
@@ -55,6 +56,7 @@ pub(crate) fn validate_witness(
     target: &[u8],
     surface: Surface,
     allowed_keys: &[Vec<u8>],
+    clocks: crate::value_contract::json::AnchorClocks,
 ) -> Result<()> {
     let parse = |bytes: &[u8]| -> Result<Value> {
         ensure!(
@@ -67,6 +69,10 @@ pub(crate) fn validate_witness(
     };
     let mut source = parse(source)?;
     let mut target = parse(target)?;
+    ensure!(
+        source["request_started_at"] == serde_json::to_value(clocks.dependency.source)?,
+        "Memcached Source request clock differs from its protected metadata"
+    );
     let wire = source["wire_protocol"]
         .as_str()
         .context("Memcached wire protocol unavailable")?
@@ -76,6 +82,11 @@ pub(crate) fn validate_witness(
         "Memcached wire protocol changed"
     );
     if surface == Surface::DependencyRequest {
+        ensure!(
+            target["request_started_at"] == serde_json::to_value(clocks.dependency.target)?
+                && target["observed_at"] == target["request_started_at"],
+            "Memcached Target request clock differs from its protected metadata"
+        );
         let source_args = captures(&source["args"])?;
         let target_args = captures(&target["args"])?;
         let source_value = capture(&source["value"])?;
@@ -118,12 +129,28 @@ pub(crate) fn validate_witness(
             value["extras"] = Value::Null;
             value["value"] = Value::Null;
             value["observed_at"] = Value::Null;
+            value["request_started_at"] = Value::Null;
         }
     } else {
         ensure!(
             surface == Surface::DependencyResponse,
             "Memcached has no API response surface"
         );
+        ensure!(
+            source["observed_at"] == serde_json::to_value(clocks.delivery.source)?
+                && target["delivery_request_started_at"]
+                    == serde_json::to_value(clocks.dependency.target)?
+                && target["response_delivered_at"] == serde_json::to_value(clocks.delivery.target)?,
+            "Memcached delivery clocks differ from their protected metadata"
+        );
+        target
+            .as_object_mut()
+            .context("Memcached envelope must be an object")?
+            .remove("delivery_request_started_at");
+        target
+            .as_object_mut()
+            .context("Memcached envelope must be an object")?
+            .remove("response_delivered_at");
         let mut expected = captures(&source["response_frames"])?;
         let actual = captures(&target["response_frames"])?;
         if wire == "binary" {

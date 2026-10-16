@@ -387,6 +387,10 @@ fn response_digest_or_signature_requires_its_own_typed_rewrite_owner() {
     .unwrap();
     target["response_delivered_at"] = serde_json::to_value(delivered).unwrap();
     let clocks = AnchorClocks {
+        dependency: crate::value_contract::time::ClockPair {
+            source: chrono::DateTime::from_timestamp(1000, 0),
+            target: chrono::DateTime::from_timestamp(2000, 0),
+        },
         delivery: crate::value_contract::time::ClockPair {
             source: chrono::DateTime::from_timestamp(1005, 0),
             target: Some(delivered),

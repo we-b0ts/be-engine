@@ -230,6 +230,20 @@ fn initial_failure_without_rules_retains_source_and_independent_target_payloads(
     assert!(runtime.report().dependency_rules.is_empty());
 }
 
+fn witness_clocks() -> AnchorClocks {
+    AnchorClocks {
+        dependency: ClockPair {
+            source: DateTime::from_timestamp(1000, 0),
+            target: DateTime::from_timestamp(2000, 0),
+        },
+        delivery: ClockPair {
+            source: DateTime::from_timestamp(1000, 0),
+            target: DateTime::from_timestamp(2005, 0),
+        },
+        ..Default::default()
+    }
+}
+
 #[test]
 fn native_request_witness_guard_accepts_only_value_lengths_and_native_expiration() {
     let source_value = br#"{"expires_at":127}"#;
@@ -248,11 +262,13 @@ fn native_request_witness_guard_accepts_only_value_lengths_and_native_expiration
     target["value"] = STANDARD.encode(target_value).into();
     target["args"][2] = STANDARD.encode(target_value.len().to_string()).into();
     target["observed_at"] = "1970-01-01T00:33:20Z".into();
+    target["request_started_at"] = target["observed_at"].clone();
     validate_witness(
         &source,
         &serde_json::to_vec(&target).unwrap(),
         Surface::DependencyRequest,
         &[b"session".to_vec()],
+        witness_clocks(),
     )
     .unwrap();
     for field in ["cas", "quiet", "noreply", "opcode"] {
@@ -263,7 +279,8 @@ fn native_request_witness_guard_accepts_only_value_lengths_and_native_expiration
                 &source,
                 &serde_json::to_vec(&changed).unwrap(),
                 Surface::DependencyRequest,
-                &[b"session".to_vec()]
+                &[b"session".to_vec()],
+                witness_clocks(),
             )
             .is_err()
         );
@@ -274,7 +291,8 @@ fn native_request_witness_guard_accepts_only_value_lengths_and_native_expiration
             &source,
             &serde_json::to_vec(&target).unwrap(),
             Surface::DependencyRequest,
-            &[b"session".to_vec()]
+            &[b"session".to_vec()],
+            witness_clocks(),
         )
         .is_err()
     );
@@ -307,11 +325,14 @@ fn binary_response_witness_proves_native_get_adaptation_and_keeps_cas_flags_stri
     let mut target: serde_json::Value = serde_json::from_slice(&source).unwrap();
     target["response_frames"] = encoded_frames(&adapted);
     target["delivery_request"] = json!({"opcode":0,"opaque":42});
+    target["delivery_request_started_at"] = json!(DateTime::from_timestamp(2000, 0).unwrap());
+    target["response_delivered_at"] = json!(DateTime::from_timestamp(2005, 0).unwrap());
     validate_witness(
         &source,
         &serde_json::to_vec(&target).unwrap(),
         Surface::DependencyResponse,
         &[b"session".to_vec()],
+        witness_clocks(),
     )
     .unwrap();
     for offset in [16, 24, 12, 1] {
@@ -323,7 +344,8 @@ fn binary_response_witness_proves_native_get_adaptation_and_keeps_cas_flags_stri
                 &source,
                 &serde_json::to_vec(&target).unwrap(),
                 Surface::DependencyResponse,
-                &[b"session".to_vec()]
+                &[b"session".to_vec()],
+                witness_clocks(),
             )
             .is_err()
         );

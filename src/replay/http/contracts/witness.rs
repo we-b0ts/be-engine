@@ -149,7 +149,15 @@ pub(crate) fn validate_witness(
 ) -> Result<()> {
     let mut source = parse(source)?;
     let mut target = parse(target)?;
+    ensure!(
+        source["request_started_at"] == serde_json::to_value(clocks.dependency.source)?,
+        "HTTP Source request clock differs from its protected metadata"
+    );
     if surface == Surface::DependencyRequest {
+        ensure!(
+            target["request_started_at"] == serde_json::to_value(clocks.dependency.target)?,
+            "HTTP Target request clock differs from its protected metadata"
+        );
         let expected: HeaderSnapshot = serde_json::from_value(source["request_headers"].clone())?;
         let actual: HeaderSnapshot = serde_json::from_value(target["request_headers"].clone())?;
         ensure!(
@@ -179,6 +187,10 @@ pub(crate) fn validate_witness(
         ensure!(
             surface == Surface::DependencyResponse,
             "HTTP dependency witness has no API response surface"
+        );
+        ensure!(
+            source["response_delivered_at"] == serde_json::to_value(clocks.delivery.source)?,
+            "HTTP Source response clock differs from its protected metadata"
         );
         let target_body = witness_value(target_bytes(&target)?.as_slice(), surface)?
             .context("HTTP response has no body slot")?;
