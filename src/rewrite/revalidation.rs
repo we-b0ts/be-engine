@@ -307,7 +307,7 @@ mod tests {
         .unwrap();
 
         let value = serde_json::to_value(&report).unwrap();
-        assert_eq!(value["schema_version"], serde_json::json!(36));
+        assert_eq!(value["schema_version"], serde_json::json!(37));
         assert_eq!(
             value.pointer("/next/action/kind"),
             Some(&serde_json::json!("wait_required"))

@@ -109,12 +109,22 @@ pub(in crate::rewrite) fn scope_action(
         },
         Coverage::IntegrationRequired => RewriteAction::IntegrationRequired {
             summary: format!(
-                "integrate the ready worker handoff for {}, including its coordinator inputs, and review the complete candidate before reporting integrated. Keep prior integrated code as the base. For a single new handoff use its scope and handoff ID; a batch may include current integrated handoffs plus ready handoffs, but report integrated only for those still handoff_ready",
+                "ready handoffs await integration; the current action entry is {}. Select batch members from inventory and use commands.export_batch to export their exact delivery metadata and check command for the code integrator. This action names one entry, not the complete in-flight integration batch. Keep prior integrated code as the base and review the complete candidate before reporting integrated. A batch may include current integrated handoffs plus ready handoffs; report integrated only for those still handoff_ready",
                 scope.label()
             ),
             handoff_id: runtime::observation(state, scope)
                 .and_then(|value| value.handoff_id.clone())
                 .expect("ready handoff has an identity"),
+            export_batch: action::command(
+                target_root,
+                vec![
+                    "review".into(),
+                    "batch".into(),
+                    "--api".into(),
+                    scope.binding_key(),
+                ],
+                vec!["BACKEND_REWRITE_REVIEW_WORKTREE".into()],
+            ),
             report_worker: runtime::report_command(
                 target_root,
                 worker.agent_handle.as_deref(),

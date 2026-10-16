@@ -299,8 +299,19 @@ original accepted handoff, not its earlier worker report. Global evidence-only
 or final quality review uses `review check --integration --worktree
 /absolute/integration` without scope or handoff ID; after publication the
 coordinator admits it using `review accept --report /absolute/report.json`.
-For one or more current API handoffs, `--batch-handoffs /absolute/handoffs.json`
-accepts a nonempty JSON array of exact `{scope, handoff_id}` entries with at least one
+For selected current API handoffs, the coordinator runs
+`review batch --worktree /absolute/integration --api '/a' --api '/b'` (or its
+returned `commands.export_batch` with the retained worktree environment input).
+The engine creates a private batch file and returns its complete `check` command,
+accepted handoff/dispatch IDs, worker worktrees, delivery commits, and review paths.
+Handoff IDs remain exact opaque strings; a short handoff ID is not expanded into
+the separately supplied delivery commit. Export does not run quality checks or
+reserve or consume a handoff. Only explicitly selected routes are included.
+The generated file binds workflow, recording and dispatch; stale bindings fail
+before quality checks and must be regenerated from current inventory.
+
+`--batch-handoffs /absolute/handoffs.json` also retains support for a nonempty
+legacy JSON array of exact `{scope, handoff_id}` entries with at least one
 `handoff_ready` item. Already `integrated` items may be included as retained
 deliveries: build on their published code, merge only new deliveries, and review
 the complete candidate once. After publication, report `integrated` only for

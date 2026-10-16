@@ -1,6 +1,8 @@
 //! Delivery-time checks and coordinator receipt admission across real worktrees.
 #[path = "delivery_tests/batch.rs"]
 mod batch;
+#[path = "delivery_tests/batch_export.rs"]
+mod batch_export;
 use super::*;
 use crate::rewrite::quality::QualityCommandStatus;
 use crate::rewrite::worker::model::RewriteWorkerActivity;

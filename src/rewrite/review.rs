@@ -9,12 +9,17 @@ use super::model::{RewriteAction, RewriteState};
 use super::store::RewriteStore;
 use super::{action, fingerprint, source_diff, worker};
 
+mod batch;
 mod candidate;
 mod evidence;
 mod integrated;
 mod model;
 mod repair;
 mod scan;
+pub use batch::{
+    RewriteIntegrationBatchDelivery, RewriteIntegrationBatchOptions, RewriteIntegrationBatchReport,
+    check_file as check_batch_file, export as export_batch,
+};
 pub use candidate::accept;
 pub(super) use candidate::accept_locked as accept_integration;
 #[cfg(test)]

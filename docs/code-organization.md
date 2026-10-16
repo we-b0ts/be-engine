@@ -71,6 +71,13 @@ is unclear.
   result-transition cleanup. E2E state/result publication preserves the actual
   executor revision; `build_info` exposes its build-time constant without status I/O.
 
+- `rewrite/review/batch` owns selected delivery export, private batch documents,
+  exact workflow/recording/dispatch binding and generated review commands.
+  It reuses `review/candidate` admission and the complete review pipeline;
+  export does not run quality checks, reserve handoffs or mutate workflow state.
+  The review CLI adapts route selection and batch-file input without rebuilding
+  identity or deciding which deliveries belong in an integration assignment.
+
 - `case_group/discovery` validates and retains raw recorded HTTP path identity;
   canonical route and pattern validation belongs to group selectors, so an
   unrelated valid noncanonical request cannot block inventory discovery.

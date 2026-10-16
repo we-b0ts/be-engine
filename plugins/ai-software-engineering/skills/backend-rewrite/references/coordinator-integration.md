@@ -44,6 +44,22 @@ API binding and dispatch. Record the canonical commit and
 relevant content/configuration state. Create or mechanically synchronize the
 integration worktree without discarding existing work. Delegate source conflicts.
 
+Execute `commands.export_batch` with `BACKEND_REWRITE_REVIEW_WORKTREE` set to
+the retained integration worktree. To include additional chosen ready or retained
+integrated routes, append one `--api '/route'` for each additional member; keep the
+command's original route. The engine exports their exact accepted identities,
+worker worktrees, delivery commits, review paths, and the complete `check` command.
+Pass this output to the integrator. Do not copy handoff IDs from prose, expand
+short IDs into commit SHAs, or construct the batch JSON yourself. Handoff IDs and
+delivery commits are separate fields even when their text happens to be identical.
+
+For an explicitly selected set outside the current action, use
+`backend-rewrite --target-root /absolute/canonical review batch --worktree
+/absolute/integration --api '/a' --api '/b'`. Export only the chosen routes;
+exporting does not reserve them, report integration, or run quality checks.
+An export binds the workflow, recording and dispatches. Refresh stale exports
+from current inventory without changing the identities inside an old file.
+
 Send only the data needed for the assignment:
 
 - role `code-integrator`, task `integrate`, unique assignment ID;
@@ -131,12 +147,15 @@ ancestry and no unrelated working-tree changes. Respect the engine's live
 verification/traffic owner. If any prerequisite changed, return to status or
 the integrator instead of resolving a source conflict yourself.
 
-The integrator must run `review check --integration` on the final candidate.
-For one handoff, it may use the original work-item selector and accepted `--handoff-id`.
-For one or more API handoffs, write a nonempty JSON array of exact accepted identities,
-for example
-`[{"scope":{"kind":"api","api":"/a"},"handoff_id":"id-a"},{"scope":{"kind":"api","api":"/b"},"handoff_id":"id-b"}]`,
-and run `review check --integration --batch-handoffs /absolute/handoffs.json`.
+The integrator must execute the exported `check` command on the final candidate.
+It runs `review check --integration --batch-handoffs` with the generated file.
+When appending another accepted delivery to an in-progress candidate, export the
+complete selected set again and pass the new output to the retained integrator.
+The integrator may cancel an earlier check, merge the addition, and review the
+expanded candidate. An export fixes one check's input, not the integration task's
+membership forever. Preserve the old file and never reuse its report for later code.
+Existing single-handoff review commands and legacy JSON selection arrays remain
+supported for retained assignments; new assignments use engine-generated exports.
 The engine checks every current dispatch and handoff before issuing one report.
 The report
 must cover every required source, isolation and engine-standard quality check, and

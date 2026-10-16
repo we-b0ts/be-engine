@@ -19,7 +19,7 @@ use crate::{
 };
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 36;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 37;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -673,6 +673,7 @@ pub enum RewriteAction {
         summary: String,
         worker: RewriteWorkerDispatchView,
         handoff_id: String,
+        export_batch: RewriteCommandSpec,
         report_worker: RewriteCommandSpec,
     },
     ExecutionFailed {

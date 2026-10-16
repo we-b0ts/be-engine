@@ -13,6 +13,9 @@ commit, and relevant source locations.
   binding/dispatch, handoff ID, worker base, delivery commit, accepted review,
   local-test results, shared impact, and required-input references. The
   coordinator may add ready API handoffs before final candidate review.
+  The coordinator supplies the engine's `review batch` export with exact delivery
+  metadata, `batch_path`, and the complete `check` command. Use the exported
+  `delivery_commit` for Git operations; preserve the independent `handoff_id`.
 - `review`: inspected target version, current findings/report when available,
   and available commit-to-work-item provenance. This includes a missing or stale
   final quality report. No API issue is implied by this assignment.
@@ -34,7 +37,11 @@ integrator evidence endpoint or engine integration activity to invent.
    mechanical. Return unresolved business decisions to the responsible owner.
 4. Check combined module boundaries, affected startup ownership, and evidence
    locations. Commit the candidate and record every conflict resolution and
-   original-to-result mapping. Run complete candidate review:
+   original-to-result mapping. Execute the engine-exported `check` command for
+   complete candidate review. It already includes the integration worktree and
+   generated batch path; no identity probing or manual JSON assembly is needed.
+
+   Existing retained assignments may still supply a single-handoff command:
 
    ```bash
    backend-rewrite --target-root /absolute/canonical review check \
@@ -42,10 +49,9 @@ integrator evidence endpoint or engine integration activity to invent.
      --api '/api' --handoff-id ACCEPTED_HANDOFF_ID
    ```
 
-   For one or more current API handoffs, write a nonempty JSON array of their exact
-   `scope` and `handoff_id` pairs and replace `--api ... --handoff-id ...` with
-   `--batch-handoffs /absolute/handoffs.json`. This one check freezes membership
-   and reviews the complete combined candidate. The batch must include at least
+   Generated batches bind the original workflow, recording, scope, handoff and
+   dispatch. The check validates those bindings and reviews the complete combined
+   candidate. The batch must include at least
    one `handoff_ready` item; current `integrated` items may be included to bind
    their retained identities to the new candidate. For six already integrated
    APIs plus one new API, keep the six in the canonical base and merge only the
@@ -54,6 +60,11 @@ integrator evidence endpoint or engine integration activity to invent.
    only for items still `handoff_ready`, preserving earlier integration states.
    A later addition requires a new complete review of the resulting candidate,
    not a replay of already integrated merges or acceptance callbacks.
+   Additional deliveries may join an in-progress integration. The coordinator
+   exports the expanded selected set; cancel an older check if necessary, merge
+   the addition, then execute the new export's `check`. Never edit an exported
+   file to substitute a different identity. Return a stale export to the
+   coordinator for reconciliation and regeneration.
    Supply current `--evidence` and
    `--hardcode-ai-verified` mappings when required. Only a `passed` report
    qualifies. Resolve integration-induced failures here; return original
