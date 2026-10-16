@@ -10,6 +10,8 @@ pub(crate) struct RedisRequestSelector {
     #[serde(default)]
     pub database: i64,
     pub key: RedisValueKeySelector,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_contract: Option<super::key::KeyContract>,
     pub commands: Vec<RedisRequestCommand>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -45,6 +47,7 @@ pub(crate) struct JsonArgument {
 pub(crate) enum JsonField {
     Time(TimeField),
     Jwt(JwtField),
+    Identity(super::key::IdentityField),
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -111,6 +114,9 @@ impl RedisRequestSelector {
             "Redis request rules require a database and 1..16 commands"
         );
         self.key.validate()?;
+        if let Some(key) = &self.key_contract {
+            key.validate()?;
+        }
         let mut commands = std::collections::BTreeSet::new();
         for command in &self.commands {
             command.validate_script()?;
@@ -119,9 +125,20 @@ impl RedisRequestSelector {
                 "duplicate Redis request command"
             );
             ensure!(
-                !command.argument_values.is_empty() && command.argument_values.len() <= 32,
-                "Redis request rules require 1..32 argument locations"
+                (!command.argument_values.is_empty() || self.key_contract.is_some())
+                    && command.argument_values.len() <= 32,
+                "Redis request rules require 1..32 argument locations or an explicit key contract"
             );
+            if let Some(key) = &self.key_contract {
+                ensure!(
+                    match key {
+                        super::key::KeyContract::TimeWindow { .. } =>
+                            matches!(command.command.as_str(), "INCRBY" | "EXPIRE"),
+                        _ => command.command == "SET",
+                    },
+                    "key contract selects INCRBY/EXPIRE windows or SET identities"
+                );
+            }
             for (index, field) in &command.argument_values {
                 match field {
                     ArgumentRule::Time(time) => {
@@ -152,6 +169,7 @@ impl RedisRequestSelector {
                                 "request fields require exact non-root pointers"
                             );
                             match field {
+                                JsonField::Identity(reference) => reference.identity.validate()?,
                                 JsonField::Time(time) => {
                                     tolerance(&time.tolerance)?;
                                 }

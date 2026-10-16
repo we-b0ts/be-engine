@@ -389,34 +389,37 @@ pub(super) fn applicable_rule_planners(
             let (selector_flag, selector) =
                 if let Some(query_param) = candidate["query_param"].as_str() {
                     ("--query-param", query_param)
+                } else if let Some(raw_header) = candidate["raw_header"].as_str() {
+                    ("--header", raw_header)
                 } else {
                     ("--header", candidate["header"].as_str().unwrap_or_default())
                 };
             let algorithm = candidate["algorithm"].as_str().unwrap_or_default();
-            if !seen.insert((selector_flag, selector, algorithm)) {
+            let raw_header = candidate["raw_header"].is_string();
+            if !seen.insert((selector_flag, selector, algorithm, raw_header)) {
                 continue;
+            }
+            let mut arguments = vec![
+                "rule".into(),
+                "plan".into(),
+                "--request-kind".into(),
+                "jwt".into(),
+                "--evidence-id".into(),
+                evidence_id.into(),
+                selector_flag.into(),
+                selector.into(),
+                "--algorithm".into(),
+                algorithm.into(),
+                "--help".into(),
+            ];
+            if raw_header {
+                arguments.extend(["--header-scheme".into(), "raw".into()]);
             }
             planners.push(RewriteApplicableRulePlanner {
                 kind: "request_rule".into(),
                 capability: "jwt_time_shift".into(),
                 evidence_id: evidence_id.into(),
-                command: super::super::action::command(
-                    target_root,
-                    vec![
-                        "rule".into(),
-                        "plan".into(),
-                        "--request-kind".into(),
-                        "jwt".into(),
-                        "--evidence-id".into(),
-                        evidence_id.into(),
-                        selector_flag.into(),
-                        selector.into(),
-                        "--algorithm".into(),
-                        algorithm.into(),
-                        "--help".into(),
-                    ],
-                    Vec::new(),
-                ),
+                command: super::super::action::command(target_root, arguments, Vec::new()),
             });
         }
         return planners;

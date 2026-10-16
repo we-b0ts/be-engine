@@ -10,10 +10,13 @@ leaving source/target authentication code and recorded artifacts unchanged.
 For a response issue, run the coordinator-issued `jwt-time-validity` evidence
 query. It checks the actual failed attempt, returns at most 20 candidate
 observations with an omitted count, and never returns tokens or identities.
-Candidates require actual HTTP 401, a different recorded status, a supported
-Bearer-header or named-query-parameter JWT, and `exp` after recording but
-before Replay. Missing keys or unverified signatures are not proof of expiry
-as the cause of the response.
+Candidates require a failed response assertion, a supported bearer-header,
+raw-header or named-query-parameter JWT, and `exp` after recording but before
+Replay. Recorded 401/403 responses are excluded. The target status is not an
+expiry gate: an application can render a failed-login HTML page with 200, or
+an earlier dependency can fail with 503 before authentication runs. These are
+time observations, not proof of authentication causality. Source review,
+signature verification, configured leeway and fresh execution remain required.
 
 The same evidence includes `signing_key_discovery`: effective target variable
 names, captured startup mount paths with `writable` access modes, existing key
@@ -60,6 +63,19 @@ For a source contract that carries the token directly in a URL query parameter,
 replace `--header authorization` with `--query-param download_token`. The
 planner binds the evidence to that exact parameter name; header and query
 selectors are mutually exclusive.
+
+For a compact JWT carried directly in a custom header, use
+`--header x-download-token --header-scheme raw`. The generated policy uses
+`header: x-download-token` and `scheme: raw`; the runtime replaces only that
+single header value without adding a Bearer prefix. Header names remain
+case-insensitive; multiple values, unsupported schemes and ambiguous selectors
+are rejected. Expired-at-recording and invalid-signature inputs retain their
+failure behavior. Raw-header evidence uses `raw_header` to distinguish its
+representation from bearer evidence, and generated planner commands preserve it.
+
+Custom JWT headers contain credentials. Projects must include their configured
+names in `recording.redact_headers` so existing recording encryption applies.
+The engine does not guess project-specific credential header names.
 
 Use the leeway proven in the actual application, not the example value. Plan
 verifies the original evidence signatures using the selected key, checks

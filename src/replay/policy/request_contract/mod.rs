@@ -2,6 +2,8 @@
 pub(crate) mod config;
 pub(in crate::replay::policy) mod evidence;
 mod http_json;
+mod key;
+pub(in crate::replay) use key::KeyBindingReport;
 mod overlap;
 mod redis;
 mod script;
@@ -35,6 +37,10 @@ type SequenceKey = (String, String, Vec<u8>);
 
 #[derive(Default)]
 struct State {
+    key_bindings: BTreeMap<key::BindingScope, BTreeMap<String, String>>,
+    key_binding_proofs: BTreeSet<KeyBindingReport>,
+    key_binds: BTreeMap<String, usize>,
+    identity_references: BTreeMap<String, usize>,
     cases: BTreeMap<String, CaseAnchor>,
     applicable: BTreeSet<String>,
     usage: BTreeMap<String, usize>,
@@ -45,6 +51,7 @@ struct State {
 }
 #[derive(Debug, Clone, Default)]
 struct Sequence {
+    actual_key: Option<Vec<u8>>,
     next: usize,
     times: Vec<(f64, f64)>,
 }
@@ -63,6 +70,8 @@ impl std::fmt::Debug for RequestContracts {
 }
 #[derive(Debug, Clone, Default)]
 pub(in crate::replay) struct Decision {
+    key_bindings: Vec<key::PendingBinding>,
+    identity_references: usize,
     pub ids: Vec<String>,
     time_validations: usize,
     sequence: Option<(SequenceKey, Sequence)>,
@@ -151,6 +160,8 @@ impl RequestContracts {
         }
         state.sequences.retain(|(case, _, _), _| case != id);
         state.nonces.retain(|(case, _, _), _| case != id);
+        state.key_bindings.retain(|scope, _| !scope.belongs_to(id));
+        state.key_binding_proofs.retain(|proof| proof.case_id != id);
         state.candidates.retain(|c| c.case_id != id);
     }
     pub(in crate::replay) fn request_begin(&self, id: &str) -> Result<()> {
@@ -224,6 +235,9 @@ impl RequestContracts {
     pub(in crate::replay) fn commit(&self, decision: Decision) {
         let mut state = self.state.lock().expect("request contracts");
         for id in decision.ids {
+            *state.key_binds.entry(id.clone()).or_default() += decision.key_bindings.len();
+            *state.identity_references.entry(id.clone()).or_default() +=
+                decision.identity_references;
             *state.time_validations.entry(id.clone()).or_default() += decision.time_validations;
             *state.usage.entry(id).or_default() += 1;
         }
@@ -232,6 +246,13 @@ impl RequestContracts {
         }
         for (key, source, actual) in decision.nonces {
             state.nonces.entry(key).or_default().insert(source, actual);
+        }
+        for (scope, source, actual) in decision.key_bindings {
+            state
+                .key_bindings
+                .entry(scope)
+                .or_default()
+                .insert(source, actual);
         }
     }
     pub(in crate::replay) fn enabled(&self) -> bool {
@@ -344,8 +365,12 @@ impl RequestContracts {
                     kind: Some("dependency_request"),
                     applicable: state.applicable.contains(&rule.id),
                     matches,
-                    binds: 0,
-                    references: 0,
+                    binds: state.key_binds.get(&rule.id).copied().unwrap_or_default(),
+                    references: state
+                        .identity_references
+                        .get(&rule.id)
+                        .copied()
+                        .unwrap_or_default(),
                     validations: matches,
                     time_validations: state
                         .time_validations

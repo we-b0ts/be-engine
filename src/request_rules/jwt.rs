@@ -154,7 +154,8 @@ pub(crate) fn request_token(
     location: &JwtTokenLocation,
 ) -> Result<Option<String>> {
     match location {
-        JwtTokenLocation::BearerHeader { header } => header_token(request, header),
+        JwtTokenLocation::BearerHeader { header } => header_token(request, header, true),
+        JwtTokenLocation::RawHeader { raw_header } => header_token(request, raw_header, false),
         JwtTokenLocation::QueryParameter { query_param } => {
             let Some(uri) = request["uri"].as_str() else {
                 return Ok(None);
@@ -170,6 +171,17 @@ pub(crate) fn replace_request_token(
     token: String,
 ) -> Result<()> {
     match location {
+        JwtTokenLocation::RawHeader { raw_header } => {
+            if let Some(headers) = request["headers"].as_object_mut() {
+                for (key, values) in headers {
+                    if key.eq_ignore_ascii_case(raw_header) {
+                        values[0] = Value::String(token);
+                        return Ok(());
+                    }
+                }
+            }
+            bail!("JWT header disappeared during transformation")
+        }
         JwtTokenLocation::BearerHeader { header } => {
             if let Some(headers) = request["headers"].as_object_mut() {
                 for (key, values) in headers {
@@ -207,7 +219,7 @@ pub(crate) fn replace_request_token(
     }
 }
 
-fn header_token(request: &Value, name: &str) -> Result<Option<String>> {
+fn header_token(request: &Value, name: &str, bearer: bool) -> Result<Option<String>> {
     let Some(headers) = request["headers"].as_object() else {
         return Ok(None);
     };
@@ -227,6 +239,9 @@ fn header_token(request: &Value, name: &str) -> Result<Option<String>> {
     let value = values[0]
         .as_str()
         .context("JWT request header must be text")?;
+    if !bearer {
+        return Ok((!value.contains(char::is_whitespace)).then(|| value.to_owned()));
+    }
     let Some((scheme, token)) = value.split_once(' ') else {
         return Ok(None);
     };

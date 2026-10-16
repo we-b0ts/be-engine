@@ -424,6 +424,63 @@ fn query_parameter_evidence_guides_and_plans_the_matching_location() {
 }
 
 #[test]
+fn raw_header_expiry_is_plannable_for_html_and_earlier_dependency_failures() {
+    for actual_status in [200, 503] {
+        let mut f = fixture();
+        let recorded = 1_700_000_000;
+        let mut request = crate::request_rules::tests::request(
+            json!({"sub":"test-user","exp":recorded+300}),
+            "test-signing-key",
+            recorded,
+        );
+        let raw = crate::request_rules::tests::token(
+            json!({"sub":"test-user","exp":recorded+300}),
+            "test-signing-key",
+        );
+        request["headers"] = json!({"x-download-token":[raw],"x-unrelated":["one","two"]});
+        fs::write(&f.request, serde_json::to_vec(&request).unwrap()).unwrap();
+        let case = f.request.parent().unwrap();
+        crate::e2e_run::jwt_evidence::test_support::install_attempt(
+            f.target.path(),
+            case.parent().unwrap(),
+            &[(case.to_path_buf(), 200, actual_status)],
+            DateTime::from_timestamp(recorded + 7200, 0).unwrap(),
+        );
+        let query = evidence::commands(f.target.path(), &f.state)
+            .into_iter()
+            .find(|query| query.query_id.ends_with("jwt-time-validity"))
+            .unwrap();
+        let report = evidence::query(f.target.path(), &f.state, &query.query_id).unwrap();
+        assert_eq!(
+            report.facts["candidates"][0]["raw_header"],
+            "x-download-token"
+        );
+        let planner = &report.applicable_rule_planners[0];
+        assert!(
+            planner
+                .command
+                .argv
+                .windows(2)
+                .any(|args| args == ["--header-scheme", "raw"])
+        );
+        let mut options = options();
+        options.location = JwtTokenLocation::RawHeader {
+            raw_header: "x-download-token".into(),
+        };
+        let planned = plan(
+            f.target.path(),
+            &mut f.state,
+            report.evidence_id,
+            Some("source checks the signed raw header before its HTML success response".into()),
+            options,
+        )
+        .unwrap();
+        assert_eq!(planned.traffic_e2e_report["rule"]["scheme"], "raw");
+        assert_eq!(planned.traffic_e2e_report["signature_verified"], true);
+    }
+}
+
+#[test]
 fn global_apply_invalidates_other_completed_api_without_new_recording() {
     let mut f = fixture();
     f.state.api_inventory[1].status = super::super::model::RewriteApiStatus::Complete;
@@ -585,7 +642,7 @@ fn jwt_discovery_keeps_evidence_and_environment_when_mount_snapshot_is_unavailab
 }
 
 #[test]
-fn jwt_candidate_discovery_preserves_401_403_and_rejects_missing_recorded_status() {
+fn jwt_candidate_discovery_accepts_failed_responses_and_rejects_missing_recorded_status() {
     for (actual, expected, count) in [
         (401, Some(json!(200)), 1),
         (403, Some(json!(200)), 1),
@@ -594,7 +651,8 @@ fn jwt_candidate_discovery_preserves_401_403_and_rejects_missing_recorded_status
         (403, Some(json!(403)), 0),
         (403, None, 0),
         (403, Some(json!("200")), 0),
-        (200, Some(json!(200)), 0),
+        (200, Some(json!(200)), 1),
+        (503, Some(json!(200)), 1),
     ] {
         let f = fixture();
         let case = f.request.parent().unwrap().to_path_buf();
