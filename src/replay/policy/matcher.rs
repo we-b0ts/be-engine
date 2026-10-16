@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+mod memcached;
 pub(in crate::replay::policy) mod mysql_response;
 pub(in crate::replay::policy) mod mysql_selectors;
 pub(super) mod mysql_values;
@@ -15,7 +16,6 @@ use super::config::{
     load_replay_policy,
 };
 use super::pattern::{path_pattern_matches, query_values, text_pattern_matches, uri_path};
-use super::protobuf::matches_with_timestamp_fields;
 use super::report::{DependencyRuleReport, ReplayPolicyReport};
 use super::value::{validate_relative_time, validate_value};
 use crate::replay::{
@@ -43,6 +43,7 @@ pub(in crate::replay) struct DependencyRuleDecision {
     usage: BTreeMap<String, DependencyRuleUsage>,
     bindings: Vec<(String, Value)>,
     pub(in crate::replay) dynamic_query_params: Vec<String>,
+    pub(in crate::replay) value_contracts: Vec<super::request_contract::Decision>,
 }
 
 #[derive(Debug)]
@@ -86,6 +87,7 @@ pub(in crate::replay) struct MemcachedPolicyContext<'a> {
     pub(in crate::replay) recorded_value: Option<&'a [u8]>,
     pub(in crate::replay) actual_value: Option<&'a [u8]>,
     pub(in crate::replay) recorded_observed_at: DateTime<Utc>,
+    pub(in crate::replay) recorded_duration_ms: u64,
     pub(in crate::replay) actual_observed_at: DateTime<Utc>,
 }
 
@@ -523,70 +525,6 @@ impl ReplayPolicyRuntime {
         Ok(decision)
     }
 
-    pub(in crate::replay) fn preview_memcached(
-        &self,
-        context: &MemcachedPolicyContext<'_>,
-    ) -> Result<DependencyRuleDecision, String> {
-        let Some(case_id) = context.case_id else {
-            return exact_memcached_value(context.recorded_value, context.actual_value);
-        };
-        let Some(case) = self.cases.get(case_id) else {
-            return Err(format!(
-                "replay policy has no request metadata for case {case_id}"
-            ));
-        };
-        let matching_rules = self
-            .loaded
-            .document
-            .dependency_rules
-            .iter()
-            .filter(|rule| {
-                rule.protocol == DependencyProtocol::Memcached
-                    && rule_matches_case(rule, case)
-                    && rule_matches_memcached(rule, context.target, context.command, context.key)
-            })
-            .collect::<Vec<_>>();
-        if matching_rules.is_empty() {
-            return exact_memcached_value(context.recorded_value, context.actual_value);
-        }
-        let (Some(recorded), Some(actual)) = (context.recorded_value, context.actual_value) else {
-            return Err(
-                "replay policy selected a Memcached protobuf value but recorded or actual value is absent"
-                    .to_string(),
-            );
-        };
-
-        let mut selected_fields = BTreeMap::new();
-        for rule in &matching_rules {
-            let memcached = rule.memcached.as_ref().expect("validated Memcached policy");
-            for number in memcached.protobuf.timestamp_fields.keys() {
-                if selected_fields.insert(*number, rule.id.as_str()).is_some() {
-                    return Err(format!(
-                        "multiple replay policy rules select Memcached protobuf field {number}"
-                    ));
-                }
-            }
-        }
-        let field_numbers = selected_fields.keys().copied().collect::<Vec<_>>();
-        matches_with_timestamp_fields(
-            recorded,
-            actual,
-            &field_numbers,
-            context.recorded_observed_at,
-            context.actual_observed_at,
-        )?;
-
-        let mut decision = DependencyRuleDecision::default();
-        for rule_id in selected_fields.values() {
-            decision
-                .usage
-                .entry((*rule_id).to_string())
-                .or_default()
-                .time_validations += 1;
-        }
-        Ok(decision)
-    }
-
     fn preview_dynamic_value(
         &self,
         case_id: &str,
@@ -656,6 +594,9 @@ impl ReplayPolicyRuntime {
         case_id: Option<&str>,
         decision: DependencyRuleDecision,
     ) {
+        for value_contract in decision.value_contracts {
+            self.request_contracts.commit(value_contract);
+        }
         if let Some(case_id) = case_id {
             let bindings = self.bindings.entry(case_id.to_string()).or_default();
             for (name, value) in decision.bindings {
@@ -716,6 +657,7 @@ impl ReplayPolicyRuntime {
             dynamic_capture_candidates: self.dynamic_values.capture_candidates(),
             request_contract_candidates: self.request_contracts.candidates(),
             unused_applicable_dependency_rule_ids,
+            unavailable_value_slots: self.request_contracts.unavailable_value_slots(),
         }
     }
 }

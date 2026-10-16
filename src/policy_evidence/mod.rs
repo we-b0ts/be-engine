@@ -45,6 +45,8 @@ impl WitnessClocks {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SourceIdentity {
     pub case_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exchange_id: Option<String>,
     pub connection_id: Option<String>,
     pub sequence: Option<u64>,
 }

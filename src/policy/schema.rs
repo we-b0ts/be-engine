@@ -42,11 +42,50 @@ pub enum Surface {
     DependencyResponse,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "SlotDocument", into = "SlotDocument")]
 pub enum Slot {
     Body,
     Value,
+    SqlValue(usize),
+    SqlColumn(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+enum SlotDocument {
+    Named(SlotName),
+    SqlValue { sql_value: usize },
+    SqlColumn { sql_column: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SlotName {
+    Body,
+    Value,
+}
+
+impl From<SlotDocument> for Slot {
+    fn from(value: SlotDocument) -> Self {
+        match value {
+            SlotDocument::Named(SlotName::Body) => Self::Body,
+            SlotDocument::Named(SlotName::Value) => Self::Value,
+            SlotDocument::SqlValue { sql_value } => Self::SqlValue(sql_value),
+            SlotDocument::SqlColumn { sql_column } => Self::SqlColumn(sql_column),
+        }
+    }
+}
+
+impl From<Slot> for SlotDocument {
+    fn from(value: Slot) -> Self {
+        match value {
+            Slot::Body => Self::Named(SlotName::Body),
+            Slot::Value => Self::Named(SlotName::Value),
+            Slot::SqlValue(sql_value) => Self::SqlValue { sql_value },
+            Slot::SqlColumn(sql_column) => Self::SqlColumn { sql_column },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

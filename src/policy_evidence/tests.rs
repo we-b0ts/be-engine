@@ -16,6 +16,7 @@ fn setup() -> (tempfile::TempDir, PathBuf, WitnessStore, WitnessMetadata) {
         source_role: SourceRole::RecordedDependencyRequest,
         target_role: TargetRole::IndependentTargetObservation,
         source: SourceIdentity {
+            exchange_id: None,
             case_id: "case".into(),
             connection_id: Some("lane".into()),
             sequence: Some(1),

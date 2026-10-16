@@ -1,7 +1,7 @@
 //! Primary-response adapter for the same value contracts used by dependencies.
 use super::*;
 use crate::policy::{CompiledRule, Surface};
-use crate::value_contract::json::{AnchorClocks, Field};
+use crate::value_contract::json::AnchorClocks;
 #[cfg(test)]
 mod tests;
 
@@ -41,37 +41,20 @@ pub(super) fn compare(
     times: RequestTimes,
     report: &mut ResponseAssertionCaseReport,
 ) -> Result<()> {
-    ensure!(
-        rules.iter().all(|rule| rule.rule.codec.is_json()),
-        "selected response codec has no installed value adapter"
-    );
-    let source_value = crate::json_value::parse(source.body())
-        .context("response contract requires complete unique-member Source JSON")?;
-    let target_value = crate::json_value::parse(target.body())
-        .context("response contract requires complete unique-member actual Target JSON")?;
-    let fields = rules
-        .iter()
-        .flat_map(|rule| {
-            rule.rule
-                .contract
-                .iter()
-                .map(move |(pointer, contract)| Field {
-                    rule_id: &rule.rule.id,
-                    pointer,
-                    contract,
-                })
-        })
-        .collect::<Vec<_>>();
-    let comparison = crate::value_contract::json::compare(
-        &source_value,
-        &target_value,
-        &fields,
+    let codec = crate::value_contract::encoded::merged_codec(rules)?;
+    let comparison = crate::value_contract::encoded::compare(
+        source.body(),
+        target.body(),
+        rules,
         AnchorClocks {
             case: times,
             ..Default::default()
         },
-    );
-    report.body_codec = ResponseBodyCodec::Json;
+    )?;
+    report.body_codec = match codec {
+        crate::policy::Codec::Json => ResponseBodyCodec::Json,
+        crate::policy::Codec::Protobuf(_) => ResponseBodyCodec::Protobuf,
+    };
     report.applied_body_rule_ids.extend(comparison.evaluated);
     for diff in comparison.differences {
         let mut difference = ResponseDifference::body_value_mismatch();

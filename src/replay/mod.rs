@@ -26,6 +26,10 @@ mod case_index;
 mod command_matching;
 #[cfg(test)]
 mod command_protocol_tests;
+mod contract_value;
+pub(crate) use memcached::contracts::{
+    source_witness as memcached_source_witness, validate_witness as memcached_validate_witness,
+};
 mod control;
 mod deferred;
 mod dependencies;
@@ -65,6 +69,7 @@ mod mysql;
 mod network_access;
 mod policy;
 pub(crate) use policy::replace_request_rule_section;
+pub(crate) use policy::request_contract::redis_bulk_payload;
 mod redis;
 pub(crate) mod report;
 #[cfg(test)]

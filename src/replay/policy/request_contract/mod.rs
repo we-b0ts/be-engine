@@ -3,11 +3,14 @@ pub(crate) mod config;
 pub(in crate::replay::policy) mod evidence;
 mod http_json;
 mod key;
+mod memcached;
+mod value_decision;
 pub(in crate::replay) use key::KeyBindingReport;
 mod overlap;
 mod redis;
 mod unified_response;
 pub(in crate::replay) use unified_response::PreparedRedisDelivery;
+pub(crate) use unified_response::redis_bulk_payload;
 mod script;
 mod time;
 mod unified;
@@ -50,6 +53,7 @@ struct State {
     applicable: BTreeSet<String>,
     usage: BTreeMap<String, usize>,
     time_validations: BTreeMap<String, usize>,
+    unavailable_value_slots: BTreeMap<String, usize>,
     candidates: Vec<Candidate>,
     sequences: BTreeMap<SequenceKey, Sequence>,
     nonces: BTreeMap<(String, String, String), BTreeMap<String, String>>,

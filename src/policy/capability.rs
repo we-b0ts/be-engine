@@ -2,7 +2,7 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::{Codec, FieldContract, ProtobufType, TimestampFormat};
+use super::{Codec, FieldContract, ProtobufCodec, ProtobufField, ProtobufType, TimestampFormat};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -106,7 +106,7 @@ pub fn validate_contract_binding(
     let Codec::Protobuf(codec) = codec else {
         return Ok(());
     };
-    let field = codec.fields.get(path).ok_or_else(|| {
+    let field = resolve_protobuf_field(codec, path).ok_or_else(|| {
         anyhow::anyhow!("Protobuf contract {path:?} requires an explicit typed field binding")
     })?;
     match contract {
@@ -144,6 +144,30 @@ pub fn validate_contract_binding(
     Ok(())
 }
 
+/// A scalar collection has one declared wire/type binding; selecting its immediate
+/// elements does not need another artificial wire path. Message descendants still
+/// need their own typed aliases because a parent proves no child field type.
+pub fn resolve_protobuf_field(codec: &ProtobufCodec, path: &str) -> Option<ProtobufField> {
+    if let Some(field) = codec.fields.get(path) {
+        return Some(field.clone());
+    }
+    let (parent, element) = path.rsplit_once('/')?;
+    let indexed = element
+        .parse::<usize>()
+        .ok()
+        .is_some_and(|index| index.to_string() == element);
+    if element != "*" && !indexed {
+        return None;
+    }
+    let field = codec.fields.get(parent)?;
+    if !field.repeated || field.field_type == ProtobufType::Message {
+        return None;
+    }
+    let mut scalar = field.clone();
+    scalar.repeated = false;
+    Some(scalar)
+}
+
 fn numeric(kind: ProtobufType) -> bool {
     matches!(
         kind,
@@ -161,3 +185,6 @@ fn numeric(kind: ProtobufType) -> bool {
             | ProtobufType::Double
     )
 }
+
+#[cfg(test)]
+mod tests;

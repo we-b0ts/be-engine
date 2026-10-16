@@ -636,10 +636,11 @@ async fn deliver_redis_exchange(
     }
 
     matched.timing.delay_response().await;
+    let unified_rendered_at = chrono::Utc::now();
     let unified_rendered = matched
         .unified_delivery
         .as_ref()
-        .map(|delivery| delivery.render(chrono::Utc::now()))
+        .map(|delivery| delivery.render(unified_rendered_at))
         .transpose();
     let unified_rendered = match unified_rendered {
         Ok(rendered) => rendered,
@@ -683,11 +684,11 @@ async fn deliver_redis_exchange(
     let state_ref = state;
     let mut state = state_ref.lock().await;
     if let Some(delivery) = &matched.unified_delivery {
-        if let Err(error) = state
-            .redis
-            .request_contracts
-            .commit_redis_delivery(delivery, response)
-        {
+        if let Err(error) = state.redis.request_contracts.commit_redis_delivery(
+            delivery,
+            response,
+            unified_rendered_at,
+        ) {
             state.redis.fail_exchange(matched, error.to_string());
             return Err(error);
         }

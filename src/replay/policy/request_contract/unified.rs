@@ -1,7 +1,7 @@
 //! Redis value-slot adapter for the shared compiled contract evaluator.
 //! This adapter never claims lanes, consumes exchanges, or changes auth/key/options.
 use super::*;
-use crate::policy::{Codec, CompiledPolicy, CompiledRule, Protocol, Surface};
+use crate::policy::{CompiledPolicy, CompiledRule, Protocol, Surface};
 use crate::policy_evidence::{
     ClockPair as WitnessClockPair, SourceIdentity, SourceRole, TargetRole, WitnessClocks,
     WitnessMetadata, WitnessStore,
@@ -221,27 +221,6 @@ impl RequestContracts {
                     .all(|(i, (source, actual))| i == index || source == actual),
                 "Redis key or unselected options/arguments changed"
             );
-            ensure!(
-                rules.iter().all(|rule| rule.rule.codec == Codec::Json),
-                "Redis JSON adapter requires an explicit JSON codec"
-            );
-            let source = crate::replay::json_order::parse(&source[index])
-                .context("Source Redis value is not complete unique-member JSON")?;
-            let actual = crate::replay::json_order::parse(&actual[index])
-                .context("Target Redis value is not complete unique-member JSON")?;
-            let fields = rules
-                .iter()
-                .flat_map(|rule| {
-                    rule.rule
-                        .contract
-                        .iter()
-                        .map(move |(pointer, contract)| json::Field {
-                            rule_id: &rule.rule.id,
-                            pointer,
-                            contract,
-                        })
-                })
-                .collect::<Vec<_>>();
             let anchor = self.anchor(context.case)?;
             let clocks = json::AnchorClocks {
                 case: ClockPair {
@@ -256,7 +235,12 @@ impl RequestContracts {
                 },
                 ..Default::default()
             };
-            let comparison = json::compare(&source, &actual, &fields, clocks);
+            let comparison = crate::value_contract::encoded::compare(
+                &source[index],
+                &actual[index],
+                &rules,
+                clocks,
+            )?;
             ensure!(
                 comparison.passed(),
                 "Redis value contract failed: {}",
@@ -323,6 +307,7 @@ impl RequestContracts {
     }
 
     pub(super) fn observe_unified_source(&self, case: &str, event: &Value) -> Result<()> {
+        self.observe_unified_memcached_source(case, event)?;
         if self.compiled.is_none()
             || event["event_type"] != "redis_exchange"
             || event["replay_safe"] != true
@@ -390,11 +375,29 @@ impl RequestContracts {
         }
         let mut ids = BTreeSet::new();
         for surface in [Surface::DependencyRequest, Surface::DependencyResponse] {
-            ids.extend(
-                self.unified_selected(&context, &key, surface)
-                    .iter()
-                    .map(|rule| rule.rule.id.clone()),
-            );
+            let selected = self
+                .unified_selected(&context, &key, surface)
+                .iter()
+                .map(|rule| rule.rule.id.clone())
+                .collect::<Vec<_>>();
+            if selected.is_empty() {
+                continue;
+            }
+            if surface == Surface::DependencyResponse {
+                let ordinary = event["outcome"]
+                    .as_str()
+                    .is_none_or(|outcome| outcome == "response");
+                let available = ordinary
+                    && super::unified_response::redis_bulk_payload(&evidence::decode(
+                        &event["response"],
+                    )?)?
+                    .is_some();
+                if !available {
+                    self.observe_value_slot_unavailable(selected);
+                    continue;
+                }
+            }
+            ids.extend(selected);
         }
         self.state
             .lock()
@@ -425,6 +428,7 @@ impl RequestContracts {
                 TargetRole::Unavailable
             },
             source: SourceIdentity {
+                exchange_id: None,
                 case_id: context.case.into(),
                 connection_id: context.connection_id.map(|value| value.to_string()),
                 sequence: context.sequence,
@@ -485,6 +489,7 @@ impl RequestContracts {
             source_role: SourceRole::RecordedDependencyResponse,
             target_role: TargetRole::Unavailable,
             source: SourceIdentity {
+                exchange_id: None,
                 case_id: context.case.into(),
                 connection_id: context.connection_id.map(|value| value.to_string()),
                 sequence: context.sequence,

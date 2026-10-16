@@ -226,9 +226,9 @@ impl RedisReplayState {
             }
         })?;
         let exchange = &self.exchanges[index];
-        let unified_delivery = exchange
-            .case_id
-            .as_deref()
+        let unified_delivery = (exchange.record.outcome == crate::DependencyExchangeOutcome::Response)
+            .then_some(exchange.case_id.as_deref())
+            .flatten()
             .and_then(|case| {
                 self.request_contracts.prepare_redis_delivery(
                     case,
@@ -251,6 +251,17 @@ impl RedisReplayState {
         if unified_delivery.is_some() && exchange.response_time_shift.is_some() {
             return Err(CommandMatchDiagnostic::EvidenceUnavailable {
                 reason: "overlapping dependency delivery owners".into(),
+            });
+        }
+        if unified_delivery.is_some()
+            && (exchange.reusable_snapshot
+                || exchange.shared_rule_id.is_some()
+                || exchange.record.cache_snapshot_hit
+                || exchange.record.cache_snapshot_rule.is_some())
+        {
+            return Err(CommandMatchDiagnostic::EvidenceUnavailable {
+                reason: "value delivery rules cannot renew shared or snapshot response inventory"
+                    .into(),
             });
         }
         let normalized = (exchange.source == ReplaySource::Case

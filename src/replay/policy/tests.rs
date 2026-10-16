@@ -436,6 +436,7 @@ fn validates_memcached_protobuf_timestamp_without_exposing_literals() {
             recorded_value: Some(&recorded),
             actual_value: Some(&actual),
             recorded_observed_at: recorded_at,
+            recorded_duration_ms: 0,
             actual_observed_at: actual_at,
         })
         .unwrap();
@@ -463,6 +464,7 @@ fn validates_memcached_protobuf_timestamp_without_exposing_literals() {
                 recorded_value: Some(&recorded),
                 actual_value: Some(&actual),
                 recorded_observed_at: recorded_at,
+                recorded_duration_ms: 0,
                 actual_observed_at: actual_at,
             })
             .is_ok()
@@ -483,6 +485,7 @@ fn validates_memcached_protobuf_timestamp_without_exposing_literals() {
                 recorded_value: Some(&recorded),
                 actual_value: Some(&changed_stable_value),
                 recorded_observed_at: recorded_at,
+                recorded_duration_ms: 0,
                 actual_observed_at: actual_at,
             })
             .unwrap_err()

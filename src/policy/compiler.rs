@@ -74,7 +74,7 @@ pub fn compile_policy(document: &TrafficPolicy) -> Result<CompiledPolicy> {
             id: &rule.rule.id,
             surface: rule.rule.surface,
             selector: &rule.rule.selector,
-            slot: rule.rule.slot,
+            slot: &rule.rule.slot,
             codec: &rule.rule.codec,
             contract: &rule.rule.contract,
             when: rule.rule.when.as_ref(),
@@ -99,7 +99,7 @@ struct RuntimeIdentity<'a> {
     id: &'a str,
     surface: Surface,
     selector: &'a MatchSpec,
-    slot: Slot,
+    slot: &'a Slot,
     codec: &'a Codec,
     contract: &'a BTreeMap<String, FieldContract>,
     when: Option<&'a SourceCondition>,
@@ -269,6 +269,16 @@ fn validate_match(rule: &Rule) -> Result<()> {
             )?;
         }
         Protocol::Redis | Protocol::Memcached => {
+            if resource.protocol == Protocol::Memcached {
+                ensure!(
+                    matches!(
+                        (rule.surface, operation),
+                        (Surface::DependencyRequest, "SET")
+                            | (Surface::DependencyResponse, "GET" | "GETS")
+                    ),
+                    "installed Memcached value slots support request SET and response GET/GETS"
+                );
+            }
             ensure!(
                 rule.slot == Slot::Value && selector.path.is_none() && selector.sql.is_none(),
                 "Redis/Memcached value rules require slot: value without HTTP path or SQL"
@@ -291,9 +301,22 @@ fn validate_match(rule: &Rule) -> Result<()> {
         }
         Protocol::Mysql => {
             ensure!(
-                rule.slot == Slot::Value && selector.key.is_none() && selector.path.is_none(),
-                "MySQL scalar rules require slot: value without key/HTTP path"
+                matches!(rule.slot, Slot::SqlValue(_) | Slot::SqlColumn(_))
+                    && selector.key.is_none()
+                    && selector.path.is_none(),
+                "MySQL values require slot: {{sql_value: index}} or {{sql_column: name}}"
             );
+            ensure!(
+                matches!(
+                    (&rule.slot, rule.surface),
+                    (Slot::SqlValue(_), Surface::DependencyRequest)
+                        | (Slot::SqlColumn(_), Surface::DependencyResponse)
+                ),
+                "SQL slot and comparison surface disagree"
+            );
+            if let Slot::SqlColumn(column) = &rule.slot {
+                text(column, "SQL column", 256)?;
+            }
             text(
                 selector
                     .sql
