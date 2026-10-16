@@ -42,6 +42,7 @@ impl Fixture {
         runtime.state.lock().unwrap().cases.insert(
             "case".into(),
             CaseAnchor {
+                source_body: None,
                 conditions: BTreeSet::new(),
                 method: "PUT".into(),
                 path: "/scenario".into(),

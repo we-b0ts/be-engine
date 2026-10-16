@@ -19,6 +19,7 @@ fn response_state() -> RewriteState {
         attempt: 1,
     });
     state.rule_plan = Some(RewriteRulePlanRecord {
+        unified: None,
         generated_witnesses: Vec::new(),
         response_jwts: Vec::new(),
         header_dates: Vec::new(),

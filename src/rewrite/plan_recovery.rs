@@ -7,6 +7,13 @@ use serde_json::{Value, json};
 use super::{RewriteContext, action, inventory, model::RewriteState, store::RewriteStore};
 
 pub(super) fn evidence_unusable(target_root: &Path, state: &RewriteState) -> Result<bool> {
+    if let Some(plan) = state
+        .rule_plan
+        .as_ref()
+        .and_then(|plan| plan.unified.as_ref())
+    {
+        return Ok(super::unified_rule::stale(target_root, state, plan));
+    }
     let context = crate::E2eRunContext {
         target_root: target_root.into(),
         case_source: state
@@ -91,6 +98,7 @@ pub(super) fn required_action(
         .as_ref()
         .filter(|plan| {
             plan.jwt.is_some()
+                || plan.unified.is_some()
                 || !plan.response_jwts.is_empty()
                 || !plan.header_dates.is_empty()
                 || plan.dynamic_value.is_some()
@@ -117,6 +125,13 @@ pub fn recover_rewrite_rule_plan(context: RewriteContext, plan_id: &str) -> Resu
     let api = inventory::api_for_rule_plan(&state, plan_id)
         .or_else(|| inventory::api_for_dependency_rule_plan(&state, plan_id))
         .context("rule plan is stale or belongs to no API work item")?;
+    if inventory::scoped(&state, Some(&api.parse()?))?
+        .rule_plan
+        .as_ref()
+        .is_some_and(|p| p.unified.is_some())
+    {
+        super::worker::ensure_api_confirmed(&state, &api, "recovering a unified traffic rule")?;
+    }
     let report = inventory::with_slice_mut(&mut state, &api, |state| {
         ensure!(
             evidence_unusable(&root, state)?,

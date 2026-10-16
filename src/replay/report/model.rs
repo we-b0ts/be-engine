@@ -2,6 +2,8 @@ use super::super::*;
 
 #[derive(Debug, Serialize)]
 pub(in crate::replay) struct ReplayReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) policy_witnesses: Option<crate::policy_evidence::WitnessManifest>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) egress_rejections: Vec<ReplayEgressRejections>,
     pub(in crate::replay) version: u8,

@@ -132,6 +132,7 @@ fn plan_json(
         .or_else(|| issue.representative.as_ref().map(|r| r.pointer.clone()))
         .context("rule plan requires a representative JSON Pointer")?;
     let mut record = RewriteRulePlanRecord {
+        unified: None,
         generated_witnesses: Vec::new(),
         response_jwts: Vec::new(),
         header_dates: Vec::new(),
@@ -224,6 +225,7 @@ fn plan_response_body(
     };
     let spec_json = serde_json::to_string(&spec)?;
     let record = RewriteRulePlanRecord {
+        unified: None,
         generated_witnesses: Vec::new(),
         response_jwts: Vec::new(),
         header_dates: Vec::new(),
@@ -273,6 +275,9 @@ pub(super) fn apply(
     plan_id: &str,
 ) -> Result<RewriteRuleReport> {
     let record = pending_plan_for_apply(state, plan_id)?;
+    if record.unified.is_some() {
+        return super::unified_rule::apply(target_root, state, record);
+    }
     if record.time.is_some() {
         crate::GeneratedValueRulePlan::ensure_evidence_current(&record.generated_witnesses)?;
     }
@@ -435,6 +440,9 @@ pub(super) fn generated_evidence_stale(
     state: &RewriteState,
     record: &RewriteRulePlanRecord,
 ) -> bool {
+    if let Some(unified) = &record.unified {
+        return super::unified_rule::stale(root, state, unified);
+    }
     if !has_generated_rule(record) && record.time.is_none() {
         return false;
     }

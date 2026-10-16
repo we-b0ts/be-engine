@@ -1,7 +1,5 @@
 use chrono::{DateTime, Utc};
 
-const MAX_TIMESTAMP_DISTANCE_SECONDS: u64 = 5;
-
 pub(super) fn matches_with_timestamp_fields(
     recorded: &[u8],
     actual: &[u8],
@@ -158,15 +156,19 @@ fn validate_timestamp(
     timestamp: u64,
     observed_at: DateTime<Utc>,
 ) -> Result<(), String> {
-    let observed = u64::try_from(observed_at.timestamp()).map_err(|_| {
+    u64::try_from(observed_at.timestamp()).map_err(|_| {
         format!("protobuf timestamp field {field_number} cannot use a pre-epoch observation")
     })?;
-    if timestamp.abs_diff(observed) > MAX_TIMESTAMP_DISTANCE_SECONDS {
-        return Err(format!(
-            "protobuf timestamp field {field_number} is outside the fixed ±5 second SET window"
-        ));
-    }
-    Ok(())
+    // The captured field has second precision; preserve that observation precision.
+    let observed_at = DateTime::from_timestamp(observed_at.timestamp(), 0)
+        .expect("an existing timestamp remains representable without subsecond precision");
+    crate::value_contract::time::validate_request_window(
+        i128::from(timestamp) * crate::value_contract::time::NANOS_PER_SECOND,
+        observed_at,
+    )
+    .map_err(|_| {
+        format!("protobuf timestamp field {field_number} is outside the fixed ±5 second SET window")
+    })
 }
 
 #[cfg(test)]
@@ -206,6 +208,16 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn second_precision_keeps_the_inclusive_boundary_for_subsecond_observations() {
+        let observed_at = Utc.timestamp_opt(1_800_000_000, 999_999_999).unwrap();
+        assert!(validate_timestamp(50, 1_799_999_995, observed_at).is_ok());
+        assert!(validate_timestamp(50, 1_800_000_005, observed_at).is_ok());
+        assert!(validate_timestamp(50, 1_799_999_994, observed_at).is_err());
+        assert!(validate_timestamp(50, 1_800_000_006, observed_at).is_err());
+        assert!(validate_timestamp(50, 0, Utc.timestamp_opt(-1, 0).unwrap()).is_err());
     }
 
     #[test]

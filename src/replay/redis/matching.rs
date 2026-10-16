@@ -226,6 +226,33 @@ impl RedisReplayState {
             }
         })?;
         let exchange = &self.exchanges[index];
+        let unified_delivery = exchange
+            .case_id
+            .as_deref()
+            .and_then(|case| {
+                self.request_contracts.prepare_redis_delivery(
+                    case,
+                    target,
+                    database,
+                    username,
+                    command,
+                    &exchange.args,
+                    &response,
+                    exchange.record.timestamp,
+                    exchange.record.duration_ms,
+                    exchange.record.connection_id,
+                    exchange.record.sequence,
+                )
+            })
+            .transpose()
+            .map_err(|error| CommandMatchDiagnostic::EvidenceUnavailable {
+                reason: format!("response contract failed: {error:#}"),
+            })?;
+        if unified_delivery.is_some() && exchange.response_time_shift.is_some() {
+            return Err(CommandMatchDiagnostic::EvidenceUnavailable {
+                reason: "overlapping dependency delivery owners".into(),
+            });
+        }
         let normalized = (exchange.source == ReplaySource::Case
             && exchange.shared_rule_id.is_none())
         .then(|| {
@@ -290,6 +317,7 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Ok(MatchedRedisExchange {
+            unified_delivery,
             rpc_push: exchange.rpc_push,
             rpc_response,
             publish_duration_ms: exchange.record.duration_ms,
@@ -370,6 +398,7 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Some(MatchedRedisExchange {
+            unified_delivery: None,
             rpc_push: None,
             rpc_response: None,
             publish_duration_ms: exchange.record.duration_ms,

@@ -7,6 +7,10 @@ impl ReplayState {
         let allowed_unused_case_http_exchanges =
             self.unused_http_exchanges(ReplaySource::Case, true);
         ReplayReport {
+            policy_witnesses: self
+                .replay_policy
+                .as_ref()
+                .and_then(|policy| policy.request_contracts.witness_manifest()),
             egress_rejections: self.egress_rejections.values().cloned().collect(),
             version: 6,
             session_id: self.session_id.to_string(),

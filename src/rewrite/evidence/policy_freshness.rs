@@ -9,12 +9,13 @@ pub(super) fn attach(
     query: &str,
     facts: &mut Value,
 ) -> Result<Option<String>> {
-    if !matches!(query, QUERY_DIRTY_CLUSTERS | QUERY_REPRESENTATIVES)
-        || !matches!(
-            issue.kind,
-            RewriteIssueKind::Response | RewriteIssueKind::Replay | RewriteIssueKind::Dependency
-        )
-    {
+    if !matches!(
+        query,
+        QUERY_DIRTY_CLUSTERS | QUERY_REPRESENTATIVES | QUERY_UNIFIED_RULE_CANDIDATES
+    ) || !matches!(
+        issue.kind,
+        RewriteIssueKind::Response | RewriteIssueKind::Replay | RewriteIssueKind::Dependency
+    ) {
         return Ok(None);
     }
     let current = crate::validate_replay_policy(&root.join(".traffic-e2e/verification.yaml"))?;

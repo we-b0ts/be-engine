@@ -115,6 +115,7 @@ pub(super) fn plan(
         &options.response_jwts,
     ))?;
     let mut record = RewriteRulePlanRecord {
+        unified: None,
         generated_witnesses: Vec::new(),
         id: format!(
             "plan-{}",

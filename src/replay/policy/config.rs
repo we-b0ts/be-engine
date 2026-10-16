@@ -280,6 +280,7 @@ pub struct ReplayPolicyValidationReport {
 
 #[derive(Debug)]
 pub(in crate::replay) struct LoadedReplayPolicy {
+    pub(in crate::replay) compiled: Option<std::sync::Arc<crate::policy::CompiledPolicy>>,
     pub(in crate::replay) document: ReplayPolicyDocument,
     pub(in crate::replay) path: PathBuf,
     pub(in crate::replay) fingerprint: String,
@@ -287,6 +288,28 @@ pub(in crate::replay) struct LoadedReplayPolicy {
 
 pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationReport> {
     let loaded = load_replay_policy(path)?;
+    if let Some(compiled) = &loaded.compiled {
+        return Ok(ReplayPolicyValidationReport {
+            version: 1,
+            path: loaded.path.display().to_string(),
+            fingerprint: compiled.fingerprints.full.clone(),
+            expected_response: ExpectedResponseUsage::AssertionsOnly,
+            dependency_rule_ids: compiled
+                .rules
+                .iter()
+                .filter(|r| r.rule.surface != crate::policy::Surface::ApiResponse)
+                .map(|r| r.rule.id.clone())
+                .collect(),
+            response_rule_ids: compiled
+                .rules
+                .iter()
+                .filter(|r| r.rule.surface == crate::policy::Surface::ApiResponse)
+                .map(|r| r.rule.id.clone())
+                .collect(),
+            dynamic_value_rule_ids: vec![],
+            runner_owned_response_assertions: true,
+        });
+    }
     let response_rule_ids = response_rule_ids(&loaded.document.response_rules);
     Ok(ReplayPolicyValidationReport {
         version: loaded.document.version,
@@ -320,6 +343,28 @@ pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationRepor
 pub(in crate::replay) fn load_replay_policy(path: &Path) -> Result<LoadedReplayPolicy> {
     let bytes = fs::read(path)
         .with_context(|| format!("failed to read replay policy {}", path.display()))?;
+    // During staged implementation, the old typed owners still run native
+    // domains. New value contracts are evaluated directly from their typed IR.
+    // P5 removes the old document reader after every native domain is mapped.
+    let discriminator: serde_yaml::Value = serde_yaml::from_slice(&bytes)?;
+    if discriminator.get("format").is_some() {
+        let source = std::str::from_utf8(&bytes)?;
+        let policy = crate::policy::parse_policy(source)?;
+        let compiled = std::sync::Arc::new(crate::policy::compile_policy(&policy)?);
+        return Ok(LoadedReplayPolicy {
+            fingerprint: compiled.fingerprints.full.clone(),
+            compiled: Some(compiled),
+            path: path.canonicalize()?,
+            document: ReplayPolicyDocument {
+                dynamic_values: vec![],
+                version: 3,
+                expected_response: ExpectedResponseUsage::AssertionsOnly,
+                dependency_rules: vec![],
+                request_rules: Default::default(),
+                response_rules: Default::default(),
+            },
+        });
+    }
     let document: ReplayPolicyDocument = serde_yaml::from_slice(&bytes)
         .with_context(|| format!("failed to parse replay policy {}", path.display()))?;
     validate_document(&document)
@@ -328,6 +373,7 @@ pub(in crate::replay) fn load_replay_policy(path: &Path) -> Result<LoadedReplayP
         .canonicalize()
         .with_context(|| format!("failed to resolve replay policy {}", path.display()))?;
     Ok(LoadedReplayPolicy {
+        compiled: None,
         document,
         path,
         fingerprint: fingerprint(&bytes),

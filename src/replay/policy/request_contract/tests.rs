@@ -17,6 +17,7 @@ pub(super) fn runtime(rule: ReplayDependencyRule) -> RequestContracts {
     state.cases.insert(
         "case".into(),
         CaseAnchor {
+            source_body: None,
             conditions: BTreeSet::new(),
             method: "PUT".into(),
             path: "/presence/1".into(),

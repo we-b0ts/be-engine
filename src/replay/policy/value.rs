@@ -34,9 +34,14 @@ pub(super) fn validate_relative_time(
 ) -> Result<(), String> {
     let source = parse_time(source, rule).map_err(|error| error.to_string())?;
     let actual = parse_time(actual, rule).map_err(|error| error.to_string())?;
-    use crate::replay::assertion::time::{compare_timestamp_delta, date_nanos};
-    compare_timestamp_delta(date_nanos(source), date_nanos(actual), times)
-        .map_err(|error| format!("request-relative time mismatch: {error:?}; fixed tolerance 5s"))
+    use crate::value_contract::time::{TimeMode, compare_timestamp_nanos, date_nanos};
+    compare_timestamp_nanos(
+        date_nanos(source),
+        date_nanos(actual),
+        TimeMode::PreserveRelative,
+        times,
+    )
+    .map_err(|error| format!("request-relative time mismatch: {error:?}; fixed tolerance 5s"))
 }
 
 pub(super) fn parse_time(actual: &Value, rule: &TimeRule) -> Result<DateTime<Utc>> {

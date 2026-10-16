@@ -255,6 +255,10 @@ impl ReplayRuntime {
             .map(|path| ReplayPolicyRuntime::load_with_sources(path, &cases, !lazy))
             .transpose()?;
         if let Some(policy) = &mut replay_policy {
+            let witnesses = crate::policy_evidence::WitnessStore::new(&replay_artifact_dir)?;
+            policy
+                .request_contracts
+                .configure_witnesses(witnesses, !lazy)?;
             for exchange in mysql
                 .exchanges
                 .iter()

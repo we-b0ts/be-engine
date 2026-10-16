@@ -119,6 +119,7 @@ struct ReplayExchange {
 
 #[derive(Debug, Clone)]
 struct MatchedRedisExchange {
+    unified_delivery: Option<super::policy::request_contract::PreparedRedisDelivery>,
     rpc_push: Option<usize>,
     rpc_response: Option<Vec<u8>>,
     publish_duration_ms: u64,
@@ -635,6 +636,22 @@ async fn deliver_redis_exchange(
     }
 
     matched.timing.delay_response().await;
+    let unified_rendered = matched
+        .unified_delivery
+        .as_ref()
+        .map(|delivery| delivery.render(chrono::Utc::now()))
+        .transpose();
+    let unified_rendered = match unified_rendered {
+        Ok(rendered) => rendered,
+        Err(error) => {
+            state
+                .lock()
+                .await
+                .redis
+                .fail_exchange(matched, error.to_string());
+            return Err(error);
+        }
+    };
     let rendered = matched
         .response_time_shift
         .as_ref()
@@ -651,9 +668,11 @@ async fn deliver_redis_exchange(
             return Err(error);
         }
     };
-    let response = rendered
-        .as_ref()
-        .map_or(matched.response.as_slice(), |(bytes, _)| bytes.as_slice());
+    let response = unified_rendered.as_deref().unwrap_or_else(|| {
+        rendered
+            .as_ref()
+            .map_or(matched.response.as_slice(), |(bytes, _)| bytes.as_slice())
+    });
     if let Err(error) = reader.inner.write_all(response).await {
         state.lock().await.redis.fail_exchange(
             matched,
@@ -663,6 +682,16 @@ async fn deliver_redis_exchange(
     }
     let state_ref = state;
     let mut state = state_ref.lock().await;
+    if let Some(delivery) = &matched.unified_delivery {
+        if let Err(error) = state
+            .redis
+            .request_contracts
+            .commit_redis_delivery(delivery, response)
+        {
+            state.redis.fail_exchange(matched, error.to_string());
+            return Err(error);
+        }
+    }
     if let (Some(shift), Some((_, offset_milliseconds))) = (&matched.response_time_shift, rendered)
     {
         if let Some(policy) = state.replay_policy.as_mut() {

@@ -431,6 +431,17 @@ async fn finalize_replay(
             None,
         );
     }
+    if let Some(policy) = state.replay_policy.as_ref() {
+        match policy.request_contracts.seal_witnesses() {
+            Ok(()) => report.policy_witnesses = policy.request_contracts.witness_manifest(),
+            Err(error) => {
+                return (
+                    serde_json::json!({"ok":false,"error":format!("failed to seal policy witnesses: {error:#}")}),
+                    None,
+                );
+            }
+        }
+    }
     let finalized_at = Utc::now();
     state.finalized_at = Some(finalized_at);
     report.finalized_at = Some(finalized_at);

@@ -30,6 +30,21 @@ is unclear.
 
 ## Current Boundaries
 
+- `policy/schema` owns the strict self-contained `traffic-policy/v1` document.
+  `policy/compiler` owns typed capability validation, field ownership and
+  semantic effect fingerprints; neither module reads evidence or changes runtime
+  state. `value_contract/time` owns exact timestamp arithmetic and trusted-clock
+  relations. `value_contract/json` composes field contracts with strict remainder
+  comparison and bounded whole-element multiset pairing; `value_contract/delivery`
+  writes only explicitly authorized timestamps in derived copies. These pure
+  owners never claim protocol exchanges or mutate recorded evidence.
+- `policy_evidence` owns authenticated private payload witnesses, complete
+  coverage accounting, sealing and publication of their relative artifacts.
+  Public reports retain role/identity/digest metadata without payload bodies.
+  Protocol adapters supply independent observed clocks and original exchange
+  identities. Assertion and request adapters map the same compiled contracts
+  into their existing status, lane, admission and consumption lifecycles.
+
 - `config/api_trigger` owns API-origin process-rule schema, SQL identity slots and bounded key-template
   validation; `api_trigger` owns immutable origin evidence and disposable index
   persistence. Its `same_resource` child owns report-only read eligibility for
@@ -166,8 +181,8 @@ is unclear.
   Its `script` child validates explicit Lua digests and bounded KEYS/ARGV
   envelopes without evaluating Lua. Redis compares dynamic-identity copies
   before disjoint request-time contracts; overlapping field ownership is rejected.
-  Its `time` child uses exact integer nanoseconds for timestamp parsing and relative-clock validation across
-  protocols, reusing the assertion time decimal scaler. `redis/publish/json` owns UUID-only JSON comparison copies for composition with time contracts; `redis/matching/request` commits their bindings only after all request checks pass. Planning uses the same copies without mutating recorded evidence. `http_json` owns JSON body stable-field pairing and time comparisons
+  Its `time` child adapts request-specific source format and calendar constraints
+  to `value_contract/time`. `redis/publish/json` owns UUID-only JSON comparison copies for composition with time contracts; `redis/matching/request` commits their bindings only after all request checks pass. Planning uses the same copies without mutating recorded evidence. `http_json` owns JSON body stable-field pairing and time comparisons
   using dependency-local clocks, and `evidence/http_json` protects and verifies
   failed target witnesses before planning.
   `replay/policy/case_condition` owns bounded scalar conditions on immutable
@@ -200,8 +215,8 @@ is unclear.
   from process-owned traffic classification when reusing Replay responses.
   `rewrite/plan_recovery` retires a pending rule with unavailable Replay evidence
   and requests fresh verification while returning its selector and source proof.
-- `replay/assertion/time` owns the shared timestamp formats and fixed request
-  time windows consumed by response assertions and dependency-header rules.
+- `replay/assertion/time` adapts response time configuration and diagnostics to
+  the shared `value_contract/time` formats, fixed windows and precision rules.
   `replay/policy/http_headers` owns typed selectors/schema validation, its
   matcher child selects/accounts for rules, and its feedback child owns
   evidence-backed plan/apply. `replay/http/request_headers` owns post-match
@@ -684,7 +699,7 @@ explicit repository-wide audit.
   comparator owns value comparison and rule applicability using those resolved
   locations; feedback keeps plan/apply evidence validation and persistence.
 - `replay/policy/response/time_rule` owns explicit timestamp-format, comparison-mode and duration-unit
-  contracts. `replay/assertion/time` owns numeric parsing and fixed five-second
+  contracts. `value_contract/time` owns numeric parsing and fixed five-second
   request-relative validation; artifact adapters supply captured request times.
   `feedback/time_plan` preflights proposed response time rules with this same
   comparator and freezes actual case/response witnesses before plan/apply.

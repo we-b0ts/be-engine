@@ -3,6 +3,7 @@ mod binary_body;
 mod compare;
 pub(in crate::replay) mod docx;
 pub(in crate::replay) mod headers;
+mod unified;
 pub use headers::date::ResponseHeaderDateCandidate;
 pub(in crate::replay) mod hessian2;
 mod joined_string;
@@ -399,9 +400,10 @@ fn evaluate_response(
         path
     );
     let gateway_protocol = request.gateway_protocol()?;
+    let unified_rules = unified::selected(loaded, &request, &path)?;
     let mut report = ResponseAssertionCaseReport::new(
         case_id,
-        request.method,
+        request.method.clone(),
         path,
         gateway_protocol,
         request_path.display().to_string(),
@@ -432,6 +434,23 @@ fn evaluate_response(
             times,
             &mut report,
         )?;
+    }
+    if !unified_rules.is_empty() {
+        unified::compare(
+            &unified_rules,
+            &expected_body,
+            &actual_body,
+            times,
+            &mut report,
+        )?;
+        report.finish(
+            &[],
+            &unified_rules
+                .iter()
+                .map(|r| r.rule.id.clone())
+                .collect::<Vec<_>>(),
+        );
+        return Ok(report);
     }
     if let Some(rule) = body_rules.first() {
         ensure!(

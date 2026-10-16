@@ -19,11 +19,24 @@ impl RedisReplayState {
             port: exchange.record.target_port,
         };
         let preview = |source: &[Vec<u8>], actual: &[Vec<u8>]| {
-            self.request_contracts.preview_redis(
-                case,
-                &target,
-                exchange.record.database,
-                &exchange.record.command,
+            self.request_contracts.preview_redis_context(
+                &crate::replay::policy::request_contract::RedisRequestContext {
+                    case,
+                    target: &target,
+                    database: exchange.record.database,
+                    username: exchange.record.username.as_deref(),
+                    command: &exchange.record.command,
+                    recorded_at: exchange.record.timestamp.and_then(|completed| {
+                        i64::try_from(exchange.record.duration_ms)
+                            .ok()
+                            .and_then(|duration| {
+                                completed
+                                    .checked_sub_signed(chrono::TimeDelta::milliseconds(duration))
+                            })
+                    }),
+                    connection_id: Some(exchange.record.connection_id),
+                    sequence: Some(exchange.record.sequence),
+                },
                 source,
                 actual,
             )

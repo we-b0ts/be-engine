@@ -127,6 +127,7 @@ pub(super) fn plan(
     };
     let (_, _, traffic_report) = build(root, state, &spec)?;
     let record = RewriteRulePlanRecord {
+        unified: None,
         generated_witnesses: Vec::new(),
         response_jwts: Vec::new(),
         header_dates: Vec::new(),

@@ -182,7 +182,7 @@ impl ReplayPolicyRuntime {
             .iter()
             .map(|rule| (rule.id.clone(), DependencyRuleUsage::default()))
             .collect();
-        let runtime = Self {
+        let mut runtime = Self {
             mysql_selectors: mysql_selectors::MysqlSelectors::new(
                 &loaded.document.dependency_rules,
             )?,
@@ -198,6 +198,9 @@ impl ReplayPolicyRuntime {
             usage,
             bindings: BTreeMap::new(),
         };
+        runtime
+            .request_contracts
+            .configure_compiled(runtime.loaded.compiled.clone())?;
         if observe_sources
             && (runtime.dynamic_values.enabled() || runtime.request_contracts.enabled())
         {

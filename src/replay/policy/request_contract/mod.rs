@@ -6,9 +6,13 @@ mod key;
 pub(in crate::replay) use key::KeyBindingReport;
 mod overlap;
 mod redis;
+mod unified_response;
+pub(in crate::replay) use unified_response::PreparedRedisDelivery;
 mod script;
 mod time;
+mod unified;
 pub(in crate::replay::policy) use overlap::validate as validate_overlaps;
+pub(in crate::replay) use unified::RedisRequestContext;
 #[cfg(test)]
 mod tests;
 use super::config::{DependencyProtocol, ReplayDependencyRule};
@@ -32,6 +36,7 @@ struct CaseAnchor {
     actual: Option<DateTime<Utc>>,
     dir: PathBuf,
     conditions: BTreeSet<String>,
+    source_body: Option<Value>,
 }
 type SequenceKey = (String, String, Vec<u8>);
 
@@ -57,6 +62,8 @@ struct Sequence {
 }
 #[derive(Clone, Default)]
 pub(in crate::replay) struct RequestContracts {
+    compiled: Option<Arc<crate::policy::CompiledPolicy>>,
+    witnesses: Option<crate::policy_evidence::WitnessStore>,
     rules: Arc<Vec<ReplayDependencyRule>>,
     keys: Arc<BTreeMap<(String, String), crate::request_rules::keys::ResolvedSigningKey>>,
     state: Arc<Mutex<State>>,
@@ -76,6 +83,7 @@ pub(in crate::replay) struct Decision {
     time_validations: usize,
     sequence: Option<(SequenceKey, Sequence)>,
     nonces: Vec<((String, String, String), String, String)>,
+    unified_time_validations: BTreeMap<String, usize>,
 }
 impl RequestContracts {
     pub(in crate::replay::policy) fn load(
@@ -133,10 +141,13 @@ impl RequestContracts {
                                 .map(|condition| (rule.id.as_str(), condition))
                         }),
                     ),
+                    source_body: unified::source_body(&request),
                 },
             );
         }
         Ok(Self {
+            compiled: None,
+            witnesses: None,
             rules: Arc::new(
                 rules
                     .iter()
@@ -238,7 +249,11 @@ impl RequestContracts {
             *state.key_binds.entry(id.clone()).or_default() += decision.key_bindings.len();
             *state.identity_references.entry(id.clone()).or_default() +=
                 decision.identity_references;
-            *state.time_validations.entry(id.clone()).or_default() += decision.time_validations;
+            *state.time_validations.entry(id.clone()).or_default() += decision
+                .unified_time_validations
+                .get(&id)
+                .copied()
+                .unwrap_or(decision.time_validations);
             *state.usage.entry(id).or_default() += 1;
         }
         if let Some((key, sequence)) = decision.sequence {
@@ -257,6 +272,13 @@ impl RequestContracts {
     }
     pub(in crate::replay) fn enabled(&self) -> bool {
         !self.rules.is_empty()
+            || self.witnesses.is_some()
+            || self.compiled.as_ref().is_some_and(|policy| {
+                policy
+                    .rules
+                    .iter()
+                    .any(|rule| rule.rule.surface != crate::policy::Surface::ApiResponse)
+            })
     }
     pub(in crate::replay) fn observe_source(&self, case: &str, bytes: &[u8]) -> Result<()> {
         if !self.enabled() {
@@ -267,6 +289,7 @@ impl RequestContracts {
             if event["global_dependency_reason"].is_string() {
                 continue;
             }
+            self.observe_unified_source(case, &event)?;
             let protocol = match event["event_type"].as_str() {
                 Some("redis_exchange") => DependencyProtocol::Redis,
                 Some("http_exchange") => DependencyProtocol::Http,
@@ -379,6 +402,7 @@ impl RequestContracts {
                         .unwrap_or_default(),
                 }
             })
+            .chain(self.unified_reports(&state))
             .collect()
     }
     #[allow(clippy::too_many_arguments)]

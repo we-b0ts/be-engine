@@ -38,6 +38,9 @@ impl From<ResponseBodyCodecArg> for ResponseBodyCodec {
 
 #[derive(Debug, Args)]
 pub(super) struct RulePlanArgs {
+    /// Self-contained traffic-policy/v1 proposal with Source proof for every rule.
+    #[arg(long, visible_alias = "rules", value_name = "RULES_YAML", conflicts_with_all = ["response_jwts", "dependency_request", "dynamic_value", "mysql_time", "redis_time", "header_dates", "request_kind", "body_codec", "kind", "unit", "timestamp_format", "timestamp_mode", "json_pointer", "source_evidence", "source_example", "target_example", "separator", "unordered_paths", "unordered_joined_string_paths", "docx_timestamps"])]
+    pub(super) file: Option<std::path::PathBuf>,
     /// Signed JWT in a JSON HTTP response. Declares algorithm, key source and optional UUID v4 jti.
     #[arg(long = "response-jwt", value_name = "RULE_JSON", value_parser = parse_response_jwt, conflicts_with_all = ["header_dates", "dynamic_value", "dependency_request", "request_kind", "kind", "json_pointer", "unordered_paths", "unordered_joined_string_paths", "docx_timestamps"])]
     pub(super) response_jwts: Vec<traffic_e2e::ResponseJwtRule>,
@@ -58,10 +61,10 @@ pub(super) struct RulePlanArgs {
     pub(super) header_dates: Vec<traffic_e2e::ResponseHeaderDateRule>,
     #[command(flatten)]
     pub(super) jwt: jwt_rule::JwtArgs,
-    #[arg(long)]
+    #[arg(long = "evidence", visible_alias = "evidence-id")]
     pub(super) evidence_id: String,
     /// Body codec. JSON uses --kind, protobuf/Hessian2 use typed paths, and DOCX uses --docx-timestamp.
-    #[arg(long, value_enum, required_unless_present_any = ["request_kind", "header_dates", "dynamic_value", "dependency_request", "response_jwts"])]
+    #[arg(long, value_enum, required_unless_present_any = ["file", "request_kind", "header_dates", "dynamic_value", "dependency_request", "response_jwts"])]
     pub(super) body_codec: Option<ResponseBodyCodecArg>,
     /// JSON response-rule kind. Omit for protobuf and Hessian2 typed-body rules.
     #[arg(

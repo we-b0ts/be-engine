@@ -3,7 +3,27 @@ use super::*;
 use config::{ArgumentRule, JsonField, JwtContract, RedisRequestSelector};
 
 impl RequestContracts {
+    #[cfg(test)]
     pub(in crate::replay) fn preview_redis(
+        &self,
+        case: &str,
+        target: &TargetKey,
+        database: i64,
+        command: &str,
+        source: &[Vec<u8>],
+        actual: &[Vec<u8>],
+    ) -> Option<Result<Decision>> {
+        if let Some(result) = self.preview_unified_redis(
+            &RedisRequestContext::without_exchange(case, target, database, command),
+            source,
+            actual,
+        ) {
+            return Some(result);
+        }
+        self.preview_redis_legacy(case, target, database, command, source, actual)
+    }
+
+    pub(super) fn preview_redis_legacy(
         &self,
         case: &str,
         target: &TargetKey,

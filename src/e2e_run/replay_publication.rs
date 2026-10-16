@@ -30,6 +30,7 @@ pub(super) fn prepare(
     fs::create_dir_all(destination.parent().expect("report directory"))?;
     if source != destination {
         crate::replay::report::stage_global_evidence(&source, &destination)?;
+        crate::policy_evidence::stage(&source, &destination)?;
         fs::copy(&source, &destination).context("failed to stage runner-owned Replay evidence")?;
     }
     let sidecar = dependency_evidence_path(&destination);

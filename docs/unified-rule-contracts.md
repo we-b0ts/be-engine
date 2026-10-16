@@ -236,6 +236,12 @@ round-trip without loss; an opaque old YAML blob or dual loader is not a
 completed mapping. Profile/key references may be named and reused, while
 authorization remains attached to each input/output binding.
 
+Source `when` conditions retain scalar types and read only the immutable inbound
+Source request. Missing, null, truncated, duplicate-member or undecodable inputs
+cannot satisfy `not_equals` and accidentally enable a normalization. Inbound JWT
+translation preserves invalid-signature requests unchanged; it must never turn
+negative authentication evidence into a valid re-signed request.
+
 ## Time, identity and encoding invariants
 
 The baseline already supports primary-response `request_window` and
@@ -387,8 +393,8 @@ quality and Source-review gates remain in force.
 | Phase | Status at P0 | Deliverable and hard prerequisite | Exit evidence |
 | --- | --- | --- | --- |
 | P0 | Complete | Requirement map, new document vocabulary, boundaries and nonnegotiable effect/evidence contracts. | This reviewed document against baseline and reference configuration; no implementation claim. |
-| P1 | Pending | Smallest complete JSON path through all three surfaces and discovery/plan/apply/verification. Includes the strict schema, typed IR/capability boundary, shared time core, pure decisions and frozen evidence needed for this path. | Self-contained JSON comparison/delivery examples; bounded discovery, reviewable plan, stale-safe apply, strict remainder, microsecond precision and required fresh genuine Replay. |
-| P2 | Pending | PB and cross-protocol slot/codec reuse. Requires the complete P1 JSON transaction rather than a compiler-only foundation. | JSON/PB contract parity, explicit typed PB fields and later descriptors, writable envelope preservation, HTTP/Redis/Memcached symmetry and unchanged protocol lifecycle. |
+| P1 | Pending | Smallest complete JSON path through all three surfaces, Source proof entry, discovery/plan/apply/audit/recovery and verification. Includes the strict schema, typed IR/capability boundary, shared time core, pure decisions and frozen evidence needed for this path. | Self-contained JSON comparison/delivery examples; bounded discovery, reviewable plan, stale-safe apply/recovery, strict remainder, microsecond precision and required fresh genuine Replay. |
+| P2 | Pending | PB plus Memcached/HTTP/SQL cross-protocol slot/codec reuse. Requires the complete P1 JSON transaction rather than a compiler-only foundation. | JSON/PB contract parity, explicit typed PB fields and later descriptors, writable envelope preservation, HTTP/Redis/Memcached/SQL symmetry and unchanged protocol lifecycle. |
 | P3 | Pending | Identity, nonce, cryptographic envelopes and propagation. Requires P1 staged decisions and P2 typed extraction/reconstruction. | One-to-one capture/reference, script/PUBLISH/time composition, JWT/URL/crypto checks, stable remainder and atomic failure behavior. |
 | P4 | Pending | API origin, ownership, finite sharing, snapshot and Source capture/inbound input domains. Requires independent P1-P3 value decisions and effect identities. | Immutable Source cause/identity proof; strict lane/transaction/finite gates; reversible classification; explicit input/signature transformations and capture obligations. |
 | P5 | Pending | Direct new-format cutover, removal of old entry points and reference-project configuration on a separate project branch. Requires all inventory rows and native domains to be mapped. | No fallback format, no lost scope/proof, checked examples/docs, repository checks and appropriate real recording/Replay evidence. |

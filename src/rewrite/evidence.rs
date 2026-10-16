@@ -39,6 +39,7 @@ const QUERY_DIRTY_CLUSTERS: &str = "dirty_clusters";
 const QUERY_POLICY_APPLICABILITY: &str = "policy_applicability";
 const QUERY_ATTEMPT_DELTA: &str = "attempt_delta";
 const QUERY_TARGET_RUNTIME_DIAGNOSTICS: &str = "target_runtime_diagnostics";
+const QUERY_UNIFIED_RULE_CANDIDATES: &str = "unified_rule_candidates";
 
 pub(super) fn commands(target_root: &Path, state: &RewriteState) -> Vec<RewriteEvidenceCommand> {
     let Some(issue) = &state.active_issue else {
@@ -121,19 +122,34 @@ pub(super) fn query(
         fingerprint::id(&[requested_id, &serde_json::to_string(&facts)?])
             .trim_start_matches("fnv1a64:")
     );
+    let mut planners =
+        applicable_rule_planners(target_root, issue.kind, kind, &facts, &evidence_id);
+    if kind == QUERY_UNIFIED_RULE_CANDIDATES {
+        planners.push(super::evidence_model::RewriteApplicableRulePlanner {
+            kind: "unified".into(),
+            capability: "Source-proven typed value contract across comparison surfaces".into(),
+            evidence_id: evidence_id.clone(),
+            command: super::action::command(
+                target_root,
+                vec![
+                    "rule".into(),
+                    "plan".into(),
+                    "--file".into(),
+                    "<rule.yaml>".into(),
+                    "--evidence".into(),
+                    evidence_id.clone(),
+                ],
+                vec![],
+            ),
+        });
+    }
     Ok(RewriteEvidenceReport {
         schema_version: 4,
         context: None,
         evidence_id: evidence_id.clone(),
         issue_id: issue.id.clone(),
         query: kind.to_string(),
-        applicable_rule_planners: applicable_rule_planners(
-            target_root,
-            issue.kind,
-            kind,
-            &facts,
-            &evidence_id,
-        ),
+        applicable_rule_planners: planners,
         rule_hints: rule_hints(target_root, kind, &facts),
         facts,
         queries: Vec::new(),
@@ -176,6 +192,9 @@ fn facts(
     offset: usize,
 ) -> Result<(Value, Vec<String>, String)> {
     match kind {
+        QUERY_UNIFIED_RULE_CANDIDATES => Ok((super::unified_rule::discovery::facts(target_root,state)?,
+            vec!["A mechanical draft requires Source code proof and full selected evidence validation. Derived delivery never proves independent Target response behavior.".into()],
+            "Inspect draft_rule for observed unordered/time differences, fill proof.source and proof.fact from Source, and run the returned unified rule planner. An explicit Source field may also be proposed directly; apply always requires fresh genuine Replay.".into())),
         QUERY_JWT_TIME_VALIDITY => Ok((super::jwt_rule::evidence_facts(target_root, state)?,
             vec!["Unverified JWT time claims and HTTP 401 do not alone prove authentication causality or rule applicability.".into()],
             "For time-drift candidates, inspect signing_key_discovery for target variable names, startup mount paths/access modes, existing bindings and discovery commands. Trace the source/target JWT path, configuration precedence and expiration leeway, then use the returned rule planner with the proven signing-key source. Plan/apply verifies original signatures.".into())),
@@ -531,6 +550,12 @@ fn representative_guidance(kind: RewriteIssueKind) -> (Vec<String>, String) {
 
 fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str, &'static str)> {
     let mut queries = Vec::new();
+    if matches!(
+        issue.kind,
+        RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
+    ) {
+        queries.push((QUERY_UNIFIED_RULE_CANDIDATES,"Discover bounded typed rule drafts from complete observed JSON differences, or enter a Source-proven field"));
+    }
     let typed_body_candidate = issue
         .representative
         .as_ref()

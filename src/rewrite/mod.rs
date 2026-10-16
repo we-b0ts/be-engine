@@ -69,7 +69,9 @@ mod revalidation;
 mod route;
 mod rule;
 mod rule_replay;
+mod unified_rule;
 pub use jwt_rule::JwtRulePlanOptions;
+pub use unified_rule::{RewriteUnifiedRulePlanOptions, plan_rewrite_unified_rule};
 mod scheduling;
 mod source_process_traffic;
 mod status;
@@ -228,6 +230,23 @@ pub fn apply_rewrite_rule(context: RewriteContext, plan_id: &str) -> Result<Rewr
         .context("rewrite workflow has not been initialized")?;
     let api = inventory::api_for_rule_plan(&state, plan_id)
         .context("rule plan is stale or belongs to no concurrent API work item")?;
+    let unified = inventory::scoped(&state, Some(&api.parse()?))?
+        .rule_plan
+        .as_ref()
+        .is_some_and(|plan| plan.unified.is_some());
+    let apply_intent = if unified {
+        worker::ensure_api_confirmed(&state, &api, "applying a unified traffic rule")?;
+        let intent = inventory::with_slice_mut(&mut state, &api, |slice| {
+            unified_rule::begin_apply(&target_root, slice)
+        })?;
+        if intent.changed() {
+            unified_rule::invalidate_global(&mut state);
+        }
+        store.save(&state)?;
+        Some(intent)
+    } else {
+        None
+    };
     let report = inventory::with_slice_mut(&mut state, &api, |state| {
         let report = rule::apply(&target_root, state, plan_id)?;
         state.target_fingerprint = None;
@@ -236,7 +255,17 @@ pub fn apply_rewrite_rule(context: RewriteContext, plan_id: &str) -> Result<Rewr
     if report.traffic_e2e_report["kind"] == "jwt" {
         jwt_rule::invalidate_global(&mut state);
     }
-    store.save(&state)?;
+    if report.traffic_e2e_report["kind"] == "unified"
+        && report.traffic_e2e_report["changed"] == true
+    {
+        unified_rule::invalidate_global(&mut state);
+    }
+    if let Err(error) = store.save(&state) {
+        if let Some(intent) = &apply_intent {
+            unified_rule::rollback(intent).context("failed to save applied rule state and to restore original policy; pending apply intent remains recoverable")?;
+        }
+        return Err(error).context("failed to save applied rule state; original unified policy restored and pending intent retained");
+    }
     Ok(report)
 }
 
