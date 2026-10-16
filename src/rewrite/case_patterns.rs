@@ -503,3 +503,6 @@ mod tests {
         run
     }
 }
+
+#[cfg(test)]
+mod literal_tests;

@@ -1,4 +1,30 @@
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
+
+/// Exact HTTP paths retain their spelling, including trailing/repeated separators.
+/// This never decodes, trims, redirects or otherwise canonicalizes request identity.
+pub(crate) fn validate_literal_path(path: &str) -> Result<()> {
+    ensure!(
+        path.starts_with('/') && !path.contains(['?', '#', '\r', '\n']),
+        "literal API path must contain only an absolute HTTP path"
+    );
+    let parsed = path
+        .parse::<hyper::http::uri::PathAndQuery>()
+        .context("literal API path is not a valid HTTP path")?;
+    ensure!(
+        parsed.path() == path && parsed.query().is_none(),
+        "literal API path must preserve its exact path bytes"
+    );
+    Ok(())
+}
+
+/// Inventory and Replay selectors accept exact paths or strict wildcard patterns.
+pub(crate) fn validate_path_selector(selector: &str) -> Result<()> {
+    if selector.contains('*') {
+        validate_path_pattern(selector)
+    } else {
+        validate_literal_path(selector)
+    }
+}
 
 pub(crate) fn validate_path_pattern(pattern: &str) -> Result<()> {
     ensure!(
@@ -35,6 +61,12 @@ pub(crate) fn validate_path_pattern(pattern: &str) -> Result<()> {
 }
 
 pub(crate) fn matches_path_pattern(pattern: &str, path: &str) -> bool {
+    if !pattern.contains('*') {
+        return pattern == path && validate_literal_path(pattern).is_ok();
+    }
+    if validate_path_pattern(pattern).is_err() || validate_literal_path(path).is_err() {
+        return false;
+    }
     if !canonical_path(pattern) || !canonical_path(path) {
         return false;
     }
@@ -70,6 +102,12 @@ pub(crate) fn matches_path_pattern(pattern: &str, path: &str) -> bool {
 }
 
 pub(crate) fn path_patterns_overlap(left: &str, right: &str) -> bool {
+    if !left.contains('*') {
+        return matches_path_pattern(right, left);
+    }
+    if !right.contains('*') {
+        return matches_path_pattern(left, right);
+    }
     let Some((left_segments, left_catch_all)) = parsed_pattern(left) else {
         return false;
     };
@@ -94,7 +132,13 @@ pub(crate) fn path_patterns_overlap(left: &str, right: &str) -> bool {
 
 /// Whether every path accepted by `covered` is also accepted by `cover`.
 pub(crate) fn path_pattern_covers(cover: &str, covered: &str) -> bool {
-    if validate_path_pattern(cover).is_err() || validate_path_pattern(covered).is_err() {
+    if validate_path_selector(cover).is_err() || validate_path_selector(covered).is_err() {
+        return false;
+    }
+    if !covered.contains('*') {
+        return matches_path_pattern(cover, covered);
+    }
+    if !cover.contains('*') {
         return false;
     }
     let cover_segments = segments(cover);
@@ -227,3 +271,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod literal_tests;

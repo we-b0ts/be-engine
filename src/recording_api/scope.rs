@@ -1,4 +1,4 @@
-//! Canonical route selection shared by rewrite commands and regression policy.
+//! Exact route and canonical pattern selection for rewrite and regression policy.
 use std::{fmt, str::FromStr};
 
 use anyhow::{Result, ensure};

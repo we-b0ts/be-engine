@@ -794,8 +794,21 @@ fn recorded_trailing_slashes_never_alias_static_or_dynamic_group_membership() {
     .unwrap();
     assert_eq!(item.case_ids, ["item"]);
     assert!(load_complete_case_group_inventory(&output, &source).is_err());
+    for (route, expected) in [
+        ("/api/items/", "plain-slash"),
+        ("/api/items/7/", "item-slash"),
+    ] {
+        let literal = ensure_case_group(options(&source, &member, &output, route, None)).unwrap();
+        assert_eq!(literal.case_ids, [expected]);
+    }
+    assert_eq!(
+        load_complete_case_group_inventory(&output, &source)
+            .unwrap()
+            .groups
+            .len(),
+        4
+    );
     for (route, pattern) in [
-        ("/api/items/", None),
         ("/api/items/{id}", Some("/api/items/*/")),
         ("/api/items/{id}", Some("/api//items/*")),
     ] {
@@ -824,3 +837,5 @@ fn discovery_still_rejects_invalid_recorded_http_paths() {
         );
     }
 }
+
+mod literal_paths;

@@ -27,3 +27,13 @@ when refresh is required, arrange external recording with the new policy.
 
 After adoption, follow case-pattern identification and normal coordinator actions.
 Recording contents, old batch identities and verification history remain immutable.
+
+Valid recorded HTTP paths retain their exact identity, including trailing slashes
+and repeated separators. They remain usable recorded cases even when Source
+returned 404 because no handler exists. Such responses are ordinary assertion
+oracles, not recording failures. Exact route selectors and local regression
+`only`/`skip` may name these paths verbatim; `/api/items/` never aliases
+`/api/items`. Wildcard patterns retain their canonical separator grammar and
+do not absorb noncanonical paths. Skip controls selected workflow coverage;
+it does not alter recorded requests, expected responses or assertion policy.
+Removing skip restores the original cases and their response checks.

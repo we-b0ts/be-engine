@@ -79,8 +79,11 @@ is unclear.
   identity or deciding which deliveries belong in an integration assignment.
 
 - `case_group/discovery` validates and retains raw recorded HTTP path identity;
-  canonical route and pattern validation belongs to group selectors, so an
-  unrelated valid noncanonical request cannot block inventory discovery.
+  shared `path_pattern` validation separates exact HTTP paths from canonical
+  wildcard patterns. Recording inventories, static groups and regression selectors
+  retain exact trailing/repeated separators without aliasing; wildcard matching
+  and dynamic source-route grammar stay strict. Unrelated valid noncanonical
+  requests cannot block inventory discovery or finalized recording adoption.
   `case_group/snapshot` reads prepared membership for read-only projections
   without discovering recording cases. `e2e_run/reclassify/status` owns the
   query-scoped shared-session snapshot and compact report classification codec;
@@ -417,8 +420,8 @@ is unclear.
   on both load and save. These modules never manufacture task-runtime
   handles or manage worktrees. `model.rs` owns the remaining persisted state and
   public action contract and reexports the worker contract for compatibility.
-  `recording_api/scope` owns canonical route selector grammar and identity shared
-  by coordinator commands and local regression configuration. `api_selector`
+  `recording_api/scope` owns exact route/canonical pattern selector grammar and
+  identity shared by coordinator commands and local regression configuration. `api_selector`
   owns executable route-to-method inventory selection and worker scope projection.
   `api_batch` owns grouped preparation
   and method-slice transitions for one route acceptance. `e2e_run/focused_batch`
