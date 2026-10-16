@@ -107,6 +107,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(directory.join("dependencies.jsonl"), "").unwrap();
+        std::fs::write(directory.join("expected-response.json"), "{}").unwrap();
         let proof = json!({"source":"source.py:save","fact":"Source mints a UUID, keeps it for later updates, and stores the request-relative creation instant"});
         let resource = json!({"protocol":"mysql","endpoint":"db.test:3306","database":"app"});
         let document = json!({"format":"traffic-policy/v1","rules":[

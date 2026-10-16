@@ -313,13 +313,15 @@ mod tests {
     fn scalar_and_json_sql_times_share_groups_and_compose_with_value_codecs() {
         let proof = json!({"source":"source.py:save","fact":"Source stores the generated timestamps and an unordered membership collection"});
         let time = |format: &str, group: Option<&str>| json!({"kind":"time","format":format,"relation":"preserve_offset","anchor":"case.request_start","utc_offset":"+00:00","clock_group":group});
+        let mut json_time = time("iso8601_naive", Some("another-clock"));
+        json_time.as_object_mut().unwrap().remove("kind");
         let template = "UPDATE events SET created=?, updated=?, payload=? WHERE id=?";
         let selector = json!({"api":"POST /events","resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app"},"operation":"COM_QUERY","sql":template});
         let document = json!({"format":"traffic-policy/v1","rules":[
             {"id":"times","match":selector,"effect":{"kind":"mysql_values","values":{
                 "0":{"contract":time("sql_datetime",None),"proof":proof},
                 "1":{"contract":time("sql_datetime",None),"proof":proof},
-                "2":{"contract":{"kind":"json","fields":{"/time":{"contract":time("iso8601_naive",Some("another-clock")),"proof":proof}}},"proof":proof}
+                "2":{"contract":{"kind":"json","fields":{"/time":{"contract":json_time,"proof":proof}}},"proof":proof}
             }},"proof":proof},
             {"id":"members","surface":"dependency.request","match":selector,"slot":{"sql_value":2},"codec":"json","contract":{"/members":{"kind":"unordered"}},"proof":proof}
         ]});
