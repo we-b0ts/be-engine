@@ -48,7 +48,8 @@ pub(super) fn validate(rule: &NativeRule) -> Result<()> {
                 );
             }
             match &effect.path {
-                CapturePath::Exact { value } | CapturePath::Pattern { value } => {
+                CapturePath::Exact { value } => crate::path_pattern::validate_literal_path(value)?,
+                CapturePath::Pattern { value } => {
                     crate::path_pattern::validate_path_pattern(value)?
                 }
             }

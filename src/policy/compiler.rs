@@ -791,15 +791,11 @@ pub(crate) fn disjoint_conditions(
     })
 }
 
-fn validate_api(api: &str) -> Result<()> {
-    let (method, path) = api
-        .split_once(' ')
-        .context("match.api requires 'METHOD /path'")?;
-    ensure!(
-        !method.is_empty() && method.bytes().all(|byte| byte.is_ascii_uppercase()),
-        "match.api method must be uppercase"
-    );
-    validate_path(path)
+pub(super) fn validate_api(api: &str) -> Result<()> {
+    let selector = api
+        .parse::<crate::RecordingApi>()
+        .context("match.api requires a valid 'METHOD /path' selector")?;
+    validate_path(selector.path_pattern())
 }
 
 pub(crate) fn validate_path(path: &str) -> Result<()> {
@@ -807,10 +803,7 @@ pub(crate) fn validate_path(path: &str) -> Result<()> {
         path.len() <= 4096 && !path.contains([' ', '\t']),
         "path must be bounded and contain no whitespace"
     );
-    if path == "/" {
-        return Ok(());
-    }
-    crate::path_pattern::validate_path_pattern(path)
+    crate::path_pattern::validate_path_selector(path)
 }
 
 fn text(value: &str, name: &str, max: usize) -> Result<()> {

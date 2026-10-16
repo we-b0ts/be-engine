@@ -1,4 +1,5 @@
 use super::*;
+mod literal_paths;
 
 fn json_rule(surface: &str) -> String {
     let selector = if surface == "api.response" {

@@ -787,14 +787,10 @@ fn validate_condition(condition: &SourceCondition) -> Result<()> {
 }
 
 pub(super) fn api_parts(api: &str) -> Result<(&str, &str)> {
+    compiler::validate_api(api)?;
     let (method, path) = api
         .split_once(' ')
         .context("API selector requires METHOD /path")?;
-    ensure!(
-        method.parse::<hyper::Method>().is_ok() && method == method.to_ascii_uppercase(),
-        "API selector requires an uppercase HTTP method"
-    );
-    compiler::validate_path(path)?;
     Ok((method, path))
 }
 

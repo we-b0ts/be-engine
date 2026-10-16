@@ -45,12 +45,8 @@ fn literal_groups_keep_trailing_paths_and_404_oracles_distinct_and_immutable() {
         crate::resolve_recording_api_case_ids(&source, &["GET /api/items/".parse().unwrap()])
             .unwrap();
     assert_eq!(selected, ["slash"]);
-    let policy = temp.path().join("verification.yaml");
-    fs::write(
-        &policy,
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
-    )
-    .unwrap();
+    let policy = temp.path().join("policy.yaml");
+    fs::write(&policy, "format: traffic-policy/v1\nrules: []\n").unwrap();
     let actual = temp.path().join("actual.json");
     let slash = source.join("shared/slash");
     for (status, body, passes) in [
