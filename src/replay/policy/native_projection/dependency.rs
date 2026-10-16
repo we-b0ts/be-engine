@@ -250,6 +250,7 @@ pub(in crate::replay::policy) fn generated(
         time: None,
     };
     match value {
+        n::GeneratedValue::Bind { binding } => result.bind = Some(binding.clone()),
         n::GeneratedValue::Uuid { binding } => {
             result.validate = Some(c::ValueValidator::Uuid);
             result.bind = binding.clone();

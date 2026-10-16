@@ -292,6 +292,9 @@ pub enum SqlValueContract {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum GeneratedValue {
+    Bind {
+        binding: String,
+    },
     Uuid {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         binding: Option<String>,

@@ -405,7 +405,21 @@ fn evaluate_response(
                 request_path.parent().unwrap_or(Path::new(".")),
             )
         })
-        .transpose()?;
+        .transpose();
+    let (native_context, native_key_unavailable) = match native_context {
+        Ok(context) => (context, false),
+        Err(_)
+            if native_selected.iter().any(|rule| {
+                matches!(
+                    rule.rule.effect,
+                    crate::policy::NativeEffect::ResponseJwt(_)
+                )
+            }) =>
+        {
+            (None, true)
+        }
+        Err(error) => return Err(error),
+    };
     let native_body_ids = native_selected.iter().filter(|rule|
         matches!(&rule.rule.effect, crate::policy::NativeEffect::ResponseBody(effect) if effect.codec != crate::policy::native::BodyCodec::Json))
         .map(|rule| rule.rule.id.clone()).collect::<Vec<_>>();
@@ -450,6 +464,11 @@ fn evaluate_response(
         actual_path.display().to_string(),
         actual_fingerprint,
     );
+    if native_key_unavailable {
+        let mut difference = ResponseDifference::body_value_mismatch();
+        difference.kind = ResponseDifferenceKind::JwtSigningKeyUnavailable;
+        report.differences.push(difference);
+    }
     if expected_status != actual_status {
         report
             .differences

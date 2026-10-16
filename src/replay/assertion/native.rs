@@ -420,6 +420,10 @@ impl NativeResponseContext {
                         .map_err(|error| {
                             format!("authenticated JWT companion rejected: {error:?}")
                         })?;
+                        if rule.ttl.as_deref() == Some(pointer) && context.source != context.target
+                        {
+                            return Err("JWT TTL is a stable business value".into());
+                        }
                         Ok(LeafObservations {
                             time_validations: if token { validated.time_validations } else { 0 },
                             nonces: if token {

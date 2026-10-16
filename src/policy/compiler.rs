@@ -801,7 +801,7 @@ fn validate_api(api: &str) -> Result<()> {
     validate_path(path)
 }
 
-fn validate_path(path: &str) -> Result<()> {
+pub(crate) fn validate_path(path: &str) -> Result<()> {
     ensure!(
         path.len() <= 4096 && !path.contains([' ', '\t']),
         "path must be bounded and contain no whitespace"

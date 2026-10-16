@@ -182,7 +182,7 @@ fn validate_match(selector: &NativeMatch) -> Result<()> {
         validate_key(key)?;
     }
     if let Some(path) = &selector.path {
-        crate::path_pattern::validate_path_pattern(path)?;
+        compiler::validate_path(path)?;
     }
     if let Some(sql) = &selector.sql {
         text(sql, "SQL selector", 8192)?;
@@ -704,7 +704,9 @@ fn validate_generated_value(value: &GeneratedValue) -> Result<()> {
             }
             Ok(())
         }
-        GeneratedValue::Reference { binding } => identifier(binding, "generated binding"),
+        GeneratedValue::Reference { binding } | GeneratedValue::Bind { binding } => {
+            identifier(binding, "generated binding")
+        }
         GeneratedValue::Time(time) => validate_time(time),
     }
 }
@@ -792,7 +794,7 @@ pub(super) fn api_parts(api: &str) -> Result<(&str, &str)> {
         method.parse::<hyper::Method>().is_ok() && method == method.to_ascii_uppercase(),
         "API selector requires an uppercase HTTP method"
     );
-    crate::path_pattern::validate_path_pattern(path)?;
+    compiler::validate_path(path)?;
     Ok((method, path))
 }
 

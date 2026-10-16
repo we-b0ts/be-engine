@@ -45,6 +45,19 @@ pub(crate) fn compare(
     native_rules: &[&CompiledNativeRule],
     clocks: AnchorClocks,
 ) -> Result<Comparison> {
+    if let (Some(source), Some(target)) = (source_params, actual_params) {
+        ensure!(
+            source.len() == target.len(),
+            "MySQL prepared parameter inventory changed"
+        );
+        ensure!(
+            source
+                .iter()
+                .zip(target)
+                .all(|(source, target)| source.kind == target.kind),
+            "MySQL prepared parameter kind changed"
+        );
+    }
     let source =
         mysql_values::materialized(source_sql, source_params).map_err(anyhow::Error::msg)?;
     let actual =
@@ -214,25 +227,6 @@ fn time_contract(time: &crate::policy::TimeContract) -> FieldContract {
         utc_offset: time.utc_offset.clone(),
         clock_group: time.clock_group.clone(),
     }
-}
-
-pub(crate) fn compare_native_values(
-    source_sql: Option<&str>,
-    source_params: Option<&[RecordedMysqlValue]>,
-    target_sql: Option<&str>,
-    target_params: Option<&[RecordedMysqlValue]>,
-    rule: &CompiledNativeRule,
-    clocks: AnchorClocks,
-) -> Result<Comparison> {
-    compare(
-        source_sql,
-        source_params,
-        target_sql,
-        target_params,
-        &[],
-        &[rule],
-        clocks,
-    )
 }
 
 pub(crate) fn witness_matches(event: &Value, rule: &CompiledNativeRule) -> Result<bool> {
