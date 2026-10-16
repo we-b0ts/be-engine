@@ -131,7 +131,7 @@ fn plan_json(
         .json_pointer
         .or_else(|| issue.representative.as_ref().map(|r| r.pointer.clone()))
         .context("rule plan requires a representative JSON Pointer")?;
-    let record = RewriteRulePlanRecord {
+    let mut record = RewriteRulePlanRecord {
         generated_witnesses: Vec::new(),
         response_jwts: Vec::new(),
         header_dates: Vec::new(),
@@ -163,6 +163,9 @@ fn plan_json(
         evidence_id: options.evidence_id,
     };
     let traffic_plan = build_plan(target_root, state, &record)?;
+    if let VerificationRulePlan::Response(plan) = &traffic_plan {
+        record.generated_witnesses = plan.time_evidence_witnesses();
+    }
     let traffic_report = traffic_plan.report()?;
     state.dependency_rule_plan = None;
     state.recorder_capture_plan = None;
@@ -270,6 +273,9 @@ pub(super) fn apply(
     plan_id: &str,
 ) -> Result<RewriteRuleReport> {
     let record = pending_plan_for_apply(state, plan_id)?;
+    if record.time.is_some() {
+        crate::GeneratedValueRulePlan::ensure_evidence_current(&record.generated_witnesses)?;
+    }
     if record.jwt.is_some() {
         return super::jwt_rule::apply(target_root, state, record);
     }
@@ -394,7 +400,7 @@ fn validate_plan_evidence(
         .as_ref()
         .filter(|plan| plan.issue_id == issue_id && plan.evidence_id == evidence_id)
     {
-        if has_generated_rule(plan) {
+        if has_generated_rule(plan) || plan.time.is_some() {
             crate::GeneratedValueRulePlan::ensure_evidence_current(&plan.generated_witnesses)
                 .context("pending generated-value evidence is stale; recover the plan and run fresh Replay")?;
         }
@@ -429,7 +435,7 @@ pub(super) fn generated_evidence_stale(
     state: &RewriteState,
     record: &RewriteRulePlanRecord,
 ) -> bool {
-    if !has_generated_rule(record) {
+    if !has_generated_rule(record) && record.time.is_none() {
         return false;
     }
     if crate::GeneratedValueRulePlan::ensure_evidence_current(&record.generated_witnesses).is_err()

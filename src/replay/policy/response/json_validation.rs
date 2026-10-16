@@ -25,7 +25,10 @@ pub(super) fn validate_json_rule_map<'a>(
         for rule in &rules.jwt {
             rule.validate()?;
             locations.push((method, path, &rule.pointer, ResponseRuleKind::Jwt));
-            if let Some(pointer) = &rule.expires_at {
+            for pointer in rule.companion_pointers() {
+                locations.push((method, path, pointer, ResponseRuleKind::Jwt));
+            }
+            if let Some(pointer) = &rule.ttl {
                 locations.push((method, path, pointer, ResponseRuleKind::Jwt));
             }
         }

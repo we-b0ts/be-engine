@@ -29,7 +29,112 @@ fn array_feedback(root: &Path, kind: ResponseRuleKind) -> ResponseRuleFeedback {
         _ => None,
     };
     feedback.json_pointers = vec!["/data/*/value".into()];
+    if feedback.time.is_some() {
+        write_time_observations(root, &feedback);
+    }
     feedback
+}
+
+fn write_time_observations(root: &Path, feedback: &ResponseRuleFeedback) {
+    let request = root.join("request.json");
+    let expected = root.join("expected.json");
+    let actual = root.join("actual.json");
+    fs::write(
+        &request,
+        r#"{"method":"GET","uri":"/api/resource/token","timestamp":"2023-11-14T22:13:20Z"}"#,
+    )
+    .unwrap();
+    let (source, target) = if feedback.kind == ResponseRuleKind::Timestamp {
+        ("1700000000", "1700000060")
+    } else {
+        ("120", "180")
+    };
+    for (path, value) in [(&expected, source), (&actual, target)] {
+        fs::write(path, serde_json::to_vec(&json!({"version":1,"status":200,"headers":{},"request_sent_at":"2023-11-14T22:14:20Z","body":{"encoding":"utf8","truncated":false,"data":json!({"data":[{"value":value},{"value":value}]}).to_string()}})).unwrap()).unwrap();
+    }
+    let mut evidence: serde_json::Value =
+        serde_json::from_slice(&fs::read(&feedback.assertion_report).unwrap()).unwrap();
+    let response = &mut evidence["cases"][0]["response"];
+    response["request_path"] = json!(request);
+    response["expected_response_path"] = json!(expected);
+    response["actual_response_path"] = json!(actual);
+    response["expected_response_fingerprint"] = json!(fingerprint(&fs::read(expected).unwrap()));
+    response["actual_response_fingerprint"] = json!(fingerprint(&fs::read(actual).unwrap()));
+    fs::write(
+        &feedback.assertion_report,
+        serde_json::to_vec(&evidence).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn time_planning_rejects_unsatisfiable_timestamps_before_policy_mutation() {
+    let temp = tempdir().unwrap();
+    let feedback = array_feedback(temp.path(), ResponseRuleKind::Timestamp);
+    let policy = fs::read(&feedback.policy_path).unwrap();
+    let actual = temp.path().join("actual.json");
+    let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&actual).unwrap()).unwrap();
+    value["body"]["data"] =
+        json!(json!({"data":[{"value":"1700000660"},{"value":"1700000060"}]}).to_string());
+    fs::write(&actual, serde_json::to_vec(&value).unwrap()).unwrap();
+    let mut evidence: serde_json::Value =
+        serde_json::from_slice(&fs::read(&feedback.assertion_report).unwrap()).unwrap();
+    evidence["cases"][0]["response"]["actual_response_fingerprint"] =
+        json!(fingerprint(&fs::read(&actual).unwrap()));
+    fs::write(
+        &feedback.assertion_report,
+        serde_json::to_vec(&evidence).unwrap(),
+    )
+    .unwrap();
+    let error = plan_response_rule(feedback.clone())
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        error.contains("TimestampOutsideRequestWindow") && error.contains("/data/0/value"),
+        "{error}"
+    );
+    assert_eq!(fs::read(&feedback.policy_path).unwrap(), policy);
+}
+
+#[test]
+fn time_plans_freeze_response_evidence_and_require_captured_clocks() {
+    for defect in ["before_plan", "after_plan", "missing_clock"] {
+        let temp = tempdir().unwrap();
+        let feedback = array_feedback(temp.path(), ResponseRuleKind::Duration);
+        let policy = fs::read(&feedback.policy_path).unwrap();
+        let actual = temp.path().join("actual.json");
+        let plan = if defect == "after_plan" {
+            Some(plan_response_rule(feedback.clone()).unwrap())
+        } else {
+            None
+        };
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&actual).unwrap()).unwrap();
+        if defect == "missing_clock" {
+            value.as_object_mut().unwrap().remove("request_sent_at");
+        } else {
+            value["status"] = json!(201);
+        }
+        fs::write(&actual, serde_json::to_vec(&value).unwrap()).unwrap();
+        if defect == "missing_clock" {
+            let mut evidence: serde_json::Value =
+                serde_json::from_slice(&fs::read(&feedback.assertion_report).unwrap()).unwrap();
+            evidence["cases"][0]["response"]["actual_response_fingerprint"] =
+                json!(fingerprint(&fs::read(&actual).unwrap()));
+            fs::write(
+                &feedback.assertion_report,
+                serde_json::to_vec(&evidence).unwrap(),
+            )
+            .unwrap();
+        }
+        if let Some(plan) = plan {
+            assert!(plan.apply().is_err());
+        } else {
+            assert!(plan_response_rule(feedback.clone()).is_err(), "{defect}");
+        }
+        assert_eq!(fs::read(&feedback.policy_path).unwrap(), policy);
+    }
 }
 
 #[test]

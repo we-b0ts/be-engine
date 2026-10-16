@@ -34,7 +34,8 @@ evidence-backed plan/apply and fresh verification with existing recordings.
 IDs, signed Redis JSON writes, correlated write times and multipart boundaries.
 [JWT response rules](jwt-response-rules.md) validate signatures, stable claims
 and request-relative validity for freshly issued HTTP JSON tokens, including
-URL query tokens, typed base64url nonces and linked RFC3339 expiry fields.
+URL query tokens, typed base64url nonces, RS256 public-key verification from
+recorded MySQL results, and linked integer/RFC3339 expiry and TTL fields.
 
 ## Rust Tooling
 

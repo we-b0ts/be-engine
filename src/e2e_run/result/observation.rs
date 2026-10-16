@@ -151,13 +151,7 @@ fn jwt_candidate(value: &Value, depth: usize) -> bool {
         return false;
     }
     match value {
-        Value::String(raw) => {
-            crate::request_rules::jwt::Token::parse(raw)
-                .ok()
-                .flatten()
-                .is_some()
-                || crate::request_rules::jwt::url_query::has_candidate(raw)
-        }
+        Value::String(raw) => crate::ResponseJwtRule::is_candidate(raw),
         Value::Array(values) => values.iter().take(64).any(|v| jwt_candidate(v, depth + 1)),
         Value::Object(values) => values
             .values()

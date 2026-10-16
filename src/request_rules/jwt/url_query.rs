@@ -54,7 +54,7 @@ pub(crate) fn select<'a>(raw: &'a str, parameter: &str) -> Result<QueryToken<'a>
 }
 
 /// Format-only discovery. No signature, generation, or rule eligibility is proven.
-pub(crate) fn has_candidate(raw: &str) -> bool {
+pub(crate) fn has_candidate_matching(raw: &str, candidate: impl Fn(&str) -> bool) -> bool {
     if validate(raw).is_err() {
         return false;
     }
@@ -64,6 +64,6 @@ pub(crate) fn has_candidate(raw: &str) -> bool {
         .is_some_and(|(_, query)| {
             url::form_urlencoded::parse(query.as_bytes())
                 .take(64)
-                .any(|(_, value)| super::Token::parse(&value).ok().flatten().is_some())
+                .any(|(_, value)| candidate(&value))
         })
 }

@@ -7,6 +7,7 @@ use crate::replay::{
 };
 use crate::request_rules::keys::ResolvedSigningKey;
 
+#[derive(Clone)]
 pub struct ResponseJwtRuleFeedback {
     pub policy_path: PathBuf,
     pub api: String,
@@ -44,7 +45,9 @@ pub fn plan_response_jwt_rule(feedback: ResponseJwtRuleFeedback) -> Result<Gener
         .jwt;
     for rule in &feedback.rules {
         rule.validate()?;
-        keys.push(ResolvedSigningKey::resolve(root, &rule.signing_key_source)?);
+        if let Some(source) = rule.signing_key_source.startup() {
+            keys.push(ResolvedSigningKey::resolve(root, &source)?);
+        }
         if let Some(existing) = entries.iter().find(|old| old.pointer == rule.pointer) {
             ensure!(
                 existing == rule,
@@ -105,7 +108,10 @@ pub fn plan_response_jwt_rule(feedback: ResponseJwtRuleFeedback) -> Result<Gener
             .context("source JWT response requires complete unique-member JSON")?;
         let target = crate::json_value::parse(&target_body)
             .context("target JWT response requires complete unique-member JSON")?;
-        let mut comparison = JwtComparison::load(&fields, &feedback.policy_path, &source, &target);
+        let mut comparison =
+            JwtComparison::load(&fields, &feedback.policy_path, &request, &source, &target);
+        comparison.ensure_keys_available()?;
+        witnesses.extend(comparison.key_witnesses().cloned());
         let mut changed = false;
         let mut selected = false;
         for field in &fields {

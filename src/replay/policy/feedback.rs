@@ -16,6 +16,7 @@ pub use mysql_time::{
 mod generated_values;
 mod model;
 mod response_body;
+mod time_plan;
 pub use generated_values::{
     DynamicValueMysqlTimeRule, DynamicValueRedisTimeRule, DynamicValueRuleFeedback,
     GeneratedValueRulePlan, GeneratedValueRuleReport, RedisJsonTimeValueSelector,
@@ -60,9 +61,13 @@ pub struct ResponseRulePlan {
     original: String,
     updated: String,
     report: ResponseRuleReport,
+    witnesses: Vec<(PathBuf, String)>,
 }
 
 impl ResponseRulePlan {
+    pub(crate) fn time_evidence_witnesses(&self) -> Vec<(PathBuf, String)> {
+        self.witnesses.clone()
+    }
     pub fn report(&self) -> &ResponseRuleReport {
         &self.report
     }
@@ -78,6 +83,12 @@ impl ResponseRulePlan {
             current == self.original,
             "replay policy changed after planning; rerun plan before applying"
         );
+        for (path, identity) in &self.witnesses {
+            ensure!(
+                fingerprint(&read_published_report(path, "response time evidence")?) == *identity,
+                "response time evidence changed after planning; rerun plan"
+            );
+        }
         if self.report.changed {
             write_atomic(&self.policy_path, self.updated.as_bytes())?;
         }
@@ -108,6 +119,17 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
     let assertion_bytes = read_regular(&feedback.assertion_report, "assertion report")?;
     let mut assertions: AssertionEvidence =
         serde_json::from_slice(&assertion_bytes).context("invalid assertion report")?;
+    let detail_witnesses = assertions
+        .cases
+        .iter()
+        .filter_map(|case| {
+            let response = case.response.as_ref()?;
+            Some((
+                response.detail_report.clone()?,
+                response.detail_fingerprint.clone()?,
+            ))
+        })
+        .collect::<Vec<_>>();
     hydrate_assertion_details(&mut assertions)?;
     ensure!(
         assertions.expected_response == "assertions_only"
@@ -150,7 +172,23 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
         true,
         justification.separator.as_deref(),
     )?;
-    build_response_rule_plan(
+    let mut witnesses = if let Some(time) = justification.time {
+        time_plan::verify(&feedback.api, &feedback.json_pointers, &assertions, time)?
+    } else {
+        Vec::new()
+    };
+    if justification.time.is_some() {
+        witnesses.extend(detail_witnesses);
+        witnesses.push((
+            feedback.assertion_report.clone(),
+            fingerprint(&assertion_bytes),
+        ));
+        witnesses.push((
+            feedback.aggregate_report.clone(),
+            fingerprint(&aggregate_bytes),
+        ));
+    }
+    let mut plan = build_response_rule_plan(
         feedback.policy_path,
         feedback.kind,
         feedback.api,
@@ -164,7 +202,9 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
             aggregate_fingerprint: fingerprint(&aggregate_bytes),
             aggregate_dirty: aggregate.dirty,
         },
-    )
+    )?;
+    plan.witnesses = witnesses;
+    Ok(plan)
 }
 
 fn hydrate_assertion_details(assertions: &mut AssertionEvidence) -> Result<()> {
@@ -527,6 +567,7 @@ fn build_response_rule_plan(
         ),
     };
     Ok(ResponseRulePlan {
+        witnesses: Vec::new(),
         policy_path: policy_path.clone(),
         original: prepared.original,
         updated,

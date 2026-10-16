@@ -160,6 +160,6 @@ pub use feedback::{
 
 pub use feedback::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
 
-pub use response::ResponseJwtRule;
+pub use response::{ResponseJwtAlgorithm, ResponseJwtKeySource, ResponseJwtRule};
 
 pub use feedback::{ResponseJwtRuleFeedback, plan_response_jwt_rule};

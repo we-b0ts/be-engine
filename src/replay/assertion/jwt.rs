@@ -4,16 +4,16 @@ use std::{collections::BTreeMap, path::Path};
 use serde_json::Value;
 
 use super::{RequestTimes, ResponseDifferenceKind};
+mod companions;
+mod keys;
+mod rsa;
 use crate::{
     replay::policy::{ResponseField, ResponseJwtRule},
-    request_rules::{
-        jwt::contract::{self, Contract, Failure},
-        keys::ResolvedSigningKey,
-    },
+    request_rules::jwt::contract::{self, Contract, Failure},
 };
 
 pub(in crate::replay) struct JwtComparison<'a> {
-    keys: BTreeMap<String, Option<ResolvedSigningKey>>,
+    keys: BTreeMap<String, anyhow::Result<keys::VerificationKey>>,
     nonces: BTreeMap<(String, String), NonceBindings>,
     documents: [&'a Value; 2],
 }
@@ -28,6 +28,7 @@ impl<'a> JwtComparison<'a> {
     pub(in crate::replay) fn load(
         fields: &[ResponseField],
         policy: &Path,
+        request: &Path,
         source: &'a Value,
         target: &'a Value,
     ) -> Self {
@@ -41,7 +42,11 @@ impl<'a> JwtComparison<'a> {
                 field.jwt.as_ref().map(|rule| {
                     (
                         field.id.clone(),
-                        ResolvedSigningKey::resolve(root, &rule.signing_key_source).ok(),
+                        keys::VerificationKey::resolve(
+                            root,
+                            &rule.signing_key_source,
+                            request.parent().unwrap_or(Path::new(".")),
+                        ),
                     )
                 })
             })
@@ -51,6 +56,23 @@ impl<'a> JwtComparison<'a> {
             nonces: BTreeMap::new(),
             documents: [source, target],
         }
+    }
+
+    pub(in crate::replay) fn key_witnesses(
+        &self,
+    ) -> impl Iterator<Item = &(std::path::PathBuf, String)> {
+        self.keys
+            .values()
+            .filter_map(|key| key.as_ref().ok()?.witness.as_ref())
+    }
+
+    pub(in crate::replay) fn ensure_keys_available(&self) -> anyhow::Result<()> {
+        for key in self.keys.values() {
+            if let Err(error) = key {
+                anyhow::bail!("response_jwt_key_unavailable: {error}");
+            }
+        }
+        Ok(())
     }
 
     pub(in crate::replay) fn compare(
@@ -66,7 +88,7 @@ impl<'a> JwtComparison<'a> {
         let key = self
             .keys
             .get(&field.id)
-            .and_then(Option::as_ref)
+            .and_then(|key| key.as_ref().ok())
             .ok_or(ResponseDifferenceKind::JwtSigningKeyUnavailable)?;
         let token_pointer = ResponseJwtRule::concrete_pointer(&rule.pointer, pointer);
         let [Some(source), Some(target)] = self
@@ -75,19 +97,8 @@ impl<'a> JwtComparison<'a> {
         else {
             return Err(ResponseDifferenceKind::JwtInvalid);
         };
-        let validated = compare(rule, source, target, times, key.bytes())?;
-        if let Some(pattern) = &rule.expires_at {
-            let expiry_pointer = ResponseJwtRule::concrete_pointer(pattern, pointer);
-            for (document, exp) in self.documents.into_iter().zip(validated.exp) {
-                let expiry = document
-                    .pointer(&expiry_pointer)
-                    .and_then(Value::as_str)
-                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok());
-                if !expiry.is_some_and(|value| value.timestamp() == exp) {
-                    return Err(ResponseDifferenceKind::JwtExpiryMismatch);
-                }
-            }
-        }
+        let validated = compare(rule, source, target, times, &key.bytes, key.kid.as_deref())?;
+        companions::compare(rule, pointer, self.documents, &validated)?;
         let nonces = validated.nonces;
         // Stage every selected claim before mutating any nonce binding.
         for nonce in &nonces {
@@ -124,6 +135,7 @@ pub(in crate::replay) fn compare(
     target: &Value,
     times: RequestTimes,
     key: &[u8],
+    kid: Option<&str>,
 ) -> Result<contract::Validated, ResponseDifferenceKind> {
     let (Some(source_time), Some(target_time)) = (times.source, times.target) else {
         return Err(ResponseDifferenceKind::TimeReferenceMissing);
@@ -153,18 +165,23 @@ pub(in crate::replay) fn compare(
         .as_ref()
         .map(|values| [&values[0], &values[1]])
         .unwrap_or([source, target]);
-    contract::compare(
-        source,
-        target,
-        Contract {
-            algorithm: rule.algorithm,
-            key,
-            anchors: [nanos(source_time), nanos(target_time)],
-            tolerance: 5_000_000_000,
-            dynamic_claims: &rule.dynamic_claims,
-        },
-    )
-    .map_err(|failure| match failure {
+    let anchors = [nanos(source_time), nanos(target_time)];
+    let validated = if let Some(algorithm) = rule.algorithm.hmac() {
+        contract::compare(
+            source,
+            target,
+            Contract {
+                algorithm,
+                key,
+                anchors,
+                tolerance: 5_000_000_000,
+                dynamic_claims: &rule.dynamic_claims,
+            },
+        )
+    } else {
+        rsa::compare(source, target, key, kid, anchors, &rule.dynamic_claims)
+    };
+    validated.map_err(|failure| match failure {
         Failure::Invalid => ResponseDifferenceKind::JwtInvalid,
         Failure::Algorithm => ResponseDifferenceKind::JwtAlgorithmMismatch,
         Failure::Signature => ResponseDifferenceKind::JwtSignatureInvalid,
