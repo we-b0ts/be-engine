@@ -3,9 +3,10 @@
 Task: `KCYgNKF0ZW`. Design and implementation baseline: `14439d5`
 (`feat(replay): validate generated Redis timestamps precisely`).
 
-P0 established the requirements below. P1/P2 are committed; P3-P5 implement the
-native effects, whole-policy owners and direct cutover. Focused validation and
-final repository checks are recorded with the corresponding phase commits.
+P0 established the requirements below. P1-P4 implement the shared value kernel,
+native effects and whole-policy owners; P5 cuts over the public workflow and
+reference configuration. Focused validation and final repository checks are
+recorded with the corresponding phase commits.
 Each phase may contain several focused commits.
 
 The objective is reusable, concise rules with complete evidence. A new
@@ -89,6 +90,17 @@ Kafka key/header/value and Motan envelopes retain their existing bounded
 protocol support. No generic value adapter claims broader broker, transaction,
 serialization or connection support than its protocol currently provides.
 
+The P5 refresh uses the current reference configuration and the inspected frozen
+Source image `sha256:b0e209bcab1c67a2a2c793b0c818a0964ddbf4e689618f99a1a022479a6904c7`.
+Its 64 dependency requirements become part of 112 self-contained typed rules;
+all 185 capture paths and 27 process selectors remain represented. The refresh
+also replaces whole-value random allowances with signed download URLs,
+AES-CBC plaintext contracts and shared VNC template fragments where Source
+supports those stronger checks. Method-free legacy identity scopes are bound to
+the actual Source generator methods, rather than a converter's default method.
+Configuration loading and compilation are checked offline; this does not certify
+the reference Target's behavior or renew any existing execution evidence.
+
 ## Module boundaries
 
 | Owner | Responsibility | Must not own |
@@ -112,11 +124,17 @@ new modules and any touched file approaching 1000 lines.
 ## New configuration core
 
 The document discriminator is `format: traffic-policy/v1`; `rules` is the
-ordered authoring list, not first-match-wins permission. Every rule has an ID,
+authoring list; ordinary comparison permissions are combined by explicit field
+ownership. Every rule has an ID,
 surface, match scope, slot, codec, contract and project proof. Rules may have a
 Source `when` condition and an explicit `delivery.rebase_time` field subset.
 The compiler rejects unknown fields, ambiguous overlapping ownership and
 unsupported combinations before any Target traffic is admitted.
+
+The native `capture_http_response` owner retains its existing ordered plugin
+selection: the first matching plugin is selected, while ordinary matching URL
+pointers are combined. Its authored relative order enters the capture and full
+policy identities. Reordering unrelated comparison rules has no semantic effect.
 
 This example uses two encodings with the same collection semantics, and
 separate request, delivery and primary-response time permissions:
@@ -226,6 +244,13 @@ GET response extraction also requires preserving null/missing/error and
 protocol envelope distinctions. Decoding a GET value is automatically reusable
 capability; enabling a comparison, delivery change or sharing permission is not.
 
+A comparison field absent from both sides of one Source response shape is
+inactive; the complete value still compares strictly. A Target-only addition or
+Source-only deletion fails. Planning requires at least one genuine Source hit
+for every proposed rule across the complete selected inventory. Explicit delivery
+writes additionally require the declared Source timestamp to exist before any
+exchange is admitted; absence cannot authorize a synthetic dependency input.
+
 Proof belongs to each project binding. Source revision, immutable witnesses
 and schema/clock/key identity are frozen by the engine rather than copied from
 a reusable example. Reusable semantic definitions may reduce authoring
@@ -316,7 +341,10 @@ rules:
       fact: Active durations use now minus submitted_at; terminal states freeze at updated_at and therefore remain exact.
 ```
 
-Template bindings here correlate selected fields within one response rule. They
+Plain UUID/random contracts validate only their declared shape. Use template
+bindings or native identity/nonce effects when Source semantics require copied
+values or a one-to-one relationship. Template bindings here correlate selected
+fields within one response rule. They
 do not imply a cross-request Redis binding. Integer identities are capture-only
 until a typed reference adapter exists; unsupported references reject at compile
 time rather than becoming silent runtime gaps. String identities retain explicit
@@ -324,12 +352,18 @@ allowed cross-resource references through their existing staged runtime owner.
 
 `response_generated.encrypted_json` declares the cipher envelope and effective
 startup key. AES-CBC decoding checks IV, key length, padding and complete JSON;
-plaintext is exact except explicit nested contracts. A Source-default cipher key
+plaintext is exact except explicit nested contracts. Staged IV mappings preserve
+Source/Target reuse relationships within the same rule and response, including
+unordered element pairing. This is neither an entropy guarantee nor a persistent
+cross-case IV registry. A Source-default cipher key
 requires a file hash and literal range in the frozen Source image, and is usable
 only when the selected startup field is absent. Malformed keys cannot trigger a
 fallback. JWT signing never uses this cipher fallback.
 
-The authoritative path is `project.policy` (Target-root relative). All loaders,
+The authoritative path is `project.policy` (Target-root relative). Its parent
+directories must remain inside the repository and cannot be symlink aliases;
+the Source owner also rejects a symlink policy file. An as-yet-uncreated nested
+policy is supported during initialization. All loaders,
 capture writers, configuration-commit gates, key resolution, fingerprints and
 progress publication resolve this path. Writers preserve every other rule and
 nested proof in the document. Only the new format is accepted; old DTOs remain
@@ -491,11 +525,11 @@ quality and Source-review gates remain in force.
 | Phase | Implementation state | Deliverable and hard prerequisite | Exit evidence |
 | --- | --- | --- | --- |
 | P0 | Complete | Requirement map, new document vocabulary, boundaries and nonnegotiable effect/evidence contracts. | This reviewed document against baseline and reference configuration; no implementation claim. |
-| P1 | Implemented | Smallest complete JSON path through all three surfaces, Source proof entry, discovery/plan/apply/audit/recovery and verification. Includes the strict schema, typed IR/capability boundary, shared time core, pure decisions and frozen evidence needed for this path. | Self-contained JSON comparison/delivery examples; bounded discovery, reviewable plan, stale-safe apply/recovery, strict remainder, microsecond precision and required fresh genuine Replay. |
-| P2 | Implemented | PB plus Memcached/HTTP/SQL cross-protocol slot/codec reuse. Requires the complete P1 JSON transaction rather than a compiler-only foundation. | JSON/PB contract parity, explicit typed PB fields and later descriptors, writable envelope preservation, HTTP/Redis/Memcached/SQL symmetry and unchanged protocol lifecycle. |
-| P3 | Validation in progress | Identity, nonce, cryptographic envelopes and propagation. Requires P1 staged decisions and P2 typed extraction/reconstruction. | One-to-one capture/reference, script/PUBLISH/time composition, JWT/URL/crypto checks, stable remainder and atomic failure behavior. |
-| P4 | Validation in progress | API origin, ownership, finite sharing, snapshot and Source capture/inbound input domains. Requires independent P1-P3 value decisions and effect identities. | Immutable Source cause/identity proof; strict lane/transaction/finite gates; reversible classification; explicit input/signature transformations and capture obligations. |
-| P5 | Validation in progress | Direct new-format cutover, removal of old entry points and reference-project configuration on a separate project branch. Requires all inventory rows and native domains to be mapped. | No fallback format, no lost scope/proof, checked examples/docs, repository checks and appropriate real recording/Replay evidence. |
+| P1 | Complete | Smallest complete JSON path through all three surfaces, Source proof entry, discovery/plan/apply/audit/recovery and verification. Includes the strict schema, typed IR/capability boundary, shared time core, pure decisions and frozen evidence needed for this path. | Self-contained JSON comparison/delivery examples; bounded discovery, reviewable plan, stale-safe apply/recovery, strict remainder, microsecond precision and required fresh genuine Replay. |
+| P2 | Complete | PB plus Memcached/HTTP/SQL cross-protocol slot/codec reuse. Requires the complete P1 JSON transaction rather than a compiler-only foundation. | JSON/PB contract parity, explicit typed PB fields, writable envelope preservation, HTTP/Redis/Memcached/SQL symmetry and unchanged protocol lifecycle. |
+| P3 | Complete | Identity, nonce, cryptographic envelopes and propagation. Requires P1 staged decisions and P2 typed extraction/reconstruction. | One-to-one capture/reference, script/PUBLISH/time composition, JWT/URL/crypto checks, stable remainder and atomic failure behavior. |
+| P4 | Complete | API origin, ownership, finite sharing, snapshot and Source capture/inbound input domains. Requires independent P1-P3 value decisions and effect identities. | Immutable Source cause/identity proof; strict lane/transaction/finite gates; reversible classification; explicit input/signature transformations and capture obligations. |
+| P5 | Complete for engine and offline configuration migration | Direct new-format cutover, removal of old entry points and reference-project configuration on a separate project branch. Requires all inventory rows and native domains to be mapped. | No fallback format, no lost scope/proof, checked examples/docs, repository checks and tested fresh Recording/Replay obligations. Reference-project Target execution remains unverified. |
 
 Each phase is independently reviewable and committed. If implementation changes
 a boundary or public spelling, update this document in that phase. P5 must not
@@ -525,3 +559,60 @@ are required when a selected rule needs uncaptured or changed Source facts;
 never synthesize missing historical exchanges. All normal repository checks
 remain required before opening or updating an MR, including formatting, tests,
 Clippy and the code-organization check against the intended target branch.
+
+## Delivered implementation and validation
+
+Both repositories use branch `codex/unified-rule-contracts-KCYgNKF0ZW` in
+isolated worktrees. Phase anchors below identify the initial cohesive delivery;
+subsequent phase-labelled commits close protocol/evidence boundaries and final
+regressions rather than mixing unrelated work into a single commit.
+
+| Phase | Initial delivery commit |
+| --- | --- |
+| P0 | `aa161b0` |
+| P1 | `ac1428d` |
+| P2 | `4542e91` |
+| P3 | `1c2b63a` |
+| P4 | `11e1a6f` |
+| P5 | `8e0b592` |
+
+Master commits `f82a7b6` (explicit clock groups) and `044b8c2` (literal HTTP
+paths) were merged and retained, together with the baseline microsecond time
+support. Final responsibility review confirms that the shared value kernel
+remains pure, policy compilation owns validation and identities, protocol
+adapters own complete envelopes and lifecycle, and the coordinator owns frozen
+evidence and stale-safe transactions. Source writers preserve unrelated rules,
+nested proofs and authored response-plugin precedence. No changed Rust product
+file exceeds 1000 lines; registry settings and dependencies were unchanged.
+
+Final repository checks passed:
+
+```sh
+cargo fmt --check
+cargo test --no-fail-fast
+cargo clippy --all-targets -- -D warnings
+CODE_ORG_BASE=origin/master plugins/ai-software-engineering/skills/backend-rewrite/scripts/check-code-organization
+git diff --check
+```
+
+All test targets together report 2381 passed, zero failed and four existing
+ignored tests (two Docker-dependent host tests and two MySQL benchmarks).
+The library contributes 2272 passing tests. No migration utility or additional
+ignored test remains in the product tree.
+
+Reference-project commit `337bcc0e4` changes only the four policy configuration
+paths: it adds `.traffic-e2e/policy.yaml`, points `project.policy` to it and
+removes the two retired rule files. The migrated policy contains 112 rules
+(five shared value rules and 107 typed native rules), retaining all 64 original
+dependency rule IDs, 185 capture paths and 27 process selectors. Its SHA-256 is
+`cc90220a779217b045dc383b065b27d08c3422d710b0b214e34ddb342f19b36b`.
+The latest source requirements include runtime-token validation, S3 GET signing
+time and the OIDC CLI session key family. Loading, compilation and recorder
+projection of the actual committed project configuration passed offline using
+the final engine library.
+
+The original reference checkout stays on `replay/20261017-1`; its pre-existing
+uncommitted progress remains untouched. This delivery does not execute its
+Target, start recording, install an engine, or renew execution evidence.
+Adoption still requires the engine-issued genuine Replay obligations and fresh
+Recording when capture, snapshot or missing Source evidence requires it.
