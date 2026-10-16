@@ -204,7 +204,7 @@ fn facts(
             "For time-drift candidates, inspect signing_key_discovery for target variable names, startup mount paths/access modes, existing bindings and discovery commands. Trace the source/target JWT path, configuration precedence and expiration leeway, then use the returned rule planner with the proven signing-key source. Plan/apply verifies original signatures.".into())),
         QUERY_IP_CAPTURE => Ok((super::response_url_evidence::facts(target_root, state)?,
             vec!["The IP omission is reported by target analysis; source consumption and absence of equivalent recorded calls require source/dependency evidence.".to_string()],
-            "Prove the IP origin. For a supported JSON URL, execute the returned recorder-capture plan and apply, then verify a fresh recording before submitting a remaining system defect.".to_string())),
+            "Prove the IP origin. For a supported JSON URL, write a self-contained capture_http_response rule, use rule plan --file with this evidence, inspect and apply the plan, then verify a fresh recording before submitting a remaining system defect.".to_string())),
         QUERY_CASE_RESPONSE_DIFFERENCES => {
             case_response_difference_facts(target_root, state, issue, offset)
         }

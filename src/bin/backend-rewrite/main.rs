@@ -1,4 +1,3 @@
-mod jwt_rule;
 mod review;
 use std::io::Write;
 use std::path::PathBuf;
@@ -11,18 +10,17 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_e2e::{
-    ResponseRuleKind, RewriteCaseDependenciesOptions, RewriteCasePatternApplyOptions,
-    RewriteContext, RewriteNextOptions, RewriteRevalidationRequestOptions, RewriteRouteCause,
-    RewriteRouteOptions, RewriteTargetQualityOptions, RewriteWorkerConfirmOptions,
-    RewriteWorkerReportOptions, RewriteWorkerTransferOptions, apply_rewrite_case_patterns,
-    confirm_rewrite_worker, inventory_rewrite, query_rewrite_case_dependencies, recover_rewrite,
-    report_rewrite_worker, request_rewrite_revalidation, resume_rewrite_replay_planning,
-    retry_rewrite_operation, route_rewrite, start_rewrite_next, start_rewrite_target_quality,
-    status_rewrite, transfer_rewrite_worker, verify_rewrite_repair,
+    RewriteCaseDependenciesOptions, RewriteCasePatternApplyOptions, RewriteContext,
+    RewriteNextOptions, RewriteRevalidationRequestOptions, RewriteRouteCause, RewriteRouteOptions,
+    RewriteTargetQualityOptions, RewriteWorkerConfirmOptions, RewriteWorkerReportOptions,
+    RewriteWorkerTransferOptions, apply_rewrite_case_patterns, confirm_rewrite_worker,
+    inventory_rewrite, query_rewrite_case_dependencies, recover_rewrite, report_rewrite_worker,
+    request_rewrite_revalidation, resume_rewrite_replay_planning, retry_rewrite_operation,
+    route_rewrite, start_rewrite_next, start_rewrite_target_quality, status_rewrite,
+    transfer_rewrite_worker, verify_rewrite_repair,
 };
 
 mod config_protocol;
-mod dependency_rule;
 mod evidence;
 mod expert;
 mod project_init;
@@ -126,10 +124,8 @@ enum RewriteCommand {
     CasePattern(CasePatternArgs),
     /// Inspect an issue overview or execute one returned bounded evidence query.
     Evidence(evidence::EvidenceArgs),
-    /// Plan or apply evidence-backed inbound request, dependency request or response rules.
+    /// Plan/apply/recover self-contained rules using current Source-backed evidence.
     Rule(RuleArgs),
-    /// Classify dependency ownership or plan/apply dependency value and scope rules.
-    DependencyRule(dependency_rule::DependencyRuleArgs),
     /// Plan or apply one source-proven Breeze resource capture rule.
     RecorderCapture(recorder_capture::RecorderCaptureArgs),
     /// Submit a source-backed non-target-code attribution for controlled routing.
@@ -245,16 +241,6 @@ impl RuleApplyArgs {
             .or(self.plan_id.as_deref())
             .expect("clap requires a plan ID")
     }
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum RuleKindArg {
-    Timestamp,
-    Duration,
-    Uuid,
-    Random,
-    Unordered,
-    UnorderedJoinedString,
 }
 
 #[derive(Debug, Args)]
@@ -542,7 +528,6 @@ async fn run(cli: Cli) -> Result<()> {
             print_json(&args.query(RewriteContext { target_root })?, pretty)
         }
         RewriteCommand::Rule(args) => rule::run(target_root, args, pretty),
-        RewriteCommand::DependencyRule(args) => dependency_rule::run(target_root, args, pretty),
         RewriteCommand::RecorderCapture(args) => recorder_capture::run(target_root, args, pretty),
         RewriteCommand::Route(args) => {
             let cause = if matches!(args.cause, RouteCauseArg::UnrecordedIp) {
@@ -645,19 +630,6 @@ async fn run(cli: Cli) -> Result<()> {
             &recover_rewrite(RewriteContext { target_root }).await?,
             pretty,
         ),
-    }
-}
-
-impl From<RuleKindArg> for ResponseRuleKind {
-    fn from(value: RuleKindArg) -> Self {
-        match value {
-            RuleKindArg::Timestamp => Self::Timestamp,
-            RuleKindArg::Duration => Self::Duration,
-            RuleKindArg::Uuid => Self::Uuid,
-            RuleKindArg::Random => Self::Random,
-            RuleKindArg::Unordered => Self::Unordered,
-            RuleKindArg::UnorderedJoinedString => Self::UnorderedJoinedString,
-        }
     }
 }
 

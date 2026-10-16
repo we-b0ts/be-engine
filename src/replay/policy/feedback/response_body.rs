@@ -304,6 +304,7 @@ fn load_focused_e2e_evidence(
 }
 
 pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<ResponseBodyRulePlan> {
+    crate::policy::retired_authoring()?;
     parse_api(&feedback.api)?;
     let original = read_regular_text(&feedback.policy_path, "replay policy")?;
     let mut loaded = load_replay_policy(&feedback.policy_path)?;

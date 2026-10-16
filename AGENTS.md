@@ -56,7 +56,7 @@ cargo test proxy_integration
 For local recording and replay:
 
 ```bash
-traffic-e2e diagnose recorder --config config/project.example.yaml
+traffic-e2e diagnose recorder --config .traffic-e2e/project.yaml
 traffic-e2e replay path/to/case-dir
 traffic-e2e replay --no-intercept path/to/case-dir
 traffic-e2e target exec -- path/to/prebuilt-target

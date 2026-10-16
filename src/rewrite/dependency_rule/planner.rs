@@ -457,9 +457,8 @@ pub(super) fn build_plan(
             },
         )?));
     }
-    let rules_path = target_root
-        .join(crate::repository::TRAFFIC_E2E_ROOT)
-        .join(crate::config::SOURCE_TRAFFIC_POLICY_FILE);
+    let rules_path =
+        crate::config::resolve_unified_policy_path(&target_root.join(".traffic-e2e/project.yaml"))?;
     match &record.spec {
         RewriteDependencyRuleSpec::MysqlApiTriggered { selector } => Ok(
             DependencyRulePlan::MysqlApiTriggered(crate::plan_api_triggered_mysql(

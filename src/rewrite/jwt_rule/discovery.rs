@@ -35,7 +35,7 @@ pub(super) fn query(root: &Path) -> Value {
     };
     json!({
         "environment": environment, "startup_mounts": mounts, "configured_profiles": profiles,
-        "selection": "Trace the JWT key name, dotenv file path and configuration precedence in source/target code. Use --target-env NAME for an effective startup variable, or --target-key-file CONTAINER_PATH --target-key-field NAME for a dotenv file within a mount with writable=false. A directory mount may contain the file. These are available inputs, not proof of the signing-key source; plan/apply verifies the original signature. The configured profile source is persisted in verification.yaml. No target process or secret disclosure is required."
+        "selection": "Trace the JWT key name, dotenv file path and configuration precedence in source/target code. Declare signing_key.source: {kind: target_env, name: NAME} for an effective startup variable, or {kind: target_file, path: CONTAINER_PATH, field: NAME} for a dotenv file within a mount with writable=false. A directory mount may contain the file. These are available inputs, not proof of the signing-key source; plan/apply verifies the original signature. Keep the key source inline in the self-contained input_jwt/response_jwt effect in project.policy. Use rule plan --file <rule.yaml> --evidence <id>. No target process or secret disclosure is required."
     })
 }
 

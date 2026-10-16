@@ -321,6 +321,7 @@ impl MysqlTimeRulePlan {
         &self.report
     }
     pub fn apply(self) -> Result<MysqlTimeRuleReport> {
+        crate::policy::retired_authoring()?;
         ensure!(
             fs::read_to_string(&self.report.policy)? == self.original,
             "replay policy changed after planning; rerun plan before applying"
@@ -336,6 +337,7 @@ impl MysqlTimeRulePlan {
 }
 
 pub fn plan_mysql_time_rule(feedback: MysqlTimeRuleFeedback) -> Result<MysqlTimeRulePlan> {
+    crate::policy::retired_authoring()?;
     let original = fs::read_to_string(&feedback.policy_path)?;
     let mut loaded = load_replay_policy(&feedback.policy_path)?;
     let s = &feedback.selector;

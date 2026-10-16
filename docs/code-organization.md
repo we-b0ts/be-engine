@@ -227,7 +227,8 @@ is unclear.
   timestamp-evidence child verifies immutable witnesses.
   `rewrite/evidence/rule_guidance/http_header_timestamp` projects bounded
   candidates without proving source semantics. The coordinator model and HTTP
-  CLI children own dependency-rule persistence and command projection.
+  The unified rule transaction owns authoring; protocol children own only their
+  typed domain behavior and command projection.
 - `gateway/motan` owns primary Motan request admission, fixed-response routing,
   matched-source forwarding, and primary-case persistence orchestration for
   both Motan1 and Motan2.
@@ -311,7 +312,7 @@ is unclear.
   the corresponding time-shift rule.
 - `http/rewrite/json_urls` owns JSON Pointer URL substitution and discovered
   HTTP routes. Recorder configuration owns concise rule validation and the
-  source-traffic-policy overlay; no application-specific sandbox plugin is
+  typed Source-policy overlay; no application-specific sandbox plugin is
   required.
 - `local_interception/egress_counters` owns read-only firewall command parsing.
   `replay/egress_counter` owns bounded sampling and per-case counter differences;
@@ -533,7 +534,7 @@ is unclear.
   for source-traffic evidence acquisition and classification policy. Static
   recorder fields remain embedded in `.traffic-e2e/project.yaml`; planners
   validate both documents and atomically replace only
-  `.traffic-e2e/source-traffic-policy.yaml`.
+  the unified file named by `project.policy`.
 - Config, TLS, DNS, and process lookup remain focused infrastructure concerns.
 - `platform/mod.rs` owns one managed subprocess composition boundary: it maps
   validated project/recorder state into the staged shell runtime and collects
@@ -791,3 +792,31 @@ explicit repository-wide audit.
   failed and client-termination exchanges remain blockers; final success and
   policy usage are still committed only after delivery. Other protocols keep
   their existing consumption-based admission.
+
+
+## Unified policy responsibilities
+
+- `policy/{schema,native,native_compile,strict_map,capability}` owns closed typed
+  contracts, Source scope and pure validation. Unknown combinations reject before
+  replay; adapter admission and runtime construction share typed projections.
+- `value_contract/{json,encoded,time,generated,delivery}` owns pure values, whole
+  element pairing, microsecond relationships, conditional fields and staged
+  nonces/templates. Keys are borrowed immutable inputs; bytes and plaintext do
+  not enter errors or reports.
+- `replay/policy/native_projection` translates typed effects to existing domain
+  data. Its SourceSession exercises a complete immutable Source trace in private
+  state; it cannot claim live Target work or certify Target correctness.
+- Protocol adapters keep envelope/session/lane/transaction/claim/delivery and
+  termination responsibility. They call shared value contracts only for selected
+  slots. SQL generated parameters bind atomically with scalar/JSON comparisons.
+- `config/native_policy` owns acquisition, API origin, process ownership, finite
+  sharing obligations and lossless whole-policy updates. `unified_policy_path`
+  resolves the sole Target-root-relative `project.policy` path.
+- `rewrite/unified_rule/{manifest,preflight,discovery}` owns complete protected
+  evidence, Source/Target role distinctions, reviewable plan/apply and recovery.
+  Coordinator admission preserves write intents and fresh real verification
+  obligations across crashes. Bounded hints never substitute for full coverage.
+- Historical feedback DTOs may remain as domain data or journal recovery inputs.
+  Their old authoring entrypoints reject and production loaders accept only
+  `traffic-policy/v1`. Test-only explicit fixture migration is not a reader
+  fallback and cannot produce project proof.

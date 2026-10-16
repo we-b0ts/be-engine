@@ -1,5 +1,13 @@
 # Redis PUBLISH UUID identity rules
 
+> Authoring migration: the legacy YAML and flag-based commands below are
+> historical semantic references. They are not accepted configuration or CLI
+> syntax. Use the self-contained `traffic-policy/v1` rules, `project.policy`,
+> and `rule plan --file … --evidence …` described in
+> [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
+> evidence and lifecycle constraints described here remain mandatory.
+
+
 PUBLISH payloads can contain source-proven random publisher identities such as
 `uuid4().hex`. Exact argument matching rejects the target's new identity. A
 PUBLISH rule selects a textual UUID v4 by an exact field marker, or by its

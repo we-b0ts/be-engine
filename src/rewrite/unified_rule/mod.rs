@@ -15,7 +15,7 @@ use super::{
     store::RewriteStore,
     worker,
 };
-use crate::policy::{Rule, TrafficPolicy, compile_policy, parse_policy};
+use crate::policy::{PolicyRule, TrafficPolicy, compile_policy, parse_policy};
 
 pub(super) mod discovery;
 mod manifest;
@@ -29,27 +29,26 @@ pub struct RewriteUnifiedRulePlanOptions {
     pub evidence_id: String,
 }
 
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum Proposal {
-    Document(TrafficPolicy),
-    Single(Rule),
-    List(Vec<Rule>),
-}
-
 fn parse_proposal(input: &str) -> Result<TrafficPolicy> {
-    let document = match serde_yaml::from_str::<Proposal>(input)
-        .context("expected a rule, rule list, or traffic-policy/v1 document")?
-    {
-        Proposal::Document(document) => document,
-        Proposal::Single(rule) => TrafficPolicy {
-            format: "traffic-policy/v1".into(),
-            rules: vec![rule],
-        },
-        Proposal::List(rules) => TrafficPolicy {
-            format: "traffic-policy/v1".into(),
+    let value: serde_yaml::Value = serde_yaml::from_str(input)
+        .context("expected a rule, rule list, or traffic-policy/v1 document")?;
+    let document = if value.get("rules").is_some() || value.get("format").is_some() {
+        serde_yaml::from_value::<TrafficPolicy>(value)
+            .context("invalid traffic-policy/v1 proposal")?
+    } else {
+        let rules = if value.is_sequence() {
+            serde_yaml::from_value::<Vec<PolicyRule>>(value)
+                .context("invalid rule list proposal")?
+        } else {
+            vec![
+                serde_yaml::from_value::<PolicyRule>(value)
+                    .context("invalid self-contained rule proposal")?,
+            ]
+        };
+        TrafficPolicy {
+            format: crate::policy::POLICY_FORMAT.into(),
             rules,
-        },
+        }
     };
     compile_policy(&document)?;
     Ok(document)
@@ -128,18 +127,28 @@ fn plan(
         !proposed.rules.is_empty(),
         "rule proposal must contain explicit Source-proven rules"
     );
-    for rule in &mut proposed.rules {
-        ensure!(
-            rule.codec.is_json(),
-            "P1 unified plan supports JSON; use the implemented codec adapter before planning another encoding"
-        );
-        if let Some(api) = &rule.selector.api {
-            ensure!(
-                api == &state.api,
-                "rule plan must retain the exact active prepared API scope"
-            );
-        } else {
-            rule.selector.api = Some(state.api.clone());
+    for proposal in &mut proposed.rules {
+        match proposal {
+            PolicyRule::Value(rule) => {
+                if let Some(api) = &rule.selector.api {
+                    ensure!(
+                        api == &state.api,
+                        "rule plan must retain the exact active prepared API scope"
+                    );
+                } else {
+                    rule.selector.api = Some(state.api.clone());
+                }
+            }
+            PolicyRule::Native(rule) => {
+                if let Some(api) = &rule.selector.api {
+                    ensure!(
+                        api == &state.api,
+                        "native rule plan must retain the exact active prepared API scope"
+                    );
+                }
+                // Global acquisition/ownership/sharing effects retain the empty
+                // outer selector required by their typed domain compiler.
+            }
         }
     }
     let (_, config) = crate::e2e_run::resolve_project(root)?;
@@ -150,19 +159,23 @@ fn plan(
     let rule_ids = proposed
         .rules
         .iter()
-        .map(|r| r.id.clone())
+        .map(|r| r.id().to_owned())
         .collect::<BTreeSet<_>>();
+    let mut changed = false;
     for rule in proposed.rules {
         ensure!(
             document
                 .rules
                 .iter()
-                .find(|current| current.id == rule.id)
+                .find(|current| current.id() == rule.id())
                 .is_none_or(|current| current == &rule),
             "existing rule ID changes scope, effect, contract or proof; use a new explicitly reviewed rule ID"
         );
-        document.rules.retain(|current| current.id != rule.id);
+        if document.rules.iter().any(|current| current == &rule) {
+            continue;
+        }
         document.rules.push(rule);
+        changed = true;
     }
     let compiled = compile_policy(&document)?;
     let current = crate::validate_replay_policy(&config.replay_policy)?;
@@ -172,9 +185,13 @@ fn plan(
     );
     let identity = manifest::ExecutionIdentity::current(root, state)?;
     let mut bundle = manifest::Bundle::load(root, state, &current.fingerprint)?;
-    let preflight = preflight::verify(&mut bundle, &compiled, &rule_ids)?;
+    let preflight = preflight::verify(root, state, &mut bundle, &compiled, &rule_ids)?;
     bundle.artifacts.insert(proposal.path.clone(), proposal);
-    let updated = serde_yaml::to_string(&document)?;
+    let updated = if changed {
+        serde_yaml::to_string(&document)?
+    } else {
+        original.clone()
+    };
     let record = UnifiedRulePlanRecord {
         apply_started: false,
         policy: config.replay_policy,
@@ -214,6 +231,10 @@ fn plan(
 }
 
 impl UnifiedRulePlanRecord {
+    pub(super) fn applying(&self) -> bool {
+        self.apply_started
+    }
+
     pub(super) fn changed(&self) -> bool {
         self.original != self.updated
     }
@@ -238,7 +259,8 @@ impl UnifiedRulePlanRecord {
                 artifact.verify()?;
             }
         }
-        compile_policy(&parse_policy(&self.updated)?)?;
+        let compiled = compile_policy(&parse_policy(&self.updated)?)?;
+        self.preflight.ensure_current(root, &compiled)?;
         Ok(())
     }
 
@@ -246,17 +268,16 @@ impl UnifiedRulePlanRecord {
         let expanded = parse_policy(&self.updated)
             .and_then(|p| compile_policy(&p))
             .ok();
-        let rules = expanded.as_ref().map(|p| {
+        let rules = parse_policy(&self.updated).ok().map(|p| {
             p.rules
-                .iter()
-                .filter(|r| self.rule_ids.contains(&r.rule.id))
-                .map(|r| &r.rule)
+                .into_iter()
+                .filter(|r| self.rule_ids.contains(r.id()))
                 .collect::<Vec<_>>()
         });
-        json!({"kind":"unified", "status":if applied {"applied_pending_replay"} else {self.preflight.status()},
+        json!({"kind":"unified", "status":if !self.changed() && applied {"applied_no_change"} else if !self.changed() {"planned_no_change"} else if applied && self.preflight.needs_recording() {"applied_pending_recording"} else if applied {"applied_pending_replay"} else {self.preflight.status()},
             "applied":applied, "changed":self.original != self.updated,
             "rule_ids":self.rule_ids, "preflight":self.preflight,
-            "requires_fresh_replay":true, "verified":false,
+            "requires_fresh_replay":self.changed(), "requires_fresh_recording":self.changed() && self.preflight.needs_recording(), "verified":false,
             "policy":self.policy, "evidence_artifacts":self.artifacts.len(),
             "expanded_rules":rules, "effect_identity":expanded.as_ref().map(|p| &p.fingerprints),
             "checks":{"full_source_inventory":true,"immutable_attempt_and_witnesses":true,"policy_compare_and_swap":true,
@@ -286,6 +307,33 @@ pub(super) fn apply(
     state.rule_plan = None;
     if record.original != record.updated {
         super::rule_replay::request(state);
+        if record.preflight.needs_recording() {
+            let policy = parse_policy(&record.updated)?;
+            let proof = policy
+                .rules
+                .iter()
+                .filter(|rule| record.rule_ids.contains(rule.id()))
+                .map(|rule| format!("{}: {}", rule.proof().source, rule.proof().fact))
+                .collect::<Vec<_>>()
+                .join("\n");
+            super::dependency_rule::schedule_cache_snapshot_refresh(
+                root,
+                state,
+                super::model::RewriteDependencyRuleAppliedRecord {
+                    plan_id: outer.id.clone(),
+                    issue_id: outer.issue_id.clone(),
+                    evidence_id: outer.evidence_id.clone(),
+                    api: state.api.clone(),
+                    rule_name: record
+                        .rule_ids
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    source_evidence: proof,
+                },
+            )?;
+        }
     }
     state.bump();
     Ok(RewriteRuleReport {

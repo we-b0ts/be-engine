@@ -10,7 +10,6 @@ use traffic_e2e::{
 };
 
 mod recorder;
-mod replay;
 
 #[derive(Debug, Args)]
 pub(super) struct ConfigArgs {
@@ -23,12 +22,10 @@ pub(super) struct ConfigArgs {
 
 #[derive(Debug, Subcommand)]
 enum ConfigCommand {
-    /// Generate the repository's project, recorder, and verification configuration once.
+    /// Generate the repository project and unified traffic policy once.
     Init(InitArgs),
     /// Plan or apply evidence-backed recorder configuration changes.
     Recorder(recorder::RecorderArgs),
-    /// Configure dependency replay and response rules.
-    Replay(replay::ReplayArgs),
 }
 
 #[derive(Debug, Args)]
@@ -116,7 +113,6 @@ pub(super) fn run(args: ConfigArgs) -> Result<()> {
             },
         )?),
         ConfigCommand::Recorder(command) => recorder::run(args.target_root, command),
-        ConfigCommand::Replay(command) => replay::run(args.target_root, command),
     }
 }
 

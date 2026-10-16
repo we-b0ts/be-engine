@@ -1,5 +1,13 @@
 # API-triggered process traffic
 
+> Authoring migration: the legacy YAML and flag-based commands below are
+> historical semantic references. They are not accepted configuration or CLI
+> syntax. Use the self-contained `traffic-policy/v1` rules, `project.policy`,
+> and `rule plan --file … --evidence …` described in
+> [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
+> evidence and lifecycle constraints described here remain mandatory.
+
+
 An HTTP API can return while its asynchronous task continues to call dependencies.
 Time-window recording can place those calls inside a later API's case. An
 API-origin process rule reclassifies only source-proven, unused foreign-case

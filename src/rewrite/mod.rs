@@ -214,6 +214,7 @@ pub fn plan_rewrite_rule(
     let api = inventory::api_for_evidence_id(&target_root, &state, &options.evidence_id)
         .context("rule evidence is stale or belongs to no concurrent API work item")?;
     worker::ensure_api_confirmed(&state, &api, "planning a verification rule")?;
+    crate::policy::retired_authoring()?;
     let report = inventory::with_slice_mut(&mut state, &api, |state| {
         rule::plan(&target_root, state, options)
     })?;
@@ -234,6 +235,10 @@ pub fn apply_rewrite_rule(context: RewriteContext, plan_id: &str) -> Result<Rewr
         .rule_plan
         .as_ref()
         .is_some_and(|plan| plan.unified.is_some());
+    ensure!(
+        unified,
+        "this plan uses a retired rule format; run `backend-rewrite rule recover {plan_id}`, obtain fresh evidence and use `rule plan --file <rule.yaml> --evidence <id>`"
+    );
     let apply_intent = if unified {
         worker::ensure_api_confirmed(&state, &api, "applying a unified traffic rule")?;
         let intent = inventory::with_slice_mut(&mut state, &api, |slice| {
@@ -260,6 +265,12 @@ pub fn apply_rewrite_rule(context: RewriteContext, plan_id: &str) -> Result<Rewr
     {
         unified_rule::invalidate_global(&mut state);
     }
+    if report.traffic_e2e_report["requires_fresh_recording"] == true {
+        let runnable = inventory::mark_awaiting_recording_refresh(&mut state, &api)?;
+        if !runnable {
+            recording::begin_pending_capture_refresh(&target_root, &mut state)?;
+        }
+    }
     if let Err(error) = store.save(&state) {
         if let Some(intent) = &apply_intent {
             unified_rule::rollback(intent).context("failed to save applied rule state and to restore original policy; pending apply intent remains recoverable")?;
@@ -282,6 +293,7 @@ pub fn plan_rewrite_dependency_rule(
     let api = inventory::api_for_evidence_id(&target_root, &state, &options.evidence_id)
         .context("dependency-rule evidence is stale or belongs to no concurrent API work item")?;
     worker::ensure_api_confirmed(&state, &api, "planning a dependency rule")?;
+    crate::policy::retired_authoring()?;
     let report = inventory::with_slice_mut(&mut state, &api, |state| {
         dependency_rule::plan(&target_root, state, options)
     })?;
@@ -302,6 +314,7 @@ pub fn plan_rewrite_dependency_payload_rule(
     let api = inventory::api_for_evidence_id(&target_root, &state, &options.evidence_id)
         .context("dependency-rule evidence is stale or belongs to no concurrent API work item")?;
     worker::ensure_api_confirmed(&state, &api, "planning a dependency payload rule")?;
+    crate::policy::retired_authoring()?;
     let report = inventory::with_slice_mut(&mut state, &api, |state| {
         dependency_rule::plan_memcached_timestamp(&target_root, state, options)
     })?;
@@ -321,6 +334,8 @@ pub fn apply_rewrite_dependency_rule(
         .context("rewrite workflow has not been initialized")?;
     let owner_api = inventory::api_for_dependency_rule_plan(&state, plan_id)
         .context("dependency-rule plan is stale or belongs to no concurrent API work item")?;
+    worker::ensure_api_confirmed(&state, &owner_api, "applying a dependency rule")?;
+    crate::policy::retired_authoring()?;
     let changes_dependency_matching = inventory::with_slice_mut(&mut state, &owner_api, |slice| {
         Ok(slice.dependency_rule_plan.as_ref().is_some_and(|p| {
             matches!(

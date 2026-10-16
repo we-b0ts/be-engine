@@ -320,8 +320,8 @@ When `details.reason=configuration_commit_required`, match the listed persistent
 configuration changes to the returned input/plan and commit exactly those files
 in the canonical target. Return unresolved semantic questions to their source
 owner. Then repeat the original `next` command with the same scope and inputs.
-This gate covers `project.yaml`, `source-traffic-policy.yaml`, and
-`verification.yaml`, including staged and new files. Staging is not sufficient.
+This gate covers `project.yaml` and its configured `project.policy` file,
+including staged and new files. Staging is not sufficient.
 `status` reports this requirement without writing files; `next` stops before
 dispatch or verification, including when preparation creates a policy change.
 An active operation keeps its existing wait/recovery action. Routine generated
@@ -352,8 +352,7 @@ When `details.reason=verification_progress_commit_required`, every API is
 verified but terminal delivery is still forbidden. Commit exactly the listed
 engine-managed delivery files without editing or resetting the generated
 `progress.yaml`, then execute `backend-rewrite next` again. The list includes
-the dirty `.traffic-e2e/source-traffic-policy.yaml` or
-`.traffic-e2e/verification.yaml` when applicable, alongside the final public
+the dirty configured `project.policy` file when applicable, alongside the final public
 progress snapshot. Intermediate failed or passing attempts do not
 require progress commits.
 
@@ -561,9 +560,9 @@ permission to mark completion. Preserve bindings and evidence when the engine
 returns global `blocked`, and resume through its returned action after repair.
 
 Redis lock token candidates are exposed by current `dirty_clusters` evidence,
-including conditional `redis_lock` hints/planners. Use `dependency-rule plan
-redis lock` with the returned evidence ID, explicit host/port/key scope and
-implementer source proof; review/apply the returned plan and run fresh Replay.
+including conditional `redis_lock` hints/planners. Propose a self-contained
+`redis_lock` effect with exact resource/key scope and implementer Source proof,
+then use `rule plan --file rule.yaml --evidence <id>`; review/apply and run fresh Replay.
 Do not require UUID formatting, script SHA configuration or a second release
 rule. The engine retains nonce correlation and every other command argument.
 Old reports require fresh Replay to obtain witnesses. Wrong tokens after an

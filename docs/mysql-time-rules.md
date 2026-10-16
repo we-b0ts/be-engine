@@ -1,5 +1,13 @@
 # MySQL SQL time rules
 
+> Authoring migration: the legacy YAML and flag-based commands below are
+> historical semantic references. They are not accepted configuration or CLI
+> syntax. Use the self-contained `traffic-policy/v1` rules, `project.policy`,
+> and `rule plan --file … --evidence …` described in
+> [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
+> evidence and lifecycle constraints described here remain mandatory.
+
+
 Runtime-generated timestamps in SELECT, INSERT, UPDATE and DELETE can be validated with
 explicit `dependency_rules.mysql.sql_values` rules. One rule can atomically
 select multiple scalar SQL slots and exact JSON Pointer fields inside a string

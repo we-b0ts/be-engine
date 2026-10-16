@@ -1,5 +1,13 @@
 # Unordered arrays in HTTP dependency requests
 
+> Authoring migration: the legacy YAML and flag-based commands below are
+> historical semantic references. They are not accepted configuration or CLI
+> syntax. Use the self-contained `traffic-policy/v1` rules, `project.policy`,
+> and `rule plan --file … --evidence …` described in
+> [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
+> evidence and lifecycle constraints described here remain mandatory.
+
+
 Use `unordered` when an outbound HTTP JSON request contains an array whose
 element order has no meaning in the source contract. For example, a membership
 check can send the same department IDs in a different order because the source

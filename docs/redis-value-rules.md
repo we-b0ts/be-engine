@@ -1,5 +1,13 @@
 # Redis value comparison and unordered rules
 
+> Authoring migration: the legacy YAML and flag-based commands below are
+> historical semantic references. They are not accepted configuration or CLI
+> syntax. Use the self-contained `traffic-policy/v1` rules, `project.policy`,
+> and `rule plan --file … --evidence …` described in
+> [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
+> evidence and lifecycle constraints described here remain mandatory.
+
+
 Replay recognizes JSON and Protobuf in the value argument of `SET`, `SETNX`,
 `SETEX`, and `PSETEX`. It compares JSON objects by keys and values, independent
 of object member order or formatting. This needs no rule. Nested arrays remain

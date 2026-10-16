@@ -22,6 +22,7 @@ pub(crate) fn replace_root_section(
     heading: &str,
     rendered: &str,
 ) -> Result<String> {
+    crate::policy::retired_authoring()?;
     let mut offset = 0;
     let mut start = None;
     let mut end = original.len();
@@ -54,6 +55,7 @@ pub(crate) fn replace_root_section(
 }
 
 pub(super) fn render_dependency_rules(document: &ReplayPolicyDocument) -> Result<String> {
+    crate::policy::retired_authoring()?;
     if document.dependency_rules.is_empty() && document.dynamic_values.is_empty() {
         return Ok("dependency_rules: []\n".into());
     }
@@ -101,6 +103,7 @@ struct ResponseRulesDocument<'a> {
 }
 
 pub(super) fn render_response_rules(rules: &ResponseRules) -> Result<String> {
+    crate::policy::retired_authoring()?;
     Ok(serde_yaml::to_string(&ResponseRulesDocument {
         response_rules: rules,
     })?)

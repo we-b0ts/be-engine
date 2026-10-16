@@ -49,6 +49,7 @@ impl RedisTimeShiftPlan {
         &self.report
     }
     pub fn apply(self) -> Result<RedisTimeShiftReport> {
+        crate::policy::retired_authoring()?;
         ensure!(
             fs::read_to_string(&self.feedback.policy_path)? == self.original,
             "policy changed after planning; rerun Redis time-shift plan"
@@ -73,6 +74,7 @@ impl RedisTimeShiftPlan {
 }
 
 pub fn plan_redis_time_shift(feedback: RedisTimeShiftFeedback) -> Result<RedisTimeShiftPlan> {
+    crate::policy::retired_authoring()?;
     feedback.selector.validate()?;
     crate::config::process_owned_dependencies::validate_source_evidence(&feedback.source_evidence)?;
     let original = fs::read_to_string(&feedback.policy_path)?;

@@ -412,7 +412,7 @@ impl RequestRuleRuntime {
                 RuntimeKey::TargetStartup(root) => {
                     let source = profile.signing_key_source.as_ref().with_context(|| {
                         format!(
-                            "JWT request rule {:?} matched a parseable JWT requiring time translation, but profile {:?} has no signing_key_source in verification.yaml",
+                            "JWT request rule {:?} matched a parseable JWT requiring time translation, but profile {:?} has no signing_key_source in project.policy",
                             rule.id, rule.profile
                         )
                     })?;

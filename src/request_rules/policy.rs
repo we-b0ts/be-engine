@@ -21,6 +21,7 @@ pub(crate) fn parse(value: &serde_yaml::Value) -> Result<RequestRules> {
 }
 
 pub(crate) fn add(original: &str, profile: &JwtProfile, rule: &JwtRule) -> Result<String> {
+    crate::policy::retired_authoring()?;
     let value: serde_yaml::Value = serde_yaml::from_str(original)?;
     let mut rules = parse(&value)?;
     if !rules.jwt.add(profile.clone(), rule.clone())? {

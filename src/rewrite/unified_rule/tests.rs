@@ -96,3 +96,19 @@ fn frozen_artifacts_reject_changed_or_symlinked_evidence() {
     std::os::unix::fs::symlink(temp.path().join("other"), &path).unwrap();
     assert!(Artifact::capture(&path).is_err());
 }
+
+#[test]
+fn unchanged_rules_do_not_renew_recording_or_replay_obligations() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut record = record(&temp.path().join("policy.yaml"));
+    record.updated = record.original.clone();
+    record
+        .preflight
+        .obligations
+        .insert(crate::config::native_policy::SourceObligation::FreshRecording);
+    let report = record.report(true);
+    assert_eq!(report["status"], "applied_no_change");
+    assert_eq!(report["requires_fresh_recording"], false);
+    assert_eq!(report["requires_fresh_replay"], false);
+    assert_eq!(report["verified"], false);
+}

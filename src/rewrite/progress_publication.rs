@@ -7,11 +7,6 @@ use super::model::{RewriteApiStatus, RewritePhase, RewriteState};
 use crate::verification_progress::{self, VerificationStage};
 
 const PUBLIC_PROGRESS: &str = ".traffic-e2e/progress.yaml";
-const MANAGED_DELIVERY_PATHS: &[&str] = &[
-    ".traffic-e2e/source-traffic-policy.yaml",
-    ".traffic-e2e/verification.yaml",
-    PUBLIC_PROGRESS,
-];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum PublicationState {
@@ -20,8 +15,18 @@ pub(super) enum PublicationState {
     Published,
 }
 
-pub(super) fn managed_delivery_paths() -> &'static [&'static str] {
-    MANAGED_DELIVERY_PATHS
+pub(super) fn managed_delivery_paths(root: &Path) -> Result<Vec<String>> {
+    let policy = super::fingerprint::policy_file(root)?;
+    let relative = policy
+        .strip_prefix(root)
+        .context("traffic policy is outside the target repository")?;
+    Ok(vec![
+        relative
+            .to_str()
+            .context("traffic policy path is not UTF-8")?
+            .into(),
+        PUBLIC_PROGRESS.into(),
+    ])
 }
 
 pub(super) fn state(target_root: &Path, state: &RewriteState) -> Option<PublicationState> {
@@ -69,9 +74,9 @@ fn inspect(target_root: &Path) -> Result<PublicationState> {
 
 fn git_uncommitted_managed_delivery_paths(target_root: &Path) -> Result<Vec<String>> {
     let mut uncommitted = Vec::new();
-    for relative_path in managed_delivery_paths() {
-        if git_has_uncommitted_path(target_root, relative_path)? {
-            uncommitted.push((*relative_path).to_string());
+    for relative_path in managed_delivery_paths(target_root)? {
+        if git_has_uncommitted_path(target_root, &relative_path)? {
+            uncommitted.push(relative_path);
         }
     }
     Ok(uncommitted)
@@ -195,10 +200,7 @@ mod tests {
         write_managed_delivery_files(target.path(), "updated");
         write_progress(target.path(), &["replay-1", "replay-retry-1", "replay-2"]);
         let state = complete_state();
-        let expected = managed_delivery_paths()
-            .iter()
-            .map(|path| (*path).to_string())
-            .collect::<Vec<_>>();
+        let expected = managed_delivery_paths(target.path()).unwrap();
         assert_eq!(
             super::state(target.path(), &state),
             Some(PublicationState::CommitRequired(expected.clone()))
@@ -260,11 +262,11 @@ mod tests {
     fn write_managed_delivery_files(target_root: &Path, contents: &str) {
         let root = target_root.join(".traffic-e2e");
         fs::create_dir_all(&root).unwrap();
-        for path in managed_delivery_paths() {
-            if *path == PUBLIC_PROGRESS {
+        for path in managed_delivery_paths(target_root).unwrap() {
+            if path == PUBLIC_PROGRESS {
                 continue;
             }
-            fs::write(target_root.join(path), format!("{contents}: {path}\n")).unwrap();
+            fs::write(target_root.join(&path), format!("{contents}: {path}\n")).unwrap();
         }
     }
 

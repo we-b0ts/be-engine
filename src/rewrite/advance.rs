@@ -378,6 +378,11 @@ async fn advance_atomic(
             Ok(action::for_state(&target_root, &state))
         }
         RewritePhase::ImplementationRequired => {
+            if super::replay_admission::applying_policy(&state)
+                || super::replay_admission::pending_transaction(&state.active_slice)
+            {
+                return Ok(action::for_state(&target_root, &state));
+            }
             let scope = RewriteWorkScope::Api {
                 api: state.api.clone(),
             };

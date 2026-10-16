@@ -12,6 +12,7 @@ pub struct DependencyRequestRuleFeedback {
 pub fn plan_dependency_request_rule(
     feedback: DependencyRequestRuleFeedback,
 ) -> Result<GeneratedValueRulePlan> {
+    crate::policy::retired_authoring()?;
     let rule: ReplayDependencyRule = serde_json::from_value(feedback.rule)?;
     if super::mysql_response::is_rule(&rule) {
         return super::mysql_response::plan(

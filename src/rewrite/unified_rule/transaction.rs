@@ -7,6 +7,13 @@ use crate::rewrite::{
     recover_rewrite_rule_plan,
 };
 
+#[path = "transaction_dependency.rs"]
+mod dependency_transaction;
+#[path = "transaction_native.rs"]
+mod native_transaction;
+#[path = "transaction_recovery.rs"]
+mod recovery_transaction;
+
 struct Fixture {
     target: tempfile::TempDir,
     proposal: PathBuf,
@@ -21,16 +28,39 @@ fn body(value: serde_json::Value) -> serde_json::Value {
     json!({"encoding":"utf8","data":value.to_string(),"truncated":false})
 }
 
+fn raw_body(bytes: &[u8]) -> serde_json::Value {
+    use base64::Engine as _;
+    json!({"encoding":"base64","data":base64::engine::general_purpose::STANDARD.encode(bytes),"truncated":false})
+}
+
 impl Fixture {
     fn new() -> Self {
         let target = crate::rewrite::worker::tests::configured_target();
         let root = target.path();
+        let project_path = root.join(".traffic-e2e/project.yaml");
+        let mut project: serde_json::Value =
+            serde_yaml::from_str(&fs::read_to_string(&project_path).unwrap()).unwrap();
+        project["project"]["policy"] = json!(".traffic-e2e/policy.yaml");
+        project["recorder"]["dns_mock"]["enabled"] = json!(true);
+        project["recorder"]["tcp_gateway"]["enabled"] = json!(true);
+        project["recorder"]["tcp_gateway"]["record_http"] = json!(true);
+        project["recorder"]["http_gateway"]["enabled"] = json!(true);
+        project["recorder"]["http_gateway"]["ready"]["enabled"] = json!(true);
+        project["project"]
+            .as_object_mut()
+            .unwrap()
+            .remove("recording");
+        project["project"]["replay"]
+            .as_object_mut()
+            .unwrap()
+            .remove("policy");
+        fs::write(&project_path, serde_yaml::to_string(&project).unwrap()).unwrap();
         fs::write(
             root.join(".traffic-e2e/Dockerfile.target"),
             "FROM scratch\n",
         )
         .unwrap();
-        let policy = root.join(".traffic-e2e/verification.yaml");
+        let policy = root.join(".traffic-e2e/policy.yaml");
         fs::write(&policy, "format: traffic-policy/v1\nrules: []\n").unwrap();
         let source = root.join(".traffic-e2e/local/artifacts/recordings/recording");
         let case = source.join("apis/api/case-1");
@@ -65,7 +95,7 @@ impl Fixture {
         let actual = latest.join("reports/case-1.json");
         write(
             &actual,
-            json!({"status":200,"body":body(json!({"members":[2,1],"business":"exact"})),"request_sent_at":now}),
+            json!({"version":1,"status":200,"body":body(json!({"members":[2,1],"business":"exact"})),"request_sent_at":now}),
         );
         let grouped = crate::case_group::ensure_case_group(crate::CaseGroupOptions {
             case_source: source.clone(),
@@ -82,6 +112,8 @@ impl Fixture {
         let state_path = latest.join("state.yaml");
         let mut focused: serde_json::Value =
             serde_yaml::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+        focused["session_id"] = json!(uuid::Uuid::nil().to_string());
+        focused["case_inventory_id"] = json!(grouped.case_inventory_id);
         let detail = latest.join("reports/assertion-detail.json");
         write(
             &detail,
@@ -145,7 +177,7 @@ impl Fixture {
         self.store().load().unwrap().unwrap()
     }
     fn policy(&self) -> PathBuf {
-        self.root().join(".traffic-e2e/verification.yaml")
+        self.root().join(".traffic-e2e/policy.yaml")
     }
     fn confirm(&self) {
         worker::confirm(RewriteWorkerConfirmOptions {
@@ -179,6 +211,85 @@ impl Fixture {
                 evidence_id: self.evidence().evidence_id,
             },
         )
+    }
+
+    fn replace_response_bodies(&self, source: &[u8], target: &[u8]) {
+        let mut assertions: serde_json::Value =
+            serde_json::from_slice(&fs::read(&self.paths.assertions).unwrap()).unwrap();
+        let summary = &mut assertions["cases"][0]["response"];
+        let expected = summary["expected_response"].as_str().unwrap().to_owned();
+        let actual = summary["actual_response"].as_str().unwrap().to_owned();
+        let detail_path = summary["detail_report"].as_str().unwrap().to_owned();
+        write(
+            Path::new(&expected),
+            json!({"status":200,"body":raw_body(source)}),
+        );
+        write(
+            Path::new(&actual),
+            json!({"version":1,"status":200,"body":raw_body(target),"request_sent_at":"2026-10-16T00:01:00Z"}),
+        );
+        let mut detail: serde_json::Value =
+            serde_json::from_slice(&fs::read(&detail_path).unwrap()).unwrap();
+        detail["expected_response_fingerprint"] = json!(crate::verification_progress::fingerprint(
+            &fs::read(&expected).unwrap()
+        ));
+        detail["actual_response_fingerprint"] = json!(crate::verification_progress::fingerprint(
+            &fs::read(&actual).unwrap()
+        ));
+        write(Path::new(&detail_path), detail);
+        summary["detail_fingerprint"] = json!(crate::verification_progress::fingerprint(
+            &fs::read(&detail_path).unwrap()
+        ));
+        let state_path = self
+            .paths
+            .replay
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("state.yaml");
+        let mut focused: serde_json::Value =
+            serde_yaml::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+        focused["cases"][0]["response_assertion"] = summary.clone();
+        fs::write(state_path, serde_yaml::to_string(&focused).unwrap()).unwrap();
+        write(&self.paths.assertions, assertions);
+    }
+}
+
+#[test]
+fn protobuf_uses_the_same_public_transaction_and_retains_unknown_business_fields() {
+    for changed_remainder in [false, true] {
+        let fixture = Fixture::new();
+        let mut proposed = super::rule();
+        proposed["codec"] = json!({"kind":"protobuf","fields":{"/members":{"field_path":[1],"field_type":"string","repeated":true}}});
+        write(&fixture.proposal, proposed);
+        let source = b"\x0a\x03one\x0a\x03two\x12\x05exact";
+        let target = if changed_remainder {
+            b"\x0a\x03two\x0a\x03one\x12\x05wrong".as_slice()
+        } else {
+            b"\x0a\x03two\x0a\x03one\x12\x05exact".as_slice()
+        };
+        fixture.replace_response_bodies(source, target);
+        fixture.confirm();
+        let evidence = fixture.evidence();
+        assert!(evidence.facts["candidates"].as_array().unwrap().is_empty());
+        assert_eq!(
+            evidence.facts["source_entry"]["bindings"][0]["needs_schema"],
+            true
+        );
+        let plan = fixture.plan();
+        if changed_remainder {
+            assert!(plan.is_err());
+            assert!(fixture.state().rule_plan.is_none());
+        } else {
+            let plan = plan.unwrap();
+            assert_eq!(
+                plan.traffic_e2e_report["preflight"]["independent_target_validations"],
+                1
+            );
+            apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+            assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
+        }
     }
 }
 

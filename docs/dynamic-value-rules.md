@@ -1,5 +1,13 @@
 # Case-local dynamic dependency values
 
+> Authoring migration: the legacy YAML and flag-based commands below are
+> historical semantic references. They are not accepted configuration or CLI
+> syntax. Use the self-contained `traffic-policy/v1` rules, `project.policy`,
+> and `rule plan --file … --evidence …` described in
+> [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
+> evidence and lifecycle constraints described here remain mandatory.
+
+
 A source-generated name can appear in a uniqueness SELECT, an INSERT's scalar
 and JSON values, and a Redis cache key. One capture binds its recorded value to
 the target's generated value. Later references are discovered in decoded

@@ -47,6 +47,7 @@ impl RedisCrossCasePlan {
     }
 
     pub fn apply(self) -> Result<RedisCrossCaseReport> {
+        crate::policy::retired_authoring()?;
         ensure!(
             fs::read_to_string(&self.feedback.policy_path)? == self.original,
             "policy changed after planning; rerun Redis cross-case plan"
@@ -71,6 +72,7 @@ impl RedisCrossCasePlan {
 }
 
 pub fn plan_redis_cross_case(feedback: RedisCrossCaseFeedback) -> Result<RedisCrossCasePlan> {
+    crate::policy::retired_authoring()?;
     crate::config::process_owned_dependencies::validate_source_evidence(&feedback.source_evidence)?;
     let original = fs::read_to_string(&feedback.policy_path)?;
     let loaded = load_replay_policy(&feedback.policy_path)?;

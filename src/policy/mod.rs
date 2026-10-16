@@ -1,7 +1,9 @@
 //! Self-contained traffic contracts and their protocol-independent compiled policy.
 //! Compilation is pure: evidence authorization and policy persistence belong to
 //! their callers, and protocol adapters retain lane/session/consumption ownership.
+mod authoring;
 mod capability;
+pub(crate) use authoring::retired_authoring;
 mod compiler;
 pub mod native;
 mod native_compile;

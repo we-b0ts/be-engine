@@ -1,5 +1,13 @@
 # Response header calendar dates
 
+> Authoring migration: the legacy YAML and flag-based commands below are
+> historical semantic references. They are not accepted configuration or CLI
+> syntax. Use the self-contained `traffic-policy/v1` rules, `project.policy`,
+> and `rule plan --file … --evidence …` described in
+> [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
+> evidence and lifecycle constraints described here remain mandatory.
+
+
 An exporter may return `Content-Disposition: attachment;
 filename="report_2026-10-07.docx"`, with the date generated for that request.
 An explicit date rule validates each date against its own request's calendar day

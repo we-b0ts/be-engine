@@ -1,5 +1,13 @@
 # MySQL result time shifts
 
+> Authoring migration: the legacy YAML and flag-based commands below are
+> historical semantic references. They are not accepted configuration or CLI
+> syntax. Use the self-contained `traffic-policy/v1` rules, `project.policy`,
+> and `rule plan --file … --evidence …` described in
+> [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
+> evidence and lifecycle constraints described here remain mandatory.
+
+
 A recorded lease read can contain an absolute UTC expiry five minutes after its
 recorded request. Returning those bytes years later makes the lease appear expired.
 An explicit version-3 dependency rule can translate selected DATETIME/TIMESTAMP

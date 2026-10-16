@@ -14,10 +14,16 @@ use serde_json::Value;
 
 use super::manifest::Bundle;
 use crate::{
-    policy::{CompiledPolicy, CompiledRule, Protocol, Surface},
-    policy_evidence::{TargetRole, WitnessManifest, WitnessRef},
-    value_contract::json::{self, AnchorClocks, Field},
+    policy::{CompiledPolicy, CompiledRule, NativeEffect, Protocol, Surface},
+    policy_evidence::{TargetRole, WitnessManifest},
+    rewrite::model::RewriteState,
+    value_contract::json::AnchorClocks,
 };
+
+mod api;
+pub(super) mod dependency;
+mod session;
+mod source;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Preflight {
@@ -25,25 +31,52 @@ pub struct Preflight {
     pub independent_target_validations: usize,
     pub derived_delivery_validations: usize,
     pub missing_target_witnesses: usize,
+    #[serde(default)]
+    pub unavailable_source_values: usize,
     pub rules: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub obligations: BTreeSet<crate::config::native_policy::SourceObligation>,
+    #[serde(default)]
+    pub pending_effect_evidence: BTreeSet<String>,
+    #[serde(default)]
+    pub stateful_target_obligations: BTreeSet<String>,
+    #[serde(default)]
+    source_scope: Option<source::SourceRecord>,
 }
 
 impl Preflight {
     pub(super) fn status(&self) -> &'static str {
-        if self.missing_target_witnesses > 0 {
+        if self.needs_recording() {
+            "planned_needs_recording"
+        } else if self.missing_target_witnesses > 0 || !self.stateful_target_obligations.is_empty()
+        {
             "planned_needs_replay"
         } else {
             "preflight_validated_requires_replay"
         }
     }
+
+    pub(super) fn needs_recording(&self) -> bool {
+        source::needs_recording(&self.obligations)
+    }
+
+    pub(super) fn ensure_current(&self, root: &Path, policy: &CompiledPolicy) -> Result<()> {
+        if let Some(record) = &self.source_scope {
+            record.ensure_current(root, policy)?;
+        }
+        Ok(())
+    }
 }
 
 pub(super) fn verify(
+    root: &Path,
+    state: &RewriteState,
     bundle: &mut Bundle,
     policy: &CompiledPolicy,
     selected: &BTreeSet<String>,
 ) -> Result<Preflight> {
     let mut result = Preflight::default();
+    source::verify(root, state, bundle, policy, selected, &mut result)?;
     let manifest = bundle
         .replay
         .get("policy_witnesses")
@@ -95,13 +128,29 @@ pub(super) fn verify(
             .copied()
             .filter(|r| r.rule.surface == Surface::ApiResponse)
             .collect::<Vec<_>>();
-        if response_rules.iter().any(|r| selected.contains(&r.rule.id)) {
-            api_response(
+        let source_body = capture(&request["body"])
+            .ok()
+            .and_then(|bytes| crate::json_value::parse(&bytes));
+        let native_applicable =
+            crate::replay::native_response_selected(policy, method, &path, source_body.as_ref());
+        let native_response = native_applicable
+            .iter()
+            .copied()
+            .filter(|rule| api::is_response(rule))
+            .collect::<Vec<_>>();
+        if response_rules.iter().any(|r| selected.contains(&r.rule.id))
+            || native_response
+                .iter()
+                .any(|r| selected.contains(&r.rule.id))
+        {
+            api::verify(
+                root,
                 bundle,
                 &case_id,
                 &directory,
                 &request,
                 &response_rules,
+                &native_response,
                 &mut result,
             )?;
         }
@@ -123,26 +172,36 @@ pub(super) fn verify(
                     .copied()
                     .filter(|r| r.rule.surface == surface)
                 {
-                    if redis_selects(rule, &event)? {
+                    if dependency::selects(rule, &event)? {
                         rules.push(rule);
                     }
                 }
-                if !rules.iter().any(|r| selected.contains(&r.rule.id)) {
+                let mut native_sql = Vec::new();
+                if surface == Surface::DependencyRequest
+                    && dependency::protocol(&event) == Some(Protocol::Mysql)
+                {
+                    for rule in native_applicable
+                        .iter()
+                        .copied()
+                        .filter(|rule| matches!(&rule.rule.effect, NativeEffect::MysqlValues(_)))
+                    {
+                        if dependency::selects_native_sql(rule, &event)? {
+                            native_sql.push(rule);
+                        }
+                    }
+                }
+                if !rules.iter().any(|r| selected.contains(&r.rule.id))
+                    && !native_sql.iter().any(|r| selected.contains(&r.rule.id))
+                {
                     continue;
                 }
                 ensure!(
-                    event["replay_safe"] == true
-                        && event["outcome"].as_str().is_none_or(|s| s == "response")
+                    event["replay_safe"] != false
                         && event["global_dependency_reason"].is_null()
                         && event["cache_snapshot_rule"].is_null(),
                     "value rule requires complete ordinary Case evidence; it does not authorize ownership or snapshots"
                 );
-                let raw = if surface == Surface::DependencyRequest {
-                    serde_json::to_vec(&arguments(&event)?)?
-                } else {
-                    capture(&event["response"])?
-                };
-                let source = payload(surface, &event, &raw)?;
+                let raw = dependency::source_witness(surface, &event, &directory)?;
                 let source_time = timestamp(&request["timestamp"]);
                 let mut source_clocks = AnchorClocks::default();
                 source_clocks.case = crate::value_contract::time::ClockPair {
@@ -167,10 +226,21 @@ pub(super) fn verify(
                     source: completed,
                     target: completed,
                 };
-                compare(&source, &source, &rules, source_clocks)?;
+                let checked = dependency::compare_source(
+                    surface,
+                    &event,
+                    &raw,
+                    &rules,
+                    &native_sql,
+                    source_clocks,
+                )?;
+                if checked.is_empty() {
+                    result.unavailable_source_values += 1;
+                    continue;
+                }
                 result.source_validations += 1;
-                for rule in &rules {
-                    *result.rules.entry(rule.rule.id.clone()).or_default() += 1;
+                for id in checked {
+                    *result.rules.entry(id).or_default() += 1;
                 }
                 let refs = manifest
                     .as_ref()
@@ -180,9 +250,32 @@ pub(super) fn verify(
                             .filter(|w| {
                                 w.metadata.surface == surface
                                     && w.metadata.source.case_id == case_id
+                                    && (dependency::protocol(&event) == Some(Protocol::Http)
+                                        || event["connection_id"].is_string()
+                                            && if dependency::protocol(&event)
+                                                == Some(Protocol::Mysql)
+                                            {
+                                                event["query_sequence"].is_u64()
+                                            } else {
+                                                event["sequence"].is_u64()
+                                            })
                                     && w.metadata.source.connection_id.as_deref()
                                         == event["connection_id"].as_str()
-                                    && w.metadata.source.sequence == event["sequence"].as_u64()
+                                    && w.metadata.source.sequence
+                                        == if dependency::protocol(&event) == Some(Protocol::Mysql)
+                                        {
+                                            event["query_sequence"].as_u64()
+                                        } else {
+                                            event["sequence"].as_u64()
+                                        }
+                                    && (dependency::protocol(&event) != Some(Protocol::Http)
+                                        || event["id"].is_string())
+                                    && w.metadata.source.exchange_id.as_deref()
+                                        == if dependency::protocol(&event) == Some(Protocol::Http) {
+                                            event["id"].as_str()
+                                        } else {
+                                            None
+                                        }
                                     && w.source_sha256 == crate::policy_evidence::digest(&raw)
                                     && w.target_sha256.is_some()
                             })
@@ -193,8 +286,9 @@ pub(super) fn verify(
                     result.missing_target_witnesses += 1;
                     continue;
                 }
+                let mut observations = BTreeSet::new();
                 for witness in refs {
-                    validate_metadata(witness, &event)?;
+                    dependency::validate_metadata(witness, &event)?;
                     let clocks = witness.metadata.clocks.comparison();
                     ensure!(
                         clocks.case.source == source_clocks.case.source
@@ -218,21 +312,32 @@ pub(super) fn verify(
                         "protected Source witness differs from immutable recording"
                     );
                     let target = target.context("Target payload witness is unavailable")?;
-                    if surface == Surface::DependencyRequest {
-                        let expected = arguments(&event)?;
-                        let actual: Vec<Vec<u8>> = serde_json::from_slice(&target)?;
-                        let value_index = value_index(&event)?;
-                        ensure!(
-                            expected.len() == actual.len()
-                                && expected
-                                    .iter()
-                                    .zip(&actual)
-                                    .enumerate()
-                                    .all(|(i, (a, b))| i == value_index || a == b),
-                            "unselected Redis key/options/arguments differ"
-                        );
+                    let stateful = native_sql.iter().filter(|rule|
+                        matches!(&rule.rule.effect, NativeEffect::MysqlValues(effect) if !effect.params.is_empty()))
+                        .map(|rule| rule.rule.id.clone()).collect::<BTreeSet<_>>();
+                    if !stateful.is_empty() {
+                        // Scalar masks prove neither a case binding nor its later references.
+                        // Preserve the complete observation without claiming Target validation.
+                        result.stateful_target_obligations.extend(stateful);
+                        continue;
                     }
-                    compare(&source, &payload(surface, &event, &target)?, &rules, clocks)?;
+                    dependency::compare_pair(
+                        surface,
+                        &event,
+                        &raw,
+                        &target,
+                        &rules,
+                        &native_sql,
+                        clocks,
+                    )?;
+                    // One physical observation may be recorded once per SQL slot.
+                    // Validate every protected envelope, then count the observation once.
+                    if !observations.insert((
+                        witness.target_sha256.clone(),
+                        serde_json::to_string(&witness.metadata.target_role)?,
+                    )) {
+                        continue;
+                    }
                     match witness.metadata.target_role {
                         TargetRole::IndependentTargetObservation => {
                             result.independent_target_validations += 1
@@ -246,6 +351,7 @@ pub(super) fn verify(
             }
         }
     }
+    session::verify(root, bundle, policy, selected, &mut result)?;
     for id in selected {
         ensure!(
             result.rules.get(id).is_some_and(|n| *n > 0),
@@ -255,122 +361,21 @@ pub(super) fn verify(
     Ok(result)
 }
 
-fn compare(
-    source: &Value,
-    target: &Value,
-    rules: &[&CompiledRule],
-    clocks: AnchorClocks,
-) -> Result<()> {
-    let fields = rules
-        .iter()
-        .flat_map(|rule| {
-            rule.rule
-                .contract
-                .iter()
-                .map(move |(pointer, contract)| Field {
-                    rule_id: &rule.rule.id,
-                    pointer,
-                    contract,
-                })
-        })
-        .collect::<Vec<_>>();
-    let report = json::compare(source, target, &fields, clocks);
-    ensure!(
-        report.passed(),
-        "unified contract preflight failed: {}",
-        serde_json::to_string(&report.differences)?
-    );
-    Ok(())
-}
-
-fn redis_selects(rule: &CompiledRule, event: &Value) -> Result<bool> {
-    let resource = rule
-        .rule
-        .selector
-        .resource
-        .as_ref()
-        .context("dependency rule lacks resource")?;
-    ensure!(
-        resource.protocol == Protocol::Redis,
-        "P1 dependency preflight supports Redis JSON; other protocols require their P2 adapter"
-    );
-    if event["event_type"] != "redis_exchange"
-        || !event["target_host"]
-            .as_str()
-            .is_some_and(|h| h.eq_ignore_ascii_case(&resource.endpoint.host))
-        || event["target_port"].as_u64() != Some(u64::from(resource.endpoint.port))
-        || resource
-            .database
-            .as_ref()
-            .is_some_and(|d| d.index() != event["database"].as_i64())
-        || resource
-            .username
-            .as_ref()
-            .is_some_and(|u| event["username"].as_str() != Some(u))
-        || rule
-            .rule
-            .selector
-            .operation
-            .as_ref()
-            .is_some_and(|c| event["command"] != *c)
-    {
-        return Ok(false);
-    }
-    let args = arguments(event)?;
-    Ok(args
-        .first()
-        .is_some_and(|k| rule.rule.selector.key.as_ref().is_none_or(|s| s.matches(k))))
-}
-
-fn validate_metadata(witness: &WitnessRef, event: &Value) -> Result<()> {
-    let resource = witness
-        .metadata
-        .resource
-        .as_ref()
-        .context("witness has no protocol identity")?;
-    ensure!(
-        resource.protocol == Protocol::Redis
-            && event["target_host"]
-                .as_str()
-                .is_some_and(|h| h.eq_ignore_ascii_case(&resource.endpoint.host))
-            && event["target_port"].as_u64() == Some(u64::from(resource.endpoint.port))
-            && resource.database.as_ref().and_then(|d| d.index()) == event["database"].as_i64()
-            && resource.username.as_deref() == event["username"].as_str()
-            && event["command"] == witness.metadata.operation,
-        "Target witness protocol identity differs from the selected immutable Source exchange"
-    );
-    Ok(())
-}
-
-pub(super) fn payload(surface: Surface, event: &Value, raw: &[u8]) -> Result<Value> {
+fn redis_payload(surface: Surface, event: &Value, raw: &[u8]) -> Result<Vec<u8>> {
     if surface == Surface::DependencyRequest {
         let args: Vec<Vec<u8>> = serde_json::from_slice(raw)?;
-        let index = value_index(event)?;
-        ensure!(
-            event["command"] != "RPUSH" || args.len() == 2,
-            "P1 RPUSH preflight requires one explicitly selected element"
-        );
-        crate::json_value::parse(args.get(index).context("Redis value slot missing")?)
-            .context("selected Redis value is not complete unique-member JSON")
+        let index = value_index(event, args.len())?;
+        Ok(args.get(index).context("Redis value slot missing")?.clone())
     } else {
-        let bytes = bytes::Bytes::copy_from_slice(raw);
-        let (frame, consumed) = redis_protocol::resp2::decode::decode_bytes(&bytes)
-            .map_err(|e| anyhow::anyhow!("invalid Redis response envelope: {e}"))?
-            .context("incomplete Redis response")?;
-        ensure!(consumed == bytes.len(), "Redis response has trailing bytes");
-        let redis_protocol::resp2::types::BytesFrame::BulkString(value) = frame else {
-            anyhow::bail!("JSON read requires one successful bulk-string response");
-        };
-        crate::json_value::parse(&value)
-            .context("selected Redis response is not complete unique-member JSON")
+        crate::replay::redis_bulk_payload(raw)?.context("Redis response has no encoded value")
     }
 }
 
-fn value_index(event: &Value) -> Result<usize> {
-    match event["command"].as_str() {
-        Some("SET" | "RPUSH" | "PUBLISH") => Ok(1),
-        Some("SETEX" | "PSETEX" | "HSET") => Ok(2),
-        _ => anyhow::bail!("unsupported P1 Redis value slot"),
+fn value_index(event: &Value, length: usize) -> Result<usize> {
+    match (event["command"].as_str(), length) {
+        (Some("SET"), 2..) | (Some("PUBLISH"), 2) => Ok(1),
+        (Some("SETEX" | "PSETEX"), 3) => Ok(2),
+        _ => anyhow::bail!("unsupported Redis value slot or argument shape"),
     }
 }
 
@@ -401,89 +406,4 @@ pub(super) fn capture(value: &Value) -> Result<Vec<u8>> {
 
 fn timestamp(value: &Value) -> Option<DateTime<Utc>> {
     value.as_str()?.parse().ok()
-}
-
-fn api_response(
-    bundle: &mut Bundle,
-    case: &str,
-    directory: &Path,
-    request: &Value,
-    rules: &[&CompiledRule],
-    result: &mut Preflight,
-) -> Result<()> {
-    let summary = bundle.assertions["cases"]
-        .as_array()
-        .and_then(|items| items.iter().find(|c| c["case_id"] == case))
-        .map(|c| c["response"].clone())
-        .unwrap_or(Value::Null);
-    let expected = summary["expected_response"]
-        .as_str()
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| directory.join("expected-response.json"));
-    let source_document = bundle.json(&expected)?;
-    let immutable = bundle.json(&directory.join("expected-response.json"))?;
-    ensure!(
-        source_document == immutable,
-        "primary Source response does not match the prepared immutable case"
-    );
-    let source = crate::json_value::parse(&capture(&source_document["body"])?)
-        .context("Source primary JSON response unavailable")?;
-    let source_time = timestamp(&request["timestamp"]);
-    let clocks = AnchorClocks {
-        case: crate::value_contract::time::ClockPair {
-            source: source_time,
-            target: source_time,
-        },
-        ..Default::default()
-    };
-    compare(&source, &source, rules, clocks)?;
-    result.source_validations += 1;
-    for rule in rules {
-        *result.rules.entry(rule.rule.id.clone()).or_default() += 1;
-    }
-    let Some(actual) = summary["actual_response"].as_str() else {
-        result.missing_target_witnesses += 1;
-        return Ok(());
-    };
-    let detail_path = summary["detail_report"]
-        .as_str()
-        .context("Target response has no runner-owned assertion detail")?;
-    let detail = bundle.json(Path::new(detail_path))?;
-    ensure!(
-        crate::verification_progress::fingerprint(&fs::read(detail_path)?)
-            == summary["detail_fingerprint"]
-                .as_str()
-                .context("assertion detail fingerprint missing")?
-            && detail["case_id"] == case
-            && detail["expected_response_path"] == expected.to_string_lossy().as_ref()
-            && detail["actual_response_path"] == actual,
-        "response assertion detail identity changed after publication"
-    );
-    let target_document = bundle.json(Path::new(actual))?;
-    for (path, field) in [
-        (expected.as_path(), "expected_response_fingerprint"),
-        (Path::new(actual), "actual_response_fingerprint"),
-    ] {
-        ensure!(
-            detail[field].as_str()
-                == Some(crate::verification_progress::fingerprint(&fs::read(path)?).as_str()),
-            "primary response bytes changed after assertion publication"
-        );
-    }
-    let target = crate::json_value::parse(&capture(&target_document["body"])?)
-        .context("Target primary JSON response unavailable")?;
-    compare(
-        &source,
-        &target,
-        rules,
-        AnchorClocks {
-            case: crate::value_contract::time::ClockPair {
-                source: source_time,
-                target: timestamp(&target_document["request_sent_at"]),
-            },
-            ..Default::default()
-        },
-    )?;
-    result.independent_target_validations += 1;
-    Ok(())
 }

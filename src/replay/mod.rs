@@ -645,6 +645,8 @@ pub use policy::{
 pub(crate) use policy::test_fixture::{
     convert_legacy_policy as convert_legacy_policy_fixture, write_policy as write_policy_fixture,
 };
+#[cfg(test)]
+pub(crate) use policy::test_fixture::install_dependency_rule as install_dependency_rule_fixture;
 pub use policy::{
     RedisTimeShiftFeedback, RedisTimeShiftPlan, RedisTimeShiftReport, plan_redis_time_shift,
 };

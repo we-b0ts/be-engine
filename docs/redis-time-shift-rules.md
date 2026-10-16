@@ -1,5 +1,13 @@
 # Redis response time-shift rules
 
+> Authoring migration: the legacy YAML and flag-based commands below are
+> historical semantic references. They are not accepted configuration or CLI
+> syntax. Use the self-contained `traffic-policy/v1` rules, `project.policy`,
+> and `rule plan --file … --evidence …` described in
+> [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
+> evidence and lifecycle constraints described here remain mandatory.
+
+
 Recorded absolute timestamps can age between capture and Replay. If source and
 target use identical expiry logic, this can cause extra dependency reads even
 when the earlier response matched successfully. The explicit `time-shift`
