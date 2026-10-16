@@ -12,7 +12,7 @@ mod json_validation;
 mod jwt;
 mod time_rule;
 use json_validation::validate_json_rule_map;
-pub use jwt::ResponseJwtRule;
+pub use jwt::{ResponseJwtAlgorithm, ResponseJwtKeySource, ResponseJwtRule};
 pub use time_rule::{ResponseDurationUnit, ResponseTimeRule, ResponseTimestampFormat};
 
 pub(crate) use json_pointer::response_locations_overlap;

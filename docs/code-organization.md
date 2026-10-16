@@ -660,10 +660,15 @@ explicit repository-wide audit.
 - `json_value` owns bounded strict JSON decoding with duplicate-member
   rejection. Replay JSON normalization and signed-token validation share it;
   selector expansion and collection normalization stay in Replay.
-- `replay/policy/response/jwt` owns explicit JWT response selectors and startup
-  key references. `replay/assertion/jwt` resolves private signing inputs and
-  enforces per-response nonce consistency and signed-expiry relationships.
-  The JSON comparator selects both owned fields of a composite JWT rule;
+- `replay/policy/response/jwt` owns explicit JWT response selectors, response-only
+  algorithms, typed public/startup key references and companion time fields.
+  Its `key_source` child validates exact recorded MySQL selectors; `input`
+  provides bounded field-specific CLI diagnostics. `replay/assertion/jwt/keys`
+  resolves startup keys or one immutable case-local recorded public key;
+  `rsa` authenticates RS256 signatures without request transformation, and
+  `companions` validates signed iat/exp and TTL derivations. The shared pure
+  claims validator retains stable-claim, time and nonce checks for both families.
+  The JSON comparator selects owned fields of a composite JWT rule;
   related array indexes stay scoped to the same response item. Generated-value feedback's
   `response_evidence` child owns protected response observation admission;
   `response_jwt` owns signed witness validation and atomic plan/apply through
@@ -677,6 +682,8 @@ explicit repository-wide audit.
 - `replay/policy/response/time_rule` owns explicit timestamp-format and duration-unit
   contracts. `replay/assertion/time` owns numeric parsing and fixed five-second
   request-relative validation; artifact adapters supply captured request times.
+  `feedback/time_plan` preflights proposed response time rules with this same
+  comparator and freezes actual case/response witnesses before plan/apply.
 - `replay/assertion/docx` owns bounded OPC ZIP expansion and DOCX part comparison.
   ZIP timestamps, compression choices, entry order, and offsets are container
   metadata; configured XML timestamp elements reuse request-relative time

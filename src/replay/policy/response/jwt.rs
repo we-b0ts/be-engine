@@ -1,13 +1,44 @@
 //! Explicit signed-token response contracts; secrets stay in startup inputs.
 use super::*;
-use crate::request_rules::{JwtAlgorithm, JwtDynamicClaim, keys::SigningKeySource};
+use crate::request_rules::JwtDynamicClaim;
+
+mod input;
+mod key_source;
+pub use key_source::ResponseJwtKeySource;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ResponseJwtAlgorithm {
+    HS256,
+    HS384,
+    HS512,
+    RS256,
+}
+
+impl ResponseJwtAlgorithm {
+    pub(in crate::replay) fn hmac(self) -> Option<crate::request_rules::JwtAlgorithm> {
+        use crate::request_rules::JwtAlgorithm as A;
+        match self {
+            Self::HS256 => Some(A::HS256),
+            Self::HS384 => Some(A::HS384),
+            Self::HS512 => Some(A::HS512),
+            Self::RS256 => None,
+        }
+    }
+}
+
+fn default_expiry_format() -> ResponseTimestampFormat {
+    ResponseTimestampFormat::Rfc3339
+}
+fn is_default_expiry_format(format: &ResponseTimestampFormat) -> bool {
+    *format == default_expiry_format()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ResponseJwtRule {
     pub pointer: String,
-    pub algorithm: JwtAlgorithm,
-    pub signing_key_source: SigningKeySource,
+    pub algorithm: ResponseJwtAlgorithm,
+    pub signing_key_source: ResponseJwtKeySource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dynamic_claims: Vec<JwtDynamicClaim>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -15,13 +46,37 @@ pub struct ResponseJwtRule {
     /// RFC3339 response timestamp whose floored Unix seconds must equal JWT exp.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,
+    #[serde(
+        default = "default_expiry_format",
+        skip_serializing_if = "is_default_expiry_format"
+    )]
+    pub expires_at_format: ResponseTimestampFormat,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issued_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<String>,
     pub source_evidence: String,
 }
 
 impl ResponseJwtRule {
     pub(crate) fn validate(&self) -> Result<()> {
         validate_json_pointer(&self.pointer)?;
-        crate::request_rules::keys::validate_source(&self.signing_key_source)?;
+        self.signing_key_source.validate(self.algorithm)?;
+        ensure!(
+            matches!(
+                self.expires_at_format,
+                ResponseTimestampFormat::Rfc3339 | ResponseTimestampFormat::UnixSeconds
+            ),
+            "JWT expires_at_format supports rfc3339 or unix_seconds"
+        );
+        ensure!(
+            self.expires_at.is_some() || is_default_expiry_format(&self.expires_at_format),
+            "JWT expires_at_format requires expires_at"
+        );
+        ensure!(
+            self.ttl.is_none() || self.expires_at.is_some() && self.issued_at.is_some(),
+            "JWT ttl requires expires_at and issued_at"
+        );
         validate_audit_text(&self.source_evidence, "source_evidence", 512)?;
         let mut claims = BTreeSet::new();
         for claim in &self.dynamic_claims {
@@ -41,7 +96,10 @@ impl ResponseJwtRule {
                 "JWT URL query selector must be a nonempty unreserved ASCII name"
             );
         }
-        if let Some(pointer) = &self.expires_at {
+        for pointer in self
+            .companion_pointers()
+            .chain(self.ttl.iter().map(String::as_str))
+        {
             validate_json_pointer(pointer)?;
             let scope = |pointer: &str| {
                 let parts = pointer.split('/').collect::<Vec<_>>();
@@ -57,6 +115,13 @@ impl ResponseJwtRule {
             );
         }
         Ok(())
+    }
+
+    pub(in crate::replay) fn companion_pointers(&self) -> impl Iterator<Item = &str> {
+        self.expires_at
+            .iter()
+            .chain(&self.issued_at)
+            .map(String::as_str)
     }
 
     /// Bind array indexes from either owned field to the same response item.

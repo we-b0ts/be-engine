@@ -151,7 +151,7 @@ fn parse_header_date(value: &str) -> Result<traffic_e2e::ResponseHeaderDateRule,
 }
 
 fn parse_response_jwt(value: &str) -> Result<traffic_e2e::ResponseJwtRule, String> {
-    serde_json::from_str(value).map_err(|_| "invalid JWT response rule JSON".into())
+    traffic_e2e::ResponseJwtRule::parse_json(value)
 }
 
 #[cfg(test)]

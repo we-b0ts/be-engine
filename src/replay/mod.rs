@@ -657,6 +657,6 @@ pub use policy::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
 
 pub(crate) use policy::request_contract::discover as discover_dependency_request_candidates;
 
-pub use policy::ResponseJwtRule;
+pub use policy::{ResponseJwtAlgorithm, ResponseJwtKeySource, ResponseJwtRule};
 
 pub use policy::{ResponseJwtRuleFeedback, plan_response_jwt_rule};

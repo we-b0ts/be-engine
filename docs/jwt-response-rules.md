@@ -83,8 +83,10 @@ planning does not turn old failed responses into successful runs.
 
 ## Response assertion contract
 
-- HS256, HS384 and HS512 compact JWS are supported. Both signatures must verify
-  with the declared startup key and algorithm. Unsupported algorithms,
+- HS256, HS384, HS512 and response-only RS256 compact JWS are supported. Both signatures must verify
+  with the declared key and algorithm. RS256 accepts an RSA SubjectPublicKeyInfo
+  public-key PEM; verification does not require a private key or rewrite tokens.
+  Inbound JWT translation and Redis JWT contracts retain their HMAC-only scope. Unsupported algorithms,
   duplicate JSON members, critical extensions and malformed tokens fail.
 - Decoded headers and all stable claims must agree exactly, including identity,
   audience, issuer, roles and scopes. JSON member order is irrelevant; array
@@ -115,13 +117,21 @@ planning does not turn old failed responses into successful runs.
   encoding and fragments remain exact. A `?` inside a fragment is not a query.
   URLs are bounded to 128 KiB and JWTs to 64 KiB. Discovery offers a candidate
   only; it never proves the signature or echoes the URL/token in its hints.
-- Optional `expires_at` is a JSON Pointer to an RFC3339 response timestamp.
+- Optional `expires_at` is a JSON Pointer to a response timestamp. The default
+  `expires_at_format: rfc3339` preserves the existing contract; explicit
+  `expires_at_format: unix_seconds` requires a JSON integer, not a numeric string.
   On each side separately, its Unix timestamp floored to whole seconds must
   equal the same signed token's integer `exp`. Fractional seconds and timezone
   offsets are accepted; missing, invalid or inconsistent values fail. This
   exact derivation check is separate from the five-second request-relative
   comparison. The expiry and token selectors must share the same wildcard
   array prefix, for example `/items/*/expiresAt` and `/items/*/downloadUrl`.
+- Optional `issued_at` selects a JSON integer that must equal the same token's
+  signed `iat` on each side. Optional `ttl` requires both `issued_at` and
+  `expires_at`: each side must satisfy `issued_at + ttl = expires_at`, with a
+  positive integer TTL and checked arithmetic. TTL remains compared exactly
+  between Source and Target. All selected fields share the token's array scope;
+  overlapping response rules are rejected.
 - Missing fields, JSON types, array structure, status, headers and other
   response values remain checked. A selector absent on both sides is
   inapplicable. Overlapping JWT, random, timestamp or other subtree rules fail
@@ -133,8 +143,62 @@ dotenv file can use
 `{kind: target_file, path: /app/.env, field: SECRET_KEY}` only within a declared
 read-only startup mount. Keys stay in private memory and are never written to
 plans, policy previews or diagnostics. Assertion differences report a pointer
-and reason without token or claim values. JWE and asymmetric algorithms remain
-outside this contract.
+and reason without token or claim values. JWE and asymmetric algorithms other
+than RS256 remain outside this response contract.
+
+## Recorded RSA public keys
+
+An RS256 response can select its public key from its own case's immutable
+`dependencies.jsonl`, without querying a live database or configuring private
+key decryption. The selector fixes the endpoint, database, complete SQL and bound
+parameter values, result column, JSON paths, and expected `kid`:
+
+```yaml
+response_rules:
+  json:
+    POST /api/issuers/*/issue:
+      jwt:
+        - pointer: /access_token
+          algorithm: RS256
+          signing_key_source:
+            kind: recorded_mysql
+            host: db.internal
+            port: 3306
+            database: app
+            sql: SELECT document FROM signing_keys WHERE id = ?
+            params: [7]
+            column: document
+            json_pointer: /spec/publicKeyPem
+            kid_pointer: /spec/kid
+            algorithm_pointer: /spec/algorithm
+            kid: key-1
+          expires_at: /expires_at
+          expires_at_format: unix_seconds
+          issued_at: /issued_at
+          ttl: /expires_in
+          dynamic_claims: [/jti]
+          source_evidence: issuer signs RS256 claims and returns iat, exp and TTL
+```
+
+SQL identity uses exact token equality after parameter binding, allowing text
+and prepared representations of the same query. Parameters accept strings,
+integers and null; they are never wildcards. Every selected case must contain
+exactly one matching successful, complete, untruncated single-row exchange.
+Its JSON must provide the selected public key, configured `kid`, and `RS256`
+algorithm. Both token headers must use that `kid`. Missing or ambiguous keys,
+changed selectors, malformed keys and invalid signatures fail closed. Each
+issuer/key selector is explicit; a different issuer requires matching evidence
+and a reviewed selector, never a fallback key from the token itself.
+
+Planning freezes the dependency artifact with the response evidence; apply
+rejects changed artifacts and requires fresh planning. The policy and plan
+contain selectors, not PEM bytes, decrypted private keys or complete JWTs.
+Dependency replay matching and consumption remain mandatory.
+
+Response JWT input errors identify an unsupported algorithm or key-source kind,
+or the field path with an invalid value type. Supported response algorithms are
+HS256/HS384/HS512/RS256; key-source kinds are
+`target_env`, `target_file` and `recorded_mysql`.
 
 This rule compares an HTTP response only. Inbound credential translation uses
 [JWT request rules](jwt-request-rules.md); generated JWTs sent in Redis writes

@@ -25,6 +25,7 @@ pub(crate) struct Validated {
     pub nonces: Vec<Nonce>,
     pub time_validations: usize,
     pub exp: [i64; 2],
+    pub iat: [Option<i64>; 2],
 }
 
 pub(crate) struct Nonce {
@@ -53,8 +54,8 @@ pub(crate) fn compare(
     if !(0..=5_000_000_000).contains(&contract.tolerance) {
         return Err(Failure::Time);
     }
-    let mut source = parse(source)?;
-    let mut target = parse(target)?;
+    let source = parse(source)?;
+    let target = parse(target)?;
     if source.algorithm != contract.algorithm || target.algorithm != contract.algorithm {
         return Err(Failure::Algorithm);
     }
@@ -66,48 +67,72 @@ pub(crate) fn compare(
     {
         return Err(Failure::Claims);
     }
+    compare_authenticated_claims(
+        source.claims,
+        target.claims,
+        contract.anchors,
+        contract.tolerance,
+        contract.dynamic_claims,
+    )
+}
+
+/// Call only after authenticating both signatures and comparing their headers.
+pub(crate) fn compare_authenticated_claims(
+    mut source: Value,
+    mut target: Value,
+    anchors: [i128; 2],
+    tolerance: i128,
+    dynamic_claims: &[super::nonce::DynamicClaim],
+) -> Result<Validated, Failure> {
+    if !(0..=5_000_000_000).contains(&tolerance) {
+        return Err(Failure::Time);
+    }
+    let integer = |value: &Value, name: &str| -> Result<Option<i64>, Failure> {
+        value
+            .get(name)
+            .map(|v| v.as_i64().ok_or(Failure::Time))
+            .transpose()
+    };
+    let iat = [integer(&source, "iat")?, integer(&target, "iat")?];
     let mut time_validations = 0;
-    let exp = [source.integer_claim("exp"), target.integer_claim("exp")]
-        .map(|value| value.ok().flatten());
+    let exp = [integer(&source, "exp"), integer(&target, "exp")].map(|value| value.ok().flatten());
     let [Some(source_exp), Some(target_exp)] = exp else {
         return Err(Failure::Time);
     };
     for name in ["exp", "iat", "nbf"] {
-        let left = source.integer_claim(name).map_err(|_| Failure::Time)?;
-        let right = target.integer_claim(name).map_err(|_| Failure::Time)?;
+        let left = integer(&source, name)?;
+        let right = integer(&target, name)?;
         if left.is_some() != right.is_some() || name == "exp" && left.is_none() {
             return Err(Failure::Time);
         }
         if let (Some(left), Some(right)) = (left, right) {
             time_validations += 1;
-            let [a, b] = contract.anchors;
+            let [a, b] = anchors;
             let left = i128::from(left) * 1_000_000_000;
             let right = i128::from(right) * 1_000_000_000;
             let source_offset = left.checked_sub(a).ok_or(Failure::Time)?;
             let target_offset = right.checked_sub(b).ok_or(Failure::Time)?;
-            let source_latest = a.checked_add(contract.tolerance).ok_or(Failure::Time)?;
-            let target_latest = b.checked_add(contract.tolerance).ok_or(Failure::Time)?;
-            if target_offset.abs_diff(source_offset) > contract.tolerance as u128
+            let source_latest = a.checked_add(tolerance).ok_or(Failure::Time)?;
+            let target_latest = b.checked_add(tolerance).ok_or(Failure::Time)?;
+            if target_offset.abs_diff(source_offset) > tolerance as u128
                 || name == "exp" && (left <= a || right <= b)
                 || name != "exp" && (left > source_latest || right > target_latest)
             {
                 return Err(Failure::Time);
             }
-            source.claims.as_object_mut().unwrap().remove(name);
-            target.claims.as_object_mut().unwrap().remove(name);
+            source.as_object_mut().ok_or(Failure::Invalid)?.remove(name);
+            target.as_object_mut().ok_or(Failure::Invalid)?.remove(name);
         }
     }
     let mut nonces = Vec::new();
-    for claim in contract.dynamic_claims {
+    for claim in dynamic_claims {
         claim.validate().map_err(|_| Failure::Nonce)?;
         let pointer = claim.pointer();
         let left = source
-            .claims
             .pointer(pointer)
             .and_then(Value::as_str)
             .ok_or(Failure::Nonce)?;
         let right = target
-            .claims
             .pointer(pointer)
             .and_then(Value::as_str)
             .ok_or(Failure::Nonce)?;
@@ -121,15 +146,22 @@ pub(crate) fn compare(
             source: left.into(),
             target: right.into(),
         });
-        source.claims.as_object_mut().unwrap().remove(&pointer[1..]);
-        target.claims.as_object_mut().unwrap().remove(&pointer[1..]);
+        source
+            .as_object_mut()
+            .ok_or(Failure::Invalid)?
+            .remove(&pointer[1..]);
+        target
+            .as_object_mut()
+            .ok_or(Failure::Invalid)?
+            .remove(&pointer[1..]);
     }
-    if source.claims != target.claims {
+    if source != target {
         return Err(Failure::Claims);
     }
     Ok(Validated {
         nonces,
         time_validations,
         exp: [source_exp, target_exp],
+        iat,
     })
 }

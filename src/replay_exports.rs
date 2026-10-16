@@ -76,6 +76,6 @@ pub use crate::replay::{
 
 pub use crate::replay::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
 
-pub use crate::replay::ResponseJwtRule;
+pub use crate::replay::{ResponseJwtAlgorithm, ResponseJwtKeySource, ResponseJwtRule};
 
 pub use crate::replay::{ResponseJwtRuleFeedback, plan_response_jwt_rule};

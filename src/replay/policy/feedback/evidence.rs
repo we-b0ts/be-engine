@@ -45,12 +45,16 @@ pub(super) struct ResponseCaseEvidence {
     pub(super) detail_report: Option<PathBuf>,
     #[serde(default)]
     pub(super) detail_fingerprint: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "request_path")]
     pub(super) request: Option<PathBuf>,
-    #[serde(default)]
+    #[serde(default, alias = "expected_response_path")]
     pub(super) expected_response: Option<PathBuf>,
-    #[serde(default)]
+    #[serde(default, alias = "actual_response_path")]
     pub(super) actual_response: Option<PathBuf>,
+    #[serde(default)]
+    pub(super) expected_response_fingerprint: Option<String>,
+    #[serde(default)]
+    pub(super) actual_response_fingerprint: Option<String>,
     #[serde(default)]
     pub(super) policy_fingerprint: String,
     #[serde(default)]

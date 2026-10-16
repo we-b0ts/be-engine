@@ -490,6 +490,18 @@ start times. Replay reads source `request.json.timestamp` and target
 `request_sent_at`.
 No current wall-clock fallback or configurable tolerance is allowed.
 
+Timestamp and duration plans preflight every selected field against these same
+captured clocks before a policy can be applied. Missing clocks, stale response
+artifacts, invalid field types, or an unsatisfied time constraint reject the plan
+without modifying policy. Errors identify the case, concrete JSON Pointer and
+failed constraint. Apply rechecks the frozen evidence; a fresh Replay is still
+required after policy application.
+
+For signed JWT responses, integer or RFC3339 expiry fields can instead bind to
+the token's signed `exp`, with optional issued-at and TTL derivation checks;
+see [JWT response rules](jwt-response-rules.md). A timestamp near request time
+and an absolute expiry are distinct contracts.
+
 - `timestamp` requires `format: unix_seconds`, `unix_milliseconds`, `rfc3339`,
   or `amz_date`. Each source/target timestamp must be within five seconds of its
   own request start, even if the two field literals are equal.

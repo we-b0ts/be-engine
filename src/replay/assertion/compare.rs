@@ -25,15 +25,15 @@ pub(super) fn compare_json(
             applicable.push(field.clone());
         }
         for pointer in pointers {
-            if let Some(expiry) = field
-                .jwt
-                .as_ref()
-                .and_then(|rule| rule.expires_at.as_deref())
-            {
-                selected.insert(
-                    crate::replay::policy::ResponseJwtRule::concrete_pointer(expiry, &pointer),
-                    field,
-                );
+            if let Some(rule) = &field.jwt {
+                for companion in rule.companion_pointers() {
+                    selected.insert(
+                        crate::replay::policy::ResponseJwtRule::concrete_pointer(
+                            companion, &pointer,
+                        ),
+                        field,
+                    );
+                }
             }
             selected.insert(pointer, field);
         }
@@ -41,6 +41,7 @@ pub(super) fn compare_json(
     let mut jwt = super::jwt::JwtComparison::load(
         fields,
         std::path::Path::new(&report.policy_path),
+        std::path::Path::new(&report.request_path),
         expected,
         actual,
     );
