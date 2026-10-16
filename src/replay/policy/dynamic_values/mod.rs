@@ -4,6 +4,8 @@ mod candidates;
 mod config;
 mod http;
 mod mysql;
+#[cfg(test)]
+mod mysql_table_tests;
 mod path_candidates;
 mod path_segment;
 mod redis;

@@ -63,6 +63,11 @@ identifier fragments are unsupported. Table selectors require `{{table}}`, and
 `{{table}}` requires declared table bounds. Existing concrete rules need no change.
 Table patterns match only ASCII identifiers up to 64 bytes and reject a bare `*`.
 Source proof must justify the selected table family as well as its generated time.
+When an initial write also captures a generated identity, the
+[joint identity/time planner](dynamic-value-rules.md#plan-a-generated-mysql-identity-with-current-time-values)
+inherits these same table bounds from the identity capture and applies both
+ordinary rules atomically. Its admission checks the entire declared family for
+time-rule conflicts, including tables not present in the current witness.
 
 `time: preserve_relative` compares
 `(target_value - source_value) - (target_request_time - source_request_time)`

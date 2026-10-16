@@ -115,3 +115,42 @@ fn larger_sql_value_statements_retain_token_and_statement_safety_bounds() {
         assert!(bounded_statement_tokens(&sql).is_none());
     }
 }
+
+#[test]
+fn exact_reserved_marker_names_remain_literal_when_table_families_intersect() {
+    let exact = SqlValueTemplate::new(
+        "SELECT id FROM __traffic_time_table__ WHERE name=?",
+        &[],
+        &[],
+        None,
+    )
+    .unwrap();
+    assert!(exact.matches("SELECT id FROM __traffic_time_table__ WHERE name='name'"));
+    let family = SqlValueTemplate::new(
+        "SELECT id FROM {{table}} WHERE name=?",
+        &["__traffic_time_table__".into()],
+        &[],
+        None,
+    )
+    .unwrap();
+    assert!(exact.overlaps(&family));
+    assert!(family.overlaps(&exact));
+    let other = SqlValueTemplate::new(
+        "SELECT id FROM {{table}} WHERE name=?",
+        &["items".into()],
+        &[],
+        None,
+    )
+    .unwrap();
+    assert!(!exact.overlaps(&other));
+    assert!(!other.overlaps(&exact));
+    let literal = SqlValueTemplate::new(
+        "UPDATE items SET name='__traffic_time_table__' WHERE id=?",
+        &[],
+        &[],
+        None,
+    )
+    .unwrap();
+    assert!(literal.matches("UPDATE items SET name='__traffic_time_table__' WHERE id=7"));
+    assert!(!literal.matches("UPDATE items SET name='items' WHERE id=7"));
+}

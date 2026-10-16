@@ -2,7 +2,10 @@
 use super::*;
 use crate::replay::{
     RecordedMysqlValue,
-    policy::{config::fingerprint, matcher::mysql_values::values},
+    policy::{
+        config::fingerprint,
+        matcher::mysql_values::{template_pair_values, template_values},
+    },
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -34,10 +37,11 @@ impl DynamicValues {
                     DynamicValueCapture::Mysql {
                         target,
                         database,
-                        sql,
                         value_index,
                         json_pointer,
+                        ..
                     } => {
+                        let template = rule.capture.mysql_template()?;
                         event["event_type"] == "mysql_exchange"
                             && event["target_host"]
                                 .as_str()
@@ -49,7 +53,7 @@ impl DynamicValues {
                             )
                             .ok()
                             .is_some_and(|params| {
-                                values(sql, event["sql"].as_str(), params.as_deref())
+                                template_values(&template, event["sql"].as_str(), params.as_deref())
                                     .ok()
                                     .is_some_and(|values| {
                                         mysql::capture(
@@ -184,9 +188,9 @@ pub(in crate::replay) fn from_report(
         let DynamicValueCapture::Mysql {
             target,
             database,
-            sql,
             value_index,
             json_pointer,
+            ..
         } = &rule.capture
         else {
             restore_request_binding(
@@ -200,6 +204,7 @@ pub(in crate::replay) fn from_report(
             )?;
             continue;
         };
+        let template = rule.capture.mysql_template()?;
         let mut restored = false;
         for actual in report["matched_queries"]
             .as_array()
@@ -214,16 +219,8 @@ pub(in crate::replay) fn from_report(
                     && query["database"] == *database
             })
         {
-            let params: Option<Vec<RecordedMysqlValue>> =
+            let actual_params: Option<Vec<RecordedMysqlValue>> =
                 serde_json::from_value(actual.get("params").cloned().unwrap_or(Value::Null))?;
-            let Ok(actual_values) = values(sql, actual["sql"].as_str(), params.as_deref()) else {
-                continue;
-            };
-            let target_value =
-                mysql::capture(&actual_values[*value_index], json_pointer.as_deref())?;
-            if fingerprint(target_value.as_bytes()) != proof["target_fingerprint"] {
-                continue;
-            }
             for source in events.iter().filter(|source| {
                 source["event_type"] == "mysql_exchange"
                     && source["target_host"]
@@ -235,10 +232,20 @@ pub(in crate::replay) fn from_report(
             }) {
                 let params: Option<Vec<RecordedMysqlValue>> =
                     serde_json::from_value(source.get("params").cloned().unwrap_or(Value::Null))?;
-                let Ok(source_values) = values(sql, source["sql"].as_str(), params.as_deref())
-                else {
+                let Ok((source_values, actual_values)) = template_pair_values(
+                    &template,
+                    source["sql"].as_str(),
+                    params.as_deref(),
+                    actual["sql"].as_str(),
+                    actual_params.as_deref(),
+                ) else {
                     continue;
                 };
+                let target_value =
+                    mysql::capture(&actual_values[*value_index], json_pointer.as_deref())?;
+                if fingerprint(target_value.as_bytes()) != proof["target_fingerprint"] {
+                    continue;
+                }
                 let source_value =
                     mysql::capture(&source_values[*value_index], json_pointer.as_deref())?;
                 if fingerprint(source_value.as_bytes()) != proof["source_fingerprint"] {
