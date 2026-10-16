@@ -8,7 +8,10 @@ Normal protocol rules use `case: {method, path}` for the inbound HTTP API;
 ## Source request conditions
 
 Both rule families accept an optional top-level `when` to select the Source
-branch that generates a dependency value. For example, initialization can select
+branch that generates a dependency value. For Redis protocol rules, only argument
+request contracts support `when`; unordered values, lock tokens, PUBLISH UUIDs
+and response time shifts reject it. Dynamic captures support it independently.
+For example, initialization can select
 `/event_type: {equals: session.created}` while a separate update rule selects
 `/event_type: {not_equals: session.created}`:
 

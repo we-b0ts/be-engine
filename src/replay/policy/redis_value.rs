@@ -6,6 +6,9 @@ use crate::replay::redis::value::{
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub(super) enum RedisSelector {
@@ -75,6 +78,10 @@ pub(super) fn validate(rule: &ReplayDependencyRule) -> Result<()> {
         .redis
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Redis rule requires redis selector"))?;
+    ensure!(
+        rule.when.is_none() || matches!(redis, RedisSelector::Requests(_)),
+        "Redis request conditions require an argument request contract"
+    );
     ensure!(
         rule.case_selector.is_none() || matches!(redis, RedisSelector::Requests(_)),
         "Redis rules cannot select a case"
