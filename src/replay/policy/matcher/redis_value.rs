@@ -5,28 +5,7 @@ impl ReplayPolicyRuntime {
     pub(in crate::replay) fn redis_publish_rules(
         &self,
     ) -> Vec<crate::replay::redis::publish::PublishRule> {
-        self.loaded
-            .document
-            .dependency_rules
-            .iter()
-            .filter_map(|rule| {
-                let super::super::redis_value::RedisSelector::Publish(publish) =
-                    rule.redis.as_ref()?
-                else {
-                    return None;
-                };
-                Some(crate::replay::redis::publish::PublishRule {
-                    id: rule.id.clone(),
-                    selector: crate::replay::redis::publish::RedisPublishSelector {
-                        host: rule.target.host.clone().unwrap_or_default(),
-                        port: rule.target.port.unwrap_or_default(),
-                        channel: publish.publish.channel.clone(),
-                        uuid_index: publish.publish.uuid_index,
-                        uuid_field: publish.publish.uuid_field.clone(),
-                    },
-                })
-            })
-            .collect()
+        super::super::redis_value::publish_rules(&self.loaded.document.dependency_rules)
     }
     pub(in crate::replay) fn redis_lock_token_rules(
         &self,

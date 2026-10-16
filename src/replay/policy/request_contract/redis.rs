@@ -66,6 +66,12 @@ impl RequestContracts {
         let config = &selector.commands[location];
         config.validate_arguments(source)?;
         config.validate_arguments(actual)?;
+        if command == "PUBLISH" {
+            ensure!(
+                source.len() == 2,
+                "PUBLISH requires an exact channel and one JSON payload"
+            );
+        }
         if command == "ZADD" {
             ensure!(
                 source.len() == 3,
@@ -159,14 +165,7 @@ impl RequestContracts {
             config.argument_values.keys().all(|i| *i < source.len()),
             "selected Redis argument is missing"
         );
-        if let Some(first) = times.first() {
-            ensure!(
-                times
-                    .iter()
-                    .all(|pair| ((pair.1 - first.1) - (pair.0 - first.0)).abs() <= 0.000_001),
-                "request time parameter relationship changed"
-            );
-        }
+        super::time::validate_relationships(&times)?;
         if selector.commands.len() > 1 {
             let key = (
                 case.into(),
@@ -191,14 +190,14 @@ impl RequestContracts {
                     "key changed within a command sequence"
                 );
             }
-            if let Some(first) = previous.times.first() {
-                for pair in &times {
-                    ensure!(
-                        ((pair.1 - first.1) - (pair.0 - first.0)).abs() <= 0.000_001,
-                        "request time parameter relationship changed"
-                    );
-                }
-            }
+            super::time::validate_relationships(
+                &previous
+                    .times
+                    .iter()
+                    .chain(&times)
+                    .copied()
+                    .collect::<Vec<_>>(),
+            )?;
             let next = (location + 1) % selector.commands.len();
             let times = if next == 0 {
                 vec![]

@@ -6,7 +6,7 @@ mod publish;
 mod time_shift;
 #[derive(Debug, Args)]
 #[command(
-    after_help = "Redis write argument timestamps (ZADD score / ZREMRANGEBYSCORE maximum) use:\n  backend-rewrite rule plan --evidence-id ID --dependency-request RULE_JSON\nSee `backend-rewrite rule plan --help` for the existing request-rule entrypoint."
+    after_help = "Redis write argument timestamps (ZADD/ZREMRANGEBYSCORE, EVAL/EVALSHA scalar/JSON ARGV, SET/RPUSH/PUBLISH JSON) use:\n  backend-rewrite rule plan --evidence-id ID --dependency-request RULE_JSON\nSee `backend-rewrite rule plan --help` for the existing request-rule entrypoint."
 )]
 pub(super) struct RedisDependencyRuleArgs {
     #[command(subcommand)]

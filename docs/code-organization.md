@@ -166,8 +166,8 @@ is unclear.
   Its `script` child validates explicit Lua digests and bounded KEYS/ARGV
   envelopes without evaluating Lua. Redis compares dynamic-identity copies
   before disjoint request-time contracts; overlapping field ownership is rejected.
-  Its `time` child shares timestamp parsing and relative-clock validation across
-  protocols; `http_json` owns JSON body stable-field pairing and time comparisons
+  Its `time` child uses exact integer nanoseconds for timestamp parsing and relative-clock validation across
+  protocols, reusing the assertion time decimal scaler. `redis/publish/json` owns UUID-only JSON comparison copies for composition with time contracts; `redis/matching/request` commits their bindings only after all request checks pass. Planning uses the same copies without mutating recorded evidence. `http_json` owns JSON body stable-field pairing and time comparisons
   using dependency-local clocks, and `evidence/http_json` protects and verifies
   failed target witnesses before planning.
   `replay/policy/case_condition` owns bounded scalar conditions on immutable

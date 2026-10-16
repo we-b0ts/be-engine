@@ -244,3 +244,27 @@ pub(super) fn validate_overlaps(rules: &[ReplayDependencyRule]) -> Result<()> {
     }
     Ok(())
 }
+
+/// Shared projection for live UUID bindings and protected request-witness planning.
+pub(super) fn publish_rules(
+    rules: &[ReplayDependencyRule],
+) -> Vec<crate::replay::redis::publish::PublishRule> {
+    rules
+        .iter()
+        .filter_map(|rule| {
+            let RedisSelector::Publish(publish) = rule.redis.as_ref()? else {
+                return None;
+            };
+            Some(crate::replay::redis::publish::PublishRule {
+                id: rule.id.clone(),
+                selector: crate::replay::redis::publish::RedisPublishSelector {
+                    host: rule.target.host.clone().unwrap_or_default(),
+                    port: rule.target.port.unwrap_or_default(),
+                    channel: publish.publish.channel.clone(),
+                    uuid_index: publish.publish.uuid_index,
+                    uuid_field: publish.publish.uuid_field.clone(),
+                },
+            })
+        })
+        .collect()
+}

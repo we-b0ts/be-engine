@@ -128,7 +128,7 @@ pub(super) fn verify(
         &runtime,
         proposed,
         &report,
-        &document.dynamic_values,
+        document,
         witnesses,
         Some(&feedback.rule.id),
     )

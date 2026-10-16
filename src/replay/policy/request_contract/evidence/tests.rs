@@ -285,3 +285,80 @@ fn planning_keeps_covered_request_time_conflicts_strict() {
             .contains("request timestamp differs from its recorded relative time")
     );
 }
+
+#[test]
+fn script_json_microseconds_plan_apply_freezes_witnesses_and_rejects_bad_copies() {
+    let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let selector = json!({"key":"metrics","commands":[{"command":"EVALSHA","script":{"sha1":digest},"argument_values":{
+        "3":{"time":"preserve_relative","format":"unix_seconds"},
+        "4":{"time":"preserve_relative","format":"unix_microseconds"},
+        "5":{"json":{"/changed_at_us":{"time":"preserve_relative","format":"unix_microseconds"}}}
+    }}]});
+    for (body, passes) in [
+        (r#"{"changed_at_us":2000123456,"failed":true}"#, true),
+        (r#"{"changed_at_us":2000123457,"failed":true}"#, false),
+        (r#"{"changed_at_us":2000123456,"failed":false}"#, false),
+    ] {
+        let mut fixture = Fixture::new();
+        let source = [
+            digest,
+            "1",
+            "metrics",
+            "1000.123456",
+            "1000123456",
+            r#"{"changed_at_us":1000123456,"failed":true}"#,
+        ];
+        let actual = [digest, "1", "metrics", "2000.123456", "2000123456", body];
+        fixture.candidate("EVALSHA", &source, &actual);
+        fixture.events.push(exchange("EVALSHA", &source));
+        let plan = fixture.plan(selector.clone());
+        assert_eq!(plan.is_ok(), passes);
+        if let Ok(plan) = plan {
+            std::fs::write(fixture.case.join("dependencies.jsonl"), "changed").unwrap();
+            assert!(plan.apply().is_err());
+            assert!(
+                crate::replay::policy::load_replay_policy(&fixture.policy)
+                    .unwrap()
+                    .document
+                    .dependency_rules
+                    .is_empty()
+            );
+        }
+    }
+}
+
+#[test]
+fn publish_time_planning_composes_existing_uuid_and_preserves_stable_fields() {
+    let source_id = "0123456789ab4def8123456789abcdef";
+    let actual_id = "fedcba98765443218123456789abcdef";
+    let selector = json!({"key":"events","commands":[{"command":"PUBLISH","argument_values":{"1":{"json":{
+        "/data/0/completed_at":{"time":"preserve_relative","format":"iso8601_naive","utc_offset":"+00:00"}
+    }}}}]} );
+    let payload = |id: &str, time: &str, status: &str| {
+        json!({"event":"task:status","host_id":id,"data":[{"completed_at":time,"status":status}]})
+            .to_string()
+    };
+    for (time, status, passes) in [
+        ("1970-01-01T00:33:20.123456", "COMPLETED", true),
+        ("1970-01-01T00:16:40.123456", "COMPLETED", false),
+        ("1970-01-01T00:33:20.123456", "FAILED", false),
+    ] {
+        let mut fixture = Fixture::new();
+        let uuid = json!({"id":"publisher","protocol":"redis","target":{"host":"cache.test","port":6379},"redis":{"publish":{"channel":"events","uuid_field":"host_id","source_evidence":"Emitter initializes a process UUID v4"}}});
+        std::fs::write(&fixture.policy,serde_yaml::to_string(&json!({"version":3,"expected_response":"assertions_only","dependency_rules":[uuid]})).unwrap()).unwrap();
+        let source = payload(source_id, "1970-01-01T00:16:40.123456", "COMPLETED");
+        let actual = payload(actual_id, time, status);
+        fixture.candidate("PUBLISH", &["events", &source], &["events", &actual]);
+        fixture
+            .events
+            .push(exchange("PUBLISH", &["events", &source]));
+        let plan = fixture.plan(selector.clone());
+        assert_eq!(plan.is_ok(), passes, "{time}: {status}");
+        if let Ok(plan) = plan {
+            assert!(plan.report().requires_fresh_replay);
+            plan.apply().unwrap();
+            let loaded = crate::replay::policy::load_replay_policy(&fixture.policy).unwrap();
+            assert_eq!(loaded.document.dependency_rules.len(), 2);
+        }
+    }
+}

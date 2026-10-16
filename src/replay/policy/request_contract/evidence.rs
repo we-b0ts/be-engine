@@ -68,7 +68,7 @@ impl RequestContracts {
             "redis_key_request"
         } else if source.first() != actual.first() {
             return;
-        } else if matches!(command, "SET" | "RPUSH")
+        } else if matches!(command, "SET" | "RPUSH" | "PUBLISH")
             && source.len() >= 2
             && crate::replay::json_order::parse(&source[1]).is_some()
             && crate::replay::json_order::parse(&actual[1]).is_some()
@@ -214,21 +214,26 @@ pub(in crate::replay::policy) fn verify(
     runtime: &RequestContracts,
     rule: &ReplayDependencyRule,
     report: &Value,
-    dynamic_rules: &[super::super::dynamic_values::DynamicValueRule],
+    document: &super::super::config::ReplayPolicyDocument,
     witnesses: &mut Vec<(PathBuf, String)>,
 ) -> Result<usize> {
     runtime.restore_key_binding_proofs(report)?;
-    verify_capture(runtime, rule, report, dynamic_rules, witnesses, None)
+    verify_capture(runtime, rule, report, document, witnesses, None)
 }
 
 pub(in crate::replay::policy) fn verify_capture(
     runtime: &RequestContracts,
     rule: &ReplayDependencyRule,
     report: &Value,
-    dynamic_rules: &[super::super::dynamic_values::DynamicValueRule],
+    document: &super::super::config::ReplayPolicyDocument,
     witnesses: &mut Vec<(PathBuf, String)>,
     capture_id: Option<&str>,
 ) -> Result<usize> {
+    let dynamic_rules = &document.dynamic_values;
+    let mut publish = crate::replay::redis::publish::PublishRules::default();
+    publish.configure(super::super::redis_value::publish_rules(
+        &document.dependency_rules,
+    ));
     let mut validated = BTreeSet::new();
     let mut matched_cases = BTreeSet::new();
     let mut dynamic_cases = BTreeMap::new();
@@ -412,18 +417,43 @@ pub(in crate::replay::policy) fn verify_capture(
                         &actual,
                     )
                     .transpose()?;
+                let source_args = normalized
+                    .as_ref()
+                    .map_or(source.as_slice(), |n| n.source.as_slice());
+                let actual_args = normalized
+                    .as_ref()
+                    .map_or(actual.as_slice(), |n| n.actual.as_slice());
+                let publish_comparison = if candidate.command == "PUBLISH" {
+                    publish
+                        .preview_json(
+                            crate::replay::redis::publish::json::JsonContext {
+                                host: &candidate.host,
+                                port: candidate.port,
+                                database: candidate.database,
+                                username: event["username"].as_str(),
+                            },
+                            source_args,
+                            actual_args,
+                        )
+                        .transpose()?
+                } else {
+                    None
+                };
                 runtime.compare_redis(
                     &candidate.case_id,
                     rule,
                     &single,
                     &candidate.command,
-                    normalized
+                    publish_comparison
                         .as_ref()
-                        .map_or(source.as_slice(), |n| n.source.as_slice()),
-                    normalized
+                        .map_or(source_args, |c| &c.source),
+                    publish_comparison
                         .as_ref()
-                        .map_or(actual.as_slice(), |n| n.actual.as_slice()),
+                        .map_or(actual_args, |c| &c.actual),
                 )?;
+                if let Some(comparison) = publish_comparison {
+                    publish.commit_json(comparison);
+                }
                 let capture_differs = capture_id.is_none_or(|id| {
                     normalized
                         .as_ref()
@@ -607,7 +637,7 @@ fn validate_source_commands(
                 .context("source selected argument missing")?;
             match field {
                 config::ArgumentRule::Time(field) => {
-                    super::time::timestamp(&serde_json::from_slice(bytes)?, field.format)?;
+                    super::time::timestamp(&serde_json::from_slice(bytes)?, field)?;
                 }
                 config::ArgumentRule::Json(fields) => {
                     let json = crate::replay::json_order::parse(bytes)
@@ -624,7 +654,7 @@ fn validate_source_commands(
                                 );
                             }
                             config::JsonField::Time(field) => {
-                                super::time::timestamp(value, field.format)?;
+                                super::time::timestamp(value, field)?;
                             }
                             config::JsonField::Jwt(_) => {
                                 ensure!(value.is_string(), "source JWT field must be a string");

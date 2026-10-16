@@ -54,6 +54,8 @@ pub(crate) enum JsonField {
 pub(crate) struct TimeField {
     pub time: RelativeTime,
     pub format: RequestTimestampFormat,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub utc_offset: Option<String>,
     #[serde(default = "default_tolerance", skip_serializing)]
     pub tolerance: String,
 }
@@ -70,7 +72,9 @@ pub(crate) enum RelativeTime {
 pub(crate) enum RequestTimestampFormat {
     UnixSeconds,
     UnixMilliseconds,
+    UnixMicroseconds,
     Rfc3339,
+    Iso8601Naive,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -107,6 +111,22 @@ pub(crate) fn tolerance(value: &str) -> Result<f64> {
     ensure!(seconds == 5.0, "request tolerance is fixed at 5s");
     Ok(seconds)
 }
+
+impl TimeField {
+    pub(crate) fn validate(&self) -> Result<()> {
+        tolerance(&self.tolerance)?;
+        if self.format == RequestTimestampFormat::Iso8601Naive {
+            super::time::offset(self)?;
+        } else {
+            ensure!(
+                self.utc_offset.is_none(),
+                "utc_offset is only valid for iso8601_naive"
+            );
+        }
+        Ok(())
+    }
+}
+
 impl RedisRequestSelector {
     pub(crate) fn validate(&self) -> Result<()> {
         ensure!(
@@ -120,6 +140,14 @@ impl RedisRequestSelector {
         let mut commands = std::collections::BTreeSet::new();
         for command in &self.commands {
             command.validate_script()?;
+            if command.command == "PUBLISH" {
+                ensure!(
+                    self.commands.len() == 1
+                        && self.key_contract.is_none()
+                        && matches!(self.key, RedisValueKeySelector::Exact { .. }),
+                    "PUBLISH time contracts require one command and an exact channel"
+                );
+            }
             ensure!(
                 commands.insert(&command.command),
                 "duplicate Redis request command"
@@ -150,19 +178,26 @@ impl RedisRequestSelector {
                                 && (3..=128).contains(index),
                             "scalar time rules select ZADD/ZREMRANGEBYSCORE time slots or bounded script ARGV indices"
                         );
-                        tolerance(&time.tolerance)?;
+                        time.validate()?;
                     }
                     ArgumentRule::Json(json) => {
                         ensure!(
                             command.command == "SET" && *index == 1
-                                || command.command == "RPUSH" && (1..=128).contains(index),
-                            "JSON request rules select SET value index 1 or RPUSH element indices 1..128"
+                                || command.command == "RPUSH" && (1..=128).contains(index)
+                                || command.command == "PUBLISH" && *index == 1
+                                || matches!(command.command.as_str(), "EVAL" | "EVALSHA")
+                                    && (3..=128).contains(index),
+                            "JSON request rules select SET/PUBLISH value index 1, RPUSH elements or bounded script ARGV"
                         );
                         ensure!(
                             !json.json.is_empty() && json.json.len() <= 32,
                             "JSON request rules require 1..32 fields"
                         );
                         for (pointer, field) in &json.json {
+                            ensure!(
+                                command.command != "PUBLISH" || matches!(field, JsonField::Time(_)),
+                                "PUBLISH request fields support time contracts only; UUID bindings retain their own rules"
+                            );
                             super::super::response::validate_json_pointer(pointer)?;
                             ensure!(
                                 !pointer.is_empty() && !pointer.split('/').any(|part| part == "*"),
@@ -171,7 +206,7 @@ impl RedisRequestSelector {
                             match field {
                                 JsonField::Identity(reference) => reference.identity.validate()?,
                                 JsonField::Time(time) => {
-                                    tolerance(&time.tolerance)?;
+                                    time.validate()?;
                                 }
                                 JsonField::Jwt(field) => {
                                     ensure!(

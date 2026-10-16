@@ -56,3 +56,61 @@ fn publish_uuid_slots_are_bounded_complete_and_preserve_every_other_byte() {
         assert_eq!(selector.position(bad.as_bytes()), None);
     }
 }
+
+#[test]
+fn json_composition_keeps_original_uuid_index_and_binding_scope() {
+    use json::JsonContext;
+    let source_id = "0123456789ab4def8123456789abcdef";
+    let target_id = "fedcba98765443218123456789abcdef";
+    let stable_id = "1123456789ab4def8123456789abcdef";
+    let source =
+        format!(r#"{{"z_host":"{source_id}","a_stable":"{stable_id}","completed_at":1000}}"#);
+    let actual =
+        format!(r#"{{"z_host":"{target_id}","a_stable":"{stable_id}","completed_at":2000}}"#);
+    let mut rules = PublishRules::default();
+    rules.configure(vec![PublishRule {
+        id: "publisher".into(),
+        selector: RedisPublishSelector {
+            host: "redis.test".into(),
+            port: 6379,
+            channel: "events".into(),
+            uuid_index: Some(0),
+            uuid_field: None,
+        },
+    }]);
+    let source = vec![b"events".to_vec(), source.into_bytes()];
+    let actual = vec![b"events".to_vec(), actual.into_bytes()];
+    let context = || JsonContext {
+        host: "redis.test",
+        port: 6379,
+        database: 0,
+        username: Some("user"),
+    };
+    let comparison = rules
+        .preview_json(context(), &source, &actual)
+        .unwrap()
+        .unwrap();
+    let normalized: serde_json::Value = serde_json::from_slice(&comparison.actual[1]).unwrap();
+    assert_eq!(normalized["z_host"], source_id);
+    assert_eq!(normalized["a_stable"], stable_id);
+    assert_eq!(normalized["completed_at"], 2000);
+    // Preview is pure; a conflicting hypothetical comparison has no effect.
+    let _ = rules
+        .preview_json(context(), &source, &source)
+        .unwrap()
+        .unwrap();
+    assert_eq!(rules.commit_json(comparison), vec!["publisher"]);
+    assert!(
+        rules
+            .preview_json(context(), &source, &source)
+            .unwrap()
+            .is_err()
+    );
+    let other = JsonContext {
+        host: "redis.test",
+        port: 6379,
+        database: 1,
+        username: Some("user"),
+    };
+    assert!(rules.preview_json(other, &source, &source).unwrap().is_ok());
+}

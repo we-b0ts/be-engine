@@ -50,7 +50,7 @@ pub fn plan_dependency_request_rule(
         &runtime,
         &rule,
         &report,
-        &loaded.document.dynamic_values,
+        &loaded.document,
         &mut witnesses,
     )?;
     if let Some(existing) = loaded

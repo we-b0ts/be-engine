@@ -24,7 +24,7 @@ pub(super) fn validate(http: &HttpSelector) -> Result<()> {
                 || !super::super::response_locations_overlap(pointer, other)),
             "HTTP JSON time fields overlap"
         );
-        config::tolerance(&field.tolerance)?;
+        field.validate()?;
     }
     Ok(())
 }
@@ -67,14 +67,7 @@ impl<'a> TimeComparison<'a> {
             .iter()
             .map(|(field, source, actual)| super::time::compare(source, actual, field, clocks))
             .collect::<Result<Vec<_>>>()?;
-        if let Some(first) = times.first() {
-            ensure!(
-                times
-                    .iter()
-                    .all(|pair| ((pair.1 - first.1) - (pair.0 - first.0)).abs() <= 0.000_001),
-                "HTTP JSON time parameter relationship changed"
-            );
-        }
+        super::time::validate_relationships(&times)?;
         Ok(times.len())
     }
 }

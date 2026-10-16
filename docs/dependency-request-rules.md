@@ -182,9 +182,91 @@ For `EVALSHA digest 1 key timestamp`, argument index 3 is ARGV[1]. The key
 selector scopes the first KEYS entry; all KEYS, numkeys, script bytes/digest and
 unselected ARGV remain exact. Rules require 1..32 keys and at most 128 argument
 indices. Selected indices must lie in the present ARGV region, never KEYS.
-Unix seconds and milliseconds retain numeric category and request-relative
-offsets. Multiple selected time parameters also retain their differences.
+Unix seconds, milliseconds and microseconds retain numeric category and request-relative
+offsets. JSON rules may also select exact time pointers inside an ARGV argument;
+all remaining JSON members and array order stay exact. Multiple selected time parameters also retain their differences.
 SCRIPT LOAD remains an ordinary exact dependency exchange.
+
+## Script JSON and microsecond timestamp copies
+
+For seven KEYS, ARGV[1] is argument index 9: in general ARGV[n] is
+`numkeys + 1 + n`. Select raw argument indices, excluding the command name.
+For example, a script taking seconds in ARGV[5], microseconds in ARGV[6],
+a JSON state in ARGV[7], and another seconds value in ARGV[9] uses:
+
+```yaml
+redis:
+  database: 0
+  key: {prefix: 'metrics:'}
+  commands:
+  - command: EVALSHA
+    script: {sha1: '0123456789abcdef0123456789abcdef01234567'}
+    argument_values:
+      13: {time: preserve_relative, format: unix_seconds}
+      14: {time: preserve_relative, format: unix_microseconds}
+      15:
+        json:
+          /changed_at_us: {time: preserve_relative, format: unix_microseconds}
+      17: {time: preserve_relative, format: unix_seconds}
+```
+
+This also works for EVAL with the exact Lua SHA256. Script identity, every
+KEYS entry, numkeys and unselected ARGV remain checked. JSON arguments require
+complete unique-member JSON and exact nonoverlapping field pointers, just like
+SET/RPUSH. Script JSON fields do not enable signed JWT normalization outside SET.
+Integer microseconds are scaled directly to integer nanoseconds, including
+values above JavaScript's exact integer range. Numeric strings are rejected.
+All selected times preserve a common shift within one microsecond; when two
+source timestamps are exactly equal, their target copies must be exactly equal.
+The same comparator validates protected planning witnesses and live Replay.
+
+## PUBLISH JSON timestamps and publisher UUIDs
+
+```yaml
+- id: completion-time
+  protocol: redis
+  case: {method: POST, path: /internal/callback}
+  target: {host: cache.internal, port: 6379}
+  source_evidence: 'Emitter generates local ISO completion times; deployment fixes TZ to UTC'
+  redis:
+    database: 0
+    key: socketio
+    commands:
+    - command: PUBLISH
+      argument_values:
+        1:
+          json:
+            /data/0/completed_at:
+              time: preserve_relative
+              format: iso8601_naive
+              utc_offset: '+00:00'
+```
+
+PUBLISH time contracts require one command, an exact channel, and time-only JSON
+fields. They select only recorded messages containing every declared pointer.
+A Source message without the pointer retains ordinary exact/UUID matching; a
+selected Source message with a missing Target pointer fails. Channel, event,
+room, status, task identity and all other unselected JSON values remain checked.
+Invalid or duplicate-member JSON cannot use the time contract. No binary
+serializer is interpreted by this JSON capability.
+
+For ISO strings without a timezone, `iso8601_naive` requires an explicit
+source-proven fixed `utc_offset` in `+/-HH:MM` form, at most 14 hours. Do not
+infer the timezone from a displayed date or the Replay host. Fixed offsets do
+not model daylight-saving transitions; use a timezone-bearing source format
+when those transitions are required. RFC3339 retains its embedded timezone and
+rejects `utc_offset`. All formats use the independently captured request clocks
+and fixed inclusive five-second relative window; there is no wall-clock fallback.
+
+Existing [PUBLISH UUID rules](redis-publish-rules.md) compose with these time
+contracts. Apply the source-proven publisher UUID rule first using a UUID-only
+failure witness, then obtain fresh Replay evidence for the time rule. The UUID
+binding remains session-wide and bijective, including ordinary messages that
+have no selected time. Only declared UUID copies and time fields may differ;
+all validations must pass before committing either binding or consuming the
+exchange. JSON whitespace and member order may differ for selected messages.
+Use the existing `dirty_clusters` → `rule plan --dependency-request RULE_JSON`
+→ apply → fresh Replay workflow; recordings remain immutable.
 
 ## RPUSH JSON identities and timestamps
 
@@ -244,7 +326,8 @@ clocks fail closed. No configured clock, business-specific offset or outgoing
 request rewrite is involved. All selected fields must share the same shift
 within 1 microsecond, preserving the recorded start/end window.
 
-Supported formats are `unix_seconds`, `unix_milliseconds` and `rfc3339`.
+Supported formats are `unix_seconds`, `unix_milliseconds`, `unix_microseconds`,
+`rfc3339` and explicit-offset `iso8601_naive` as described below.
 JSON numeric categories remain checked. Select 1..32 exact non-root JSON
 pointers; wildcard and overlapping pointers are rejected. Bodies must be complete
 unique-member JSON of at most 1 MiB. Other JSON members, array ordering, path,

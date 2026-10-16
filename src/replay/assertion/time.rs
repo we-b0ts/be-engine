@@ -125,6 +125,25 @@ fn timestamp_nanos(value: &Value, format: ResponseTimestampFormat) -> Option<i12
 /// to nanoseconds without floating-point subtraction. Round fractional
 /// nanoseconds to the nearest nanosecond and reject arithmetic overflow.
 fn numeric_nanos(value: &Value, unit: ResponseDurationUnit) -> Option<i128> {
+    let multiplier = match unit {
+        ResponseDurationUnit::Minutes => 60,
+        ResponseDurationUnit::Hours => 3600,
+        _ => 1,
+    };
+    let scale = if unit == ResponseDurationUnit::Milliseconds {
+        6
+    } else {
+        9
+    };
+    numeric_nanos_scaled(value, scale, multiplier)
+}
+
+/// Exact decimal scaling shared with request timestamp contracts.
+pub(in crate::replay) fn numeric_nanos_scaled(
+    value: &Value,
+    scale: i32,
+    multiplier: i128,
+) -> Option<i128> {
     let text = match value {
         Value::Number(number) => number.to_string(),
         Value::String(text) => text.clone(),
@@ -144,19 +163,10 @@ fn numeric_nanos(value: &Value, unit: ResponseDurationUnit) -> Option<i128> {
     {
         return None;
     }
-    let multiplier = match unit {
-        ResponseDurationUnit::Minutes => 60,
-        ResponseDurationUnit::Hours => 3600,
-        _ => 1,
-    };
     let digits = format!("{whole}{fraction}")
         .parse::<i128>()
         .ok()?
         .checked_mul(multiplier)?;
-    let scale: i32 = match unit {
-        ResponseDurationUnit::Milliseconds => 6,
-        _ => 9,
-    };
     let power = scale
         .checked_add(exponent)?
         .checked_sub(i32::try_from(fraction.len()).ok()?)?;

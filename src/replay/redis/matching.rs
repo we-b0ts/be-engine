@@ -1,5 +1,6 @@
 //! Redis command selection with semantic value matching and source-lane order diagnostics.
 use super::*;
+mod request;
 use crate::replay::command_matching::{
     CommandExchangeScope, PreferredMatch, lane_blocked_diagnostic, preferred_match,
     unmatched_diagnostic,
@@ -38,21 +39,7 @@ impl RedisReplayState {
             .as_ref()
             .map_or(exchange.args.as_slice(), |n| n.source.as_slice());
         let actual = normalized.as_ref().map_or(args, |n| n.actual.as_slice());
-        if exchange.source == ReplaySource::Case
-            && exchange.shared_rule_id.is_none()
-            && let Some(case) = exchange.case_id.as_deref()
-            && let Some(result) = self.request_contracts.preview_redis(
-                case,
-                &TargetKey {
-                    host: exchange.record.target_host.clone(),
-                    port: exchange.record.target_port,
-                },
-                exchange.record.database,
-                &exchange.record.command,
-                source,
-                actual,
-            )
-        {
+        if let Some(result) = self.request_preview(exchange, source, actual) {
             return result.is_ok();
         }
         if let Some(normalized) = normalized {
@@ -264,30 +251,25 @@ impl RedisReplayState {
         } else {
             args
         };
-        let request_decision = (exchange.source == ReplaySource::Case
-            && exchange.shared_rule_id.is_none())
-        .then(|| {
-            exchange.case_id.as_deref().and_then(|case| {
-                self.request_contracts.preview_redis(
-                    case,
-                    target,
-                    database,
-                    command,
-                    &normalized_exchange.args,
-                    arguments,
-                )
-            })
-        })
-        .flatten()
-        .transpose()
-        .expect("selected Redis request contract was validated");
+        let request_decision = self
+            .request_preview(&normalized_exchange, &normalized_exchange.args, arguments)
+            .transpose()
+            .expect("selected Redis request contract was validated");
         let mut rule_ids = value::used_rules(&normalized_exchange, arguments, &self.value_rules);
         rule_ids.extend(self.lock_tokens.claim(&normalized_exchange, arguments));
-        rule_ids.extend(self.publish_rules.claim(&normalized_exchange, arguments));
+        if !request_decision
+            .as_ref()
+            .is_some_and(|(_, comparison)| comparison.is_some())
+        {
+            rule_ids.extend(self.publish_rules.claim(&normalized_exchange, arguments));
+        }
         if let (Some(case), Some(normalized)) = (exchange.case_id.as_deref(), normalized) {
             self.dynamic_values.commit(case, normalized.decision);
         }
-        if let Some(decision) = request_decision {
+        if let Some((decision, comparison)) = request_decision {
+            if let Some(comparison) = comparison {
+                rule_ids.extend(self.publish_rules.commit_json(comparison));
+            }
             self.request_contracts.commit(decision);
         }
         let rpc_response = self.pubsub.claim(&self.exchanges[index], args);

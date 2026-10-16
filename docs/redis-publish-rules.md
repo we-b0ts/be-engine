@@ -67,3 +67,13 @@ session state still requires its original physical connection affinity.
 `cargo test redis_publish` covers real RESP plan/apply, JSON and binary payloads,
 multiple sockets, strict channel/content checks, identity consistency, distinct
 publishers, lane blockers, stale evidence and finite consumption.
+
+## JSON time composition
+
+For source-generated timestamps in a JSON PUBLISH payload, combine the UUID
+rule with an explicit [dependency request time contract](dependency-request-rules.md#publish-json-timestamps-and-publisher-uuids).
+Selected messages are parsed as bounded unique-member JSON; only the declared
+UUID and time locations may differ. Publisher binding, stable field comparison,
+ordering and finite consumption remain strict and commit together after a full
+match. Messages without a selected Source time field retain this page's ordinary
+byte/UUID behavior. Binary payloads retain UUID-only support.

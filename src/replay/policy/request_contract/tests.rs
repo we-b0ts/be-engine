@@ -461,3 +461,133 @@ fn rpush_timestamp_rules_compose_with_explicit_integer_id_captures() {
     *json_pointer = Some("/timestamp".into());
     assert!(validate_overlaps(&overlap).is_err());
 }
+
+#[test]
+fn script_json_microseconds_preserve_copies_and_strict_envelope() {
+    let digest = "75f75be3d11e483c99c83f8b0b8836c2e2c5923b";
+    let rule = rule(
+        json!({"key":"metrics","commands":[{"command":"EVALSHA","script":{"sha1":digest},
+        "argument_values":{
+            "3":{"time":"preserve_relative","format":"unix_seconds"},
+            "4":{"time":"preserve_relative","format":"unix_microseconds"},
+            "5":{"json":{"/changed_at_us":{"time":"preserve_relative","format":"unix_microseconds"}}}
+        }}]}),
+    );
+    validate(&rule).unwrap();
+    let runtime = runtime(rule.clone());
+    let source = args(&[
+        digest,
+        "1",
+        "metrics",
+        "1000.123456",
+        "1000123456",
+        r#"{"changed_at_us":1000123456,"failed":true,"reason_id":7}"#,
+        "keep",
+    ]);
+    let actual = args(&[
+        digest,
+        "1",
+        "metrics",
+        "2000.123456",
+        "2000123456",
+        r#"{"changed_at_us":2000123456,"failed":true,"reason_id":7}"#,
+        "keep",
+    ]);
+    assert!(
+        runtime
+            .preview_redis("case", &target(), 0, "EVALSHA", &source, &actual)
+            .unwrap()
+            .is_ok()
+    );
+    for (index, bad) in [
+        (0, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        (1, "2"),
+        (2, "other"),
+        (3, "2001.123456"),
+        (4, "2000123457"),
+        (
+            5,
+            r#"{"changed_at_us":2000123457,"failed":true,"reason_id":7}"#,
+        ),
+        (
+            5,
+            r#"{"changed_at_us":2000123456,"failed":false,"reason_id":7}"#,
+        ),
+        (
+            5,
+            r#"{"changed_at_us":2000123456,"changed_at_us":2000123456,"failed":true,"reason_id":7}"#,
+        ),
+        (5, r#"{"failed":true,"reason_id":7}"#),
+        (6, "changed"),
+    ] {
+        let mut bad_args = actual.clone();
+        bad_args[index] = bad.as_bytes().to_vec();
+        assert!(
+            runtime
+                .preview_redis("case", &target(), 0, "EVALSHA", &source, &bad_args)
+                .unwrap()
+                .is_err(),
+            "index {index}: {bad}"
+        );
+    }
+    let mut selected_key = rule;
+    let super::super::redis_value::RedisSelector::Requests(selector) =
+        selected_key.redis.as_mut().unwrap()
+    else {
+        unreachable!()
+    };
+    let field = selector.commands[0].argument_values.remove(&5).unwrap();
+    selector.commands[0].argument_values.insert(3, field);
+    // With two KEYS, index 3 belongs to KEYS and cannot be normalized.
+    let input = args(&[digest, "2", "metrics", "second", "1000123456", "keep"]);
+    assert!(selector.commands[0].validate_arguments(&input).is_err());
+}
+
+#[test]
+fn publish_time_contract_requires_exact_channel_and_only_present_source_fields() {
+    let rule = rule(
+        json!({"key":"events","commands":[{"command":"PUBLISH","argument_values":{"1":{"json":{
+            "/data/0/completed_at":{"time":"preserve_relative","format":"iso8601_naive","utc_offset":"+00:00"}
+        }}}}]}),
+    );
+    validate(&rule).unwrap();
+    let runtime = runtime(rule.clone());
+    let source = r#"{"event":"task:status","data":[{"completed_at":"1970-01-01T00:16:40","status":"COMPLETED"}]}"#;
+    let actual = source.replace("00:16:40", "00:33:20");
+    assert!(
+        check(
+            &runtime,
+            "PUBLISH",
+            &["events", source],
+            &["events", &actual]
+        )
+        .is_ok()
+    );
+    for bad in [
+        actual.replace("COMPLETED", "FAILED"),
+        actual.replace("00:33:20", "00:33:26"),
+        r#"{"event":"task:status","data":[{"status":"COMPLETED"}]}"#.into(),
+    ] {
+        assert!(check(&runtime, "PUBLISH", &["events", source], &["events", &bad]).is_err());
+    }
+    assert!(
+        runtime
+            .preview_redis(
+                "case",
+                &target(),
+                0,
+                "PUBLISH",
+                &args(&["events", r#"{"event":"other"}"#]),
+                &args(&["events", r#"{"event":"other"}"#])
+            )
+            .is_none()
+    );
+    let mut broad = rule;
+    let super::super::redis_value::RedisSelector::Requests(selector) =
+        broad.redis.as_mut().unwrap()
+    else {
+        unreachable!()
+    };
+    selector.key = serde_json::from_value(json!({"prefix":"event"})).unwrap();
+    assert!(validate(&broad).is_err());
+}

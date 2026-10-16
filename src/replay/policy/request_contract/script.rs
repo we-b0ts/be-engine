@@ -61,6 +61,20 @@ impl RedisRequestCommand {
     }
 
     pub(super) fn matches_identity(&self, args: &[Vec<u8>]) -> bool {
+        if self.command == "PUBLISH" {
+            let Some(json) = args
+                .get(1)
+                .and_then(|bytes| crate::replay::json_order::parse(bytes))
+            else {
+                return false;
+            };
+            return self.argument_values.values().all(|field| match field {
+                super::config::ArgumentRule::Json(fields) => {
+                    fields.json.keys().all(|p| json.pointer(p).is_some())
+                }
+                _ => false,
+            });
+        }
         let Some(script) = &self.script else {
             return true;
         };

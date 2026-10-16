@@ -7,6 +7,7 @@ use std::{collections::BTreeMap, ops::Range};
 use uuid::Uuid;
 
 pub(crate) mod evidence;
+pub(in crate::replay) mod json;
 const MAX_PAYLOAD: usize = 1024 * 1024;
 const MAX_UUIDS: usize = 32;
 
