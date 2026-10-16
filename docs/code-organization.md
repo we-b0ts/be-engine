@@ -81,8 +81,8 @@ is unclear.
   the pin and selectors against that adopted snapshot without rediscovery.
 
 - `config/mysql_tables` owns shared bounded physical-table selection for
-  process-owned reads and SQL-time rules. `replay/policy/sql_template/table`
-  binds whole table identifiers and qualifiers for SQL-time rules; matcher and
+  process-owned reads, SQL-time rules and dynamic identity captures. `replay/policy/sql_template/table`
+  binds whole table identifiers and qualifiers and checks template intersections; matcher and
   evidence planning retain source/target physical-table equality. CLI table
   bounds live in `bin/backend-rewrite/dependency_rule/mysql_tables`.
   Runtime table-series matching keeps numeric bounds and canonical zero-padding
@@ -90,6 +90,9 @@ is unclear.
   owns immutable per-policy SQL selector compilation shared by observation,
   PREPARE metadata, request-value validation and response-time selection; case
   scope, request anchors, parameter values and consumption remain live state.
+  `replay/policy/matcher/mysql_values` owns pure scalar-slot extraction, binding
+  the Source physical table before extracting Target values for dynamic runtime,
+  immutable planning evidence and binding-audit restoration.
 
 - `dependency_index` owns disposable semantic evidence locations, source identity,
   atomic index persistence, cancellation and immutable byte caching. Protocol
@@ -593,6 +596,11 @@ explicit repository-wide audit.
   identity and time locations in one immutable exchange. It reuses the existing
   identity normalization and relative-time contracts, then publishes both rules
   through the same atomic generated-value plan transaction.
+  MySQL identity captures share the bounded table selectors and
+  `matcher/mysql_values` pair extraction: bind the Source physical table before
+  extracting Target values. Runtime capture, evidence planning and binding-audit
+  restoration use that same operation. `sql_template/table` owns declaration
+  intersection across complete table ranges for policy admission.
   `rewrite/rule/generated_values` freezes the engine's file witnesses across
   coordinator plan/apply commands. `e2e_run` supplies the active-attempt guard
   independently of report availability; `rewrite/plan_recovery` retires legacy

@@ -6,9 +6,7 @@ use super::*;
 use crate::mysql::sql::Token;
 use crate::replay::mysql::sql_match::materialize;
 use crate::replay::policy::config::{MysqlTimeValueRule, TimeRule};
-use crate::replay::policy::sql_template::{
-    SqlValueTemplate, bounded_statement_tokens, bounded_tokens, extract,
-};
+use crate::replay::policy::sql_template::{SqlValueTemplate, bounded_statement_tokens, extract};
 use crate::replay::policy::value::validate_relative_time;
 
 fn materialized(
@@ -34,16 +32,6 @@ pub(in crate::replay::policy) fn time_value(token: &Token) -> Result<Value, Stri
     }
 }
 
-pub(in crate::replay::policy) fn values(
-    template: &str,
-    sql: Option<&str>,
-    params: Option<&[RecordedMysqlValue]>,
-) -> Result<Vec<Token>, String> {
-    let template = bounded_tokens(template).ok_or("invalid SQL template")?;
-    extract(&template, &materialized(sql, params)?)
-        .ok_or_else(|| "SQL differs from template".into())
-}
-
 pub(in crate::replay::policy) fn template_values(
     template: &SqlValueTemplate,
     sql: Option<&str>,
@@ -54,6 +42,26 @@ pub(in crate::replay::policy) fn template_values(
         .bind(&actual)
         .ok_or("SQL differs from table template")?;
     extract(&bound, &actual).ok_or_else(|| "SQL differs from template".into())
+}
+
+// The recorded statement chooses the physical table. Matching each side's
+// membership independently would erase the identity of different shards.
+pub(in crate::replay::policy) fn template_pair_values(
+    template: &SqlValueTemplate,
+    source_sql: Option<&str>,
+    source_params: Option<&[RecordedMysqlValue]>,
+    actual_sql: Option<&str>,
+    actual_params: Option<&[RecordedMysqlValue]>,
+) -> Result<(Vec<Token>, Vec<Token>), String> {
+    let source = materialized(source_sql, source_params)?;
+    let actual = materialized(actual_sql, actual_params)?;
+    let bound = template
+        .bind(&source)
+        .ok_or("recorded SQL differs from table template")?;
+    let source = extract(&bound, &source).ok_or("recorded SQL differs from template")?;
+    let actual = extract(&bound, &actual)
+        .ok_or("target SQL differs from recorded physical table or template")?;
+    Ok((source, actual))
 }
 
 pub(in crate::replay::policy) struct SelectedMysqlTime {

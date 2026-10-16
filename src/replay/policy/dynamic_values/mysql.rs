@@ -35,9 +35,9 @@ impl DynamicValues {
                 let DynamicValueCapture::Mysql {
                     target,
                     database,
-                    sql,
                     value_index,
                     json_pointer,
+                    ..
                 } = &rule.capture
                 else {
                     continue;
@@ -47,15 +47,15 @@ impl DynamicValues {
                 {
                     continue;
                 }
-                let Ok(source) = super::super::matcher::mysql_values::values(
-                    sql,
-                    context.recorded_sql,
-                    context.recorded,
-                ) else {
-                    continue;
-                };
-                let Ok(actual) =
-                    super::super::matcher::mysql_values::values(sql, context.sql, context.actual)
+                let template = rule.capture.mysql_template()?;
+                let Ok((source, actual)) =
+                    super::super::matcher::mysql_values::template_pair_values(
+                        &template,
+                        context.recorded_sql,
+                        context.recorded,
+                        context.sql,
+                        context.actual,
+                    )
                 else {
                     continue;
                 };

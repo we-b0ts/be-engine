@@ -1,6 +1,6 @@
 //! Admission rejects time rules whose token ownership would conflict at Replay.
 use super::*;
-use crate::replay::policy::sql_template::{SqlValueTemplate, bounded_tokens, extract};
+use crate::replay::policy::sql_template::SqlValueTemplate;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(in crate::replay::policy::feedback::generated_values) fn validate(
@@ -11,8 +11,13 @@ pub(in crate::replay::policy::feedback::generated_values) fn validate(
         .mysql
         .as_ref()
         .context("joint time rule lacks SQL")?;
-    let tokens = bounded_tokens(&selected.sql).context("invalid joint SQL template")?;
-    let positions = selected_positions(&tokens, &selected.sql_values);
+    let proposed_template = SqlValueTemplate::new(
+        &selected.sql,
+        &selected.tables,
+        &selected.table_patterns,
+        selected.table_series.as_ref(),
+    )?;
+    let positions = selected_positions(proposed_template.tokens(), &selected.sql_values);
     for rule in existing.iter().filter(|rule| rule.id != proposed.id) {
         let Some(mysql) = &rule.mysql else {
             continue;
@@ -40,7 +45,19 @@ pub(in crate::replay::policy::feedback::generated_values) fn validate(
         }
         if !mysql.params.is_empty() {
             // Legacy parameter selectors use glob matching. The joint witness
-            // checks their real Runtime selectors on both normalized requests.
+            // checks real Runtime selectors for an exact capture. A table
+            // family must also protect other declared, unobserved shards.
+            let table_family = !selected.tables.is_empty()
+                || !selected.table_patterns.is_empty()
+                || selected.table_series.is_some();
+            let disjoint_verbs = fixed_verb(&selected.sql)
+                .zip(fixed_verb(&mysql.sql))
+                .is_some_and(|(left, right)| !left.eq_ignore_ascii_case(right));
+            ensure!(
+                !table_family || disjoint_verbs,
+                "joint MySQL table family may overlap legacy parameter rule {}; revise the existing contract before planning the table family",
+                rule.id
+            );
             continue;
         }
         ensure!(
@@ -54,27 +71,7 @@ pub(in crate::replay::policy::feedback::generated_values) fn validate(
             &mysql.table_patterns,
             mysql.table_series.as_ref(),
         )?;
-        if tokens.len() != template.tokens().len() {
-            continue;
-        }
-        // A fixed value in an older rule can intersect a placeholder in the
-        // proposed template. Test that intersection without treating SQL words,
-        // table identities or function expressions as replaceable values.
-        let probe: Vec<_> = tokens
-            .iter()
-            .zip(template.tokens())
-            .map(|(actual, expected)| {
-                if *actual == Token::Placeholder && expected.is_value() {
-                    expected.clone()
-                } else {
-                    actual.clone()
-                }
-            })
-            .collect();
-        let Some(bound) = template.bind(&probe) else {
-            continue;
-        };
-        if extract(&bound, &probe).is_none() {
+        if !proposed_template.overlaps(&template) {
             continue;
         }
         ensure!(
@@ -82,7 +79,7 @@ pub(in crate::replay::policy::feedback::generated_values) fn validate(
             "joint SQL time rule conflicts with parameter rule {}",
             rule.id
         );
-        let existing_positions = selected_positions(&bound, &mysql.sql_values);
+        let existing_positions = selected_positions(template.tokens(), &mysql.sql_values);
         ensure!(
             positions.is_disjoint(&existing_positions),
             "joint SQL time rule overlaps the existing SQL token ownership of {}; reuse or revise the existing contract",
@@ -90,6 +87,14 @@ pub(in crate::replay::policy::feedback::generated_values) fn validate(
         );
     }
     Ok(())
+}
+
+fn fixed_verb(sql: &str) -> Option<&str> {
+    sql.split_ascii_whitespace().next().filter(|verb| {
+        ["select", "insert", "update", "delete"]
+            .iter()
+            .any(|expected| expected.eq_ignore_ascii_case(verb))
+    })
 }
 
 fn selected_positions(

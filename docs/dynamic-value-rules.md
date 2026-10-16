@@ -47,6 +47,35 @@ Choose one of these capture locations:
   pointer in its request body, or an explicit `path_segment` template. This method identifies the outbound capture;
   the enclosing inbound `api` remains route-only.
 
+For source-proven MySQL shards, the capture can use `{{table}}` with explicit
+`tables`, `table_patterns`, or `table_series`, using the same selectors as
+[MySQL time rules](mysql-time-rules.md):
+
+```yaml
+capture:
+  protocol: mysql
+  target: {host: db.internal, port: 3306}
+  database: app
+  sql: SELECT id FROM {{table}} WHERE {{table}}.name=? AND user_id=?
+  table_series: {prefix: items_, start: 0, end: 15, width: 4}
+  value_index: 0
+```
+
+Source proof must justify the table family and its bounds; observed table names
+alone do not establish the range. Exact `tables` and bounded `table_series`
+cover at most 4096 distinct names. Series require canonical zero-padding with
+width at most 10. Up to 64 `table_patterns` may use one `*` between ASCII
+identifier affixes; a bare wildcard is rejected. The selectors may be combined.
+
+Every marker selects a whole table identifier or table qualifier. The recorded
+statement binds one physical table, and Target must match that same bound table,
+including every qualifier. Two allowed shards never substitute for each other.
+Literal, column, alias and identifier-fragment markers are unsupported. A marker
+requires declared bounds, and bounds require a marker; concrete legacy SQL needs
+no changes. Automatic references still preserve ordinary SQL table identities.
+Captures with overlapping API, endpoint, database, SQL and selected field are
+rejected; disjoint JSON pointers retain separate ownership.
+
 Alternative capture examples (include their targets in `targets`):
 
 ```yaml
@@ -225,7 +254,9 @@ backend-rewrite rule apply RETURNED_PLAN_ID
 ```
 
 `--mysql-time` requires a MySQL `--dynamic-value` capture. Its exact endpoint,
-database and SQL template come from that capture; it cannot override them.
+database, SQL template and complete table selectors come from that capture;
+it cannot override them. One joint plan covers the declared table family without
+copying a rule per shard, and both halves retain the same physical-table check.
 The time rule uses ordinary endpoint/database/SQL scope, while the identity
 binding retains its API and case lifetime. The two rule ids must differ.
 An opaque generated name such as `task-pending-…` uses the default string
@@ -245,6 +276,14 @@ Pointers inside one value. Scalar overlap and equal/ancestor/descendant
 pointers are rejected. Existing conflicting SQL token ownership or parameter
 rules cannot be bypassed. A newly proposed identity never excuses a changed
 unselected string through substring replacement.
+
+Admission checks overlapping time ownership across the whole declared table
+range, including shards absent from the current witness. For a table-family
+plan, a legacy `params` rule in the same endpoint/database scope is conservatively
+rejected unless its fixed statement verb proves the operations disjoint. Wildcard
+verb prefixes or fragments cannot establish that proof. Revise that legacy
+contract before planning the family; exact-table planning retains its existing
+checks against the actual normalized witness.
 
 Preview contains both ordinary policy entries. Apply checks the frozen policy
 and original evidence, writes both entries atomically, and requires one fresh

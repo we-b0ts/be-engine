@@ -34,6 +34,12 @@ pub enum DynamicValueCapture {
         target: DynamicValueTarget,
         database: String,
         sql: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tables: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        table_patterns: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        table_series: Option<crate::MysqlTableSeries>,
         value_index: usize,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         json_pointer: Option<String>,
@@ -59,6 +65,27 @@ pub enum DynamicValueCapture {
 }
 
 impl DynamicValueCapture {
+    pub(in crate::replay::policy) fn mysql_template(
+        &self,
+    ) -> Result<super::super::sql_template::SqlValueTemplate> {
+        let Self::Mysql {
+            sql,
+            tables,
+            table_patterns,
+            table_series,
+            ..
+        } = self
+        else {
+            anyhow::bail!("MySQL capture template requires MySQL capture");
+        };
+        super::super::sql_template::SqlValueTemplate::new(
+            sql,
+            tables,
+            table_patterns,
+            table_series.as_ref(),
+        )
+    }
+
     pub(super) fn target(&self) -> &DynamicValueTarget {
         match self {
             Self::Mysql { target, .. } | Self::Redis { target, .. } | Self::Http { target, .. } => {
@@ -71,7 +98,6 @@ impl DynamicValueCapture {
         match self {
             Self::Mysql {
                 database,
-                sql,
                 value_index,
                 json_pointer,
                 ..
@@ -80,8 +106,8 @@ impl DynamicValueCapture {
                     !database.is_empty() && database.len() <= 255,
                     "dynamic MySQL capture requires a database"
                 );
-                let tokens = super::super::sql_template::bounded_tokens(sql)
-                    .ok_or_else(|| anyhow::anyhow!("invalid dynamic SQL template"))?;
+                let template = self.mysql_template()?;
+                let tokens = template.tokens();
                 ensure!(
                     tokens
                         .first()
@@ -288,6 +314,49 @@ pub(in crate::replay) fn validate(rules: &[DynamicValueRule]) -> Result<()> {
         rule.validate()?;
         ensure!(ids.insert(&rule.id), "duplicate dynamic value rule id");
         for other in &rules[..index] {
+            if let (
+                DynamicValueCapture::Mysql {
+                    target: a,
+                    database: ad,
+                    value_index: ai,
+                    json_pointer: ap,
+                    ..
+                },
+                DynamicValueCapture::Mysql {
+                    target: b,
+                    database: bd,
+                    value_index: bi,
+                    json_pointer: bp,
+                    ..
+                },
+            ) = (&rule.capture, &other.capture)
+                && a.host.eq_ignore_ascii_case(&b.host)
+                && a.port == b.port
+                && ad == bd
+                && crate::path_pattern::path_patterns_overlap(&rule.api, &other.api)
+            {
+                let left = rule.capture.mysql_template()?;
+                let right = other.capture.mysql_template()?;
+                let position = |template: &super::super::sql_template::SqlValueTemplate, index| {
+                    template
+                        .tokens()
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, token)| **token == crate::mysql::sql::Token::Placeholder)
+                        .nth(index)
+                        .map(|(position, _)| position)
+                };
+                let fields_overlap = match (ap, bp) {
+                    (Some(a), Some(b)) => super::super::response_locations_overlap(a, b),
+                    _ => true,
+                };
+                ensure!(
+                    !(fields_overlap
+                        && position(&left, *ai) == position(&right, *bi)
+                        && left.overlaps(&right)),
+                    "overlapping dynamic MySQL capture location"
+                );
+            }
             if let (
                 DynamicValueCapture::Redis {
                     target: a,

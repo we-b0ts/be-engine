@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+mod table_tests;
 
 const SQL: &str = "INSERT INTO items (name, created_at, updated_at, owner_id) VALUES (?, ?, ?, ?)";
 const SOURCE_NAME: &str = "task-pending-123e4567e89b42d3a456426614174000";

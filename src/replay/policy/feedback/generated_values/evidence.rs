@@ -3,7 +3,7 @@ use super::*;
 use crate::mysql::sql::Token;
 use crate::replay::policy::{
     dynamic_values::{DynamicValueCapture, DynamicValueRule},
-    matcher::mysql_values::values,
+    matcher::mysql_values::{template_pair_values, template_values},
     pattern::{path_pattern_matches, uri_path},
 };
 use serde_json::Value;
@@ -35,13 +35,14 @@ pub(super) fn dynamic(
     let DynamicValueCapture::Mysql {
         target,
         database,
-        sql,
         value_index,
         json_pointer,
+        ..
     } = &rule.capture
     else {
         return super::request_evidence::validate(rule, &report, witnesses);
     };
+    let template = rule.capture.mysql_template()?;
     for actual in report["unmatched_queries"].as_array().into_iter().flatten() {
         if !matches!(
             actual["command"].as_str(),
@@ -59,10 +60,9 @@ pub(super) fn dynamic(
         }
         let actual_params: Option<Vec<crate::replay::RecordedMysqlValue>> =
             serde_json::from_value(actual.get("params").cloned().unwrap_or(Value::Null))?;
-        let Ok(actual_values) = values(sql, actual["sql"].as_str(), actual_params.as_deref())
-        else {
+        if template_values(&template, actual["sql"].as_str(), actual_params.as_deref()).is_err() {
             continue;
-        };
+        }
         let Some(case) = report["cases"]
             .as_array()
             .into_iter()
@@ -117,7 +117,13 @@ pub(super) fn dynamic(
             }
             let params: Option<Vec<crate::replay::RecordedMysqlValue>> =
                 serde_json::from_value(source.get("params").cloned().unwrap_or(Value::Null))?;
-            let Ok(source_values) = values(sql, source["sql"].as_str(), params.as_deref()) else {
+            let Ok((source_values, actual_values)) = template_pair_values(
+                &template,
+                source["sql"].as_str(),
+                params.as_deref(),
+                actual["sql"].as_str(),
+                actual_params.as_deref(),
+            ) else {
                 continue;
             };
             if let Some(time) = mysql_time {

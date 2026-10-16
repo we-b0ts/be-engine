@@ -25,6 +25,9 @@ impl DynamicValueMysqlTimeRule {
             target,
             database,
             sql,
+            tables,
+            table_patterns,
+            table_series,
             value_index,
             json_pointer,
         } = &identity.capture
@@ -56,9 +59,9 @@ impl DynamicValueMysqlTimeRule {
                 database: database.clone(),
                 username: String::new(),
                 sql: sql.clone(),
-                tables: vec![],
-                table_patterns: vec![],
-                table_series: None,
+                tables: tables.clone(),
+                table_patterns: table_patterns.clone(),
+                table_series: table_series.clone(),
                 time_values: self.time_values.clone(),
             },
         )?;
@@ -120,9 +123,9 @@ impl<'a> JointEvidence<'a> {
         let DynamicValueCapture::Mysql {
             target,
             database,
-            sql,
             value_index,
             json_pointer,
+            ..
         } = &self.identity.capture
         else {
             anyhow::bail!("a MySQL time companion requires a MySQL dynamic capture");
@@ -134,12 +137,15 @@ impl<'a> JointEvidence<'a> {
             serde_json::from_value(source_event.get("params").cloned().unwrap_or(Value::Null))?;
         let actual_params: Option<Vec<crate::replay::RecordedMysqlValue>> =
             serde_json::from_value(actual_event.get("params").cloned().unwrap_or(Value::Null))?;
-        let values = |sql_text: Option<&str>,
-                      params: Option<&[crate::replay::RecordedMysqlValue]>| {
-            mysql_values::values(sql, sql_text, params).map_err(anyhow::Error::msg)
-        };
-        let mut source = values(source_event["sql"].as_str(), source_params.as_deref())?;
-        let mut actual = values(actual_event["sql"].as_str(), actual_params.as_deref())?;
+        let template = self.identity.capture.mysql_template()?;
+        let (mut source, mut actual) = mysql_values::template_pair_values(
+            &template,
+            source_event["sql"].as_str(),
+            source_params.as_deref(),
+            actual_event["sql"].as_str(),
+            actual_params.as_deref(),
+        )
+        .map_err(anyhow::Error::msg)?;
         // Restore only committed, immutable identity proofs. A new proposal
         // cannot overwrite an earlier binding or collapse two source values.
         let aliases = from_report(
