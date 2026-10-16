@@ -165,3 +165,122 @@ fn initialization_has_one_empty_typed_policy_and_no_project_specific_ownership()
     assert!(source.process_owned_dependencies.is_empty());
     assert!(source.http.case_path_patterns.is_empty());
 }
+
+#[test]
+fn changing_a_response_capture_keeps_plugin_precedence_and_untouched_typed_facts() {
+    let mut document = base();
+    let response = |id: &str, contract| NativeRule {
+        id: id.into(),
+        selector: Default::default(),
+        when: None,
+        proof: proof(id),
+        effect: NativeEffect::CaptureHttpResponse(n::CaptureResponseEffect {
+            authorities: vec!["service.test".into()],
+            methods: vec!["GET".into()],
+            path: n::CapturePath::Pattern {
+                value: "/resources/123".into(),
+            },
+            status_codes: vec![200],
+            content_types: vec!["application/json".into()],
+            contract,
+        }),
+    };
+    document.rules.push(
+        response(
+            "z-primary-url",
+            n::CaptureResponseContract::Urls {
+                pointers: vec![Proven {
+                    contract: "/base_url".into(),
+                    proof: proof("original-url-construction"),
+                }],
+            },
+        )
+        .into(),
+    );
+    document.rules.push(
+        response(
+            "a-fallback-plugin",
+            n::CaptureResponseContract::VintageCacheConfig,
+        )
+        .into(),
+    );
+    let original = serde_yaml::to_string(&document).unwrap();
+    let compiled = crate::policy::compile_policy(&document).unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let directory = target.path().join(".traffic-e2e");
+    std::fs::create_dir_all(&directory).unwrap();
+    let policy_path = directory.join("policy.yaml");
+    let project_path = directory.join("project.yaml");
+    std::fs::write(
+        &project_path,
+        "version: 18\nproject:\n  policy: .traffic-e2e/policy.yaml\nrecorder:\n  dns_mock: {enabled: true}\n  tcp_gateway: {enabled: true, record_http: true}\n",
+    )
+    .unwrap();
+    std::fs::write(&policy_path, &original).unwrap();
+    let loaded = crate::AppConfig::load(&project_path).unwrap();
+    assert_eq!(loaded.http_response_rewrite.rules[0].name, "z-primary-url");
+    assert!(loaded.http_response_rewrite.rules[0].plugin.is_none());
+    let mut reordered = document.clone();
+    reordered.rules.swap(3, 4);
+    let reordered_compiled = crate::policy::compile_policy(&reordered).unwrap();
+    assert_ne!(
+        compiled.fingerprints.capture,
+        reordered_compiled.fingerprints.capture
+    );
+    assert_ne!(
+        compiled.fingerprints.full,
+        reordered_compiled.fingerprints.full
+    );
+    assert_eq!(
+        compiled.fingerprints.runtime,
+        reordered_compiled.fingerprints.runtime
+    );
+    assert_eq!(
+        compiled.fingerprints.classification,
+        reordered_compiled.fingerprints.classification
+    );
+    std::fs::write(&policy_path, serde_yaml::to_string(&reordered).unwrap()).unwrap();
+    let loaded = crate::AppConfig::load(&project_path).unwrap();
+    assert!(loaded.http_response_rewrite.rules[0].plugin.is_some());
+    let mut unordered = document.clone();
+    unordered.rules.swap(0, 1);
+    assert_eq!(
+        crate::policy::compile_policy(&unordered)
+            .unwrap()
+            .fingerprints,
+        compiled.fingerprints
+    );
+    let mut proposed = project_source_policy(&compiled.native).unwrap();
+    proposed.http_response_rewrite[0].path_pattern = Some("/resources/*".into());
+    let after = crate::policy::parse_policy(
+        &render_updated(&original, &proposed, &proof("reviewed-dynamic-path")).unwrap(),
+    )
+    .unwrap();
+    // The recorder chooses the first matching plugin before combining ordinary
+    // URL pointers. Appending the changed URL rule would select the fallback.
+    let final_source =
+        project_source_policy(&crate::policy::compile_policy(&after).unwrap().native).unwrap();
+    assert_eq!(final_source.http_response_rewrite[0].name, "z-primary-url");
+    assert!(final_source.http_response_rewrite[0].plugin.is_none());
+    assert_eq!(
+        final_source.http_response_rewrite[1].name,
+        "a-fallback-plugin"
+    );
+    for untouched in document
+        .rules
+        .iter()
+        .filter(|rule| rule.id() != "z-primary-url")
+    {
+        assert_eq!(
+            after.rules.iter().find(|rule| rule.id() == untouched.id()),
+            Some(untouched)
+        );
+    }
+    let changed = after
+        .rules
+        .iter()
+        .find(|rule| rule.id() == "z-primary-url")
+        .unwrap();
+    assert!(changed.proof().fact.contains(&proof("z-primary-url").fact));
+    assert!(changed.proof().fact.contains("reviewed-dynamic-path"));
+}

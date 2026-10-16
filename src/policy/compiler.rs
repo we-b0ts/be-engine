@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::*;
+mod order;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CompiledPolicy {
@@ -68,11 +69,11 @@ pub fn compile_policy(document: &TrafficPolicy) -> Result<CompiledPolicy> {
         }
     }
     rules.sort_by(|left, right| left.rule.id.cmp(&right.rule.id));
-    native.sort_by(|left, right| left.rule.id.cmp(&right.rule.id));
+    order::native(&mut native);
     validate_rule_overlaps(&rules)?;
     validate_field_claims(&rules, &native)?;
     let mut expanded = document.rules.iter().collect::<Vec<_>>();
-    expanded.sort_by_key(|rule| rule.id());
+    order::expanded(&mut expanded);
     let runtime = rules
         .iter()
         .map(|rule| RuntimeIdentity {
@@ -475,7 +476,7 @@ pub(crate) fn validate_codec(codec: &Codec) -> Result<()> {
         return Ok(());
     };
     ensure!(
-        !codec.fields.is_empty() && codec.fields.len() <= 256,
+        codec.fields.len() <= 256,
         "Protobuf requires 1..256 explicit field bindings"
     );
     let mut paths = BTreeSet::new();

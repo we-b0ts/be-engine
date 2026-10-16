@@ -97,7 +97,7 @@ pub(super) fn rule(value: &B, proof: &Proof) -> Result<n::NativeRule> {
                 script: script.as_ref().map(|script| Proven {
                     contract: n::OriginScript {
                         sha1: script.sha1.clone(),
-                        keys: script.keys.iter().map(key).collect(),
+                        keys: script.keys.iter().map(script_key).collect(),
                         argv_count: script.argv_count,
                         identity_argv_index: script.identity_argv_index,
                     },
@@ -172,3 +172,18 @@ fn key(value: &RedisKeyPatternConfig) -> n::NativeKeySelector {
         }
     }
 }
+
+fn script_key(value: &RedisKeyPatternConfig) -> n::NativeKeySelector {
+    if value.numeric_middle {
+        key(value)
+    } else {
+        // The Lua envelope owner requires an empty middle when this flag is
+        // false. General process-key affixes have different semantics.
+        n::NativeKeySelector::Exact {
+            value: format!("{}{}", value.prefix, value.suffix),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

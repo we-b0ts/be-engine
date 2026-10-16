@@ -1,6 +1,7 @@
 //! Modify acquisition/ownership effects without rebuilding unrelated policies.
 use super::*;
 use crate::policy::{NativeDomain, PolicyRule, Proof, TrafficPolicy};
+mod order;
 
 pub(crate) fn empty_policy() -> Result<String> {
     Ok(serde_yaml::to_string(&TrafficPolicy {
@@ -89,6 +90,7 @@ pub(crate) fn render_updated(
         }
         retained.push(PolicyRule::from(next));
     }
+    order::capture_responses(&mut retained, proposed)?;
     document.rules = retained;
     crate::policy::compile_policy(&document)
         .context("updated Source effects violate unified policy capabilities or ownership")?;
