@@ -37,11 +37,7 @@ fn typed_protobuf_rules_preserve_members_and_retire_legacy_authoring() {
     let detail = temp.path().join("assertion-detail.json");
     let assertions = temp.path().join("assertions.json");
     let aggregate = temp.path().join("aggregate.json");
-    fs::write(
-        &policy,
-        "format: traffic-policy/v1\nrules: []\n",
-    )
-    .unwrap();
+    fs::write(&policy, "format: traffic-policy/v1\nrules: []\n").unwrap();
     fs::write(
         &request,
         serde_json::to_vec(&json!({"method": "POST", "uri": "/rpc/example"})).unwrap(),
@@ -153,19 +149,45 @@ fn typed_protobuf_rules_preserve_members_and_retire_legacy_authoring() {
             aggregate_report: aggregate,
         },
     })
-    .err().expect("legacy authoring must be retired");
-    assert!(retired.to_string().contains("legacy rule authoring is retired"));
-    write_body_policy(&policy, "POST /rpc/example", "protobuf", vec![json!({
-        "contract":{"kind":"unordered","selector":{"kind":"protobuf","field_path":[3],"alias":"names","element_type":"string"}},
-        "proof":source_proof()
-    })]);
-    assert!(assert_recorded_response(ResponseAssertionOptions {
-        case_id:"case-1".into(), request:request.clone(), expected_response:expected.clone(), actual_response:actual.clone(), policy:policy.clone()
-    }).unwrap().passed);
+    .err()
+    .expect("legacy authoring must be retired");
+    assert!(
+        retired
+            .to_string()
+            .contains("legacy rule authoring is retired")
+    );
+    write_body_policy(
+        &policy,
+        "POST /rpc/example",
+        "protobuf",
+        vec![json!({
+            "contract":{"kind":"unordered","selector":{"kind":"protobuf","field_path":[3],"alias":"/names","element_type":"string"}},
+            "proof":source_proof()
+        })],
+    );
+    assert!(
+        assert_recorded_response(ResponseAssertionOptions {
+            case_id: "case-1".into(),
+            request: request.clone(),
+            expected_response: expected.clone(),
+            actual_response: actual.clone(),
+            policy: policy.clone()
+        })
+        .unwrap()
+        .passed
+    );
     fs::write(&actual, serde_json::to_vec(&json!({"version":1,"status":200,"body":{"encoding":"base64","data":STANDARD.encode(protobuf_body(&["alice","mallory"])),"truncated":false}})).unwrap()).unwrap();
-    assert!(!assert_recorded_response(ResponseAssertionOptions {
-        case_id:"case-1".into(), request, expected_response:expected, actual_response:actual, policy
-    }).unwrap().passed);
+    assert!(
+        !assert_recorded_response(ResponseAssertionOptions {
+            case_id: "case-1".into(),
+            request,
+            expected_response: expected,
+            actual_response: actual,
+            policy
+        })
+        .unwrap()
+        .passed
+    );
 }
 
 fn fnv1a64(bytes: &[u8]) -> u64 {
@@ -209,11 +231,7 @@ fn typed_docx_timestamp_rule_preserves_relative_time_and_retires_legacy_authorin
     let detail = temp.path().join("assertion-detail.json");
     let assertions = temp.path().join("assertions.json");
     let aggregate = temp.path().join("aggregate.json");
-    fs::write(
-        &policy,
-        "format: traffic-policy/v1\nrules: []\n",
-    )
-    .unwrap();
+    fs::write(&policy, "format: traffic-policy/v1\nrules: []\n").unwrap();
     fs::write(
         &request,
         serde_json::to_vec(&json!({
@@ -298,15 +316,33 @@ fn typed_docx_timestamp_rule_preserves_relative_time_and_retires_legacy_authorin
             aggregate_report: aggregate,
         },
     })
-    .err().expect("legacy authoring must be retired");
-    assert!(retired.to_string().contains("legacy rule authoring is retired"));
-    write_body_policy(&policy, "GET /api/tasks/*/export/docx", "docx", vec![json!({
-        "contract":{"kind":"timestamp","part":"docProps/core.xml","element":"dcterms:created","format":"rfc3339"},
-        "proof":source_proof()
-    })]);
-    assert!(assert_recorded_response(ResponseAssertionOptions {
-        case_id:"case-docx".into(), request, expected_response:expected, actual_response:actual, policy
-    }).unwrap().passed);
+    .err()
+    .expect("legacy authoring must be retired");
+    assert!(
+        retired
+            .to_string()
+            .contains("legacy rule authoring is retired")
+    );
+    write_body_policy(
+        &policy,
+        "GET /api/tasks/*/export/docx",
+        "docx",
+        vec![json!({
+            "contract":{"kind":"timestamp","part":"docProps/core.xml","element":"dcterms:created","format":"rfc3339"},
+            "proof":source_proof()
+        })],
+    );
+    assert!(
+        assert_recorded_response(ResponseAssertionOptions {
+            case_id: "case-docx".into(),
+            request,
+            expected_response: expected,
+            actual_response: actual,
+            policy
+        })
+        .unwrap()
+        .passed
+    );
 }
 
 #[test]
@@ -316,11 +352,7 @@ fn docx_codec_only_ignores_zip_metadata_but_compares_part_contents() {
     let request = temp.path().join("request.json");
     let expected = temp.path().join("expected-response.json");
     let actual = temp.path().join("actual-response.json");
-    fs::write(
-        &policy,
-        "format: traffic-policy/v1\nrules: []\n",
-    )
-    .unwrap();
+    fs::write(&policy, "format: traffic-policy/v1\nrules: []\n").unwrap();
     fs::write(
         &request,
         serde_json::to_vec(&json!({"method":"GET","uri":"/export"})).unwrap(),
@@ -356,7 +388,12 @@ fn source_proof() -> serde_json::Value {
     json!({"source":"src/service.rs:generate", "fact":"This isolated fixture generates only the selected value; business remainder stays exact."})
 }
 
-fn write_body_policy(path: &std::path::Path, api: &str, codec: &str, fields: Vec<serde_json::Value>) {
+fn write_body_policy(
+    path: &std::path::Path,
+    api: &str,
+    codec: &str,
+    fields: Vec<serde_json::Value>,
+) {
     fs::write(path, serde_json::to_vec(&json!({"format":"traffic-policy/v1", "rules":[{
         "id":"response-body", "match":{"api":api}, "effect":{"kind":"response_body","codec":codec,"fields":fields}, "proof":source_proof()
     }]})).unwrap()).unwrap();

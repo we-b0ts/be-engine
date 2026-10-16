@@ -36,9 +36,17 @@ async fn cold_source_setup_can_be_omitted_or_consumed_by_normal_sqlx_clients() {
         for policy in [false, true] {
             for send_setup in [false, true] {
                 let (temp, addr, runtime, task) = fixture(&cold_records(), policy).await;
-                let path = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
+                let path = temp
+                    .path()
+                    .join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
                 let original = std::fs::read(&path).unwrap();
-                let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
+                let mut client = connect(
+                    addr,
+                    &temp
+                        .path()
+                        .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+                )
+                .await;
                 if send_setup {
                     // Prepared constant assignment also uses the ordinary
                     // matcher, including session-prefix spelling differences.
@@ -89,7 +97,13 @@ async fn autocommit_failures_and_write_session_omissions_stay_visible() {
         records[1]["response"] =
             json!({"status":"ok", "server_status":1,"affected_rows":1,"last_insert_id":0});
         let (temp, addr, runtime, task) = fixture(&records, false).await;
-        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         sqlx::raw_sql("UPDATE users SET active=0 WHERE id=1")
             .execute(&mut client)
             .await
@@ -113,7 +127,13 @@ async fn autocommit_failures_and_write_session_omissions_stay_visible() {
             json!({"status":"error", "error_code":1205, "error_message":"recorded failure"}),
         )];
         let (temp, addr, runtime, task) = fixture(&records, true).await;
-        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         let error = sqlx::raw_sql("SET AUTOCOMMIT=1")
             .execute(&mut client)
             .await

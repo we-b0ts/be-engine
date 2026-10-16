@@ -157,7 +157,13 @@ async fn sqlx_predicate_prepare_keeps_fixed_values_and_execute_checks_remaining_
             json!([[{"kind":"integer","value":1}]]),
         );
         let (temp, addr, runtime, task) = fixture(&[exchange(sql, response)], false).await;
-        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         let target = "SELECT id FROM tasks WHERE tenant=? AND id IN (?,1,NULL)";
         assert!(
             sqlx::query(target)

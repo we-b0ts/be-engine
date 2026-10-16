@@ -202,8 +202,18 @@ async fn changing_business_rollback_to_commit_stays_dirty() {
     tokio::time::timeout(Duration::from_secs(15), async {
         let records = transaction_records();
         let (temp, addr, runtime, task) = fixture(&records, false).await;
-        let original = std::fs::read(temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl")).unwrap();
-        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
+        let original = std::fs::read(
+            temp.path()
+                .join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl"),
+        )
+        .unwrap();
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         let mut tx = client.begin().await.unwrap();
         sqlx::query("UPDATE users SET active=0 WHERE id=1")
             .execute(&mut *tx)
@@ -223,7 +233,11 @@ async fn changing_business_rollback_to_commit_stays_dirty() {
             );
         }
         assert_eq!(
-            std::fs::read(temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl")).unwrap(),
+            std::fs::read(
+                temp.path()
+                    .join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl")
+            )
+            .unwrap(),
             original
         );
         task.abort();
@@ -236,7 +250,13 @@ async fn changing_business_rollback_to_commit_stays_dirty() {
 async fn real_business_rollback_does_not_require_repeated_pool_cleanup() {
     tokio::time::timeout(Duration::from_secs(15), async {
         let (temp, addr, runtime, task) = fixture(&transaction_records(), false).await;
-        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         let mut tx = client.begin().await.unwrap();
         sqlx::query("UPDATE users SET active=0 WHERE id=1")
             .execute(&mut *tx)
@@ -292,9 +312,17 @@ async fn implicit_read_cleanup_can_be_omitted_or_consumed_without_discarding_rea
             record["query_sequence"] = json!(116 + index);
         }
         let (temp, addr, runtime, task) = fixture(&records, true).await;
-        let path = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
+        let path = temp
+            .path()
+            .join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
         let original = std::fs::read(&path).unwrap();
-        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         {
             let state = runtime.state.lock().await;
             assert_eq!(

@@ -189,18 +189,16 @@ fn script_plan_explains_nonempty_middle_for_an_exact_key() {
     let key = &mut selector.script.as_mut().unwrap().keys[1];
     key.prefix = "metrics:as-".into();
     key.suffix = "f".into();
-    let error = plan_api_triggered_redis(
-        &f.policy,
-        &f.report,
-        &f.root,
-        "metrics",
-        SOURCE_REVISION,
-        PROOF,
-        &selector,
-    )
-    .err()
-    .unwrap()
-    .to_string();
+    // The typed policy stores an exact key as one value. Exercise the Lua
+    // envelope owner directly to retain its prefix/suffix diagnostic contract.
+    let args = crate::api_trigger::redis_args(&events[1]).unwrap();
+    let error = selector
+        .script
+        .as_ref()
+        .unwrap()
+        .check_identity(&args)
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("KEYS[1]"));
     assert!(error.contains("numeric_middle=false requires an exact prefix+suffix"));
     let key = &mut selector.script.as_mut().unwrap().keys[1];

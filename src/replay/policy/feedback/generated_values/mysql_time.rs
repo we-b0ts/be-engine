@@ -20,7 +20,10 @@ pub struct DynamicValueMysqlTimeRule {
 }
 
 impl DynamicValueMysqlTimeRule {
-    pub(super) fn proposed(&self, identity: &DynamicValueRule) -> Result<ReplayDependencyRule> {
+    pub(in crate::replay::policy) fn proposed(
+        &self,
+        identity: &DynamicValueRule,
+    ) -> Result<ReplayDependencyRule> {
         let DynamicValueCapture::Mysql {
             target,
             database,

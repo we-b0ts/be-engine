@@ -134,12 +134,15 @@ pub(super) fn convert(
                     .iter()
                     .map(|field| (field.pointer.clone(), p::FieldContract::Unordered))
                     .collect::<BTreeMap<_, _>>();
-                contract.extend(
-                    http.json
-                        .time
-                        .iter()
-                        .map(|(pointer, time)| (pointer.clone(), time_field(&request_time(time)))),
-                );
+                contract.extend(http.json.time.iter().map(|(pointer, time)| {
+                    (
+                        pointer.clone(),
+                        time_field(&n::NativeTime {
+                            anchor: p::TimeAnchor::DependencyRequestStart,
+                            ..request_time(time)
+                        }),
+                    )
+                }));
                 output.push(
                     value(
                         &rule.id,
@@ -260,7 +263,7 @@ pub(super) fn convert(
                         format!("/field_{number}"),
                         p::FieldContract::Time {
                             format: p::TimestampFormat::UnixSeconds,
-                            relation: p::TimeRelation::PreserveOffset,
+                            relation: p::TimeRelation::RequestWindow,
                             anchor: p::TimeAnchor::DependencyRequestStart,
                             utc_offset: None,
                             clock_group: None,

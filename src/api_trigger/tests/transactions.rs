@@ -432,8 +432,10 @@ fn old_summary_diagnoses_ambiguous_commit_without_broadening_ownership() {
             .any(|r| r.contains("transaction start or contiguous prefix"))
     );
     assert_eq!(plan.report().matched_unused_exchanges, 3);
-    let mut rules = f.mysql_rules();
-    rules.push(write_selector().rule("write", SOURCE_REVISION, PROOF));
+    plan.apply().unwrap();
+    let rules = SourceTrafficPolicyConfig::load(&f.policy)
+        .unwrap()
+        .process_owned_dependencies;
     let index = load(&f.root, &rules).unwrap();
     assert!(index.witness("victim", &ev[3]).is_some());
     assert!(index.witness("victim", ev.last().unwrap()).is_none());

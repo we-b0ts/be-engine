@@ -864,7 +864,7 @@ fn unordered_array_preserves_duplicate_counts() {
         report.differences[0].kind,
         ResponseDifferenceKind::UnorderedArrayContentMismatch
     );
-    assert_eq!(report.unused_applicable_unordered_rule_ids.len(), 1);
+    assert_eq!(report.applied_body_rule_ids.len(), 1);
 }
 
 #[test]

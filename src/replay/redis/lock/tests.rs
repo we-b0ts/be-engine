@@ -417,7 +417,7 @@ fn policy_requires_endpoint_source_proof_and_disjoint_selectors() {
     let rule = json!({"id":"locks","match":{"api":"GET /api", "resource":{"protocol":"redis","endpoint":"redis.test:6379"},
         "key":{"kind":"affix","prefix":"lock:"}},"effect":{"kind":"redis_lock"},
         "proof":{"source":"locks.rs:acquire/release","fact":"Source uses random ownership tokens and compare-delete"}});
-    let parse = |rules: Value| {
+    let parse = |rules: serde_json::Value| {
         crate::policy::parse_policy(
             &json!({"format":"traffic-policy/v1","rules":rules}).to_string(),
         )

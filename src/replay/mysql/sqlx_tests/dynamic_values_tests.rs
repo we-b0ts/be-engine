@@ -31,9 +31,10 @@ dependency_rules:
 async fn capture_then_sql_json_and_redis_key_preserve_fixed_values_times_and_consumption() {
     tokio::time::timeout(Duration::from_secs(20), async {
         let redis = json!({"event_type":"redis_exchange", "connection_id":uuid::Uuid::new_v4(),
+            "timestamp":"2020-01-01T00:00:00Z","duration_ms":0,
             "sequence":1,"target_host":"redis.internal","target_port":6379,"resp_version":2,
-            "database":0,"command":"DEL","args":[{"encoding":"utf8","data":"cache:old-name:fixed"}],
-            "response_kind":"integer","response":{"encoding":"utf8","data":":1\r\n"},"replay_safe":true});
+            "database":0,"command":"DEL","args":[{"encoding":"utf8","data":"cache:old-name:fixed","truncated":false}],
+            "response_kind":"integer","response":{"encoding":"utf8","data":":1\r\n","truncated":false},"replay_safe":true});
         let records = [
             exchange("SELECT count(*) FROM kinds WHERE name='old-name'", result(
                 json!([{"name":"count(*)","family":"integer","sql_type":"BIGINT"}]),
@@ -120,14 +121,15 @@ pub(super) async fn endpoint_listener(
 }
 
 #[tokio::test]
-async fn sql_time_planner_uses_only_committed_same_case_identity_proofs() {
+async fn sql_time_evidence_uses_committed_identity_proofs_and_retired_authoring_writes_nothing() {
     tokio::time::timeout(Duration::from_secs(20),async {
         let mut capture = exchange("SELECT count(*) FROM kinds WHERE name='old-name'",result(json!([{"name":"count(*)","family":"integer","sql_type":"BIGINT"}]),json!([[{"kind":"integer","value":0}]])));
         capture["parse_warnings"] = json!([]);
         let mut insert = exchange("INSERT INTO kinds(name,json,created_at) VALUES('old-name','{\"name\":\"old-name\",\"stable\":1}','2020-01-01 00:00:00')",json!({"status":"ok","affected_rows":1}));
         insert["parse_warnings"] = json!([]);
         let policy = POLICY.split("  - id: created-at").next().unwrap().to_owned();
-        let (temp,addr,runtime,task) = fixture_with_policy(&[capture,insert],Some(&policy)).await;
+        let records = [capture,insert];
+        let (temp,addr,runtime,task) = fixture_with_policy(&records,Some(&policy)).await;
         let mut client = connect(addr,&temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         sqlx::query("SELECT count(*) FROM kinds WHERE name=?").bind("new-name").fetch_one(&mut client).await.unwrap();
         assert!(sqlx::query("INSERT INTO kinds(name,json,created_at) VALUES(?,?,?)").bind("new-name").bind(r#"{"stable":1,"name":"new-name"}"#).bind(chrono::Utc::now().naive_utc()).execute(&mut client).await.is_err());
@@ -145,12 +147,42 @@ async fn sql_time_planner_uses_only_committed_same_case_identity_proofs() {
         let bytes = std::fs::read(&report).unwrap();
         let mut tampered: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(tampered["replay_policy"]["dynamic_bindings"].as_array().unwrap().len(),1);
+        let policy_path = temp.path().join("policy.yaml");
+        let loaded = crate::replay::policy::load_replay_policy(&policy_path).unwrap();
+        let case = temp.path().join(".traffic-e2e/local/recordings/case-id");
+        let source_bytes = std::fs::read(case.join("dependencies.jsonl")).unwrap();
+        let request: Value = serde_json::from_slice(&std::fs::read(case.join("request.json")).unwrap()).unwrap();
+        let restore = |report:&Value| crate::replay::policy::dynamic_values::from_report(
+            &loaded.document.dynamic_values,report,"case-id",&request,&source_bytes,
+            &[crate::mysql::sql::Token::Bytes(b"old-name".to_vec())],
+            &[crate::mysql::sql::Token::Bytes(b"new-name".to_vec())],
+        );
+        restore(&tampered).unwrap();
         tampered["replay_policy"]["dynamic_bindings"][0]["target_fingerprint"] = json!("invalid");
-        std::fs::write(&report,tampered.to_string()).unwrap();
-        assert!(crate::plan_mysql_time_rule(feedback()).is_err());
-        std::fs::write(&report,bytes).unwrap();
-        crate::plan_mysql_time_rule(feedback()).unwrap().apply().unwrap();
+        assert!(restore(&tampered).is_err());
+        let before = std::fs::read(&policy_path).unwrap();
+        let error = crate::plan_mysql_time_rule(feedback()).err().unwrap();
+        assert!(error.to_string().contains("legacy rule authoring is retired"));
+        assert_eq!(std::fs::read(&policy_path).unwrap(),before);
+        assert_eq!(std::fs::read(&report).unwrap(),bytes);
+        assert_eq!(std::fs::read(case.join("dependencies.jsonl")).unwrap(),source_bytes);
+        crate::replay::policy::test_fixture::install_dependency_rule(&policy_path,json!({
+            "id":"insert-time","protocol":"mysql","target":{"host":"127.0.0.1","port":3306},
+            "source_evidence":"Storage:create writes datetime.utcnow()",
+            "mysql":{"command":"COM_QUERY","database":"appdb","username":"root",
+                "sql":"INSERT INTO kinds(name,json,created_at) VALUES(?,?,?)",
+                "sql_values":{"2":{"time":"replay_now","tolerance":"5s","format":"%Y-%m-%d %H:%M:%S%.f","timezone":"+00:00"}}}
+        })).unwrap();
         assert!(std::fs::read_to_string(temp.path().join("policy.yaml")).unwrap().contains("insert-time"));
+        task.abort();
+        let updated = std::fs::read_to_string(&policy_path).unwrap();
+        let (next,addr,_,task) = fixture_with_policy(&records,Some(&updated)).await;
+        let mut client = connect(addr,&next.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
+        sqlx::query("SELECT count(*) FROM kinds WHERE name=?").bind("new-name").fetch_one(&mut client).await.unwrap();
+        assert_eq!(sqlx::query("INSERT INTO kinds(name,json,created_at) VALUES(?,?,?)")
+            .bind("new-name").bind(r#"{"stable":1,"name":"new-name"}"#).bind(chrono::Utc::now().naive_utc())
+            .execute(&mut client).await.unwrap().rows_affected(),1);
+        client.close().await.unwrap();
         task.abort();
     }).await.expect("SQL-time identity evidence test timed out");
 }

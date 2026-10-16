@@ -71,10 +71,10 @@ async fn http_listener(runtime: Arc<ReplayRuntime>) -> (SocketAddr, tokio::task:
 }
 
 fn records() -> Vec<Value> {
-    vec![
-        json!({"event_type":"http_exchange","scheme":"http","method":"PUT","authority":"s3.example.test",
+    let mut records = vec![
+        json!({"event_type":"http_exchange","id":"recorded-storage-put","scheme":"http","method":"PUT","authority":"s3.example.test",
         "uri":"/bucket/attachments/aabbccddeeff_20200101000000_7_100?part=1",
-        "request_started_at":"2020-01-01T00:00:00Z",
+        "timestamp":"2020-01-01T00:00:00Z","request_started_at":"2020-01-01T00:00:00Z",
         "request_body":{"encoding":"utf8","data":"file bytes","truncated":false},
         "response_status":200,"response_headers":{"content-length":["8"]},
         "response_body":{"encoding":"utf8","data":"accepted","truncated":false},"error":null}),
@@ -82,74 +82,190 @@ fn records() -> Vec<Value> {
             "UPDATE subtask_contexts SET type_data='{\"storage_key\":\"attachments/aabbccddeeff_20200101000000_7_100\",\"stable\":1}' WHERE id=100",
             json!({"status":"ok","affected_rows":1}),
         ),
-    ]
+    ];
+    records[1]["timestamp"] = json!("2020-01-01T00:00:00Z");
+    records[1]["connection_id"] = json!("00000000-0000-4000-8000-000000000001");
+    records[1]["query_sequence"] = json!(1);
+    records
 }
 
 #[tokio::test]
-async fn path_capture_plan_apply_then_http_put_and_prepared_sql_retain_identity_and_inventory() {
-    tokio::time::timeout(Duration::from_secs(30),async {
-        let empty="version: 3\nexpected_response: assertions_only\ndependency_rules: []\n";
-        let (temp,_,runtime,task)=fixture_with_policy(&records(),Some(empty)).await;
-        task.abort(); let (addr,task)=http_listener(runtime.clone()).await;
-        let immutable=std::fs::read(temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl")).unwrap();
-        let key=format!("112233445566_{}_7_100",Utc::now().format("%Y%m%d%H%M%S"));
-        let path=format!("/bucket/attachments/{key}?part=1");
-        assert!(put(addr,&path,"file bytes").await.starts_with("HTTP/1.1 502"));
-        let report_path=temp.path().join("replay.json");
+async fn retired_path_authoring_preserves_evidence_and_native_http_sql_replay_is_finite() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let empty = "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n";
+        let (temp, _, runtime, task) = fixture_with_policy(&records(), Some(empty)).await;
+        task.abort();
+        let (addr, task) = http_listener(runtime.clone()).await;
+        let immutable = std::fs::read(
+            temp.path()
+                .join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl"),
+        )
+        .unwrap();
+        let key = format!("112233445566_{}_7_100", Utc::now().format("%Y%m%d%H%M%S"));
+        let path = format!("/bucket/attachments/{key}?part=1");
+        assert!(
+            put(addr, &path, "file bytes")
+                .await
+                .starts_with("HTTP/1.1 502")
+        );
+        let report_path = temp.path().join("replay.json");
         let report = {
-            let mut state=runtime.state.lock().await; state.finalized_at=Some(Utc::now());
+            let mut state = runtime.state.lock().await;
+            state.finalized_at = Some(Utc::now());
             serde_json::to_value(state.snapshot_report()).unwrap()
         };
-        assert_eq!(report["replay_policy"]["dynamic_capture_candidates"].as_array().unwrap().len(),1);
-        let candidate=report["replay_policy"]["dynamic_capture_candidates"][0].to_string();
-        assert!(!candidate.contains(&key)); assert!(!candidate.contains("aabbccddeeff"));
-        std::fs::write(&report_path,report.to_string()).unwrap(); task.abort();
-        let feedback=|| crate::DynamicValueRuleFeedback {policy_path:temp.path().join("policy.yaml"),rule:rule(),replay_report:report_path.clone()};
-        for (pointer,replacement) in [
-            ("/replay_policy/dynamic_capture_candidates/0/target_value_fingerprint",json!("invalid")),
-            ("/replay_policy/dynamic_capture_candidates/0/path_witness/target_request_started_at",json!("2020-01-01T00:00:00Z")),
-            ("/replay_policy/dynamic_capture_candidates/0/source_payload_fingerprint",json!("invalid")),
-        ] {
-            let mut tampered=report.clone(); *tampered.pointer_mut(pointer).unwrap()=replacement;
-            std::fs::write(&report_path,tampered.to_string()).unwrap();
-            assert!(crate::plan_dynamic_value_rule(feedback()).is_err(),"{pointer}");
-        }
-        std::fs::write(&report_path,report.to_string()).unwrap();
-        let plan=crate::plan_dynamic_value_rule(feedback()).unwrap();
-        assert!(plan.report().requires_fresh_replay); plan.apply().unwrap();
-        let policy=std::fs::read_to_string(temp.path().join("policy.yaml")).unwrap(); assert!(policy.contains("path_segment:"));
-        let (next,_,runtime,task)=fixture_with_policy(&records(),Some(&policy)).await;
-        task.abort(); let (addr,task)=http_listener(runtime.clone()).await;
-        let (mysql_addr,mysql_task)=super::dynamic_values_tests::endpoint_listener(runtime.clone(),false).await;
-        let mut client=connect(mysql_addr,&next.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
-        let key=format!("112233445566_{}_7_100",Utc::now().format("%Y%m%d%H%M%S"));
-        let path=format!("/bucket/attachments/{key}?part=1");
-        let sql="UPDATE subtask_contexts SET type_data=? WHERE id=?";
-        let payload=format!("{{\"storage_key\":\"attachments/{key}\",\"stable\":1}}");
+        assert_eq!(
+            report["replay_policy"]["dynamic_capture_candidates"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let candidate = report["replay_policy"]["dynamic_capture_candidates"][0].to_string();
+        assert!(!candidate.contains(&key));
+        assert!(!candidate.contains("aabbccddeeff"));
+        std::fs::write(&report_path, report.to_string()).unwrap();
+        task.abort();
+        let feedback = || crate::DynamicValueRuleFeedback {
+            policy_path: temp.path().join("policy.yaml"),
+            rule: rule(),
+            replay_report: report_path.clone(),
+        };
+        let policy_before = std::fs::read(temp.path().join("policy.yaml")).unwrap();
+        let evidence_before = std::fs::read(&report_path).unwrap();
+        let error = crate::plan_dynamic_value_rule(feedback())
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains("legacy rule authoring is retired"),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("policy.yaml")).unwrap(),
+            policy_before
+        );
+        assert_eq!(std::fs::read(&report_path).unwrap(), evidence_before);
+        assert_eq!(
+            std::fs::read(
+                temp.path()
+                    .join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl")
+            )
+            .unwrap(),
+            immutable
+        );
+        crate::replay::policy::test_fixture::install_dynamic_value(feedback()).unwrap();
+        let policy = std::fs::read_to_string(temp.path().join("policy.yaml")).unwrap();
+        let document = crate::policy::parse_policy(&policy).unwrap();
+        assert!(
+            document
+                .rules
+                .iter()
+                .find(|rule| rule.id() == "object-key")
+                .unwrap()
+                .as_native()
+                .is_some()
+        );
+        let (next, _, runtime, task) = fixture_with_policy(&records(), Some(&policy)).await;
+        task.abort();
+        let (addr, task) = http_listener(runtime.clone()).await;
+        let (mysql_addr, mysql_task) =
+            super::dynamic_values_tests::endpoint_listener(runtime.clone(), false).await;
+        let mut client = connect(
+            mysql_addr,
+            &next
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
+        let key = format!("112233445566_{}_7_100", Utc::now().format("%Y%m%d%H%M%S"));
+        let path = format!("/bucket/attachments/{key}?part=1");
+        let sql = "UPDATE subtask_contexts SET type_data=? WHERE id=?";
+        let payload = format!("{{\"storage_key\":\"attachments/{key}\",\"stable\":1}}");
         // A SQL reference before the successful PUT has no binding.
-        assert!(sqlx::query(sql).bind(&payload).bind(100_i64).execute(&mut client).await.is_err());
-        for (bad_path,body) in [
-            (path.clone(),"wrong file bytes"),
-            (path.replace("_7_100","_8_100"),"file bytes"),
-            (path.replace("_7_100","_7_101"),"file bytes"),
-            (path.replace("part=1","part=2"),"file bytes"),
-            ("/bucket/attachments/112233445566_20000101000000_7_100?part=1".into(),"file bytes"),
-        ] { assert!(put(addr,&bad_path,body).await.starts_with("HTTP/1.1 502")); }
-        assert!(runtime.state.lock().await.replay_policy.as_ref().unwrap().report().dynamic_bindings.is_empty());
-        assert!(put(addr,&path,"file bytes").await.starts_with("HTTP/1.1 200"));
-        for (bad_payload,id) in [
-            (payload.replace("112233445566","665544332211"),100_i64),
-            (payload.replace("\"stable\":1","\"stable\":2"),100),
-            (payload.clone(),101),
-        ] { assert!(sqlx::query(sql).bind(bad_payload).bind(id).execute(&mut client).await.is_err()); }
-        assert_eq!(sqlx::query(sql).bind(payload).bind(100_i64).execute(&mut client).await.unwrap().rows_affected(),1);
-        assert!(put(addr,&path,"file bytes").await.starts_with("HTTP/1.1 502"));
+        assert!(
+            sqlx::query(sql)
+                .bind(&payload)
+                .bind(100_i64)
+                .execute(&mut client)
+                .await
+                .is_err()
+        );
+        for (bad_path, body) in [
+            (path.clone(), "wrong file bytes"),
+            (path.replace("_7_100", "_8_100"), "file bytes"),
+            (path.replace("_7_100", "_7_101"), "file bytes"),
+            (path.replace("part=1", "part=2"), "file bytes"),
+            (
+                "/bucket/attachments/112233445566_20000101000000_7_100?part=1".into(),
+                "file bytes",
+            ),
+        ] {
+            assert!(put(addr, &bad_path, body).await.starts_with("HTTP/1.1 502"));
+        }
+        assert!(
+            runtime
+                .state
+                .lock()
+                .await
+                .replay_policy
+                .as_ref()
+                .unwrap()
+                .report()
+                .dynamic_bindings
+                .is_empty()
+        );
+        assert!(
+            put(addr, &path, "file bytes")
+                .await
+                .starts_with("HTTP/1.1 200")
+        );
+        for (bad_payload, id) in [
+            (payload.replace("112233445566", "665544332211"), 100_i64),
+            (payload.replace("\"stable\":1", "\"stable\":2"), 100),
+            (payload.clone(), 101),
+        ] {
+            assert!(
+                sqlx::query(sql)
+                    .bind(bad_payload)
+                    .bind(id)
+                    .execute(&mut client)
+                    .await
+                    .is_err()
+            );
+        }
+        assert_eq!(
+            sqlx::query(sql)
+                .bind(payload)
+                .bind(100_i64)
+                .execute(&mut client)
+                .await
+                .unwrap()
+                .rows_affected(),
+            1
+        );
+        assert!(
+            put(addr, &path, "file bytes")
+                .await
+                .starts_with("HTTP/1.1 502")
+        );
         client.close().await.unwrap();
-        let state=runtime.state.lock().await;
+        let state = runtime.state.lock().await;
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
-        let policy_report=state.replay_policy.as_ref().unwrap().report();
-        assert_eq!(policy_report.dynamic_bindings.len(),1); assert_eq!(policy_report.dependency_rules[0].time_validations,1);
-        assert_eq!(std::fs::read(temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl")).unwrap(),immutable);
-        task.abort(); mysql_task.abort();
-    }).await.expect("path capture HTTP/SQL Replay timed out");
+        let policy_report = state.replay_policy.as_ref().unwrap().report();
+        assert_eq!(policy_report.dynamic_bindings.len(), 1);
+        assert_eq!(policy_report.dependency_rules[0].time_validations, 1);
+        assert_eq!(
+            std::fs::read(
+                temp.path()
+                    .join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl")
+            )
+            .unwrap(),
+            immutable
+        );
+        task.abort();
+        mysql_task.abort();
+    })
+    .await
+    .expect("path capture HTTP/SQL Replay timed out");
 }

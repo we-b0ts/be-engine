@@ -230,9 +230,16 @@ fn file_inspection_derives_without_modifying_immutable_recording() {
         format!("{}\n", record_json(None, "$2\r\nv1\r\n")),
     )
     .unwrap();
-    let policy_path = temp.path().join("source-traffic-policy.yaml");
+    let policy_path = temp.path().join("policy.yaml");
     let mut policy = SourceTrafficPolicyConfig::empty();
-    policy.process_owned_dependencies.push(rule());
+    let mut process = rule();
+    if let BackgroundDependencyRuleConfig::Redis {
+        source_revision, ..
+    } = &mut process
+    {
+        *source_revision = format!("sha256:{}", "1".repeat(64));
+    }
+    policy.process_owned_dependencies.push(process);
     fs::write(&policy_path, policy.render().unwrap()).unwrap();
     let global_before = fs::read(&global).unwrap();
     let case_before = fs::read(&case_dependencies).unwrap();

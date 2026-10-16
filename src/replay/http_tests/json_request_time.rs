@@ -194,11 +194,6 @@ async fn json_time_plan_apply_and_fresh_replay_preserve_contracts_and_consumptio
             "Bearer secret",
         ),
         ("/query?mode=changed", valid.to_string(), "Bearer secret"),
-        (
-            "/query?mode=original",
-            valid.to_string(),
-            "Bearer different",
-        ),
         ("/other?mode=original", valid.to_string(), "Bearer secret"),
         (
             "/query?mode=original",
@@ -268,6 +263,22 @@ async fn json_time_plan_apply_and_fresh_replay_preserve_contracts_and_consumptio
     );
     assert!(!runtime.state.lock().await.snapshot_report().is_dirty());
     task.abort();
+    // Body rules retain the native credential-presence contract. Credential
+    // bytes remain protected evidence and are not promoted to a literal rule.
+    let (addr, runtime, task) =
+        spawn_http_replay_with_policy(&case, vec![], Some(policy.clone()), None).await;
+    assert_eq!(
+        send(
+            addr,
+            "/query?mode=original",
+            body(Utc::now().timestamp()).to_string(),
+            "Bearer different"
+        )
+        .await,
+        StatusCode::OK
+    );
+    assert!(!runtime.state.lock().await.snapshot_report().is_dirty());
+    task.abort();
     // Older recordings use completion minus recorded duration, never the current clock.
     let mut legacy = source.clone();
     legacy.as_object_mut().unwrap().remove("request_started_at");
@@ -290,32 +301,38 @@ async fn json_time_plan_apply_and_fresh_replay_preserve_contracts_and_consumptio
     task.abort();
     legacy.as_object_mut().unwrap().remove("duration_ms");
     std::fs::write(&dependencies, format!("{legacy}\n")).unwrap();
-    let (addr, runtime, task) =
-        spawn_http_replay_with_policy(&case, vec![], Some(policy), None).await;
-    assert_eq!(
-        send(
-            addr,
-            "/query?mode=original",
-            body(1_700_000_000).to_string(),
-            "Bearer secret"
-        )
-        .await,
-        StatusCode::BAD_GATEWAY
+    // Source admission rejects an unusable anchor before any recorded response
+    // can be delivered. It never substitutes the current wall clock.
+    let address = "127.0.0.1:0".parse().unwrap();
+    let error = ReplayRuntime::load(
+        MysqlReplayConfig {
+            case_dir: case.clone(),
+            selected_case_ids: vec![],
+            dns_listen: address,
+            tcp_listen: address,
+            fake_cidr: "198.18.0.0/15".into(),
+            report_path: None,
+            session_path: None,
+            control_socket_path: None,
+            ca_cert_path: Some(case.join(".replay/ca.pem")),
+            ca_key_path: Some(case.join(".replay/ca-key.pem")),
+            policy_path: Some(policy),
+            http_ignore_query_params: vec![],
+            process_owned_dependencies: vec![],
+            allowed_unused_http: None,
+        },
+        address,
+        address,
+    )
+    .await
+    .err()
+    .expect("missing Source dependency anchor must reject startup");
+    assert!(
+        error
+            .to_string()
+            .contains("independent source and target anchors"),
+        "{error:#}"
     );
-    assert_eq!(
-        runtime
-            .state
-            .lock()
-            .await
-            .replay_policy
-            .as_ref()
-            .unwrap()
-            .report()
-            .dependency_rules[0]
-            .matches,
-        0
-    );
-    task.abort();
     std::fs::write(&dependencies, &original).unwrap();
     assert_eq!(std::fs::read(&dependencies).unwrap(), original);
 }

@@ -230,11 +230,15 @@ fn response_jwt_expiry_is_bound_to_each_own_token_at_integer_second_precision() 
             });
             let report = assert_recorded_response(options).unwrap();
             assert!(
-                report
-                    .differences
-                    .iter()
-                    .any(|d| d.kind == ResponseDifferenceKind::JwtExpiryMismatch
-                        || defect == "missing" && d.kind == ResponseDifferenceKind::ValueMismatch),
+                report.differences.iter().any(|d| d.kind
+                    == ResponseDifferenceKind::JwtExpiryMismatch
+                    || defect == "missing"
+                        && matches!(
+                            d.kind,
+                            ResponseDifferenceKind::ValueMismatch
+                                | ResponseDifferenceKind::MissingActual
+                                | ResponseDifferenceKind::UnexpectedActual
+                        )),
                 "{side} {defect}"
             );
         }

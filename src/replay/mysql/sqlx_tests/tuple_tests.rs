@@ -82,7 +82,13 @@ async fn sqlx_tuple_prepare_is_injective_and_execute_checks_row_pairing() {
             ),
         );
         let (temp, addr, runtime, task) = fixture(&[record], true).await;
-        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         let target = "SELECT id FROM tasks WHERE (kind,uid) IN ((?,2),(1,?)) AND tenant=?";
         assert!(
             sqlx::query(target)

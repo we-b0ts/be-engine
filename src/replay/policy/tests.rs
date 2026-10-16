@@ -277,12 +277,19 @@ fn binds_and_references_runtime_mysql_uuid() {
         actual: Some(&actual_insert),
     };
     let changed_table = MysqlPolicyContext {
-        case_id: Some(CASE_ID), identity: &identity, command: "COM_STMT_EXECUTE",
+        case_id: Some(CASE_ID),
+        identity: &identity,
+        command: "COM_STMT_EXECUTE",
         recorded_sql: insert_context.recorded_sql,
         sql: Some("INSERT INTO request_log_202606 (uuid, request_time) VALUES (?, ?)"),
-        recorded: Some(&recorded_insert), actual: Some(&actual_insert),
+        recorded: Some(&recorded_insert),
+        actual: Some(&actual_insert),
     };
-    assert!(preview_mysql_contract(&runtime, &changed_table, now).unwrap_err().contains("physical"));
+    assert!(
+        preview_mysql_contract(&runtime, &changed_table, now)
+            .unwrap_err()
+            .contains("physical")
+    );
     assert!(runtime.allows_mysql_sql_difference(&insert_context));
     let insert = preview_mysql_contract(&runtime, &insert_context, now).unwrap();
     runtime.commit(Some(CASE_ID), insert);

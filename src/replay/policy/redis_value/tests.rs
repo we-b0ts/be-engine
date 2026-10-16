@@ -23,6 +23,7 @@ fn condition() -> Value {
 fn assert_rule_retains_condition(mut rule: Value) {
     load(rule.clone()).expect("the typed selector must remain valid");
     rule["when"] = condition();
+    rule["case"] = json!({"method":"POST","path":"/sessions"});
     let loaded = load(rule).expect("Source conditions remain in the compiled guard");
     let compiled = loaded.compiled.unwrap();
     assert!(

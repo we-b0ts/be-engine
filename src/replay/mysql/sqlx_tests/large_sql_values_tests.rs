@@ -51,9 +51,17 @@ dependency_rules:
                     ]);
                 }
                 let (temp, addr, runtime, task) = fixture_with_policy(&[write], Some(policy)).await;
-                let path = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
+                let path = temp
+                    .path()
+                    .join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
                 let original = std::fs::read(&path).unwrap();
-                let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
+                let mut client = connect(
+                    addr,
+                    &temp
+                        .path()
+                        .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+                )
+                .await;
                 // Wrong stable JSON, key, and stale time cannot consume evidence.
                 // A correct call succeeds once in each text/prepared combination.
                 for attempt in 0..5 {
@@ -62,7 +70,7 @@ dependency_rules:
                     let observed = if attempt == 2 {
                         "2020-01-01T00:00:00+00:00".to_string()
                     } else {
-                        now.to_rfc3339()
+                        now.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
                     };
                     let payload = json!({
                         "name":if attempt == 0 {"changed"} else {"stable"},
@@ -74,7 +82,7 @@ dependency_rules:
                         sqlx::query(SQL)
                             .bind(&payload)
                             .bind(0_i64)
-                            .bind(&timestamp)
+                            .bind(now.naive_utc())
                             .bind(id)
                             .execute(&mut client)
                             .await

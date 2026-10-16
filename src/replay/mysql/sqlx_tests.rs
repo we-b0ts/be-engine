@@ -206,7 +206,13 @@ async fn sqlx_cached_statement_rebinds_params_and_replays_writes_transactions_an
             ),
         ];
         let (temp, addr, runtime, task) = fixture(&records, false).await;
-        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         let sql = "SELECT id FROM tasks_0509 WHERE uid=? AND note='?' /* ? */";
         let first = sqlx::query(sql)
             .bind(509_u64)

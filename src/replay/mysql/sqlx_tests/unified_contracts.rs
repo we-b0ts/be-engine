@@ -147,7 +147,13 @@ async fn finalized_evidence_waits_for_actual_dependency_delivery() {
         );
         record["duration_ms"] = json!(500);
         let (temp, addr, runtime, server) = fixture_with_policy(&[record], None).await;
-        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         let query = tokio::spawn(async move {
             (&mut client).fetch_one(sql).await.unwrap();
             client.close().await.unwrap();

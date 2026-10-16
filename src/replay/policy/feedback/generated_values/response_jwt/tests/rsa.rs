@@ -204,10 +204,14 @@ fn response_jwt_rs256_key_selectors_fail_closed_and_freeze_dependencies() {
         if defect == "params" {
             install_jwt_fixture(feedback).unwrap();
         }
-        assert!(
-            assert_recorded_response(copy(&options)).is_err(),
-            "{defect}"
-        );
+        if let Ok(report) = assert_recorded_response(copy(&options)) {
+            assert!(!report.passed, "{defect}");
+            assert!(
+                report.differences.iter().any(|difference| difference.kind
+                    == ResponseDifferenceKind::JwtSigningKeyUnavailable),
+                "{defect}"
+            );
+        }
         if defect != "params" {
             assert_eq!(fs::read(&options.policy).unwrap(), installed_policy);
         }

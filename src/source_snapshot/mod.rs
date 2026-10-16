@@ -19,9 +19,9 @@ use image::{copy_image_path, ensure_local_image};
 pub use provider::{
     ContainerSourceOptions, KubernetesSourceOptions, SourceOptions, SourceProviderEvidence,
 };
-mod upgrade;
 #[cfg(test)]
 pub(crate) mod test_fixture;
+mod upgrade;
 
 pub(crate) use upgrade::begin_kubernetes_source_snapshot_upgrade;
 

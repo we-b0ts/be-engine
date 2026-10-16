@@ -18,6 +18,13 @@ pub(crate) fn convert_legacy_policy(
     fixture_root: Option<&Path>,
 ) -> Result<p::TrafficPolicy> {
     let document: old::ReplayPolicyDocument = serde_yaml::from_str(yaml)?;
+    convert_document(document, fixture_root)
+}
+
+fn convert_document(
+    document: old::ReplayPolicyDocument,
+    fixture_root: Option<&Path>,
+) -> Result<p::TrafficPolicy> {
     ensure!(
         matches!(document.version, 1 | 3),
         "fixture migration only accepts the explicit version-three DTO"
@@ -120,10 +127,23 @@ pub(crate) fn write_policy(path: impl AsRef<Path>, yaml: impl AsRef<[u8]>) -> Re
 /// Install a domain regression fixture directly. This does not emulate planning
 /// or claim that synthetic Source facts authorize a production rule.
 pub(crate) fn install_dependency_rule(path: &Path, rule: serde_json::Value) -> Result<()> {
-    let added = convert_legacy_policy(
-        &serde_yaml::to_string(
-            &serde_json::json!({"version":3,"expected_response":"assertions_only","dependency_rules":[rule]}),
-        )?,
+    // Deserialize the original typed DTO directly: JSON map keys encode numeric
+    // SQL positions as strings, whereas its YAML representation uses integers.
+    let (dependency_rules, dynamic_values) = if rule.get("kind").is_some() {
+        let old::BindingEntry::DynamicValue(rule) = serde_json::from_value(rule)?;
+        (vec![], vec![rule])
+    } else {
+        (vec![serde_json::from_value(rule)?], vec![])
+    };
+    let added = convert_document(
+        old::ReplayPolicyDocument {
+            version: 3,
+            expected_response: old::ExpectedResponseUsage::AssertionsOnly,
+            dependency_rules,
+            dynamic_values,
+            request_rules: Default::default(),
+            response_rules: Default::default(),
+        },
         path.parent(),
     )?;
     let mut policy = p::parse_policy(&std::fs::read_to_string(path)?)?;
@@ -380,20 +400,6 @@ mod tests {
         )
         .unwrap();
         assert!(old::load_replay_policy(&path).is_ok());
-    }
-
-    #[test]
-    #[ignore = "Explicit developer-only synthetic migration draft; never a production loader"]
-    fn export_legacy_policy_fixture() {
-        let input = std::env::var("TRAFFIC_E2E_LEGACY_FIXTURE_INPUT").unwrap();
-        let output = std::env::var("TRAFFIC_E2E_LEGACY_FIXTURE_OUTPUT").unwrap();
-        let root = Path::new(&input).parent().unwrap();
-        let policy = crate::replay::convert_legacy_policy_fixture(
-            &std::fs::read_to_string(&input).unwrap(),
-            Some(root),
-        )
-        .unwrap();
-        std::fs::write(output, serde_yaml::to_string(&policy).unwrap()).unwrap();
     }
 }
 impl Inventory {

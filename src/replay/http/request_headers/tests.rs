@@ -1,18 +1,18 @@
 use super::super::tests::{spawn_http_replay_with_policy, write_http_case, write_http_dependency};
 use super::*;
 use crate::replay::control::{ReplayControlRequest, end_case, handle_control_request};
+use crate::replay::policy::test_fixture::ManagedFixtureDirectory as TempDir;
 use crate::replay::report::{build_dependency_evidence, report_has_case_dirty_events};
 use hyper::client::conn::http1;
 use serde_json::json;
 use std::path::PathBuf;
-use tempfile::TempDir;
 mod timestamp_tests;
 
 const HOST: &str = "api.example.test";
 const BODY: &str = "{\"input\":1}";
 
 async fn fixture(headers: Value, count: usize) -> (TempDir, PathBuf) {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
     let case = temp.path().join("case-headers");
     write_http_case(
         &case,

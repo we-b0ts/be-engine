@@ -119,10 +119,14 @@ async fn redis_time_shift_rfc3339_get_plan_apply_preserves_session_expiry_over_r
         false
     );
     let report = serde_json::to_value(state.lock().await.snapshot_report()).unwrap();
-    assert_eq!(
-        report["redis"]["time_shifts"][0]["rule_id"],
-        "session-expiry"
-    );
+    let usage = report["replay_policy"]["dependency_rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|rule| rule["id"] == "session-expiry")
+        .unwrap();
+    assert_eq!(usage["kind"], "source_to_delivery");
+    assert!(usage["time_validations"].as_u64().unwrap() > 0);
     assert!(!report.to_string().contains("private-token"));
     assert_eq!(std::fs::read(recording).unwrap(), immutable);
     task.abort();
@@ -131,7 +135,9 @@ fn control(command: &str, case: &str) -> ReplayControlRequest {
     serde_json::from_value(json!({"command":command,"case_id":case})).unwrap()
 }
 
-fn shared_read_recording(read_count: usize) -> crate::replay::policy::test_fixture::ManagedFixtureDirectory {
+fn shared_read_recording(
+    read_count: usize,
+) -> crate::replay::policy::test_fixture::ManagedFixtureDirectory {
     let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
     let root = temp.path();
     let consumer = root.join("apis/tasks/consumer");
@@ -626,7 +632,14 @@ async fn redis_time_shift_plan_apply_restores_cache_reuse_across_cases_over_real
     let report = serde_json::to_value(state.lock().await.snapshot_report()).unwrap();
     assert_eq!(report["redis"]["matched_count"], 1);
     assert!(report["redis"]["unmatched"].as_array().unwrap().is_empty());
-    assert_eq!(report["redis"]["time_shifts"][0]["rule_id"], "token-time");
+    let usage = report["replay_policy"]["dependency_rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|rule| rule["id"] == "token-time")
+        .unwrap();
+    assert_eq!(usage["kind"], "source_to_delivery");
+    assert!(usage["time_validations"].as_u64().unwrap() > 0);
     assert_eq!(
         report["replay_policy"]["dependency_rules"][0]["validations"],
         1

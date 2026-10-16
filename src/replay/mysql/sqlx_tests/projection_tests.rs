@@ -73,7 +73,13 @@ async fn sqlx_count_and_constant_aliases_preserve_values_and_conditions() {
             ),
         ];
         let (temp, addr, runtime, task) = fixture(&records, false).await;
-        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         for invalid in [
             "SELECT COUNT(*) AS total FROM tasks WHERE status='DONE'",
             "SELECT COUNT(id) AS total FROM tasks WHERE status='RUNNING'",

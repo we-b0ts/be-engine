@@ -25,7 +25,10 @@ fn configured_target() -> tempfile::TempDir {
     fs::create_dir_all(target.path().join("config")).unwrap();
     fs::write(
         target.path().join(".traffic-e2e/project.yaml"),
-        include_str!("manual/readonly/project.yaml").replace("tests/manual/readonly/policy.yaml", ".traffic-e2e/policy.yaml"),
+        include_str!("manual/readonly/project.yaml").replace(
+            "tests/manual/readonly/policy.yaml",
+            ".traffic-e2e/policy.yaml",
+        ),
     )
     .unwrap();
     fs::write(

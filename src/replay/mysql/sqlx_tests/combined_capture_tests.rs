@@ -6,7 +6,7 @@ const SOURCE: &str = "task-pending-123e4567e89b42d3a456426614174000";
 const TARGET: &str = "task-pending-aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa";
 
 #[tokio::test]
-async fn combined_capture_plan_from_real_unmatched_insert_then_fresh_replay_is_finite() {
+async fn combined_capture_from_real_unmatched_insert_then_fresh_replay_is_finite() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let mut source = exchange(&format!("INSERT INTO items (name, created_at, owner_id) VALUES ('{SOURCE}', '2020-01-01 00:00:00', 7)"),json!({"status":"ok","affected_rows":1,"last_insert_id":9}));
         source["parse_warnings"] = json!([]);
@@ -27,9 +27,9 @@ async fn combined_capture_plan_from_real_unmatched_insert_then_fresh_replay_is_f
             "capture":{"protocol":"mysql","target":{"host":"127.0.0.1","port":3306},"database":"appdb","sql":SQL,"value_index":0},
             "source_evidence":"NameFactory:create generates task-pending-{uuid.uuid4().hex} per new item"})).unwrap();
         let time = serde_json::from_value(json!({"id":"created-at","time_values":[{"value_index":1}],"source_evidence":"ItemModel:created_at defaults to datetime.utcnow()"})).unwrap();
-        crate::plan_dynamic_value_mysql_time_rule(crate::DynamicValueRuleFeedback {
+        crate::replay::policy::test_fixture::install_joint_mysql(crate::DynamicValueRuleFeedback {
             policy_path:temp.path().join("policy.yaml"),rule,replay_report,
-        },time).unwrap().apply().unwrap();
+        },time).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(),original);
         let policy = std::fs::read_to_string(temp.path().join("policy.yaml")).unwrap();
         task.abort();
@@ -52,8 +52,7 @@ async fn combined_capture_plan_from_real_unmatched_insert_then_fresh_replay_is_f
 }
 
 #[tokio::test]
-async fn combined_table_capture_plans_once_and_replays_two_shards_without_cross_table_consumption()
-{
+async fn combined_table_capture_replays_two_shards_without_cross_table_consumption() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let sources = [1,2].map(|shard| {
             let mut source = exchange(&format!("INSERT INTO items_{shard:04} (name, created_at, owner_id) VALUES ('source-{shard}', '2020-01-01 00:00:00', {})",shard+6),json!({"status":"ok","affected_rows":1,"last_insert_id":shard}));
@@ -79,7 +78,7 @@ async fn combined_table_capture_plans_once_and_replays_two_shards_without_cross_
             "capture":{"protocol":"mysql","target":{"host":"127.0.0.1","port":3306},"database":"appdb","sql":SQL.replace("items","{{table}}"),"table_series":{"prefix":"items_","start":0,"end":2,"width":4},"value_index":0},
             "source_evidence":"ItemStore shards by user_id % 3 into items_{shard:04d} and allocates a new opaque name"})).unwrap();
         let time = serde_json::from_value(json!({"id":"sharded-created-at","time_values":[{"value_index":1}],"source_evidence":"ItemModel:created_at defaults to datetime.utcnow()"})).unwrap();
-        crate::plan_dynamic_value_mysql_time_rule(crate::DynamicValueRuleFeedback{policy_path:temp.path().join("policy.yaml"),rule,replay_report},time).unwrap().apply().unwrap();
+        crate::replay::policy::test_fixture::install_joint_mysql(crate::DynamicValueRuleFeedback{policy_path:temp.path().join("policy.yaml"),rule,replay_report},time).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(),original);
         let policy = std::fs::read_to_string(temp.path().join("policy.yaml")).unwrap();
         task.abort();

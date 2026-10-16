@@ -7,6 +7,15 @@ pub(crate) fn install_dynamic_value(value: crate::replay::DynamicValueRuleFeedba
     rule["kind"] = json!("dynamic_value");
     install_dependency_rule(&value.policy_path, rule)
 }
+pub(crate) fn install_joint_mysql(
+    feedback: crate::replay::DynamicValueRuleFeedback,
+    time: crate::replay::DynamicValueMysqlTimeRule,
+) -> Result<()> {
+    let companion = time.proposed(&feedback.rule)?;
+    let path = feedback.policy_path.clone();
+    install_dynamic_value(feedback)?;
+    install_dependency_rule(&path, serde_json::to_value(companion)?)
+}
 pub(crate) fn promote_redis_sharing(value: crate::replay::RedisCrossCaseFeedback) -> Result<()> {
     let mut policy = p::parse_policy(&std::fs::read_to_string(&value.policy_path)?)?;
     let rule = policy

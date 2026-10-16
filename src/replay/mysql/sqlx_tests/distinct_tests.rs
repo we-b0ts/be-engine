@@ -28,9 +28,17 @@ async fn sqlx_distinct_real_query_shape_matches_without_text_protocol_emulation(
                 exchange(SOURCE, departments(&[])),
             ];
             let (temp, addr, runtime, task) = fixture(&records, policy).await;
-            let capture = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
+            let capture = temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
             let before = std::fs::read(&capture).unwrap();
-            let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
+            let mut client = connect(
+                addr,
+                &temp
+                    .path()
+                    .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+            )
+            .await;
             let rows = sqlx::query(TARGET).fetch_all(&mut client).await.unwrap();
             assert_eq!(
                 rows.iter()

@@ -28,7 +28,13 @@ async fn sqlx_tls_reads_large_text_and_prepared_rows_and_the_following_row() {
             records.push(exchange(sql, response));
         }
         let (temp, addr, runtime, task) = fixture(&records, false).await;
-        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         for len in [
             19_795_000,
             MAX_PACKET_PAYLOAD_LEN - 7,
