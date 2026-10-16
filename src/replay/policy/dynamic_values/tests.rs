@@ -292,7 +292,7 @@ fn redis_and_http_audits_restore_only_proven_same_case_sql_references() {
             &[rule.clone()],
             &report,
             "case",
-            "/items",
+            &json!({"uri":"/items"}),
             &bytes,
             &left,
             &right,
@@ -313,7 +313,7 @@ fn redis_and_http_audits_restore_only_proven_same_case_sql_references() {
                 &[rule.clone()],
                 &report,
                 "case",
-                "/other",
+                &json!({"uri":"/other"}),
                 &bytes,
                 &left,
                 &right
@@ -321,7 +321,18 @@ fn redis_and_http_audits_restore_only_proven_same_case_sql_references() {
             .is_err()
         );
         report["replay_policy"]["dynamic_bindings"][0]["target_fingerprint"] = json!("forged");
-        assert!(from_report(&[rule], &report, "case", "/items", &bytes, &left, &right).is_err());
+        assert!(
+            from_report(
+                &[rule],
+                &report,
+                "case",
+                &json!({"uri":"/items"}),
+                &bytes,
+                &left,
+                &right
+            )
+            .is_err()
+        );
     }
 }
 

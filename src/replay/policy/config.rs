@@ -48,6 +48,8 @@ pub(in crate::replay) enum DependencyProtocol {
 #[serde(deny_unknown_fields)]
 pub(super) struct ReplayDependencyRule {
     pub(super) id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) when: Option<super::case_condition::CaseCondition>,
     #[serde(default, skip_serializing_if = "ReplayScope::is_case")]
     pub(super) replay_scope: ReplayScope,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -492,6 +494,13 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
             "rule {:?} case.path must be an absolute HTTP path pattern",
             rule.id
         );
+    }
+    if let Some(condition) = &rule.when {
+        ensure!(
+            rule.replay_scope == ReplayScope::Case,
+            "request conditions require case-owned dependencies"
+        );
+        condition.validate()?;
     }
     if rule.target.port.is_some() {
         ensure!(

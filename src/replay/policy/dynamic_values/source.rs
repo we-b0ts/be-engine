@@ -28,6 +28,7 @@ pub(in crate::replay) fn from_event(
             key,
             argument_index,
             json_pointer,
+            ..
         } => {
             if event["event_type"] != "redis_exchange"
                 || event["target_host"]

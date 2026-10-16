@@ -203,9 +203,7 @@ pub(super) fn validate(
                     actual["case_id"]
                         .as_str()
                         .context("dynamic SQL time evidence has no case")?,
-                    &crate::replay::policy::pattern::uri_path(
-                        request["uri"].as_str().unwrap_or_default(),
-                    ),
+                    &request,
                     &bytes,
                     &source,
                     &actual_values,

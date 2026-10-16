@@ -205,8 +205,20 @@ pub(in crate::replay::policy) fn verify(
     dynamic_rules: &[super::super::dynamic_values::DynamicValueRule],
     witnesses: &mut Vec<(PathBuf, String)>,
 ) -> Result<usize> {
+    verify_capture(runtime, rule, report, dynamic_rules, witnesses, None)
+}
+
+pub(in crate::replay::policy) fn verify_capture(
+    runtime: &RequestContracts,
+    rule: &ReplayDependencyRule,
+    report: &Value,
+    dynamic_rules: &[super::super::dynamic_values::DynamicValueRule],
+    witnesses: &mut Vec<(PathBuf, String)>,
+    capture_id: Option<&str>,
+) -> Result<usize> {
     let mut validated = BTreeSet::new();
     let mut matched_cases = BTreeSet::new();
+    let mut dynamic_cases = BTreeMap::new();
     for item in report["replay_policy"]["request_contract_candidates"]
         .as_array()
         .into_iter()
@@ -254,7 +266,11 @@ pub(in crate::replay::policy) fn verify(
         let Some(scope) = &rule.case_selector else {
             continue;
         };
-        if request["method"] != scope.method
+        if rule
+            .when
+            .as_ref()
+            .is_some_and(|condition| !condition.matches_request(&request))
+            || request["method"] != scope.method
             || !super::super::pattern::path_pattern_matches(
                 &scope.path,
                 &super::super::pattern::uri_path(request["uri"].as_str().unwrap_or_default()),
@@ -263,13 +279,22 @@ pub(in crate::replay::policy) fn verify(
             continue;
         }
         let recorded = request["timestamp"].as_str().and_then(|v| v.parse().ok());
-        let dynamic = super::super::dynamic_values::DynamicValues::new(
-            dynamic_rules.to_vec(),
-            BTreeMap::from([(
-                candidate.case_id.clone(),
-                super::super::pattern::uri_path(request["uri"].as_str().unwrap_or_default()),
-            )]),
-        );
+        let dynamic = dynamic_cases
+            .entry(candidate.case_id.clone())
+            .or_insert_with(|| {
+                let mut dynamic = super::super::dynamic_values::DynamicValues::new(
+                    dynamic_rules.to_vec(),
+                    BTreeMap::from([(
+                        candidate.case_id.clone(),
+                        super::super::pattern::uri_path(
+                            request["uri"].as_str().unwrap_or_default(),
+                        ),
+                    )]),
+                );
+                dynamic.set_request(&candidate.case_id, &request);
+                dynamic
+            })
+            .clone();
         runtime
             .state
             .lock()
@@ -283,6 +308,7 @@ pub(in crate::replay::policy) fn verify(
                     recorded,
                     actual: Some(candidate.actual_anchor),
                     dir: dir.clone(),
+                    conditions: BTreeSet::from([rule.id.clone()]),
                 },
             );
         let actual = crate::request_headers::decrypt_evidence(
@@ -385,6 +411,22 @@ pub(in crate::replay::policy) fn verify(
                         .as_ref()
                         .map_or(actual.as_slice(), |n| n.actual.as_slice()),
                 )?;
+                let capture_differs = capture_id.is_none_or(|id| {
+                    normalized
+                        .as_ref()
+                        .is_some_and(|normalized| normalized.decision.differs(id))
+                });
+                if let Some(normalized) = normalized {
+                    dynamic.validate_report_decision(
+                        &candidate.case_id,
+                        &normalized.decision,
+                        report,
+                    )?;
+                    dynamic.commit(&candidate.case_id, normalized.decision);
+                }
+                if !capture_differs {
+                    continue;
+                }
                 validated.insert(candidate.command.clone());
                 matched_cases.insert(candidate.case_id.clone());
             } else {

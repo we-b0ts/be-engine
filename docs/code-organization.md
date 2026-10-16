@@ -159,6 +159,16 @@ is unclear.
   protocols; `http_json` owns JSON body stable-field pairing and time comparisons
   using dependency-local clocks, and `evidence/http_json` protects and verifies
   failed target witnesses before planning.
+  `replay/policy/case_condition` owns bounded scalar conditions on immutable
+  inbound Source JSON. Runtime adapters retain matching rule IDs, and evidence
+  planners freeze the same request artifact before admitting a conditional
+  rule; dependency payloads cannot choose their own inbound branch.
+  `dynamic_values/redis_json` owns exact first-capture JSON projection and
+  bounded identity/key reference templates. `feedback/generated_values/redis_time`
+  adapts an identity capture and inherited Redis time selector into the existing
+  atomic policy transaction, using protected whole-request evidence owned by
+  `request_contract/evidence`. CLI and coordinator adapters retain their ordinary
+  plan, apply, recovery and fresh-Replay lifecycle.
 - `e2e_run/assertion_publication` owns staging-time retargeting of assertion
   details, summary references and their fingerprints for both ordinary terminal
   publication and focused method projections. Store owns atomic directory

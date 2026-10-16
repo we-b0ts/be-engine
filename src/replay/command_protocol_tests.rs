@@ -20,6 +20,7 @@ mod redis_api_origin_tests;
 mod redis_authentication_tests;
 mod redis_client_info_tests;
 mod redis_connection_tests;
+mod redis_joint_time_tests;
 mod redis_lane_tests;
 mod redis_lock_tests;
 mod redis_process_owned_tests;

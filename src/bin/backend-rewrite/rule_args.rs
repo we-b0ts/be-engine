@@ -48,8 +48,11 @@ pub(super) struct RulePlanArgs {
     #[arg(long, value_name = "RULE_JSON", value_parser = parse_dynamic_value, conflicts_with_all = ["header_dates", "request_kind", "kind", "json_pointer", "unordered_paths", "unordered_joined_string_paths", "docx_timestamps"])]
     pub(super) dynamic_value: Option<traffic_e2e::DynamicValueRule>,
     /// Atomically plan explicit current-time SQL slots with a MySQL generated identity.
-    #[arg(long, value_name = "RULE_JSON", value_parser = parse_mysql_time, requires = "dynamic_value")]
+    #[arg(long, value_name = "RULE_JSON", value_parser = parse_mysql_time, requires = "dynamic_value", conflicts_with = "redis_time")]
     pub(super) mysql_time: Option<traffic_e2e::DynamicValueMysqlTimeRule>,
+    /// Atomically plan explicit Redis JSON time fields with a captured Redis identity.
+    #[arg(long, value_name = "RULE_JSON", value_parser = parse_redis_time, requires = "dynamic_value", conflicts_with = "mysql_time")]
+    pub(super) redis_time: Option<traffic_e2e::DynamicValueRedisTimeRule>,
     /// Date location in an HTTP response header (including filename / filename*).
     #[arg(long = "header-date", value_name = "RULE_JSON", value_parser = parse_header_date, conflicts_with_all = ["request_kind", "kind", "json_pointer", "unordered_paths", "unordered_joined_string_paths", "docx_timestamps"])]
     pub(super) header_dates: Vec<traffic_e2e::ResponseHeaderDateRule>,
@@ -136,6 +139,10 @@ fn parse_dynamic_value(value: &str) -> Result<traffic_e2e::DynamicValueRule, Str
 
 fn parse_mysql_time(value: &str) -> Result<traffic_e2e::DynamicValueMysqlTimeRule, String> {
     serde_json::from_str(value).map_err(|error| format!("invalid MySQL time companion: {error}"))
+}
+
+fn parse_redis_time(value: &str) -> Result<traffic_e2e::DynamicValueRedisTimeRule, String> {
+    serde_json::from_str(value).map_err(|error| format!("invalid Redis time companion: {error}"))
 }
 
 fn parse_header_date(value: &str) -> Result<traffic_e2e::ResponseHeaderDateRule, String> {
@@ -309,5 +316,81 @@ mod generated_tests {
             .is_err()
         );
         assert!(Cli::try_parse_from(["backend-rewrite","rule","plan","--evidence-id","current","--dynamic-value",dynamic,"--mysql-time",r#"{"id":"created-at","time_values":[],"source_evidence":"Clock:now","database":"other"}"#]).is_err());
+    }
+
+    #[test]
+    fn redis_time_companion_parses_and_inherits_the_dynamic_capture_scope() {
+        use super::super::{Cli, RewriteCommand, RuleCommand};
+        let dynamic = r#"{"id":"item","api":"/items","targets":[{"host":"cache.test","port":6379}],"capture":{"protocol":"redis","target":{"host":"cache.test","port":6379},"database":0,"command":"RPUSH","key":{"prefix":"items:","numeric":true},"argument_index":1,"json_pointer":"/id","references":[]}}"#;
+        let time = r#"{"id":"item-time","method":"POST","time_values":[{"json_pointer":"/timestamp","format":"unix_milliseconds"}],"source_evidence":"ItemFactory:create assigns the current timestamp"}"#;
+        let parsed = Cli::try_parse_from([
+            "backend-rewrite",
+            "rule",
+            "plan",
+            "--evidence-id",
+            "current",
+            "--dynamic-value",
+            dynamic,
+            "--redis-time",
+            time,
+        ])
+        .unwrap();
+        let RewriteCommand::Rule(command) = parsed.command else {
+            panic!("rule command")
+        };
+        let RuleCommand::Plan(options) = command.command else {
+            panic!("plan command")
+        };
+        let companion = options.redis_time.unwrap();
+        assert_eq!(companion.id, "item-time");
+        assert_eq!(companion.method, "POST");
+        assert_eq!(companion.time_values[0].json_pointer, "/timestamp");
+        assert!(options.dynamic_value.is_some());
+        assert!(options.mysql_time.is_none());
+        assert!(
+            Cli::try_parse_from([
+                "backend-rewrite",
+                "rule",
+                "plan",
+                "--evidence-id",
+                "current",
+                "--redis-time",
+                time,
+            ])
+            .is_err()
+        );
+        let mysql = r#"{"id":"created-at","time_values":[{"value_index":1}],"source_evidence":"ItemModel:created_at uses the current time"}"#;
+        for flags in [
+            ["--mysql-time", mysql, "--redis-time", time],
+            ["--redis-time", time, "--mysql-time", mysql],
+        ] {
+            let mut args = vec![
+                "backend-rewrite",
+                "rule",
+                "plan",
+                "--evidence-id",
+                "current",
+                "--dynamic-value",
+                dynamic,
+            ];
+            args.extend(flags);
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+        let mut duplicate_scope: serde_json::Value = serde_json::from_str(time).unwrap();
+        duplicate_scope["target"] = serde_json::json!({"host":"other.test","port":6379});
+        assert!(
+            Cli::try_parse_from([
+                "backend-rewrite",
+                "rule",
+                "plan",
+                "--evidence-id",
+                "current",
+                "--dynamic-value",
+                dynamic,
+                "--redis-time",
+                &duplicate_scope.to_string(),
+            ])
+            .is_err()
+        );
     }
 }

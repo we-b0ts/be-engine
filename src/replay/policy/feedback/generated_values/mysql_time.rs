@@ -67,6 +67,7 @@ impl DynamicValueMysqlTimeRule {
         )?;
         rule.target.host = Some(target.host.clone());
         rule.target.port = Some(target.port);
+        rule.when = identity.when.clone();
         for value in rule
             .mysql
             .as_mut()
@@ -152,7 +153,7 @@ impl<'a> JointEvidence<'a> {
             self.dynamic_rules,
             report,
             case_id,
-            &crate::replay::policy::pattern::uri_path(request["uri"].as_str().unwrap_or_default()),
+            request,
             dependencies,
             &source,
             &actual,
@@ -181,6 +182,13 @@ impl<'a> JointEvidence<'a> {
                 .as_ref()
                 .is_some_and(|mysql| !mysql.params.is_empty())
         }) {
+            if rule
+                .when
+                .as_ref()
+                .is_some_and(|condition| !condition.matches_request(request))
+            {
+                continue;
+            }
             if rule.case_selector.as_ref().is_some_and(|scope| {
                 request["method"].as_str() != Some(scope.method.as_str())
                     || !crate::replay::policy::pattern::path_pattern_matches(

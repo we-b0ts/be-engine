@@ -42,6 +42,7 @@ impl Fixture {
         runtime.state.lock().unwrap().cases.insert(
             "case".into(),
             CaseAnchor {
+                conditions: BTreeSet::new(),
                 method: "PUT".into(),
                 path: "/scenario".into(),
                 recorded: Some(DateTime::from_timestamp(1000, 0).unwrap()),

@@ -78,10 +78,15 @@ pub(super) fn dynamic(
         );
         let request: Value =
             serde_json::from_slice(&read(case_dir.join("request.json"), &mut witnesses)?)?;
-        if !path_pattern_matches(
-            &rule.api,
-            &uri_path(request["uri"].as_str().unwrap_or_default()),
-        ) {
+        if rule
+            .when
+            .as_ref()
+            .is_some_and(|condition| !condition.matches_request(&request))
+            || !path_pattern_matches(
+                &rule.api,
+                &uri_path(request["uri"].as_str().unwrap_or_default()),
+            )
+        {
             continue;
         }
         let dependencies = read(case_dir.join("dependencies.jsonl"), &mut witnesses)?;

@@ -19,6 +19,12 @@ pub(in crate::replay::policy::feedback::generated_values) fn validate(
     )?;
     let positions = selected_positions(proposed_template.tokens(), &selected.sql_values);
     for rule in existing.iter().filter(|rule| rule.id != proposed.id) {
+        if !crate::replay::policy::case_condition::overlaps(
+            rule.when.as_ref(),
+            proposed.when.as_ref(),
+        ) {
+            continue;
+        }
         let Some(mysql) = &rule.mysql else {
             continue;
         };

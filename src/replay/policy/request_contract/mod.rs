@@ -29,6 +29,7 @@ struct CaseAnchor {
     recorded: Option<DateTime<Utc>>,
     actual: Option<DateTime<Utc>>,
     dir: PathBuf,
+    conditions: BTreeSet<String>,
 }
 type SequenceKey = (String, String, Vec<u8>);
 
@@ -115,6 +116,14 @@ impl RequestContracts {
                     recorded: request["timestamp"].as_str().and_then(|v| v.parse().ok()),
                     actual: None,
                     dir: case.dir.clone(),
+                    conditions: super::case_condition::matching_rule_ids(
+                        &request,
+                        rules.iter().filter_map(|rule| {
+                            rule.when
+                                .as_ref()
+                                .map(|condition| (rule.id.as_str(), condition))
+                        }),
+                    ),
                 },
             );
         }
@@ -199,6 +208,7 @@ impl RequestContracts {
             .iter()
             .filter(|r| {
                 r.protocol == protocol
+                    && (r.when.is_none() || anchor.conditions.contains(&r.id))
                     && r.target
                         .host
                         .as_ref()

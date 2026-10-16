@@ -388,6 +388,7 @@ pub(in crate::replay::policy::feedback) fn proposed_rule(
         id: id.into(),
         replay_scope: Default::default(),
         source_evidence: String::new(),
+        when: None,
         case_selector: None,
         redis: None,
         protocol: DependencyProtocol::Mysql,

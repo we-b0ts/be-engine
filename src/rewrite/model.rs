@@ -244,6 +244,8 @@ pub struct RewriteRulePlanRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mysql_time: Option<crate::DynamicValueMysqlTimeRule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redis_time: Option<crate::DynamicValueRedisTimeRule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dependency_request: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time: Option<crate::ResponseTimeRule>,

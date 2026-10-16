@@ -9,6 +9,7 @@ mod mysql_table_tests;
 mod path_candidates;
 mod path_segment;
 mod redis;
+mod redis_json;
 mod source;
 mod strings;
 pub(in crate::replay) use audit::{DynamicBindingReport, from_report};
@@ -16,7 +17,8 @@ pub(in crate::replay) use candidates::CaptureCandidate;
 pub(in crate::replay) use config::validate;
 pub use config::{
     DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget,
-    DynamicValueType, PathSegmentCapture, PathSegmentField,
+    DynamicValueType, PathSegmentCapture, PathSegmentField, RedisCaptureReference,
+    RedisDerivedIdentity,
 };
 pub(in crate::replay) use http::HttpInput;
 pub(in crate::replay) use source::from_event as recorded_capture;
@@ -48,6 +50,7 @@ type CaseBindings = BTreeMap<String, BTreeMap<String, Vec<IdentityPair>>>;
 pub(in crate::replay) struct DynamicValues {
     rules: Arc<Vec<DynamicValueRule>>,
     routes: Arc<BTreeMap<String, String>>,
+    conditions: Arc<BTreeMap<String, BTreeSet<String>>>,
     bindings: Arc<Mutex<CaseBindings>>,
     candidates: Arc<Mutex<Vec<CaptureCandidate>>>,
     applicable: Arc<Mutex<BTreeSet<String>>>,
@@ -64,10 +67,43 @@ impl DynamicValues {
         Self {
             rules: Arc::new(rules),
             routes: Arc::new(routes),
+            conditions: Arc::default(),
             bindings: Arc::new(Mutex::new(BTreeMap::new())),
             candidates: Arc::new(Mutex::new(Vec::new())),
             applicable: Arc::new(Mutex::new(BTreeSet::new())),
         }
+    }
+    pub(in crate::replay::policy) fn set_request(
+        &mut self,
+        case_id: &str,
+        request: &serde_json::Value,
+    ) {
+        let allowed = super::case_condition::matching_rule_ids(
+            request,
+            self.rules
+                .iter()
+                .filter(|rule| {
+                    self.routes
+                        .get(case_id)
+                        .is_some_and(|path| super::pattern::path_pattern_matches(&rule.api, path))
+                })
+                .filter_map(|rule| {
+                    rule.when
+                        .as_ref()
+                        .map(|condition| (rule.id.as_str(), condition))
+                }),
+        );
+        Arc::make_mut(&mut self.conditions).insert(case_id.into(), allowed);
+    }
+    fn matches_case(&self, rule: &DynamicValueRule, case_id: &str) -> bool {
+        self.routes
+            .get(case_id)
+            .is_some_and(|path| super::pattern::path_pattern_matches(&rule.api, path))
+            && (rule.when.is_none()
+                || self
+                    .conditions
+                    .get(case_id)
+                    .is_some_and(|ids| ids.contains(&rule.id)))
     }
     pub(in crate::replay) fn begin_case(&self, case_id: &str) {
         self.candidates
@@ -96,9 +132,7 @@ impl DynamicValues {
         self.rules
             .iter()
             .filter(|rule| {
-                self.routes
-                    .get(case_id)
-                    .is_some_and(|path| super::pattern::path_pattern_matches(&rule.api, path))
+                self.matches_case(rule, case_id)
                     && rule.targets.iter().any(|endpoint| endpoint.matches(target))
             })
             .collect()

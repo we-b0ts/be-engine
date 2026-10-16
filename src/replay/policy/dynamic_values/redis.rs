@@ -7,7 +7,43 @@ pub(in crate::replay) struct ArgumentNormalization {
     pub decision: DynamicDecision,
 }
 
+impl DynamicDecision {
+    pub(in crate::replay::policy) fn differs(&self, rule: &str) -> bool {
+        self.pairs
+            .iter()
+            .any(|(id, pair)| id == rule && pair.source != pair.target)
+    }
+}
+
 impl DynamicValues {
+    pub(in crate::replay::policy) fn validate_report_decision(
+        &self,
+        case: &str,
+        decision: &DynamicDecision,
+        report: &serde_json::Value,
+    ) -> Result<()> {
+        for (id, pair) in &decision.pairs {
+            let source = super::super::config::fingerprint(pair.source.as_bytes());
+            let target = super::super::config::fingerprint(pair.target.as_bytes());
+            for proof in report["replay_policy"]["dynamic_bindings"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|proof| proof["case_id"] == case && proof["rule_id"] == *id)
+            {
+                ensure!(
+                    proof["source_fingerprint"] != source || proof["target_fingerprint"] == target,
+                    "dynamic identity changed its previously proven target reference"
+                );
+                ensure!(
+                    proof["target_fingerprint"] != target || proof["source_fingerprint"] == source,
+                    "distinct dynamic identities collapsed into a previously proven target"
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub(in crate::replay) fn redis(
         &self,
         case: Option<&str>,
@@ -64,12 +100,15 @@ impl DynamicValues {
                 "dynamic Redis capture key changed"
             );
             let mut decision = DynamicDecision::default();
+            let mut strict_arguments = std::collections::BTreeSet::new();
+            let mut legacy_decision = DynamicDecision::default();
             let mut source = source.to_vec();
             let mut actual = actual.to_vec();
             for rule in captures {
                 let DynamicValueCapture::Redis {
                     argument_index,
                     json_pointer,
+                    references,
                     ..
                 } = &rule.capture
                 else {
@@ -86,7 +125,18 @@ impl DynamicValues {
                     target: capture(actual_value, json_pointer.as_deref(), rule.value_type)?,
                 };
                 self.check_pair(case, rule, &pair, &decision)?;
-                if rule.value_type == DynamicValueType::Integer {
+                if references.is_some() {
+                    let (left, right) = super::redis_json::project(
+                        &rule.capture,
+                        &source[0],
+                        source_value,
+                        actual_value,
+                        &pair,
+                    )?;
+                    source[*argument_index] = left;
+                    actual[*argument_index] = right;
+                    strict_arguments.insert(*argument_index);
+                } else if rule.value_type == DynamicValueType::Integer {
                     let pointer = json_pointer.as_deref().expect("validated integer pointer");
                     let source_json =
                         crate::replay::json_order::parse(source_value).expect("validated capture");
@@ -98,9 +148,14 @@ impl DynamicValues {
                     source[*argument_index] = serde_json::to_vec(&source_json)?;
                     actual[*argument_index] = serde_json::to_vec(&actual_json)?;
                 }
+                if references.is_none() {
+                    legacy_decision.pairs.push((rule.id.clone(), pair.clone()));
+                }
                 decision.pairs.push((rule.id.clone(), pair));
             }
-            let pairs = self.pairs(case, target, &decision);
+            // A new strict capture owns only its declared JSON pointers. Its
+            // pending identity must never normalize another argument or field.
+            let pairs = self.pairs(case, target, &legacy_decision);
             ensure!(
                 source.len() == actual.len(),
                 "dynamic Redis argument counts differ"
@@ -110,7 +165,7 @@ impl DynamicValues {
                     .iter()
                     .enumerate()
                     .map(|(index, value)| {
-                        if index == 0 {
+                        if index == 0 || strict_arguments.contains(&index) {
                             Ok(value.clone())
                         } else {
                             strings::normalize(value, &pairs, false)
@@ -121,7 +176,7 @@ impl DynamicValues {
                     .iter()
                     .enumerate()
                     .map(|(index, value)| {
-                        if index == 0 {
+                        if index == 0 || strict_arguments.contains(&index) {
                             Ok(value.clone())
                         } else {
                             strings::normalize(value, &pairs, true)

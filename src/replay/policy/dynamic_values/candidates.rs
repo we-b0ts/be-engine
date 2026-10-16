@@ -118,6 +118,8 @@ impl DynamicValues {
                 self.candidate(
                     case,
                     DynamicValueCapture::Redis {
+                        references: None,
+                        derived_from: None,
                         target: DynamicValueTarget {
                             host: target.host.clone(),
                             port: target.port,

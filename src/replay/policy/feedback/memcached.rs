@@ -166,6 +166,7 @@ fn proposed_rule(feedback: &MemcachedTimestampRuleFeedback) -> ReplayDependencyR
         id: feedback.rule_id.clone(),
         replay_scope: Default::default(),
         source_evidence: String::new(),
+        when: None,
         case_selector: None,
         redis: None,
         protocol: DependencyProtocol::Memcached,

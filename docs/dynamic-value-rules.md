@@ -31,6 +31,23 @@ dependency_rules:
 
 `api` is an inbound HTTP path/pattern without METHOD. Targets require exact hosts
 and nonzero ports; include the capture target and every allowed reference target.
+An optional top-level `when` limits the rule to a Source request branch:
+
+```yaml
+when:
+  request_body_json:
+    /event_type: {equals: item.delta}
+```
+
+The predicates read the original recorded inbound body, not dependency JSON or
+Target output. They limit capture and reference eligibility without changing the
+recording. An event that supplies a fixed block ID must retain its ordinary exact
+comparison; a generated-ID rule should select only the Source generation branch.
+Missing, malformed, truncated or oversized JSON and scalar type mismatches do not
+match either `equals` or `not_equals`. Conditions are ANDed. See the shared
+[request-condition contract](dependency-request-rules.md#source-request-conditions)
+for bounds and disjoint ownership. Omitting `when` preserves route-only scope.
+
 Choose one of these capture locations:
 
 - **MySQL**: the complete business SQL template replaces literals with `?`.
@@ -289,6 +306,94 @@ Preview contains both ordinary policy entries. Apply checks the frozen policy
 and original evidence, writes both entries atomically, and requires one fresh
 Replay using the existing recordings. It never writes an intermediate policy
 with only one half of the contract.
+
+## Plan a Redis JSON identity with current-time fields
+
+A single `SET` value or `RPUSH` element can contain a generated string identity,
+references to that identity, and a current timestamp. Plan these differences
+together using `--dynamic-value` and `--redis-time`. Both arguments take JSON,
+and `--redis-time` is mutually exclusive with `--mysql-time`.
+The plan writes two ordinary rules atomically and requires fresh Replay.
+
+For example, `identity.json` can declare:
+
+```json
+{
+  "id": "item-identity",
+  "targets": [{"host": "cache.internal", "port": 6379}],
+  "when": {"request_body_json": {"/mode": {"equals": "generated"}}},
+  "capture": {
+    "protocol": "redis",
+    "target": {"host": "cache.internal", "port": 6379},
+    "database": 0,
+    "command": "RPUSH",
+    "key": {"prefix": "items:", "numeric": true},
+    "argument_index": 1,
+    "json_pointer": "/id",
+    "references": [{
+      "json_pointer": "/content_key",
+      "template": "cache:payload:{key_middle}:{value}"
+    }],
+    "derived_from": {"json_pointer": "/timestamp", "prefix": "item-"}
+  },
+  "source_evidence": "Item:create generates its ID from current milliseconds and reuses it in the payload key"
+}
+```
+
+The companion `time.json` declares an independent rule ID, inbound method,
+exact time fields, and Source proof:
+
+```json
+{
+  "id": "item-time",
+  "method": "POST",
+  "time_values": [{"json_pointer": "/timestamp", "format": "unix_milliseconds"}],
+  "source_evidence": "Item:create writes the current request-relative millisecond timestamp"
+}
+```
+
+```bash
+backend-rewrite --target-root "$TARGET" rule plan \
+  --dynamic-value "$(cat identity.json)" --redis-time "$(cat time.json)" \
+  --evidence-id CURRENT_EVIDENCE
+backend-rewrite --target-root "$TARGET" rule apply RETURNED_PLAN_ID
+```
+
+The coordinator supplies the active API path. The companion inherits the identity capture's endpoint, database, command,
+key, argument index, inbound path and `when`. Its method must match the
+immutable Source request. Time formats are `unix_seconds`,
+`unix_milliseconds`, and `rfc3339`; the existing fixed five-second relative
+time window and relationships between selected clocks apply. This joint
+authoring currently supports `SET` and `RPUSH`; `HSET` time companions are
+rejected explicitly.
+
+`references` must be present for joint Redis planning; use `[]` when there are
+no references in the captured JSON. Each exact, non-root pointer owns one
+string field. A template contains exactly one `{value}` and optionally one
+`{key_middle}`. The latter requires the capture key's bounded numeric affixes.
+Source and Target must have identical complete capture keys. Each reference
+must equal its template rendered from its own side's identity and that same
+key middle. Prefixes, suffixes and other JSON fields stay strict. The first
+capture never uses its new identity to replace arbitrary substrings in other
+fields or arguments.
+
+Optional `derived_from` requires the captured identity to equal `prefix`
+followed by the canonical JSON integer at its selected pointer, on both
+Source and Target. The prefix can be omitted. That pointer must also be a
+Unix time field in the companion. Omit `derived_from` for independent random
+identities and clocks. Capture, reference and time pointers cannot overlap;
+at most 16 references and 32 time fields are supported, and templates are
+limited to 1024 bytes.
+
+Planning uses protected complete request witnesses rather than discovery
+hints. It checks a real identity difference, the inbound Source branch,
+all declared references and clocks, all stable fields, and existing and new
+case-local bindings. The report must be finalized and match the current
+policy; an incomplete overall Replay can still provide a valid failed
+request witness. Policy, report, Source request and dependency files are
+frozen through apply. Missing, truncated or changed evidence rejects the
+plan. New explicit-reference captures require this joint authoring path;
+legacy captures that omit `references` keep their existing behavior.
 
 ## Runtime contract
 

@@ -16,6 +16,7 @@ use crate::replay::{
 
 const CASE_ID: &str = "case-1";
 
+mod case_conditions;
 mod mysql_matching_benchmark;
 mod mysql_relative_time;
 mod mysql_tables;

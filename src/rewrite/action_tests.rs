@@ -103,6 +103,7 @@ fn pending_rule_plans_are_recoverable_by_plan_id() {
         header_dates: Vec::new(),
         dynamic_value: None,
         mysql_time: None,
+        redis_time: None,
         dependency_request: None,
         time: None,
         id: "plan-response".to_string(),

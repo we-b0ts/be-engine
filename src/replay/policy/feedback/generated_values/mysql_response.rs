@@ -73,7 +73,11 @@ pub(super) fn plan(
         );
         let request: Value =
             serde_json::from_slice(&evidence::read(dir.join("request.json"), &mut witnesses)?)?;
-        if request["method"] != scope.method
+        if rule
+            .when
+            .as_ref()
+            .is_some_and(|condition| !condition.matches_request(&request))
+            || request["method"] != scope.method
             || !request["uri"]
                 .as_str()
                 .is_some_and(|uri| path_pattern_matches(&scope.path, &uri_path(uri)))

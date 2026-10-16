@@ -22,6 +22,7 @@ pub struct RewriteRulePlanOptions {
     pub header_dates: Vec<crate::ResponseHeaderDateRule>,
     pub dynamic_value: Option<crate::DynamicValueRule>,
     pub mysql_time: Option<crate::DynamicValueMysqlTimeRule>,
+    pub redis_time: Option<crate::DynamicValueRedisTimeRule>,
     pub dependency_request: Option<Value>,
     pub evidence_id: String,
     pub jwt: Option<super::jwt_rule::JwtRulePlanOptions>,
@@ -71,6 +72,7 @@ pub(super) fn plan(
         || !options.header_dates.is_empty()
         || options.dynamic_value.is_some()
         || options.mysql_time.is_some()
+        || options.redis_time.is_some()
         || options.dependency_request.is_some()
     {
         return generated_values::plan(target_root, state, options);
@@ -135,6 +137,7 @@ fn plan_json(
         header_dates: Vec::new(),
         dynamic_value: None,
         mysql_time: None,
+        redis_time: None,
         dependency_request: None,
         id: format!(
             "plan-{}",
@@ -223,6 +226,7 @@ fn plan_response_body(
         header_dates: Vec::new(),
         dynamic_value: None,
         mysql_time: None,
+        redis_time: None,
         dependency_request: None,
         id: format!(
             "plan-{}",
@@ -415,6 +419,8 @@ fn has_generated_rule(record: &RewriteRulePlanRecord) -> bool {
     !record.response_jwts.is_empty()
         || record.dependency_request.is_some()
         || record.dynamic_value.is_some()
+        || record.mysql_time.is_some()
+        || record.redis_time.is_some()
         || !record.header_dates.is_empty()
 }
 
