@@ -100,8 +100,11 @@ owned; method progress and failures remain independently visible.
 
 ## Waiting For Checks
 
-Do not invoke `sleep` to wait for reviews, builds, or other background commands,
-including loops of shorter sleeps. Do not invoke `wait` or `backend-rewrite wait`;
+When waiting for reviews, builds, or other background commands, a single `sleep`
+must not exceed 30 seconds. Across one waiting episode, all sleeps combined must
+also stay within 30 seconds, including loops and sleeps split across tool calls.
+Checking status between sleeps does not reset this budget. Prefer completion
+notifications over fixed delays. Do not invoke `wait` or `backend-rewrite wait`;
 engine waiting belongs to the coordinator.
 
 Use the task runtime's background execution support, retain the command's task
