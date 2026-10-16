@@ -144,15 +144,13 @@ impl RunSnapshot {
         } else {
             None
         };
-        let rules =
-            crate::config::SourceTrafficPolicyConfig::load(policy)?.process_owned_dependencies;
+        let (_, fingerprints) =
+            crate::config::SourceTrafficPolicyConfig::load_with_fingerprints(policy)?;
         Ok(Self {
             prepared_case_ids,
             states,
             pending_session,
-            rules_fingerprint: crate::verification_progress::fingerprint(&serde_json::to_vec(
-                &rules,
-            )?),
+            rules_fingerprint: fingerprints.classification,
             sessions: BTreeMap::new(),
         })
     }

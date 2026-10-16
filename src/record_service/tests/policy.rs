@@ -1,24 +1,43 @@
 use super::*;
 use std::path::Path;
 
-const POLICY: &str = r#"version: 2
-http:
-  case_path_patterns: [/api/teams/*/skills]
-  allowed_unused_http_hosts: [config.example]
-process_owned_dependencies:
-- protocol: http
-  name: configuration_refresh
-  authorities: [config.example]
-  methods: [GET]
-  path_prefixes: [/refresh]
-  source_revision: abc1234
-  source_evidence: test configuration refresh
+pub(super) const POLICY: &str = r#"format: traffic-policy/v1
+rules:
+- id: team-paths
+  match: {}
+  effect:
+    kind: capture_http
+    source_revision: sha256:1111111111111111111111111111111111111111111111111111111111111111
+    case_paths: [/api/teams/*/skills]
+  proof: {source: 'routes.rs:teams', fact: 'The teams route has one dynamic segment'}
+- id: configuration-refresh
+  match: {}
+  effect:
+    kind: process_owned
+    source_revision: ''
+    selector: {protocol: http, authorities: [config.example], methods: [GET], path_prefixes: [/refresh]}
+  proof: {source: 'source.rs:refresh', fact: 'Configuration refresh is process owned'}
+- id: sandbox-url
+  match: {}
+  effect:
+    kind: capture_http_response
+    authorities: [sandbox.example]
+    methods: [GET]
+    path: {kind: pattern, value: '/sandboxes/*'}
+    status_codes: [200]
+    content_types: [application/json]
+    contract:
+      kind: urls
+      pointers:
+      - contract: /base_url
+        proof: {source: 'source.rs:sandbox', fact: 'Source consumes this sandbox URL'}
+  proof: {source: 'source.rs:sandbox', fact: 'Source consumes this sandbox response'}
 "#;
 
 fn options(path: &Path) -> RecordOptions {
     OptionsCli::try_parse_from([
         "traffic-e2e record".as_ref(),
-        "--source-traffic-policy".as_ref(),
+        "--policy".as_ref(),
         path.as_os_str(),
         "--case-limit".as_ref(),
         "2".as_ref(),
@@ -32,8 +51,8 @@ fn options(path: &Path) -> RecordOptions {
 #[test]
 fn standalone_policy_applies_overlays_without_api_filters() {
     let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("source-traffic-policy.yaml");
-    std::fs::write(&path, format!("{POLICY}http_response_rewrite:\n- name: sandbox.example\n  rules:\n  - path_pattern: GET /sandboxes/*\n    pointer: /base_url\n    source_evidence: source consumes this sandbox URL\n")).unwrap();
+    let path = temp.path().join("policy.yaml");
+    std::fs::write(&path, POLICY).unwrap();
     let mut permissions = std::fs::metadata(&path).unwrap().permissions();
     permissions.set_readonly(true);
     std::fs::set_permissions(&path, permissions).unwrap();
@@ -42,10 +61,7 @@ fn standalone_policy_applies_overlays_without_api_filters() {
         config.http_gateway.case_path_patterns,
         ["/api/teams/*/skills"]
     );
-    assert_eq!(
-        config.http_gateway.allowed_unused_http_hosts,
-        ["config.example"]
-    );
+    assert!(config.http_gateway.allowed_unused_http_hosts.is_empty());
     assert_eq!(config.process_owned_dependencies.len(), 1);
     assert!(config.http_response_rewrite.is_enabled());
     assert_eq!(
@@ -64,7 +80,7 @@ fn standalone_policy_applies_overlays_without_api_filters() {
 #[test]
 fn explicitly_configured_missing_or_invalid_policy_fails_configuration() {
     let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("source-traffic-policy.yaml");
+    let path = temp.path().join("policy.yaml");
     assert!(options(&path).config().is_err());
     assert!(options(temp.path()).config().is_err());
     for policy in [
@@ -88,7 +104,7 @@ fn loaded_policy_groups_team_ids_and_shares_the_case_limit() {
     runtime().block_on(async {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("source-traffic-policy.yaml");
+        let path = temp.path().join("policy.yaml");
         std::fs::write(&path, POLICY).unwrap();
         let source = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let source_address = source.local_addr().unwrap();

@@ -20,7 +20,8 @@ pattern plan/apply/replan gate below.
 ## Inputs
 
 - published case, API collection, or run directory
-- source repository and revision used to interpret API routes
+- source repository used to interpret API routes and the current immutable
+  Source image revision (`sha256:<64-hex-digits>`) for capture authorization
 - target repository recorder config, when it is source-controlled
 - whether the supplied cases are focused or collection-wide feedback; this
   scope is metadata only and never authorizes deletion by omission
@@ -69,18 +70,25 @@ Before accepting it:
 
 Keep project-specific recorder config in the target repo. Static matching rules
 live under `recorder` in `.traffic-e2e/project.yaml`; dynamic feedback lives in
-the wholly coordinator-managed `.traffic-e2e/source-traffic-policy.yaml`:
+the unified policy named by `project.policy`, normally `.traffic-e2e/policy.yaml`:
 
 ```yaml
-version: 2
-http:
-  source_revision: <revision>
-  case_path_patterns:
-    - /api/example/*
-  allowed_unused_http_hosts: []
-breeze_capture: []
-process_owned_dependencies: []
+format: traffic-policy/v1
+rules:
+  - id: example-route
+    match: {}
+    effect:
+      kind: capture_http
+      source_revision: sha256:<64-hex-digits>
+      case_paths: [/api/example/*]
+    proof:
+      source: src/routes.rs:example
+      fact: The registered route has one dynamic path segment.
 ```
+
+The bootstrap command below updates these effects while preserving every
+unrelated rule and its complete inline proof. New capture scope requires fresh
+recording; published cases are never rewritten.
 
 - Recording limits are target-owned and independent from route feedback.
   `http_gateway.per_api_case_limits.default` applies per resolved case pattern,
@@ -88,7 +96,7 @@ process_owned_dependencies: []
   limits. Do not add or raise these limits merely to make replay discovery
   record more cases. Pattern feedback must preserve existing limit settings.
 - Require `traffic-e2e` from `PATH`. Never edit either target YAML document
-  directly and never create the source traffic policy on the target's behalf. If
+  directly and never create the unified policy on the target's behalf. If
   the command is unavailable or rejects the managed document,
   report `recording_configuration/action_required` with the confirmed patterns,
   exact tool or managed-block failure, and acceptance check; stop only the
@@ -107,7 +115,7 @@ process_owned_dependencies: []
 traffic-e2e config recorder apply case-path-patterns \
   --target-root <target> \
   --authority focused \
-  --source-revision <revision> \
+  --source-revision <immutable-source-image-revision> \
   --case-source path/to/cases \
   --pattern '/api/example/*'
 ```

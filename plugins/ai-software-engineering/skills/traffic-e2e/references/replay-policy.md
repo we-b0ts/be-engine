@@ -1,658 +1,136 @@
-# Traffic E2E Replay And Assertion Policy
+# Unified Traffic Rules
 
-Read this reference before creating, changing, or validating replay-time
-response rules.
-
-## Contents
-
-- Ownership
-- Assertion and dependency boundaries
-- Dependency dynamic rules
-- Standard HTTP response headers
-- Generated scalar response fields
-- Unordered response arrays
-- Structured response-body rules
-
-## Ownership
-
-Maintain one source-controlled target `.traffic-e2e/verification.yaml`. Every replay
-MUST pass it explicitly with `--policy`; do not auto-discover it or duplicate
-rules in shell, application config, target code, or traffic E2E state.
-
-Use version one for legacy target-owned response assertions:
+Use one `traffic-policy/v1` policy for acquisition, classification, input
+adaptation and all comparisons. Managed project configuration contains:
 
 ```yaml
-version: 1
-expected_response: assertions_only
-dependency_rules: []
+project:
+  policy: .traffic-e2e/policy.yaml
 ```
 
-Use version three when the standard runner owns response assertions:
+The path is relative to the target repository root. Initialization creates an
+empty policy; it supplies no project-specific exceptions. Old version-1/2/3
+verification documents and the separate Source policy format are rejected.
 
-```yaml
-version: 3
-expected_response: assertions_only
-dependency_rules: []
-response_rules:
-  json: {}
-  protobuf: {}
-  hessian2: {}
-  docx: {}
-```
+## Discover, Plan, Apply
 
-Response field rules are grouped by body codec, canonical API, and then
-concrete rule kind. Standard replay loads JSON `timestamp`, `duration`, `uuid`,
-`random`, `jwt`, and `unordered` rules plus configured protobuf, Hessian2, and DOCX rules.
-Rules must select disjoint JSON subtrees;
-overlapping strategies are rejected rather than ordered by precedence.
+During a managed rewrite, load the backend-rewrite skill instead of operating
+its state machine from this skill. Current evidence supplies a bounded rule
+discovery query and capability metadata. Follow its returned command. Inspect
+immutable Source code and the exact Source/Target witnesses before proposing a
+rule; a mechanically explainable difference is not a semantic justification.
 
-Signed HTTP JSON tokens use explicit `jwt` rules, not whole-token `random`
-exemptions. Prove source issuance and key precedence, then use the coordinator's
-`rule plan --response-jwt` with current evidence and a private startup-key
-reference. Plan verifies both signatures, exact stable claims and relative
-`exp`/`iat`/`nbf` offsets within five seconds. Optional `url_query_param` selects
-one token in an HTTP(S) URL while retaining all unselected URL bytes. Legacy
-`dynamic_claims: [/jti]` retains UUID v4 semantics; typed `/jti` or `/nonce`
-entries support UUID v4 or canonical unpadded base64url with explicit
-`decoded_bytes`. Optional `expires_at` owns an RFC3339 field whose floored Unix
-seconds must equal that side's signed `exp`; array scopes must match. Never
-exempt an entire signed URL with a random rule.
-Apply rechecks artifacts, policy and key, then requires fresh Replay. See
-[JWT response rules](../../../../../docs/jwt-response-rules.md).
-
-`traffic-e2e config init` validates the initial policy, every
-evidence-driven `apply` validates the resulting policy, and the runner validates
-it again before replay. Retain its canonical path, fingerprint, applicable
-rules, usage, and unused applicable rules from the final report.
-
-Rule planning requires evidence produced under the current policy content
-fingerprint. Backend-rewrite reports `facts.policy_freshness` in dirty-cluster
-and representative queries. If stale or unavailable, use the coordinator's
-returned `refresh_command` through normal gates, reuse the existing recordings,
-and query new evidence; applicable planners resume after fresh verification.
-An unrelated rule or comment edit also changes the fingerprint. See
-[policy freshness](../../../../../docs/replay-policy.md#policy-freshness-before-rule-planning).
-
-## Assertion And Dependency Boundaries
-
-`expected-response.json` is an assertion oracle only. Target product code, test
-setup, dependency implementations, replay rules, branch or cache decisions,
-side-effect generation, and runtime config MUST NOT read it to create actual
-behavior.
-
-Case and Global dependency files are recorder-owned replay
-inputs. Target product code, E2E code, test support, commands, and application
-config MUST NOT read, parse, copy, or derive dependency results from them. Do
-not create recording-backed or fixture-backed target dependency implementations.
-An offline target-preparation step may inspect dependency request or connection
-evidence to materialize a value only after the source startup path proves it is
-a direct startup input. It must not infer configuration provenance from a
-downstream request or materialize a value that the source loads from a runtime
-dependency.
-
-## Dependency Dynamic Rules
-
-For a generated identity reused across SQL/JSON and Redis key segments, use
-[`dependency_rules` with `kind: dynamic_value`](../../../../../docs/dynamic-value-rules.md): one MySQL, Redis SET/HSET or HTTP JSON capture,
-exact allowed host/port endpoints, source proof, and optional UUID format.
-Redis capture keys accept the shared exact/prefix/suffix/numeric selectors;
-source and target complete capture keys remain equal. Discovery retains exact
-key witnesses; source review justifies any broader selector.
-References correlate automatically within the case after capture; ordinary
-values, finite calls and ownership stay strict. Dirty MySQL evidence and
-Redis/HTTP capture witnesses offer hints; the coordinator uses `rule plan --dynamic-value` / apply and
-fresh Replay. Existing recordings are reusable.
-
-Add a rule only after source and dependency evidence proves that a field is
-legitimately generated by a runtime non-deterministic mechanism such as random,
-UUID, nonce, current time, or a value derived from one of them. A value supplied
-by stable runtime configuration is not dynamic merely because the target value
-is missing or differs. Restore it through its authoritative source: materialize
-a direct startup input, or preserve a runtime-dependency value through the
-genuine dependency path. Retain exact matching; do not replace it with
-`non_empty`, bind/ref, time tolerance, or another relaxed strategy.
-
-Select the dependency identity or fingerprint and exact field. Reuse one
-operation-level rule for the same dependency selector; do not copy it for each
-inbound API. Use supported bind/ref relationships, shape validation, or
-relative-time validation without copying recorded literals, secrets, absolute
-case paths, or case ids into the policy.
-
-The optional `case` selector is an exception for an evidenced ambiguity: use it
-only when the same dependency operation has different dynamic-field semantics
-in different request contexts and no narrower dependency selector can
-distinguish them. Bindings remain isolated by active case even when the rule is
-unscoped, so one bind/ref name can be reused safely across a collection.
-
-An unscoped or scoped rule is applicable only when a selected case-owned
-recorded dependency exchange matches its stable protocol and dependency
-selectors, plus `case` when present. Selecting an inbound API alone does not
-make a rule applicable, and bootstrap evidence does not make a case rule
-applicable. Multiple rules may compose on one dependency exchange only when
-they select disjoint fields; overlapping field selection is rejected.
-
-```yaml
-dependency_rules:
-  - id: request-audit-insert
-    protocol: mysql
-    target:
-      host: audit.example.test
-      port: 3306
-    mysql:
-      command: COM_STMT_EXECUTE
-      database: audit
-      username: audit_writer
-      sql: "INSERT INTO request_log_* (*) VALUES (*)"
-      params:
-        0:
-          bind: request_audit_id
-          validate: uuid_v4
-        11:
-          time:
-            relative_to: replay_now
-            tolerance: 10s
-
-  - id: request-audit-update
-    protocol: mysql
-    target:
-      host: audit.example.test
-      port: 3306
-    mysql:
-      command: COM_STMT_EXECUTE
-      database: audit
-      username: audit_writer
-      sql: "UPDATE request_log_* SET * WHERE uuid=?"
-      params:
-        0:
-          bind: request_audit_elapsed
-        3:
-          ref: request_audit_id
-
-  - id: resource-token-audit-response
-    case:
-      method: GET
-      path: /api/resource/token
-    protocol: mysql
-    target:
-      host: audit.example.test
-      port: 3306
-    mysql:
-      command: COM_STMT_EXECUTE
-      database: audit
-      username: audit_writer
-      sql: "UPDATE request_log_* SET * WHERE uuid=?"
-      params:
-        1:
-          validate: non_empty
-```
-
-Version one supports its recorder-declared scalar fields and the narrow
-Memcached protobuf timestamp contract below. It does not support background
-allowlists, case-id exceptions, dependency payload fixtures, response ignores,
-or arbitrary JSON-body transformations. A case requiring an unsupported rule
-remains non-passing; return
-`verification_policy/action_required` with the missing capability and
-acceptance check. Do not compensate in target code or the test harness.
-
-Memcached `set` supports one narrow dynamic payload contract: a top-level
-protobuf varint field proven by source to contain the current Unix time in
-seconds. Select a supported Memcached resource plus a byte-exact key
-prefix/suffix whose middle is a nonempty ASCII integer, then name each timestamp
-field and retain one-line source evidence. A `cache_service` resource uses
-protocol plus port to select the rule; the recorded exchange remains bound to
-its exact target domain plus port. Cache namespace and deployment group are not
-accepted or exposed:
-
-```yaml
-dependency_rules:
-  - id: user-info-cache-writeback
-    protocol: memcached
-    memcached:
-      resource:
-        kind: cache_service
-        port: 11211
-      command: set
-      key:
-        prefix: u
-        suffix: ''
-      protobuf:
-        timestamp_fields:
-          50:
-            mechanism: unix_seconds
-            source_evidence: UserInfoServiceBase.java:438 loads the current time
-```
-
-The engine, not the AI or policy author, owns a fixed symmetric five-second
-window. Validate the recorded field against its recorded `SET` event time and
-the target field against the time Replay observes the target `SET`; never
-compare the two timestamp literals across runs. The exact timestamp and its
-offset are not policy inputs or normal AI evidence. Every unselected protobuf
-field and every other Memcached request property remains exact. A selected
-field must occur exactly once as a varint; malformed protobuf, groups, missing
-or repeated fields, and out-of-window values fail closed. Do not replace this
-field rule with whole-value or command-and-key-only matching.
-
-Memcached `SET` expiration is engine-owned protocol behavior, not a policy
-rule. Equal expiration values match. `0` and relative expirations through 30
-days must otherwise remain exact. When both values are absolute Unix
-timestamps, compare each expiration with the observation time of that same
-`SET`; accept only when the remaining TTLs differ by at most five seconds. A
-relative value never matches an absolute value. This applies to text arguments
-and binary extras while all non-expiration components remain exact. Do not plan
-a dependency rule for an exptime-only difference.
-
-Only `kind: cache_service` is currently supported. Reject `kind: breeze`
-instead of guessing its namespace and dynamic-port semantics; add that kind
-only after a concrete recorded case supplies the required evidence.
-
-## Standard HTTP Response Headers
-
-Source-generated calendar dates inside headers use
-[header date rules](../../../../../docs/response-header-date-rules.md), including
-`Content-Disposition` `filename` and `filename*`. Prove the format and timezone,
-return `--header-date` inputs to the coordinator, and use current evidence for
-plan/apply and fresh verification. Body codec configuration is independent.
-
-Version three makes the runner compare expected and actual responses. The runner
-reads `request.json`, sends the genuine request to the managed target HTTP
-endpoint, and writes the actual-response artifact. The target MUST NOT read
-`request.json` or `expected-response.json`.
-
-Replay automatically compares these end-to-end HTTP response headers:
-
-```text
-access-control-allow-credentials
-access-control-allow-headers
-access-control-allow-methods
-access-control-allow-origin
-access-control-expose-headers
-access-control-max-age
-allow
-cache-control
-content-disposition
-content-type
-location
-vary
-www-authenticate
-x-request-id
-```
-
-Names are case-insensitive. Comma-separated header-name and HTTP-method fields
-compare as case-insensitive sets. `content-type` and `content-disposition`
-compare their primary value and unordered parameters. `cache-control` compares
-unordered directives, `access-control-max-age` compares delta-seconds, and
-`www-authenticate` compares unordered challenges and authentication parameters.
-The remaining scalar fields compare trimmed values. Both sides absent is equal;
-one-sided presence or a semantic value difference fails the response assertion,
-except for the source-positive `x-request-id` contract. A missing source
-response `x-request-id` imposes no target requirement. A present source value
-requires target presence. When the source response echoes the source request,
-the target response must echo the request actually sent to the target; otherwise
-the trimmed source and target response values must have equal byte length.
-
-An older artifact with no `headers` member has unavailable header evidence and
-retains its existing status/body verdict. Do not treat a missing snapshot as an
-empty map. New HTTP Replay actual-response artifacts retain only these standard
-headers, not unselected sensitive headers such as `set-cookie`, plus only the
-target request's `x-request-id` as request-correlation context. A selected
-standard header whose recorded value is `<redacted>` is unevaluable rather than
-equal. Missing legacy request context skips only the value relationship after
-enforcing target response presence. Other response headers remain outside the
-verdict. In particular, compression, content length, cookies, timestamps,
-infrastructure identity, and tracing headers other than `x-request-id` are not
-implicitly compared.
-
-## Generated Scalar Response Fields
-
-`response_rules.json.<API>.<rule-kind>` selects an exact scalar JSON value by
-JSON Pointer. Use the concrete source-proven mechanism as the key:
-
-```yaml
-response_rules:
-  json:
-    "GET /api/resource/token":
-      uuid:
-        - pointer: /content
-          source_evidence: src/token.rs:issue_token UUID generation
-          source_example: <redacted source UUID>
-          target_example: <redacted target UUID>
-```
-
-For a response pair, the rule applies only when the selected field exists in
-both expected and actual JSON; both values must have the same scalar JSON kind.
-If both responses omit the Pointer because that API has another response
-shape, the rule does not participate and produces no coverage requirement. If
-only one response omits it, the missing field remains an exact structural
-difference. UUID/random skip literal equality without validating UUID shape
-or randomness. Timestamp/duration enforce the time relationships below. Status,
-body structure, undeclared fields, and non-JSON bodies remain exact. Its concrete rule kind, persisted source citation, and distinct
-redacted source/target examples make the decision reviewable but do not replace
-source review, unit tests, or real-traffic integration tests.
-
-JSON response Pointers also support a whole `*` segment for array elements,
-for example `/data/*/created_at` or `/data/*/items/*/id`. This is shared by
-`timestamp`, `duration`, `uuid`, `random`, `unordered`,
-and `unordered_joined_string` rules. A numeric
-segment still selects one exact index; `/*` selects each element of a root
-array. Object keys remain exact (including a literal `*` key); `*` does not
-expand object members. Standard `~0` and `~1` escaping still applies.
-
-Each selected value is checked independently. UUID and random rules require
-matching non-null scalar types and skip literal equality. Timestamp and duration
-rules parse and validate time values as described below. Array length, order,
-missing fields, and undeclared values remain checked. Empty arrays or fields
-absent on both sides create no coverage requirement. Reports keep concrete
-numeric Pointers for differences and one rule ID for the wildcard selector.
-Plan/apply accepts the same pattern against concrete difference evidence; the
-source citation must justify every selected element. Overlapping patterns,
-explicit indexes, and ancestor rules are rejected when they could select the
-same subtree.
-
-Time rules use a fixed ±5 second tolerance and the engine's captured request
-start times. Replay reads source `request.json.timestamp` and target
-`request_sent_at`.
-No current wall-clock fallback or configurable tolerance is allowed.
-
-- `timestamp` requires `format: unix_seconds`, `unix_milliseconds`, or
-  `rfc3339`. Each source/target timestamp must be within five seconds of its
-  own request start, even if the two field literals are equal.
-  Explicit `time: preserve_relative` instead preserves the timestamp's offset
-  from each side's captured request start within five seconds. Use it for a
-  source-proven expiry or scheduled time; a wrong TTL or fixed absolute expiry
-  remains checked. CLI: `--kind timestamp --timestamp-format rfc3339
-  --timestamp-mode preserve-relative`. Omitting the mode keeps the existing
-  request-window contract. Plan and Replay share the comparator; apply retains
-  frozen-witness checks. See [JSON response time rules](../../../../../docs/response-time-rules.md).
-- `duration` requires `unit: milliseconds`, `seconds`, `minutes`, or `hours`.
-  After conversion to the same unit, it requires
-  `abs((target_duration - source_duration) - (target_request_time - source_request_time)) <= 5 seconds`.
-  This describes elapsed time since a shared origin, not processing latency or
-  a decreasing expiry countdown. The deltas are signed.
-- Numeric formats accept JSON numbers or numeric strings, including decimals;
-  both sides must retain the same JSON type. RFC3339 requires strings with a
-  timezone. Boolean/null/container values, invalid formats, overflow, and
-  missing request-time evidence fail comparison. Empty selectors remain
-  inapplicable. Old timestamp/duration declarations must add format/unit;
-  they never silently fall back to scalar-only comparison.
-
-```yaml
-response_rules:
-  json:
-    "GET /api/items":
-      timestamp:
-        - pointer: /data/*/generated_at
-          format: unix_seconds
-          source_evidence: src/items.rs:generated_at uses the current time
-          source_example: "1700000000"
-          target_example: "1700003600"
-      duration:
-        - pointer: /data/*/elapsed_hours
-          unit: hours
-          source_evidence: src/items.rs:elapsed_hours measures time since creation
-          source_example: "1.5"
-          target_example: "2.5"
-```
-
-CLI planning/application uses `--timestamp-format unix-seconds`,
-`--timestamp-format unix-milliseconds`, or `--timestamp-format rfc3339` for
-`--kind timestamp`, and `--unit hours` (or another supported unit) for
-`--kind duration`. Quote wildcard Pointers, e.g. `--json-pointer '/data/*/elapsed_hours'`.
-These settings also persist through `backend-rewrite rule plan` / `rule apply`.
-
-On an exact scalar mismatch the assertion report may expose the pointer as a
-diagnostic candidate. That mechanical candidate is not authorization to weaken
-the assertion. Inspect source and target behavior first. A missing, cold,
-stale, partially loaded, differently keyed, or differently refreshed
-process-local cache is target behavior and MUST NOT authorize a generated-scalar
-rule.
-Repair its implementation, lifecycle, or readiness and rerun the same cases.
-
-Apply a generated-scalar rule only when source code proves its concrete
-mechanism and a representative, redacted source/target value pair shows that
-the selected scalar differs only because of that mechanism. Stable structure
-inside a scalar remains behavior: for example, a signed URL cannot be exempted
-as one generated string when the target omits the required signature
-parameters.
-Supported rule kinds are `timestamp`, `duration`, `uuid`, and `random`. A nonce
-or random salt uses `random`; those names are business uses, not comparison
-strategies. Time rules select actual time values; they cannot exempt an entire
-signed URL or digest derived from time. For UUID/random-derived values, explain
-the derivation in `source_evidence`.
-The command requires a single-line source file/symbol citation,
-and different redacted source and target examples. It writes the citation and
-both examples into the policy beside each selected Pointer. Multiple Pointers
-may be submitted together only when the same evidence proves every selected field;
-otherwise plan and apply them separately. These declarations make the decision
-auditable; they do not replace source review. The command replans from the
-current evidence before writing; `plan` is available with the same arguments
-for optional diagnostics:
+The coordinator accepts one rule, a list, or a complete typed document:
 
 ```bash
-traffic-e2e config replay apply response-rule \
-  --target-root <target> \
-  --kind uuid \
-  --source-evidence 'src/token.rs:issue_token UUID generation' \
-  --source-example '<redacted UUID from source>' \
-  --target-example '<redacted UUID from target>' \
-  --api 'GET /api/resource/token' \
-  --json-pointer /content \
-  --case-source <exact-finalized-case-source>
+backend-rewrite --target-root <target> rule plan \
+  --file /tmp/proposed-rules.yaml --evidence <current-evidence-id>
+backend-rewrite --target-root <target> rule apply <plan-id>
 ```
 
-Complete aggregate evidence may remain dependency-dirty while applying a
-generated-scalar rule. Other response differences may also remain in the same
-report.
-Neither condition authorizes the selected Pointer, and neither blocks its
-independent evidence from being applied. The plan reports aggregate dirtiness
-and every unselected difference Pointer; those failures remain exact gates and
-must still be diagnosed after the policy change.
+The plan expands every selected rule, validates its whole affected payload and
+reports remaining Replay, reclassification and recording obligations. Reuse the
+same pending plan after an interruption; `rule recover <plan-id>` resolves an
+interrupted transaction through the coordinator. Do not edit a managed policy
+or recording to bypass this transaction.
 
-## Unordered Response Arrays
+Standalone traffic operations can load the same reviewed document with
+`traffic-e2e replay --policy <path> <case-source>` or `record --policy <path>`.
+Recording consumes only Source effects. With a project config, `--policy` must
+name that project's policy and cannot override its authority.
 
-`response_rules.json.<API>.unordered` selects an exact JSON array by JSON
-Pointer:
+## Three Comparison Surfaces
+
+| Surface | Evidence and responsibility |
+| --- | --- |
+| `api.response` | Complete recorded and independently observed API responses |
+| `dependency.request` | Complete recorded request and real Target client request |
+| `dependency.response` | Complete recorded result and its explicit Replay delivery; materialization and verification remain separate |
+
+Rules select a protocol-owned slot and then a codec. Redis SET and Memcached
+SET `value`, GET/GETS response `value`, HTTP `body`, MySQL `sql_value` and
+`sql_column` have explicit capability gates. A supported value slot uses the
+same JSON/PB contracts; adding PB does not require another JSON-specific
+protocol strategy. Unsupported operation/slot/codec combinations fail during
+compilation rather than silently falling back.
+
+A self-contained Redis JSON rule is:
 
 ```yaml
-response_rules:
-  json:
-    "GET /api/config/ansible_facts":
-      unordered:
-        - pointer: /general/sudo_users
-          source_evidence: src/config.rs:sudo_users is built from a Set
+id: cache-members
+surface: dependency.request
+match:
+  api: POST /tasks
+  resource: {protocol: redis, endpoint: 'cache.example:6379', database: 0}
+  operation: SET
+  key: {kind: exact, value: task-cache}
+slot: value
+codec: json
+contract:
+  /members: {kind: unordered}
+  /written_at:
+    kind: time
+    format: unix_milliseconds
+    relation: preserve_offset
+    anchor: dependency.request_start
+proof:
+  source: src/cache.rs:write
+  fact: The consumer treats members as a multiset; written_at comes from this request's clock.
 ```
 
-For a response pair, the rule applies only when the selected field exists in
-both responses and both values are arrays. A Pointer omitted by both response
-shapes does not participate; a one-sided omission remains an exact
-structural difference. Matching preserves length, exact JSON elements, and
-duplicate counts while ignoring only the outer array order. Other response
-locations remain exact. Response strategies cannot overlap the same JSON
-subtree.
+For PB replace only the codec declaration with explicit typed bindings, for
+example `codec: {kind: protobuf, fields: {/written_at: {field_path: [1],
+field_type: int64}, /members: {field_path: [2], field_type: string, repeated: true}}}`.
+Each selected path must have a known type. PB unknown fields, presence,
+repeated order and unselected encoded fields remain protected. A codec schema
+is not permission to change every declared field.
 
-An exact reorder-only mismatch may expose an `unordered_candidates` diagnostic.
-It is mechanical evidence, not authorization that order is irrelevant. Inspect
-source behavior, target behavior, and consumers before applying:
+## Exact Remainder And Time
 
-```bash
-traffic-e2e config replay apply response-rule \
-  --target-root <target> \
-  --kind unordered \
-  --source-evidence 'src/config.rs:sudo_users is built from a Set' \
-  --api 'GET /api/config/ansible_facts' \
-  --json-pointer /general/sudo_users \
-  --case-source <exact-finalized-case-source>
-```
+Every rule carries its own inline `proof: {source, fact}`. Default to inline
+resources, codec bindings and contracts. The current format keeps these definitions inline; plans expose their complete
+content without requiring an AI to traverse configuration references.
 
-Both actions require runner-owned structural assertion evidence using the
-current policy fingerprint and complete aggregate evidence. They validate only
-their selected Pointers and may retain dirty dependencies or unselected
-response differences as independent failing gates. Both reject content,
-structure, type, presence, length, or duplicate-count differences at a selected
-location. The plan reports aggregate dirtiness, residual case count, and every
-unselected difference Pointer. Apply is additive, sorted, and atomic.
+Unselected fields and native protocol envelope stay strict. Unordered arrays
+preserve elements, types and duplicate counts. JSON null is a present value;
+a protocol miss, null bulk response or quiet no-response is an unavailable slot
+and retains its original outcome without counting as a successful rule match.
+Missing selected JSON/PB fields or a changed type in an available payload fail.
 
-## Unordered Joined Strings
+Time contracts declare format, relation and anchor. Unix seconds, milliseconds
+and microseconds preserve integer precision; formatted times require their
+explicit offset when necessary. Source and Target use independent clocks.
+Request windows use the fixed engine boundary; preserve-offset comparisons
+also check cross-field differences and declared clock groups. Do not invent an
+offset, tolerance or a payload-derived clock to make a mismatch disappear.
 
-`unordered_joined_string` is one codec-independent comparison semantic with
-codec-specific selectors. JSON uses a `pointer`, protobuf uses `field_path`
-plus explicit `field_type: string`, and Hessian2 uses `value_path`. Every rule
-requires a non-empty `separator` and one-line `source_evidence`:
+Comparing a dependency response does not authorize rewriting it. Only explicit
+`delivery: {rebase_time: [/path]}` materializes declared response time fields.
+The writer revalidates the complete delivered payload and preserves unrelated
+bytes, native metadata and finite consumption.
 
-```yaml
-response_rules:
-  json:
-    "GET /api/members":
-      unordered_joined_string:
-        - pointer: /member_names
-          separator: ","
-          source_evidence: src/member.rs:member_names joins a Set
-```
+## Stateful And Source Effects
 
-Both strings are split without trimming or case normalization and compared as
-multisets. Empty elements and duplicate multiplicity are preserved. Mechanical
-discovery tries only `,`, `;`, and `|` and reports the exact matching
-separator; source proof is still required before planning the rule.
-Other response differences do not block an independently proven joined-string
-rule, but a content or type difference at the selected string still does.
+Use the typed native owner when a contract involves more than one value:
 
-## Structured Response-Body Rules
+- `identity`: capture and later references with explicit resource scopes;
+- `redis_sequence`, `redis_lock`, `redis_publish_identity`: atomic steps,
+  successful acquisition/reference causality and nonce identity;
+- `http_request`, `mysql_values`: native query/header/multipart or SQL
+  parameters, typed values and physical result time columns;
+- `input_jwt`, `response_jwt`, `response_generated`, `response_body` and
+  `response_header_date`: their dedicated execution or assertion owner;
+- `capture_http`, `capture_breeze`, `capture_http_response`, `process_owned`
+  and `finite_sharing`: acquisition, classification and finite sharing.
 
-The policy has exactly two top-level rule surfaces: `dependency_rules` changes
-dependency replay matching, while `response_rules` changes response
-verification. The former generic `rules` key is intentionally unsupported.
+Follow discovered capability metadata for the exact effect schema. Nested
+bindings, fields and selectors carry their own Source proof where required.
+Source self-validation exercises complete traces in isolated state. It cannot
+replace independent Target evidence; successful planning can still require
+fresh Replay. Startup signing inputs are frozen by actual resolved file hash,
+without copying secret values into a plan.
 
-HTTP and Motan are gateway protocols, not response-rule kinds. JSON, protobuf,
-Hessian2, and DOCX are body codecs, and codec-aware comparison is independent
-of the gateway protocol. A codec-only entry enables typed diagnostics or DOCX
-packaging semantics without relaxing a business value:
-
-```yaml
-response_rules:
-  protobuf:
-    "POST /api/example": {}
-```
-
-Treat reported codec candidates as decoder candidates, not semantic proof.
-Select protobuf, Hessian2, or DOCX from application/schema context, then use the
-unified response-rule planner to re-verify the same immutable evidence with
-that codec. Codec selection does not require source evidence: protobuf and
-Hessian2 do not ignore a value, while DOCX codec-only selection ignores only
-standard ZIP packaging metadata and still compares every decompressed part:
-
-```bash
-backend-rewrite rule plan \
-  --evidence-id <current-evidence-id> \
-  --body-codec protobuf
-```
-
-Motan1 `value` is protocol-defined as Hessian2. Replay removes
-its Java ObjectStream wrapper and use Hessian2 semantic equality by default;
-map wire order is ignored, while list order and business values remain exact.
-Explicit body-codec rules still take priority, and other Motan1 response kinds
-keep exact handling. `body_diagnosis.used_for_verdict` identifies this
-protocol-selected verdict; decoder-only candidates leave it false.
-
-An unordered selector does relax comparison and therefore requires one-line
-source proof on every selected path. A diagnostic candidate proves only that
-multiset comparison explains observed bytes; it does not prove order is absent
-from the product contract:
-
-```bash
-backend-rewrite rule plan \
-  --evidence-id <current-evidence-id> \
-  --body-codec protobuf \
-  --unordered-path '{"field_path":[3,1,6,3],"display_path":"rule_collection.experiments.groups.white_list","element_type":"string","source_evidence":"src/rule.rs:142-149 RuleConfig::white_list: collected from a HashSet, so iteration order is not contractual"}'
-```
-
-```bash
-backend-rewrite rule plan \
-  --evidence-id <current-evidence-id> \
-  --body-codec hessian2 \
-  --unordered-path '{"value_path":["result","groups","*","whiteList"],"display_path":"$.result.groups[*].whiteList","source_evidence":"src/rule.rs:142-149 RuleConfig::white_list: collected from a HashSet, so iteration order is not contractual"}'
-```
-
-Typed protobuf/Hessian2 paths carry their source evidence inside the JSON
-object. Do not combine them with JSON-only `--kind`, `--json-pointer`,
-`--source-evidence`, examples, or the top-level separator argument.
-
-For DOCX, select every source-proven generated XML timestamp explicitly:
-
-```bash
-backend-rewrite rule plan \
-  --evidence-id <current-evidence-id> \
-  --body-codec docx \
-  --docx-timestamp '{"part":"docProps/core.xml","element":"dcterms:created","format":"rfc3339","source_evidence":"src/docx.rs:42 generator sets created from the request clock","source_example":"2024-01-02T03:04:05Z","target_example":"2024-01-02T04:04:05Z"}'
-```
-
-DOCX comparison ignores only OPC ZIP packaging metadata: entry timestamps,
-compression representation, order, offsets, and central-directory layout. It
-compares the exact entry-name set and decompressed bytes, then permits a selected
-timestamp only when its source-to-target delta matches the elapsed time between
-the corresponding requests within five seconds. Equal clock offsets therefore
-cancel without relying on host timezone state. Other content remains exact.
-Invalid, unsafe, duplicate, oversized, or incomplete packages fail closed.
-Generic ZIP files are not auto-normalized;
-XLSX/PPTX may reuse this package layer later but are not enabled now.
-
-For ordinary source files, `source_evidence` MUST identify a
-repository-relative path, exact line or narrow line range, symbol, and the
-specific contract fact that authorizes order-insensitive comparison. Prefer
-`<path>:<line-or-range> <symbol>: <fact>`. A field name, inferred protobuf
-shape, or diagnostic candidate alone is insufficient. When source proof is a
-generated schema or another immutable artifact, cite its exact location and
-symbol instead. Keep the citation single-line and tied to the source revision
-represented by the current evidence.
-
-```yaml
-response_rules:
-  protobuf:
-    "MOTAN /rpc/ExampleService-getConfig-Request-hash":
-      unordered:
-        - field_path: [3, 1, 6, 3]
-          display_path: rule_collection.experiments.groups.white_list
-          element_type: string
-          source_evidence: 'src/rule.rs:142-149 RuleConfig::white_list: collected from a HashSet, so iteration order is not contractual'
-      unordered_joined_string:
-        - field_path: [3, 1]
-          display_path: result.member_names
-          field_type: string
-          separator: ","
-          source_evidence: 'src/service.rs:88-93 member_names: joins values collected from a HashSet'
-  hessian2:
-    "MOTAN /rpc/ExampleService-getMembers-Request-hash":
-      unordered:
-        - value_path: [result, groups, "*", whiteList]
-          display_path: result.groups[].white_list
-          source_evidence: 'src/rule.rs:142-149 RuleConfig::white_list: collected from a HashSet, so iteration order is not contractual'
-      unordered_joined_string:
-        - value_path: [result, memberNames]
-          display_path: result.member_names
-          separator: ","
-          source_evidence: 'src/service.rs:88-93 member_names: joins values collected from a HashSet'
-```
-
-Protobuf repeated selectors require a numeric `field_path`, semantic
-`display_path`, and explicit repeated `element_type`; protobuf joined strings
-instead require explicit `field_type: string`. Hessian2 selectors require a
-`value_path` and semantic `display_path`; joined strings also require a
-non-empty separator. Protobuf repeated element types cover `string`, `message`,
-integer/fixed-width scalars, `bool`, `enum`, `float`, and `double`; raw `bytes`
-is intentionally unsupported.
-Only selected collection order is ignored. Presence, types, contents,
-duplicate multiplicity, status, envelope, and undeclared paths remain exact.
-
-Use current focused E2E evidence and the current policy
-fingerprint. Plan first, review the exact selectors and source citations, apply
-atomically, then rerun the affected E2E group. Planning rejects stale
-reports, source changes, unused applicable dependency rules, selectors absent
-from typed diagnostics, and any selected location whose exact values still
-differ after its reviewed normalization. It does not require selecting every
-mechanical candidate or resolving unrelated body differences in the same plan.
-The report records residual difference cases, which remain exact failing gates
-after apply.
-
-After every policy change, revalidate and rerun the affected API group.
-Earlier Replay and aggregate artifacts are stale. A response rule participates
-only where its Pointer resolves on both sides; absence from sampled response
-shapes does not affect completion. Audit that expected responses and dependency
-recordings did not flow into target behavior.
+Process ownership does not prove target initialization or cache behavior.
+Finite sharing does not authorize unused work, reusable snapshots, unrelated
+connections or arbitrary response reuse. Protocol adapters retain framing,
+authentication, lanes, request correlation, claims and consumption.

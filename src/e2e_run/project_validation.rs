@@ -41,8 +41,13 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         "replay.startup_timeout_seconds must be positive"
     );
     ensure!(
-        !project.replay.policy.as_os_str().is_empty(),
-        "replay.policy must not be empty"
+        !project.policy.as_os_str().is_empty()
+            && project.policy.is_relative()
+            && project.policy.components().all(|part| matches!(
+                part,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )),
+        "project.policy must be a non-empty path within the target repository"
     );
     ensure!(
         project.verification.max_failed_cases_per_api > 0,
@@ -85,12 +90,6 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         project.state.runtime_root == Path::new(DEFAULT_RUNTIME_ROOT),
         "state.runtime_root must be {DEFAULT_RUNTIME_ROOT:?}"
     );
-    ensure!(
-        project.recording.source_traffic_policy
-            == Path::new(crate::config::SOURCE_TRAFFIC_POLICY_FILE),
-        "project.recording.source_traffic_policy must be {:?}",
-        crate::config::SOURCE_TRAFFIC_POLICY_FILE
-    );
     Ok(())
 }
 
@@ -127,13 +126,12 @@ mod dependency_loading_defaults {
     fn partial_mapping_preserves_managed_lazy_default() {
         for settings in ["", "dependency_loading: {cache_bytes: 0}\n"] {
             let config: ReplayProjectConfig =
-                serde_yaml::from_str(&format!("policy: policy.yaml\n{settings}")).unwrap();
+                serde_yaml::from_str(if settings.is_empty() { "{}" } else { settings }).unwrap();
             assert!(config.dependency_loading.lazy_cases);
             assert_eq!(config.startup_timeout_seconds, 60);
         }
         let config: ReplayProjectConfig =
-            serde_yaml::from_str("policy: policy.yaml\ndependency_loading: {lazy_cases: false}\n")
-                .unwrap();
+            serde_yaml::from_str("dependency_loading: {lazy_cases: false}\n").unwrap();
         assert!(!config.dependency_loading.lazy_cases);
     }
 }

@@ -31,7 +31,7 @@ surfaces:
 - `traffic-e2e replay` for the replay session;
 - `traffic-e2e target exec` for legacy low-level diagnosis of a prebuilt
   in-process target command;
-- `traffic-e2e config replay plan|apply response-rule` for evidence-driven
+- The unified `backend-rewrite rule plan --file ... --evidence ...` transaction for evidence-driven
   replay response-rule maintenance;
 - `traffic-e2e diagnose replay-control` for readiness, case lifecycle,
   finalization, and cleanup;

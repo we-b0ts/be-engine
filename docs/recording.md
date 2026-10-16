@@ -4,7 +4,8 @@
 It starts a co-located Source as UID/GID 998, starts Recorder, and optionally registers a
 reachable HTTP address in coordination Redis after readiness and the existing
 post-ready settle window. Optional `--config PATH` / `TRAFFIC_E2E_PROJECT_CONFIG`
-reuses the Recorder section of `project.yaml` and its source traffic policy.
+reuses the Recorder section of `.traffic-e2e/project.yaml` and the single
+`project.policy` reference, normally `.traffic-e2e/policy.yaml`.
 The app does not inspect Git or start the rewrite coordinator. Ingress selects API traffic. Recorder preserves the configured HTTP include/exclude
 rules; their default permits all methods and paths.
 
@@ -25,11 +26,13 @@ recorder:
       paths: [/api/jobs]
 ```
 
-An optional `--source-traffic-policy PATH` /
-`TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY` applies the existing source traffic policy
-overlay at startup, including HTTP case patterns, allowed unused HTTP hosts,
-HTTP response rewrites and process-owned dependency rules. HTTP include/exclude rules continue to apply. An explicit policy overrides the project's policy reference
-and is applied once. Without project configuration or a policy, HTTP cases use literal URI paths.
+Standalone recording can load the Source effects of a `traffic-policy/v1`
+document with `--policy PATH` / `TRAFFIC_E2E_POLICY`. With `--config`, an explicit
+policy must resolve to the same file as `project.policy`; it cannot override the
+project authority. Without project configuration or policy, cases use literal
+URI paths. Capture, HTTP response acquisition and process ownership effects are
+applied once at startup. Comparison rules in the same file do not enable Replay
+or change Source business behavior. HTTP include/exclude rules still apply.
 
 Recorder accumulates observed method/path identities only after successful case
 publication. At recording finalization, `recording-run.json` adds `api_methods`,
@@ -100,7 +103,7 @@ original path. There is no duration limit; SIGTERM/SIGINT ends the session.
 | `--data-root` / `TRAFFIC_E2E_DATA_ROOT` | `/data/traffic-e2e` | Persistent evidence, encryption key and CA |
 | `--artifact-owner` / `TRAFFIC_E2E_ARTIFACT_OWNER` | invoking controller owner | Numeric host UID:GID for private storage and finalized runs; explicit values require root |
 | `--source-workdir` / `TRAFFIC_E2E_SOURCE_WORKDIR` | `/app` | Source working directory |
-| `--source-traffic-policy` / `TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY` | unset | Optional policy file, loaded and validated once before Source startup and discovery registration |
+| `--policy` / `TRAFFIC_E2E_POLICY` | unset | Unified policy for standalone recording; with `--config`, must name `project.policy` |
 | `--startup-timeout-seconds` | `300` | Startup/readiness deadline |
 | `--request-timeout-seconds` | project value or `30` seconds | Override request forwarding/response deadline |
 | `--dns-upstream` / `TRAFFIC_E2E_DNS_UPSTREAM` | project value or first system resolver | Override real DNS upstream before fake-IP projection |
@@ -114,14 +117,20 @@ period, with a 15-second minimum for nonzero values. A missing or invalid
 explicit project configuration fails before Source startup and registration.
 Mount project YAML read-only alongside its policy and restart after edits.
 
-Keep project-specific policy outside the image and bind-mount it read-only:
+Keep project configuration and policy outside the image and bind-mount them
+read-only. Preserve the `.traffic-e2e` directory and repository-relative path
+inside the mount; keep the real Source work directory and business configuration
+unchanged:
 
 ```bash
---mount "type=bind,src=$PWD/.traffic-e2e/source-traffic-policy.yaml,dst=/etc/traffic-e2e/source-traffic-policy.yaml,readonly" \
---mount "type=bind,src=$PWD/.traffic-e2e/project.yaml,dst=/etc/traffic-e2e/project.yaml,readonly" \
---env TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY=/etc/traffic-e2e/source-traffic-policy.yaml \
---env TRAFFIC_E2E_PROJECT_CONFIG=/etc/traffic-e2e/project.yaml
+--mount "type=bind,src=$PWD/.traffic-e2e/policy.yaml,dst=/etc/traffic-e2e/.traffic-e2e/policy.yaml,readonly" \
+--mount "type=bind,src=$PWD/.traffic-e2e/project.yaml,dst=/etc/traffic-e2e/.traffic-e2e/project.yaml,readonly" \
+--env TRAFFIC_E2E_PROJECT_CONFIG=/etc/traffic-e2e/.traffic-e2e/project.yaml
 ```
+
+The mounted project contains `project.policy: .traffic-e2e/policy.yaml`.
+For a deployment without project YAML, mount that same policy and supply
+`--policy /etc/traffic-e2e/.traffic-e2e/policy.yaml` instead.
 
 An explicitly configured missing, non-regular or invalid policy fails startup;
 there is no fallback to literal-path grouping on errors. Policy overlays must

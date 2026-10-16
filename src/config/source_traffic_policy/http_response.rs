@@ -147,22 +147,34 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn grouped_domain_paths_round_trip_with_distinct_pointers() {
-        let yaml = "version: 2\nhttp_response_rewrite:\n- name: cs.example\n  rules:\n  - path_pattern: GET /sandboxes/*\n    pointer: /base_url\n    source_evidence: ID varies; read base_url\n  - path_pattern: GET /other/*\n    pointer: /url\n    source_evidence: read the other service URL\n";
-        let policy = SourceTrafficPolicyConfig::parse(yaml, Path::new("policy.yaml")).unwrap();
-        assert_eq!(policy.http_response_rewrite.len(), 2);
-        assert_eq!(
-            policy.http_response_rewrite[0].name,
-            policy.http_response_rewrite[1].name
-        );
-        assert_eq!(policy.http_response_rewrite[0].methods, ["GET"]);
+    fn separate_typed_capture_scopes_preserve_distinct_pointers_and_ids() {
+        let mut policy = SourceTrafficPolicyConfig::empty();
+        for (path, pointer) in [("GET /sandboxes/*", "/base_url"), ("GET /other/*", "/url")] {
+            policy.http_response_rewrite.push(
+                Document {
+                    name: "cs.example".into(),
+                    path_pattern: path.into(),
+                    pointer: pointer.into(),
+                    source_evidence: "Source consumes this URL".into(),
+                }
+                .into_rule()
+                .unwrap(),
+            );
+        }
         let rendered = policy.render().unwrap();
-        assert!(!rendered.contains("authorities:"));
-        assert!(!rendered.contains("pointers:"));
-        assert_eq!(
-            SourceTrafficPolicyConfig::parse(&rendered, Path::new("policy.yaml")).unwrap(),
-            policy
-        );
+        let document = crate::policy::parse_policy(&rendered).unwrap();
+        assert_ne!(document.rules[0].id(), document.rules[1].id());
+        let parsed = SourceTrafficPolicyConfig::parse(&rendered, Path::new("policy.yaml")).unwrap();
+        assert_eq!(parsed.http_response_rewrite.len(), 2);
+        for (actual, expected) in parsed
+            .http_response_rewrite
+            .iter()
+            .zip(&policy.http_response_rewrite)
+        {
+            assert_eq!(actual.authorities, expected.authorities);
+            assert_eq!(actual.path_pattern, expected.path_pattern);
+            assert_eq!(actual.pointers, expected.pointers);
+        }
     }
 
     #[test]

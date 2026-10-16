@@ -13,8 +13,7 @@ mod target_template;
 use target_template::{render_target_main, render_target_startup_probe};
 
 const PROJECT_CONFIG_PATH: &str = ".traffic-e2e/project.yaml";
-const SOURCE_TRAFFIC_POLICY_PATH: &str = ".traffic-e2e/source-traffic-policy.yaml";
-const VERIFICATION_POLICY_PATH: &str = ".traffic-e2e/verification.yaml";
+const POLICY_PATH: &str = ".traffic-e2e/policy.yaml";
 const TARGET_CARGO_PATH: &str = "Cargo.toml";
 const TARGET_CARGO_LOCK_PATH: &str = "Cargo.lock";
 const TARGET_MAIN_PATH: &str = "src/main.rs";
@@ -127,12 +126,8 @@ fn initialize_repository_config_with(
         )
     })?;
     ensure!(target_root.is_dir(), "target root must be a directory");
-    let configuration_targets = [
-        PROJECT_CONFIG_PATH,
-        SOURCE_TRAFFIC_POLICY_PATH,
-        VERIFICATION_POLICY_PATH,
-    ]
-    .map(|relative| target_root.join(relative));
+    let configuration_targets =
+        [PROJECT_CONFIG_PATH, POLICY_PATH].map(|relative| target_root.join(relative));
     require_configuration_targets_absent(&configuration_targets)?;
     ensure_pr_base_branch(&target_root)?;
 
@@ -145,7 +140,7 @@ fn initialize_repository_config_with(
         platform_response_rewrite_enabled: false,
     };
     let (_, recorder) = render_validated_recorder_config(&recorder_options)?;
-    let verification = crate::replay::render_validated_replay_policy()?;
+    let policy = super::native_policy::empty_policy()?;
     let recorder = serde_yaml::from_str::<super::AppConfig>(&recorder)
         .context("generated recorder config is not valid YAML")?;
     let project = render_project_config(
@@ -153,14 +148,13 @@ fn initialize_repository_config_with(
             target_root: target_root.clone(),
             target_dockerfile: PathBuf::from(TARGET_DOCKERFILE_PATH),
             target_startup: crate::startup::StartupConfig::default(),
-            replay_policy: PathBuf::from(VERIFICATION_POLICY_PATH),
+            replay_policy: PathBuf::from(POLICY_PATH),
             pr_base: PR_BASE.to_string(),
             recorder_config: PathBuf::from(PROJECT_CONFIG_PATH),
             force: false,
         },
         recorder,
     )?;
-    let source_traffic_policy = super::SourceTrafficPolicyConfig::repository_defaults().render()?;
 
     let (gitignore, gitignore_updated, gitignore_created) = ensure_target_gitignore(&target_root)?;
     let (dockerignore, dockerignore_updated, dockerignore_created) =
@@ -173,11 +167,7 @@ fn initialize_repository_config_with(
     let startup = capture_startup(&target_root, &startup)?;
     let mut files = vec![
         (configuration_targets[0].clone(), project),
-        (
-            configuration_targets[1].clone(),
-            source_traffic_policy.into_bytes(),
-        ),
-        (configuration_targets[2].clone(), verification.into_bytes()),
+        (configuration_targets[1].clone(), policy.into_bytes()),
     ];
     let regression = target_root.join(crate::config::regression::PATH);
     if !regression.exists() {
@@ -564,16 +554,8 @@ mod tests {
             ".traffic-e2e/local/runtime"
         );
         assert_eq!(
-            [
-                PROJECT_CONFIG_PATH,
-                SOURCE_TRAFFIC_POLICY_PATH,
-                VERIFICATION_POLICY_PATH
-            ],
-            [
-                ".traffic-e2e/project.yaml",
-                ".traffic-e2e/source-traffic-policy.yaml",
-                ".traffic-e2e/verification.yaml"
-            ]
+            [PROJECT_CONFIG_PATH, POLICY_PATH],
+            [".traffic-e2e/project.yaml", ".traffic-e2e/policy.yaml"]
         );
     }
 
@@ -681,7 +663,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result.generated.len(), 12);
+        assert_eq!(result.generated.len(), 11);
         assert!(
             result
                 .generated
@@ -731,8 +713,7 @@ mod tests {
         );
         assert!(result.target_image_tag.ends_with("-target:cache"));
         assert!(target.path().join(PROJECT_CONFIG_PATH).is_file());
-        assert!(target.path().join(SOURCE_TRAFFIC_POLICY_PATH).is_file());
-        assert!(target.path().join(VERIFICATION_POLICY_PATH).is_file());
+        assert!(target.path().join(POLICY_PATH).is_file());
         assert!(target.path().join(TARGET_CARGO_PATH).is_file());
         assert!(target.path().join(TARGET_CARGO_LOCK_PATH).is_file());
         assert!(target.path().join(TARGET_MAIN_PATH).is_file());
@@ -839,8 +820,7 @@ mod tests {
             "http://127.0.0.1:8181"
         );
         assert_eq!(recorder.recording.max_body_bytes, DEFAULT_BODY_LIMIT_BYTES);
-        crate::replay::validate_replay_policy(&target.path().join(VERIFICATION_POLICY_PATH))
-            .unwrap();
+        crate::replay::validate_replay_policy(&target.path().join(POLICY_PATH)).unwrap();
 
         let error = initialize_repository_config_with(
             RepositoryConfigInitOptions {

@@ -184,7 +184,20 @@ pub fn plan_case_path_pattern_feedback(
     rules.http.source_revision = feedback.source_revision.clone();
     rules.apply_to(&mut static_config)?;
     static_config.validate()?;
-    let updated_rules = rules.render()?;
+    let updated_rules = super::native_policy::render_updated(
+        &original_rules,
+        &rules,
+        &crate::policy::Proof {
+            source: format!("{} at {}", feedback.case_source, feedback.source_revision),
+            fact: feedback.correction_evidence.clone().unwrap_or_else(|| {
+                format!(
+                    "Observed Source APIs support the {} case-path scope: {}",
+                    feedback.authority,
+                    rules.http.case_path_patterns.join(", ")
+                )
+            }),
+        },
+    )?;
 
     let added = after.difference(&before).cloned().collect::<Vec<_>>();
     let removed = before.difference(&after).cloned().collect::<Vec<_>>();

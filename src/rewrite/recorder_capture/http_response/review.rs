@@ -17,7 +17,7 @@ pub(super) fn report(
 ) -> Result<RewriteHttpResponseCaptureReport> {
     let app = crate::AppConfig::load(super::super::project_config(target_root))?;
     rules::validate_requested(&app, &options.rule)?;
-    let path = super::super::source_traffic_policy_path(target_root);
+    let path = super::super::source_traffic_policy_path(target_root)?;
     let policy =
         crate::config::SourceTrafficPolicyConfig::parse(&std::fs::read_to_string(&path)?, &path)?;
     let existing: Vec<_> = app.http_response_rewrite.rules.iter()

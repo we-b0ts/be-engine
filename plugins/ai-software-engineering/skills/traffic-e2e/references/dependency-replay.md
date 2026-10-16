@@ -23,12 +23,9 @@ and query, applicable headers, and body. Remove only transport headers the
 harness must regenerate. Do not hardcode case-specific auth, tenant, query, body,
 or cookie values in target tests.
 
-An explicit `verification.yaml` `request_rules.jwt` policy may translate
-verified HMAC JWT time claims in the engine's per-send request copy. This is
-an exception only to exact credential-byte reuse: original recording files,
-identity/permission claims, target authentication behavior and all dependency
-checks remain intact. See [JWT request rules](../../../../../docs/jwt-request-rules.md)
-for evidence-backed plan/apply and reexecution without new standard recording.
+A typed `input_jwt` effect in `project.policy` may translate Source request
+NumericDates using the resolved startup key. It does not consume expected
+responses or dependency results. See [unified rules](replay-policy.md).
 
 Treat recorder dependency summaries and final replay reports as the acceptance
 evidence for case-owned touches. Equivalent target behavior must preserve the
@@ -81,16 +78,12 @@ remain exact. See
 [MySQL interoperability](../../../../../docs/mysql-replay.md) for the exact
 boundary and actual-client acceptance tests.
 
-Generated MySQL write timestamps can use explicit `mysql.sql_values` time rules
-across text and prepared protocols. A rule may atomically select multiple scalar
-slots and exact JSON Pointer fields inside string slots, with independent time
-formats. Rules select database and SQL, independently of inbound API paths;
-`sql_values: {0: {time: replay_now, tolerance: 5s}}` uses UTC MySQL datetime
-defaults. The coordinator exposes
-`dependency-rule plan mysql-time`; it requires source proof and matching immutable
-write evidence, then reruns Replay without new recording or write omission.
-See [SQL time rules](../../../../../docs/mysql-time-rules.md). Preserve database
-error propagation in target code; swallowing an unmatched UPDATE is not a fix.
+Generated MySQL write timestamps use the native `mysql_values` effect in the
+unified policy. Text and prepared requests share typed slots and complete SQL
+remainder checks. Native parameters, generated bindings, JSON/PB values and
+result time columns compose through their explicit owners. Use the discovered
+schema and `rule plan --file ... --evidence ...`, then keep the returned Replay
+obligation. Database error propagation remains part of Target behavior.
 
 Ordinary single-table SELECT predicates also support reordered IN/NOT IN values
 and pure AND conditions / OR branches, including source text literals versus
@@ -276,17 +269,15 @@ context for failures and never count as semantic dependency mismatches.
 
 ## HTTP Request JSON Ordering
 
-HTTP request JSON objects compare by value; arrays remain ordered unless an
-explicit `http.json.unordered` dependency rule selects their JSON Pointer.
-The `dependency-rule plan http unordered` workflow requires a current
-order-only request witness and source proof. It preserves query identity,
-element types, contents and duplicate counts, and requires fresh Replay after
-apply. See [HTTP unordered rules](../../../../../docs/http-unordered-rules.md)
-for worker discovery, coordinator plan/apply and the verification YAML shape.
+HTTP request JSON objects compare by value; arrays remain ordered unless a
+`dependency.request` body contract selects a pointer with `kind: unordered`.
+The same JSON/PB contract works in other supported value slots. Source proof
+must justify order independence; the comparator retains duplicates, types,
+query/header identity and every unselected field. See [unified rules](replay-policy.md).
 
 ## Explicit Cross-Case HTTP Scope
 
-A `cross-case` verification rule with `replay_scope: recording_run` may make
+A typed `finite_sharing` rule may make
 source-proven shared initialization exchanges available across APIs in the same
 completed standard recording. The scope is derived in memory and exchanges
 remain single-use per session. Query, body and identity headers stay strict;

@@ -73,13 +73,10 @@ pub(in crate::rewrite) fn install_project_config(
     let document = serde_json::json!({
         "version": 18,
         "project": {
+            "policy": ".traffic-e2e/policy.yaml",
             "source": { "snapshot": ".traffic-e2e/local/source" },
             "target": target,
-            "replay": { "policy": ".traffic-e2e/verification.yaml" },
-            "recording": {
-                "rule": "http-rule",
-                "source_traffic_policy": "source-traffic-policy.yaml"
-            },
+            "replay": {},
             "delivery": { "pr_base": pr_base },
             "state": { "runtime_root": "local/runtime" }
         },
@@ -93,10 +90,8 @@ pub(in crate::rewrite) fn install_project_config(
     )
     .unwrap();
     fs::write(
-        directory.join("source-traffic-policy.yaml"),
-        crate::config::SourceTrafficPolicyConfig::empty()
-            .render()
-            .unwrap(),
+        directory.join("policy.yaml"),
+        crate::config::native_policy::empty_policy().unwrap(),
     )
     .unwrap();
 }

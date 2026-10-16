@@ -6,8 +6,7 @@ use tempfile::TempDir;
 use super::*;
 
 const PROJECT: &str = r#"project:
-  recording:
-    source_traffic_policy: source-traffic-policy.yaml
+  policy: .traffic-e2e/policy.yaml
 recorder:
   http_gateway:
     enabled: true
@@ -24,7 +23,7 @@ fn feedback(fixture: &Fixture, authority: CasePathPatternAuthority) -> CasePathP
     CasePathPatternFeedback {
         project_config_path: fixture.project.clone(),
         rules_path: fixture.rules.clone(),
-        source_revision: "abc123".to_string(),
+        source_revision: format!("sha256:{}", "a".repeat(64)),
         case_source: "/recordings/focused".to_string(),
         authority,
         patterns: vec!["/api/huaweiyun/loadbalancers/listeners/list/*".to_string()],
@@ -56,7 +55,10 @@ fn focused_feedback_updates_only_source_traffic_policy_and_converges() {
         ]
     );
     let rules = SourceTrafficPolicyConfig::load(&fixture.rules).unwrap();
-    assert_eq!(rules.http.source_revision, "abc123");
+    assert_eq!(
+        rules.http.source_revision,
+        format!("sha256:{}", "a".repeat(64))
+    );
 }
 
 #[test]
@@ -157,11 +159,13 @@ struct Fixture {
 impl Fixture {
     fn new(patterns: &[&str]) -> Self {
         let temp = TempDir::new().unwrap();
-        let project = temp.path().join("project.yaml");
-        let rules_path = temp.path().join("source-traffic-policy.yaml");
+        let directory = temp.path().join(".traffic-e2e");
+        fs::create_dir(&directory).unwrap();
+        let project = directory.join("project.yaml");
+        let rules_path = directory.join("policy.yaml");
         fs::write(&project, PROJECT).unwrap();
         let mut rules = SourceTrafficPolicyConfig::empty();
-        rules.http.source_revision = "old".to_string();
+        rules.http.source_revision = format!("sha256:{}", "0".repeat(64));
         rules.http.case_path_patterns = patterns.iter().map(|value| (*value).to_string()).collect();
         fs::write(&rules_path, rules.render().unwrap()).unwrap();
         Self {

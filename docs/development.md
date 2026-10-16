@@ -349,8 +349,7 @@ and no new `Hardcode-Source-Evidence` commit trailers.
 The engine checks this automatically; do not manufacture another handoff or
 rerun checks merely to publish progress metadata.
 
-Changes confined to `.traffic-e2e/source-traffic-policy.yaml` or
-`.traffic-e2e/verification.yaml` preserve an accepted code review receipt when
+Changes confined to the file named by `project.policy` preserve an accepted code review receipt when
 its other freshness conditions still hold. These files are excluded from review
 code identity and the purpose baseline comparison, but remain part of the traffic
 verification fingerprint: policy edits invalidate prior E2E evidence
@@ -380,7 +379,7 @@ Repository scripts are development checks or explicit host trust-store tools
 only.
 
 Use the `backend-rewrite` binary and its `next`, `status`, `inventory`,
-`evidence`, `rule`, `dependency-rule`, `route`, `repair`,
+`evidence`, `rule`, `route`, `repair`,
 `config`, and `recover` commands for AI-facing migration orchestration.
 `traffic-e2e` has no
 `rewrite` subcommand; `backend-rewrite` invokes the shared crate directly and
@@ -433,7 +432,7 @@ encrypt_request_headers = ["authorization"]
 ```
 
 JWT expiration between recording and Replay can be handled by an explicit
-`verification.yaml` request rule. See [JWT request rules](jwt-request-rules.md)
+`traffic-policy/v1` `input_jwt` rule. See [JWT request rules](jwt-request-rules.md)
 for the coordinator evidence, plan/apply, target key sources, and replay-only
 revalidation flow. No new standard recording is required for this rule.
 
@@ -719,33 +718,35 @@ The `vintage-naming` plugin rewrites legacy Motan node addresses published by
 Vintage naming responses. The `vintage-cache-config` plugin rewrites cache
 node addresses published inside Vintage `/1/config/service` responses.
 
-For ordinary JSON URL fields, the coordinator writes compact rules in
-`.traffic-e2e/source-traffic-policy.yaml`:
+HTTP URL acquisition is a `capture_http_response` native effect in the unified
+policy named by `project.policy`:
 
 ```yaml
-http_response_rewrite:
-  - name: cs.wegent.intra.demo.test
-    rules:
-      - path_pattern: GET /executor-manager/sandboxes/*
-        pointer: /base_url
-        source_evidence: sandbox_id varies; consume base_url
-      - path_pattern: GET /another-api/*
-        pointer: /base_url
-        source_evidence: another API with dynamic IDs
+format: traffic-policy/v1
+rules:
+  - id: sandbox-url
+    match: {}
+    effect:
+      kind: capture_http_response
+      authorities: [cs.wegent.intra.demo.test]
+      methods: [GET]
+      path: {kind: pattern, value: '/executor-manager/sandboxes/*'}
+      status_codes: [200]
+      content_types: [application/json]
+      contract:
+        kind: urls
+        pointers:
+          - contract: /base_url
+            proof: {source: 'src/client:sandbox', fact: 'The client follows this URL.'}
+    proof: {source: 'src/client:sandbox', fact: 'Source returns a dynamic sandbox endpoint.'}
 ```
 
-`name` is the upstream authority and appears once per domain. Its `rules` list
-contains multiple path entries. Each `path_pattern` contains the HTTP method
-and path; `pointer` selects one JSON URL field. Use separate path entries for
-other methods or fields. `source_evidence` records
-the short note supplied during path review. The recorder overlays these rules
-on the static configuration in `project.yaml`. The previously generated
-`authorities` / `methods` / `pointers` list format is not accepted in this
-managed policy section. Omitted `enabled` enables configured rules; an explicit
-`enabled: false` still disables them. Rules are loaded at recording startup;
-new addresses are discovered on each matching response, without hot reload.
+Every pointer has an explicit Source fact. Built-in plugins use the same effect
+with their typed plugin contract. Rules load once at recording startup; changes
+require a fresh recording to obtain the downstream exchanges. See
+[unified rules](unified-rule-contracts.md).
 
-The path part of `path_pattern` matches the request path excluding its query.
+The typed `path` selector matches the request path excluding its query.
 Whole-segment `*` matches exactly one nonempty level; terminal `**` matches one or more levels.
 Thus `/sandboxes/*` matches `/sandboxes/123`, not `/sandboxes/123/files` or
 `/sandboxes/`. The static recorder configuration retains exact `path` selectors
@@ -873,37 +874,25 @@ traffic-e2e replay --no-intercept path/to/case-dir
 ```
 
 Target-specific dynamic UUID, timestamp, and signed-query matching belongs in
-a source-controlled `.traffic-e2e/verification.yaml`, not product code or recorded fixture
+a source-controlled `.traffic-e2e/policy.yaml`, not product code or recorded fixture
 overrides. Initialize it once and load it explicitly:
 
 ```bash
 traffic-e2e config init --target-root ../target \
   --source-pod <pod> --namespace <namespace>
-traffic-e2e replay --policy ../target/.traffic-e2e/verification.yaml path/to/case-dir
+traffic-e2e replay --policy ../target/.traffic-e2e/policy.yaml path/to/case-dir
 ```
 
-See [replay-policy.md](replay-policy.md) for the policy schemas,
+See [unified-rule-contracts.md](unified-rule-contracts.md) for the policy schemas,
 assertion-only `expected-response.json` contract, dependency rule scoping,
 runner-owned generated-scalar and unordered response fields, and dirty-evidence
 behavior.
 
-Coordinator-owned host exceptions for API-independent process-level tasks live
-in the target repository's `.traffic-e2e/source-traffic-policy.yaml`, not
-`.traffic-e2e/project.yaml` or `.traffic-e2e/verification.yaml`. Apply an add-only host after source inspection
-proves that all traffic to that host belongs to a task that is unrelated to API
-handlers:
-
-```bash
-traffic-e2e config recorder apply allowed-unused-http-hosts \
-  --target-root ../target \
-  --host cs.aliyuncs.com
-```
-
-The tool updates the global HTTP policy in the wholly coordinator-managed
-source traffic policy document. Apply replans against current evidence and is
-add-only, sorted, deduplicated, atomic, and safe against concurrent changes to
-either config document. One host applies to every HTTP case, independent of which recording
-rule or active API window happened to capture the process-level task.
+Process-owned asynchronous HTTP work uses a bounded `process_owned` rule with
+explicit authority, method, path prefix and Source proof. Unbounded unused-host
+exemptions are retired. Finite sharing does not authorize unused work. Use the
+same unified rule transaction described below; preserve target initialization,
+refresh and readiness behavior when the dependency drives business state.
 
 When a response-driving source hostname is absent from dependency evidence but
 occurs in the configured Breeze snapshot, preview and enable its logical
@@ -913,13 +902,13 @@ resource instead of listing dynamic ports or backend domains:
 traffic-e2e config recorder plan breeze-resource-capture \
   --target-root ../target \
   --resource usercounter \
-  --source-revision <source-commit> \
+  --source-revision <immutable-source-image-revision> \
   --evidence 'src/UserCounter.java:load uses usercounter'
 
 traffic-e2e config recorder apply breeze-resource-capture \
   --target-root ../target \
   --resource usercounter \
-  --source-revision <source-commit> \
+  --source-revision <immutable-source-image-revision> \
   --evidence 'src/UserCounter.java:load uses usercounter'
 ```
 
@@ -954,7 +943,7 @@ Pass the recorder config for direct replay:
 
 ```bash
 traffic-e2e replay \
-  --policy ../target/.traffic-e2e/verification.yaml \
+  --policy ../target/.traffic-e2e/policy.yaml \
   --recorder-config ../target/.traffic-e2e/project.yaml \
   path/to/case-dir
 ```
@@ -1847,15 +1836,16 @@ paths but do not prove that order is semantically irrelevant. Every selected
 protobuf/Hessian2 path and every DOCX timestamp selector must include one-line
 source evidence. Codec-only selection is evidence-light because it ignores only
 DOCX/ZIP packaging metadata or changes decoding without relaxing body values.
-Memcached dirty-cluster
-evidence currently exposes `protobuf-timestamp`, whose help command is:
+Memcached dirty-cluster evidence returns the supported JSON/PB value slot and
+its typed contracts. Use the same proposal entrypoint as other protocols:
 
 ```bash
-backend-rewrite --target-root ../target dependency-rule plan memcached protobuf-timestamp --help
+backend-rewrite --target-root ../target rule plan --file /tmp/proposed-rules.yaml \
+  --evidence <current-evidence-id>
 ```
 
 The rule planner requires current dirty-cluster evidence and source proof for
-the selected protobuf field. It owns the fixed five-second timestamp window;
+each selected logical field. It owns the fixed five-second timestamp window;
 the caller supplies neither an offset nor a tolerance.
 
 Dependency evidence can be projected without parsing the JSONL directly:
@@ -1882,11 +1872,12 @@ intentionally neither interpreted nor exposed. Dependency `representatives` and 
 return the appropriate summary command so an AI does not need to reconstruct
 argv or write an ad hoc artifact parser.
 
-Use `backend-rewrite rule plan|apply` for source-proven inbound request,
-dependency request or response rules. Generated dependency request fields use
-`rule plan --dependency-request`; see [dependency request rules](dependency-request-rules.md).
-MySQL result expiry timestamps use the same plan/apply transaction; see
-[MySQL result time shifts](mysql-response-time-shift.md).
+Use one `backend-rewrite rule plan --file RULES.yaml --evidence EVIDENCE_ID`
+transaction for Source capture/classification, input adaptation, API response,
+dependency request and dependency response effects. Query the returned bounded
+rule discovery and capability evidence before authoring. `rule apply PLAN_ID`
+uses the expanded reviewed rule and reports the remaining Replay or recording
+obligations. See [unified rules](unified-rule-contracts.md).
 
 Fast Replay does not currently reproduce process-local TTL expiry between
 recorded requests. If compressed request intervals keep a target cache warm and
@@ -1922,7 +1913,7 @@ responses requires unchanged managed code, verification policy, startup snapshot
 and effective environment. Process-owned classification alone may change. When
 execution inputs changed, or legacy state has no execution identity, reclassification
 refreshes diagnosis but requests fresh Replay and preserves the old target fingerprint.
-If `dependency-rule apply PLAN_ID` stops after writing the policy or report,
+If `rule apply PLAN_ID` stops after writing the policy or report,
 retry the same pending plan. Ownership planners recover original unused-case
 witnesses from the engine's reversible reclassification markers in memory;
 policy application and reclassification can then complete without duplicate
@@ -1933,10 +1924,9 @@ For a legacy pending rule whose Replay report or sidecar is already unavailable,
 `next` returns `rule recover PLAN_ID`. This command retires only the matching plan,
 returns its selector and source proof, and requests fresh Replay with the existing
 recordings. It does not apply the stale plan or fabricate evidence. After Replay,
-query current evidence and plan again. `dependency-rule recover PLAN_ID` is an
-alias for the same recovery transaction.
+query current evidence and plan again. The retired `dependency-rule` commands do not accept new plans.
 This recovery is for missing evidence; a partially applied ownership rule with
-available evidence resumes through `dependency-rule apply`.
+available evidence resumes through `rule apply`.
 
 Use `backend-rewrite route` for a source-proven missing recorded resource,
 Recorder/Replay capability gap, external-data blocker, or source change. For a
@@ -2064,7 +2054,7 @@ freeze concurrent application or external-volume writes. Use a stopped,
 quiescent source when a consistent application checkpoint is required.
 
 The command generates version-18 `.traffic-e2e/project.yaml`,
-`.traffic-e2e/source-traffic-policy.yaml`, and `.traffic-e2e/verification.yaml`.
+and one empty `.traffic-e2e/policy.yaml`, referenced by `project.policy`.
 When the root `Cargo.toml`, `Cargo.lock`, and `src/main.rs` are all absent, it
 also generates a runnable readiness-only Rust target using `http-server`
 `v0.0.2` with its `macros` feature. `ReadinessApi` exports the configured GET
@@ -2083,8 +2073,8 @@ root `.gitignore` and `.dockerignore` with canonical local-state, Rust build,
 recording, data, credential, and environment-file exclusions; existing regular
 target files are preserved.
 `project.yaml` combines project settings with the static recorder settings;
-`source-traffic-policy.yaml` is wholly AI/coordinator managed. Project settings
-have explicit source, target, replay, verification, recording,
+`policy.yaml` holds all explicit rules and proofs. Project settings
+have a single `policy` path plus source, target, replay, verification,
 delivery, and state sections. `verification.max_failed_cases_per_api` defaults
 to `10`; Replay stops admitting additional cases for an API once
 that many cases have not passed. Remaining Replay cases stay unexecuted rather
@@ -2186,7 +2176,7 @@ backend-rewrite-admin --target-root <target> source upgrade \
 ```
 
 This is not project initialization and never rewrites `project.yaml`,
-`source-traffic-policy.yaml`, `verification.yaml`, either Dockerfile, target
+the file named by `project.policy`, either Dockerfile, target
 code, Git state, or `.traffic-e2e/local/target.env`. It captures the selected
 Pod's new immutable image, effective environment, command and arguments,
 security settings, and supported ConfigMap/Secret mounts into a validated
@@ -2319,8 +2309,8 @@ from `Dockerfile.source`. Application-specific startup inputs use the normal
 startup declarations; Breeze SDK use and Vintage response rewrite rules remain
 independent of this startup contract.
 
-Changes confined to `.traffic-e2e/source-traffic-policy.yaml` (including case
-pattern discovery) or `.traffic-e2e/verification.yaml` do not require code review
+Changes confined to the file named by `project.policy` (including case
+pattern discovery) do not require code review
 or invalidate an otherwise current accepted code review receipt. Both policies
 remain part of the configuration commit gate and
 traffic verification fingerprints; changed source, startup inputs and other
@@ -2518,8 +2508,7 @@ Intermediate attempts do not require Git commits for progress. After every API
 is verified, the rewrite coordinator synchronizes the final public
 `progress.yaml` snapshot and returns
 `input_required/verification_progress_commit_required` until every dirty,
-coordinator-managed delivery file is committed: `source-traffic-policy.yaml`,
-`verification.yaml`, and `progress.yaml`. The action lists only the dirty
+coordinator-managed delivery file is committed: the file named by `project.policy` and `progress.yaml`. The action lists only the dirty
 paths. A reset at that gate is reconstructed from the local ledger and cannot
 make terminal completion available.
 
@@ -2714,48 +2703,33 @@ the first response, and `cache_snapshot_fill_timeout_ms` bounds that wait.
 Successful responses become sticky for the run; Redis errors are delivered to
 current waiters but are not retained.
 
-Source-proven process-level HTTP polling can be classified before recording:
+Source-proven process-level HTTP polling can be classified through a
+self-contained native rule:
 
-```toml
-[[recording.process_owned_dependencies]]
-name = "config-refresh"
-protocol = "http"
-authorities = ["config.api.demo.test"]
-methods = ["GET"]
-path_prefixes = ["/1/config/service"]
-source_evidence = "src/config/refresh.rs:42 process-level scheduled refresh"
+```yaml
+id: config-refresh
+match: {}
+effect:
+  kind: process_owned
+  source_revision: ''
+  selector:
+    protocol: http
+    authorities: [config.api.demo.test]
+    methods: [GET]
+    path_prefixes: [/1/config/service]
+proof:
+  source: src/config/refresh.rs:42
+  fact: A process scheduler refreshes this exact endpoint independently of APIs.
 ```
 
-All three selector dimensions and `source_evidence` are required. HTTP rules
-accept bounded, non-empty authority and path-prefix lists and match their
-explicit cross-product with the configured method. Repository initialization
-installs the system-owned `breeze_vintage` rule for the Weibo Vintage
-configuration and naming endpoints. The source revision remains in the plan
-report instead of runtime configuration. A
-matching exchange is not attributed to an active API case and therefore does
-not enter that case's `dependencies.jsonl` or summary. The ordinary run-level
-`traffic.jsonl` continues to retain the exchange only when
-`recording.traffic_jsonl` permits it. It also enters
-`global-dependencies.jsonl` with `reason=background_rule` and a
-`bootstrap|runtime` phase. HTTP, Motan, and Memcached rules change ownership
-only. A Redis rule also enables the bounded first-value snapshot; it does not
-change response capture limits or protocol debugging. Add a rule only after
-response assertions pass and
-source inspection proves process ownership and case independence. Low-level
-Recorder use applies the rule during future capture. In the managed
-`backend-rewrite` workflow, non-Redis dependency-rule apply can derive a
-current case/global ownership view from the existing immutable capture,
-rewrite only the generated replay report and dependency-evidence sidecar, and
-revise the same focused attempt. Redis rule apply first attempts a read-only
-snapshot overlay from the existing immutable capture. The overlay groups
-matching Global and Case exchanges by exact target/session/command/arguments,
-requires a successful untruncated `bootstrap_window` Global seed, rejects
-conflicting responses or ambiguous/unsafe evidence, and references one
-original exchange without rewriting or copying the recording. Replay then
-reuses that seed with first-value semantics. If any configured key or observed
-logical identity cannot be proved safe, the coordinator keeps the existing
-behavior and queues the affected API for one consolidated fresh standard
-recording.
+Initialization creates an empty policy and adds no service-specific ownership
+rules. HTTP, Motan and Memcached ownership preserves their existing finite
+consumption. Redis snapshot-producing selectors affect capture and runtime;
+new authorization conservatively requires fresh recording. Classification-only
+changes may derive a report from immutable complete Source evidence, while
+Target context obligations still require Replay. The plan enumerates these
+obligations instead of inferring success from reclassification.
+
 The coordinator also detects an already-finalized attempt whose effective
 dependency view is clean but whose persisted errors still contain the obsolete
 strict dirty-finalize result. `backend-rewrite next` removes only that

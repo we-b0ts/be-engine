@@ -147,9 +147,7 @@ fn ip_preflight_returns_guidance_then_plan_apply_parks_for_refresh() {
         ip_capture::ensure_before_system_repair(target.path(), &state, "recorder_capability_gap")
             .is_err()
     );
-    let config = target
-        .path()
-        .join(".traffic-e2e/source-traffic-policy.yaml");
+    let config = target.path().join(".traffic-e2e/policy.yaml");
     let before = fs::read_to_string(&config).unwrap();
     let planned = checked_plan(target.path(), &mut state, options(&report));
     assert_eq!(fs::read_to_string(&config).unwrap(), before);
@@ -211,7 +209,7 @@ fn rule(pattern: &str) -> HttpResponseRewriteRuleConfig {
 }
 
 fn install_rules(target: &Path, rules: Vec<HttpResponseRewriteRuleConfig>) {
-    let path = super::super::source_traffic_policy_path(target);
+    let path = super::super::source_traffic_policy_path(target).unwrap();
     let mut policy =
         crate::config::SourceTrafficPolicyConfig::parse(&fs::read_to_string(&path).unwrap(), &path)
             .unwrap();
@@ -248,7 +246,8 @@ fn first_plan_requires_explicit_review_without_a_proof_format_or_apply_command()
     let mut input = options(&report);
     input.pattern_checked = false;
     input.source_evidence.clear();
-    let before = fs::read(super::super::source_traffic_policy_path(target.path())).unwrap();
+    let before =
+        fs::read(super::super::source_traffic_policy_path(target.path()).unwrap()).unwrap();
     let result =
         serde_json::to_value(plan(target.path(), &mut state, input.clone()).unwrap()).unwrap();
     assert_eq!(result["status"], "path_pattern_review_required");
@@ -266,7 +265,7 @@ fn first_plan_requires_explicit_review_without_a_proof_format_or_apply_command()
     );
     assert!(state.recorder_capture_plan.is_none());
     assert_eq!(
-        fs::read(super::super::source_traffic_policy_path(target.path())).unwrap(),
+        fs::read(super::super::source_traffic_policy_path(target.path()).unwrap()).unwrap(),
         before
     );
     input.pattern_checked = true;
@@ -390,7 +389,8 @@ fn checked_pattern_merges_old_ids_and_preserves_uncovered_or_different_rules() {
     );
     assert_eq!(after[3], another_pointer);
     let raw: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(super::super::source_traffic_policy_path(target.path())).unwrap(),
+        &fs::read_to_string(super::super::source_traffic_policy_path(target.path()).unwrap())
+            .unwrap(),
     )
     .unwrap();
     let domain = &raw["http_response_rewrite"][0];
@@ -434,13 +434,14 @@ fn existing_pattern_is_reused_without_adding_the_new_id() {
     let report = report_ip(target.path(), &mut state, "http-response");
     let mut input = options(&report);
     input.rule.path_pattern = Some("/executor-manager/sandboxes/123".into());
-    let before = fs::read(super::super::source_traffic_policy_path(target.path())).unwrap();
+    let before =
+        fs::read(super::super::source_traffic_policy_path(target.path()).unwrap()).unwrap();
     let planned = checked_plan(target.path(), &mut state, input);
     assert_eq!(planned.traffic_e2e_report["reused_existing"], true);
     assert_eq!(planned.traffic_e2e_report["changed"], false);
     super::super::apply(target.path(), &mut state, &planned.plan_id).unwrap();
     assert_eq!(
-        fs::read(super::super::source_traffic_policy_path(target.path())).unwrap(),
+        fs::read(super::super::source_traffic_policy_path(target.path()).unwrap()).unwrap(),
         before
     );
 }

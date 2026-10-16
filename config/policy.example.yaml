@@ -1,0 +1,4 @@
+# One typed policy for recording, classification, inputs and comparisons.
+# Discover differences, plan a self-contained rule with Source proof, then apply.
+format: traffic-policy/v1
+rules: []

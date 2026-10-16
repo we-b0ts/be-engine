@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use super::model::{
     DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS, DeliveryProjectConfig, ProjectConfig, ProjectSettings,
-    RecordingProjectConfig, ReplayProjectConfig, ResolvedProjectConfig, RunLayout,
-    SourceProjectConfig, StateProjectConfig, TargetProjectConfig, VerificationProjectConfig,
+    ReplayProjectConfig, ResolvedProjectConfig, RunLayout, SourceProjectConfig, StateProjectConfig,
+    TargetProjectConfig, VerificationProjectConfig,
 };
 use super::project_validation::validate_project_config;
 use super::target_quality_config::inferred_target_quality_gates;
@@ -81,16 +81,10 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
     require_internal_root_ignored(&target_root, &runtime_root)?;
 
     let payload = render_project_config(&options, recorder)?;
-    let rules_path = traffic_e2e_dir.join(crate::config::SOURCE_TRAFFIC_POLICY_FILE);
-    let rules = crate::config::SourceTrafficPolicyConfig::repository_defaults().render()?;
     if options.force {
         crate::config::edit::write_atomic(&config_path, &payload)?;
-        crate::config::edit::write_atomic(&rules_path, rules.as_bytes())?;
     } else {
-        crate::config::edit::create_many_atomic(&[
-            (config_path.clone(), payload),
-            (rules_path, rules.into_bytes()),
-        ])?;
+        crate::config::edit::create_many_atomic(&[(config_path.clone(), payload)])?;
     }
     let persisted = load_project_config(&target_root, &config_path)?;
     crate::config::regression::initialize(&target_root)?;
@@ -111,6 +105,7 @@ pub(crate) fn render_project_config(
     let project_config = ProjectConfig {
         version: CONFIG_VERSION,
         project: ProjectSettings {
+            policy: options.replay_policy.clone(),
             source: SourceProjectConfig {
                 snapshot: PathBuf::from(crate::repository::LOCAL_SOURCE_ROOT),
             },
@@ -123,15 +118,10 @@ pub(crate) fn render_project_config(
             replay: ReplayProjectConfig {
                 startup_timeout_seconds: super::model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
                 dependency_loading: crate::replay::ReplayDependencyLoading::managed_default(),
-                policy: options.replay_policy.clone(),
                 case_dependency_post_response_window_ms:
                     crate::replay::DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS,
             },
             verification: VerificationProjectConfig::default(),
-            recording: RecordingProjectConfig {
-                _legacy_rule: None,
-                source_traffic_policy: PathBuf::from(crate::config::SOURCE_TRAFFIC_POLICY_FILE),
-            },
             delivery: DeliveryProjectConfig {
                 pr_base: options.pr_base.clone(),
                 managed_paths: Vec::new(),
@@ -208,17 +198,14 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         &target_root,
         &config.project.delivery.managed_paths,
     )?;
-    let policy_path = resolve_under(&target_root, &config.project.replay.policy);
+    let policy_path = crate::config::resolve_unified_policy_path(&config_path)?;
     let policy = validate_replay_policy(&policy_path).context("invalid replay policy")?;
     ensure!(
         policy.runner_owned_response_assertions,
         "managed project replay requires verification policy version 3 with runner-owned response assertions"
     );
     let recorder_config = config_path.clone();
-    let source_traffic_policy = crate::config::source_traffic_policy::resolve_from_project_config(
-        &config_path,
-        &config.project.recording.source_traffic_policy,
-    )?;
+    let source_traffic_policy = policy_path.clone();
     let recorder = crate::config::AppConfig::load(&recorder_config)?;
     ensure!(
         !recorder.http_gateway.enabled || recorder.http_gateway.ready.enabled,
@@ -430,9 +417,7 @@ mod tests {
             .collect::<String>();
         fs::write(
             root.join("config/project.yaml"),
-            format!(
-                "version: 14\nproject:\n  recording:\n    source_traffic_policy: source-traffic-policy.yaml\nrecorder:\n{recorder}"
-            ),
+            format!("version: 18\nproject:\n  policy: config/replay.yaml\nrecorder:\n{recorder}"),
         )
         .unwrap();
     }
@@ -463,7 +448,7 @@ mod tests {
         fs::create_dir_all(root.join("config")).unwrap();
         fs::write(
             root.join("config/replay.yaml"),
-            "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+            "format: traffic-policy/v1\nrules: []\n",
         )
         .unwrap();
         let mut recorder = crate::config::AppConfig::default();
@@ -478,8 +463,8 @@ mod tests {
         }];
         write_input_project(root, &recorder);
         fs::write(
-            root.join("config/source-traffic-policy.yaml"),
-            "version: 2\nhttp:\n  case_path_patterns: []\n  allowed_unused_http_hosts: []\nbreeze_capture: []\nprocess_owned_dependencies: []\n",
+            root.join("config/replay.yaml"),
+            "format: traffic-policy/v1\nrules: []\n",
         )
         .unwrap();
         assert!(
@@ -572,10 +557,7 @@ mod tests {
             config.project.target.startup_timeout_seconds,
             DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS
         );
-        assert_eq!(
-            config.project.replay.policy,
-            PathBuf::from("config/replay.yaml")
-        );
+        assert_eq!(config.project.policy, PathBuf::from("config/replay.yaml"));
         assert_eq!(
             config
                 .project
@@ -725,7 +707,7 @@ mod tests {
     fn managed_replay_uses_the_recorder_body_limit() {
         let target = target();
         let recorder_path = target.path().join("config/project.yaml");
-        let mut recorder = crate::config::AppConfig::load(&recorder_path).unwrap();
+        let mut recorder = crate::config::AppConfig::load_static(&recorder_path).unwrap();
         recorder.recording.max_body_bytes = 1234;
         write_input_project(target.path(), &recorder);
         initialize(options(target.path())).unwrap();
@@ -741,7 +723,7 @@ mod tests {
     fn managed_replay_keeps_the_native_target_http_port() {
         let target = target();
         let recorder_path = target.path().join("config/project.yaml");
-        let mut recorder = crate::config::AppConfig::load(&recorder_path).unwrap();
+        let mut recorder = crate::config::AppConfig::load_static(&recorder_path).unwrap();
         recorder.http_gateway.matched_upstream = "http://127.0.0.1:8080".to_string();
         write_input_project(target.path(), &recorder);
         initialize(options(target.path())).unwrap();
@@ -756,7 +738,7 @@ mod tests {
     fn managed_replay_accepts_motan_only_readiness() {
         let target = target();
         let recorder_path = target.path().join("config/project.yaml");
-        let mut recorder = crate::config::AppConfig::load(&recorder_path).unwrap();
+        let mut recorder = crate::config::AppConfig::load_static(&recorder_path).unwrap();
         recorder.http_gateway.enabled = false;
         recorder.http_gateway.ready.enabled = false;
         recorder.motan_gateway.enabled = true;

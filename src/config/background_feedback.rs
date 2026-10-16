@@ -154,6 +154,39 @@ pub(crate) fn plan_rule_config(
     let mut config = SourceTrafficPolicyConfig::parse(&original, rules_path)?;
     let mut rules = std::mem::take(&mut config.process_owned_dependencies);
     let requested_name = requested.name().to_string();
+    let (revision, fact) = match &requested {
+        BackgroundDependencyRuleConfig::Mysql {
+            source_revision,
+            source_evidence,
+            ..
+        }
+        | BackgroundDependencyRuleConfig::Http {
+            source_revision,
+            source_evidence,
+            ..
+        }
+        | BackgroundDependencyRuleConfig::Memcached {
+            source_revision,
+            source_evidence,
+            ..
+        }
+        | BackgroundDependencyRuleConfig::Redis {
+            source_revision,
+            source_evidence,
+            ..
+        }
+        | BackgroundDependencyRuleConfig::Motan {
+            source_revision,
+            source_evidence,
+            ..
+        } => (source_revision, source_evidence),
+    };
+    // This is the current caller's explicit Source fact. Do not parse an old
+    // projection's display string to reconstruct or inherit a proof.
+    let proof = crate::policy::Proof {
+        source: format!("Source process selector {requested_name} at {revision}"),
+        fact: fact.clone(),
+    };
     let reused = rules
         .iter()
         .find(|rule| selector::covers(rule, &requested))
@@ -197,8 +230,7 @@ pub(crate) fn plan_rule_config(
         });
     }
     config.process_owned_dependencies = rules;
-    let updated = config
-        .render()
+    let updated = super::native_policy::render_updated(&original, &config, &proof)
         .context("generated process-owned rules failed validation")?;
     let changed = updated != original;
     let diff = if changed {

@@ -16,7 +16,7 @@ pub enum CoordinationBackend {
 
 #[derive(Args)]
 pub struct RecordOptions {
-    /// Reuse the Recorder section and source traffic policy from project.yaml.
+    /// Reuse Recorder settings and the single project.policy reference.
     #[arg(
         long = "config",
         env = "TRAFFIC_E2E_PROJECT_CONFIG",
@@ -81,9 +81,9 @@ pub struct RecordOptions {
     pub artifact_owner: Option<ArtifactOwner>,
     #[arg(long, env = "TRAFFIC_E2E_SOURCE_WORKDIR", default_value = "/app")]
     pub source_workdir: PathBuf,
-    /// Source traffic policy loaded once at startup; mount read-only in containers.
-    #[arg(long, env = "TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY", value_name = "PATH")]
-    pub source_traffic_policy: Option<PathBuf>,
+    /// Unified traffic-policy/v1; with --config it must name project.policy.
+    #[arg(long, env = "TRAFFIC_E2E_POLICY", value_name = "PATH")]
+    pub policy: Option<PathBuf>,
     #[arg(long, env = "TRAFFIC_E2E_DNS_UPSTREAM")]
     pub dns_upstream: Option<SocketAddr>,
     #[arg(long, default_value = "300", value_parser = clap::value_parser!(u64).range(1..))]
@@ -191,7 +191,14 @@ impl RecordOptions {
             "Source port must differ from both HTTP listeners"
         );
         let mut config = if let Some(path) = &self.config_path {
-            AppConfig::load_with_source_traffic_policy(path, self.source_traffic_policy.as_deref())?
+            if let Some(policy) = &self.policy {
+                let reference = crate::config::resolve_unified_policy_path(path)?;
+                ensure!(
+                    std::fs::canonicalize(policy)? == std::fs::canonicalize(reference)?,
+                    "--policy must name the same file as project.policy when --config is supplied"
+                );
+            }
+            AppConfig::load(path)?
         } else {
             let mut config = AppConfig::default();
             config.http_gateway.per_api_case_limits.default = usize::MAX;
@@ -205,7 +212,7 @@ impl RecordOptions {
             config.udp_gateway.enabled = true;
             config.udp_gateway.forward = true;
             config.dns_mock.upstream_dns = system_dns();
-            if let Some(path) = &self.source_traffic_policy {
+            if let Some(path) = &self.policy {
                 SourceTrafficPolicyConfig::load(path)?.apply_to(&mut config)?;
             }
             config

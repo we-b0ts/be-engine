@@ -141,7 +141,7 @@ fn plan_with_capture_requirement(
         CapturePlan::Breeze(Box::new(plan_breeze_endpoint_capture(
             BreezeEndpointCaptureFeedback {
                 project_config_path: project_config(target_root),
-                rules_path: source_traffic_policy_path(target_root),
+                rules_path: source_traffic_policy_path(target_root)?,
                 endpoint: options.endpoint.clone(),
                 source_revision: source_revision.clone(),
                 source_evidence: options.source_evidence.clone(),
@@ -396,7 +396,7 @@ fn build_plan(
     Ok(CapturePlan::Breeze(Box::new(plan_breeze_endpoint_capture(
         BreezeEndpointCaptureFeedback {
             project_config_path: project_config(target_root),
-            rules_path: source_traffic_policy_path(target_root),
+            rules_path: source_traffic_policy_path(target_root)?,
             endpoint: record.endpoint.clone(),
             source_revision: record.source_revision.clone(),
             source_evidence: record.source_evidence.clone(),
@@ -408,8 +408,8 @@ fn project_config(target_root: &Path) -> PathBuf {
     target_root.join(".traffic-e2e/project.yaml")
 }
 
-fn source_traffic_policy_path(target_root: &Path) -> PathBuf {
-    target_root.join(".traffic-e2e/source-traffic-policy.yaml")
+fn source_traffic_policy_path(target_root: &Path) -> Result<PathBuf> {
+    crate::config::resolve_unified_policy_path(&project_config(target_root))
 }
 
 pub(super) fn pending_plan_action(
@@ -673,9 +673,7 @@ mod tests {
         let evidence_id = evidence::query(target.path(), &state, &query_id)
             .unwrap()
             .evidence_id;
-        let config = target
-            .path()
-            .join(".traffic-e2e/source-traffic-policy.yaml");
+        let config = target.path().join(".traffic-e2e/policy.yaml");
         let original = fs::read_to_string(&config).unwrap();
 
         let planned = plan(

@@ -23,7 +23,7 @@ consumes finalized recordings from the conventional artifact directory.
 - Default redaction for sensitive proxy and HTTP headers.
 - Optional MySQL TCP proxy with DNS/hosts routing through per-IP listeners.
 - MySQL login/query/response packet metadata and raw response payload recording.
-- MySQL TLS detection and explicit rejection in v1.
+- MySQL CLIENT_SSL recording and Replay TLS using the Replay CA.
 
 ## Install Rust
 
@@ -81,15 +81,15 @@ Recording is external to rewrite. Place completed batches in
 `.traffic-e2e/regression.yaml` to pin a batch.
 Missing evidence returns an input requirement, never a recording executor.
 
-Process-owned dependency rules are evidence-ownership rules, not fresh-capture
-contracts. `backend-rewrite dependency-rule apply <plan-id>` preserves the
-published cases and raw dependency JSONL, reapplies the current rules to the
-latest focused replay report, rebuilds bounded evidence, and returns `next`.
-If an interrupted or older coordinator state still carries the strict
-dependency-finalize error after that derived view becomes clean, the next
-coordinator step repairs the same attempt in place before choosing its action.
-If that removes the remaining case-scoped dirty evidence, the same focused
-attempt completes the API without a new standard recording.
+All rule effects use one source-controlled `traffic-policy/v1` document, named
+by `project.policy` (normally `.traffic-e2e/policy.yaml`). Bounded evidence
+returns available capabilities and a rule-discovery query. Inspect the Source
+facts, write a self-contained proposal, then use `backend-rewrite rule plan
+--file RULES.yaml --evidence EVIDENCE_ID` and `rule apply PLAN_ID`. The plan
+expands the complete rules and reports whether they require fresh Replay,
+reclassification, or recording. Process-owned classification preserves the
+immutable recording; selectors that change bootstrap snapshots require fresh
+recording. See [unified rules](docs/unified-rule-contracts.md).
 
 `backend-rewrite` emits one compact JSON object per command by default; use
 global `--pretty` for interactive inspection. Normal `next` and `status`
@@ -117,8 +117,9 @@ at 256 bytes with length and truncation metadata, and complete small Redis
 scalars also expose a decoded `response_value`. Memcached flags are not
 interpreted or returned.
 
-Evidence-driven recorder and verification-policy changes live under
-`traffic-e2e config ... plan|apply`; low-level grouping and report commands live
+API path discovery retains `traffic-e2e config recorder ... plan|apply`.
+Managed policy changes use the unified `backend-rewrite rule` transaction;
+low-level grouping and report commands live
 under `traffic-e2e diagnose`. Standalone recording and replay, fixed-user target
 isolation, and host interception are implemented by the same Rust binary.
 
@@ -126,7 +127,7 @@ isolation, and host interception are implemented by the same Rust binary.
 
 ```bash
 cargo run -- --help
-cargo run -- diagnose recorder --config config/project.example.yaml
+cargo run -- diagnose recorder --config /path/to/target/.traffic-e2e/project.yaml
 ```
 
 Install the binaries and start Source recording in the prepared Source environment:
@@ -165,11 +166,11 @@ the two selector forms are mutually exclusive.
 
 For runtime-generated UUIDs, timestamps, signed query fields, and reviewed
 response-comparison exemptions, keep a
-source-controlled `.traffic-e2e/verification.yaml` in the target project and pass it with
+source-controlled `.traffic-e2e/policy.yaml` in the target project and pass it with
 `--policy`. Initialize it with `traffic-e2e config init --source-pod <pod>
 --namespace <namespace>` from the target root; initialization, strategy application, and replay each
 validate the policy. See
-[Dependency Replay And Response Verification Policy](docs/replay-policy.md).
+[Unified Rule Contracts](docs/unified-rule-contracts.md).
 
 `traffic-e2e replay` starts the replay DNS and fake-IP TCP gateway, then applies
 the same local interception rules used for recording. Interception is always
@@ -264,17 +265,29 @@ recorder:
         headers: { x-record: "yes" }
 ```
 
-AI/coordinator-owned source-traffic policy values are stored only in
-`.traffic-e2e/source-traffic-policy.yaml`:
+Acquisition, process ownership and value comparison share the policy named by
+`.traffic-e2e/project.yaml`:
 
 ```yaml
-version: 2
-http:
-  source_revision: source-git-revision
-  case_path_patterns: [/api/users/*/xxx]
-  allowed_unused_http_hosts: []
-breeze_capture: []
-process_owned_dependencies: []
+project:
+  policy: .traffic-e2e/policy.yaml
+```
+
+The initialized policy starts empty; each justified rule carries its own Source
+proof. For example, a source-proven route pattern is a capture effect:
+
+```yaml
+format: traffic-policy/v1
+rules:
+  - id: user-route
+    match: {}
+    effect:
+      kind: capture_http
+      source_revision: sha256:<64-hex-digits>
+      case_paths: [/api/users/*/xxx]
+    proof:
+      source: src/routes.rs:users
+      fact: The route registration has one dynamic user segment.
 ```
 
 `recorder.http_gateway.exclude_rules` uses the same host, method, path-prefix, and
@@ -333,10 +346,9 @@ example, `/api/users/123/xxx` and `/api/users/456/xxx` both record under
 `api-users-wildcard-xxx` when the global HTTP policy has
 `case_path_patterns = ["/api/users/*/xxx"]`.
 
-For replay-time AI feedback, keep patterns in `source-traffic-policy.yaml`. Use
+For replay-time AI feedback, keep `capture_http` effects in the unified policy. Use
 `traffic-e2e config recorder apply case-path-patterns`; the command plans and
-validates against current evidence before atomically replacing that managed
-document. Feedback is add-only even for a
+validates against current evidence before atomically updating that policy while preserving other rules and proofs. Feedback is add-only even for a
 collection-wide case source; an existing pattern is never deleted merely
 because current cases omit it. Correct a specifically proven-invalid
 AI-managed pattern only through the explicit correction flags described in

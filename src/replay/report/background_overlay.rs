@@ -44,7 +44,8 @@ pub(crate) fn reclassify_background_dependencies(
     report_path: &Path,
     case_dirs: &BTreeMap<String, PathBuf>,
 ) -> Result<BackgroundReclassification> {
-    let config = SourceTrafficPolicyConfig::load(source_traffic_policy)?;
+    let (config, fingerprints) =
+        SourceTrafficPolicyConfig::load_with_fingerprints(source_traffic_policy)?;
     let rules = &config.process_owned_dependencies;
     let matcher = BackgroundDependencyMatcher::from_rules(rules)?;
     let memcached_ports = matcher.resolved_memcached_rule_ports();
@@ -79,8 +80,7 @@ pub(crate) fn reclassify_background_dependencies(
     annotate_api_origins(&mut report, &origins);
     by_protocol.retain(|_, count| *count > 0);
     let matched_unused_case = by_protocol.values().sum();
-    let rules_payload = serde_json::to_vec(rules)?;
-    let rules_fingerprint = crate::verification_progress::fingerprint(&rules_payload);
+    let rules_fingerprint = fingerprints.classification;
     let remaining_dirty_case_ids = dirty_case_ids(&report);
     report["background_reclassification"] = json!({
         "rules_fingerprint": rules_fingerprint,
@@ -202,7 +202,6 @@ pub(crate) fn source_owned_match(
     }
     Ok(matching_rule(event, std::slice::from_ref(rule), memcached_ports).is_some())
 }
-
 
 fn matching_rule<'a>(
     event: &Value,

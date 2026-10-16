@@ -203,12 +203,22 @@ impl Plan {
             app.http_response_rewrite.enabled,
             "HTTP response rewriting is explicitly disabled in the recorder configuration"
         );
-        let path = super::source_traffic_policy_path(target_root);
+        let path = super::source_traffic_policy_path(target_root)?;
         let before = std::fs::read_to_string(&path)?;
         let mut policy = crate::config::SourceTrafficPolicyConfig::parse(&before, &path)?;
         let convergence = rules::converge(&mut app, &mut policy, &spec.rule)?;
         let after = if convergence.changed {
-            policy.render()?
+            crate::config::native_policy::render_updated(
+                &before,
+                &policy,
+                &crate::policy::Proof {
+                    source: format!(
+                        "Source response {} in case {} at {} (digest {})",
+                        spec.response_id, spec.case_id, source_revision, spec.response_digest
+                    ),
+                    fact: source_evidence.into(),
+                },
+            )?
         } else {
             before.clone()
         };

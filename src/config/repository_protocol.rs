@@ -240,18 +240,13 @@ mod tests {
         fs::write(root.join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();
         fs::create_dir_all(root.join(".traffic-e2e")).unwrap();
         fs::write(
-            root.join(".traffic-e2e/verification.yaml"),
-            "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+            root.join(".traffic-e2e/policy.yaml"),
+            "format: traffic-policy/v1\nrules: []\n",
         )
         .unwrap();
         fs::write(
             root.join("project.yaml"),
-            "version: 14\nproject:\n  recording:\n    source_traffic_policy: source-traffic-policy.yaml\nrecorder:\n  http_gateway:\n    ready:\n      enabled: true\n      path: /healthz\n      success_status: 404\n    rules:\n    - name: http-rule\n      methods: [GET]\n      path_prefixes: [/]\n  motan_gateway:\n    enabled: false\n    listen: 127.0.0.1:18081\n    matched_upstream: 127.0.0.1:8080\n",
-        )
-        .unwrap();
-        fs::write(
-            root.join("source-traffic-policy.yaml"),
-            "version: 2\nhttp:\n  case_path_patterns: []\n  allowed_unused_http_hosts: []\nbreeze_capture: []\nprocess_owned_dependencies: []\n",
+            "recorder:\n  http_gateway:\n    ready:\n      enabled: true\n      path: /healthz\n      success_status: 404\n    rules:\n    - name: http-rule\n      methods: [GET]\n      path_prefixes: [/]\n  motan_gateway:\n    enabled: false\n    listen: 127.0.0.1:18081\n    matched_upstream: 127.0.0.1:8080\n",
         )
         .unwrap();
         assert!(
@@ -285,7 +280,7 @@ mod tests {
             target_root: root.to_path_buf(),
             target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.target"),
             target_startup: crate::StartupConfig::default(),
-            replay_policy: PathBuf::from(".traffic-e2e/verification.yaml"),
+            replay_policy: PathBuf::from(".traffic-e2e/policy.yaml"),
             pr_base: "integration".to_string(),
             recorder_config: PathBuf::from("project.yaml"),
             force: false,

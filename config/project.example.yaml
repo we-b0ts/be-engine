@@ -1,5 +1,6 @@
 version: 18
 project:
+  policy: .traffic-e2e/policy.yaml
   source:
     snapshot: .traffic-e2e/local/source
   target:
@@ -11,7 +12,6 @@ project:
       mode: read_write
       retention: keep
   replay:
-    policy: config/verification.example.yaml
     startup_timeout_seconds: 60
     dependency_loading:
       lazy_cases: true
@@ -21,8 +21,6 @@ project:
     case_dependency_post_response_window_ms: 10
   verification:
     max_failed_cases_per_api: 10
-  recording:
-    source_traffic_policy: source-traffic-policy.example.yaml
   delivery:
     pr_base: dev-migration
   state:
@@ -30,7 +28,7 @@ project:
 recorder:
   # Static recorder example. Project initialization embeds these settings under
   # `recorder` in `.traffic-e2e/project.yaml`. Coordinator-managed source-traffic
-  # policy values belong exclusively in `.traffic-e2e/source-traffic-policy.yaml`.
+  # policy values belong in the single project.policy file.
   artifacts:
     root_dir: ./.traffic-e2e/local/artifacts
   dns_mock:
@@ -70,7 +68,7 @@ recorder:
     enabled: false
     listen: 127.0.0.1:8080
   http_response_rewrite:
-    # JSON URL rules belong to http_response_rewrite in source-traffic-policy.yaml:
+    # JSON URL capture belongs to a capture_http_response effect in project.policy:
     # - name: cs.wegent.intra.demo.test
     #   rules:
     #   - path_pattern: GET /executor-manager/sandboxes/*
