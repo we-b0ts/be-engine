@@ -169,6 +169,41 @@ fn matched_recorded_exchanges(
     Ok(matched)
 }
 
+/// Pure Source selector proof shared with unified authoring. Origin causality and
+/// protocol selectors remain with the same owners used by report reclassification.
+pub(crate) fn source_owned_match(
+    event: &Value,
+    case: Option<&str>,
+    rule: &BackgroundDependencyRuleConfig,
+    memcached_ports: &BTreeMap<String, BTreeSet<u16>>,
+    origins: &crate::api_trigger::OriginIndex,
+) -> Result<bool> {
+    if rule.trigger_source().is_some() {
+        return Ok(case
+            .and_then(|case| origins.witness(case, event))
+            .is_some_and(|witness| witness.rule == rule.name()));
+    }
+    if let BackgroundDependencyRuleConfig::Mysql { selector, .. } = rule {
+        return Ok(event["event_type"] == "mysql_exchange"
+            && selector.matches_query(
+                event["target_host"].as_str(),
+                event["target_port"]
+                    .as_u64()
+                    .and_then(|p| u16::try_from(p).ok()),
+                event["database"].as_str(),
+                event["username"].as_str(),
+                event["command"].as_str().unwrap_or_default(),
+                event["sql"].as_str(),
+            ));
+    }
+    if matches!(rule, BackgroundDependencyRuleConfig::Http { .. }) {
+        return Ok(event["event_type"] == "http_exchange"
+            && matching_http_rule(event, std::slice::from_ref(rule)).is_some());
+    }
+    Ok(matching_rule(event, std::slice::from_ref(rule), memcached_ports).is_some())
+}
+
+
 fn matching_rule<'a>(
     event: &Value,
     rules: &'a [BackgroundDependencyRuleConfig],
@@ -332,6 +367,10 @@ fn matching_http_rule<'a>(
 }
 
 fn report_http_authority(event: &Value, uri: &str) -> Option<String> {
+    if let Some(authority) = event["authority"].as_str().and_then(normalize_authority) {
+        return Some(authority);
+    }
+
     if let Some(authority) = uri
         .parse::<Uri>()
         .ok()

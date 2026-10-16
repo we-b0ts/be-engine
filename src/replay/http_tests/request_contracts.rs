@@ -69,8 +69,8 @@ async fn multipart_plan_apply_requires_immutable_current_witness_and_fresh_repla
     )
     .unwrap();
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
-    let policy = root.join(".traffic-e2e/verification.yaml");
-    std::fs::write(
+    let policy = root.join(".traffic-e2e/policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
@@ -113,14 +113,14 @@ async fn multipart_plan_apply_requires_immutable_current_witness_and_fresh_repla
     assert!(pending.apply().is_err());
     std::fs::write(&dependencies, &original).unwrap();
     let pending = plan().unwrap();
-    std::fs::write(
+    crate::replay::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n# changed\n",
     )
     .unwrap();
     assert!(pending.apply().is_err());
     assert!(plan().is_err());
-    std::fs::write(
+    crate::replay::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )

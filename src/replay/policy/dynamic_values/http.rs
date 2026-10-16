@@ -36,14 +36,23 @@ impl DynamicValues {
         };
         let source_body = source.body;
         let actual_body = actual.body;
-        if self.selected(case, target).is_empty() {
+        let scope = super::scopes::ResourceContext {
+            protocol: crate::policy::Protocol::Http,
+            target,
+            database: None,
+            username: None,
+            operation: method,
+        };
+        if self.selected_scoped(case, scope, true).is_empty()
+            && self.selected_scoped(case, scope, false).is_empty()
+        {
             return None;
         }
         Some((|| {
             let mut decision = DynamicDecision::default();
             let mut integer_body = None;
             let mut path_capture = false;
-            for rule in self.selected(case, target) {
+            for rule in self.selected_scoped(case, scope, true) {
                 let DynamicValueCapture::Http {
                     target: endpoint,
                     method: expected_method,
@@ -100,7 +109,7 @@ impl DynamicValues {
                 }
                 decision.pairs.push((rule.id.clone(), pair));
             }
-            let pairs = self.pairs(case, target, &decision);
+            let pairs = self.scoped_pairs(case, scope, &decision);
             Ok(HttpNormalization {
                 source_uri: uri(source_uri, &pairs, false)?,
                 actual_uri: uri(&actual_uri.to_string(), &pairs, true)?.parse()?,

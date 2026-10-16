@@ -39,12 +39,10 @@ impl Token {
             return Ok(None);
         }
         let decode = |part| URL_SAFE_NO_PAD.decode(part).ok();
-        let Some(header) = decode(parts[0]).and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-        else {
+        let Some(header) = decode(parts[0]).and_then(|b| crate::json_value::parse(&b)) else {
             return Ok(None);
         };
-        let Some(claims) = decode(parts[1]).and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-        else {
+        let Some(claims) = decode(parts[1]).and_then(|b| crate::json_value::parse(&b)) else {
             return Ok(None);
         };
         let Some(signature) = decode(parts[2]) else {

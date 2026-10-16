@@ -30,6 +30,9 @@ mod contract_value;
 pub(crate) use memcached::contracts::{
     source_witness as memcached_source_witness, validate_witness as memcached_validate_witness,
 };
+pub(crate) use policy::validate_finite_sharing as validate_native_finite_sharing;
+pub(crate) use policy::{NativeSourceCase, validate_native_source_dependencies};
+pub(crate) use report::source_owned_match;
 mod control;
 mod deferred;
 mod dependencies;
@@ -71,10 +74,12 @@ mod memcached;
 mod model;
 mod motan;
 mod mysql;
+pub(crate) use mysql::contracts::validate_native_values_witness as mysql_validate_native_values_witness;
 pub(crate) use mysql::contracts::{
     source_witness as mysql_source_witness, validate_witness as mysql_validate_witness,
     witness_values as mysql_witness_values,
 };
+pub(crate) use policy::mysql_native_witness_matches;
 pub(crate) use policy::mysql_witness_matches;
 mod network_access;
 mod policy;
@@ -636,6 +641,10 @@ pub use policy::{
     HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
 };
 
+#[cfg(test)]
+pub(crate) use policy::test_fixture::{
+    convert_legacy_policy as convert_legacy_policy_fixture, write_policy as write_policy_fixture,
+};
 pub use policy::{
     RedisTimeShiftFeedback, RedisTimeShiftPlan, RedisTimeShiftReport, plan_redis_time_shift,
 };
@@ -675,3 +684,14 @@ pub(crate) use policy::request_contract::discover as discover_dependency_request
 pub use policy::{ResponseJwtAlgorithm, ResponseJwtKeySource, ResponseJwtRule};
 
 pub use policy::{ResponseJwtRuleFeedback, plan_response_jwt_rule};
+
+pub(crate) use assertion::native::{
+    NativeResponseContext, compare_body as native_response_body,
+    compare_header as native_response_header, selected as native_response_selected,
+};
+pub(crate) use assertion::response_payload_pair;
+pub(crate) use mysql::contracts::validate_contract_witness as mysql_validate_contract_witness;
+pub(crate) use policy::native_projection::validate_native_adapter;
+
+pub(crate) use assertion::native::source_request_body as native_source_request_body;
+pub(crate) use policy::native_projection::compiled_input_rules;

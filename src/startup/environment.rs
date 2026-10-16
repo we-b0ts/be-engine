@@ -551,3 +551,18 @@ mod tests {
         assert!(ensure_startup_environment(target.path(), "TOKEN", "one\ntwo").is_err());
     }
 }
+
+/// Dependency paths for a resolved effective startup environment, without values.
+pub(crate) fn startup_environment_witness_paths(target_root: &Path) -> Result<Vec<PathBuf>> {
+    effective_environment(target_root)?;
+    let mut paths = vec![environment_path(target_root)];
+    if target_root
+        .join(crate::repository::LOCAL_SOURCE_MANIFEST_PATH)
+        .exists()
+    {
+        paths.extend(crate::source_snapshot::target_environment_witness_paths(
+            target_root,
+        )?);
+    }
+    Ok(paths)
+}

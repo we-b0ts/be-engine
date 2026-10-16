@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 fn load(rule: Value) -> Result<LoadedReplayPolicy> {
     let temporary = tempfile::tempdir()?;
-    let path = temporary.path().join("verification.yaml");
+    let path = temporary.path().join("policy.yaml");
     let policy = json!({"version": 3, "expected_response": "assertions_only",
         "dependency_rules": [rule]});
     std::fs::write(&path, serde_yaml::to_string(&policy)?)?;

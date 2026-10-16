@@ -46,6 +46,22 @@ pub(crate) fn request(claims: Value, key: &str, recorded: i64) -> Value {
 }
 
 #[test]
+fn token_parser_rejects_duplicate_header_and_claim_members() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    for (header, claims) in [
+        (r#"{"alg":"HS256","alg":"HS512"}"#, r#"{"exp":1000}"#),
+        (r#"{"alg":"HS256"}"#, r#"{"exp":1000,"exp":2000}"#),
+    ] {
+        let raw = format!(
+            "{}.{}.AA",
+            URL_SAFE_NO_PAD.encode(header),
+            URL_SAFE_NO_PAD.encode(claims)
+        );
+        assert!(jwt::Token::parse(&raw).unwrap().is_none());
+    }
+}
+
+#[test]
 fn preserves_time_relationships_and_identity_with_independent_verification() {
     let recorded = 1_700_000_000;
     let now = Utc::now();

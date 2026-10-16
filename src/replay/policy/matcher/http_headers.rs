@@ -14,7 +14,20 @@ impl ReplayPolicyRuntime {
             .filter(|rule| {
                 rule.protocol == DependencyProtocol::Http
                     && rule_matches_http(rule, context.target, context.method, context.recorded_uri)
-                    && rule.case_selector.is_none()
+                    && (rule.case_selector.is_none()
+                        || context
+                            .case_id
+                            .and_then(|id| self.cases.get(id))
+                            .is_some_and(|case| rule_matches_case(rule, case)))
+                    && self.request_contracts.native_rule_scope_matches(
+                        &rule.id,
+                        context.case_id,
+                        crate::policy::Protocol::Http,
+                        context.target,
+                        None,
+                        None,
+                        false,
+                    )
             })
             .flat_map(|rule| {
                 rule.http

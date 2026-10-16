@@ -10,6 +10,7 @@ use super::*;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CompiledPolicy {
     pub rules: Vec<CompiledRule>,
+    pub native: Vec<CompiledNativeRule>,
     pub fingerprints: PolicyFingerprints,
 }
 
@@ -57,17 +58,21 @@ pub fn compile_policy(document: &TrafficPolicy) -> Result<CompiledPolicy> {
     );
     let mut ids = BTreeSet::new();
     let mut rules = Vec::with_capacity(document.rules.len());
+    let mut native = vec![];
     for rule in &document.rules {
-        ensure!(
-            ids.insert(rule.id.as_str()),
-            "duplicate rule id {:?}",
-            rule.id
-        );
-        rules.push(compile_rule(rule).with_context(|| format!("invalid rule {:?}", rule.id))?);
+        ensure!(ids.insert(rule.id()), "duplicate rule id {:?}", rule.id());
+        match rule {
+            PolicyRule::Value(rule) => rules
+                .push(compile_rule(rule).with_context(|| format!("invalid rule {:?}", rule.id))?),
+            PolicyRule::Native(rule) => native.push(compile_native(rule)?),
+        }
     }
     rules.sort_by(|left, right| left.rule.id.cmp(&right.rule.id));
+    native.sort_by(|left, right| left.rule.id.cmp(&right.rule.id));
     validate_rule_overlaps(&rules)?;
-    let expanded = rules.iter().map(|rule| &rule.rule).collect::<Vec<_>>();
+    validate_field_claims(&rules, &native)?;
+    let mut expanded = document.rules.iter().collect::<Vec<_>>();
+    expanded.sort_by_key(|rule| rule.id());
     let runtime = rules
         .iter()
         .map(|rule| RuntimeIdentity {
@@ -86,11 +91,39 @@ pub fn compile_policy(document: &TrafficPolicy) -> Result<CompiledPolicy> {
     Ok(CompiledPolicy {
         fingerprints: PolicyFingerprints {
             full: digest("traffic-policy/full/v1", &expanded)?,
-            runtime: digest("traffic-policy/runtime/v1", &runtime)?,
-            capture: digest("traffic-policy/capture/v1", &Vec::<String>::new())?,
-            classification: digest("traffic-policy/classification/v1", &Vec::<String>::new())?,
+            runtime: digest(
+                "traffic-policy/runtime/v1",
+                &(
+                    runtime,
+                    native
+                        .iter()
+                        .filter(|rule| {
+                            matches!(rule.domain, NativeDomain::Runtime | NativeDomain::Input)
+                                || affects_snapshot(rule)
+                        })
+                        .map(|rule| &rule.fingerprint)
+                        .collect::<Vec<_>>(),
+                ),
+            )?,
+            capture: digest(
+                "traffic-policy/capture/v1",
+                &native
+                    .iter()
+                    .filter(|rule| rule.domain == NativeDomain::Capture || affects_snapshot(rule))
+                    .map(|rule| &rule.fingerprint)
+                    .collect::<Vec<_>>(),
+            )?,
+            classification: digest(
+                "traffic-policy/classification/v1",
+                &native
+                    .iter()
+                    .filter(|rule| rule.domain == NativeDomain::Classification)
+                    .map(|rule| &rule.fingerprint)
+                    .collect::<Vec<_>>(),
+            )?,
         },
         rules,
+        native,
     })
 }
 
@@ -106,6 +139,13 @@ struct RuntimeIdentity<'a> {
     delivery_time: &'a BTreeMap<String, TimeContract>,
     effect: RuleEffect,
     capabilities: &'a [CapabilityId],
+}
+
+/// Redis process GET selectors also govern validated bootstrap seed admission.
+/// Their delivery and acquisition identity cannot be treated as unused-only.
+fn affects_snapshot(rule: &CompiledNativeRule) -> bool {
+    matches!(&rule.rule.effect, NativeEffect::ProcessOwned(effect)
+        if matches!(&effect.selector, super::native::ProcessSelector::Redis {operation,..} if operation == "GET"))
 }
 
 pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
@@ -128,7 +168,37 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
     );
     validate_codec(&rule.codec)?;
     for (path, contract) in &rule.contract {
-        if let Some(time) = contract.time() {
+        if let FieldContract::Conditional { when, contract } = contract {
+            ensure!(
+                !matches!(contract.as_ref(), FieldContract::Conditional { .. }),
+                "nested field conditions are unsupported"
+            );
+            ensure!(
+                when.relative_pointer.starts_with("../") && !when.relative_pointer.contains('*'),
+                "field condition requires one exact sibling pointer such as ../status"
+            );
+            validate_pointer(&when.relative_pointer[2..], false)?;
+            ensure!(
+                when.relative_pointer[3..]
+                    .split('/')
+                    .all(|segment| !matches!(segment, "." | "..")),
+                "field condition cannot escape its sibling scope"
+            );
+            ensure!(
+                !path.is_empty() && (1..=32).contains(&when.not_in.len()),
+                "field condition requires a non-root field and 1..32 excluded scalars"
+            );
+            let kinds = when
+                .not_in
+                .iter()
+                .map(std::mem::discriminant)
+                .collect::<Vec<_>>();
+            ensure!(
+                kinds.iter().all(|kind| *kind == kinds[0]),
+                "field condition constants must have the same scalar type"
+            );
+        }
+        if let Some(time) = contract.unconditional().time() {
             if let Some(group) = &time.clock_group {
                 ensure!(
                     !group.is_empty()
@@ -142,14 +212,17 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
         }
         validate_pointer(path, true)?;
         validate_contract_binding(&rule.codec, path, contract)?;
-        if let Some(time) = contract.time() {
+        if let Some(time) = contract.unconditional().time() {
             ensure!(
-                (time.format == TimestampFormat::Iso8601Naive) == time.utc_offset.is_some(),
+                (matches!(
+                    time.format,
+                    TimestampFormat::Iso8601Naive | TimestampFormat::SqlDatetime
+                )) == time.utc_offset.is_some(),
                 "iso8601_naive requires explicit utc_offset; other formats carry their own timezone or use Unix time"
             );
             time.offset()?;
         }
-        match contract {
+        match contract.unconditional() {
             FieldContract::Time { anchor, .. } | FieldContract::Duration { anchor, .. } => {
                 ensure!(
                     rule.surface != Surface::ApiResponse || *anchor == TimeAnchor::ApiRequestStart,
@@ -162,6 +235,7 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
                 );
             }
             FieldContract::Unordered => {}
+            FieldContract::Conditional { .. } => unreachable!("nested field conditions rejected"),
         }
     }
     validate_field_overlaps(&rule.contract)?;
@@ -221,6 +295,7 @@ fn validate_match(rule: &Rule) -> Result<()> {
             selector.resource.is_none()
                 && selector.operation.is_none()
                 && selector.key.is_none()
+                && selector.hash_field.is_none()
                 && selector.path.is_none()
                 && selector.sql.is_none(),
             "api.response cannot select a dependency resource or operation"
@@ -252,6 +327,15 @@ fn validate_match(rule: &Rule) -> Result<()> {
                 .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'),
         "operation must be an exact uppercase protocol operation"
     );
+    if let Some(field) = &selector.hash_field {
+        ensure!(
+            resource.protocol == Protocol::Redis
+                && operation == "HGET"
+                && rule.surface == Surface::DependencyResponse,
+            "hash_field selects only a Redis HGET response value"
+        );
+        validate_key(field)?;
+    }
     match resource.protocol {
         Protocol::Http => {
             ensure!(
@@ -367,10 +451,17 @@ fn validate_match(rule: &Rule) -> Result<()> {
 
 fn validate_key(key: &KeySelector) -> Result<()> {
     ensure!(
-        key.exact.is_some() != (key.prefix.is_some() || key.suffix.is_some()),
+        key.exact.is_some() != (key.numeric || key.prefix.is_some() || key.suffix.is_some()),
         "key requires either exact or bounded prefix/suffix"
     );
+    ensure!(
+        !key.numeric || key.exact.is_none(),
+        "numeric keys use affixes, not an exact key"
+    );
     for value in [&key.exact, &key.prefix, &key.suffix].into_iter().flatten() {
+        if key.numeric && value.is_empty() {
+            continue;
+        }
         ensure!(
             !value.is_empty() && value.len() <= 4096,
             "key selector is empty or too long"
@@ -379,7 +470,7 @@ fn validate_key(key: &KeySelector) -> Result<()> {
     Ok(())
 }
 
-fn validate_codec(codec: &Codec) -> Result<()> {
+pub(crate) fn validate_codec(codec: &Codec) -> Result<()> {
     let Codec::Protobuf(codec) = codec else {
         return Ok(());
     };
@@ -601,7 +692,19 @@ fn selectors_overlap(left: &MatchSpec, right: &MatchSpec) -> bool {
             return false;
         }
     }
-    if let (Some(left), Some(right)) = (&left.key, &right.key) {
+    if !key_scopes_overlap(left.key.as_ref(), right.key.as_ref())
+        || !key_scopes_overlap(left.hash_field.as_ref(), right.hash_field.as_ref())
+    {
+        return false;
+    }
+    super::native_compile::ownership::exact_sql_scopes_overlap(
+        left.sql.as_deref(),
+        right.sql.as_deref(),
+    )
+}
+
+pub(crate) fn key_scopes_overlap(left: Option<&KeySelector>, right: Option<&KeySelector>) -> bool {
+    if let (Some(left), Some(right)) = (left, right) {
         if let Some(exact) = &left.exact {
             return right.matches(exact.as_bytes());
         }
@@ -621,7 +724,6 @@ fn selectors_overlap(left: &MatchSpec, right: &MatchSpec) -> bool {
             return false;
         }
     }
-    // SQL disjointness needs a protocol template proof; stay conservative here.
     true
 }
 
@@ -662,7 +764,10 @@ fn codecs_compatible(left: &Codec, right: &Codec) -> bool {
     }
 }
 
-fn disjoint_conditions(left: Option<&SourceCondition>, right: Option<&SourceCondition>) -> bool {
+pub(crate) fn disjoint_conditions(
+    left: Option<&SourceCondition>,
+    right: Option<&SourceCondition>,
+) -> bool {
     let (Some(left), Some(right)) = (left, right) else {
         return false;
     };

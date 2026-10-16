@@ -32,35 +32,40 @@ impl RequestContracts {
         args: &[Vec<u8>],
         response: &[u8],
         observed: Option<DateTime<Utc>>,
-        duration_ms: u64,
+        actual_started: Option<DateTime<Utc>>,
+        source_started: Option<DateTime<Utc>>,
         connection_id: uuid::Uuid,
         sequence: u64,
     ) -> Option<Result<PreparedRedisDelivery>> {
         let compiled = self.compiled_rules()?;
-        let rules = compiled
-            .rules
-            .iter()
-            .filter(|compiled| {
-                let rule = &compiled.rule;
-                rule.surface == Surface::DependencyResponse
-                    && self.matches_compiled_case(compiled, Some(case))
-                    && rule.selector.resource.as_ref().is_some_and(|r| {
-                        r.protocol == Protocol::Redis
-                            && r.endpoint.host.eq_ignore_ascii_case(&target.host)
-                            && r.endpoint.port == target.port
-                            && r.database
-                                .as_ref()
-                                .is_none_or(|d| d.index() == Some(database))
-                            && r.username.as_deref().is_none_or(|u| Some(u) == username)
-                    })
-                    && rule.selector.operation.as_deref() == Some(command)
-                    && rule
-                        .selector
-                        .key
-                        .as_ref()
-                        .is_some_and(|key| args.first().is_some_and(|bytes| key.matches(bytes)))
-            })
-            .collect::<Vec<_>>();
+        let rules =
+            compiled
+                .rules
+                .iter()
+                .filter(|compiled| {
+                    let rule = &compiled.rule;
+                    rule.surface == Surface::DependencyResponse
+                        && self.matches_compiled_case(compiled, Some(case))
+                        && rule.selector.resource.as_ref().is_some_and(|r| {
+                            r.protocol == Protocol::Redis
+                                && r.endpoint.host.eq_ignore_ascii_case(&target.host)
+                                && r.endpoint.port == target.port
+                                && r.database
+                                    .as_ref()
+                                    .is_none_or(|d| d.index() == Some(database))
+                                && r.username.as_deref().is_none_or(|u| Some(u) == username)
+                        })
+                        && rule.selector.operation.as_deref() == Some(command)
+                        && rule.selector.hash_field.as_ref().is_none_or(|field| {
+                            args.get(1).is_some_and(|value| field.matches(value))
+                        })
+                        && rule
+                            .selector
+                            .key
+                            .as_ref()
+                            .is_some_and(|key| args.first().is_some_and(|bytes| key.matches(bytes)))
+                })
+                .collect::<Vec<_>>();
         if rules.is_empty() {
             return None;
         }
@@ -74,12 +79,8 @@ impl RequestContracts {
                 matches!(command, "GET" | "HGET"),
                 "unsupported Redis response value operation"
             );
-            let started = observed.and_then(|time| {
-                i64::try_from(duration_ms)
-                    .ok()
-                    .and_then(|ms| time.checked_sub_signed(chrono::TimeDelta::milliseconds(ms)))
-            });
-            let clocks = self.contract_clocks(Some(case), started, None, observed, None);
+            let clocks =
+                self.contract_clocks(Some(case), source_started, actual_started, observed, None);
             let value = Delivery::prepare(&payload, &rules, clocks)?;
             let witness = self.witnesses.as_ref().map(|_| {
                 use crate::policy_evidence::*;

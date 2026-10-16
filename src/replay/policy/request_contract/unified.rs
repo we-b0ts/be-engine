@@ -160,6 +160,36 @@ impl RequestContracts {
             })
     }
 
+    /// Native domains select immutable Source scope before any value rewriting.
+    /// A native rule never borrows a Target body or an unknown rule identity.
+    pub(in crate::replay) fn native_rule_scope_matches(
+        &self,
+        id: &str,
+        case: Option<&str>,
+        protocol: crate::policy::Protocol,
+        target: &TargetKey,
+        database: Option<&crate::policy::Database>,
+        username: Option<&str>,
+        is_reference: bool,
+    ) -> bool {
+        let Some(compiled) = self.compiled.as_ref() else {
+            return true;
+        };
+        let Some(rule) = compiled.native.iter().find(|rule| rule.rule.id == id) else {
+            return false;
+        };
+        let Some(anchor) = case.and_then(|case| self.anchor(case).ok()) else {
+            return false;
+        };
+        let guard = super::super::native_projection::NativeScopeGuard::from_rule(&rule.rule);
+        guard.matches_case(&anchor.method, &anchor.path, anchor.source_body.as_ref())
+            && if is_reference {
+                guard.matches_reference_resource(protocol, target, database, username)
+            } else {
+                guard.matches_capture_resource(protocol, target, database, username)
+            }
+    }
+
     pub(in crate::replay) fn contract_clocks(
         &self,
         case: Option<&str>,
@@ -197,6 +227,7 @@ impl RequestContracts {
                     context.case,
                     context.target,
                     context.database,
+                    context.username,
                     context.command,
                     source,
                     actual,
@@ -210,14 +241,16 @@ impl RequestContracts {
         source: &[Vec<u8>],
         actual: &[Vec<u8>],
     ) -> Option<Result<Decision>> {
-        if source.first() == actual.first() && value_index(context.command, source.len()).is_some()
-        {
+        if self.compiled.is_some() && !source.is_empty() {
+            // Native argument/key/script owners need the complete envelope even
+            // before a rule exists and when the value slot is unavailable.
             self.record_unified_request(context, source, Some(actual));
         }
         let rules = self.unified_selected(
             context,
             source.first()?.as_slice(),
             Surface::DependencyRequest,
+            source.get(1).map(Vec::as_slice),
         );
         if rules.is_empty() {
             return None;
@@ -270,6 +303,7 @@ impl RequestContracts {
         context: &RedisRequestContext<'_>,
         key: &[u8],
         surface: Surface,
+        hash_field: Option<&[u8]>,
     ) -> Vec<&CompiledRule> {
         let Some(policy) = &self.compiled else {
             return vec![];
@@ -301,6 +335,11 @@ impl RequestContracts {
                         .as_ref()
                         .is_none_or(|username| Some(username.as_str()) == context.username)
                     && rule.selector.operation.as_deref() == Some(context.command)
+                    && rule
+                        .selector
+                        .hash_field
+                        .as_ref()
+                        .is_none_or(|field| hash_field.is_some_and(|value| field.matches(value)))
                     && rule
                         .selector
                         .key
@@ -369,9 +408,9 @@ impl RequestContracts {
                 .and_then(|value| value.parse().ok()),
             sequence: event["sequence"].as_u64(),
         };
-        if value_index(context.command, source.len()).is_some() {
-            self.record_unified_request(&context, &source, None);
-        }
+        // Immutable inventory includes sequence commands and lock lifecycle
+        // traffic, not just commands with a generic encoded value slot.
+        self.record_unified_request(&context, &source, None);
         if matches!(context.command, "GET" | "HGET")
             && event["outcome"]
                 .as_str()
@@ -383,14 +422,16 @@ impl RequestContracts {
                 self.record_unified_response_source(
                     &context,
                     &response,
-                    event["duration_ms"].as_u64().unwrap_or_default(),
+                    event["timestamp"]
+                        .as_str()
+                        .and_then(|value| value.parse().ok()),
                 );
             }
         }
         let mut ids = BTreeSet::new();
         for surface in [Surface::DependencyRequest, Surface::DependencyResponse] {
             let selected = self
-                .unified_selected(&context, &key, surface)
+                .unified_selected(&context, &key, surface, source.get(1).map(Vec::as_slice))
                 .iter()
                 .map(|rule| rule.rule.id.clone())
                 .collect::<Vec<_>>();
@@ -485,7 +526,7 @@ impl RequestContracts {
         &self,
         context: &RedisRequestContext<'_>,
         source: &[u8],
-        duration_ms: u64,
+        delivered: Option<DateTime<Utc>>,
     ) {
         let Some(store) = &self.witnesses else {
             return;
@@ -493,11 +534,6 @@ impl RequestContracts {
         let Ok(anchor) = self.anchor(context.case) else {
             return;
         };
-        let delivered = context.recorded_at.and_then(|time| {
-            i64::try_from(duration_ms).ok().and_then(|duration| {
-                time.checked_add_signed(chrono::Duration::milliseconds(duration))
-            })
-        });
         let metadata = WitnessMetadata {
             surface: Surface::DependencyResponse,
             source_role: SourceRole::RecordedDependencyResponse,

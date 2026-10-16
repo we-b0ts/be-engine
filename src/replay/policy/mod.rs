@@ -1,6 +1,8 @@
 pub(crate) mod case_condition;
 mod config;
+pub(crate) mod native_crypto_key;
 pub use case_condition::{CaseCondition, JsonCondition};
+pub(crate) use matcher::mysql_native::compare as compare_mysql_contracts;
 mod evidence_policy;
 pub(in crate::replay) mod request_contract;
 pub(crate) use evidence_policy::ReplayEvidencePolicyFreshness;
@@ -25,11 +27,16 @@ pub use feedback::{
     RedisTimeShiftFeedback, RedisTimeShiftPlan, RedisTimeShiftReport, plan_redis_time_shift,
 };
 mod initialization;
+pub(crate) mod native_projection;
+pub(crate) use native_projection::validate_finite_sharing;
+pub(crate) use native_projection::{NativeSourceCase, validate_native_source_dependencies};
 mod matcher;
 pub(crate) use matcher::mysql_contract::{
     compare_values as compare_mysql_values, selected_value as mysql_contract_value,
     witness_matches as mysql_witness_matches,
 };
+pub(crate) use matcher::mysql_native::compare_native_values as compare_native_mysql_values;
+pub(crate) use matcher::mysql_native::witness_matches as mysql_native_witness_matches;
 mod pattern;
 mod protobuf;
 mod report;
@@ -39,6 +46,8 @@ pub use response_headers::ResponseHeaderDateRule;
 mod sql_template;
 mod value;
 
+#[cfg(test)]
+pub(crate) mod test_fixture;
 #[cfg(test)]
 mod tests;
 
@@ -167,3 +176,5 @@ pub use feedback::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
 pub use response::{ResponseJwtAlgorithm, ResponseJwtKeySource, ResponseJwtRule};
 
 pub use feedback::{ResponseJwtRuleFeedback, plan_response_jwt_rule};
+
+pub(in crate::replay) use response::ResponseBodyRuleMatch;

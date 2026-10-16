@@ -48,8 +48,8 @@ async fn redis_rfc3339_time_rule_replays_finitely_and_rejects_changed_offsets() 
     let path = case.join("dependencies.jsonl");
     let immutable = record.to_string();
     std::fs::write(&path, &immutable).unwrap();
-    let policy = temp.path().join("verification.yaml");
-    std::fs::write(&policy,json!({"version":3,"expected_response":"assertions_only","dependency_rules":[{
+    let policy = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(&policy,json!({"version":3,"expected_response":"assertions_only","dependency_rules":[{
         "id":"activity-time","protocol":"redis","case":{"method":"PUT","path":"/scenario"},
         "target":{"host":"redis.internal","port":6379},"source_evidence":"Session:touch writes datetime.now(timezone.utc).isoformat()",
         "redis":{"key":{"prefix":"streaming:","numeric":true},"commands":[{"command":"SET","argument_values":{"1":{"json":{"/last_activity_at":{"time":"preserve_relative","format":"rfc3339"}}}}}]}
@@ -150,8 +150,8 @@ async fn redis_request_contracts_discover_plan_apply_and_verify_json_jwts_and_fr
             .join("\n");
         let dependencies = case.join("dependencies.jsonl");
         std::fs::write(&dependencies, &immutable).unwrap();
-        let policy = root.join(".traffic-e2e/verification.yaml");
-        std::fs::write(
+        let policy = root.join(".traffic-e2e/policy.yaml");
+        crate::replay::write_policy_fixture(
             &policy,
             "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
         )
@@ -311,8 +311,8 @@ async fn script_and_rpush_contracts_plan_apply_and_replay_over_real_redis_client
         let record = redis_hash_dependency(Uuid::new_v4(), 1, command, &source_args, b":1\r\n");
         let immutable = record.to_string();
         std::fs::write(case.join("dependencies.jsonl"), &immutable).unwrap();
-        let policy = root.join(".traffic-e2e/verification.yaml");
-        std::fs::write(
+        let policy = root.join(".traffic-e2e/policy.yaml");
+        crate::replay::write_policy_fixture(
             &policy,
             "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
         )

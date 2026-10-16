@@ -72,8 +72,8 @@ async fn redis_lock_plan_apply_then_cross_connection_set_mget_evalsha_keeps_nonc
         .unwrap();
     }
     task.abort();
-    let policy = temp.path().join("verification.yaml");
-    std::fs::write(
+    let policy = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )

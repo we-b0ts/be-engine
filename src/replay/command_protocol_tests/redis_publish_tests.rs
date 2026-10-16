@@ -93,8 +93,8 @@ async fn redis_publish_uuid_field_preserves_other_uuids_when_payload_positions_c
             .unwrap();
         }
         task.abort();
-        let policy = temp.path().join("verification.yaml");
-        std::fs::write(
+        let policy = temp.path().join("policy.yaml");
+        crate::replay::write_policy_fixture(
             &policy,
             "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
         )
@@ -221,7 +221,7 @@ async fn redis_publish_plan_apply_preserves_uuid_relations_order_and_finite_bina
             std::fs::write(&report_path, report).unwrap();
         }
         task.abort();
-        let policy_path = temp.path().join("verification.yaml");
+        let policy_path = temp.path().join("policy.yaml");
         let original_policy =
             "# keep\nversion: 3\nexpected_response: assertions_only\ndependency_rules: []\n";
         std::fs::write(&policy_path, original_policy).unwrap();

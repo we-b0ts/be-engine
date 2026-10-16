@@ -36,8 +36,8 @@ impl Fixture {
             .collect::<Vec<_>>()
             .join("\n");
         std::fs::write(case.join("dependencies.jsonl"), &immutable).unwrap();
-        let policy = root.join(".traffic-e2e/verification.yaml");
-        std::fs::write(
+        let policy = root.join(".traffic-e2e/policy.yaml");
+        crate::replay::write_policy_fixture(
             &policy,
             "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
         )

@@ -199,7 +199,7 @@ async fn predicate_equivalence_cannot_bypass_selected_dynamic_parameter_validati
     record["params"] = json!([{"kind":"integer","value":7}, {"kind":"integer","value":1}, {"kind":"integer","value":2}]);
     let (temp, _addr, runtime, task) = fixture(&[record], true).await;
     let policy_path = temp.path().join("checked-policy.yaml");
-    std::fs::write(
+    crate::replay::write_policy_fixture(
         &policy_path,
         r#"
 version: 1

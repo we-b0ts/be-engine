@@ -28,8 +28,8 @@ async fn fixture() -> (TempDir, PathBuf, PathBuf) {
     )
     .unwrap();
     fs::write(case.join("expected-response.json"), "{}").unwrap();
-    let policy = temp.path().join("verification.yaml");
-    fs::write(&policy, "version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_rules: {json: {}}\n").unwrap();
+    let policy = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(&policy, "version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_rules: {json: {}}\n").unwrap();
     (temp, case, policy)
 }
 

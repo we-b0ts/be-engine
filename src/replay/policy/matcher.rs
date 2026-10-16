@@ -1,9 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
+mod http_native;
 mod memcached;
 pub(in crate::replay::policy) mod mysql_contract;
+pub(in crate::replay::policy) mod mysql_native;
 pub(in crate::replay::policy) mod mysql_response;
 pub(in crate::replay::policy) mod mysql_selectors;
 pub(super) mod mysql_values;
+mod source_session;
 use std::fs;
 use std::path::Path;
 
@@ -45,6 +48,20 @@ pub(in crate::replay) struct DependencyRuleDecision {
     bindings: Vec<(String, Value)>,
     pub(in crate::replay) dynamic_query_params: Vec<String>,
     pub(in crate::replay) value_contracts: Vec<super::request_contract::Decision>,
+}
+
+impl DependencyRuleDecision {
+    pub(in crate::replay::policy) fn merge_value_comparison(
+        &mut self,
+        comparison: crate::value_contract::json::Comparison,
+        native: &[&crate::policy::CompiledNativeRule],
+    ) {
+        let other = mysql_native::decision(comparison, native);
+        for (id, usage) in other.usage {
+            self.usage.entry(id).or_default().time_validations += usage.time_validations;
+        }
+        self.value_contracts.extend(other.value_contracts);
+    }
 }
 
 #[derive(Debug)]
@@ -149,11 +166,18 @@ impl ReplayPolicyRuntime {
                 .filter_map(|(id, case)| case.path.as_ref().map(|path| (id.clone(), path.clone())))
                 .collect(),
         );
+        if let Some(compiled) = &loaded.compiled {
+            dynamic_values.configure_native(&compiled.native);
+        }
         if loaded
-            .document
-            .dynamic_values
-            .iter()
-            .any(|rule| rule.when.is_some())
+            .compiled
+            .as_ref()
+            .is_some_and(|policy| !policy.native.is_empty())
+            || loaded
+                .document
+                .dynamic_values
+                .iter()
+                .any(|rule| rule.when.is_some())
             || loaded
                 .document
                 .dependency_rules
@@ -503,6 +527,13 @@ impl ReplayPolicyRuntime {
             }
         }
         let mut decision = DependencyRuleDecision::default();
+        let native_times = self.compare_native_query_times(
+            case_id,
+            &matching_rules,
+            &recorded_query,
+            &actual_query,
+            &mut decision,
+        )?;
         for (name, (rule_id, field)) in fields {
             let recorded_values = recorded_query.get(name).cloned().unwrap_or_default();
             let actual_values = actual_query.get(name).cloned().unwrap_or_default();
@@ -513,14 +544,16 @@ impl ReplayPolicyRuntime {
                     actual_values.len()
                 ));
             }
-            self.preview_dynamic_value(
-                case_id,
-                rule_id,
-                field,
-                &Value::String(recorded_values[0].clone()),
-                &Value::String(actual_values[0].clone()),
-                &mut decision,
-            )?;
+            if !native_times.contains(&(rule_id.into(), name.into())) {
+                self.preview_dynamic_value(
+                    case_id,
+                    rule_id,
+                    field,
+                    &Value::String(recorded_values[0].clone()),
+                    &Value::String(actual_values[0].clone()),
+                    &mut decision,
+                )?;
+            }
             decision.dynamic_query_params.push(name.to_string());
         }
         Ok(decision)

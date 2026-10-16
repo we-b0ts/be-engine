@@ -25,8 +25,8 @@ async fn numeric_json_rpc_id_discovery_plan_apply_preserves_business_numbers_and
     )
     .unwrap();
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
-    let policy = root.join("verification.yaml");
-    std::fs::write(
+    let policy = root.join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
@@ -130,12 +130,11 @@ async fn http_capture_plan_apply_replay_keeps_static_json_and_pending_bindings_s
     tokio::fs::write(case.join("expected-response.json"), "{}")
         .await
         .unwrap();
-    let policy = temp.path().join("verification.yaml");
-    tokio::fs::write(
+    let policy = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
-    .await
     .unwrap();
     let (addr, runtime, task) =
         spawn_http_replay_with_policy(&case, Vec::new(), Some(policy.clone()), None).await;

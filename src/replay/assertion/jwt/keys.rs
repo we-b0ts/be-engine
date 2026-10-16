@@ -2,21 +2,62 @@
 use crate::replay::policy::ResponseJwtKeySource;
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-pub(super) struct VerificationKey {
-    pub(super) bytes: Vec<u8>,
-    pub(super) kid: Option<String>,
-    pub(super) witness: Option<(PathBuf, String)>,
+pub(in crate::replay) struct VerificationKey {
+    pub(in crate::replay) bytes: Vec<u8>,
+    pub(in crate::replay) kid: Option<String>,
+    pub(in crate::replay) witness: Option<(PathBuf, String)>,
+    startup: Option<crate::request_rules::keys::ResolvedSigningKey>,
 }
 
 impl VerificationKey {
-    pub(super) fn resolve(root: &Path, source: &ResponseJwtKeySource, case: &Path) -> Result<Self> {
+    #[cfg(test)]
+    pub(in crate::replay) fn for_test(bytes: &[u8]) -> Self {
+        Self {
+            bytes: bytes.into(),
+            kid: None,
+            witness: None,
+            startup: None,
+        }
+    }
+    pub(in crate::replay) fn witnesses(&self) -> impl Iterator<Item = &(PathBuf, String)> {
+        self.witness
+            .iter()
+            .chain(self.startup.iter().flat_map(|key| key.witnesses()))
+    }
+    pub(in crate::replay) fn ensure_current(&self) -> Result<()> {
+        if let Some(key) = &self.startup {
+            key.ensure_current()?;
+        }
+        if let Some((path, digest)) = &self.witness {
+            ensure!(
+                format!("sha256:{:x}", Sha256::digest(std::fs::read(path)?)) == *digest,
+                "recorded response key evidence changed"
+            );
+        }
+        Ok(())
+    }
+    pub(in crate::replay) fn resolve(
+        root: &Path,
+        source: &ResponseJwtKeySource,
+        case: &Path,
+    ) -> Result<Self> {
+        Self::resolve_scoped(root, source, case, None)
+    }
+
+    pub(in crate::replay) fn resolve_scoped(
+        root: &Path,
+        source: &ResponseJwtKeySource,
+        case: &Path,
+        identity: Option<&crate::policy::Resource>,
+    ) -> Result<Self> {
         if let Some(source) = source.startup() {
+            let key = crate::request_rules::keys::ResolvedSigningKey::resolve(root, &source)?;
             return Ok(Self {
-                bytes: crate::request_rules::keys::ResolvedSigningKey::resolve(root, &source)?
-                    .bytes()
-                    .to_vec(),
+                bytes: key.bytes().to_vec(),
+                startup: Some(key),
                 kid: None,
                 witness: None,
             });
@@ -63,6 +104,9 @@ impl VerificationKey {
                     .is_none_or(|h| !h.eq_ignore_ascii_case(host))
                 || event["target_port"] != *port
                 || event["database"] != *database
+                || identity
+                    .and_then(|resource| resource.username.as_deref())
+                    .is_some_and(|username| event["username"].as_str() != Some(username))
             {
                 continue;
             }
@@ -137,8 +181,9 @@ impl VerificationKey {
         }
         Ok(Self {
             bytes: selected.context("JWT recorded_mysql key selector matched no exchange")?,
+            startup: None,
             kid: Some(kid.clone()),
-            witness: Some((path, crate::replay::policy::fingerprint(&bytes))),
+            witness: Some((path, format!("sha256:{:x}", Sha256::digest(&bytes)))),
         })
     }
 }

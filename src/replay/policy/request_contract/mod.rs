@@ -3,9 +3,10 @@ pub(crate) mod config;
 pub(in crate::replay::policy) mod evidence;
 mod http_json;
 mod http_value;
-mod key;
+pub(in crate::replay::policy) mod key;
 mod memcached;
 mod mysql;
+pub(in crate::replay::policy) mod native_projection;
 mod value_decision;
 pub(in crate::replay) use key::KeyBindingReport;
 mod overlap;
@@ -14,6 +15,7 @@ mod unified_response;
 pub(in crate::replay) use unified_response::PreparedRedisDelivery;
 pub(crate) use unified_response::redis_bulk_payload;
 mod script;
+mod source_session;
 mod time;
 mod unified;
 pub(in crate::replay::policy) use overlap::validate as validate_overlaps;
@@ -97,11 +99,7 @@ impl RequestContracts {
         policy: &Path,
         cases: &BTreeMap<String, ReplayCase>,
     ) -> Result<Self> {
-        let root = policy
-            .parent()
-            .and_then(Path::parent)
-            .unwrap_or(Path::new("."))
-            .to_path_buf();
+        let mut root = None;
         let mut keys = BTreeMap::new();
         for rule in rules {
             if let Some(super::redis_value::RedisSelector::Requests(selector)) = &rule.redis {
@@ -113,7 +111,9 @@ impl RequestContracts {
                                     keys.insert(
                                         (rule.id.clone(), pointer.clone()),
                                         crate::request_rules::keys::ResolvedSigningKey::resolve(
-                                            &root,
+                                            root.get_or_insert(
+                                                crate::config::resolve_unified_policy_root(policy)?,
+                                            ),
                                             &field.jwt.signing_key_source,
                                         )?,
                                     );
@@ -242,7 +242,7 @@ impl RequestContracts {
                         .as_ref()
                         .is_some_and(|host| host.eq_ignore_ascii_case(&target.host))
                     && r.target.port == Some(target.port)
-                    && r.case_selector.as_ref().is_some_and(|selector| {
+                    && r.case_selector.as_ref().is_none_or(|selector| {
                         selector.method == anchor.method
                             && super::pattern::path_pattern_matches(&selector.path, &anchor.path)
                     })
@@ -329,6 +329,25 @@ impl RequestContracts {
                 }
             };
             for rule in self.selected(case, &target, protocol) {
+                let native_protocol = if protocol == DependencyProtocol::Redis {
+                    crate::policy::Protocol::Redis
+                } else {
+                    crate::policy::Protocol::Http
+                };
+                let database = event["database"]
+                    .as_i64()
+                    .map(crate::policy::Database::Index);
+                if !self.native_rule_scope_matches(
+                    &rule.id,
+                    Some(case),
+                    native_protocol,
+                    &target,
+                    database.as_ref(),
+                    event["username"].as_str(),
+                    false,
+                ) {
+                    continue;
+                }
                 let matches = if let Some(super::redis_value::RedisSelector::Requests(selector)) =
                     &rule.redis
                 {
@@ -427,7 +446,15 @@ impl RequestContracts {
             .selected(case, target, DependencyProtocol::Http)
             .into_iter()
             .filter(|r| {
-                r.http.as_ref().is_some_and(|h| {
+                self.native_rule_scope_matches(
+                    &r.id,
+                    Some(case),
+                    crate::policy::Protocol::Http,
+                    target,
+                    None,
+                    None,
+                    false,
+                ) && r.http.as_ref().is_some_and(|h| {
                     h.multipart.is_some()
                         && h.method == method
                         && super::pattern::path_pattern_matches(&h.path, path)

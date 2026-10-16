@@ -32,8 +32,8 @@ impl Fixture {
                 .to_string(),
         )
         .unwrap();
-        let policy = temp.path().join(".traffic-e2e/verification.yaml");
-        fs::write(
+        let policy = temp.path().join(".traffic-e2e/policy.yaml");
+        crate::replay::write_policy_fixture(
             &policy,
             "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
         )
@@ -346,7 +346,7 @@ fn publish_time_planning_composes_existing_uuid_and_preserves_stable_fields() {
     ] {
         let mut fixture = Fixture::new();
         let uuid = json!({"id":"publisher","protocol":"redis","target":{"host":"cache.test","port":6379},"redis":{"publish":{"channel":"events","uuid_field":"host_id","source_evidence":"Emitter initializes a process UUID v4"}}});
-        std::fs::write(&fixture.policy,serde_yaml::to_string(&json!({"version":3,"expected_response":"assertions_only","dependency_rules":[uuid]})).unwrap()).unwrap();
+        crate::replay::write_policy_fixture(&fixture.policy,serde_yaml::to_string(&json!({"version":3,"expected_response":"assertions_only","dependency_rules":[uuid]})).unwrap()).unwrap();
         let source = payload(source_id, "1970-01-01T00:16:40.123456", "COMPLETED");
         let actual = payload(actual_id, time, status);
         fixture.candidate("PUBLISH", &["events", &source], &["events", &actual]);

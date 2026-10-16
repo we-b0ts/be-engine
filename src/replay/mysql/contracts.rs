@@ -7,6 +7,7 @@ use crate::value_contract::json::{AnchorClocks, Comparison};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RequestEnvelope {
+    request_started_at: Option<chrono::DateTime<Utc>>,
     command: String,
     sql: Option<String>,
     params: Option<Vec<RecordedMysqlValue>>,
@@ -14,6 +15,7 @@ struct RequestEnvelope {
 impl RequestEnvelope {
     fn recorded(record: &RecordedMysqlExchange) -> Self {
         Self {
+            request_started_at: source_started(record),
             command: record.command.clone(),
             sql: record.sql.clone(),
             params: record.params.clone(),
@@ -24,6 +26,7 @@ impl RequestEnvelope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ResponseEnvelope {
+    response_delivered_at: Option<chrono::DateTime<Utc>>,
     request: RequestEnvelope,
     outcome: crate::DependencyExchangeOutcome,
     response: RecordedMysqlResponse,
@@ -58,6 +61,7 @@ impl PreparedDelivery {
         now: chrono::DateTime<Utc>,
     ) -> Result<()> {
         let mut delivered = self.base.clone();
+        delivered.response_delivered_at = Some(now);
         delivered.response = response.clone();
         let target = serde_json::to_vec(&delivered)?;
         for metadata in &self.metadata {
@@ -112,6 +116,7 @@ pub(in crate::replay) fn prepare_delivery(
         "SQL response copy changed outside the proven projection"
     );
     let original = serde_json::to_vec(&ResponseEnvelope {
+        response_delivered_at: record.timestamp,
         request: RequestEnvelope::recorded(record),
         outcome: record.outcome,
         response: record.response.clone(),
@@ -133,7 +138,9 @@ pub(in crate::replay) fn prepare_delivery(
     Ok(Some(PreparedDelivery {
         original,
         base: ResponseEnvelope {
+            response_delivered_at: None,
             request: RequestEnvelope {
+                request_started_at: Some(target_started),
                 command: target_command.into(),
                 sql: target_sql.map(str::to_owned),
                 params: target_params.map(<[RecordedMysqlValue]>::to_vec),
@@ -164,6 +171,7 @@ pub(in crate::replay) fn record_request(
     }
     let source = serde_json::to_vec(&RequestEnvelope::recorded(record))?;
     let actual = serde_json::to_vec(&RequestEnvelope {
+        request_started_at: Some(observed),
         command: command.into(),
         sql: sql.map(str::to_owned),
         params: params.map(<[RecordedMysqlValue]>::to_vec),
@@ -212,6 +220,7 @@ pub(crate) fn source_witness(event: &Value, surface: Surface) -> Result<Vec<u8>>
         "invalid SQL witness surface"
     );
     Ok(serde_json::to_vec(&ResponseEnvelope {
+        response_delivered_at: record.timestamp,
         request: RequestEnvelope::recorded(&record),
         outcome: record.outcome,
         response: record.response,
@@ -228,9 +237,17 @@ pub(crate) fn validate_witness(
     if surface == Surface::DependencyRequest {
         let source: RequestEnvelope = serde_json::from_slice(source)?;
         let target: RequestEnvelope = serde_json::from_slice(target)?;
+        validate_request_clocks(&source, &target, clocks)?;
         ensure!(
-            source.command == target.command,
-            "SQL command changed outside its native adapter"
+            source.command == target.command
+                || matches!(
+                    (source.command.as_str(), target.command.as_str()),
+                    (
+                        "COM_QUERY" | "COM_STMT_EXECUTE",
+                        "COM_QUERY" | "COM_STMT_EXECUTE"
+                    )
+                ),
+            "SQL command changed outside its native text/prepared query adapter"
         );
         return policy::compare_mysql_values(
             source.sql.as_deref(),
@@ -247,11 +264,18 @@ pub(crate) fn validate_witness(
     );
     let source: ResponseEnvelope = serde_json::from_slice(source)?;
     let target: ResponseEnvelope = serde_json::from_slice(target)?;
+    validate_request_clocks(&source.request, &target.request, clocks)?;
+    ensure!(
+        source.response_delivered_at == clocks.delivery.source
+            && target.response_delivered_at == clocks.delivery.target,
+        "SQL response clocks differ from protected metadata"
+    );
     ensure!(
         source.outcome == target.outcome,
         "SQL termination outcome changed"
     );
     let record: RecordedMysqlExchange = serde_json::from_value(serde_json::json!({
+        "timestamp":source.response_delivered_at,
         "command":source.request.command,"sql":source.request.sql,"params":source.request.params,
         "response":source.response,"outcome":source.outcome
     }))?;
@@ -276,6 +300,48 @@ pub(crate) fn validate_witness(
     Ok(validation)
 }
 
+/// A state-free native SQL Source/Target preflight uses the same request owner.
+pub(crate) fn validate_native_values_witness(
+    source: &[u8],
+    target: &[u8],
+    rule: &crate::policy::CompiledNativeRule,
+    clocks: AnchorClocks,
+) -> Result<Comparison> {
+    validate_contract_witness(source, target, &[], &[rule], clocks)
+}
+
+/// Encoded fields and scalar times share one SQL remainder and clock scope.
+pub(crate) fn validate_contract_witness(
+    source: &[u8],
+    target: &[u8],
+    values: &[&CompiledRule],
+    native: &[&crate::policy::CompiledNativeRule],
+    clocks: AnchorClocks,
+) -> Result<Comparison> {
+    let source: RequestEnvelope = serde_json::from_slice(source)?;
+    let target: RequestEnvelope = serde_json::from_slice(target)?;
+    validate_request_clocks(&source, &target, clocks)?;
+    ensure!(
+        matches!(
+            (source.command.as_str(), target.command.as_str()),
+            (
+                "COM_QUERY" | "COM_STMT_EXECUTE",
+                "COM_QUERY" | "COM_STMT_EXECUTE"
+            )
+        ),
+        "native SQL time values require the query adapter"
+    );
+    policy::compare_mysql_contracts(
+        source.sql.as_deref(),
+        source.params.as_deref(),
+        target.sql.as_deref(),
+        target.params.as_deref(),
+        values,
+        native,
+        clocks,
+    )
+}
+
 pub(crate) fn witness_values(
     raw: &[u8],
     surface: Surface,
@@ -297,6 +363,19 @@ pub(crate) fn witness_values(
         }
         _ => anyhow::bail!("SQL witness slot and surface disagree"),
     }
+}
+
+fn validate_request_clocks(
+    source: &RequestEnvelope,
+    target: &RequestEnvelope,
+    clocks: AnchorClocks,
+) -> Result<()> {
+    ensure!(
+        source.request_started_at == clocks.dependency.source
+            && target.request_started_at == clocks.dependency.target,
+        "SQL request clocks differ from protected metadata"
+    );
+    Ok(())
 }
 
 pub(in crate::replay) fn source_started(

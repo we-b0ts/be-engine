@@ -73,6 +73,7 @@ pub fn capabilities() -> &'static [Capability] {
 impl CapabilityId {
     pub fn for_contract(contract: &FieldContract) -> Self {
         match contract {
+            FieldContract::Conditional { contract, .. } => Self::for_contract(contract),
             FieldContract::Unordered => Self::Unordered,
             FieldContract::Time { .. } => Self::RelativeTime,
             FieldContract::Duration { .. } => Self::Duration,
@@ -103,6 +104,31 @@ pub fn validate_contract_binding(
     path: &str,
     contract: &FieldContract,
 ) -> Result<()> {
+    if let FieldContract::Conditional { when, contract } = contract {
+        if let Codec::Protobuf(codec) = codec {
+            let pointer = when
+                .peer_pointer(path)
+                .ok_or_else(|| anyhow::anyhow!("conditional field has no parent"))?;
+            let peer = resolve_protobuf_field(codec, &pointer).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Source condition sibling requires an explicit typed Protobuf binding"
+                )
+            })?;
+            ensure!(!peer.repeated, "Source condition sibling must be a scalar");
+            for expected in &when.not_in {
+                let compatible = match expected {
+                    super::SourceScalar::Bool(_) => peer.field_type == ProtobufType::Bool,
+                    super::SourceScalar::String(_) => peer.field_type == ProtobufType::String,
+                    super::SourceScalar::Number(_) => numeric(peer.field_type),
+                };
+                ensure!(
+                    compatible,
+                    "Source condition and Protobuf sibling types disagree"
+                );
+            }
+        }
+        return validate_contract_binding(codec, path, contract);
+    }
     let Codec::Protobuf(codec) = codec else {
         return Ok(());
     };
@@ -128,7 +154,8 @@ pub fn validate_contract_binding(
             let valid = match format {
                 TimestampFormat::Rfc3339
                 | TimestampFormat::AmzDate
-                | TimestampFormat::Iso8601Naive => field.field_type == ProtobufType::String,
+                | TimestampFormat::Iso8601Naive
+                | TimestampFormat::SqlDatetime => field.field_type == ProtobufType::String,
                 _ => numeric(field.field_type),
             };
             ensure!(
@@ -140,6 +167,7 @@ pub fn validate_contract_binding(
             !field.repeated && numeric(field.field_type),
             "duration requires a numeric scalar Protobuf field at {path:?}"
         ),
+        FieldContract::Conditional { .. } => unreachable!("handled before codec binding"),
     }
     Ok(())
 }

@@ -56,6 +56,7 @@ fn redis_exchange(cache_snapshot_hit: bool) -> RecorderEvent {
         connection_id: Uuid::new_v4(),
         sequence: 1,
         timestamp: Utc::now(),
+        request_started_at: chrono::Utc::now(),
         client_addr: None,
         target_host: "redis.internal".to_string(),
         target_port: 20917,

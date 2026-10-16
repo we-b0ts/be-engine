@@ -42,9 +42,14 @@ pub(super) fn compare(
     report: &mut ResponseAssertionCaseReport,
 ) -> Result<()> {
     let codec = crate::value_contract::encoded::merged_codec(rules)?;
+    let (source_payload, target_payload) = if matches!(codec, crate::policy::Codec::Protobuf(_)) {
+        super::protobuf::payload_pair(source.body(), target.body())?
+    } else {
+        (source.body(), target.body())
+    };
     let comparison = crate::value_contract::encoded::compare(
-        source.body(),
-        target.body(),
+        source_payload,
+        target_payload,
         rules,
         AnchorClocks {
             case: times,
@@ -57,9 +62,7 @@ pub(super) fn compare(
     };
     report.applied_body_rule_ids.extend(comparison.evaluated);
     for diff in comparison.differences {
-        let mut difference = ResponseDifference::body_value_mismatch();
-        difference.pointer = diff.pointer;
-        report.differences.push(difference);
+        report.differences.push(contract_difference(diff));
     }
     if let Some(difference) = source.type_difference(target) {
         report.differences.push(difference);
@@ -70,4 +73,64 @@ pub(super) fn compare(
             .push(ResponseDifference::gateway_metadata_mismatch());
     }
     Ok(())
+}
+
+/// Preserve domain diagnostics without exposing payloads or private key errors.
+pub(super) fn contract_difference(
+    diff: crate::value_contract::json::Difference,
+) -> ResponseDifference {
+    use ResponseDifferenceKind as K;
+    let mut difference = ResponseDifference::body_value_mismatch();
+    difference.pointer = diff.pointer;
+    let jwt = [
+        K::JwtAlgorithmMismatch,
+        K::JwtSignatureInvalid,
+        K::JwtClaimsMismatch,
+        K::JwtTimeMismatch,
+        K::JwtNonceMismatch,
+        K::JwtUrlMismatch,
+        K::JwtExpiryMismatch,
+        K::JwtInvalid,
+        K::TimeReferenceMissing,
+    ];
+    difference.kind = jwt
+        .into_iter()
+        .find(|kind| diff.reason.contains(&format!("{kind:?}")))
+        .unwrap_or_else(|| match diff.reason.as_str() {
+            "authenticated nonce bijection changed" => K::JwtNonceMismatch,
+            "unordered requires two arrays" => K::UnorderedFieldNotArray,
+            "unordered multiset changed" => K::UnorderedArrayContentMismatch,
+            "joined collection requires two strings" => K::UnorderedJoinedStringFieldNotString,
+            "joined multiset changed" => K::UnorderedJoinedStringContentMismatch,
+            reason
+                if reason.contains("ReferenceMissing")
+                    || reason == "time relation requires independent source and target anchors" =>
+            {
+                K::TimeReferenceMissing
+            }
+            reason
+                if reason.contains("OutsideWindow")
+                    || reason == "timestamp is outside the fixed five-second anchor window" =>
+            {
+                K::TimestampOutsideRequestWindow
+            }
+            reason
+                if reason.contains("DeltaMismatch")
+                    || reason.contains("RelationshipMismatch")
+                    || reason == "time difference does not preserve the anchor difference"
+                    || reason == "time parameter relationship changed" =>
+            {
+                K::DurationDeltaMismatch
+            }
+            reason
+                if reason.contains("NumericCategoryChanged")
+                    || reason.contains("InvalidValue")
+                    || reason == "timestamp numeric category changed"
+                    || reason == "invalid time value" =>
+            {
+                K::TimeFieldInvalid
+            }
+            _ => K::ValueMismatch,
+        });
+    difference
 }

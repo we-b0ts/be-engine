@@ -11,7 +11,7 @@ pub const POLICY_FORMAT: &str = "traffic-policy/v1";
 #[serde(deny_unknown_fields)]
 pub struct TrafficPolicy {
     pub format: String,
-    pub rules: Vec<Rule>,
+    pub rules: Vec<super::PolicyRule>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -99,6 +99,8 @@ pub struct MatchSpec {
     pub operation: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<KeySelector>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash_field: Option<KeySelector>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -231,6 +233,8 @@ impl<'de> Deserialize<'de> for Endpoint {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KeySelector {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub numeric: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exact: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -252,6 +256,17 @@ impl KeySelector {
                 .suffix
                 .as_ref()
                 .is_none_or(|suffix| value.ends_with(suffix.as_bytes()))
+            && (!self.numeric
+                || self
+                    .prefix
+                    .as_ref()
+                    .map_or(Some(value), |prefix| value.strip_prefix(prefix.as_bytes()))
+                    .and_then(|value| {
+                        self.suffix
+                            .as_ref()
+                            .map_or(Some(value), |suffix| value.strip_suffix(suffix.as_bytes()))
+                    })
+                    .is_some_and(|value| !value.is_empty() && value.iter().all(u8::is_ascii_digit)))
     }
 }
 
@@ -357,6 +372,11 @@ impl From<Codec> for CodecDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum FieldContract {
+    /// The inactive branch compares the selected field exactly.
+    Conditional {
+        when: FieldCondition,
+        contract: Box<FieldContract>,
+    },
     Unordered,
     Time {
         format: TimestampFormat,
@@ -374,6 +394,13 @@ pub enum FieldContract {
 }
 
 impl FieldContract {
+    pub fn unconditional(&self) -> &Self {
+        match self {
+            Self::Conditional { contract, .. } => contract,
+            other => other,
+        }
+    }
+
     pub fn time(&self) -> Option<TimeContract> {
         match self {
             Self::Time {
@@ -391,6 +418,50 @@ impl FieldContract {
             }),
             _ => None,
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldCondition {
+    /// One parent step followed by an exact JSON Pointer, e.g. ../status.
+    pub relative_pointer: String,
+    pub not_in: Vec<SourceScalar>,
+}
+
+impl FieldCondition {
+    pub fn peer_pointer(&self, field: &str) -> Option<String> {
+        let relative = self.relative_pointer.strip_prefix("..")?;
+        let (parent, _) = field.rsplit_once('/')?;
+        Some(format!("{parent}{relative}"))
+    }
+
+    pub(crate) fn active(&self, root: &serde_json::Value, field: &str) -> Result<bool> {
+        let pointer = self
+            .peer_pointer(field)
+            .context("field condition requires a parent scope")?;
+        let value = root
+            .pointer(&pointer)
+            .context("Source condition sibling is absent")?;
+        let mut active = true;
+        for expected in &self.not_in {
+            let equal = match (expected, value) {
+                (SourceScalar::Bool(expected), serde_json::Value::Bool(value)) => expected == value,
+                (SourceScalar::String(expected), serde_json::Value::String(value)) => {
+                    expected == value
+                }
+                (SourceScalar::Number(expected), serde_json::Value::Number(value)) => {
+                    ensure!(
+                        expected.is_i64() == value.is_i64() && expected.is_u64() == value.is_u64(),
+                        "Source condition sibling numeric type differs"
+                    );
+                    expected == value
+                }
+                _ => anyhow::bail!("Source condition sibling type differs"),
+            };
+            active &= !equal;
+        }
+        Ok(active)
     }
 }
 
@@ -442,6 +513,7 @@ pub enum TimestampFormat {
     Rfc3339,
     AmzDate,
     Iso8601Naive,
+    SqlDatetime,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -510,7 +582,7 @@ pub struct NotEqualsPredicate {
     pub not_equals: SourceScalar,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SourceScalar {
     Bool(bool),

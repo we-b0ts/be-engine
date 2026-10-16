@@ -67,8 +67,8 @@ async fn redis_joint_time_plans_from_failure_then_replays_nil_capture_references
         .join("\n");
     let dependencies = case.join("dependencies.jsonl");
     std::fs::write(&dependencies, &immutable).unwrap();
-    let policy = temp.path().join(".traffic-e2e/verification.yaml");
-    std::fs::write(
+    let policy = temp.path().join(".traffic-e2e/policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )

@@ -26,14 +26,7 @@ impl RedisReplayState {
                     database: exchange.record.database,
                     username: exchange.record.username.as_deref(),
                     command: &exchange.record.command,
-                    recorded_at: exchange.record.timestamp.and_then(|completed| {
-                        i64::try_from(exchange.record.duration_ms)
-                            .ok()
-                            .and_then(|duration| {
-                                completed
-                                    .checked_sub_signed(chrono::TimeDelta::milliseconds(duration))
-                            })
-                    }),
+                    recorded_at: exchange.record.started_at(),
                     actual_at: self.request_observed_at,
                     connection_id: Some(exchange.record.connection_id),
                     sequence: Some(exchange.record.sequence),
@@ -47,6 +40,7 @@ impl RedisReplayState {
             return Some(original.map(|d| (d, None)));
         }
         let context = JsonContext {
+            case_id: exchange.case_id.as_deref(),
             host: &target.host,
             port: target.port,
             database: exchange.record.database,

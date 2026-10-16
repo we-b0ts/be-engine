@@ -26,8 +26,8 @@ fn fixture(source: &[u8], target: &[u8]) -> (tempfile::TempDir, RedisUnorderedFe
         json!({"finalized":true,"redis":state.snapshot()}).to_string(),
     )
     .unwrap();
-    let policy = temp.path().join("verification.yaml");
-    fs::write(&policy,"version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_rules: {json: {}}\n").unwrap();
+    let policy = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(&policy,"version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_rules: {json: {}}\n").unwrap();
     let feedback = RedisUnorderedFeedback {
         policy_path: policy,
         case_source: case,

@@ -82,7 +82,7 @@ fn write_raw_case(
         .unwrap(),
     )
     .unwrap();
-    fs::write(
+    crate::replay::write_policy_fixture(
         &policy,
         format!(
             "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n{response_rules}"
@@ -337,7 +337,7 @@ fn write_motan_case_with_rules(
         .unwrap(),
     )
     .unwrap();
-    fs::write(
+    crate::replay::write_policy_fixture(
         &policy,
         format!(
             "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n{response_rules}"
@@ -733,7 +733,7 @@ fn generated_scalar_skips_only_its_literal_value() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(report.passed);
-    assert_eq!(report.applied_generated_rule_ids.len(), 1);
+    assert_eq!(report.applied_body_rule_ids.len(), 1);
     assert!(report.differences.is_empty());
 }
 

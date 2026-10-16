@@ -35,8 +35,8 @@ async fn legacy_clock_supports_plan_apply_and_fresh_replay_without_changing_reco
     report["finalized"] = json!(true);
     let report_path = temp.path().join("replay-report.json");
     std::fs::write(&report_path, report.to_string()).unwrap();
-    let policy_path = temp.path().join("verification.yaml");
-    std::fs::write(
+    let policy_path = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy_path,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )

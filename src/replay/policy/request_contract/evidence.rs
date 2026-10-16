@@ -410,13 +410,14 @@ pub(in crate::replay::policy) fn verify_capture(
                     continue;
                 }
                 let normalized = dynamic
-                    .redis(
+                    .redis_with_identity(
                         Some(&candidate.case_id),
                         &TargetKey {
                             host: candidate.host.clone(),
                             port: candidate.port,
                         },
                         candidate.database,
+                        event["username"].as_str(),
                         &candidate.command,
                         &source,
                         &actual,
@@ -432,6 +433,7 @@ pub(in crate::replay::policy) fn verify_capture(
                     publish
                         .preview_json(
                             crate::replay::redis::publish::json::JsonContext {
+                                case_id: Some(&candidate.case_id),
                                 host: &candidate.host,
                                 port: candidate.port,
                                 database: candidate.database,

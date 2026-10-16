@@ -155,13 +155,17 @@ pub(crate) fn shift(value: &Value, config: &TimeContract, delta: i128) -> Result
                         .to_rfc3339_opts(SecondsFormat::AutoSi, original.ends_with(['Z', 'z']))
                 }
                 TimestampFormat::AmzDate => translated.format("%Y%m%dT%H%M%SZ").to_string(),
-                TimestampFormat::Iso8601Naive => translated
+                TimestampFormat::Iso8601Naive | TimestampFormat::SqlDatetime => translated
                     .with_timezone(
                         &config
                             .offset()?
                             .context("naive timestamp requires offset")?,
                     )
-                    .format("%Y-%m-%dT%H:%M:%S%.f")
+                    .format(if format == TimestampFormat::SqlDatetime {
+                        "%Y-%m-%d %H:%M:%S%.f"
+                    } else {
+                        "%Y-%m-%dT%H:%M:%S%.f"
+                    })
                     .to_string(),
                 _ => unreachable!(),
             };
@@ -170,7 +174,7 @@ pub(crate) fn shift(value: &Value, config: &TimeContract, delta: i128) -> Result
     }
 }
 
-fn select(pattern: &str, value: &Value) -> Result<Vec<String>> {
+pub(super) fn select(pattern: &str, value: &Value) -> Result<Vec<String>> {
     fn walk(parts: &[&str], value: &Value, path: String, out: &mut Vec<String>) {
         let Some((part, rest)) = parts.split_first() else {
             out.push(path);

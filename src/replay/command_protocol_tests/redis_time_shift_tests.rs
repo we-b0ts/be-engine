@@ -81,8 +81,8 @@ async fn redis_time_shift_rfc3339_get_plan_apply_preserves_session_expiry_over_r
         .unwrap();
     }
     task.abort();
-    let policy = root.join("verification.yaml");
-    std::fs::write(
+    let policy = root.join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
@@ -169,7 +169,7 @@ fn shared_read_recording(read_count: usize) -> tempfile::TempDir {
         record["timestamp"] = json!(capture_time);
         std::fs::write(origin.join("dependencies.jsonl"), record.to_string()).unwrap();
     }
-    std::fs::write(root.join("verification.yaml"), "version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: token-time\n  replay_scope: recording_run\n  source_evidence: module cache shares one token across requests\n  protocol: redis\n  target: {host: redis.internal, port: 6379}\n  redis:\n    command: HGET\n    key: token_v2\n    hash_field: '00123'\n    response_json:\n      /timestamp: {time: preserve_relative, format: unix_milliseconds}\n").unwrap();
+    crate::replay::write_policy_fixture(root.join("policy.yaml"), "version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: token-time\n  replay_scope: recording_run\n  source_evidence: module cache shares one token across requests\n  protocol: redis\n  target: {host: redis.internal, port: 6379}\n  redis:\n    command: HGET\n    key: token_v2\n    hash_field: '00123'\n    response_json:\n      /timestamp: {time: preserve_relative, format: unix_milliseconds}\n").unwrap();
     temp
 }
 
@@ -203,7 +203,7 @@ async fn load_shared_read_recording(case: &Path, policy: &Path) -> anyhow::Resul
 async fn redis_time_shift_scope_without_recorded_reads_allows_batch_and_focused_replay() {
     let temp = shared_read_recording(0);
     let root = temp.path();
-    let policy = root.join("verification.yaml");
+    let policy = root.join("policy.yaml");
     for case in [root.to_path_buf(), root.join("apis/tasks/consumer")] {
         let runtime = load_shared_read_recording(&case, &policy).await.unwrap();
         assert_eq!(
@@ -238,7 +238,7 @@ async fn redis_time_shift_scope_without_selected_read_keeps_other_reads_and_unma
     std::fs::write(&recording, dependency.to_string()).unwrap();
     let immutable = std::fs::read(&recording).unwrap();
     let (addr, state, task) =
-        redis_value_tests::spawn(&consumer, Some(root.join("verification.yaml"))).await;
+        redis_value_tests::spawn(&consumer, Some(root.join("policy.yaml"))).await;
     assert_eq!(
         begin_case(&control("begin", "consumer"), state.clone()).await["ok"],
         true
@@ -276,7 +276,7 @@ async fn redis_time_shift_scope_without_selected_read_keeps_other_reads_and_unma
 async fn redis_time_shift_scope_shares_multiple_reads_in_capture_order_with_finite_consumption() {
     let temp = shared_read_recording(2);
     let root = temp.path();
-    let policy = root.join("verification.yaml");
+    let policy = root.join("policy.yaml");
     let ordinary = root.join("apis/other/zz-ordinary");
     std::fs::create_dir_all(&ordinary).unwrap();
     std::fs::write(
@@ -383,7 +383,7 @@ async fn redis_time_shift_scope_rejects_duplicate_partial_and_unsafe_shared_lane
         };
         std::fs::write(&file, dependency).unwrap();
         for case in [root.to_path_buf(), root.join("apis/tasks/consumer")] {
-            let error = load_shared_read_recording(&case, &root.join("verification.yaml"))
+            let error = load_shared_read_recording(&case, &root.join("policy.yaml"))
                 .await
                 .err()
                 .expect("invalid shared evidence must prevent startup");
@@ -411,7 +411,7 @@ async fn redis_time_shift_scope_plan_apply_shares_a_complete_multi_read_lane() {
     std::fs::write(&origin, format!("{first}\n{refresh}")).unwrap();
     std::fs::write(&second, "").unwrap();
     let immutable = std::fs::read(&origin).unwrap();
-    let policy = root.join("verification.yaml");
+    let policy = root.join("policy.yaml");
     let original_policy = std::fs::read_to_string(&policy)
         .unwrap()
         .replace("  replay_scope: recording_run\n", "")
@@ -569,8 +569,8 @@ async fn redis_time_shift_plan_apply_restores_cache_reuse_across_cases_over_real
         std::fs::write(&report, serde_json::to_vec(&s.snapshot_report()).unwrap()).unwrap();
     }
     task.abort();
-    let policy = root.join("verification.yaml");
-    std::fs::write(
+    let policy = root.join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
@@ -656,8 +656,8 @@ async fn redis_time_shift_scope_loads_one_sibling_read_and_preserves_finite_cons
     );
     record["timestamp"] = json!(capture_time);
     std::fs::write(origin.join("dependencies.jsonl"), record.to_string()).unwrap();
-    let policy = root.join("verification.yaml");
-    std::fs::write(&policy, "version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: token-time\n  protocol: redis\n  target: {host: redis.internal, port: 6379}\n  redis:\n    command: HGET\n    key: token_v2\n    hash_field: '00123'\n    response_json:\n      /timestamp: {time: preserve_relative, format: unix_milliseconds}\n").unwrap();
+    let policy = root.join("policy.yaml");
+    crate::replay::write_policy_fixture(&policy, "version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: token-time\n  protocol: redis\n  target: {host: redis.internal, port: 6379}\n  redis:\n    command: HGET\n    key: token_v2\n    hash_field: '00123'\n    response_json:\n      /timestamp: {time: preserve_relative, format: unix_milliseconds}\n").unwrap();
 
     super::super::write_test_recording_network_manifest(root);
     std::fs::copy(

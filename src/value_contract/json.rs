@@ -7,6 +7,8 @@ use serde_json::Value;
 
 use super::time::{self, ClockPair, TimeError};
 use crate::policy::{FieldContract, TimeAnchor, TimeRelation, TimestampFormat};
+mod native;
+pub(crate) use native::{LeafContext, LeafObservations, NativeField, NonceIdentity, VerifiedField};
 
 const MAX_COMPARISONS: usize = 16_384;
 const MAX_DEPTH: usize = 128;
@@ -48,6 +50,8 @@ pub(crate) struct Comparison {
     pub(crate) differences: Vec<Difference>,
     #[serde(skip)]
     pub(crate) relationships: BTreeMap<(TimeAnchor, Option<String>), Vec<(i128, i128)>>,
+    #[serde(skip)]
+    pub(crate) nonce_relationships: BTreeMap<(String, String), Vec<([u8; 32], [u8; 32])>>,
 }
 
 impl Comparison {
@@ -63,6 +67,21 @@ impl Comparison {
         for (scope, values) in other.relationships {
             self.relationships.entry(scope).or_default().extend(values);
         }
+        for (scope, pairs) in other.nonce_relationships {
+            let existing = self.nonce_relationships.entry(scope).or_default();
+            for (source, target) in pairs {
+                if existing
+                    .iter()
+                    .any(|(a, b)| (*a == source && *b != target) || (*b == target && *a != source))
+                {
+                    self.differences
+                        .push(difference("", "generated binding bijection changed"));
+                }
+                if !existing.contains(&(source, target)) {
+                    existing.push((source, target));
+                }
+            }
+        }
         if let Some(error) = self
             .relationships
             .values()
@@ -77,15 +96,20 @@ impl Comparison {
 struct Decisions {
     evaluated: BTreeSet<String>,
     selected: BTreeSet<usize>,
+    selected_native: BTreeSet<usize>,
     times: BTreeMap<(TimeAnchor, Option<String>), Vec<(i128, i128)>>,
     time_validations: BTreeMap<String, usize>,
+    nonces: BTreeMap<(String, String), Vec<([u8; 32], [u8; 32])>>,
 }
 
 struct Comparator<'a> {
     fields: &'a [Field<'a>],
+    native: &'a [NativeField<'a>],
+    verified: &'a [VerifiedField<'a>],
     clocks: AnchorClocks,
     remaining: usize,
     source_root: &'a Value,
+    target_root: &'a Value,
 }
 
 pub(crate) fn compare(
@@ -94,15 +118,39 @@ pub(crate) fn compare(
     fields: &[Field<'_>],
     clocks: AnchorClocks,
 ) -> Comparison {
+    compare_with_native(source, target, fields, &[], clocks)
+}
+
+pub(crate) fn compare_with_native(
+    source: &Value,
+    target: &Value,
+    fields: &[Field<'_>],
+    native: &[NativeField<'_>],
+    clocks: AnchorClocks,
+) -> Comparison {
+    compare_with_verified(source, target, fields, native, &[], clocks)
+}
+
+pub(crate) fn compare_with_verified(
+    source: &Value,
+    target: &Value,
+    fields: &[Field<'_>],
+    native: &[NativeField<'_>],
+    verified: &[VerifiedField<'_>],
+    clocks: AnchorClocks,
+) -> Comparison {
     let mut comparator = Comparator {
         fields,
+        native,
+        verified,
         clocks,
         remaining: MAX_COMPARISONS,
         source_root: source,
+        target_root: target,
     };
     let mut decisions = Decisions::default();
     let result = comparator
-        .node(source, target, "", &mut decisions, 0)
+        .node(source, target, "", "", &mut decisions, 0)
         .and_then(|()| {
             if decisions.selected.len() != fields.len() {
                 let missing = fields
@@ -116,6 +164,20 @@ pub(crate) fn compare(
                     "selected field was not observed",
                 ));
             }
+            if decisions.selected_native.len() != native.len() + verified.len() {
+                let missing = native
+                    .iter()
+                    .map(|field| field.pointer)
+                    .chain(verified.iter().map(|field| field.pointer))
+                    .enumerate()
+                    .find(|(index, _)| !decisions.selected_native.contains(index))
+                    .unwrap()
+                    .1;
+                return Err(difference(
+                    missing,
+                    "selected native field was not observed",
+                ));
+            }
             validate_relationships(&decisions).map_err(|e| difference("", &e.to_string()))
         });
     Comparison {
@@ -123,6 +185,7 @@ pub(crate) fn compare(
         time_validations: decisions.time_validations,
         differences: result.err().into_iter().collect(),
         relationships: decisions.times,
+        nonce_relationships: decisions.nonces,
     }
 }
 
@@ -169,6 +232,7 @@ impl Comparator<'_> {
         source: &Value,
         target: &Value,
         pointer: &str,
+        target_pointer: &str,
         decisions: &mut Decisions,
         depth: usize,
     ) -> Result<(), Difference> {
@@ -182,13 +246,73 @@ impl Comparator<'_> {
             .enumerate()
             .filter(|(_, f)| pointer_matches(f.pointer, pointer, self.source_root))
             .collect::<Vec<_>>();
-        if selected.len() > 1 {
+        let native = self
+            .native
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| pointer_matches(field.pointer, pointer, self.source_root))
+            .collect::<Vec<_>>();
+        let verified = self
+            .verified
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| pointer_matches(field.pointer, pointer, self.source_root))
+            .collect::<Vec<_>>();
+        if selected.len() + native.len() + verified.len() > 1 {
             return Err(difference(pointer, "conflicting field contracts"));
+        }
+        if let Some((index, field)) = verified.first() {
+            decisions.selected_native.insert(self.native.len() + *index);
+            decisions.evaluated.insert(field.rule_id.into());
+            return native::verify(
+                field,
+                LeafContext {
+                    source,
+                    target,
+                    source_pointer: pointer,
+                    target_pointer,
+                    source_root: self.source_root,
+                    target_root: self.target_root,
+                    clocks: self.clocks,
+                },
+                decisions,
+            );
+        }
+        if let Some((index, field)) = native.first() {
+            decisions.selected_native.insert(*index);
+            decisions.evaluated.insert(field.rule_id.into());
+            return native::compare(source, target, field, pointer, self.clocks, decisions);
         }
         if let Some((index, field)) = selected.first() {
             decisions.selected.insert(*index);
             decisions.evaluated.insert(field.rule_id.into());
-            match field.contract {
+            let contract = if let FieldContract::Conditional { when, contract } = field.contract {
+                if !when.active(self.source_root, pointer).map_err(|_| {
+                    difference(
+                        pointer,
+                        "Source field condition is missing or has an invalid type",
+                    )
+                })? {
+                    return if source == target {
+                        Ok(())
+                    } else {
+                        Err(difference(
+                            pointer,
+                            "inactive field contract requires exact equality",
+                        ))
+                    };
+                }
+                contract.as_ref()
+            } else {
+                field.contract
+            };
+            match contract {
+                FieldContract::Conditional { .. } => {
+                    return Err(difference(
+                        pointer,
+                        "nested field conditions are unsupported",
+                    ));
+                }
                 FieldContract::Unordered => {
                     let (Some(source), Some(target)) = (source.as_array(), target.as_array())
                     else {
@@ -198,15 +322,22 @@ impl Comparator<'_> {
                         return Err(difference(pointer, "array cardinality changed"));
                     }
                     let parent_segments = pointer.split('/').count();
-                    if !self.fields.iter().any(|field| {
-                        let segments = field.pointer.split('/').collect::<Vec<_>>();
-                        segments.len() > parent_segments
-                            && pointer_matches(
-                                &segments[..parent_segments].join("/"),
-                                pointer,
-                                self.source_root,
-                            )
-                    }) {
+                    if !self
+                        .fields
+                        .iter()
+                        .map(|field| field.pointer)
+                        .chain(self.native.iter().map(|field| field.pointer))
+                        .chain(self.verified.iter().map(|field| field.pointer))
+                        .any(|pointer_pattern| {
+                            let segments = pointer_pattern.split('/').collect::<Vec<_>>();
+                            segments.len() > parent_segments
+                                && pointer_matches(
+                                    &segments[..parent_segments].join("/"),
+                                    pointer,
+                                    self.source_root,
+                                )
+                        })
+                    {
                         let counts = |values: &[Value]| {
                             let mut counts = BTreeMap::new();
                             for value in values {
@@ -230,6 +361,7 @@ impl Comparator<'_> {
                         source,
                         target,
                         pointer,
+                        target_pointer,
                         0,
                         &mut vec![false; target.len()],
                         decisions,
@@ -293,7 +425,14 @@ impl Comparator<'_> {
                     let target = target
                         .get(key)
                         .ok_or_else(|| difference(&child, "field presence changed"))?;
-                    self.node(source, target, &child, decisions, depth + 1)?;
+                    self.node(
+                        source,
+                        target,
+                        &child,
+                        &format!("{target_pointer}/{}", escape(key)),
+                        decisions,
+                        depth + 1,
+                    )?;
                 }
             }
             (Value::Array(source), Value::Array(target)) => {
@@ -305,6 +444,7 @@ impl Comparator<'_> {
                         source,
                         target,
                         &format!("{pointer}/{index}"),
+                        &format!("{target_pointer}/{index}"),
                         decisions,
                         depth + 1,
                     )?;
@@ -321,6 +461,7 @@ impl Comparator<'_> {
         source: &[Value],
         target: &[Value],
         pointer: &str,
+        target_pointer: &str,
         index: usize,
         used: &mut [bool],
         decisions: &mut Decisions,
@@ -342,6 +483,7 @@ impl Comparator<'_> {
                     &source[index],
                     &target[candidate],
                     &format!("{pointer}/{index}"),
+                    &format!("{target_pointer}/{candidate}"),
                     &mut staged,
                     depth,
                 )
@@ -351,7 +493,16 @@ impl Comparator<'_> {
             }
             used[candidate] = true;
             if self
-                .pair(source, target, pointer, index + 1, used, &mut staged, depth)
+                .pair(
+                    source,
+                    target,
+                    pointer,
+                    target_pointer,
+                    index + 1,
+                    used,
+                    &mut staged,
+                    depth,
+                )
                 .is_ok()
             {
                 *decisions = staged;
@@ -382,6 +533,7 @@ pub(crate) fn core_format(format: TimestampFormat) -> time::TimestampFormat {
         TimestampFormat::Rfc3339 => time::TimestampFormat::Rfc3339,
         TimestampFormat::AmzDate => time::TimestampFormat::AmzDate,
         TimestampFormat::Iso8601Naive => time::TimestampFormat::Iso8601Naive,
+        TimestampFormat::SqlDatetime => time::TimestampFormat::SqlDatetime,
     }
 }
 

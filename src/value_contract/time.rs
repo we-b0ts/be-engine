@@ -34,6 +34,7 @@ pub(crate) enum TimestampFormat {
     Rfc3339,
     AmzDate,
     Iso8601Naive,
+    SqlDatetime,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,10 +174,17 @@ pub(crate) fn parse_timestamp(
                 .map(|time| date_nanos(time.and_utc()))
                 .map_err(|_| invalid)
         }
-        TimestampFormat::Iso8601Naive => {
+        TimestampFormat::Iso8601Naive | TimestampFormat::SqlDatetime => {
             let text = value.as_str().ok_or(invalid)?;
             if !(19..=29).contains(&text.len())
-                || text.as_bytes().get(10) != Some(&b'T')
+                || text.as_bytes().get(10)
+                    != Some(
+                        &(if format == TimestampFormat::SqlDatetime {
+                            b' '
+                        } else {
+                            b'T'
+                        }),
+                    )
                 || !(text.len() == 19
                     || text.as_bytes()[19] == b'.'
                         && text.len() > 20
@@ -184,8 +192,15 @@ pub(crate) fn parse_timestamp(
             {
                 return Err(invalid);
             }
-            let time =
-                NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f").map_err(|_| invalid)?;
+            let time = NaiveDateTime::parse_from_str(
+                text,
+                if format == TimestampFormat::SqlDatetime {
+                    "%Y-%m-%d %H:%M:%S%.f"
+                } else {
+                    "%Y-%m-%dT%H:%M:%S%.f"
+                },
+            )
+            .map_err(|_| invalid)?;
             if time.nanosecond() >= 1_000_000_000 {
                 return Err(invalid);
             }

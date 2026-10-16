@@ -3,11 +3,10 @@
 Task: `KCYgNKF0ZW`. Design and implementation baseline: `14439d5`
 (`feat(replay): validate generated Redis timestamps precisely`).
 
-This document is the P0 requirements and boundary agreement. P0 is complete;
-P1 JSON runtime and policy transactions are implemented in `ac1428d`; coordinator
-integration tests and typed hints follow in a separate P1 commit. P2 through P5
-remain in progress. Each phase may contain several focused commits; update its
-status using actual validation rather than implementation intent.
+P0 established the requirements below. P1/P2 are committed; P3-P5 implement the
+native effects, whole-policy owners and direct cutover. Focused validation and
+final repository checks are recorded with the corresponding phase commits.
+Each phase may contain several focused commits.
 
 The objective is reusable, concise rules with complete evidence. A new
 combination of an existing protocol slot, encoding and value contract must not
@@ -212,7 +211,10 @@ The canonical anchors are `case.request_start`, `dependency.request_start`
 and `dependency.response_delivery`. The runtime supplies the independently
 observed Source/Target pair for the declared anchor; a payload cannot choose
 its own clock. Missing or inadequate historical anchors are unavailable,
-not permission to fall back to the current wall clock. Resource endpoints use
+not permission to fall back to the current wall clock. New Redis recordings retain
+exact request-start observations. Lock causality uses completion before reference
+start; a historical floor-millisecond duration supplies only a conservative bound
+and cannot prove a submillisecond ordering. Resource endpoints use
 an explicit `host:port` scalar. Resource database identity remains typed:
 Redis uses an integer and MySQL uses a database-name string.
 
@@ -234,14 +236,104 @@ declared coverage includes both locations and effects.
 Native schema variants cover S01-S08, D06-D13, R03-R05 and I01 with their existing
 typed proof owners. They must be representable in the final new document and
 round-trip without loss; an opaque old YAML blob or dual loader is not a
-completed mapping. Profile/key references may be named and reused, while
-authorization remains attached to each input/output binding.
+completed mapping. Key provenance stays inline with its input/output binding. There is no mandatory
+resource/codec/contract registry and no arbitrary reference-resolution graph.
 
 Source `when` conditions retain scalar types and read only the immutable inbound
 Source request. Missing, null, truncated, duplicate-member or undecodable inputs
 cannot satisfy `not_equals` and accidentally enable a normalization. Inbound JWT
 translation preserves invalid-signature requests unchanged; it must never turn
 negative authentication evidence into a valid re-signed request.
+
+## Native effects stay local to the rule
+
+A value rule composes existing slots, codecs and pure contracts. A stateful or
+cryptographic permission retains its domain owner in a typed `effect`. The outer
+proof states the complete Source fact; nested `contract`/`proof` pairs are used
+when distinct relaxations need independently auditable facts. These records
+remain fully inline; there is no required resources/codec/contracts registry.
+
+```yaml
+format: traffic-policy/v1
+rules:
+  - id: response-download-token
+    match: {api: POST /api/attachments/*/download-token}
+    effect:
+      kind: response_jwt
+      pointer: /download_token
+      algorithm: HS256
+      signing_key:
+        kind: startup
+        source: {kind: target_env, name: SECRET_KEY}
+    proof:
+      source: app/attachments.py:create_download_token
+      fact: Source signs the stable attachment/user claims with a request-relative expiry using the effective startup SECRET_KEY.
+
+  - id: generated-vnc-links
+    match: {api: POST /api/devices/*/vnc}
+    effect:
+      kind: response_generated
+      fields:
+        /session_id:
+          contract:
+            kind: template
+            template: 'vnc-{session}'
+            fields:
+              session:
+                contract: {format: base64url, decoded_bytes: 18, binding: session}
+                proof: {source: app/vnc.py:start, fact: Source draws an 18-byte token once and shares it between session ID and URL.}
+          proof: {source: app/vnc.py:start, fact: The session ID has a fixed vnc prefix.}
+        /url:
+          contract:
+            kind: template
+            template: 'wss://vnc.example/vnc-proxy/sessions/vnc-{session}?ticket={ticket}'
+            fields:
+              session:
+                contract: {format: base64url, decoded_bytes: 18, binding: session}
+                proof: {source: app/vnc.py:url, fact: This is the same session token.}
+              ticket:
+                contract: {format: base64url, decoded_bytes: 32}
+                proof: {source: app/vnc.py:start, fact: Source independently draws a 32-byte connect ticket.}
+          proof: {source: app/vnc.py:url, fact: Scheme/authority/path and the ticket query key are deployment-fixed.}
+    proof:
+      source: app/vnc.py:start_and_url
+      fact: Only these explicitly typed fragments vary and the session identity must agree across both fields.
+
+  - id: publication-waiting-duration
+    surface: api.response
+    match: {api: GET /api/admin/publications}
+    slot: body
+    codec: json
+    contract:
+      /items/*/waitingDurationSeconds:
+        kind: conditional
+        when:
+          relative_pointer: ../status
+          not_in: [published, withdrawn, closed]
+        contract: {kind: duration, unit: seconds, anchor: case.request_start}
+    proof:
+      source: app/publications.py:waiting_duration
+      fact: Active durations use now minus submitted_at; terminal states freeze at updated_at and therefore remain exact.
+```
+
+Template bindings here correlate selected fields within one response rule. They
+do not imply a cross-request Redis binding. Integer identities are capture-only
+until a typed reference adapter exists; unsupported references reject at compile
+time rather than becoming silent runtime gaps. String identities retain explicit
+allowed cross-resource references through their existing staged runtime owner.
+
+`response_generated.encrypted_json` declares the cipher envelope and effective
+startup key. AES-CBC decoding checks IV, key length, padding and complete JSON;
+plaintext is exact except explicit nested contracts. A Source-default cipher key
+requires a file hash and literal range in the frozen Source image, and is usable
+only when the selected startup field is absent. Malformed keys cannot trigger a
+fallback. JWT signing never uses this cipher fallback.
+
+The authoritative path is `project.policy` (Target-root relative). All loaders,
+capture writers, configuration-commit gates, key resolution, fingerprints and
+progress publication resolve this path. Writers preserve every other rule and
+nested proof in the document. Only the new format is accepted; old DTOs remain
+internal domain data and test fixtures, not production configuration readers.
 
 ## Time, identity and encoding invariants
 
@@ -375,13 +467,13 @@ The intended interaction is:
 
 ```text
 failure/evidence -> candidate + missing proof
-  -> rule plan --rules @rules.yaml
+  -> rule plan --file rule.yaml --evidence <current-evidence-id>
   -> reviewable policy/effect diff + obligations + plan ID
   -> rule apply --plan <plan-id>
   -> required classification / genuine Replay / real recording and Replay
 ```
 
-CLI spelling is coordinated with the implementation phase. Engine-generated
+The same CLI accepts one rule, a list, or a complete policy document. Engine-generated
 scopes, codec selectors and anchors should be prefilled so workers supply only
 the Source fact and genuinely missing schema/relationship choices. Plans show
 what stays strict, affected coverage, residual differences and the exact next
@@ -396,14 +488,14 @@ quality and Source-review gates remain in force.
 
 ## P0-P5 delivery and acceptance
 
-| Phase | Status at P0 | Deliverable and hard prerequisite | Exit evidence |
+| Phase | Implementation state | Deliverable and hard prerequisite | Exit evidence |
 | --- | --- | --- | --- |
 | P0 | Complete | Requirement map, new document vocabulary, boundaries and nonnegotiable effect/evidence contracts. | This reviewed document against baseline and reference configuration; no implementation claim. |
-| P1 | In progress | Smallest complete JSON path through all three surfaces, Source proof entry, discovery/plan/apply/audit/recovery and verification. Includes the strict schema, typed IR/capability boundary, shared time core, pure decisions and frozen evidence needed for this path. | Self-contained JSON comparison/delivery examples; bounded discovery, reviewable plan, stale-safe apply/recovery, strict remainder, microsecond precision and required fresh genuine Replay. |
-| P2 | Pending | PB plus Memcached/HTTP/SQL cross-protocol slot/codec reuse. Requires the complete P1 JSON transaction rather than a compiler-only foundation. | JSON/PB contract parity, explicit typed PB fields and later descriptors, writable envelope preservation, HTTP/Redis/Memcached/SQL symmetry and unchanged protocol lifecycle. |
-| P3 | Pending | Identity, nonce, cryptographic envelopes and propagation. Requires P1 staged decisions and P2 typed extraction/reconstruction. | One-to-one capture/reference, script/PUBLISH/time composition, JWT/URL/crypto checks, stable remainder and atomic failure behavior. |
-| P4 | Pending | API origin, ownership, finite sharing, snapshot and Source capture/inbound input domains. Requires independent P1-P3 value decisions and effect identities. | Immutable Source cause/identity proof; strict lane/transaction/finite gates; reversible classification; explicit input/signature transformations and capture obligations. |
-| P5 | Pending | Direct new-format cutover, removal of old entry points and reference-project configuration on a separate project branch. Requires all inventory rows and native domains to be mapped. | No fallback format, no lost scope/proof, checked examples/docs, repository checks and appropriate real recording/Replay evidence. |
+| P1 | Implemented | Smallest complete JSON path through all three surfaces, Source proof entry, discovery/plan/apply/audit/recovery and verification. Includes the strict schema, typed IR/capability boundary, shared time core, pure decisions and frozen evidence needed for this path. | Self-contained JSON comparison/delivery examples; bounded discovery, reviewable plan, stale-safe apply/recovery, strict remainder, microsecond precision and required fresh genuine Replay. |
+| P2 | Implemented | PB plus Memcached/HTTP/SQL cross-protocol slot/codec reuse. Requires the complete P1 JSON transaction rather than a compiler-only foundation. | JSON/PB contract parity, explicit typed PB fields and later descriptors, writable envelope preservation, HTTP/Redis/Memcached/SQL symmetry and unchanged protocol lifecycle. |
+| P3 | Validation in progress | Identity, nonce, cryptographic envelopes and propagation. Requires P1 staged decisions and P2 typed extraction/reconstruction. | One-to-one capture/reference, script/PUBLISH/time composition, JWT/URL/crypto checks, stable remainder and atomic failure behavior. |
+| P4 | Validation in progress | API origin, ownership, finite sharing, snapshot and Source capture/inbound input domains. Requires independent P1-P3 value decisions and effect identities. | Immutable Source cause/identity proof; strict lane/transaction/finite gates; reversible classification; explicit input/signature transformations and capture obligations. |
+| P5 | Validation in progress | Direct new-format cutover, removal of old entry points and reference-project configuration on a separate project branch. Requires all inventory rows and native domains to be mapped. | No fallback format, no lost scope/proof, checked examples/docs, repository checks and appropriate real recording/Replay evidence. |
 
 Each phase is independently reviewable and committed. If implementation changes
 a boundary or public spelling, update this document in that phase. P5 must not

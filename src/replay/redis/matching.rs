@@ -16,13 +16,14 @@ impl RedisReplayState {
             if exchange.source == ReplaySource::Case && exchange.shared_rule_id.is_none() {
                 match self
                     .dynamic_values
-                    .redis(
+                    .redis_with_identity(
                         exchange.case_id.as_deref(),
                         &TargetKey {
                             host: exchange.record.target_host.clone(),
                             port: exchange.record.target_port,
                         },
                         exchange.record.database,
+                        exchange.record.username.as_deref(),
                         &exchange.record.command,
                         &exchange.args,
                         args,
@@ -66,9 +67,12 @@ impl RedisReplayState {
     }
 
     pub(in crate::replay) fn configure_lock_tokens(&mut self, rules: &[lock::LockTokenRule]) {
-        self.lock_tokens = lock::LockTokens::prepare(&self.exchanges, rules);
+        self.lock_tokens =
+            lock::LockTokens::prepare_scoped(&self.exchanges, rules, &self.request_contracts);
     }
     pub(in crate::replay) fn configure_publish(&mut self, rules: Vec<publish::PublishRule>) {
+        self.publish_rules
+            .configure_scope(self.request_contracts.clone());
         self.publish_rules.configure(rules);
     }
 
@@ -241,7 +245,8 @@ impl RedisReplayState {
                     &exchange.args,
                     &response,
                     exchange.record.timestamp,
-                    exchange.record.duration_ms,
+                    self.request_observed_at,
+                    exchange.record.started_at(),
                     exchange.record.connection_id,
                     exchange.record.sequence,
                 )
@@ -269,13 +274,14 @@ impl RedisReplayState {
         let normalized = (exchange.source == ReplaySource::Case
             && exchange.shared_rule_id.is_none())
         .then(|| {
-            self.dynamic_values.redis(
+            self.dynamic_values.redis_with_identity(
                 exchange.case_id.as_deref(),
                 &TargetKey {
                     host: exchange.record.target_host.clone(),
                     port: exchange.record.target_port,
                 },
                 exchange.record.database,
+                exchange.record.username.as_deref(),
                 &exchange.record.command,
                 &exchange.args,
                 args,

@@ -107,8 +107,8 @@ async fn redis_value_discovery_plan_apply_then_real_set_get_preserves_lane_and_p
         .unwrap();
     }
     task.abort();
-    let policy = temp.path().join("verification.yaml");
-    std::fs::write(
+    let policy = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )

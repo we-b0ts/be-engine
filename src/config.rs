@@ -35,6 +35,9 @@ mod repository_initialization;
 mod repository_protocol;
 pub(crate) mod rule_document;
 pub(crate) mod source_traffic_policy;
+mod unified_policy_path;
+pub use unified_policy_path::resolve_unified_policy_path;
+pub(crate) use unified_policy_path::resolve_unified_policy_root;
 
 pub use allowed_unused_http::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,

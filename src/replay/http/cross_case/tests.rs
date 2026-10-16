@@ -49,8 +49,8 @@ async fn fixture() -> (TempDir, PathBuf, PathBuf) {
 }
 
 fn policy(root: &Path) -> PathBuf {
-    let path = root.join("verification.yaml");
-    fs::write(&path, format!("version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: token\n  protocol: http\n  target: {{host: {HOST}, port: 80}}\n  http: {{method: POST, path: /token}}\n  replay_scope: recording_run\n  source_evidence: 'erp.py:ensure_token caches a shared token with expiry'\n")).unwrap();
+    let path = root.join("policy.yaml");
+    crate::replay::write_policy_fixture(&path, format!("version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: token\n  protocol: http\n  target: {{host: {HOST}, port: 80}}\n  http: {{method: POST, path: /token}}\n  replay_scope: recording_run\n  source_evidence: 'erp.py:ensure_token caches a shared token with expiry'\n")).unwrap();
     path
 }
 
@@ -92,8 +92,8 @@ async fn unmatched_discovers_other_api_without_serving_it_and_plan_apply_enables
     );
     task.abort();
 
-    let path = temp.path().join("verification.yaml");
-    fs::write(
+    let path = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &path,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
@@ -252,8 +252,8 @@ async fn old_report_only_hints_and_changed_evidence_rejects_apply() {
     );
     let report = temp.path().join("failed.json");
     finalized_report(&runtime, &report).await;
-    let policy_path = temp.path().join("verification.yaml");
-    fs::write(
+    let policy_path = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy_path,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )

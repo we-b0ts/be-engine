@@ -42,8 +42,8 @@ async fn clock_fixture(headers: Value, clock: Option<DateTime<Utc>>) -> (TempDir
 }
 
 fn policy(case: &std::path::Path, path: &str) -> PathBuf {
-    let file = case.join("verification.yaml");
-    std::fs::write(
+    let file = case.join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &file,
         format!(
             r#"version: 3
@@ -288,8 +288,8 @@ async fn timestamp_plan_apply_rechecks_evidence_and_requires_fresh_replay() {
     };
     let report_path = temp.path().join("replay-report.json");
     std::fs::write(&report_path, report.to_string()).unwrap();
-    let policy_path = temp.path().join("verification.yaml");
-    std::fs::write(
+    let policy_path = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy_path,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )

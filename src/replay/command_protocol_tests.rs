@@ -331,8 +331,8 @@ async fn replays_memcached_set_with_a_case_relative_protobuf_timestamp() {
     )
     .await
     .unwrap();
-    let policy_path = temp.path().join("verification.yaml");
-    tokio::fs::write(
+    let policy_path = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy_path,
         r#"
 version: 1
@@ -355,7 +355,6 @@ dependency_rules:
             source_evidence: UserInfoServiceBase.java:438 current time
 "#,
     )
-    .await
     .unwrap();
 
     let report_path = temp.path().join("report.json");

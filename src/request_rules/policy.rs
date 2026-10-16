@@ -4,9 +4,9 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 pub(crate) fn load(path: &Path) -> Result<RequestRules> {
-    crate::replay::validate_replay_policy(path)?;
-    let value: serde_yaml::Value = serde_yaml::from_slice(&std::fs::read(path)?)?;
-    parse(&value)
+    let policy = crate::policy::parse_policy(&std::fs::read_to_string(path)?)?;
+    let compiled = crate::policy::compile_policy(&policy)?;
+    crate::replay::compiled_input_rules(&compiled)
 }
 
 pub(crate) fn parse(value: &serde_yaml::Value) -> Result<RequestRules> {

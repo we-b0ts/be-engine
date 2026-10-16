@@ -16,6 +16,7 @@ const MAX_FIELDS: usize = 1_000_000;
 mod envelope;
 mod selection;
 
+pub(in crate::replay) use envelope::payload_pair;
 use envelope::{parse_bodies, resolve_body};
 pub(in crate::replay) use selection::selected_paths_match;
 

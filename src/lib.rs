@@ -141,6 +141,7 @@ pub use config::{
     plan_case_path_pattern_feedback, plan_motan_background_dependency,
     plan_mysql_background_dependency, plan_redis_background_dependency,
 };
+pub use config::resolve_unified_policy_path;
 pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{

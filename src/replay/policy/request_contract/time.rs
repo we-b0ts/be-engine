@@ -12,16 +12,6 @@ pub(super) struct ComparedTime {
     pub(super) group: Option<String>,
 }
 
-// JWT contracts retain their seconds interface; request times use integer nanoseconds.
-pub(super) fn number(value: &Value) -> Result<f64> {
-    let value = value.as_f64().context("timestamp must be numeric")?;
-    ensure!(
-        value.is_finite() && (-62_135_596_800.0..=253_402_300_799.0).contains(&value),
-        "timestamp must be finite Unix seconds within years 1..9999"
-    );
-    Ok(value)
-}
-
 pub(super) fn offset(rule: &TimeField) -> Result<FixedOffset> {
     let offset = rule
         .utc_offset
@@ -80,6 +70,8 @@ pub(super) fn timestamp(value: &Value, rule: &TimeField) -> Result<i128> {
             (TimestampFormat::Rfc3339, None)
         }
         Format::Iso8601Naive => (TimestampFormat::Iso8601Naive, Some(offset(rule)?)),
+        Format::SqlDatetime => (TimestampFormat::SqlDatetime, Some(offset(rule)?)),
+        Format::AmzDate => (TimestampFormat::AmzDate, None),
         format => {
             ensure!(value.is_number(), "timestamp must be numeric");
             let format = match format {

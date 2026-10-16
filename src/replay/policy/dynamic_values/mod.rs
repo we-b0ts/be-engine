@@ -10,7 +10,9 @@ mod path_candidates;
 mod path_segment;
 mod redis;
 mod redis_json;
+mod scopes;
 mod source;
+mod source_coverage;
 mod strings;
 pub(in crate::replay) use audit::{DynamicBindingReport, from_report};
 pub(in crate::replay) use candidates::CaptureCandidate;
@@ -51,6 +53,8 @@ pub(in crate::replay) struct DynamicValues {
     rules: Arc<Vec<DynamicValueRule>>,
     routes: Arc<BTreeMap<String, String>>,
     conditions: Arc<BTreeMap<String, BTreeSet<String>>>,
+    native_guards: Arc<BTreeMap<String, super::native_projection::NativeScopeGuard>>,
+    native_cases: Arc<BTreeMap<String, BTreeSet<String>>>,
     bindings: Arc<Mutex<CaseBindings>>,
     candidates: Arc<Mutex<Vec<CaptureCandidate>>>,
     applicable: Arc<Mutex<BTreeSet<String>>>,
@@ -68,6 +72,8 @@ impl DynamicValues {
             rules: Arc::new(rules),
             routes: Arc::new(routes),
             conditions: Arc::default(),
+            native_guards: Arc::default(),
+            native_cases: Arc::default(),
             bindings: Arc::new(Mutex::new(BTreeMap::new())),
             candidates: Arc::new(Mutex::new(Vec::new())),
             applicable: Arc::new(Mutex::new(BTreeSet::new())),
@@ -78,6 +84,7 @@ impl DynamicValues {
         case_id: &str,
         request: &serde_json::Value,
     ) {
+        self.set_native_request(case_id, request);
         let allowed = super::case_condition::matching_rule_ids(
             request,
             self.rules
@@ -96,9 +103,15 @@ impl DynamicValues {
         Arc::make_mut(&mut self.conditions).insert(case_id.into(), allowed);
     }
     fn matches_case(&self, rule: &DynamicValueRule, case_id: &str) -> bool {
-        self.routes
-            .get(case_id)
-            .is_some_and(|path| super::pattern::path_pattern_matches(&rule.api, path))
+        (!self.native_guards.contains_key(&rule.id)
+            || self
+                .native_cases
+                .get(case_id)
+                .is_some_and(|rules| rules.contains(&rule.id)))
+            && self
+                .routes
+                .get(case_id)
+                .is_some_and(|path| super::pattern::path_pattern_matches(&rule.api, path))
             && (rule.when.is_none()
                 || self
                     .conditions
@@ -132,7 +145,8 @@ impl DynamicValues {
         self.rules
             .iter()
             .filter(|rule| {
-                self.matches_case(rule, case_id)
+                !self.native_guards.contains_key(&rule.id)
+                    && self.matches_case(rule, case_id)
                     && rule.targets.iter().any(|endpoint| endpoint.matches(target))
             })
             .collect()

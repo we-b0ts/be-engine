@@ -61,16 +61,25 @@ impl RequestContracts {
         sql: Option<&str>,
         params: Option<&[RecordedMysqlValue]>,
         observed: DateTime<Utc>,
+        runtime: &super::super::matcher::ReplayPolicyRuntime,
     ) -> Option<Result<super::super::matcher::DependencyRuleDecision, String>> {
         let rules = self.mysql_compiled_rules(Surface::DependencyRequest, case, identity, record);
-        if rules.is_empty() {
+        let native = self.mysql_native_value_rules(case, identity, record);
+        if rules.is_empty() && native.is_empty() {
             return None;
         }
         Some(
             (|| {
                 ensure!(
-                    record.command == command,
-                    "SQL command differs from the declared operation"
+                    record.command == command
+                        || matches!(
+                            (record.command.as_str(), command),
+                            (
+                                "COM_QUERY" | "COM_STMT_EXECUTE",
+                                "COM_QUERY" | "COM_STMT_EXECUTE"
+                            )
+                        ),
+                    "SQL command differs outside the native text/prepared query adapter"
                 );
                 let clocks = self.contract_clocks(
                     case,
@@ -79,12 +88,13 @@ impl RequestContracts {
                     None,
                     None,
                 );
-                let comparison = super::super::matcher::mysql_contract::compare_values(
+                let comparison = super::super::matcher::mysql_native::compare(
                     record.sql.as_deref(),
                     record.params.as_deref(),
                     sql,
                     params,
                     &rules,
+                    &native,
                     clocks,
                 )?;
                 ensure!(
@@ -92,14 +102,45 @@ impl RequestContracts {
                     "SQL value contract failed: {:?}",
                     comparison.differences
                 );
-                let mut decision = super::super::matcher::DependencyRuleDecision::default();
-                decision
-                    .value_contracts
-                    .push(Decision::from_value_comparison(comparison));
+                let mut decision = super::super::matcher::mysql_native::validate_parameters(
+                    runtime,
+                    case.context("SQL generated parameters require a case")?,
+                    record.sql.as_deref(),
+                    record.params.as_deref(),
+                    sql,
+                    params,
+                    &native,
+                )?;
+                decision.merge_value_comparison(comparison, &native);
                 Ok(decision)
             })()
             .map_err(|error: anyhow::Error| error.to_string()),
         )
+    }
+    pub(in crate::replay) fn mysql_native_value_rules(
+        &self,
+        case: Option<&str>,
+        identity: &ReplaySessionIdentity,
+        record: &RecordedMysqlExchange,
+    ) -> Vec<&crate::policy::CompiledNativeRule> {
+        let Some(anchor) = case.and_then(|id| self.anchor(id).ok()) else {
+            return vec![];
+        };
+        self.compiled_rules().into_iter().flat_map(|compiled| &compiled.native).filter(|compiled| {
+            let rule = &compiled.rule;
+            matches!(&rule.effect, crate::policy::NativeEffect::MysqlValues(effect) if !effect.values.is_empty() || !effect.params.is_empty())
+                && rule.selector.api.as_deref().is_none_or(|api| api.split_once(' ').is_some_and(|(method,path)|
+                    method == anchor.method && super::super::pattern::path_pattern_matches(path,&anchor.path)))
+                && rule.when.as_ref().is_none_or(|condition| anchor.source_body.as_ref().is_some_and(|body|condition.matches_body(body)))
+                && rule.selector.resource.as_ref().is_some_and(|r| r.protocol == Protocol::Mysql
+                    && identity.target.as_ref().is_some_and(|t| t.host.eq_ignore_ascii_case(&r.endpoint.host) && t.port==r.endpoint.port)
+                    && r.database.as_ref().is_none_or(|d| d.name()==identity.database.as_deref())
+                    && r.username.as_deref().is_none_or(|u|Some(u)==identity.username.as_deref()))
+                && rule.selector.operation.as_deref().is_none_or(|op|op==record.command)
+                && rule.selector.sql.as_deref().is_some_and(|sql|super::super::sql_template::SqlValueTemplate::new(
+                    sql,&rule.selector.tables,&rule.selector.table_patterns,rule.selector.table_series.as_ref()).ok().is_some_and(|template|
+                        super::super::matcher::mysql_values::template_values(&template,record.sql.as_deref(),record.params.as_deref()).is_ok()))
+        }).collect()
     }
     pub(in crate::replay) fn mysql_metadata(
         &self,

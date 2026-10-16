@@ -31,7 +31,10 @@ fn three_surfaces_compile_to_distinct_typed_effects() {
             }
         );
         assert_eq!(compiled.rules[0].capabilities, [CapabilityId::RelativeTime]);
-        assert_eq!(compiled.rules[0].rule, document.rules[0]);
+        assert_eq!(
+            &compiled.rules[0].rule,
+            document.rules[0].as_value().unwrap()
+        );
     }
 }
 
@@ -89,7 +92,7 @@ fn source_conditions_are_typed_and_missing_or_wrong_types_never_match() {
         json_rule("api.response")
     );
     let document = parse_policy(&raw).unwrap();
-    let condition = document.rules[0].when.as_ref().unwrap();
+    let condition = document.rules[0].as_value().unwrap().when.as_ref().unwrap();
     assert!(condition.matches_body(&serde_json::json!({"mode":"online"})));
     for body in [
         serde_json::json!({}),
@@ -166,6 +169,8 @@ fn proof_only_changes_do_not_change_executed_behavior_fingerprint() {
     let before = compile_policy(&document).unwrap();
     let mut changed = document.clone();
     changed.rules[0]
+        .as_value_mut()
+        .unwrap()
         .proof
         .fact
         .push_str(" and is used to validate expiry");
@@ -173,6 +178,8 @@ fn proof_only_changes_do_not_change_executed_behavior_fingerprint() {
     assert_ne!(before.fingerprints.full, after.fingerprints.full);
     assert_eq!(before.fingerprints.runtime, after.fingerprints.runtime);
     changed.rules[0]
+        .as_value_mut()
+        .unwrap()
         .contract
         .insert("/members".into(), FieldContract::Unordered);
     assert_ne!(
@@ -208,7 +215,9 @@ fn naive_timestamps_require_one_valid_explicit_fixed_timezone() {
         "format: iso8601_naive, utc_offset: '+08:00'",
     );
     let policy = parse_policy(&raw).unwrap();
-    let time = policy.rules[0].contract["/expires_at"].time().unwrap();
+    let time = policy.rules[0].as_value().unwrap().contract["/expires_at"]
+        .time()
+        .unwrap();
     assert_eq!(time.offset().unwrap().unwrap().local_minus_utc(), 8 * 3600);
     for invalid in [
         raw.replace(", utc_offset: '+08:00'", ""),
@@ -223,23 +232,39 @@ fn naive_timestamps_require_one_valid_explicit_fixed_timezone() {
 #[test]
 fn overlapping_scopes_and_wildcard_leaf_ownership_are_rejected() {
     let mut policy = parse_policy(&json_rule("dependency.request")).unwrap();
-    let mut other = policy.rules[0].clone();
+    let mut other = policy.rules[0].as_value().unwrap().clone();
     other.id = "other".into();
     other.selector.api = None;
     other.selector.key = Some(KeySelector {
         exact: Some("session:123".into()),
         ..Default::default()
     });
-    policy.rules.push(other);
+    policy.rules.push(other.into());
     assert!(compile_policy(&policy).is_err());
-    policy.rules[1].selector.resource.as_mut().unwrap().database = Some(Database::Index(1));
+    policy.rules[1]
+        .as_value_mut()
+        .unwrap()
+        .selector
+        .resource
+        .as_mut()
+        .unwrap()
+        .database = Some(Database::Index(1));
     compile_policy(&policy).unwrap();
     let mut policy = parse_policy(&json_rule("api.response")).unwrap();
-    let time = policy.rules[0].contract.remove("/expires_at").unwrap();
+    let time = policy.rules[0]
+        .as_value_mut()
+        .unwrap()
+        .contract
+        .remove("/expires_at")
+        .unwrap();
     policy.rules[0]
+        .as_value_mut()
+        .unwrap()
         .contract
         .insert("/members/*/time".into(), time.clone());
     policy.rules[0]
+        .as_value_mut()
+        .unwrap()
         .contract
         .insert("/members/0/time".into(), time);
     assert!(compile_policy(&policy).is_err());
@@ -248,11 +273,13 @@ fn overlapping_scopes_and_wildcard_leaf_ownership_are_rejected() {
 #[test]
 fn protobuf_bindings_cannot_hide_scalar_ancestors_or_repeated_message_scope() {
     let mut policy = parse_policy(&json_rule("api.response")).unwrap();
-    policy.rules[0].contract.clear();
+    policy.rules[0].as_value_mut().unwrap().contract.clear();
     policy.rules[0]
+        .as_value_mut()
+        .unwrap()
         .contract
         .insert("/members".into(), FieldContract::Unordered);
-    policy.rules[0].codec = Codec::Protobuf(ProtobufCodec {
+    policy.rules[0].as_value_mut().unwrap().codec = Codec::Protobuf(ProtobufCodec {
         fields: std::collections::BTreeMap::from([
             (
                 "/members".into(),
@@ -273,15 +300,75 @@ fn protobuf_bindings_cannot_hide_scalar_ancestors_or_repeated_message_scope() {
         ]),
     });
     compile_policy(&policy).unwrap();
-    let Codec::Protobuf(codec) = &mut policy.rules[0].codec else {
+    let Codec::Protobuf(codec) = &mut policy.rules[0].as_value_mut().unwrap().codec else {
         unreachable!()
     };
     let child = codec.fields.remove("/members/*/expires").unwrap();
     codec.fields.insert("/expires".into(), child);
     assert!(compile_policy(&policy).is_err());
-    let Codec::Protobuf(codec) = &mut policy.rules[0].codec else {
+    let Codec::Protobuf(codec) = &mut policy.rules[0].as_value_mut().unwrap().codec else {
         unreachable!()
     };
     codec.fields.get_mut("/members").unwrap().field_type = ProtobufType::Int64;
     assert!(compile_policy(&policy).is_err());
+}
+
+#[test]
+fn malformed_rule_errors_identify_the_rule_and_typed_field() {
+    let error = parse_policy(
+        r#"format: traffic-policy/v1
+rules:
+  - id: wrong-native
+    match: {api: GET /test}
+    effect: {kind: response_generated, unexpected: true}
+    proof: {source: Source, fact: A typed fact}
+"#,
+    )
+    .unwrap_err();
+    let diagnostic = format!("{error:#}");
+    assert!(diagnostic.contains("wrong-native"), "{diagnostic}");
+    assert!(
+        !diagnostic.contains("did not match any variant of untagged enum PolicyRule"),
+        "{diagnostic}"
+    );
+}
+
+#[test]
+fn hget_field_scopes_are_explicit_and_disjoint() {
+    let mut document = parse_policy(&json_rule("dependency.response")).unwrap();
+    let first = document.rules[0].as_value_mut().unwrap();
+    first.selector.operation = Some("HGET".into());
+    first.selector.hash_field = Some(KeySelector {
+        exact: Some("one".into()),
+        ..Default::default()
+    });
+    let mut second = first.clone();
+    second.id = "second-field".into();
+    second.selector.hash_field.as_mut().unwrap().exact = Some("two".into());
+    document.rules.push(second.into());
+    compile_policy(&document).unwrap();
+    document.rules[1]
+        .as_value_mut()
+        .unwrap()
+        .selector
+        .hash_field = None;
+    assert!(compile_policy(&document).is_err());
+    document.rules.pop();
+    document.rules[0].as_value_mut().unwrap().selector.operation = Some("GET".into());
+    assert!(compile_policy(&document).is_err());
+}
+
+#[test]
+fn documented_self_contained_examples_compile() {
+    let document = include_str!("../../docs/unified-rule-contracts.md");
+    let mut examples = 0;
+    for block in document.split("```yaml\n").skip(1) {
+        let yaml = block.split("```").next().unwrap();
+        if yaml.starts_with("format: traffic-policy/v1") {
+            parse_policy(yaml)
+                .unwrap_or_else(|error| panic!("documented policy is invalid: {error:#}"));
+            examples += 1;
+        }
+    }
+    assert!(examples >= 2);
 }

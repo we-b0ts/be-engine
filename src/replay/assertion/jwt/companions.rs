@@ -8,10 +8,20 @@ pub(super) fn compare(
     documents: [&Value; 2],
     validated: &contract::Validated,
 ) -> Result<(), ResponseDifferenceKind> {
+    compare_pair(rule, [pointer, pointer], documents, validated)
+}
+
+pub(in crate::replay) fn compare_pair(
+    rule: &ResponseJwtRule,
+    pointers: [&str; 2],
+    documents: [&Value; 2],
+    validated: &contract::Validated,
+) -> Result<(), ResponseDifferenceKind> {
     let invalid = ResponseDifferenceKind::JwtExpiryMismatch;
     for (index, document) in documents.into_iter().enumerate() {
-        let read =
-            |pattern: &str| document.pointer(&ResponseJwtRule::concrete_pointer(pattern, pointer));
+        let read = |pattern: &str| {
+            document.pointer(&ResponseJwtRule::concrete_pointer(pattern, pointers[index]))
+        };
         let exp = if let Some(pattern) = &rule.expires_at {
             let expiry = read(pattern)
                 .and_then(|value| match rule.expires_at_format {

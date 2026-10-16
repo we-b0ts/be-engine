@@ -27,8 +27,8 @@ async fn redis_capture_plan_apply_replay_preserves_options_references_and_finite
     )
     .unwrap();
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
-    let policy = temp.path().join("verification.yaml");
-    std::fs::write(
+    let policy = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
@@ -156,8 +156,8 @@ async fn redis_prefix_capture_plans_from_exact_witnesses_and_replays_multiple_ke
     )
     .unwrap();
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
-    let policy = temp.path().join("verification.yaml");
-    std::fs::write(
+    let policy = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )

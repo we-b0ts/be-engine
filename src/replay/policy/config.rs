@@ -351,18 +351,12 @@ pub(in crate::replay) fn load_replay_policy(path: &Path) -> Result<LoadedReplayP
         let source = std::str::from_utf8(&bytes)?;
         let policy = crate::policy::parse_policy(source)?;
         let compiled = std::sync::Arc::new(crate::policy::compile_policy(&policy)?);
+        let document = super::native_projection::project_native(&compiled.native)?.document;
         return Ok(LoadedReplayPolicy {
             fingerprint: compiled.fingerprints.full.clone(),
             compiled: Some(compiled),
             path: path.canonicalize()?,
-            document: ReplayPolicyDocument {
-                dynamic_values: vec![],
-                version: 3,
-                expected_response: ExpectedResponseUsage::AssertionsOnly,
-                dependency_rules: vec![],
-                request_rules: Default::default(),
-                response_rules: Default::default(),
-            },
+            document,
         });
     }
     let document: ReplayPolicyDocument = serde_yaml::from_slice(&bytes)

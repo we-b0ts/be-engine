@@ -304,8 +304,8 @@ fn plan_fixture() -> (tempfile::TempDir, crate::RedisLockFeedback, PathBuf) {
         json!({"finalized":true,"redis":state.snapshot()}).to_string(),
     )
     .unwrap();
-    let policy = temp.path().join("verification.yaml");
-    fs::write(&policy,"version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_rules: {json: {}}\n").unwrap();
+    let policy = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(&policy,"version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_rules: {json: {}}\n").unwrap();
     (
         temp,
         crate::RedisLockFeedback {
@@ -420,4 +420,32 @@ fn policy_requires_endpoint_source_proof_and_disjoint_selectors() {
     )
     .unwrap();
     assert!(load_replay_policy(&feedback.policy_path).is_err());
+}
+
+#[test]
+fn source_lock_order_requires_completion_before_the_earliest_proven_reference_start() {
+    let mut state = fixture("EVAL", ReplaySource::Case);
+    let acquired: chrono::DateTime<chrono::Utc> = "2026-10-17T00:00:00Z".parse().unwrap();
+    state.exchanges[0].record.timestamp = Some(acquired);
+    state.exchanges[1].record.timestamp = Some(acquired + chrono::TimeDelta::milliseconds(2));
+    state.exchanges[1].record.request_started_at = Some(acquired);
+    let rules = [LockTokenRule {
+        id: "locks".into(),
+        selector: selector(),
+    }];
+    let scope = crate::replay::policy::request_contract::RequestContracts::default();
+    assert_eq!(
+        LockTokens::validate_source(&state.exchanges, &rules, &scope).unwrap()["locks"],
+        2
+    );
+    state.exchanges[1].record.request_started_at =
+        Some(acquired - chrono::TimeDelta::nanoseconds(1));
+    assert!(LockTokens::validate_source(&state.exchanges, &rules, &scope).is_err());
+    // A missing exact start may only use the conservative millisecond interval.
+    state.exchanges[1].record.request_started_at = None;
+    assert!(LockTokens::validate_source(&state.exchanges, &rules, &scope).is_ok());
+    state.exchanges[1].record.timestamp = Some(acquired + chrono::TimeDelta::microseconds(500));
+    assert!(LockTokens::validate_source(&state.exchanges, &rules, &scope).is_err());
+    state.exchanges[0].record.timestamp = None;
+    assert!(LockTokens::validate_source(&state.exchanges, &rules, &scope).is_err());
 }

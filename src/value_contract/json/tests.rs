@@ -13,6 +13,51 @@ fn clocks() -> AnchorClocks {
 }
 
 #[test]
+fn source_sibling_condition_keeps_terminal_durations_exact_through_unordered_pairing() {
+    let duration = FieldContract::Conditional {
+        when: crate::policy::FieldCondition {
+            relative_pointer: "../status".into(),
+            not_in: vec![crate::policy::SourceScalar::String("closed".into())],
+        },
+        contract: Box::new(FieldContract::Duration {
+            unit: crate::policy::DurationUnit::Seconds,
+            anchor: crate::policy::TimeAnchor::ApiRequestStart,
+        }),
+    };
+    let unordered = FieldContract::Unordered;
+    let fields = [
+        Field {
+            rule_id: "duration",
+            pointer: "/items/*/duration",
+            contract: &duration,
+        },
+        Field {
+            rule_id: "members",
+            pointer: "/items",
+            contract: &unordered,
+        },
+    ];
+    let source = json!({"items":[{"id":1,"status":"pending","duration":10},{"id":2,"status":"closed","duration":7}]});
+    let target = json!({"items":[{"id":2,"status":"closed","duration":7},{"id":1,"status":"pending","duration":110}]});
+    assert!(compare(&source, &target, &fields, clocks()).passed());
+    let mut wrong = target.clone();
+    wrong["items"][0]["duration"] = json!(107);
+    assert!(!compare(&source, &wrong, &fields, clocks()).passed());
+    wrong = target.clone();
+    wrong["items"][1]["duration"] = json!(10);
+    assert!(!compare(&source, &wrong, &fields, clocks()).passed());
+    wrong = target;
+    wrong["items"][1]["status"] = json!("closed");
+    assert!(!compare(&source, &wrong, &fields, clocks()).passed());
+    for broken in [
+        json!({"items":[{"id":1,"duration":10}]}),
+        json!({"items":[{"id":1,"status":false,"duration":10}]}),
+    ] {
+        assert!(!compare(&broken, &broken, &fields, clocks()).passed());
+    }
+}
+
+#[test]
 fn multiset_preserves_duplicates_and_stable_fields() {
     let contract = FieldContract::Unordered;
     let fields = [Field {

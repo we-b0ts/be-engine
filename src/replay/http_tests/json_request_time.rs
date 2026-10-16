@@ -86,8 +86,8 @@ async fn json_time_plan_apply_and_fresh_replay_preserve_contracts_and_consumptio
     )
     .unwrap();
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
-    let policy = root.join(".traffic-e2e/verification.yaml");
-    std::fs::write(
+    let policy = root.join(".traffic-e2e/policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )

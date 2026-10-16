@@ -307,7 +307,7 @@ async fn replays_http_exchange_with_unscoped_dynamic_query_policy() {
         .await
         .unwrap();
     let policy_path = temp.path().join("replay.yaml");
-    tokio::fs::write(
+    crate::replay::write_policy_fixture(
         &policy_path,
         r#"
 version: 1
@@ -332,7 +332,6 @@ dependency_rules:
             tolerance: 5s
 "#,
     )
-    .await
     .unwrap();
     let timestamp = Utc::now().format("%Y-%m-%dT%H%%3A%M%%3A%SZ");
     let actual_uri = format!(

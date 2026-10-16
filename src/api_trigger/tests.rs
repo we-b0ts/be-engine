@@ -497,6 +497,7 @@ async fn recorder_keeps_active_case_calls_and_retains_idle_candidates_without_sn
             connection_id: Uuid::new_v4(),
             sequence: 1,
             timestamp: chrono::Utc::now(),
+            request_started_at: chrono::Utc::now(),
             client_addr: None,
             target_host: "redis.test".into(),
             target_port: 6379,

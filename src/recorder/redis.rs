@@ -59,6 +59,7 @@ struct PendingRedisExchange {
     cache_snapshot_key: Option<Vec<u8>>,
     cache_snapshot_hit: bool,
     started: Instant,
+    request_started_at: chrono::DateTime<Utc>,
 }
 
 struct SequencedRedisOutput {
@@ -285,6 +286,7 @@ pub(crate) async fn handle_connected(
                 cache_snapshot_key: None,
                 cache_snapshot_hit: false,
                 started: Instant::now(),
+                request_started_at: Utc::now(),
             };
             if let Some(key) = cache_snapshot_key {
                 match c2s_state.reserve_cache_snapshot(key.clone()).await? {

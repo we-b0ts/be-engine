@@ -9,7 +9,7 @@ fn cached_time_templates_follow_policy_reload_and_recheck_bound_values() {
     };
     let fixture = policy_fixture(&policy("updated_at"));
     let original = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
-    fs::write(&fixture.policy_path, policy("completed_at")).unwrap();
+    crate::replay::write_policy_fixture(&fixture.policy_path, policy("completed_at")).unwrap();
     let reloaded = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
     let identity = mysql_identity();
     let now = Utc.with_ymd_and_hms(2026, 9, 7, 12, 0, 0).unwrap();

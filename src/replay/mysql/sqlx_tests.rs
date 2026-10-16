@@ -124,7 +124,7 @@ async fn fixture_with_global(
         .unwrap();
         std::fs::write(case.join("expected-response.json"), "{}").unwrap();
         let path = temp.path().join("policy.yaml");
-        std::fs::write(&path, policy).unwrap();
+        crate::replay::write_policy_fixture(&path, policy).unwrap();
         Some(path)
     } else {
         None

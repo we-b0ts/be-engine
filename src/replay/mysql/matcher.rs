@@ -267,11 +267,12 @@ impl ReplayState {
                             .preview_mysql_values(
                                 active_case_id.as_deref(),
                                 identity,
-                                &self.mysql.exchanges[index].record,
+                                &exchange.record,
                                 command,
-                                observed_sql,
-                                observed_params,
+                                sql,
+                                params,
                                 request_observed_at,
+                                policy,
                             )
                             .or_else(|| {
                                 policy.preview_mysql_sql_values(&MysqlPolicyContext {

@@ -30,8 +30,8 @@ fn publish_time_and_uuid_bind_only_after_complete_match_and_consume_once() {
     .unwrap();
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
     std::fs::write(case.join("dependencies.jsonl"), "").unwrap();
-    let policy = temp.path().join("verification.yaml");
-    std::fs::write(&policy,serde_yaml::to_string(&json!({"version":3,"expected_response":"assertions_only","dependency_rules":[
+    let policy = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(&policy,serde_yaml::to_string(&json!({"version":3,"expected_response":"assertions_only","dependency_rules":[
         {"id":"host-id","protocol":"redis","target":{"host":"redis.test","port":6379},"redis":{"publish":{"channel":"events","uuid_field":"host_id","source_evidence":"Emitter initializes one process UUID v4"}}},
         {"id":"time","protocol":"redis","case":{"method":"POST","path":"/callback"},"target":{"host":"redis.test","port":6379},"source_evidence":"Emitter generates local completion time","redis":{"key":"events","commands":[{"command":"PUBLISH","argument_values":{"1":{"json":{"/data/0/completed_at":{"time":"preserve_relative","format":"iso8601_naive","utc_offset":"+00:00"}}}}}]}}
     ]})).unwrap()).unwrap();

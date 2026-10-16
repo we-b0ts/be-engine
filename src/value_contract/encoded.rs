@@ -5,6 +5,8 @@ use crate::{
     value_contract::json::{self, AnchorClocks, Comparison, Field},
 };
 use anyhow::{Context, Result, ensure};
+#[cfg(test)]
+mod tests;
 
 pub(crate) fn materialize(
     source: &[u8],
@@ -36,29 +38,7 @@ pub(crate) fn merged_codec(rules: &[&CompiledRule]) -> Result<Codec> {
         .codec
         .clone();
     for rule in rules.iter().skip(1) {
-        match (&mut codec, &rule.rule.codec) {
-            (Codec::Json, Codec::Json) => (),
-            (Codec::Protobuf(merged), Codec::Protobuf(next)) => {
-                for (path, field) in &next.fields {
-                    if let Some(current) = merged.fields.get(path) {
-                        ensure!(
-                            current == field,
-                            "selected rules disagree on a typed Protobuf field"
-                        );
-                    } else {
-                        ensure!(
-                            merged
-                                .fields
-                                .values()
-                                .all(|current| current.field_path != field.field_path),
-                            "selected rules alias a Protobuf wire field"
-                        );
-                        merged.fields.insert(path.clone(), field.clone());
-                    }
-                }
-            }
-            _ => anyhow::bail!("selected rules disagree on the payload codec"),
-        }
+        merge_codec(&mut codec, &rule.rule.codec)?;
     }
     Ok(codec)
 }
@@ -72,10 +52,6 @@ pub(crate) fn compare(
     let codec = merged_codec(rules)?;
     let source = CodecView::decode(&codec, source)?;
     let target = CodecView::decode(&codec, target)?;
-    let paths = rules
-        .iter()
-        .flat_map(|rule| rule.rule.contract.keys().cloned())
-        .collect::<Vec<_>>();
     let fields = rules
         .iter()
         .flat_map(|rule| {
@@ -90,9 +66,59 @@ pub(crate) fn compare(
         })
         .collect::<Vec<_>>();
     Ok(json::compare(
-        &source.comparison_value(&paths),
-        &target.comparison_value(&paths),
+        &source.comparison_value(&comparison_paths(&source.logical, rules)?),
+        &target.comparison_value(&comparison_paths(&target.logical, rules)?),
         &fields,
         clocks,
     ))
+}
+
+/// Retain native PB wire identity for every inactive field. The actual field
+/// permission is still evaluated against immutable Source by the comparator.
+pub(crate) fn comparison_paths(
+    root: &serde_json::Value,
+    rules: &[&CompiledRule],
+) -> Result<Vec<String>> {
+    let mut paths = Vec::new();
+    for rule in rules {
+        for (pointer, contract) in &rule.rule.contract {
+            if let crate::policy::FieldContract::Conditional { when, .. } = contract {
+                for selected in super::delivery::select(pointer, root)? {
+                    if when.active(root, &selected)? {
+                        paths.push(selected);
+                    }
+                }
+            } else {
+                paths.push(pointer.clone());
+            }
+        }
+    }
+    Ok(paths)
+}
+
+pub(crate) fn merge_codec(codec: &mut Codec, next: &Codec) -> Result<()> {
+    match (codec, next) {
+        (Codec::Json, Codec::Json) => (),
+        (Codec::Protobuf(merged), Codec::Protobuf(next)) => {
+            for (path, field) in &next.fields {
+                if let Some(current) = merged.fields.get(path) {
+                    ensure!(
+                        current == field,
+                        "selected rules disagree on a typed Protobuf field"
+                    );
+                } else {
+                    ensure!(
+                        merged
+                            .fields
+                            .values()
+                            .all(|current| current.field_path != field.field_path),
+                        "selected rules alias a Protobuf wire field"
+                    );
+                    merged.fields.insert(path.clone(), field.clone());
+                }
+            }
+        }
+        _ => anyhow::bail!("selected rules disagree on the payload codec"),
+    }
+    Ok(())
 }

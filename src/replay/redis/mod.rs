@@ -35,6 +35,9 @@ pub(in crate::replay) mod key_selector;
 mod lane_tests;
 pub(crate) mod lock;
 mod matching;
+#[cfg(test)]
+mod native_scope_tests;
+mod native_source;
 pub(crate) mod publish;
 pub(in crate::replay) mod pubsub;
 pub(crate) mod time_shift;
@@ -64,6 +67,8 @@ pub(super) struct RecordedExchange {
     id: Option<Uuid>,
     #[serde(default)]
     timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request_started_at: Option<chrono::DateTime<chrono::Utc>>,
     connection_id: Uuid,
     sequence: u64,
     target_host: String,
@@ -88,6 +93,27 @@ pub(super) struct RecordedExchange {
     session_setup: bool,
     #[serde(default)]
     global_dependency_reason: Option<String>,
+}
+
+impl RecordedExchange {
+    fn started_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.request_started_at.or_else(|| {
+            self.timestamp?
+                .checked_sub_signed(chrono::TimeDelta::milliseconds(
+                    i64::try_from(self.duration_ms).ok()?,
+                ))
+        })
+    }
+
+    /// A floor-millisecond duration only establishes a conservative lower bound.
+    fn earliest_start(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.request_started_at.or_else(|| {
+            self.timestamp?
+                .checked_sub_signed(chrono::TimeDelta::milliseconds(
+                    i64::try_from(self.duration_ms.checked_add(1)?).ok()?,
+                ))
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

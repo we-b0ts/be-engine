@@ -182,3 +182,32 @@ fn numeric_categories_are_checked_without_coercing_strings_or_floats() {
         assert_eq!(validate_numeric_category(&source, &target).is_ok(), valid);
     }
 }
+
+#[test]
+fn sql_datetime_keeps_explicit_timezone_and_microseconds() {
+    let offset = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+    let sql = serde_json::json!("2026-10-17 12:34:56.123456");
+    assert_eq!(
+        parse_timestamp(&sql, TimestampFormat::SqlDatetime, Some(offset)),
+        parse_timestamp(
+            &serde_json::json!("2026-10-17T04:34:56.123456Z"),
+            TimestampFormat::Rfc3339,
+            None
+        )
+    );
+    assert!(parse_timestamp(&sql, TimestampFormat::SqlDatetime, None).is_err());
+    for invalid in [
+        "2026-10-17T12:34:56",
+        "2026-10-17 12:34:56Z",
+        "2026-10-17 12:34:56.",
+    ] {
+        assert!(
+            parse_timestamp(
+                &serde_json::json!(invalid),
+                TimestampFormat::SqlDatetime,
+                Some(offset)
+            )
+            .is_err()
+        );
+    }
+}
