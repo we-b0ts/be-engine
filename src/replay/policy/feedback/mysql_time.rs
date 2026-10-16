@@ -248,7 +248,7 @@ pub struct MysqlTimeRulePlan {
     report: MysqlTimeRuleReport,
 }
 
-fn configured_sql_values(
+pub(in crate::replay::policy::feedback) fn configured_sql_values(
     selector: &MysqlTimeSelector,
 ) -> Result<BTreeMap<usize, MysqlTimeValueRule>> {
     ensure!(
@@ -325,29 +325,7 @@ pub fn plan_mysql_time_rule(feedback: MysqlTimeRuleFeedback) -> Result<MysqlTime
     );
     crate::config::process_owned_dependencies::validate_source_evidence(&feedback.source_evidence)?;
     let sql_values = configured_sql_values(s)?;
-    let proposed = ReplayDependencyRule {
-        id: feedback.rule_id.clone(),
-        replay_scope: Default::default(),
-        source_evidence: String::new(),
-        case_selector: None,
-        redis: None,
-        protocol: DependencyProtocol::Mysql,
-        target: TargetSelector::default(),
-        mysql: Some(MysqlSelector {
-            response_time_shift: BTreeMap::new(),
-            command: "COM_QUERY".into(),
-            sql: s.sql.clone(),
-            tables: s.tables.clone(),
-            table_patterns: s.table_patterns.clone(),
-            table_series: s.table_series.clone(),
-            database: Some(s.database.clone()),
-            username: None,
-            params: BTreeMap::new(),
-            sql_values: sql_values.clone(),
-        }),
-        http: None,
-        memcached: None,
-    };
+    let proposed = proposed_rule(&feedback.rule_id, s)?;
     // Validate before opening evidence so invalid slots cannot index values.
     let mut document = loaded.document.clone();
     document.dependency_rules = vec![proposed.clone()];
@@ -399,6 +377,35 @@ pub fn plan_mysql_time_rule(feedback: MysqlTimeRuleFeedback) -> Result<MysqlTime
             applied: false,
             diff,
         },
+    })
+}
+
+pub(in crate::replay::policy::feedback) fn proposed_rule(
+    id: &str,
+    s: &MysqlTimeSelector,
+) -> Result<ReplayDependencyRule> {
+    Ok(ReplayDependencyRule {
+        id: id.into(),
+        replay_scope: Default::default(),
+        source_evidence: String::new(),
+        case_selector: None,
+        redis: None,
+        protocol: DependencyProtocol::Mysql,
+        target: TargetSelector::default(),
+        mysql: Some(MysqlSelector {
+            response_time_shift: BTreeMap::new(),
+            command: "COM_QUERY".into(),
+            sql: s.sql.clone(),
+            tables: s.tables.clone(),
+            table_patterns: s.table_patterns.clone(),
+            table_series: s.table_series.clone(),
+            database: Some(s.database.clone()),
+            username: None,
+            params: BTreeMap::new(),
+            sql_values: configured_sql_values(s)?,
+        }),
+        http: None,
+        memcached: None,
     })
 }
 

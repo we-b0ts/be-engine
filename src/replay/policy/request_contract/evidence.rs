@@ -3,6 +3,8 @@ use super::super::config::fingerprint;
 use super::*;
 use serde::{Deserialize, Serialize};
 mod http_json;
+#[cfg(test)]
+mod tests;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::replay) struct Candidate {
@@ -292,41 +294,9 @@ pub(in crate::replay::policy) fn verify(
             fingerprint(&actual) == candidate.target_fingerprint,
             "request witness target fingerprint differs"
         );
-        let source = read(dir.join("dependencies.jsonl"), witnesses)?;
-        if let Some(super::super::redis_value::RedisSelector::Requests(selector)) = &rule.redis {
-            // Skip candidates the selector does not cover, mirroring the
-            // runtime compare guards. Verifying an unrelated key family here
-            // would abort planning of a correctly scoped single-family rule.
-            let selector_covers_candidate = selector.database == candidate.database
-                && selector.commands.iter().any(|command| {
-                    command.command == candidate.command
-                        && source
-                            .split(|b| *b == b'\n')
-                            .filter(|line| !line.is_empty())
-                            .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
-                            .filter(|event| {
-                                event["event_type"] == "redis_exchange"
-                                    && event["command"] == candidate.command
-                            })
-                            .filter_map(|event| {
-                                let args = event["args"].as_array()?;
-                                let args =
-                                    args.iter().map(decode).collect::<Result<Vec<_>>>().ok()?;
-                                (fingerprint(&serde_json::to_vec(&args).ok()?)
-                                    == candidate.source_fingerprint)
-                                    .then_some(args)
-                            })
-                            .any(|args| {
-                                command
-                                    .key(&args)
-                                    .is_some_and(|key| selector.key.matches(key))
-                            })
-                });
-            if selector_covers_candidate {
-                validate_source_commands(selector, &candidate, &source)?;
-            }
-        }
-        for line in source
+        let source_bytes = read(dir.join("dependencies.jsonl"), witnesses)?;
+        let mut source_commands_validated = false;
+        for line in source_bytes
             .split(|b| *b == b'\n')
             .filter(|line| !line.is_empty())
         {
@@ -359,8 +329,6 @@ pub(in crate::replay::policy) fn verify(
                 if fingerprint(&serde_json::to_vec(&source)?) != candidate.source_fingerprint {
                     continue;
                 }
-                decode(&event["response"])?;
-                let actual: Vec<Vec<u8>> = serde_json::from_slice(&actual)?;
                 let Some(super::super::redis_value::RedisSelector::Requests(selector)) =
                     rule.redis.as_ref()
                 else {
@@ -371,10 +339,19 @@ pub(in crate::replay::policy) fn verify(
                         .commands
                         .iter()
                         .filter(|c| c.command == candidate.command)
-                        .all(|c| c.key(&source).is_none_or(|key| !selector.key.matches(key)))
+                        .all(|c| {
+                            !c.matches_identity(&source)
+                                || c.key(&source).is_none_or(|key| !selector.key.matches(key))
+                        })
                 {
                     continue;
                 }
+                if !source_commands_validated {
+                    validate_source_commands(selector, &candidate, &source, &source_bytes)?;
+                    source_commands_validated = true;
+                }
+                decode(&event["response"])?;
+                let actual: Vec<Vec<u8>> = serde_json::from_slice(&actual)?;
                 // Planners validate individual command witnesses; runtime retains sequence correlation.
                 let mut single = selector.clone();
                 single
@@ -519,32 +496,16 @@ pub(super) fn decode(value: &Value) -> Result<Vec<u8>> {
 fn validate_source_commands(
     selector: &config::RedisRequestSelector,
     candidate: &Candidate,
+    source: &[Vec<u8>],
     bytes: &[u8],
 ) -> Result<()> {
-    let events = bytes
-        .split(|b| *b == b'\n')
-        .filter(|line| !line.is_empty())
-        .map(serde_json::from_slice::<Value>)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
     let selected_command = selector
         .commands
         .iter()
         .find(|c| c.command == candidate.command)
         .context("source command is not selected")?;
-    let source_key = events
-        .iter()
-        .filter(|e| e["event_type"] == "redis_exchange" && e["command"] == candidate.command)
-        .find_map(|e| {
-            let args = e["args"]
-                .as_array()?
-                .iter()
-                .map(decode)
-                .collect::<Result<Vec<_>>>()
-                .ok()?;
-            (fingerprint(&serde_json::to_vec(&args).ok()?) == candidate.source_fingerprint)
-                .then(|| selected_command.key(&args).map(<[u8]>::to_vec))
-                .flatten()
-        })
+    let source_key = selected_command
+        .key(source)
         .context("source request witness key is missing")?;
     let mut found = BTreeSet::new();
     for line in bytes.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
@@ -573,7 +534,7 @@ fn validate_source_commands(
             .iter()
             .map(decode)
             .collect::<Result<Vec<_>>>()?;
-        if command.key(&args) != Some(source_key.as_slice())
+        if command.key(&args) != Some(source_key)
             || command
                 .key(&args)
                 .is_none_or(|key| !selector.key.matches(key))

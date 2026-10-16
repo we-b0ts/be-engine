@@ -17,8 +17,9 @@ mod generated_values;
 mod model;
 mod response_body;
 pub use generated_values::{
-    DynamicValueRuleFeedback, GeneratedValueRulePlan, GeneratedValueRuleReport,
-    ResponseHeaderDateRuleFeedback, plan_dynamic_value_rule, plan_response_header_date_rule,
+    DynamicValueMysqlTimeRule, DynamicValueRuleFeedback, GeneratedValueRulePlan,
+    GeneratedValueRuleReport, ResponseHeaderDateRuleFeedback, plan_dynamic_value_mysql_time_rule,
+    plan_dynamic_value_rule, plan_response_header_date_rule,
 };
 
 use std::collections::BTreeSet;

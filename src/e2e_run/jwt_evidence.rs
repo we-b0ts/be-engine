@@ -46,13 +46,13 @@ pub(crate) fn query(context: E2eRunContext, api: &str) -> Result<JwtTimeEvidence
         let actual: Value = serde_json::from_slice(&std::fs::read(&assertion.actual_response)?)?;
         let expected: Value =
             serde_json::from_slice(&std::fs::read(&assertion.expected_response)?)?;
-        // Candidates are request-auth failures: the recorded response succeeded
-        // while the replay rendered an authentication rejection. Sources differ
-        // in the rendered status (401 for WWW-Authenticate flows, 403 for
-        // bespoke token-verification endpoints), so key on the failure class
-        // instead of one literal status.
+        // These status pairs only identify candidates for JWT time inspection.
+        // Sources may render 401 or 403 for expired tokens, but 403 may also be
+        // an authorization defect; neither status proves authentication causality.
         let target_status = actual["status"].as_u64().unwrap_or_default();
-        let recorded_status = expected["status"].as_u64().unwrap_or_default();
+        let Some(recorded_status) = expected["status"].as_u64() else {
+            continue;
+        };
         if !matches!(target_status, 401 | 403) || matches!(recorded_status, 401 | 403) {
             continue;
         }

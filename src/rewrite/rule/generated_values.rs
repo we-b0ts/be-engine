@@ -8,6 +8,10 @@ pub(super) fn plan(
     mut options: RewriteRulePlanOptions,
 ) -> Result<RewriteRuleReport> {
     ensure!(
+        options.mysql_time.is_none() || options.dynamic_value.is_some(),
+        "a MySQL time companion requires a dynamic identity rule"
+    );
+    ensure!(
         options.jwt.is_none()
             && options.body_codec == ResponseBodyCodec::Json
             && options.kind.is_none()
@@ -74,6 +78,8 @@ pub(super) fn plan(
     }
     let kind = if !options.response_jwts.is_empty() {
         "response_jwt"
+    } else if options.mysql_time.is_some() {
+        "dynamic_value_mysql_time"
     } else if options.dynamic_value.is_some() {
         "dynamic_value"
     } else if options.dependency_request.is_some() {
@@ -83,11 +89,13 @@ pub(super) fn plan(
     };
     let selection = serde_json::to_string(&(
         options.dynamic_value.as_ref(),
+        options.mysql_time.as_ref(),
         &options.header_dates,
         &options.dependency_request,
         &options.response_jwts,
     ))?;
-    let record = RewriteRulePlanRecord {
+    let mut record = RewriteRulePlanRecord {
+        generated_witnesses: Vec::new(),
         id: format!(
             "plan-{}",
             fingerprint::id(&[
@@ -111,11 +119,32 @@ pub(super) fn plan(
         jwt: None,
         evidence_id: options.evidence_id,
         dynamic_value: options.dynamic_value,
+        mysql_time: options.mysql_time,
         dependency_request: options.dependency_request,
         header_dates: options.header_dates,
         response_jwts: options.response_jwts,
     };
-    let report = build(target_root, state, &record)?.report().clone();
+    let plan = build_unfrozen(target_root, state, &record)?;
+    record.generated_witnesses = plan.evidence_witnesses();
+    if let Some(pending) = state.rule_plan.as_ref().filter(|pending| {
+        pending.issue_id == record.issue_id
+            && pending.evidence_id == record.evidence_id
+            && super::has_generated_rule(pending)
+    }) {
+        GeneratedValueRulePlan::ensure_evidence_current(&pending.generated_witnesses)?;
+        ensure!(
+            !pending.generated_witnesses.iter().any(|(path, identity)| {
+                record
+                    .generated_witnesses
+                    .iter()
+                    .any(|(current_path, current_identity)| {
+                        current_path == path && current_identity != identity
+                    })
+            }),
+            "generated value evidence changed after planning"
+        );
+    }
+    let report = plan.report().clone();
     state.rule_plan = Some(record.clone());
     state.dependency_rule_plan = None;
     state.recorder_capture_plan = None;
@@ -129,6 +158,22 @@ pub(super) fn plan(
 }
 
 pub(super) fn build(
+    target_root: &Path,
+    state: &RewriteState,
+    record: &RewriteRulePlanRecord,
+) -> Result<GeneratedValueRulePlan> {
+    GeneratedValueRulePlan::ensure_evidence_current(&record.generated_witnesses).context(
+        "pending generated-value evidence is stale; recover the plan and run fresh Replay",
+    )?;
+    let plan = build_unfrozen(target_root, state, record)?;
+    ensure!(
+        plan.evidence_witnesses() == record.generated_witnesses,
+        "generated value evidence changed after planning"
+    );
+    Ok(plan)
+}
+
+fn build_unfrozen(
     target_root: &Path,
     state: &RewriteState,
     record: &RewriteRulePlanRecord,
@@ -157,11 +202,15 @@ pub(super) fn build(
             });
         }
         if let Some(rule) = &record.dynamic_value {
-            return crate::plan_dynamic_value_rule(DynamicValueRuleFeedback {
+            let feedback = DynamicValueRuleFeedback {
                 policy_path,
                 rule: rule.clone(),
                 replay_report: evidence.replay,
-            });
+            };
+            return match &record.mysql_time {
+                Some(time) => crate::plan_dynamic_value_mysql_time_rule(feedback, time.clone()),
+                None => crate::plan_dynamic_value_rule(feedback),
+            };
         }
         ResponseBodyRuleEvidence::FocusedE2e {
             assertion_report: evidence.assertions,
@@ -183,3 +232,7 @@ pub(super) fn build(
         evidence,
     })
 }
+
+#[cfg(test)]
+#[path = "generated_values/tests.rs"]
+pub(super) mod tests;

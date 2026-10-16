@@ -98,9 +98,11 @@ fn pending_rule_plans_are_recoverable_by_plan_id() {
     let mut state = crate::rewrite::test_state();
     state.phase = RewritePhase::ImplementationRequired;
     state.rule_plan = Some(RewriteRulePlanRecord {
+        generated_witnesses: Vec::new(),
         response_jwts: Vec::new(),
         header_dates: Vec::new(),
         dynamic_value: None,
+        mysql_time: None,
         dependency_request: None,
         time: None,
         id: "plan-response".to_string(),

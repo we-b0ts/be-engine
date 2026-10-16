@@ -7,17 +7,24 @@ use serde_json::{Value, json};
 use super::{RewriteContext, action, inventory, model::RewriteState, store::RewriteStore};
 
 pub(super) fn evidence_missing(target_root: &Path, state: &RewriteState) -> Result<bool> {
-    let evidence = crate::resolve_e2e_response_rule_evidence(
-        crate::E2eRunContext {
-            target_root: target_root.into(),
-            case_source: state
-                .case_source
-                .clone()
-                .context("plan has no case source")?,
-            run_key: None,
-        },
-        state.group_id.as_deref().context("plan has no API group")?,
-    )?;
+    let context = crate::E2eRunContext {
+        target_root: target_root.into(),
+        case_source: state
+            .case_source
+            .clone()
+            .context("plan has no case source")?,
+        run_key: None,
+    };
+    let api = state.group_id.as_deref().context("plan has no API group")?;
+    crate::e2e_run::ensure_response_rule_evidence_inactive(context.clone(), api)?;
+    if state
+        .rule_plan
+        .as_ref()
+        .is_some_and(|plan| super::rule::generated_evidence_stale(target_root, state, plan))
+    {
+        return Ok(true);
+    }
+    let evidence = crate::resolve_e2e_response_rule_evidence(context, api)?;
     if !evidence.replay.is_file()
         || !crate::replay::report::dependency_evidence_path(&evidence.replay).is_file()
     {
@@ -68,7 +75,13 @@ pub(super) fn required_action(
     let plan_id = state
         .rule_plan
         .as_ref()
-        .filter(|plan| plan.dynamic_value.is_some() || plan.dependency_request.is_some())
+        .filter(|plan| {
+            plan.jwt.is_some()
+                || !plan.response_jwts.is_empty()
+                || !plan.header_dates.is_empty()
+                || plan.dynamic_value.is_some()
+                || plan.dependency_request.is_some()
+        })
         .map(|plan| &plan.id)
         .or_else(|| state.dependency_rule_plan.as_ref().map(|plan| &plan.id))?;
     if !evidence_missing(target_root, state).unwrap_or(false) {

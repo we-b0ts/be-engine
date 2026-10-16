@@ -234,11 +234,15 @@ pub enum RewriteRepairAcceptanceKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RewriteRulePlanRecord {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub generated_witnesses: Vec<(PathBuf, String)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub response_jwts: Vec<crate::ResponseJwtRule>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub header_dates: Vec<crate::ResponseHeaderDateRule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dynamic_value: Option<crate::DynamicValueRule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mysql_time: Option<crate::DynamicValueMysqlTimeRule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dependency_request: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

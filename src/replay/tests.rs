@@ -642,6 +642,7 @@ mod tests {
             serde_json::from_slice(&tokio::fs::read(&report_path).await.unwrap()).unwrap();
         assert_eq!(persisted["version"], 6);
         assert_eq!(persisted["finalized"], true);
+        assert_eq!(persisted["complete"], true);
         assert_eq!(persisted["matched_queries"].as_array().unwrap().len(), 2);
         assert!(report_path.is_file());
         abort_tasks(tasks);
@@ -660,9 +661,10 @@ mod tests {
         }
         let session_path = temp.path().join(".replay").join("session.json");
         let control_socket_path = temp.path().join(".replay").join("control.sock");
+        let report_path = temp.path().join("report.json");
         let (_addr, tasks) = spawn_replay_with_control(
             &collection_dir,
-            Some(temp.path().join("report.json")),
+            Some(report_path.clone()),
             session_path.clone(),
             control_socket_path,
         )
@@ -676,6 +678,7 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("pending or active cases"));
+        assert!(!report_path.exists());
         let status = run_control(&session_path, "status", None, false)
             .await
             .unwrap();
@@ -950,4 +953,5 @@ mod tests {
     }
 
     include!("test_helpers.rs");
+    include!("finalization_tests.rs");
 }

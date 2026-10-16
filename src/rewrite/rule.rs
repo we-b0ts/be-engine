@@ -21,6 +21,7 @@ pub struct RewriteRulePlanOptions {
     pub response_jwts: Vec<crate::ResponseJwtRule>,
     pub header_dates: Vec<crate::ResponseHeaderDateRule>,
     pub dynamic_value: Option<crate::DynamicValueRule>,
+    pub mysql_time: Option<crate::DynamicValueMysqlTimeRule>,
     pub dependency_request: Option<Value>,
     pub evidence_id: String,
     pub jwt: Option<super::jwt_rule::JwtRulePlanOptions>,
@@ -69,6 +70,7 @@ pub(super) fn plan(
     if !options.response_jwts.is_empty()
         || !options.header_dates.is_empty()
         || options.dynamic_value.is_some()
+        || options.mysql_time.is_some()
         || options.dependency_request.is_some()
     {
         return generated_values::plan(target_root, state, options);
@@ -128,9 +130,11 @@ fn plan_json(
         .or_else(|| issue.representative.as_ref().map(|r| r.pointer.clone()))
         .context("rule plan requires a representative JSON Pointer")?;
     let record = RewriteRulePlanRecord {
+        generated_witnesses: Vec::new(),
         response_jwts: Vec::new(),
         header_dates: Vec::new(),
         dynamic_value: None,
+        mysql_time: None,
         dependency_request: None,
         id: format!(
             "plan-{}",
@@ -214,9 +218,11 @@ fn plan_response_body(
     };
     let spec_json = serde_json::to_string(&spec)?;
     let record = RewriteRulePlanRecord {
+        generated_witnesses: Vec::new(),
         response_jwts: Vec::new(),
         header_dates: Vec::new(),
         dynamic_value: None,
+        mysql_time: None,
         dependency_request: None,
         id: format!(
             "plan-{}",
@@ -280,11 +286,7 @@ fn build_plan(
     state: &RewriteState,
     record: &RewriteRulePlanRecord,
 ) -> Result<VerificationRulePlan> {
-    if !record.response_jwts.is_empty()
-        || record.dependency_request.is_some()
-        || record.dynamic_value.is_some()
-        || !record.header_dates.is_empty()
-    {
+    if has_generated_rule(record) {
         return Ok(VerificationRulePlan::Generated(Box::new(
             generated_values::build(target_root, state, record)?,
         )));
@@ -383,11 +385,15 @@ fn validate_plan_evidence(
     issue_id: &str,
     evidence_id: &str,
 ) -> Result<()> {
-    if state
+    if let Some(plan) = state
         .rule_plan
         .as_ref()
-        .is_some_and(|plan| plan.issue_id == issue_id && plan.evidence_id == evidence_id)
+        .filter(|plan| plan.issue_id == issue_id && plan.evidence_id == evidence_id)
     {
+        if has_generated_rule(plan) {
+            crate::GeneratedValueRulePlan::ensure_evidence_current(&plan.generated_witnesses)
+                .context("pending generated-value evidence is stale; recover the plan and run fresh Replay")?;
+        }
         return Ok(());
     }
 
@@ -403,6 +409,60 @@ fn validate_plan_evidence(
     anyhow::bail!(
         "evidence id is stale or belongs to another active issue; query current evidence again. If verification.yaml changed, run fresh Replay using the existing recordings before planning"
     )
+}
+
+fn has_generated_rule(record: &RewriteRulePlanRecord) -> bool {
+    !record.response_jwts.is_empty()
+        || record.dependency_request.is_some()
+        || record.dynamic_value.is_some()
+        || !record.header_dates.is_empty()
+}
+
+pub(super) fn generated_evidence_stale(
+    root: &Path,
+    state: &RewriteState,
+    record: &RewriteRulePlanRecord,
+) -> bool {
+    if !has_generated_rule(record) {
+        return false;
+    }
+    if crate::GeneratedValueRulePlan::ensure_evidence_current(&record.generated_witnesses).is_err()
+    {
+        return true;
+    }
+    // Signed families must still verify the immutable original tokens with the
+    // current startup key. A rotated key cannot leave an unappliable plan stuck.
+    (!record.response_jwts.is_empty()
+        || record
+            .dependency_request
+            .as_ref()
+            .is_some_and(declares_signing_key))
+        && generated_values::build(root, state, record).is_err()
+}
+
+#[cfg(test)]
+pub(super) fn response_jwt_plan_fixture() -> (
+    tempfile::TempDir,
+    RewriteState,
+    crate::E2eResponseRuleEvidence,
+) {
+    let mut fixture = generated_values::tests::jwt_fixture();
+    fixture.state.rule_plan.as_mut().unwrap().id = "plan".into();
+    super::store::RewriteStore::new(fixture.target.path())
+        .unwrap()
+        .save(&fixture.state)
+        .unwrap();
+    (fixture.target, fixture.state, fixture.evidence)
+}
+
+fn declares_signing_key(value: &Value) -> bool {
+    match value {
+        Value::Object(fields) => {
+            fields.contains_key("signing_key_source") || fields.values().any(declares_signing_key)
+        }
+        Value::Array(values) => values.iter().any(declares_signing_key),
+        _ => false,
+    }
 }
 
 fn validate_response_body_plan_evidence(

@@ -583,3 +583,98 @@ fn jwt_discovery_keeps_evidence_and_environment_when_mount_snapshot_is_unavailab
     }
     assert!(!report.to_string().contains("test-signing-key"));
 }
+
+#[test]
+fn jwt_candidate_discovery_preserves_401_403_and_rejects_missing_recorded_status() {
+    for (actual, expected, count) in [
+        (401, Some(json!(200)), 1),
+        (403, Some(json!(200)), 1),
+        (401, Some(json!(403)), 0),
+        (403, Some(json!(401)), 0),
+        (403, Some(json!(403)), 0),
+        (403, None, 0),
+        (403, Some(json!("200")), 0),
+        (200, Some(json!(200)), 0),
+    ] {
+        let f = fixture();
+        let case = f.request.parent().unwrap().to_path_buf();
+        crate::e2e_run::jwt_evidence::test_support::install_attempt(
+            f.target.path(),
+            f.state.case_source.as_deref().unwrap(),
+            &[(case.clone(), 200, actual)],
+            DateTime::from_timestamp(1_700_007_200, 0).unwrap(),
+        );
+        let expected = expected.map_or_else(|| json!({}), |status| json!({"status":status}));
+        fs::write(case.join("expected-response.json"), expected.to_string()).unwrap();
+        let evidence = facts(f.target.path(), &f.state).unwrap();
+        assert_eq!(evidence.candidates.len(), count);
+        assert!(!evidence.signature_verified);
+        if let Some(candidate) = evidence.candidates.first() {
+            assert_eq!(candidate.source_status, 200);
+            assert_eq!(candidate.target_status, u64::from(actual));
+        }
+    }
+}
+
+#[test]
+fn both_auth_statuses_require_expiration_and_a_verified_signature_before_planning() {
+    for status in [401, 403] {
+        for scenario in ["expired", "unexpired", "invalid_signature"] {
+            let mut f = fixture();
+            let recorded = 1_700_000_000;
+            let expiry = recorded
+                + if scenario == "unexpired" {
+                    10_000
+                } else {
+                    3_600
+                };
+            let key = if scenario == "invalid_signature" {
+                "untrusted-key"
+            } else {
+                "test-signing-key"
+            };
+            fs::write(
+                &f.request,
+                serde_json::to_vec(&request(
+                    json!({"sub":"test-user","exp":expiry}),
+                    key,
+                    recorded,
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+            crate::e2e_run::jwt_evidence::test_support::install_attempt(
+                f.target.path(),
+                f.state.case_source.as_deref().unwrap(),
+                &[(f.request.parent().unwrap().into(), 200, status)],
+                DateTime::from_timestamp(recorded + 7_200, 0).unwrap(),
+            );
+            let query = evidence::commands(f.target.path(), &f.state)
+                .into_iter()
+                .find(|query| query.query_id.ends_with("jwt-time-validity"))
+                .unwrap();
+            let evidence = evidence::query(f.target.path(), &f.state, &query.query_id).unwrap();
+            assert_eq!(evidence.facts["signature_verified"], false);
+            assert_eq!(
+                evidence.facts["candidates"].as_array().unwrap().len(),
+                usize::from(scenario != "unexpired")
+            );
+            let policy_path = f.target.path().join(".traffic-e2e/verification.yaml");
+            let policy = fs::read(&policy_path).unwrap();
+            let result = plan(
+                f.target.path(),
+                &mut f.state,
+                evidence.evidence_id,
+                Some("auth.rs verifies SECRET_KEY HS256 JWTs with 60s expiration leeway".into()),
+                options(),
+            );
+            assert_eq!(
+                result.is_ok(),
+                scenario == "expired",
+                "{status}: {scenario}: {result:?}"
+            );
+            assert_eq!(f.state.rule_plan.is_some(), scenario == "expired");
+            assert_eq!(fs::read(policy_path).unwrap(), policy);
+        }
+    }
+}

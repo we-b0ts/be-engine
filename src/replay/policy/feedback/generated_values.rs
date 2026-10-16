@@ -3,6 +3,7 @@ mod dependency_request;
 mod evidence;
 mod header_evidence;
 mod mysql_response;
+mod mysql_time;
 mod request_evidence;
 mod response_evidence;
 mod response_jwt;
@@ -17,6 +18,7 @@ use super::{
 };
 use anyhow::{Context, Result, ensure};
 pub use dependency_request::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
+pub use mysql_time::DynamicValueMysqlTimeRule;
 pub use response_jwt::{ResponseJwtRuleFeedback, plan_response_jwt_rule};
 use serde::Serialize;
 use std::{fs, path::PathBuf};
@@ -61,6 +63,32 @@ pub struct GeneratedValueRulePlan {
 }
 
 impl GeneratedValueRulePlan {
+    pub(crate) fn evidence_witnesses(&self) -> Vec<(PathBuf, String)> {
+        std::iter::once((
+            self.policy_path.clone(),
+            fingerprint(self.original.as_bytes()),
+        ))
+        .chain(self.witnesses.iter().cloned())
+        .collect()
+    }
+
+    pub(crate) fn ensure_evidence_current(witnesses: &[(PathBuf, String)]) -> Result<()> {
+        ensure!(
+            !witnesses.is_empty(),
+            "pending generated-value plan has no frozen evidence"
+        );
+        for (path, identity) in witnesses {
+            ensure!(
+                fingerprint(&super::read_published_report(
+                    path,
+                    "generated value witness"
+                )?) == *identity,
+                "generated value evidence changed after planning"
+            );
+        }
+        Ok(())
+    }
+
     pub fn report(&self) -> &GeneratedValueRuleReport {
         &self.report
     }
@@ -93,11 +121,27 @@ impl GeneratedValueRulePlan {
 pub fn plan_dynamic_value_rule(
     feedback: DynamicValueRuleFeedback,
 ) -> Result<GeneratedValueRulePlan> {
+    plan_dynamic_value(feedback, None)
+}
+
+pub fn plan_dynamic_value_mysql_time_rule(
+    feedback: DynamicValueRuleFeedback,
+    time: DynamicValueMysqlTimeRule,
+) -> Result<GeneratedValueRulePlan> {
+    plan_dynamic_value(feedback, Some(time))
+}
+
+fn plan_dynamic_value(
+    feedback: DynamicValueRuleFeedback,
+    time: Option<DynamicValueMysqlTimeRule>,
+) -> Result<GeneratedValueRulePlan> {
     feedback.rule.validate()?;
     let original = fs::read_to_string(&feedback.policy_path)?;
     let mut loaded = load_replay_policy(&feedback.policy_path)?;
-    let witnesses =
-        evidence::dynamic(&feedback.rule, &feedback.replay_report, &loaded.fingerprint)?;
+    let proposed_time = time
+        .as_ref()
+        .map(|time| time.proposed(&feedback.rule))
+        .transpose()?;
     if let Some(existing) = loaded
         .document
         .dynamic_values
@@ -111,17 +155,51 @@ pub fn plan_dynamic_value_rule(
     } else {
         loaded.document.dynamic_values.push(feedback.rule.clone());
     }
+    let mut added_rule_ids = vec![feedback.rule.id.clone()];
+    if let Some(proposed) = &proposed_time {
+        mysql_time::validate_time_overlaps(proposed, &loaded.document.dependency_rules)?;
+        if let Some(existing) = loaded
+            .document
+            .dependency_rules
+            .iter()
+            .find(|rule| rule.id == proposed.id)
+        {
+            ensure!(
+                serde_json::to_value(existing)? == serde_json::to_value(proposed)?,
+                "SQL time rule id already has a different definition"
+            );
+        } else {
+            loaded.document.dependency_rules.push(proposed.clone());
+        }
+        added_rule_ids.push(proposed.id.clone());
+    }
+    super::super::config::validate_document(&loaded.document)?;
+    let joint = proposed_time
+        .as_ref()
+        .map(|time| mysql_time::JointEvidence::new(&feedback.rule, time, &loaded.document))
+        .transpose()?;
+    let witnesses = evidence::dynamic(
+        &feedback.rule,
+        &feedback.replay_report,
+        &loaded.fingerprint,
+        joint.as_ref(),
+    )?;
     let rendered = render_dependency_rules(&loaded.document)?;
     let updated = replace_dependency_rules(&original, &loaded.document)?;
     Ok(GeneratedValueRulePlan {
         policy_path: feedback.policy_path,
         report: GeneratedValueRuleReport {
-            kind: "dynamic_value".into(),
+            kind: if proposed_time.is_some() {
+                "dynamic_value_mysql_time"
+            } else {
+                "dynamic_value"
+            }
+            .into(),
             api: feedback.rule.api,
             policy_fingerprint: loaded.fingerprint,
             matching_cases: 1,
             selected_difference_cases: 1,
-            added_rule_ids: vec![feedback.rule.id],
+            added_rule_ids,
             changed: original != updated,
             applied: false,
             requires_fresh_replay: true,

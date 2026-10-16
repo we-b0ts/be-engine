@@ -10,12 +10,12 @@ enum SqlSelector {
 }
 
 #[derive(Debug)]
-pub(super) struct MysqlSelectors {
+pub(in crate::replay::policy) struct MysqlSelectors {
     sql: BTreeMap<String, SqlSelector>,
 }
 
 impl MysqlSelectors {
-    pub(super) fn new(rules: &[ReplayDependencyRule]) -> Result<Self> {
+    pub(in crate::replay::policy) fn new(rules: &[ReplayDependencyRule]) -> Result<Self> {
         let mut sql = BTreeMap::new();
         for rule in rules
             .iter()
@@ -47,7 +47,11 @@ impl MysqlSelectors {
         }
     }
 
-    pub(super) fn matches_sql(&self, rule: &ReplayDependencyRule, sql: Option<&str>) -> bool {
+    pub(in crate::replay::policy) fn matches_sql(
+        &self,
+        rule: &ReplayDependencyRule,
+        sql: Option<&str>,
+    ) -> bool {
         let Some(sql) = sql else {
             return false;
         };
@@ -60,7 +64,7 @@ impl MysqlSelectors {
         }
     }
 
-    pub(super) fn matches(
+    pub(in crate::replay::policy) fn matches(
         &self,
         rule: &ReplayDependencyRule,
         identity: &ReplaySessionIdentity,

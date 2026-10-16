@@ -47,6 +47,9 @@ pub(super) struct RulePlanArgs {
     /// Source-proven captured identity rule; references are automatic across scoped endpoints.
     #[arg(long, value_name = "RULE_JSON", value_parser = parse_dynamic_value, conflicts_with_all = ["header_dates", "request_kind", "kind", "json_pointer", "unordered_paths", "unordered_joined_string_paths", "docx_timestamps"])]
     pub(super) dynamic_value: Option<traffic_e2e::DynamicValueRule>,
+    /// Atomically plan explicit current-time SQL slots with a MySQL generated identity.
+    #[arg(long, value_name = "RULE_JSON", value_parser = parse_mysql_time, requires = "dynamic_value")]
+    pub(super) mysql_time: Option<traffic_e2e::DynamicValueMysqlTimeRule>,
     /// Date location in an HTTP response header (including filename / filename*).
     #[arg(long = "header-date", value_name = "RULE_JSON", value_parser = parse_header_date, conflicts_with_all = ["request_kind", "kind", "json_pointer", "unordered_paths", "unordered_joined_string_paths", "docx_timestamps"])]
     pub(super) header_dates: Vec<traffic_e2e::ResponseHeaderDateRule>,
@@ -129,6 +132,10 @@ fn parse_dependency_request(value: &str) -> Result<serde_json::Value, String> {
 
 fn parse_dynamic_value(value: &str) -> Result<traffic_e2e::DynamicValueRule, String> {
     serde_json::from_str(value).map_err(|error| format!("invalid dynamic value rule: {error}"))
+}
+
+fn parse_mysql_time(value: &str) -> Result<traffic_e2e::DynamicValueMysqlTimeRule, String> {
+    serde_json::from_str(value).map_err(|error| format!("invalid MySQL time companion: {error}"))
 }
 
 fn parse_header_date(value: &str) -> Result<traffic_e2e::ResponseHeaderDateRule, String> {
@@ -262,5 +269,45 @@ mod generated_tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn mysql_time_companion_is_explicit_and_requires_the_dynamic_capture_family() {
+        use super::super::{Cli, RewriteCommand, RuleCommand};
+        let dynamic = r#"{"id":"name","targets":[{"host":"db","port":3306}],"capture":{"protocol":"mysql","target":{"host":"db","port":3306},"database":"app","sql":"INSERT INTO items(name,created_at) VALUES(?,?)","value_index":0}}"#;
+        let time = r#"{"id":"created-at","time_values":[{"value_index":1}],"source_evidence":"ItemModel:created_at defaults to datetime.now()"}"#;
+        let parsed = Cli::try_parse_from([
+            "backend-rewrite",
+            "rule",
+            "plan",
+            "--evidence-id",
+            "current",
+            "--dynamic-value",
+            dynamic,
+            "--mysql-time",
+            time,
+        ])
+        .unwrap();
+        let RewriteCommand::Rule(command) = parsed.command else {
+            panic!("rule command")
+        };
+        let RuleCommand::Plan(options) = command.command else {
+            panic!("plan command")
+        };
+        assert_eq!(options.mysql_time.unwrap().id, "created-at");
+        assert!(options.dynamic_value.is_some());
+        assert!(
+            Cli::try_parse_from([
+                "backend-rewrite",
+                "rule",
+                "plan",
+                "--evidence-id",
+                "current",
+                "--mysql-time",
+                time
+            ])
+            .is_err()
+        );
+        assert!(Cli::try_parse_from(["backend-rewrite","rule","plan","--evidence-id","current","--dynamic-value",dynamic,"--mysql-time",r#"{"id":"created-at","time_values":[],"source_evidence":"Clock:now","database":"other"}"#]).is_err());
     }
 }
