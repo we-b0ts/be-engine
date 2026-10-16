@@ -174,9 +174,9 @@ pub use policy::{
     ResponseBodyRulePlan, ResponseBodyRuleReport, ResponseBodyRuleVerificationOutcome,
     ResponseBodyUnorderedPath, ResponseDurationUnit, ResponseRuleFeedback, ResponseRuleKind,
     ResponseRulePlan, ResponseRuleReport, ResponseTimeRule, ResponseTimestampFormat,
-    initialize_replay_policy, plan_http_cross_case, plan_memcached_timestamp_rule,
-    plan_mysql_time_rule, plan_redis_cross_case, plan_response_body_rule, plan_response_rule,
-    validate_replay_policy,
+    ResponseTimestampMode, initialize_replay_policy, plan_http_cross_case,
+    plan_memcached_timestamp_rule, plan_mysql_time_rule, plan_redis_cross_case,
+    plan_response_body_rule, plan_response_rule, validate_replay_policy,
 };
 pub use policy::{
     DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget,

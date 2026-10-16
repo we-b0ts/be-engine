@@ -1,4 +1,4 @@
-//! Recover unavailable rule evidence without applying an unverified plan.
+//! Retire unavailable or policy-stale rule evidence without applying a plan.
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use super::{RewriteContext, action, inventory, model::RewriteState, store::RewriteStore};
 
-pub(super) fn evidence_missing(target_root: &Path, state: &RewriteState) -> Result<bool> {
+pub(super) fn evidence_unusable(target_root: &Path, state: &RewriteState) -> Result<bool> {
     let context = crate::E2eRunContext {
         target_root: target_root.into(),
         case_source: state
@@ -29,6 +29,20 @@ pub(super) fn evidence_missing(target_root: &Path, state: &RewriteState) -> Resu
         || !crate::replay::report::dependency_evidence_path(&evidence.replay).is_file()
     {
         return Ok(true);
+    }
+    if state.dependency_rule_plan.as_ref().is_some_and(|plan| {
+        matches!(
+            plan.spec,
+            super::model::RewriteDependencyRuleSpec::MysqlSqlTime { .. }
+        )
+    }) {
+        let report: Value = serde_json::from_slice(&std::fs::read(&evidence.replay)?)?;
+        if crate::MysqlTimeRuleFeedback::policy_evidence_stale(
+            &target_root.join(".traffic-e2e/verification.yaml"),
+            &report,
+        )? {
+            return Ok(true);
+        }
     }
     // A generated-value plan freezes the policy identity its evidence was
     // validated against. When the verification policy or the assertion report
@@ -84,11 +98,11 @@ pub(super) fn required_action(
         })
         .map(|plan| &plan.id)
         .or_else(|| state.dependency_rule_plan.as_ref().map(|plan| &plan.id))?;
-    if !evidence_missing(target_root, state).unwrap_or(false) {
+    if !evidence_unusable(target_root, state).unwrap_or(false) {
         return None;
     }
     Some(super::model::RewriteAction::PlanApplyRequired {
-        summary: "pending rule evidence is unavailable; recover the plan and run fresh Replay before replanning".into(),
+        summary: "pending rule evidence is unavailable or policy-stale; recover the plan and run fresh Replay before replanning".into(),
         command: action::command(target_root, vec!["rule".into(), "recover".into(), plan_id.clone()], vec![]),
     })
 }
@@ -105,8 +119,8 @@ pub fn recover_rewrite_rule_plan(context: RewriteContext, plan_id: &str) -> Resu
         .context("rule plan is stale or belongs to no API work item")?;
     let report = inventory::with_slice_mut(&mut state, &api, |state| {
         ensure!(
-            evidence_missing(&root, state)?,
-            "rule evidence is available; apply the reviewed plan normally"
+            evidence_unusable(&root, state)?,
+            "rule evidence remains usable; apply the reviewed plan normally"
         );
         recover_slice(&root, state, plan_id)
     })?;

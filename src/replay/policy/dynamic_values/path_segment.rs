@@ -213,6 +213,7 @@ impl PathSegmentCapture {
                     let (a, b) = (parse(a)?, parse(b)?);
                     compare(
                         ResponseTimeRule::Timestamp {
+                            mode: Default::default(),
                             format: ResponseTimestampFormat::Rfc3339,
                         },
                         &serde_json::Value::String(a.to_rfc3339()),

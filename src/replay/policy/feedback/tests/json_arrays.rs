@@ -21,6 +21,7 @@ fn array_feedback(root: &Path, kind: ResponseRuleKind) -> ResponseRuleFeedback {
     feedback.kind = kind;
     feedback.time = match kind {
         ResponseRuleKind::Timestamp => Some(crate::ResponseTimeRule::Timestamp {
+            mode: Default::default(),
             format: crate::ResponseTimestampFormat::UnixSeconds,
         }),
         ResponseRuleKind::Duration => Some(crate::ResponseTimeRule::Duration {
@@ -65,6 +66,105 @@ fn write_time_observations(root: &Path, feedback: &ResponseRuleFeedback) {
         serde_json::to_vec(&evidence).unwrap(),
     )
     .unwrap();
+}
+
+fn relative_feedback(root: &Path, target_expiry: &str) -> ResponseRuleFeedback {
+    let mut feedback = array_feedback(root, ResponseRuleKind::Timestamp);
+    feedback.time = Some(crate::ResponseTimeRule::Timestamp {
+        format: crate::ResponseTimestampFormat::Rfc3339,
+        mode: crate::ResponseTimestampMode::PreserveRelative,
+    });
+    feedback.source_example = Some("2023-11-14T23:13:20Z".into());
+    feedback.target_example = Some(target_expiry.into());
+    for (name, expiry) in [
+        ("expected.json", "2023-11-14T23:13:20Z"),
+        ("actual.json", target_expiry),
+    ] {
+        let path = root.join(name);
+        let mut response: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        response["body"]["data"] =
+            json!(json!({"data":[{"value":expiry},{"value":expiry}]}).to_string());
+        fs::write(path, serde_json::to_vec(&response).unwrap()).unwrap();
+    }
+    refresh_relative_fingerprints(root, &feedback);
+    feedback
+}
+
+fn refresh_relative_fingerprints(root: &Path, feedback: &ResponseRuleFeedback) {
+    let mut evidence: serde_json::Value =
+        serde_json::from_slice(&fs::read(&feedback.assertion_report).unwrap()).unwrap();
+    evidence["cases"][0]["response"]["expected_response_fingerprint"] =
+        json!(fingerprint(&fs::read(root.join("expected.json")).unwrap()));
+    evidence["cases"][0]["response"]["actual_response_fingerprint"] =
+        json!(fingerprint(&fs::read(root.join("actual.json")).unwrap()));
+    fs::write(
+        &feedback.assertion_report,
+        serde_json::to_vec(&evidence).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn relative_timestamp_plan_apply_persists_mode_and_replays_with_captured_clocks() {
+    let temp = tempdir().unwrap();
+    let feedback = relative_feedback(temp.path(), "2023-11-14T23:14:20Z");
+    let source = fs::read(temp.path().join("expected.json")).unwrap();
+    let target = fs::read(temp.path().join("actual.json")).unwrap();
+    let plan = plan_response_rule(feedback.clone()).unwrap();
+    plan.apply().unwrap();
+    let policy = fs::read_to_string(&feedback.policy_path).unwrap();
+    assert!(policy.contains("time: preserve_relative"));
+    let report = crate::assert_recorded_response(crate::ResponseAssertionOptions {
+        case_id: "case-1".into(),
+        request: temp.path().join("request.json"),
+        expected_response: temp.path().join("expected.json"),
+        actual_response: temp.path().join("actual.json"),
+        policy: feedback.policy_path,
+    })
+    .unwrap();
+    assert!(report.passed, "{report:?}");
+    assert_eq!(report.applied_generated_rule_ids.len(), 1);
+    assert_eq!(fs::read(temp.path().join("expected.json")).unwrap(), source);
+    assert_eq!(fs::read(temp.path().join("actual.json")).unwrap(), target);
+}
+
+#[test]
+fn relative_timestamp_preflight_rejects_wrong_ttl_invalid_values_and_missing_clock() {
+    for (expiry, missing_clock, constraint) in [
+        ("2023-11-14T23:44:20Z", false, "DurationDeltaMismatch"),
+        ("invalid", false, "TimeFieldInvalid"),
+        ("2023-11-14T23:14:20Z", true, "TimeReferenceMissing"),
+    ] {
+        let temp = tempdir().unwrap();
+        let feedback = relative_feedback(temp.path(), expiry);
+        let policy = fs::read(&feedback.policy_path).unwrap();
+        if missing_clock {
+            let path = temp.path().join("actual.json");
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            value.as_object_mut().unwrap().remove("request_sent_at");
+            fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+            refresh_relative_fingerprints(temp.path(), &feedback);
+        }
+        let error = plan_response_rule(feedback.clone())
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains(constraint), "{error}");
+        assert_eq!(fs::read(&feedback.policy_path).unwrap(), policy);
+    }
+}
+
+#[test]
+fn relative_timestamp_apply_rejects_changed_response_witnesses() {
+    let temp = tempdir().unwrap();
+    let feedback = relative_feedback(temp.path(), "2023-11-14T23:14:20Z");
+    let policy = fs::read(&feedback.policy_path).unwrap();
+    let plan = plan_response_rule(feedback.clone()).unwrap();
+    fs::write(temp.path().join("actual.json"), b"changed response").unwrap();
+    assert!(plan.apply().is_err());
+    assert_eq!(fs::read(&feedback.policy_path).unwrap(), policy);
 }
 
 #[test]

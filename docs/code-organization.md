@@ -683,11 +683,14 @@ explicit repository-wide audit.
   array expansion, evidence matching, and subtree overlap checks. The assertion
   comparator owns value comparison and rule applicability using those resolved
   locations; feedback keeps plan/apply evidence validation and persistence.
-- `replay/policy/response/time_rule` owns explicit timestamp-format and duration-unit
+- `replay/policy/response/time_rule` owns explicit timestamp-format, comparison-mode and duration-unit
   contracts. `replay/assertion/time` owns numeric parsing and fixed five-second
   request-relative validation; artifact adapters supply captured request times.
   `feedback/time_plan` preflights proposed response time rules with this same
   comparator and freezes actual case/response witnesses before plan/apply.
+  `rewrite/plan_recovery` retires unavailable or policy-stale pending plans
+  without applying them. SQL-time recovery mirrors the dynamic-binding policy
+  admission condition and requests fresh Replay only for the plan's owner slice.
 - `replay/assertion/docx` owns bounded OPC ZIP expansion and DOCX part comparison.
   ZIP timestamps, compression choices, entry order, and offsets are container
   metadata; configured XML timestamp elements reuse request-relative time

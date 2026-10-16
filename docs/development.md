@@ -36,6 +36,8 @@ IDs, signed Redis JSON writes, correlated write times and multipart boundaries.
 and request-relative validity for freshly issued HTTP JSON tokens, including
 URL query tokens, typed base64url nonces, RS256 public-key verification from
 recorded MySQL results, and linked integer/RFC3339 expiry and TTL fields.
+[JSON response time rules](response-time-rules.md) validate source-proven expiry
+and scheduled-time offsets through explicit `preserve_relative` timestamps.
 
 ## Rust Tooling
 

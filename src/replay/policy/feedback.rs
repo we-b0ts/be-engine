@@ -454,6 +454,12 @@ fn build_response_rule_plan(
                 .expect("generated kind has a rule collection");
             for pointer in &prepared.requested {
                 let proposed = GeneratedResponseRule {
+                    time: justification
+                        .time
+                        .and_then(super::response::ResponseTimeRule::timestamp_mode)
+                        .filter(|mode| {
+                            *mode != super::response::ResponseTimestampMode::RequestWindow
+                        }),
                     unit: justification
                         .time
                         .and_then(super::response::ResponseTimeRule::unit),

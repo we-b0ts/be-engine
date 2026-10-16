@@ -94,12 +94,10 @@ pub(super) fn validate(
         s.table_series.as_ref(),
     )?;
     let loaded = load_replay_policy(&feedback.policy_path)?;
-    if !loaded.document.dynamic_values.is_empty() {
-        ensure!(
-            report["replay_policy"]["fingerprint"] == loaded.fingerprint,
-            "dynamic SQL time evidence uses a different policy"
-        );
-    }
+    ensure!(
+        !dynamic_policy_stale(&loaded, &report),
+        "dynamic SQL time evidence uses a different policy"
+    );
     let start = report["started_at"]
         .as_str()
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())

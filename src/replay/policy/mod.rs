@@ -66,7 +66,7 @@ pub use response::{
     ProtobufFieldPath, ProtobufJoinedStringFieldType, ProtobufJoinedStringPath,
     ProtobufRepeatedElementType, ProtobufUnorderedPath, ResponseBodyCodec,
     ResponseBodyJoinedStringPath, ResponseBodyUnorderedPath, ResponseDurationUnit, ResponseField,
-    ResponseRuleKind, ResponseTimeRule, ResponseTimestampFormat,
+    ResponseRuleKind, ResponseTimeRule, ResponseTimestampFormat, ResponseTimestampMode,
 };
 
 /// Read only explicit cross-case selectors before dependency preload.
