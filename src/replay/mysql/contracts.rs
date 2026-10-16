@@ -159,7 +159,7 @@ pub(in crate::replay) fn record_request(
     params: Option<&[RecordedMysqlValue]>,
     observed: chrono::DateTime<Utc>,
 ) -> Result<()> {
-    if !owner.retains_value_witnesses() {
+    if !owner.retains_value_witnesses() || owner.compiled_rules().is_none() {
         return Ok(());
     }
     let source = serde_json::to_vec(&RequestEnvelope::recorded(record))?;
