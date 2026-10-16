@@ -74,6 +74,14 @@ impl RequestContracts {
         if !observe_sources {
             return Ok(());
         }
+        // Eager policy construction already validated Source applicability before
+        // the protected store existed. Recount unavailable slots during this full
+        // retention scan, rather than counting the same Source observation twice.
+        self.state
+            .lock()
+            .expect("request contracts")
+            .unavailable_value_slots
+            .clear();
         let cases = self
             .state
             .lock()

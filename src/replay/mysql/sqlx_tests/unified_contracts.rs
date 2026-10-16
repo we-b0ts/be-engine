@@ -175,7 +175,7 @@ async fn finalized_evidence_waits_for_actual_dependency_delivery() {
         let (ended, _) = crate::replay::control::handle_control_request(
             request("end", Some("case-id".into())),
             runtime.state.clone(),
-            None,
+            Some(temp.path().join("finished-replay.json")),
             None,
         )
         .await;
@@ -183,7 +183,7 @@ async fn finalized_evidence_waits_for_actual_dependency_delivery() {
         let (pending, _) = crate::replay::control::handle_control_request(
             request("finalize", None),
             runtime.state.clone(),
-            None,
+            Some(temp.path().join("finished-replay.json")),
             None,
         )
         .await;
@@ -193,7 +193,7 @@ async fn finalized_evidence_waits_for_actual_dependency_delivery() {
         let (finished, _) = crate::replay::control::handle_control_request(
             request("finalize", None),
             runtime.state.clone(),
-            None,
+            Some(temp.path().join("finished-replay.json")),
             None,
         )
         .await;
@@ -201,7 +201,7 @@ async fn finalized_evidence_waits_for_actual_dependency_delivery() {
         let (reopened, _) = crate::replay::control::handle_control_request(
             request("begin", Some("case-id".into())),
             runtime.state.clone(),
-            None,
+            Some(temp.path().join("finished-replay.json")),
             None,
         )
         .await;
