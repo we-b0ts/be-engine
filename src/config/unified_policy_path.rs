@@ -58,7 +58,50 @@ pub fn resolve_unified_policy_path(project_path: &Path) -> Result<PathBuf> {
         !normalized.as_os_str().is_empty(),
         "project.policy must name a file"
     );
-    Ok(root.join(normalized))
+    let policy = root.join(normalized);
+    validate_ownership(&root, &policy)?;
+    Ok(policy)
+}
+
+fn validate_ownership(root: &Path, policy: &Path) -> Result<()> {
+    let mut checked = false;
+    for ancestor in policy.ancestors().take_while(|path| path.starts_with(root)) {
+        let metadata = match std::fs::symlink_metadata(ancestor) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to inspect policy path {}", ancestor.display())
+                });
+            }
+        };
+        // Parent aliases would give the policy a second repository path and
+        // disagree with code-fingerprint exclusions. A leaf is left unchanged
+        // so the Source owner's regular-file check still rejects leaf links.
+        ensure!(
+            ancestor == policy || !metadata.file_type().is_symlink(),
+            "project.policy parent directories must not be symlinks: {}",
+            ancestor.display()
+        );
+        if !checked {
+            let canonical = std::fs::canonicalize(ancestor).with_context(|| {
+                format!(
+                    "failed to resolve existing policy path {}",
+                    ancestor.display()
+                )
+            })?;
+            ensure!(
+                canonical.starts_with(root),
+                "project.policy must remain within the target repository"
+            );
+            checked = true;
+        }
+    }
+    ensure!(
+        checked,
+        "project.policy has no existing repository ancestor"
+    );
+    Ok(())
 }
 
 /// Locate the managed repository that explicitly authorizes this policy. The
@@ -119,5 +162,68 @@ mod tests {
             std::fs::write(&project, raw).unwrap();
             assert!(resolve_unified_policy_path(&project).is_err());
         }
+    }
+
+    #[test]
+    fn missing_nested_policy_is_supported_but_parent_links_cannot_change_ownership() {
+        let temp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(outside.path().join("nested")).unwrap();
+        std::fs::write(
+            outside.path().join("nested/rules.yaml"),
+            "format: traffic-policy/v1\nrules: []\n",
+        )
+        .unwrap();
+        let managed = temp.path().join(".traffic-e2e");
+        std::fs::create_dir(&managed).unwrap();
+        let project = managed.join("project.yaml");
+        std::fs::write(
+            &project,
+            "project:\n  policy: contracts/nested/rules.yaml\n",
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_unified_policy_path(&project).unwrap(),
+            temp.path().join("contracts/nested/rules.yaml")
+        );
+        for target in [
+            outside.path().to_path_buf(),
+            temp.path().join("missing-parent"),
+        ] {
+            std::os::unix::fs::symlink(&target, temp.path().join("contracts")).unwrap();
+            assert!(resolve_unified_policy_path(&project).is_err());
+            std::fs::remove_file(temp.path().join("contracts")).unwrap();
+        }
+        std::fs::create_dir(temp.path().join("inside")).unwrap();
+        std::os::unix::fs::symlink(temp.path().join("inside"), temp.path().join("contracts"))
+            .unwrap();
+        assert!(
+            resolve_unified_policy_path(&project).is_err(),
+            "parent aliases inside the repository are also rejected"
+        );
+    }
+
+    #[test]
+    fn existing_policy_has_one_authorized_root_and_leaf_links_stay_visible_to_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let managed = temp.path().join(".traffic-e2e");
+        std::fs::create_dir(&managed).unwrap();
+        let project = managed.join("project.yaml");
+        std::fs::write(&project, "project:\n  policy: contracts/rules.yaml\n").unwrap();
+        let directory = temp.path().join("contracts");
+        std::fs::create_dir(&directory).unwrap();
+        let policy = directory.join("rules.yaml");
+        std::fs::write(&policy, "format: traffic-policy/v1\nrules: []\n").unwrap();
+        assert_eq!(resolve_unified_policy_path(&project).unwrap(), policy);
+        assert_eq!(resolve_unified_policy_root(&policy).unwrap(), temp.path());
+        std::fs::rename(&policy, directory.join("actual.yaml")).unwrap();
+        std::os::unix::fs::symlink("actual.yaml", &policy).unwrap();
+        assert_eq!(resolve_unified_policy_path(&project).unwrap(), policy);
+        assert!(
+            crate::config::SourceTrafficPolicyConfig::load(&policy)
+                .unwrap_err()
+                .to_string()
+                .contains("regular file")
+        );
     }
 }
