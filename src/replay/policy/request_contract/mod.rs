@@ -53,7 +53,7 @@ struct State {
 struct Sequence {
     actual_key: Option<Vec<u8>>,
     next: usize,
-    times: Vec<(i128, i128)>,
+    times: Vec<time::ComparedTime>,
 }
 #[derive(Clone, Default)]
 pub(in crate::replay) struct RequestContracts {

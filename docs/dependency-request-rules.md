@@ -184,7 +184,8 @@ unselected ARGV remain exact. Rules require 1..32 keys and at most 128 argument
 indices. Selected indices must lie in the present ARGV region, never KEYS.
 Unix seconds, milliseconds and microseconds retain numeric category and request-relative
 offsets. JSON rules may also select exact time pointers inside an ARGV argument;
-all remaining JSON members and array order stay exact. Multiple selected time parameters also retain their differences.
+all remaining JSON members and array order stay exact. Related time parameters
+retain their differences; independent clock reads require explicit groups below.
 SCRIPT LOAD remains an ordinary exact dependency exchange.
 
 ## Script JSON and microsecond timestamp copies
@@ -192,7 +193,7 @@ SCRIPT LOAD remains an ordinary exact dependency exchange.
 For seven KEYS, ARGV[1] is argument index 9: in general ARGV[n] is
 `numkeys + 1 + n`. Select raw argument indices, excluding the command name.
 For example, a script taking seconds in ARGV[5], microseconds in ARGV[6],
-a JSON state in ARGV[7], and another seconds value in ARGV[9] uses:
+a JSON state in ARGV[7], and a second independent clock read in ARGV[9] uses:
 
 ```yaml
 redis:
@@ -202,12 +203,12 @@ redis:
   - command: EVALSHA
     script: {sha1: '0123456789abcdef0123456789abcdef01234567'}
     argument_values:
-      13: {time: preserve_relative, format: unix_seconds}
-      14: {time: preserve_relative, format: unix_microseconds}
+      13: {time: preserve_relative, format: unix_seconds, clock_group: event}
+      14: {time: preserve_relative, format: unix_microseconds, clock_group: event}
       15:
         json:
-          /changed_at_us: {time: preserve_relative, format: unix_microseconds}
-      17: {time: preserve_relative, format: unix_seconds}
+          /changed_at_us: {time: preserve_relative, format: unix_microseconds, clock_group: event}
+      17: {time: preserve_relative, format: unix_seconds, clock_group: after_commit}
 ```
 
 This also works for EVAL with the exact Lua SHA256. Script identity, every
@@ -216,9 +217,42 @@ complete unique-member JSON and exact nonoverlapping field pointers, just like
 SET/RPUSH. Script JSON fields do not enable signed JWT normalization outside SET.
 Integer microseconds are scaled directly to integer nanoseconds, including
 values above JavaScript's exact integer range. Numeric strings are rejected.
-All selected times preserve a common shift within one microsecond; when two
-source timestamps are exactly equal, their target copies must be exactly equal.
-The same comparator validates protected planning witnesses and live Replay.
+By default all selected times preserve a common shift within one microsecond;
+when two source timestamps are exactly equal, their target copies must be exactly
+equal. Named clock groups limit these relationship checks to related fields as
+specified below. The same comparator validates protected planning witnesses and
+live Replay.
+
+## Independent clock groups
+
+An optional `clock_group` on each request time field explicitly identifies
+fields sharing one source clock read or a derived time window. This works across
+Redis scalar arguments, JSON pointers and ordered command sequences, and HTTP
+JSON time pointers. Names use 1..64 ASCII letters, digits, underscores or hyphens;
+names are case-sensitive. Omitted names share one legacy group, distinct from
+every named group. Existing rules and their serialized form remain unchanged.
+
+Within a group, all fields retain the existing common shift within one
+microsecond. Equal Source instants, including seconds/microseconds/JSON copies,
+require exactly equal Target instants. This keeps fixed TTLs, window lengths and
+copies checked. Sequence groups persist across its commands and reset only when
+the sequence completes; names do not share state across rules or cases.
+
+Between groups, elapsed execution time may change. For example, a clock read
+before flush and a second read after commit can be 48 ms apart in Source and
+2 microseconds apart in Target. The example above puts the first read's three
+copies in `event` and the second read in `after_commit`. Every field still
+preserves its own distance from the independently captured request start within
+the fixed inclusive five-second window. Missing anchors, wrong numeric types,
+wrong units, inconsistent copies within a group and changed stable fields fail.
+Coincident values from independently read clocks do not infer a shared clock.
+
+Prove each group's source generation in `source_evidence`. Keep a timestamp and
+its derived expiry, cutoff or copies together; separate names describe actual
+independent clock reads, not a way to relax a failed TTL or copy relationship.
+Group declarations never select a clock or supply a time offset. Planning and
+Replay use the same group checks, frozen evidence and ordinary apply/fresh-Replay
+lifecycle. Already applied rules must be revised through that lifecycle.
 
 ## PUBLISH JSON timestamps and publisher UUIDs
 
@@ -323,8 +357,10 @@ start, with the fixed inclusive 5s tolerance. The recorded anchor is
 `request_started_at`, or recorded completion minus duration for older captures;
 Replay captures the target anchor when the outbound HTTP request starts. Missing
 clocks fail closed. No configured clock, business-specific offset or outgoing
-request rewrite is involved. All selected fields must share the same shift
-within 1 microsecond, preserving the recorded start/end window.
+request rewrite is involved. Fields within the same clock group (one shared
+unnamed group by default) must share the same shift within 1 microsecond,
+preserving the recorded start/end window. Independent reads can use the explicit
+`clock_group` contract above.
 
 Supported formats are `unix_seconds`, `unix_milliseconds`, `unix_microseconds`,
 `rfc3339` and explicit-offset `iso8601_naive` as described below.

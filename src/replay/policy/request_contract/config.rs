@@ -56,6 +56,10 @@ pub(crate) struct TimeField {
     pub format: RequestTimestampFormat,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utc_offset: Option<String>,
+    /// Fields from one source-proven clock read (or derived time window).
+    /// Absent names retain the legacy single shared group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_group: Option<String>,
     #[serde(default = "default_tolerance", skip_serializing)]
     pub tolerance: String,
 }
@@ -115,6 +119,16 @@ pub(crate) fn tolerance(value: &str) -> Result<f64> {
 impl TimeField {
     pub(crate) fn validate(&self) -> Result<()> {
         tolerance(&self.tolerance)?;
+        if let Some(group) = &self.clock_group {
+            ensure!(
+                !group.is_empty()
+                    && group.len() <= 64
+                    && group
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-')),
+                "clock_group requires 1..64 ASCII letters, digits, underscores or hyphens"
+            );
+        }
         if self.format == RequestTimestampFormat::Iso8601Naive {
             super::time::offset(self)?;
         } else {

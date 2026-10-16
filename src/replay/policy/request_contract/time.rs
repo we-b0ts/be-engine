@@ -4,6 +4,14 @@ use crate::replay::assertion::time::{compare_timestamp_delta, date_nanos, numeri
 use chrono::{FixedOffset, NaiveDateTime, Timelike};
 use config::{RequestTimestampFormat as Format, TimeField};
 
+/// A validated timestamp pair and its explicitly declared relationship scope.
+#[derive(Debug, Clone)]
+pub(super) struct ComparedTime {
+    pub(super) source: i128,
+    pub(super) actual: i128,
+    pub(super) group: Option<String>,
+}
+
 // JWT contracts retain their seconds interface; request times use integer nanoseconds.
 pub(super) fn number(value: &Value) -> Result<f64> {
     let value = value.as_f64().context("timestamp must be numeric")?;
@@ -43,7 +51,7 @@ pub(super) fn compare(
     actual: &Value,
     rule: &TimeField,
     anchor: crate::replay::assertion::RequestTimes,
-) -> Result<(i128, i128)> {
+) -> Result<ComparedTime> {
     ensure!(
         source.is_i64() == actual.is_i64() && source.is_u64() == actual.is_u64(),
         "timestamp numeric category changed"
@@ -52,7 +60,11 @@ pub(super) fn compare(
     config::tolerance(&rule.tolerance)?;
     compare_timestamp_delta(pair.0, pair.1, anchor)
         .map_err(|_| anyhow::anyhow!("request timestamp differs from its recorded relative time or is missing its request anchor"))?;
-    Ok(pair)
+    Ok(ComparedTime {
+        source: pair.0,
+        actual: pair.1,
+        group: rule.clock_group.clone(),
+    })
 }
 
 pub(super) fn timestamp(value: &Value, rule: &TimeField) -> Result<i128> {
@@ -112,14 +124,17 @@ pub(super) fn timestamp(value: &Value, rule: &TimeField) -> Result<i128> {
     Ok(nanos)
 }
 
-pub(super) fn validate_relationships(times: &[(i128, i128)]) -> Result<()> {
+pub(super) fn validate_relationships(times: &[ComparedTime]) -> Result<()> {
     for (i, a) in times.iter().enumerate() {
         for b in &times[i + 1..] {
+            if a.group != b.group {
+                continue;
+            }
             ensure!(
-                if a.0 == b.0 {
-                    a.1 == b.1
+                if a.source == b.source {
+                    a.actual == b.actual
                 } else {
-                    (a.1 - a.0).abs_diff(b.1 - b.0) <= 1000
+                    (a.actual - a.source).abs_diff(b.actual - b.source) <= 1000
                 },
                 "request time parameter relationship changed"
             );
