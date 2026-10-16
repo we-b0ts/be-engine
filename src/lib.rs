@@ -103,8 +103,7 @@ pub use build_info::BINARY_VERSION;
 
 pub use case_group::{
     CaseGroupEnsureResult, CaseGroupOptions, CaseGroupStatus, PatternOutcome, PatternOutcomeStatus,
-    ensure_case_group, resolve_recording_api_case_ids, resolve_recording_api_case_ids_with_routes,
-    resolve_recording_api_member,
+    ensure_case_group, resolve_recording_api_case_ids, resolve_recording_api_member,
 };
 pub use config::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
@@ -320,7 +319,7 @@ impl AppState {
     }
 
     pub async fn new_with_recording_options(
-        mut config: AppConfig,
+        config: AppConfig,
         run_id: Option<String>,
         recording_apis: Vec<RecordingApi>,
         artifact_owner: Option<ArtifactOwner>,
@@ -329,18 +328,8 @@ impl AppState {
         config
             .validate()
             .context("invalid recorder configuration")?;
-        config.http_gateway.source_routes = config.http_gateway.source_routes.merged(
-            recording_apis
-                .iter()
-                .filter(|api| api.method().as_str() != "MOTAN")
-                .map(ToString::to_string),
-        )?;
-        recording_api::validate_selection_with_routes(
-            &recording_apis,
-            &config.http_gateway.rules,
-            &config.http_gateway.source_routes,
-        )
-        .context("invalid recording API selection")?;
+        recording_api::validate_selection(&recording_apis, &config.http_gateway.rules)
+            .context("invalid recording API selection")?;
         let background_rules = config.process_owned_dependencies.clone();
         let process_owned_dependencies = tokio::task::spawn_blocking(move || {
             BackgroundDependencyMatcher::from_rules(&background_rules)
@@ -442,15 +431,7 @@ impl AppState {
         self.inner
             .recording_apis
             .iter()
-            .find(|api| {
-                api.matches(method, uri)
-                    && (method.as_str() == "MOTAN"
-                        || self.config().http_gateway.source_routes.selects(
-                            method.as_str(),
-                            uri.path(),
-                            api.path_pattern(),
-                        ))
-            })
+            .find(|api| api.matches(method, uri))
             .map(RecordingApi::path_pattern)
     }
 

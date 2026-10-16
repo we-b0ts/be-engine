@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
@@ -9,15 +10,15 @@ use super::model::{
 };
 use super::{action, artifacts, fingerprint, inventory};
 use crate::RecordingApi;
+use crate::config::SourceTrafficPolicyConfig;
 
-const ROUTES_ENV: &str = "BACKEND_REWRITE_SOURCE_ROUTES_JSON";
-mod registration;
+const PATTERNS_ENV: &str = "BACKEND_REWRITE_CASE_PATH_PATTERNS_JSON";
 
 #[derive(Debug, Clone)]
 pub struct RewriteCasePatternApplyOptions {
     pub target_root: PathBuf,
     pub batch_id: String,
-    pub source_routes: Vec<String>,
+    pub patterns: Vec<String>,
 }
 
 pub(super) fn identify_after_finalized_recording(
@@ -30,14 +31,21 @@ pub(super) fn identify_after_finalized_recording(
 
     let (_, project) = crate::e2e_run::resolve_project(target_root)?;
     let config = crate::config::AppConfig::load(&project.recorder_config)?;
-    let sources = registration::confirmed(&config);
-    state.api_catalog_initialized = true;
-    recanonicalize_catalog(&mut state.api_catalog, &sources)?;
+    let patterns = &config.http_gateway.case_path_patterns;
+    if !state.api_catalog_initialized {
+        let historical = artifacts::historical_standard_recording_observed_apis(
+            target_root,
+            &state.recording_run_id,
+        )?;
+        extend_catalog(&mut state.api_catalog, &historical, patterns)?;
+        state.api_catalog_initialized = true;
+    }
+    recanonicalize_catalog(&mut state.api_catalog, patterns)?;
 
     let observed_apis =
         artifacts::standard_recording_observed_apis(target_root, &state.recording_run_id)?;
     if !inventory::recording_scope(state).is_empty() {
-        extend_catalog(&mut state.api_catalog, &observed_apis, &sources)?;
+        extend_catalog(&mut state.api_catalog, &observed_apis, patterns)?;
         return Ok(false);
     }
 
@@ -47,16 +55,13 @@ pub(super) fn identify_after_finalized_recording(
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .filter(|api| api.method().as_str() != "MOTAN")
-        .filter(|api| {
-            sources
-                .resolve(api.method().as_str(), api.path_pattern())
-                .is_none()
-        })
+        .filter(|api| configured_pattern(patterns, api.path_pattern()).is_none())
+        .filter(|api| !catalog_covers(&state.api_catalog, api))
         .map(|api| api.to_string())
         .collect::<Vec<_>>();
 
     if candidates.is_empty() {
-        extend_catalog(&mut state.api_catalog, &observed_apis, &sources)?;
+        extend_catalog(&mut state.api_catalog, &observed_apis, patterns)?;
         return Ok(false);
     }
 
@@ -91,7 +96,7 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> Option<R
                 "apply".to_string(),
                 pending.id.clone(),
             ],
-            vec![ROUTES_ENV.to_string()],
+            vec![PATTERNS_ENV.to_string()],
         ),
     })
 }
@@ -108,7 +113,7 @@ pub(super) fn canonical_observed_apis(
         .map(|api| {
             Ok(canonical_api(
                 &api.parse()?,
-                &config.http_gateway.source_routes,
+                &config.http_gateway.case_path_patterns,
             ))
         })
         .collect()
@@ -138,13 +143,10 @@ pub fn apply(options: RewriteCasePatternApplyOptions) -> Result<RewriteActionEnv
         "case pattern identification belongs to a different recording run"
     );
 
-    let config = crate::config::AppConfig::load(&project.recorder_config)?;
-    let existing = registration::confirmed(&config);
-    let sources = registration::submitted(
-        &config,
+    let patterns = validate_submitted_patterns(
+        &project.recorder_config,
         &pending.candidates,
-        &existing,
-        options.source_routes,
+        options.patterns,
     )?;
     // Read-only status reuses the adopted observation snapshot. Mutation still
     // verifies that the selected recording has canonical usable case members.
@@ -153,13 +155,17 @@ pub fn apply(options: RewriteCasePatternApplyOptions) -> Result<RewriteActionEnv
         &state.recording_run_id,
         inventory::recording_scope(&state),
     )?;
-    let sources = crate::config::source_traffic_policy::source_routes::register(
+    let effective_patterns = apply_patterns(
         &project.recorder_config,
         &project.source_traffic_policy,
-        sources.entries().map(ToString::to_string),
+        &patterns,
     )?;
-    recanonicalize_catalog(&mut state.api_catalog, &sources)?;
-    extend_catalog(&mut state.api_catalog, &pending.observed_apis, &sources)?;
+    recanonicalize_catalog(&mut state.api_catalog, &effective_patterns)?;
+    extend_catalog(
+        &mut state.api_catalog,
+        &pending.observed_apis,
+        &effective_patterns,
+    )?;
     state.api_catalog_initialized = true;
     state.case_pattern_identification = None;
     state.bump();
@@ -175,76 +181,145 @@ pub fn apply(options: RewriteCasePatternApplyOptions) -> Result<RewriteActionEnv
     ))
 }
 
+fn validate_submitted_patterns(
+    project_config: &Path,
+    candidates: &[String],
+    patterns: Vec<String>,
+) -> Result<Vec<String>> {
+    let config = crate::config::AppConfig::load_static(project_config)?;
+    let mut unique = BTreeSet::new();
+    for pattern in patterns {
+        let pattern =
+            crate::config::validate_case_path_pattern(&pattern, &config.http_gateway.rules)?;
+        ensure!(
+            unique.insert(pattern.clone()),
+            "duplicate case path pattern {pattern}"
+        );
+        ensure!(
+            candidates.iter().any(|candidate| {
+                candidate.parse::<RecordingApi>().is_ok_and(|api| {
+                    crate::path_pattern::matches_path_pattern(&pattern, api.path_pattern())
+                })
+            }),
+            "case path pattern {pattern} does not cover any API in the pending identification batch"
+        );
+    }
+    Ok(unique.into_iter().collect())
+}
+
+fn apply_patterns(
+    project_config: &Path,
+    policy_path: &Path,
+    patterns: &[String],
+) -> Result<Vec<String>> {
+    SourceTrafficPolicyConfig::load(policy_path)?;
+    let original = fs::read_to_string(policy_path)
+        .with_context(|| format!("failed to read {}", policy_path.display()))?;
+    let mut policy = SourceTrafficPolicyConfig::parse(&original, policy_path)?;
+    let mut after = policy
+        .http
+        .case_path_patterns
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    after.extend(patterns.iter().cloned());
+    policy.http.case_path_patterns = after.into_iter().collect();
+
+    let mut effective = crate::config::AppConfig::load_static(project_config)?;
+    policy.apply_to(&mut effective)?;
+    effective.validate()?;
+    let updated = policy.render()?;
+    let current = fs::read_to_string(policy_path)
+        .with_context(|| format!("failed to read {}", policy_path.display()))?;
+    ensure!(
+        current == original,
+        "source traffic policy changed during case pattern application; retry the current action"
+    );
+    if current != updated {
+        crate::config::edit::write_atomic(policy_path, updated.as_bytes())?;
+    }
+    Ok(policy.http.case_path_patterns)
+}
+
 fn extend_catalog(
     catalog: &mut BTreeSet<String>,
     apis: &[String],
-    sources: &crate::config::HttpSourceRoutes,
+    patterns: &[String],
 ) -> Result<()> {
     for api in apis {
-        let api = api.parse::<RecordingApi>()?;
-        if sources
-            .resolve(api.method().as_str(), api.path_pattern())
-            .is_some()
-        {
-            catalog.insert(canonical_api(&api, sources));
-        }
+        catalog.insert(canonical_api(&api.parse::<RecordingApi>()?, patterns));
     }
     Ok(())
 }
 
-fn recanonicalize_catalog(
-    catalog: &mut BTreeSet<String>,
-    sources: &crate::config::HttpSourceRoutes,
-) -> Result<()> {
-    *catalog = sources
-        .entries()
-        .map(ToString::to_string)
-        .chain(
-            catalog
-                .iter()
-                .filter(|api| api.starts_with("MOTAN "))
-                .cloned(),
-        )
-        .collect();
+fn recanonicalize_catalog(catalog: &mut BTreeSet<String>, patterns: &[String]) -> Result<()> {
+    let mut canonical = BTreeSet::new();
+    for entry in std::mem::take(catalog) {
+        let api = entry.parse::<RecordingApi>()?;
+        if api.is_dynamic() && configured_pattern(patterns, api.path_pattern()).is_none() {
+            continue;
+        }
+        canonical.insert(canonical_api(&api, patterns));
+    }
+    *catalog = canonical;
     Ok(())
 }
 
-fn canonical_api(api: &RecordingApi, sources: &crate::config::HttpSourceRoutes) -> String {
-    sources
-        .resolve(api.method().as_str(), api.path_pattern())
-        .map_or_else(|| api.to_string(), ToString::to_string)
+fn canonical_api(api: &RecordingApi, patterns: &[String]) -> String {
+    let path = configured_pattern(patterns, api.path_pattern())
+        .unwrap_or_else(|| api.path_pattern().to_string());
+    format!("{} {path}", api.method())
+}
+
+fn configured_pattern(patterns: &[String], path: &str) -> Option<String> {
+    patterns
+        .iter()
+        .find(|pattern| crate::path_pattern::matches_path_pattern(pattern, path))
+        .cloned()
+}
+
+fn catalog_covers(catalog: &BTreeSet<String>, candidate: &RecordingApi) -> bool {
+    catalog.iter().any(|entry| {
+        entry.parse::<RecordingApi>().is_ok_and(|known| {
+            known.method() == candidate.method()
+                && crate::path_pattern::matches_path_pattern(
+                    known.path_pattern(),
+                    candidate.path_pattern(),
+                )
+        })
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::HttpSourceRoutes;
     use crate::rewrite::store::RewriteStore;
-    use std::fs;
 
     #[test]
-    fn catalog_preserves_confirmed_static_and_method_identity() {
-        let sources = HttpSourceRoutes::try_from(vec![
-            "GET /items/upload".into(),
-            "GET /items/*".into(),
-            "POST /items/*".into(),
-        ])
-        .unwrap();
-        let mut catalog = BTreeSet::new();
-        recanonicalize_catalog(&mut catalog, &sources).unwrap();
-        assert_eq!(catalog.len(), 3);
+    fn catalog_uses_active_patterns_and_drops_removed_dynamic_entries() {
+        let mut catalog = BTreeSet::from([
+            "GET /api/startup".to_string(),
+            "GET /api/tasks/123/tree".to_string(),
+            "GET /legacy/*".to_string(),
+        ]);
+
+        recanonicalize_catalog(&mut catalog, &["/api/tasks/*/tree".to_string()]).unwrap();
+
         assert_eq!(
-            canonical_api(&"GET /items/upload".parse().unwrap(), &sources),
-            "GET /items/upload"
+            catalog,
+            BTreeSet::from([
+                "GET /api/startup".to_string(),
+                "GET /api/tasks/*/tree".to_string(),
+            ])
         );
-        assert_eq!(
-            canonical_api(&"POST /items/upload".parse().unwrap(), &sources),
-            "POST /items/*"
-        );
-        assert_eq!(
-            canonical_api(&"DELETE /items/upload".parse().unwrap(), &sources),
-            "DELETE /items/upload"
-        );
+    }
+
+    #[test]
+    fn catalog_patterns_cover_future_concrete_ids() {
+        let catalog = BTreeSet::from(["GET /api/tasks/*/tree".to_string()]);
+        let candidate = "GET /api/tasks/456/tree".parse().unwrap();
+
+        assert!(catalog_covers(&catalog, &candidate));
     }
 
     #[test]
@@ -277,12 +352,11 @@ mod tests {
 
         assert!(identify_after_finalized_recording(target.path(), &mut state).unwrap());
         let pending = state.case_pattern_identification.as_ref().unwrap();
-        assert!(pending.candidates.contains(&"GET /api/startup".to_string()));
+        assert!(!pending.candidates.contains(&"GET /api/startup".to_string()));
         assert_eq!(
             pending.candidates,
             [
                 "GET /api/new-static",
-                "GET /api/startup",
                 "GET /api/tasks/222/status",
                 "GET /api/tasks/222/tree",
                 "GET /api/tasks/333/tree",
@@ -295,7 +369,7 @@ mod tests {
         );
         assert_eq!(
             action["commands"]["apply"]["required_env_names"],
-            serde_json::json!([ROUTES_ENV])
+            serde_json::json!([PATTERNS_ENV])
         );
 
         let batch_id = pending.id.clone();
@@ -307,11 +381,9 @@ mod tests {
         let next = apply(RewriteCasePatternApplyOptions {
             target_root: target.path().to_path_buf(),
             batch_id,
-            source_routes: vec![
-                "GET /api/startup".into(),
-                "GET /api/new-static".into(),
-                "GET /api/tasks/*/tree".into(),
-                "GET /api/tasks/*/status".into(),
+            patterns: vec![
+                "/api/tasks/*/tree".to_string(),
+                "/api/tasks/*/status".to_string(),
             ],
         })
         .unwrap();

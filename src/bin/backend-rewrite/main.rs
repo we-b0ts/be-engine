@@ -184,7 +184,7 @@ struct CasePatternArgs {
 
 #[derive(Debug, Subcommand)]
 enum CasePatternCommand {
-    /// Register every confirmed Source method/path, including static routes.
+    /// Apply every identified pattern; an empty JSON array confirms all candidates are static.
     Apply(CasePatternApplyArgs),
 }
 
@@ -192,13 +192,13 @@ enum CasePatternCommand {
 struct CasePatternApplyArgs {
     /// Opaque batch id returned by case_pattern_identification_required.
     batch_id: String,
-    /// Complete JSON array of confirmed METHOD path/pattern registrations.
+    /// Complete JSON array of identified path patterns.
     #[arg(
         long,
-        env = "BACKEND_REWRITE_SOURCE_ROUTES_JSON",
+        env = "BACKEND_REWRITE_CASE_PATH_PATTERNS_JSON",
         hide_env_values = true
     )]
-    routes_json: String,
+    patterns_json: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -515,13 +515,13 @@ async fn run(cli: Cli) -> Result<()> {
         },
         RewriteCommand::CasePattern(args) => match args.command {
             CasePatternCommand::Apply(args) => {
-                let source_routes = serde_json::from_str::<Vec<String>>(&args.routes_json)
-                    .map_err(|error| anyhow::anyhow!("invalid Source routes JSON: {error}"))?;
+                let patterns = serde_json::from_str::<Vec<String>>(&args.patterns_json)
+                    .map_err(|error| anyhow::anyhow!("invalid case path patterns JSON: {error}"))?;
                 print_json(
                     &apply_rewrite_case_patterns(RewriteCasePatternApplyOptions {
                         target_root,
                         batch_id: args.batch_id,
-                        source_routes,
+                        patterns,
                     })?,
                     pretty,
                 )

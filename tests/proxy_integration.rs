@@ -1,6 +1,3 @@
-#[path = "support/recording_groups.rs"]
-mod recording_groups;
-use recording_groups::group_dir;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -380,14 +377,11 @@ async fn http_gateway_allows_only_one_active_matched_case() {
     handle.abort();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
-    let uri_group_dirs = [group_dir(&run_dir, "apis", "record-one")];
+    let uri_group_dirs = [run_dir.join("apis/record-one")];
     assert_eq!(uri_group_dirs.len(), 1);
-    assert!(
-        uri_group_dirs[0]
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .starts_with("record-one-")
+    assert_eq!(
+        uri_group_dirs[0].file_name().unwrap().to_str().unwrap(),
+        "record-one"
     );
     let case_dirs = std::fs::read_dir(&uri_group_dirs[0])
         .unwrap()
@@ -462,8 +456,8 @@ async fn http_gateway_keeps_matched_case_active_after_downstream_disconnect() {
     handle.abort();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
-    assert!(!run_dir.join("apis").exists());
-    let failed_group = group_dir(&run_dir, "failed", "record-one");
+    assert!(!run_dir.join("apis/record-one").exists());
+    let failed_group = run_dir.join("failed/record-one");
     let failed_cases = std::fs::read_dir(failed_group)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -517,12 +511,6 @@ async fn http_gateway_limits_published_cases_independently_by_case_pattern() {
         "/record/default/*".to_string(),
         "/record/override/*".to_string(),
     ];
-    config.http_gateway.source_routes = vec![
-        "GET /record/default/*".into(),
-        "GET /record/override/*".into(),
-    ]
-    .try_into()
-    .unwrap();
     config.mysql.enabled = false;
     config.recording.output_dir = temp.path().join("recordings");
     config.tls.ca_cert_path = temp.path().join("ca.pem");
@@ -563,13 +551,13 @@ async fn http_gateway_limits_published_cases_independently_by_case_pattern() {
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
     assert_eq!(
-        std::fs::read_dir(group_dir(&run_dir, "apis", "record-default-wildcard"))
+        std::fs::read_dir(run_dir.join("apis/record-default-wildcard"))
             .unwrap()
             .count(),
         1
     );
     assert_eq!(
-        std::fs::read_dir(group_dir(&run_dir, "apis", "record-override-wildcard"))
+        std::fs::read_dir(run_dir.join("apis/record-override-wildcard"))
             .unwrap()
             .count(),
         2
@@ -614,7 +602,7 @@ async fn http_gateway_writes_case_files_and_decodes_gzip_response() {
     handle.abort();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
-    let rule_dir = group_dir(&run_dir, "apis", "api-users-list");
+    let rule_dir = run_dir.join("apis/api-users-list");
     let case_dirs = std::fs::read_dir(&rule_dir)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -762,11 +750,7 @@ async fn http_gateway_rewrites_pluto_eci_kubeconfig_and_registers_alias() {
     proxy_listener.abort();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
-    let rule_dir = group_dir(
-        &run_dir,
-        "apis",
-        &format!("api-v2-k8s-{cluster_id}-user_config"),
-    );
+    let rule_dir = run_dir.join(format!("apis/api-v2-k8s-{cluster_id}-user_config"));
     let case_dir = std::fs::read_dir(rule_dir)
         .unwrap()
         .next()
@@ -826,9 +810,16 @@ async fn http_gateway_keeps_truncated_case_out_of_published_recordings() {
     handle.abort();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
-    assert!(!run_dir.join("apis").exists());
+    let published_group = run_dir.join("apis/api-users-list");
+    assert!(
+        !published_group.exists()
+            || std::fs::read_dir(&published_group)
+                .unwrap()
+                .next()
+                .is_none()
+    );
 
-    let failed_group = group_dir(&run_dir, "failed", "api-users-list");
+    let failed_group = run_dir.join("failed/api-users-list");
     let failed_cases = std::fs::read_dir(&failed_group)
         .unwrap()
         .map(|entry| entry.unwrap().path())

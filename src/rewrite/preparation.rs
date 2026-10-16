@@ -11,15 +11,10 @@ use crate::e2e_run::{
 use crate::{E2eRunContext, E2eRunPrepareOptions, RecordingApi, prepare_e2e_run};
 
 pub(super) fn prepare_recording(target_root: &Path, state: &mut RewriteState) -> Result<()> {
-    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
+    crate::e2e_run::resolve_project(target_root)?;
     let case_source = artifacts::recording_run(target_root, &state.recording_run_id);
     let api = state.api.parse::<RecordingApi>()?;
-    let config = crate::config::AppConfig::load(&project.recorder_config)?;
-    let routes = config
-        .http_gateway
-        .source_routes
-        .merged((api.method().as_str() != "MOTAN").then(|| api.to_string()))?;
-    let member = crate::case_group::resolve_recording_api_seed_member(&case_source, &api, &routes)?;
+    let member = crate::case_group::resolve_recording_api_seed_member(&case_source, &api)?;
     let source_revision = fingerprint::source_image_revision(target_root)?;
     let prepared = prepare_e2e_run(E2eRunPrepareOptions {
         context: E2eRunContext {

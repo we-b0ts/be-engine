@@ -10,9 +10,6 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use traffic_e2e::{AppConfig, AppState, HttpGatewayRuleConfig};
 
-#[path = "support/recording_groups.rs"]
-mod recording_groups;
-
 static PORT_BIND_LOCK: Mutex<()> = Mutex::const_new(());
 
 struct Gateway {
@@ -94,7 +91,7 @@ impl Gateway {
     }
 
     fn case(&self, group: &str) -> (Value, Value) {
-        let cases = directories(&recording_groups::group_dir(&self.run_dir(), "apis", group));
+        let cases = directories(&self.run_dir().join("apis").join(group));
         assert_eq!(cases.len(), 1);
         let read =
             |name| serde_json::from_slice(&std::fs::read(cases[0].join(name)).unwrap()).unwrap();
@@ -188,7 +185,7 @@ async fn incomplete_http_chunk_does_not_publish_a_successful_sse_case() {
     });
     let gateway = Gateway::new(address).await;
     assert!(gateway.get("/sse/events").await.starts_with("HTTP/1.1 502"));
-    assert!(!gateway.run_dir().join("apis").exists());
+    assert!(!gateway.run_dir().join("apis/sse-events").exists());
     assert!(gateway.run_dir().join("failed").is_dir());
     source.await.unwrap();
 }
@@ -211,6 +208,6 @@ async fn unmatched_requests_keep_full_body_forwarding_past_the_sse_window() {
     });
     let gateway = Gateway::new(address).await;
     assert!(gateway.get("/fallback").await.contains("data: ready\n\n"));
-    assert!(!gateway.run_dir().join("apis").exists());
+    assert!(!gateway.run_dir().join("apis/fallback").exists());
     source.await.unwrap();
 }

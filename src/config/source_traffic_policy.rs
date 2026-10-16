@@ -9,7 +9,6 @@ use super::process_owned_dependencies::{self, BackgroundDependencyRuleConfig};
 use super::{AppConfig, DnsBypassStrategyConfig};
 
 pub(crate) mod http_response;
-pub(crate) mod source_routes;
 
 pub const SOURCE_TRAFFIC_POLICY_VERSION: u32 = 2;
 pub const SOURCE_TRAFFIC_POLICY_FILE: &str = "source-traffic-policy.yaml";
@@ -38,8 +37,6 @@ pub struct SourceTrafficHttpPolicyConfig {
     pub source_revision: String,
     #[serde(default)]
     pub case_path_patterns: Vec<String>,
-    #[serde(default, skip_serializing_if = "super::HttpSourceRoutes::is_empty")]
-    pub source_routes: super::HttpSourceRoutes,
     #[serde(default)]
     pub allowed_unused_http_hosts: Vec<String>,
 }
@@ -185,7 +182,6 @@ impl SourceTrafficPolicyConfig {
 
     pub fn apply_to(&self, config: &mut AppConfig) -> Result<()> {
         config.http_gateway.case_path_patterns = self.http.case_path_patterns.clone();
-        config.http_gateway.source_routes = self.http.source_routes.clone();
         config.http_gateway.allowed_unused_http_hosts = self.http.allowed_unused_http_hosts.clone();
         for overlay in &self.breeze_capture {
             let mut matches = config
@@ -258,7 +254,6 @@ impl SourceTrafficPolicyConfig {
             http: SourceTrafficHttpPolicyConfig {
                 source_revision,
                 case_path_patterns,
-                source_routes: Default::default(),
                 allowed_unused_http_hosts,
             },
             http_response_rewrite: Vec::new(),
