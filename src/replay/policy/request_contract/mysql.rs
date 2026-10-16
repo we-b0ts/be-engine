@@ -147,11 +147,11 @@ impl RequestContracts {
         case: &str,
         identity: &ReplaySessionIdentity,
         record: &RecordedMysqlExchange,
-        surface: Surface,
-        slot: Slot,
+        location: (Surface, Slot),
         role: TargetRole,
         clocks: AnchorClocks,
     ) -> WitnessMetadata {
+        let (surface, slot) = location;
         let pair = |p: crate::value_contract::time::ClockPair| ClockPair {
             source: p.source,
             target: p.target,
@@ -223,8 +223,7 @@ impl RequestContracts {
                         case,
                         &identity,
                         &record,
-                        surface,
-                        slot,
+                        (surface, slot),
                         TargetRole::Unavailable,
                         clocks,
                     ),
@@ -235,13 +234,20 @@ impl RequestContracts {
             }
             let mut slots = BTreeSet::new();
             for rule in rules {
-                let available = surface == Surface::DependencyRequest
+                let values = crate::replay::mysql::contracts::witness_values(&raw, surface, rule)?;
+                let available = (surface == Surface::DependencyRequest
                     || (record.outcome == crate::DependencyExchangeOutcome::Response
-                        && record.response.status == "resultset"
-                        && !crate::replay::mysql::contracts::witness_values(&raw, surface, rule)?
-                            .is_empty());
+                        && record.response.status == "resultset"))
+                    && !values.is_empty();
                 if available {
-                    self.observe_value_slot_applicable([rule.rule.id.clone()]);
+                    for (_, value) in values {
+                        let checked = crate::replay::contract_value::Delivery::prepare(
+                            &value,
+                            &[rule],
+                            clocks,
+                        )?;
+                        self.observe_value_slot_applicable(checked.validation().evaluated.clone());
+                    }
                 } else {
                     self.observe_value_slot_unavailable([rule.rule.id.clone()]);
                 }
@@ -251,8 +257,7 @@ impl RequestContracts {
                             case,
                             &identity,
                             &record,
-                            surface,
-                            rule.rule.slot.clone(),
+                            (surface, rule.rule.slot.clone()),
                             TargetRole::Unavailable,
                             clocks,
                         ),

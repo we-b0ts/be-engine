@@ -217,3 +217,45 @@ async fn finalized_evidence_waits_for_actual_dependency_delivery() {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn absent_sql_json_leaf_is_inactive_and_business_values_remain_exact() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let policy = r#"format: traffic-policy/v1
+rules:
+- id: optional-sql-time
+  surface: dependency.request
+  match:
+    api: GET /users
+    resource: {protocol: mysql, endpoint: '127.0.0.1:3306', database: appdb, username: root}
+    operation: COM_QUERY
+    sql: UPDATE settings SET json=? WHERE id=7
+  slot: {sql_value: 0}
+  codec: json
+  contract:
+    /updated_at: {kind: time, format: unix_seconds, relation: preserve_offset, anchor: case.request_start}
+  proof: {source: 'src/settings.rs:update', fact: 'Only request-derived updated_at may vary when present'}
+"#;
+        let sql = "UPDATE settings SET json='{\"stable\":7}' WHERE id=7";
+        let record = exchange(sql, json!({"status":"ok","affected_rows":1}));
+        let (temp, addr, runtime, server) = fixture_with_policy(&[record], Some(policy)).await;
+        let mut client = connect(
+            addr,
+            &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        ).await;
+        assert!((&mut client).execute("UPDATE settings SET json='{\"stable\":8}' WHERE id=7").await.is_err());
+        assert_eq!((&mut client).execute(sql).await.unwrap().rows_affected(), 1);
+        client.close().await.unwrap();
+        let state = runtime.state.lock().await;
+        let report = state.replay_policy.as_ref().unwrap().report();
+        let rule = report.dependency_rules.iter().find(|rule| rule.id == "optional-sql-time").unwrap();
+        assert!(!rule.applicable);
+        assert_eq!(rule.matches, 0);
+        assert!(report.unused_applicable_dependency_rule_ids.is_empty());
+        assert!(report.unavailable_value_slots.is_empty());
+        assert_eq!(state.mysql.events.matched_query_count, 1);
+        assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
+        assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
+        server.abort();
+    }).await.unwrap();
+}

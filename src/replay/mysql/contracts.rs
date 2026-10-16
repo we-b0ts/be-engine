@@ -4,6 +4,14 @@ use crate::policy::{CompiledRule, Slot, Surface};
 use crate::policy_evidence::{TargetRole, WitnessMetadata};
 use crate::value_contract::json::{AnchorClocks, Comparison};
 
+#[derive(Debug, Clone, Copy)]
+pub(in crate::replay) struct ObservedRequest<'a> {
+    pub command: &'a str,
+    pub sql: Option<&'a str>,
+    pub params: Option<&'a [RecordedMysqlValue]>,
+    pub started_at: chrono::DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RequestEnvelope {
@@ -13,6 +21,14 @@ struct RequestEnvelope {
     params: Option<Vec<RecordedMysqlValue>>,
 }
 impl RequestEnvelope {
+    fn observed(request: ObservedRequest<'_>) -> Self {
+        Self {
+            request_started_at: Some(request.started_at),
+            command: request.command.into(),
+            sql: request.sql.map(str::to_owned),
+            params: request.params.map(<[RecordedMysqlValue]>::to_vec),
+        }
+    }
     fn recorded(record: &RecordedMysqlExchange) -> Self {
         Self {
             request_started_at: source_started(record),
@@ -82,10 +98,7 @@ pub(in crate::replay) fn prepare_delivery(
     identity: &ReplaySessionIdentity,
     record: &RecordedMysqlExchange,
     delivered: &RecordedMysqlResponse,
-    target_command: &str,
-    target_sql: Option<&str>,
-    target_params: Option<&[RecordedMysqlValue]>,
-    target_started: chrono::DateTime<Utc>,
+    request: ObservedRequest<'_>,
 ) -> Result<Option<PreparedDelivery>> {
     let rules =
         owner.mysql_compiled_rules(Surface::DependencyResponse, Some(case), identity, record);
@@ -98,7 +111,7 @@ pub(in crate::replay) fn prepare_delivery(
     let clocks = owner.contract_clocks(
         Some(case),
         source_started(record),
-        Some(target_started),
+        Some(request.started_at),
         record.timestamp,
         None,
     );
@@ -110,7 +123,7 @@ pub(in crate::replay) fn prepare_delivery(
         validation.differences
     );
     // Projection is a native SQL proof. It cannot be inferred from a codec.
-    let expected = projected_response(record, target_command, target_sql, target_params)?;
+    let expected = projected_response(record, request.command, request.sql, request.params)?;
     ensure!(
         &expected == delivered,
         "SQL response copy changed outside the proven projection"
@@ -128,8 +141,7 @@ pub(in crate::replay) fn prepare_delivery(
                 case,
                 identity,
                 record,
-                Surface::DependencyResponse,
-                rule.rule.slot.clone(),
+                (Surface::DependencyResponse, rule.rule.slot.clone()),
                 TargetRole::DerivedDelivery,
                 clocks,
             )
@@ -139,12 +151,7 @@ pub(in crate::replay) fn prepare_delivery(
         original,
         base: ResponseEnvelope {
             response_delivered_at: None,
-            request: RequestEnvelope {
-                request_started_at: Some(target_started),
-                command: target_command.into(),
-                sql: target_sql.map(str::to_owned),
-                params: target_params.map(<[RecordedMysqlValue]>::to_vec),
-            },
+            request: RequestEnvelope::observed(request),
             outcome: record.outcome,
             response: delivered.clone(),
         },
@@ -155,31 +162,22 @@ pub(in crate::replay) fn prepare_delivery(
     }))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(in crate::replay) fn record_request(
     owner: &policy::request_contract::RequestContracts,
     case: &str,
     identity: &ReplaySessionIdentity,
     record: &RecordedMysqlExchange,
-    command: &str,
-    sql: Option<&str>,
-    params: Option<&[RecordedMysqlValue]>,
-    observed: chrono::DateTime<Utc>,
+    request: ObservedRequest<'_>,
 ) -> Result<()> {
     if !owner.retains_value_witnesses() || owner.compiled_rules().is_none() {
         return Ok(());
     }
     let source = serde_json::to_vec(&RequestEnvelope::recorded(record))?;
-    let actual = serde_json::to_vec(&RequestEnvelope {
-        request_started_at: Some(observed),
-        command: command.into(),
-        sql: sql.map(str::to_owned),
-        params: params.map(<[RecordedMysqlValue]>::to_vec),
-    })?;
+    let actual = serde_json::to_vec(&RequestEnvelope::observed(request))?;
     let clocks = owner.contract_clocks(
         Some(case),
         source_started(record),
-        Some(observed),
+        Some(request.started_at),
         None,
         None,
     );
@@ -198,8 +196,7 @@ pub(in crate::replay) fn record_request(
                 case,
                 identity,
                 record,
-                Surface::DependencyRequest,
-                slot,
+                (Surface::DependencyRequest, slot),
                 TargetRole::IndependentTargetObservation,
                 clocks,
             ),
@@ -455,11 +452,9 @@ fn response_values(
         .rows
         .iter()
         .enumerate()
-        .filter_map(|(row, values)| {
-            Some((|| {
-                let value = values.get(index).context("SQL result row is incomplete")?;
-                Ok(value_bytes(value)?.map(|bytes| (row.to_string().into_bytes(), bytes)))
-            })())
+        .map(|(row, values)| {
+            let value = values.get(index).context("SQL result row is incomplete")?;
+            Ok(value_bytes(value)?.map(|bytes| (row.to_string().into_bytes(), bytes)))
         })
         .collect::<Result<Vec<_>>>()
         .map(|values| values.into_iter().flatten().collect())

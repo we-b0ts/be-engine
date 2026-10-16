@@ -190,10 +190,12 @@ impl ReplayState {
                             case,
                             identity,
                             &exchange.record,
-                            command,
-                            observed_sql,
-                            observed_params,
-                            request_observed_at,
+                            contracts::ObservedRequest {
+                                command,
+                                sql: observed_sql,
+                                params: observed_params,
+                                started_at: request_observed_at,
+                            },
                         )
                     {
                         self.mysql
@@ -464,10 +466,12 @@ impl ReplayState {
                                 identity,
                                 &original,
                                 &exchange.record.response,
-                                command,
-                                observed_sql,
-                                observed_params,
-                                request_observed_at,
+                                contracts::ObservedRequest {
+                                    command,
+                                    sql: observed_sql,
+                                    params: observed_params,
+                                    started_at: request_observed_at,
+                                },
                             ) {
                                 Ok(prepared) => prepared,
                                 Err(_) => continue,
