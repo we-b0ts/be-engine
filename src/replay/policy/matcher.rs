@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 pub(in crate::replay::policy) mod mysql_response;
-mod mysql_selectors;
+pub(in crate::replay::policy) mod mysql_selectors;
 pub(super) mod mysql_values;
 use std::fs;
 use std::path::Path;

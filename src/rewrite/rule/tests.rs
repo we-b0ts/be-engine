@@ -19,9 +19,11 @@ fn response_state() -> RewriteState {
         attempt: 1,
     });
     state.rule_plan = Some(RewriteRulePlanRecord {
+        generated_witnesses: Vec::new(),
         response_jwts: Vec::new(),
         header_dates: Vec::new(),
         dynamic_value: None,
+        mysql_time: None,
         dependency_request: None,
         time: None,
         id: "plan-response".to_string(),

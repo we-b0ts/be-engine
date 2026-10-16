@@ -10,6 +10,7 @@ use std::time::Duration;
 use tempfile::tempdir;
 
 mod autocommit_tests;
+mod combined_capture_tests;
 mod continuation_tests;
 mod distinct_tests;
 mod dynamic_values_tests;

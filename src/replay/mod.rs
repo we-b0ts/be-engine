@@ -182,8 +182,9 @@ pub use policy::{
     DynamicValueType, PathSegmentCapture, PathSegmentField,
 };
 pub use policy::{
-    DynamicValueRuleFeedback, GeneratedValueRulePlan, GeneratedValueRuleReport,
-    ResponseHeaderDateRuleFeedback, plan_dynamic_value_rule, plan_response_header_date_rule,
+    DynamicValueMysqlTimeRule, DynamicValueRuleFeedback, GeneratedValueRulePlan,
+    GeneratedValueRuleReport, ResponseHeaderDateRuleFeedback, plan_dynamic_value_mysql_time_rule,
+    plan_dynamic_value_rule, plan_response_header_date_rule,
 };
 pub(crate) use redis::snapshot_overlay::inspect_case_source_snapshot_overlay;
 pub(crate) use report::aggregate::aggregate_runner_replay_report;

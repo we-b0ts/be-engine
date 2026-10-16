@@ -289,6 +289,12 @@ fn response_jwt_authoring_rejects_stale_evidence_policy_keys_and_incomplete_scop
             "scope" => feedback.api = "PUT /connector/token".into(),
             _ => unreachable!(),
         }
+        if defect == "key" {
+            GeneratedValueRulePlan::ensure_evidence_current(
+                &plan.as_ref().unwrap().evidence_witnesses(),
+            )
+            .unwrap(); // Rotating a key does not change the frozen signed files.
+        }
         assert!(plan_response_jwt_rule(feedback).is_err(), "{defect}");
         if let Some(plan) = plan {
             assert!(plan.apply().is_err(), "{defect}");

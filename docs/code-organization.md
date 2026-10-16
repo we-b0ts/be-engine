@@ -589,6 +589,14 @@ explicit repository-wide audit.
   `replay/policy/feedback/mysql_time` owns atomic policy plan/apply; its evidence
   child correlates immutable writes. Coordinator dependency rules persist the plan
   and invalidate validation without changing dependency ownership.
+  `feedback/generated_values/mysql_time` jointly proves explicitly selected
+  identity and time locations in one immutable exchange. It reuses the existing
+  identity normalization and relative-time contracts, then publishes both rules
+  through the same atomic generated-value plan transaction.
+  `rewrite/rule/generated_values` freezes the engine's file witnesses across
+  coordinator plan/apply commands. `e2e_run` supplies the active-attempt guard
+  independently of report availability; `rewrite/plan_recovery` retires legacy
+  or stale file/signature proofs and requests fresh Replay.
   `replay/mysql/time_shift` translates selected datetime result cells on delivery
   copies. `replay/policy/config/mysql_response` owns bounded result selectors;
   `matcher/mysql_response` selects rules and accounts for successful delivery.

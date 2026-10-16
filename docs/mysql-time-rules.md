@@ -130,6 +130,16 @@ The original `--value-index` plus optional `--format`
 remains supported for one scalar slot; it cannot be combined with
 `--time-value`.
 
+If the same first capture statement contains a newly generated identity and
+current timestamps, use `rule plan --dynamic-value RULE_JSON --mysql-time
+COMPANION_JSON`. The companion declares a separate rule id, explicit time
+locations and source proof; it inherits the capture's exact endpoint, database
+and SQL. Both ordinary rules are proved against the same immutable exchange and
+applied atomically before one fresh Replay. Stable fields and existing identity
+bindings remain strict. Distinct JSON Pointers in one SQL value are supported;
+overlapping ownership is rejected. See [joint identity/time
+planning](dynamic-value-rules.md#plan-a-generated-mysql-identity-with-current-time-values).
+
 For a table template, add repeatable `--table` or `--table-pattern`, or use
 `--table-prefix subtasks_ --table-start 0 --table-end 1023 --table-width 4` with
 `--sql 'UPDATE {{table}} SET updated_at=? WHERE {{table}}.id = ?'`. These bounds

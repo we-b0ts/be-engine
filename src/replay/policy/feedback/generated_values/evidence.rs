@@ -19,6 +19,7 @@ pub(super) fn dynamic(
     rule: &DynamicValueRule,
     report_path: &std::path::Path,
     policy_fingerprint: &str,
+    mysql_time: Option<&super::mysql_time::JointEvidence<'_>>,
 ) -> Result<Witnesses> {
     let mut witnesses = Vec::new();
     let report: Value = serde_json::from_slice(&read(report_path.into(), &mut witnesses)?)?;
@@ -119,7 +120,18 @@ pub(super) fn dynamic(
             let Ok(source_values) = values(sql, source["sql"].as_str(), params.as_deref()) else {
                 continue;
             };
-            if source_values.len() != actual_values.len()
+            if let Some(time) = mysql_time {
+                if !time.validate_witness(
+                    &report,
+                    case,
+                    &request,
+                    &dependencies,
+                    &source,
+                    actual,
+                )? {
+                    continue;
+                }
+            } else if source_values.len() != actual_values.len()
                 || source_values
                     .iter()
                     .zip(&actual_values)
@@ -150,7 +162,7 @@ pub(super) fn dynamic(
                     .to_owned();
                 *source_json.pointer_mut(pointer).expect("selected pointer") = Value::Null;
                 *target_json.pointer_mut(pointer).expect("selected pointer") = Value::Null;
-                if source_json != target_json {
+                if mysql_time.is_none() && source_json != target_json {
                     continue;
                 }
                 (source_value, target_value)

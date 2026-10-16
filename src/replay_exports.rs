@@ -32,8 +32,9 @@ pub use crate::replay::{
     run_replay_with_lifecycle, validate_replay_policy,
 };
 pub use crate::replay::{
-    DynamicValueRuleFeedback, GeneratedValueRulePlan, GeneratedValueRuleReport,
-    ResponseHeaderDateRuleFeedback, plan_dynamic_value_rule, plan_response_header_date_rule,
+    DynamicValueMysqlTimeRule, DynamicValueRuleFeedback, GeneratedValueRulePlan,
+    GeneratedValueRuleReport, ResponseHeaderDateRuleFeedback, plan_dynamic_value_mysql_time_rule,
+    plan_dynamic_value_rule, plan_response_header_date_rule,
 };
 
 pub use crate::replay::HttpUnorderedSelector;

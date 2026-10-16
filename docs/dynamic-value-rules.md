@@ -195,7 +195,7 @@ planner hint; source review is still required.
 backend-rewrite rule plan --evidence-id CURRENT_EVIDENCE_ID \
   --dynamic-value '{"id":"generated-name","targets":[{"host":"db.internal","port":3306},{"host":"redis.internal","port":6379}],"capture":{"protocol":"mysql","target":{"host":"db.internal","port":3306},"database":"app","sql":"SELECT id FROM items WHERE name=? AND user_id=?","value_index":0}}' \
   --source-evidence 'NameFactory:create generates a random name reused in storage and cache keys'
-backend-rewrite rule apply --plan-id RETURNED_PLAN_ID
+backend-rewrite rule apply RETURNED_PLAN_ID
 ```
 
 The coordinator supplies the active API route and wraps the entry with `kind`.
@@ -211,6 +211,45 @@ evidence's coordinator refresh command and obtain new evidence using the same
 recordings before planning. Stale evidence suppresses planner hints and reports
 both policy fingerprints; it does not indicate an unsupported capture or
 recording version. See [policy freshness](replay-policy.md#policy-freshness-before-rule-planning).
+
+## Plan a generated MySQL identity with current-time values
+
+When the first capture statement also contains generated timestamps, plan the
+identity and its time selections together. Supply both source proofs explicitly:
+
+```bash
+backend-rewrite rule plan --evidence-id CURRENT_EVIDENCE_ID \
+  --dynamic-value '{"id":"pending-item-name","targets":[{"host":"db.example.test","port":3306}],"capture":{"protocol":"mysql","target":{"host":"db.example.test","port":3306},"database":"app","sql":"INSERT INTO items(name,created_at,updated_at,owner_id) VALUES(?,?,?,?)","value_index":0},"source_evidence":"NameFactory:create generates task-pending-{uuid.uuid4().hex}"}' \
+  --mysql-time '{"id":"item-write-times","time_values":[{"value_index":1},{"value_index":2}],"source_evidence":"ItemModel:created_at and updated_at default to datetime.now()"}'
+backend-rewrite rule apply RETURNED_PLAN_ID
+```
+
+`--mysql-time` requires a MySQL `--dynamic-value` capture. Its exact endpoint,
+database and SQL template come from that capture; it cannot override them.
+The time rule uses ordinary endpoint/database/SQL scope, while the identity
+binding retains its API and case lifetime. The two rule ids must differ.
+An opaque generated name such as `task-pending-…` uses the default string
+contract; use `format: uuid_v4` only when the entire captured value is a UUID v4.
+
+The planner verifies one current-policy finalized report and one complete
+same-case source exchange against the actual unmatched request. The whole
+report may be incomplete after an engine rejection; the selected exchange and
+both captured request-time anchors must still be available. Only the declared
+identity location and time locations may differ. Stable SQL values, JSON
+members, endpoint, database and user remain checked. Existing committed identity
+bindings cannot be changed or collapsed. Each declared time must preserve its
+distance from its request anchor within the shared five-second window.
+
+Identity and time may use distinct SQL values or nonoverlapping exact JSON
+Pointers inside one value. Scalar overlap and equal/ancestor/descendant
+pointers are rejected. Existing conflicting SQL token ownership or parameter
+rules cannot be bypassed. A newly proposed identity never excuses a changed
+unselected string through substring replacement.
+
+Preview contains both ordinary policy entries. Apply checks the frozen policy
+and original evidence, writes both entries atomically, and requires one fresh
+Replay using the existing recordings. It never writes an intermediate policy
+with only one half of the contract.
 
 ## Runtime contract
 

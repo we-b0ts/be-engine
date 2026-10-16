@@ -10,8 +10,9 @@ pub use dynamic_values::{
 mod feedback;
 pub(crate) use feedback::replace_request_rule_section;
 pub use feedback::{
-    DynamicValueRuleFeedback, GeneratedValueRulePlan, GeneratedValueRuleReport,
-    ResponseHeaderDateRuleFeedback, plan_dynamic_value_rule, plan_response_header_date_rule,
+    DynamicValueMysqlTimeRule, DynamicValueRuleFeedback, GeneratedValueRulePlan,
+    GeneratedValueRuleReport, ResponseHeaderDateRuleFeedback, plan_dynamic_value_mysql_time_rule,
+    plan_dynamic_value_rule, plan_response_header_date_rule,
 };
 pub use feedback::{
     RedisCrossCaseFeedback, RedisCrossCasePlan, RedisCrossCaseReport, plan_redis_cross_case,

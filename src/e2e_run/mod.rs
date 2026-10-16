@@ -389,14 +389,7 @@ pub fn resolve_e2e_response_rule_evidence(
         &context.case_source,
         context.run_key.as_deref(),
     )?;
-    let focused_root = layout
-        .run_root
-        .join("focused")
-        .join(support::api_directory(api));
-    ensure!(
-        !focused_root.join(".active").exists() && !layout.active_dir.exists(),
-        "response-rule evidence is unavailable while an E2E attempt is active"
-    );
+    let focused_root = inactive_response_evidence_root(&layout, api)?;
     let focused_state = focused_root.join("latest/state.yaml");
     let full_state = layout.latest_dir.join("state.yaml");
     let state_path = if focused_state.is_file() {
@@ -438,6 +431,31 @@ pub fn resolve_e2e_response_rule_evidence(
         assertions: state.assertions_report,
         aggregate: state.aggregate_report,
     })
+}
+
+pub(crate) fn ensure_response_rule_evidence_inactive(
+    context: E2eRunContext,
+    api: &str,
+) -> Result<()> {
+    let (_, layout) = config::resolve_layout(
+        &context.target_root,
+        &context.case_source,
+        context.run_key.as_deref(),
+    )?;
+    inactive_response_evidence_root(&layout, api)?;
+    Ok(())
+}
+
+fn inactive_response_evidence_root(layout: &model::RunLayout, api: &str) -> Result<PathBuf> {
+    let focused_root = layout
+        .run_root
+        .join("focused")
+        .join(support::api_directory(api));
+    ensure!(
+        !focused_root.join(".active").exists() && !layout.active_dir.exists(),
+        "response-rule evidence is unavailable while an E2E attempt is active"
+    );
+    Ok(focused_root)
 }
 
 pub fn resolve_single_e2e_response_rule_evidence(
