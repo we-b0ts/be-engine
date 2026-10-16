@@ -157,7 +157,7 @@ fn mysql_capture_audit_cannot_restore_a_binding_from_another_allowed_table() {
             std::slice::from_ref(&rule),
             &report,
             "case",
-            "/items",
+            &serde_json::json!({"uri":"/items"}),
             &bytes,
             &[],
             &[],

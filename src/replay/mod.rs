@@ -160,6 +160,7 @@ pub(crate) use assertion::{
 pub(crate) use policy::ReplayEvidencePolicyFreshness;
 pub use policy::ResponseHeaderDateRule;
 pub(crate) use policy::render_validated_replay_policy;
+pub use policy::{CaseCondition, JsonCondition};
 pub use policy::{
     DocxTimestampRule, Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath,
     HttpCrossCaseFeedback, HttpCrossCasePlan, HttpCrossCaseReport, MemcachedTimestampRuleFeedback,
@@ -179,12 +180,14 @@ pub use policy::{
 };
 pub use policy::{
     DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget,
-    DynamicValueType, PathSegmentCapture, PathSegmentField,
+    DynamicValueType, PathSegmentCapture, PathSegmentField, RedisCaptureReference,
+    RedisDerivedIdentity,
 };
 pub use policy::{
-    DynamicValueMysqlTimeRule, DynamicValueRuleFeedback, GeneratedValueRulePlan,
-    GeneratedValueRuleReport, ResponseHeaderDateRuleFeedback, plan_dynamic_value_mysql_time_rule,
-    plan_dynamic_value_rule, plan_response_header_date_rule,
+    DynamicValueMysqlTimeRule, DynamicValueRedisTimeRule, DynamicValueRuleFeedback,
+    GeneratedValueRulePlan, GeneratedValueRuleReport, RedisJsonTimeValueSelector,
+    ResponseHeaderDateRuleFeedback, plan_dynamic_value_mysql_time_rule,
+    plan_dynamic_value_redis_time_rule, plan_dynamic_value_rule, plan_response_header_date_rule,
 };
 pub(crate) use redis::snapshot_overlay::inspect_case_source_snapshot_overlay;
 pub(crate) use report::aggregate::aggregate_runner_replay_report;

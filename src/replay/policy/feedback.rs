@@ -17,9 +17,10 @@ mod generated_values;
 mod model;
 mod response_body;
 pub use generated_values::{
-    DynamicValueMysqlTimeRule, DynamicValueRuleFeedback, GeneratedValueRulePlan,
-    GeneratedValueRuleReport, ResponseHeaderDateRuleFeedback, plan_dynamic_value_mysql_time_rule,
-    plan_dynamic_value_rule, plan_response_header_date_rule,
+    DynamicValueMysqlTimeRule, DynamicValueRedisTimeRule, DynamicValueRuleFeedback,
+    GeneratedValueRulePlan, GeneratedValueRuleReport, RedisJsonTimeValueSelector,
+    ResponseHeaderDateRuleFeedback, plan_dynamic_value_mysql_time_rule,
+    plan_dynamic_value_redis_time_rule, plan_dynamic_value_rule, plan_response_header_date_rule,
 };
 
 use std::collections::BTreeSet;

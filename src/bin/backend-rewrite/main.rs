@@ -539,6 +539,7 @@ async fn run(cli: Cli) -> Result<()> {
                         header_dates: args.header_dates,
                         dynamic_value: args.dynamic_value,
                         mysql_time: args.mysql_time,
+                        redis_time: args.redis_time,
                         dependency_request: args.dependency_request,
                         evidence_id: args.evidence_id,
                         body_codec: args

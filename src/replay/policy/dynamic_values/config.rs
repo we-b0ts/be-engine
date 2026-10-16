@@ -1,5 +1,6 @@
 //! One source-proven capture location and explicit endpoints for automatic references.
 pub use super::path_segment::{PathSegmentCapture, PathSegmentField};
+pub use super::redis_json::{RedisCaptureReference, RedisDerivedIdentity};
 use crate::replay::RedisValueKeySelector;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -52,6 +53,10 @@ pub enum DynamicValueCapture {
         argument_index: usize,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         json_pointer: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        references: Option<Vec<RedisCaptureReference>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        derived_from: Option<RedisDerivedIdentity>,
     },
     Http {
         target: DynamicValueTarget,
@@ -134,6 +139,8 @@ impl DynamicValueCapture {
                 key,
                 argument_index,
                 json_pointer,
+                references,
+                derived_from,
                 ..
             } => {
                 ensure!(
@@ -153,6 +160,12 @@ impl DynamicValueCapture {
                 if let Some(pointer) = json_pointer {
                     validate_pointer(pointer)?;
                 }
+                super::redis_json::validate(
+                    json_pointer.as_deref(),
+                    references.as_deref(),
+                    derived_from.as_ref(),
+                    key,
+                )?;
             }
             Self::Http {
                 method,
@@ -184,7 +197,7 @@ impl DynamicValueCapture {
     }
 }
 
-fn validate_pointer(pointer: &str) -> Result<()> {
+pub(super) fn validate_pointer(pointer: &str) -> Result<()> {
     super::super::response::validate_json_pointer(pointer)?;
     ensure!(
         !pointer.split('/').any(|part| part == "*"),
@@ -222,6 +235,8 @@ pub struct DynamicValueRule {
     pub id: String,
     #[serde(default)]
     pub api: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<super::super::case_condition::CaseCondition>,
     pub targets: Vec<DynamicValueTarget>,
     pub capture: DynamicValueCapture,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -257,6 +272,20 @@ impl DynamicValueRule {
             target.validate()?;
         }
         self.capture.validate()?;
+        if let Some(condition) = &self.when {
+            condition.validate()?;
+        }
+        ensure!(
+            self.value_type == DynamicValueType::String
+                || !matches!(
+                    &self.capture,
+                    DynamicValueCapture::Redis {
+                        references: Some(_),
+                        ..
+                    }
+                ),
+            "explicit Redis JSON references require a string identity"
+        );
         ensure!(
             self.value_type == DynamicValueType::String
                 || matches!(
@@ -314,6 +343,9 @@ pub(in crate::replay) fn validate(rules: &[DynamicValueRule]) -> Result<()> {
         rule.validate()?;
         ensure!(ids.insert(&rule.id), "duplicate dynamic value rule id");
         for other in &rules[..index] {
+            if !super::super::case_condition::overlaps(rule.when.as_ref(), other.when.as_ref()) {
+                continue;
+            }
             if let (
                 DynamicValueCapture::Mysql {
                     target: a,
@@ -365,6 +397,8 @@ pub(in crate::replay) fn validate(rules: &[DynamicValueRule]) -> Result<()> {
                     key: ak,
                     argument_index: ai,
                     json_pointer: ap,
+                    references: ar,
+                    ..
                 },
                 DynamicValueCapture::Redis {
                     target: b,
@@ -373,11 +407,19 @@ pub(in crate::replay) fn validate(rules: &[DynamicValueRule]) -> Result<()> {
                     key: bk,
                     argument_index: bi,
                     json_pointer: bp,
+                    references: br,
+                    ..
                 },
             ) = (&rule.capture, &other.capture)
             {
                 let fields_overlap = match (ap, bp) {
-                    (Some(a), Some(b)) => super::super::response_locations_overlap(a, b),
+                    (Some(a), Some(b)) => std::iter::once(a)
+                        .chain(ar.iter().flatten().map(|reference| &reference.json_pointer))
+                        .any(|left| {
+                            std::iter::once(b)
+                                .chain(br.iter().flatten().map(|reference| &reference.json_pointer))
+                                .any(|right| super::super::response_locations_overlap(left, right))
+                        }),
                     _ => true,
                 };
                 ensure!(
@@ -423,10 +465,12 @@ pub(in crate::replay) fn validate(rules: &[DynamicValueRule]) -> Result<()> {
         ensure!(
             !rules[..index]
                 .iter()
-                .any(
-                    |other| crate::path_pattern::path_patterns_overlap(&other.api, &rule.api)
-                        && other.capture == rule.capture
-                ),
+                .any(|other| super::super::case_condition::overlaps(
+                    other.when.as_ref(),
+                    rule.when.as_ref()
+                ) && crate::path_pattern::path_patterns_overlap(
+                    &other.api, &rule.api
+                ) && other.capture == rule.capture),
             "duplicate dynamic value capture location"
         );
     }

@@ -143,6 +143,7 @@ fn fixture() -> Fixture {
         header_dates: Vec::new(),
         dynamic_value: Some(rule),
         mysql_time: None,
+        redis_time: None,
         dependency_request: None,
         evidence_id: "reviewed-evidence".into(),
         jwt: None,
@@ -168,6 +169,260 @@ fn fixture() -> Fixture {
         evidence,
         case,
     }
+}
+
+fn redis_time() -> crate::DynamicValueRedisTimeRule {
+    serde_json::from_value(json!({
+        "id":"item-time", "method":"GET",
+        "time_values":[{"json_pointer":"/timestamp","format":"unix_milliseconds"}],
+        "source_evidence":"ItemFactory:create stores the current millisecond timestamp"
+    }))
+    .unwrap()
+}
+
+#[test]
+fn redis_companion_record_is_optional_and_round_trips_without_changing_legacy_records() {
+    let legacy = json!({"id":"plan","issue_id":"issue","kind":"dynamic_value",
+        "json_pointer":"","evidence_id":"evidence"});
+    let mut record: RewriteRulePlanRecord = serde_json::from_value(legacy).unwrap();
+    assert!(record.redis_time.is_none());
+    assert!(
+        serde_json::to_value(&record)
+            .unwrap()
+            .get("redis_time")
+            .is_none()
+    );
+    record.redis_time = Some(redis_time());
+    let restored: RewriteRulePlanRecord =
+        serde_json::from_value(serde_json::to_value(record).unwrap()).unwrap();
+    assert_eq!(restored.redis_time, Some(redis_time()));
+}
+
+#[test]
+fn companion_guards_reject_invalid_public_options_without_mutating_policy_or_state() {
+    for invalid in ["redis_without_identity", "both_companions"] {
+        let mut f = fixture();
+        let root = f.target.path();
+        let before = serde_json::to_value(&f.state).unwrap();
+        let policy = fs::read(root.join(".traffic-e2e/verification.yaml")).unwrap();
+        let mut options = f.options.clone();
+        options.redis_time = Some(redis_time());
+        if invalid == "redis_without_identity" {
+            options.dynamic_value = None;
+        } else {
+            options.mysql_time = Some(
+                serde_json::from_value(json!({
+                    "id":"sql-time", "time_values":[{"value_index":1}],
+                    "source_evidence":"ItemModel:created_at uses the current time"
+                }))
+                .unwrap(),
+            );
+        }
+        let error = super::super::plan(root, &mut f.state, options).unwrap_err();
+        let expected = if invalid == "redis_without_identity" {
+            "a Redis time companion requires a dynamic identity rule"
+        } else {
+            "MySQL and Redis time companions cannot be combined"
+        };
+        assert!(format!("{error:#}").contains(expected));
+        assert_eq!(serde_json::to_value(&f.state).unwrap(), before);
+        assert_eq!(
+            fs::read(root.join(".traffic-e2e/verification.yaml")).unwrap(),
+            policy
+        );
+        assert_eq!(
+            serde_json::to_value(RewriteStore::new(root).unwrap().load().unwrap().unwrap())
+                .unwrap(),
+            before
+        );
+    }
+}
+
+fn redis_fixture() -> Fixture {
+    let mut f = fixture();
+    let root = f.target.path();
+    let local = root.join(".traffic-e2e/local");
+    let encryption_key = local.join(crate::repository::LOCAL_ENCRYPTION_KEY_FROM_LOCAL);
+    fs::create_dir_all(encryption_key.parent().unwrap()).unwrap();
+    fs::write(
+        encryption_key,
+        crate::request_headers::generate_encryption_key().unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        f.case.join("request.json"),
+        json!({"method":"GET","uri":"/api",
+        "timestamp":"1970-01-01T00:16:40Z",
+        "body":{"encoding":"utf8","truncated":false,"data":"{\"mode\":\"generated\"}"}})
+        .to_string(),
+    )
+    .unwrap();
+    let arguments = |stamp| {
+        vec![
+            b"items:7".to_vec(),
+            json!({"id":format!("item-{stamp}"),
+        "timestamp":stamp,"content_key":format!("payload:7:item-{stamp}"),"stable":true})
+            .to_string()
+            .into_bytes(),
+        ]
+    };
+    let source = arguments(1_000_100);
+    let target = arguments(2_000_100);
+    let captured = |bytes: &[u8]| {
+        json!({"encoding":"utf8","truncated":false,
+        "data":String::from_utf8(bytes.to_vec()).unwrap()})
+    };
+    fs::write(f.case.join("dependencies.jsonl"), json!({"event_type":"redis_exchange",
+        "target_host":"cache.test","target_port":6379,"database":0,"command":"RPUSH",
+        "outcome":"response","replay_safe":true,"args":source.iter().map(|bytes|captured(bytes)).collect::<Vec<_>>(),
+        "response":{"encoding":"utf8","truncated":false,"data":":1\r\n"}}).to_string()).unwrap();
+    let fingerprint = |bytes: &[u8]| {
+        let hash = bytes.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+        });
+        format!("fnv1a64:{hash:016x}")
+    };
+    let source_fingerprint = fingerprint(&serde_json::to_vec(&source).unwrap());
+    let target_bytes = serde_json::to_vec(&target).unwrap();
+    let target_fingerprint = fingerprint(&target_bytes);
+    let actual_anchor = chrono::DateTime::from_timestamp(2000, 0).unwrap();
+    let metadata = serde_json::to_string(&(
+        "case-1",
+        "redis_json_request",
+        "cache.test",
+        6379,
+        "RPUSH",
+        0,
+        "",
+        &source_fingerprint,
+        &target_fingerprint,
+        actual_anchor,
+    ))
+    .unwrap();
+    let encrypted_target = crate::request_headers::encrypt_evidence(
+        &f.case,
+        &format!("dependency-request:{metadata}"),
+        &target_bytes,
+    )
+    .unwrap();
+    fs::write(&f.evidence.replay, json!({"finalized":true,
+        "replay_policy":{"fingerprint":crate::validate_replay_policy(&root.join(".traffic-e2e/verification.yaml")).unwrap().fingerprint,
+            "request_contract_candidates":[{"case_id":"case-1","capability":"redis_json_request",
+                "host":"cache.test","port":6379,"command":"RPUSH","database":0,"path":"",
+                "source_fingerprint":source_fingerprint,"target_fingerprint":target_fingerprint,
+                "actual_anchor":actual_anchor,"encrypted_target":encrypted_target}]},
+        "cases":[{"case_id":"case-1","case_dir":f.case}]}).to_string()).unwrap();
+    let rule = serde_json::from_value(json!({"id":"item-id","api":"/api",
+        "targets":[{"host":"cache.test","port":6379}],
+        "when":{"request_body_json":{"/mode":{"equals":"generated"}}},
+        "capture":{"protocol":"redis","target":{"host":"cache.test","port":6379},
+            "database":0,"command":"RPUSH","key":{"prefix":"items:","numeric":true},
+            "argument_index":1,"json_pointer":"/id",
+            "references":[{"json_pointer":"/content_key","template":"payload:{key_middle}:{value}"}],
+            "derived_from":{"json_pointer":"/timestamp","prefix":"item-"}},
+        "source_evidence":"ItemFactory:create derives an identity and its payload reference from current milliseconds"
+    })).unwrap();
+    f.options.dynamic_value = Some(rule);
+    f.options.redis_time = Some(redis_time());
+    let mut record = f.state.rule_plan.take().unwrap();
+    record.kind = "dynamic_value_redis_time".into();
+    record.dynamic_value = f.options.dynamic_value.clone();
+    record.redis_time = f.options.redis_time.clone();
+    record.generated_witnesses = build_unfrozen(root, &f.state, &record)
+        .unwrap()
+        .evidence_witnesses();
+    f.state.rule_plan = Some(record);
+    super::super::plan(root, &mut f.state, f.options.clone()).unwrap();
+    RewriteStore::new(root).unwrap().save(&f.state).unwrap();
+    f
+}
+
+#[test]
+fn redis_joint_coordinator_applies_one_frozen_plan_and_requests_fresh_replay() {
+    let f = redis_fixture();
+    let root = f.target.path();
+    let store = RewriteStore::new(root).unwrap();
+    let restored = store.load().unwrap().unwrap();
+    let record = restored.rule_plan.as_ref().unwrap();
+    assert_eq!(record.kind, "dynamic_value_redis_time");
+    assert_eq!(record.redis_time, Some(redis_time()));
+    assert!(
+        crate::rewrite::recover_rewrite_rule_plan(
+            RewriteContext {
+                target_root: root.into()
+            },
+            &record.id
+        )
+        .is_err()
+    );
+    let source = fs::read(f.case.join("dependencies.jsonl")).unwrap();
+    let result = crate::rewrite::apply_rewrite_rule(
+        RewriteContext {
+            target_root: root.into(),
+        },
+        &record.id,
+    )
+    .unwrap();
+    assert_eq!(
+        result.traffic_e2e_report["kind"],
+        "dynamic_value_redis_time"
+    );
+    assert_eq!(
+        result.traffic_e2e_report["added_rule_ids"],
+        json!(["item-id", "item-time"])
+    );
+    assert_eq!(result.traffic_e2e_report["applied"], true);
+    assert_eq!(result.traffic_e2e_report["requires_fresh_replay"], true);
+    let applied = store.load().unwrap().unwrap();
+    assert!(applied.rule_plan.is_none() && applied.rule_replay_pending && !applied.e2e_current);
+    assert_eq!(
+        serde_json::to_value(&applied.attempts).unwrap(),
+        serde_json::to_value(&f.state.attempts).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(applied.api_inventory).unwrap(),
+        serde_json::to_value(f.state.api_inventory).unwrap()
+    );
+    assert_eq!(fs::read(f.case.join("dependencies.jsonl")).unwrap(), source);
+    let policy = fs::read_to_string(root.join(".traffic-e2e/verification.yaml")).unwrap();
+    assert!(policy.contains("item-id") && policy.contains("item-time"));
+}
+
+#[test]
+fn redis_joint_stale_evidence_recovers_with_both_selectors_without_policy_changes() {
+    let f = redis_fixture();
+    let root = f.target.path();
+    let record = f.state.rule_plan.as_ref().unwrap();
+    let policy = fs::read(root.join(".traffic-e2e/verification.yaml")).unwrap();
+    fs::remove_file(f.case.join("request.json")).unwrap();
+    assert!(
+        crate::rewrite::apply_rewrite_rule(
+            RewriteContext {
+                target_root: root.into()
+            },
+            &record.id
+        )
+        .is_err()
+    );
+    let result = crate::rewrite::recover_rewrite_rule_plan(
+        RewriteContext {
+            target_root: root.into(),
+        },
+        &record.id,
+    )
+    .unwrap();
+    assert_eq!(result["status"], "fresh_replay_required");
+    assert_eq!(result["applied"], false);
+    assert_eq!(result["retired_plan"]["dynamic_value"]["id"], "item-id");
+    assert_eq!(result["retired_plan"]["redis_time"]["id"], "item-time");
+    let recovered = RewriteStore::new(root).unwrap().load().unwrap().unwrap();
+    assert!(
+        recovered.rule_plan.is_none() && recovered.rule_replay_pending && !recovered.e2e_current
+    );
+    assert_eq!(
+        fs::read(root.join(".traffic-e2e/verification.yaml")).unwrap(),
+        policy
+    );
 }
 
 #[test]

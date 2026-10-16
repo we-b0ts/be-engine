@@ -1,18 +1,22 @@
+pub(crate) mod case_condition;
 mod config;
+pub use case_condition::{CaseCondition, JsonCondition};
 mod evidence_policy;
 pub(in crate::replay) mod request_contract;
 pub(crate) use evidence_policy::ReplayEvidencePolicyFreshness;
 pub(in crate::replay) mod dynamic_values;
 pub use dynamic_values::{
     DynamicValueCapture, DynamicValueFormat, DynamicValueRule, DynamicValueTarget,
-    DynamicValueType, PathSegmentCapture, PathSegmentField,
+    DynamicValueType, PathSegmentCapture, PathSegmentField, RedisCaptureReference,
+    RedisDerivedIdentity,
 };
 mod feedback;
 pub(crate) use feedback::replace_request_rule_section;
 pub use feedback::{
-    DynamicValueMysqlTimeRule, DynamicValueRuleFeedback, GeneratedValueRulePlan,
-    GeneratedValueRuleReport, ResponseHeaderDateRuleFeedback, plan_dynamic_value_mysql_time_rule,
-    plan_dynamic_value_rule, plan_response_header_date_rule,
+    DynamicValueMysqlTimeRule, DynamicValueRedisTimeRule, DynamicValueRuleFeedback,
+    GeneratedValueRulePlan, GeneratedValueRuleReport, RedisJsonTimeValueSelector,
+    ResponseHeaderDateRuleFeedback, plan_dynamic_value_mysql_time_rule,
+    plan_dynamic_value_redis_time_rule, plan_dynamic_value_rule, plan_response_header_date_rule,
 };
 pub use feedback::{
     RedisCrossCaseFeedback, RedisCrossCasePlan, RedisCrossCaseReport, plan_redis_cross_case,

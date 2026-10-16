@@ -26,6 +26,7 @@ use crate::replay::{
 struct CaseIdentity {
     method: Option<String>,
     path: Option<String>,
+    conditions: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -89,7 +90,7 @@ pub(in crate::replay) struct MemcachedPolicyContext<'a> {
 }
 
 #[derive(Debug, Deserialize)]
-// Replay policy only needs the route identity from the evolving request artifact.
+// Replay policy retains route identity and projects explicit Source body conditions.
 // All other canonical and future request.json fields are intentionally ignored.
 struct RecordedCaseRequest {
     method: String,
@@ -138,6 +139,43 @@ impl ReplayPolicyRuntime {
                 load_case_identity(&case.dir, &request_path)?,
             );
         }
+        let mut dynamic_values = super::dynamic_values::DynamicValues::new(
+            loaded.document.dynamic_values.clone(),
+            case_identities
+                .iter()
+                .filter_map(|(id, case)| case.path.as_ref().map(|path| (id.clone(), path.clone())))
+                .collect(),
+        );
+        if loaded
+            .document
+            .dynamic_values
+            .iter()
+            .any(|rule| rule.when.is_some())
+            || loaded
+                .document
+                .dependency_rules
+                .iter()
+                .any(|rule| rule.when.is_some())
+        {
+            for case in cases
+                .values()
+                .filter(|case| case.dir.join("request.json").is_file())
+            {
+                let request: Value =
+                    serde_json::from_slice(&fs::read(case.dir.join("request.json"))?)?;
+                dynamic_values.set_request(&case.id, &request);
+                if let Some(identity) = case_identities.get_mut(&case.id) {
+                    identity.conditions = super::case_condition::matching_rule_ids(
+                        &request,
+                        loaded.document.dependency_rules.iter().filter_map(|rule| {
+                            rule.when
+                                .as_ref()
+                                .map(|condition| (rule.id.as_str(), condition))
+                        }),
+                    );
+                }
+            }
+        }
         let usage = loaded
             .document
             .dependency_rules
@@ -153,15 +191,7 @@ impl ReplayPolicyRuntime {
                 path,
                 cases,
             )?,
-            dynamic_values: super::dynamic_values::DynamicValues::new(
-                loaded.document.dynamic_values.clone(),
-                case_identities
-                    .iter()
-                    .filter_map(|(id, case)| {
-                        case.path.as_ref().map(|path| (id.clone(), path.clone()))
-                    })
-                    .collect(),
-            ),
+            dynamic_values,
             loaded,
             cases: case_identities,
             applicable_dependency_rule_ids: BTreeSet::new(),
@@ -709,6 +739,9 @@ fn exact_memcached_value(
 }
 
 fn rule_matches_case(rule: &ReplayDependencyRule, case: &CaseIdentity) -> bool {
+    if rule.when.is_some() && !case.conditions.contains(&rule.id) {
+        return false;
+    }
     let Some(selector) = rule.case_selector.as_ref() else {
         return true;
     };
@@ -761,6 +794,7 @@ fn load_case_identity(case_dir: &Path, request_path: &Path) -> Result<CaseIdenti
     Ok(CaseIdentity {
         method: Some(request.method),
         path: Some(path),
+        conditions: BTreeSet::new(),
     })
 }
 

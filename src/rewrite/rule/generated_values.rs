@@ -2,15 +2,32 @@
 use super::*;
 use crate::{DynamicValueRuleFeedback, GeneratedValueRulePlan, ResponseHeaderDateRuleFeedback};
 
+fn validate_companions(dynamic: bool, mysql: bool, redis: bool) -> Result<()> {
+    ensure!(
+        !mysql || dynamic,
+        "a MySQL time companion requires a dynamic identity rule"
+    );
+    ensure!(
+        !redis || dynamic,
+        "a Redis time companion requires a dynamic identity rule"
+    );
+    ensure!(
+        !(mysql && redis),
+        "MySQL and Redis time companions cannot be combined"
+    );
+    Ok(())
+}
+
 pub(super) fn plan(
     target_root: &Path,
     state: &mut RewriteState,
     mut options: RewriteRulePlanOptions,
 ) -> Result<RewriteRuleReport> {
-    ensure!(
-        options.mysql_time.is_none() || options.dynamic_value.is_some(),
-        "a MySQL time companion requires a dynamic identity rule"
-    );
+    validate_companions(
+        options.dynamic_value.is_some(),
+        options.mysql_time.is_some(),
+        options.redis_time.is_some(),
+    )?;
     ensure!(
         options.jwt.is_none()
             && options.body_codec == ResponseBodyCodec::Json
@@ -80,6 +97,8 @@ pub(super) fn plan(
         "response_jwt"
     } else if options.mysql_time.is_some() {
         "dynamic_value_mysql_time"
+    } else if options.redis_time.is_some() {
+        "dynamic_value_redis_time"
     } else if options.dynamic_value.is_some() {
         "dynamic_value"
     } else if options.dependency_request.is_some() {
@@ -90,6 +109,7 @@ pub(super) fn plan(
     let selection = serde_json::to_string(&(
         options.dynamic_value.as_ref(),
         options.mysql_time.as_ref(),
+        options.redis_time.as_ref(),
         &options.header_dates,
         &options.dependency_request,
         &options.response_jwts,
@@ -120,6 +140,7 @@ pub(super) fn plan(
         evidence_id: options.evidence_id,
         dynamic_value: options.dynamic_value,
         mysql_time: options.mysql_time,
+        redis_time: options.redis_time,
         dependency_request: options.dependency_request,
         header_dates: options.header_dates,
         response_jwts: options.response_jwts,
@@ -178,6 +199,11 @@ fn build_unfrozen(
     state: &RewriteState,
     record: &RewriteRulePlanRecord,
 ) -> Result<GeneratedValueRulePlan> {
+    validate_companions(
+        record.dynamic_value.is_some(),
+        record.mysql_time.is_some(),
+        record.redis_time.is_some(),
+    )?;
     let policy_path = target_root.join(".traffic-e2e/verification.yaml");
     let evidence = {
         let evidence = resolve_e2e_response_rule_evidence(
@@ -207,9 +233,12 @@ fn build_unfrozen(
                 rule: rule.clone(),
                 replay_report: evidence.replay,
             };
-            return match &record.mysql_time {
-                Some(time) => crate::plan_dynamic_value_mysql_time_rule(feedback, time.clone()),
-                None => crate::plan_dynamic_value_rule(feedback),
+            return if let Some(time) = &record.redis_time {
+                crate::plan_dynamic_value_redis_time_rule(feedback, time.clone())
+            } else if let Some(time) = &record.mysql_time {
+                crate::plan_dynamic_value_mysql_time_rule(feedback, time.clone())
+            } else {
+                crate::plan_dynamic_value_rule(feedback)
             };
         }
         ResponseBodyRuleEvidence::FocusedE2e {

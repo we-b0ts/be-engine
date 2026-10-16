@@ -1,4 +1,5 @@
 //! Public Replay, assertion and verification-policy surface.
+pub use crate::replay::{CaseCondition, JsonCondition};
 pub use crate::replay::{
     DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS, DocxBodyDifference,
     DocxBodyDifferenceKind, DocxTimestampRule, DynamicValueCapture, DynamicValueFormat,
@@ -12,10 +13,11 @@ pub use crate::replay::{
     PathSegmentField, ProtobufBodyDifference, ProtobufBodyDifferenceKind, ProtobufFieldPath,
     ProtobufFieldPathCandidate, ProtobufJoinedStringCandidate, ProtobufJoinedStringFieldType,
     ProtobufJoinedStringPath, ProtobufRepeatedElementType, ProtobufUnorderedPath,
-    RedisCrossCaseFeedback, RedisCrossCasePlan, RedisCrossCaseReport, ReplayAggregateOptions,
-    ReplayAggregateReport, ReplayAllowedUnusedHttpConfig, ReplayConfig, ReplayControlConfig,
-    ReplayDependencyLoading, ReplayEgressCounterReader, ReplayEgressCounterSnapshot,
-    ReplayEgressRejections, ReplayLifecycleConfig, ReplayPolicyInitOptions, ReplayPolicyInitResult,
+    RedisCaptureReference, RedisCrossCaseFeedback, RedisCrossCasePlan, RedisCrossCaseReport,
+    RedisDerivedIdentity, ReplayAggregateOptions, ReplayAggregateReport,
+    ReplayAllowedUnusedHttpConfig, ReplayConfig, ReplayControlConfig, ReplayDependencyLoading,
+    ReplayEgressCounterReader, ReplayEgressCounterSnapshot, ReplayEgressRejections,
+    ReplayLifecycleConfig, ReplayPolicyInitOptions, ReplayPolicyInitResult,
     ReplayPolicyValidationReport, ResponseAssertionOptions, ResponseBodyAssertionReport,
     ResponseBodyCodec, ResponseBodyDifferenceDetail, ResponseBodyJoinedStringCandidate,
     ResponseBodyJoinedStringPath, ResponseBodyRuleEvidence, ResponseBodyRuleEvidenceKind,
@@ -32,9 +34,10 @@ pub use crate::replay::{
     run_replay_with_lifecycle, validate_replay_policy,
 };
 pub use crate::replay::{
-    DynamicValueMysqlTimeRule, DynamicValueRuleFeedback, GeneratedValueRulePlan,
-    GeneratedValueRuleReport, ResponseHeaderDateRuleFeedback, plan_dynamic_value_mysql_time_rule,
-    plan_dynamic_value_rule, plan_response_header_date_rule,
+    DynamicValueMysqlTimeRule, DynamicValueRedisTimeRule, DynamicValueRuleFeedback,
+    GeneratedValueRulePlan, GeneratedValueRuleReport, RedisJsonTimeValueSelector,
+    ResponseHeaderDateRuleFeedback, plan_dynamic_value_mysql_time_rule,
+    plan_dynamic_value_redis_time_rule, plan_dynamic_value_rule, plan_response_header_date_rule,
 };
 
 pub use crate::replay::HttpUnorderedSelector;

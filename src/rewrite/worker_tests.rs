@@ -105,6 +105,7 @@ fn diagnostic_entrypoints_require_worker_confirmation_without_mutating_state() {
                 header_dates: Vec::new(),
                 dynamic_value: None,
                 mysql_time: None,
+                redis_time: None,
                 dependency_request: None,
                 time: None,
                 jwt: None,

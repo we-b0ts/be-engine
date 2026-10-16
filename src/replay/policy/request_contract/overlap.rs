@@ -17,7 +17,8 @@ pub(in crate::replay::policy) fn validate(
             .enumerate()
             .filter(|(i, _)| *i != index)
         {
-            if rule.protocol != other.protocol
+            if !super::super::case_condition::overlaps(rule.when.as_ref(), other.when.as_ref())
+                || rule.protocol != other.protocol
                 || rule
                     .target
                     .host
@@ -66,6 +67,9 @@ pub(in crate::replay::policy) fn validate(
             );
         }
         for dynamic in &document.dynamic_values {
+            if !super::super::case_condition::overlaps(rule.when.as_ref(), dynamic.when.as_ref()) {
+                continue;
+            }
             if rule.case_selector.as_ref().is_some_and(|case| {
                 !crate::path_pattern::path_patterns_overlap(&case.path, &dynamic.api)
             }) {
@@ -82,6 +86,8 @@ pub(in crate::replay::policy) fn validate(
                         key,
                         argument_index,
                         json_pointer,
+                        references,
+                        ..
                     },
                 ) => {
                     rule.target
@@ -98,11 +104,20 @@ pub(in crate::replay::policy) fn validate(
                                 c.argument_values.get(argument_index).is_some_and(|field| {
                                     match (field, json_pointer) {
                                         (config::ArgumentRule::Json(json), Some(pointer)) => {
-                                            json.json.keys().any(|other| {
-                                                super::super::response_locations_overlap(
-                                                    pointer, other,
+                                            std::iter::once(pointer)
+                                                .chain(
+                                                    references
+                                                        .iter()
+                                                        .flatten()
+                                                        .map(|reference| &reference.json_pointer),
                                                 )
-                                            })
+                                                .any(|selected| {
+                                                    json.json.keys().any(|other| {
+                                                        super::super::response_locations_overlap(
+                                                            selected, other,
+                                                        )
+                                                    })
+                                                })
                                         }
                                         _ => true,
                                     }

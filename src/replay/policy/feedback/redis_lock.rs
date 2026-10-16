@@ -81,6 +81,7 @@ pub fn plan_redis_lock(feedback: RedisLockFeedback) -> Result<RedisLockPlan> {
         id: feedback.rule_id.clone(),
         replay_scope: ReplayScope::Case,
         source_evidence: String::new(),
+        when: None,
         case_selector: None,
         protocol: DependencyProtocol::Redis,
         target: TargetSelector {

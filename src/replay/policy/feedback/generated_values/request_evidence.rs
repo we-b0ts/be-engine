@@ -42,10 +42,15 @@ pub(super) fn validate(
         );
         let request: Value =
             serde_json::from_slice(&read(root.join("request.json"), &mut witnesses)?)?;
-        if !path_pattern_matches(
-            &rule.api,
-            &uri_path(request["uri"].as_str().unwrap_or_default()),
-        ) {
+        if rule
+            .when
+            .as_ref()
+            .is_some_and(|condition| !condition.matches_request(&request))
+            || !path_pattern_matches(
+                &rule.api,
+                &uri_path(request["uri"].as_str().unwrap_or_default()),
+            )
+        {
             continue;
         }
         let bytes = read(root.join("dependencies.jsonl"), &mut witnesses)?;
@@ -143,6 +148,7 @@ fn selected(rule: &DynamicValueCapture, candidate: &DynamicValueCapture) -> bool
                 key,
                 argument_index,
                 json_pointer,
+                ..
             },
             DynamicValueCapture::Redis {
                 target: other,
@@ -151,6 +157,7 @@ fn selected(rule: &DynamicValueCapture, candidate: &DynamicValueCapture) -> bool
                 key: crate::replay::RedisValueKeySelector::Exact { value },
                 argument_index: other_index,
                 json_pointer: other_pointer,
+                ..
             },
         ) => {
             target == other

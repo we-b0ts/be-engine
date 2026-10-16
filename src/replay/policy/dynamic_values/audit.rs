@@ -28,11 +28,11 @@ impl DynamicValues {
             if event["global_dependency_reason"].is_string() {
                 continue;
             }
-            for rule in self.rules.iter().filter(|rule| {
-                self.routes.get(case).is_some_and(|path| {
-                    super::super::pattern::path_pattern_matches(&rule.api, path)
-                })
-            }) {
+            for rule in self
+                .rules
+                .iter()
+                .filter(|rule| self.matches_case(rule, case))
+            {
                 let applicable = match &rule.capture {
                     DynamicValueCapture::Mysql {
                         target,
@@ -154,15 +154,14 @@ pub(in crate::replay) fn from_report(
     rules: &[DynamicValueRule],
     report: &Value,
     case_id: &str,
-    path: &str,
+    request: &Value,
     dependencies: &[u8],
     source_values: &[crate::mysql::sql::Token],
     actual_values: &[crate::mysql::sql::Token],
 ) -> Result<DynamicValues> {
-    let runtime = DynamicValues::new(
-        rules.to_vec(),
-        BTreeMap::from([(case_id.into(), path.into())]),
-    );
+    let path = super::super::pattern::uri_path(request["uri"].as_str().unwrap_or_default());
+    let mut runtime = DynamicValues::new(rules.to_vec(), BTreeMap::from([(case_id.into(), path)]));
+    runtime.set_request(case_id, request);
     if rules.is_empty() {
         return Ok(runtime);
     }
@@ -182,7 +181,7 @@ pub(in crate::replay) fn from_report(
             .find(|rule| proof["rule_id"] == rule.id)
             .ok_or_else(|| anyhow::anyhow!("Replay references an unknown dynamic rule"))?;
         ensure!(
-            super::super::pattern::path_pattern_matches(&rule.api, path),
+            runtime.matches_case(rule, case_id),
             "dynamic proof is outside the API scope"
         );
         let DynamicValueCapture::Mysql {

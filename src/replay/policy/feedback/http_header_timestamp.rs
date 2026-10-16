@@ -109,6 +109,7 @@ pub fn plan_http_header_timestamp(
             id: feedback.rule_id.clone(),
             replay_scope: ReplayScope::Case,
             source_evidence: String::new(),
+            when: None,
             case_selector: None,
             protocol: DependencyProtocol::Http,
             target: TargetSelector {

@@ -5,6 +5,40 @@ recorded responses. All entries below belong in version 3 `dependency_rules`.
 Normal protocol rules use `case: {method, path}` for the inbound HTTP API;
 `dynamic_value` retains its existing route-only `api` selector.
 
+## Source request conditions
+
+Both rule families accept an optional top-level `when` to select the Source
+branch that generates a dependency value. For example, initialization can select
+`/event_type: {equals: session.created}` while a separate update rule selects
+`/event_type: {not_equals: session.created}`:
+
+```yaml
+when:
+  request_body_json:
+    /event_type: {equals: session.created}
+```
+
+Use the field that the Source handler actually dispatches on. The conditions
+read immutable recorded inbound `request.json` body captures, in UTF-8 or
+base64 encoding. They do not inspect Target output or grant sharing. Existing
+API, endpoint, database, key, ordering and finite-consumption checks still apply.
+
+Declare 1–16 exact, non-root JSON Pointers, with one `equals` or `not_equals`
+operator per pointer. Conditions are ANDed. Expected values must be non-null
+strings, numbers or booleans; strings are limited to 1024 bytes. Operators retain
+JSON scalar types, with no string/number/boolean coercion. A missing pointer,
+null, object, array, type mismatch, invalid capture encoding, decoding error,
+duplicate JSON member, truncated body or JSON body larger than 1 MiB matches
+neither operator. In particular, `not_equals` does not turn missing evidence
+into permission to normalize. Omitting `when` retains the existing API scope.
+
+Ownership checks can prove two scopes disjoint from differing `equals` values
+at the same pointer, or `equals` and `not_equals` of the same value. Different
+pointers or two `not_equals` conditions remain conservatively overlapping.
+When initialization regenerates a timestamp but later updates preserve it,
+partition the rules explicitly; adding the field to a broader update rule would
+also normalize values that Source preserves.
+
 ## Integer JSON-RPC correlation ID
 
 ```yaml

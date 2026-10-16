@@ -128,6 +128,7 @@ pub(super) fn plan(
         header_dates: Vec::new(),
         dynamic_value: None,
         mysql_time: None,
+        redis_time: None,
         dependency_request: None,
         time: None,
         id: format!(
