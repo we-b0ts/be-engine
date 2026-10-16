@@ -488,14 +488,21 @@ mod tests {
         let root = repository.path();
         fs::create_dir_all(root.join(".traffic-e2e")).unwrap();
         fs::write(root.join("lib.rs"), "pub fn value() {}\n").unwrap();
-        fs::write(
-            root.join(".traffic-e2e/project.yaml"),
-            format!("project:\n  policy: {policy_name}\n"),
-        )
-        .unwrap();
+        crate::rewrite::test_support::install_project_config(
+            root,
+            "integration",
+            crate::rewrite::test_support::managed_test_recorder(),
+            None,
+        );
+        let project = root.join(".traffic-e2e/project.yaml");
+        let mut document: serde_yaml::Value =
+            serde_yaml::from_str(&fs::read_to_string(&project).unwrap()).unwrap();
+        document["project"]["policy"] = serde_yaml::Value::String(policy_name.into());
+        fs::write(&project, serde_yaml::to_string(&document).unwrap()).unwrap();
+        fs::remove_file(root.join(".traffic-e2e/policy.yaml")).unwrap();
         let policy = root.join(policy_name);
         fs::create_dir_all(policy.parent().unwrap()).unwrap();
-        git_ok(root, &["init", "-q"]);
+        git_ok(root, &["init", "-q", "-b", "integration"]);
         git_ok(root, &["config", "user.email", "test@example.com"]);
         git_ok(root, &["config", "user.name", "Test"]);
         git_ok(root, &["add", "."]);

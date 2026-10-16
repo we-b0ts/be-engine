@@ -163,8 +163,8 @@ pub(super) fn convert(
                         nonces: rule
                             .dynamic_claims
                             .iter()
-                            .map(|claim| proven(nonce(claim), &rule.source_evidence))
-                            .collect(),
+                            .map(|claim| Ok(proven(nonce(claim)?, &rule.source_evidence)))
+                            .collect::<Result<_>>()?,
                         url_query_param: rule.url_query_param.clone(),
                         expires_at: rule.expires_at.clone(),
                         expires_at_format: format(rule.expires_at_format),
@@ -331,9 +331,10 @@ pub(super) fn format(value: r::ResponseTimestampFormat) -> p::TimestampFormat {
         r::ResponseTimestampFormat::AmzDate => p::TimestampFormat::AmzDate,
     }
 }
-pub(super) fn nonce(value: &crate::request_rules::JwtDynamicClaim) -> n::NonceClaim {
+pub(super) fn nonce(value: &crate::request_rules::JwtDynamicClaim) -> Result<n::NonceClaim> {
     use crate::request_rules::{JwtDynamicClaim as D, JwtNonceFormat as F};
-    match value {
+    value.validate()?;
+    Ok(match value {
         D::Legacy(pointer) => n::NonceClaim {
             pointer: pointer.clone(),
             format: n::NonceFormat::UuidV4,
@@ -347,7 +348,7 @@ pub(super) fn nonce(value: &crate::request_rules::JwtDynamicClaim) -> n::NonceCl
                 },
             },
         },
-    }
+    })
 }
 pub(super) fn protobuf(value: r::ProtobufRepeatedElementType) -> n::ProtobufElement {
     use r::ProtobufRepeatedElementType as P;

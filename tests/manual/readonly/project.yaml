@@ -5,19 +5,17 @@ project:
   target:
     dockerfile: .traffic-e2e/Dockerfile.target
     startup: {}
+  policy: tests/manual/readonly/policy.yaml
   replay:
-    policy: config/verification.example.yaml
     case_dependency_post_response_window_ms: 10
-  recording:
-    source_traffic_policy: source-traffic-policy.yaml
   delivery:
     pr_base: dev-migration
   state:
     runtime_root: local/runtime
 recorder:
   # Static recorder example. Project initialization embeds these settings under
-  # `recorder` in `.traffic-e2e/project.yaml`. Coordinator-managed source-traffic
-  # policy values belong exclusively in `.traffic-e2e/source-traffic-policy.yaml`.
+  # `recorder` in `.traffic-e2e/project.yaml`. All semantic rules belong in
+  # the Target-root-relative `project.policy` document.
   artifacts: null
   dns_mock:
     enabled: false

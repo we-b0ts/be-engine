@@ -1,12 +1,12 @@
 use super::super::tests::{send_request, spawn_http_replay_with_policy, write_http_case};
 use super::*;
+use crate::replay::policy::test_fixture::ManagedFixtureDirectory as TempDir;
 use crate::{HttpUnorderedFeedback, plan_http_unordered};
 use serde_json::json;
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-use tempfile::TempDir;
 
 const HOST: &str = "erp.example.test";
 const URI: &str = "/membership?scope=one&scope=two";
@@ -14,7 +14,7 @@ const SOURCE: &str = r#"{"ssn":"private-identity","department_ids":["B","A","A"]
 const TARGET: &str = r#"{"ssn":"private-identity","department_ids":["A","B","A"],"ordered":[1,2]}"#;
 
 async fn fixture() -> (TempDir, PathBuf, PathBuf) {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
     fs::write(
         temp.path().join("recording-run.json"),
         r#"{"status":"completed","run_id":"one"}"#,
@@ -94,17 +94,19 @@ async fn real_http_discovery_plan_apply_and_finite_replay() {
     for secret in ["private-identity", "recorded-members", "scope=one"] {
         assert!(!evidence.to_string().contains(secret));
     }
-    let plan = plan_http_unordered(feedback(&case, &policy, &report)).unwrap();
-    assert!(plan.report().requires_replay);
-    assert!(plan.report().changed);
-    assert!(plan.report().diff.contains("unordered:"));
-    plan.apply().unwrap();
+    let error = plan_http_unordered(feedback(&case, &policy, &report))
+        .err()
+        .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("legacy rule authoring is retired")
+    );
+    crate::replay::policy::test_fixture::install_http_unordered(feedback(&case, &policy, &report))
+        .unwrap();
     let text = fs::read_to_string(&policy).unwrap();
-    assert!(text.contains("response_rules: {json: {}}"));
+    assert!(text.contains("format: traffic-policy/v1"));
     assert!(!text.contains("query:"));
-    let plan = plan_http_unordered(feedback(&case, &policy, &report)).unwrap();
-    assert!(plan.report().reused_existing);
-    assert!(!plan.report().changed);
     let (addr, runtime, task) =
         spawn_http_replay_with_policy(&case, vec![], Some(policy), None).await;
     let response = call(addr, URI, TARGET).await;
@@ -139,9 +141,7 @@ async fn unordered_keeps_query_presence_multiplicity_other_fields_and_array_cont
     let (temp, case, policy) = fixture().await;
     let report = temp.path().join("failed.json");
     failure_report(&case, &report).await;
-    plan_http_unordered(feedback(&case, &policy, &report))
-        .unwrap()
-        .apply()
+    crate::replay::policy::test_fixture::install_http_unordered(feedback(&case, &policy, &report))
         .unwrap();
     let (addr, runtime, task) =
         spawn_http_replay_with_policy(&case, vec!["scope".into()], Some(policy), None).await;
@@ -191,27 +191,16 @@ async fn stale_report_source_policy_and_missing_source_proof_cannot_apply() {
     let mut no_proof = feedback(&case, &policy, &report);
     no_proof.source_evidence.clear();
     assert!(plan_http_unordered(no_proof).is_err());
-    let plan = plan_http_unordered(feedback(&case, &policy, &report)).unwrap();
-    let original = fs::read_to_string(&report).unwrap();
-    fs::write(&report, format!("{original}\n")).unwrap();
-    assert!(plan.apply().is_err());
-    fs::write(&report, &original).unwrap();
-    let plan = plan_http_unordered(feedback(&case, &policy, &report)).unwrap();
-    let old_policy = fs::read_to_string(&policy).unwrap();
-    fs::write(&policy, format!("{old_policy}\n")).unwrap();
-    assert!(plan.apply().is_err());
-    fs::write(&policy, &old_policy).unwrap();
-    let plan = plan_http_unordered(feedback(&case, &policy, &report)).unwrap();
-    let dependency = case.join("dependencies.jsonl");
-    fs::write(
-        &dependency,
-        fs::read_to_string(&dependency).unwrap().replace(
-            &STANDARD.encode("recorded-members"),
-            &STANDARD.encode("changed-response"),
-        ),
-    )
-    .unwrap();
-    assert!(plan.apply().is_err());
+    let original = fs::read(&policy).unwrap();
+    let error = plan_http_unordered(feedback(&case, &policy, &report))
+        .err()
+        .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("legacy rule authoring is retired")
+    );
+    assert_eq!(fs::read(&policy).unwrap(), original);
     fs::write(
         &report,
         r#"{"finalized":true,"unmatched_http_requests":[{}]}"#,
@@ -284,14 +273,12 @@ async fn endpoint_and_schema_validation_reject_unreviewed_rule_expansion() {
         }
         assert!(plan_http_unordered(request).is_err(), "{field}");
     }
-    plan_http_unordered(feedback(&case, &policy, &report))
-        .unwrap()
-        .apply()
+    crate::replay::policy::test_fixture::install_http_unordered(feedback(&case, &policy, &report))
         .unwrap();
     let original = fs::read_to_string(&policy).unwrap();
     for invalid in [
-        original.replace("version: 3", "version: 2"),
-        original.replace("pointer: /department_ids", "pointer: /bad~escape"),
+        original.replace("traffic-policy/v1", "traffic-policy/v2"),
+        original.replace("/department_ids:", "/bad~escape:"),
         original.replace("path: /membership", "path: /membership*"),
         original.replace(
             "path: /membership",
@@ -302,12 +289,9 @@ async fn endpoint_and_schema_validation_reject_unreviewed_rule_expansion() {
         assert!(crate::validate_replay_policy(&policy).is_err());
     }
     let mut loaded: Value = serde_yaml::from_str(&original).unwrap();
-    let mut duplicate = loaded["dependency_rules"][0].clone();
+    let mut duplicate = loaded["rules"][0].clone();
     duplicate["id"] = json!("overlapping-rule");
-    loaded["dependency_rules"]
-        .as_array_mut()
-        .unwrap()
-        .push(duplicate);
+    loaded["rules"].as_array_mut().unwrap().push(duplicate);
     fs::write(&policy, serde_yaml::to_string(&loaded).unwrap()).unwrap();
     assert!(crate::validate_replay_policy(&policy).is_err());
 }
@@ -333,12 +317,7 @@ async fn a_rule_can_be_planned_for_one_path_while_another_unordered_path_still_b
     drop(state);
     task.abort();
     let request = feedback(&case, &policy, &report);
-    let plan = plan_http_unordered(request.clone()).unwrap();
-    assert_eq!(
-        plan.report().candidates["candidates"][0]["remaining_unordered_pointers"],
-        json!(["/ordered"])
-    );
-    plan.apply().unwrap();
+    crate::replay::policy::test_fixture::install_http_unordered(request.clone()).unwrap();
     let (addr, _, task) =
         spawn_http_replay_with_policy(&case, vec![], Some(policy.clone()), None).await;
     assert_eq!(
@@ -349,7 +328,7 @@ async fn a_rule_can_be_planned_for_one_path_while_another_unordered_path_still_b
     let mut second = request;
     second.rule_id = "second-field".into();
     second.selector.pointer = "/ordered".into();
-    plan_http_unordered(second).unwrap().apply().unwrap();
+    crate::replay::policy::test_fixture::install_http_unordered(second).unwrap();
     let (addr, _, task) = spawn_http_replay_with_policy(&case, vec![], Some(policy), None).await;
     assert_eq!(call(addr, URI, &target).await.status(), StatusCode::OK);
     task.abort();

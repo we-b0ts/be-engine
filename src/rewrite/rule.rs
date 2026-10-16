@@ -68,6 +68,7 @@ pub(super) fn plan(
     state: &mut RewriteState,
     options: RewriteRulePlanOptions,
 ) -> Result<RewriteRuleReport> {
+    crate::policy::retired_authoring()?;
     if !options.response_jwts.is_empty()
         || !options.header_dates.is_empty()
         || options.dynamic_value.is_some()
@@ -433,56 +434,6 @@ fn has_generated_rule(record: &RewriteRulePlanRecord) -> bool {
         || record.mysql_time.is_some()
         || record.redis_time.is_some()
         || !record.header_dates.is_empty()
-}
-
-pub(super) fn generated_evidence_stale(
-    root: &Path,
-    state: &RewriteState,
-    record: &RewriteRulePlanRecord,
-) -> bool {
-    if let Some(unified) = &record.unified {
-        return super::unified_rule::stale(root, state, unified);
-    }
-    if !has_generated_rule(record) && record.time.is_none() {
-        return false;
-    }
-    if crate::GeneratedValueRulePlan::ensure_evidence_current(&record.generated_witnesses).is_err()
-    {
-        return true;
-    }
-    // Signed families must still verify the immutable original tokens with the
-    // current startup key. A rotated key cannot leave an unappliable plan stuck.
-    (!record.response_jwts.is_empty()
-        || record
-            .dependency_request
-            .as_ref()
-            .is_some_and(declares_signing_key))
-        && generated_values::build(root, state, record).is_err()
-}
-
-#[cfg(test)]
-pub(super) fn response_jwt_plan_fixture() -> (
-    tempfile::TempDir,
-    RewriteState,
-    crate::E2eResponseRuleEvidence,
-) {
-    let mut fixture = generated_values::tests::jwt_fixture();
-    fixture.state.rule_plan.as_mut().unwrap().id = "plan".into();
-    super::store::RewriteStore::new(fixture.target.path())
-        .unwrap()
-        .save(&fixture.state)
-        .unwrap();
-    (fixture.target, fixture.state, fixture.evidence)
-}
-
-fn declares_signing_key(value: &Value) -> bool {
-    match value {
-        Value::Object(fields) => {
-            fields.contains_key("signing_key_source") || fields.values().any(declares_signing_key)
-        }
-        Value::Array(values) => values.iter().any(declares_signing_key),
-        _ => false,
-    }
 }
 
 fn validate_response_body_plan_evidence(

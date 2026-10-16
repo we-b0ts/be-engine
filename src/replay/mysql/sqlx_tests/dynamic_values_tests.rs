@@ -44,9 +44,9 @@ async fn capture_then_sql_json_and_redis_key_preserve_fixed_values_times_and_con
         let (temp,_,runtime,task) = fixture_with_policy(&records,Some(POLICY)).await;
         task.abort();
         let (addr,mysql_task) = endpoint_listener(runtime.clone(),false).await;
-        let dependencies = temp.path().join("case-id/dependencies.jsonl");
+        let dependencies = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
         let immutable = std::fs::read(&dependencies).unwrap();
-        let mut client = connect(addr,&temp.path().join("case-id/.replay/ca.pem")).await;
+        let mut client = connect(addr,&temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let count = sqlx::query("SELECT count(*) FROM kinds WHERE name=?").bind("new-name").fetch_one(&mut client).await.unwrap();
         assert_eq!(count.get::<i64,_>(0),0);
         let insert = "INSERT INTO kinds(name,json,created_at) VALUES(?,?,?)";
@@ -128,7 +128,7 @@ async fn sql_time_planner_uses_only_committed_same_case_identity_proofs() {
         insert["parse_warnings"] = json!([]);
         let policy = POLICY.split("  - id: created-at").next().unwrap().to_owned();
         let (temp,addr,runtime,task) = fixture_with_policy(&[capture,insert],Some(&policy)).await;
-        let mut client = connect(addr,&temp.path().join("case-id/.replay/ca.pem")).await;
+        let mut client = connect(addr,&temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         sqlx::query("SELECT count(*) FROM kinds WHERE name=?").bind("new-name").fetch_one(&mut client).await.unwrap();
         assert!(sqlx::query("INSERT INTO kinds(name,json,created_at) VALUES(?,?,?)").bind("new-name").bind(r#"{"stable":1,"name":"new-name"}"#).bind(chrono::Utc::now().naive_utc()).execute(&mut client).await.is_err());
         client.close().await.unwrap();

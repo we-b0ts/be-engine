@@ -1,89 +1,27 @@
 use super::*;
-
 fn table_fixture() -> (
-    tempfile::TempDir,
+    RetiredFixture,
     DynamicValueRuleFeedback,
     DynamicValueMysqlTimeRule,
 ) {
-    let (temp, mut feedback, time) = fixture();
+    let (fixture, mut feedback, time) = fixture();
     let mut value = serde_json::to_value(&feedback.rule).unwrap();
     value["capture"]["sql"] = json!(SQL.replace("items", "{{table}}"));
     value["capture"]["tables"] = json!(["items_0009"]);
     value["capture"]["table_patterns"] = json!(["archived_items_*"]);
     value["capture"]["table_series"] = json!({"prefix":"items_","start":0,"end":2,"width":4});
-    value["source_evidence"] = json!(
-        "ItemStore chooses items_{user_id % 3:04d}, archived_items_* or items_0009 and generates the pending name"
-    );
     feedback.rule = serde_json::from_value(value).unwrap();
-    let source_path = temp.path().join("case/dependencies.jsonl");
-    let mut source: Value = serde_json::from_slice(&fs::read(&source_path).unwrap()).unwrap();
-    source["sql"] = json!(
-        source["sql"]
-            .as_str()
-            .unwrap()
-            .replace("items", "items_0001")
-    );
-    write(&source_path, &source);
-    let mut report = report(&feedback);
-    report["unmatched_queries"][0]["sql"] = json!(SQL.replace("items", "items_0001"));
-    write(&feedback.replay_report, &report);
-    (temp, feedback, time)
+    (fixture, feedback, time)
 }
-
 #[test]
-fn table_companion_inherits_all_bounds_and_joint_plan_keeps_physical_tables_equal() {
-    for mode in [
-        "valid",
-        "cross_table",
-        "out_of_range",
-        "bad_padding",
-        "unselected_owner",
-    ] {
-        let (temp, feedback, time) = table_fixture();
-        let proposed = time.proposed(&feedback.rule).unwrap();
-        let mysql = proposed.mysql.as_ref().unwrap();
-        assert_eq!(mysql.tables, ["items_0009"]);
-        assert_eq!(mysql.table_patterns, ["archived_items_*"]);
-        assert_eq!(mysql.table_series.as_ref().unwrap().end, 2);
-        assert_eq!(mysql.sql, SQL.replace("items", "{{table}}"));
-        let original = fs::read(&feedback.policy_path).unwrap();
-        let source_path = temp.path().join("case/dependencies.jsonl");
-        let source_bytes = fs::read(&source_path).unwrap();
-        let mut actual = report(&feedback);
-        match mode {
-            "cross_table" => {
-                actual["unmatched_queries"][0]["sql"] = json!(SQL.replace("items", "items_0002"))
-            }
-            "out_of_range" => {
-                actual["unmatched_queries"][0]["sql"] = json!(SQL.replace("items", "items_0003"))
-            }
-            "bad_padding" => {
-                actual["unmatched_queries"][0]["sql"] = json!(SQL.replace("items", "items_1"))
-            }
-            "unselected_owner" => actual["unmatched_queries"][0]["params"][3]["value"] = json!(8),
-            _ => {}
-        }
-        write(&feedback.replay_report, &actual);
-        let result = plan_dynamic_value_mysql_time_rule(feedback, time);
-        assert_eq!(result.is_ok(), mode == "valid", "{mode}");
-        if let Ok(plan) = result {
-            let policy_path = plan.policy_path.clone();
-            plan.apply().unwrap();
-            let loaded = load_replay_policy(&policy_path).unwrap();
-            assert_eq!(loaded.document.dependency_rules.len(), 1);
-            assert_eq!(loaded.document.dynamic_values.len(), 1);
-            assert_eq!(
-                serde_json::to_value(&loaded.document.dependency_rules[0]).unwrap(),
-                serde_json::to_value(proposed).unwrap()
-            );
-        } else {
-            assert_eq!(
-                fs::read(temp.path().join("verification.yaml")).unwrap(),
-                original
-            );
-        }
-        assert_eq!(fs::read(&source_path).unwrap(), source_bytes);
-    }
+fn table_companion_keeps_all_declared_physical_table_bounds() {
+    let (_fixture, feedback, time) = table_fixture();
+    let proposed = time.proposed(&feedback.rule).unwrap();
+    let mysql = proposed.mysql.as_ref().unwrap();
+    assert_eq!(mysql.tables, ["items_0009"]);
+    assert_eq!(mysql.table_patterns, ["archived_items_*"]);
+    assert_eq!(mysql.table_series.as_ref().unwrap().end, 2);
+    assert_eq!(mysql.sql, SQL.replace("items", "{{table}}"));
 }
 
 #[test]

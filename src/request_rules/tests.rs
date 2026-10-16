@@ -273,24 +273,19 @@ fn rejects_ambiguous_query_values_and_invalid_selector_shapes() {
 }
 
 #[test]
-fn rejects_unsupported_rule_shapes_and_keeps_other_policy_sections() {
+fn rejects_unsupported_rule_shapes_and_retired_section_authoring() {
     for input in [
         "jwt: [{id: a, header: authorization, scheme: bearer, algorithm: none, time: preserve_relative, signing_key_ref: k}]",
         "jwt: [{id: a, header: authorization, scheme: bearer, algorithm: HS256, time: ignore, signing_key_ref: k}]",
     ] {
         assert!(serde_yaml::from_str::<RequestRules>(input).is_err());
     }
-    let original = "version: 3\nexpected_response: assertions_only\n# keep this comment\ndependency_rules: []\nresponse_rules: {}\n";
-    let updated = policy::add(original, &profile(), &rule()).unwrap();
-    assert!(updated.starts_with(original));
-    assert_eq!(policy::add(&updated, &profile(), &rule()).unwrap(), updated);
+    let original = "format: traffic-policy/v1\n# preserve this document\nrules: []\n";
+    let error = policy::add(original, &profile(), &rule()).unwrap_err();
     assert!(
-        policy::add(
-            "version: 1\nexpected_response: assertions_only\ndependency_rules: []\n",
-            &profile(),
-            &rule()
-        )
-        .is_err()
+        error
+            .to_string()
+            .contains("legacy rule authoring is retired")
     );
 }
 
@@ -326,10 +321,15 @@ fn configured_source_does_not_require_a_local_binding() {
     let local = root.path().join(".traffic-e2e/local");
     std::fs::create_dir_all(&local).unwrap();
     std::fs::write(local.join("target.env"), "SECRET_KEY=test-key\n").unwrap();
-    let policy_path = root.path().join("verification.yaml");
+    let policy_path = root.path().join("policy.yaml");
     std::fs::write(
         &policy_path,
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\nrequest_rules:\n  jwt:\n    profiles:\n      session:\n        signing_key_ref: session-jwt\n        signing_key_source:\n          kind: target_env\n          name: SECRET_KEY\n        algorithm: HS256\n        time: preserve_relative\n    rules:\n    - id: bearer\n      header: authorization\n      scheme: bearer\n      profile: session\n",
+        serde_yaml::to_string(&json!({"format":"traffic-policy/v1","rules":[{
+            "id":"bearer","match":{"api":"GET /api"},
+            "effect":{"kind":"input_jwt","location":{"kind":"bearer_header","name":"authorization"},
+                "algorithm":"HS256","time":"preserve_relative","signing_key":{"kind":"target_env","name":"SECRET_KEY"}},
+            "proof":{"source":"auth.py:verify","fact":"Source verifies this signed input and uses relative JWT claim times"}
+        }]})).unwrap(),
     )
     .unwrap();
     let runtime = RequestRuleRuntime::load(root.path(), &policy_path).unwrap();

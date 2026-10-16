@@ -54,12 +54,12 @@ async fn assert_unmatched(client: &mut TcpStream, args: &[&str]) {
 async fn fixture(
     records: Vec<Value>,
 ) -> (
-    tempfile::TempDir,
+    crate::replay::policy::test_fixture::ManagedFixtureDirectory,
     PathBuf,
     SocketAddr,
     tokio::task::JoinHandle<()>,
 ) {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
     let case = temp.path().join("case");
     tokio::fs::create_dir_all(&case).await.unwrap();
     tokio::fs::write(

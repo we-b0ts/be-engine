@@ -13,6 +13,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+const SOURCE_REVISION: &str =
+    "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+
 const PROOF: &str = "api/jobs.py:create starts a background task; jobs.py:finish deletes the cancellation key for its captured job id";
 
 struct Fixture {
@@ -117,7 +120,7 @@ impl Fixture {
             &victim.join("dependencies.jsonl"),
             &[redis(command, 12, "victim-lane")],
         );
-        let policy = temp.path().join("source-traffic-policy.yaml");
+        let policy = temp.path().join("policy.yaml");
         fs::write(
             &policy,
             SourceTrafficPolicyConfig::empty().render().unwrap(),
@@ -151,14 +154,14 @@ impl Fixture {
             &self.report,
             &self.root,
             "job-cleanup",
-            "0123456789abcdef",
+            SOURCE_REVISION,
             PROOF,
             &selector(command),
         )
         .unwrap()
     }
     fn rules(&self, command: &str) -> Vec<crate::BackgroundDependencyRuleConfig> {
-        vec![selector(command).rule("job-cleanup", "0123456789abcdef", PROOF)]
+        vec![selector(command).rule("job-cleanup", SOURCE_REVISION, PROOF)]
     }
     fn change_request(&self, directory: &Path, body: Value, uri: &str) {
         let path = directory.join("request.json");
@@ -321,7 +324,7 @@ fn rejects_target_failures_and_foreign_recording_membership() {
                 &f.report,
                 &f.root,
                 "cleanup",
-                "0123456789abcdef",
+                SOURCE_REVISION,
                 PROOF,
                 &selector("DEL")
             )
@@ -482,7 +485,7 @@ async fn recorder_keeps_active_case_calls_and_retains_idle_candidates_without_sn
     config.dns_mock.registry_path = temp.path().join("dns.json");
     config.http_gateway.ready.enabled = false;
     config.process_owned_dependencies =
-        vec![selector("GET").rule("background", "0123456789abcdef", PROOF)];
+        vec![selector("GET").rule("background", SOURCE_REVISION, PROOF)];
     let state = crate::AppState::new(config).await.unwrap();
     let case = CaseContext {
         id: Uuid::new_v4(),

@@ -20,6 +20,8 @@ pub use provider::{
     ContainerSourceOptions, KubernetesSourceOptions, SourceOptions, SourceProviderEvidence,
 };
 mod upgrade;
+#[cfg(test)]
+pub(crate) mod test_fixture;
 
 pub(crate) use upgrade::begin_kubernetes_source_snapshot_upgrade;
 

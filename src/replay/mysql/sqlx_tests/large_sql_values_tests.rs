@@ -51,9 +51,9 @@ dependency_rules:
                     ]);
                 }
                 let (temp, addr, runtime, task) = fixture_with_policy(&[write], Some(policy)).await;
-                let path = temp.path().join("case-id/dependencies.jsonl");
+                let path = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
                 let original = std::fs::read(&path).unwrap();
-                let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+                let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
                 // Wrong stable JSON, key, and stale time cannot consume evidence.
                 // A correct call succeeds once in each text/prepared combination.
                 for attempt in 0..5 {

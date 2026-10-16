@@ -75,44 +75,18 @@ fn coordinator_status_preserves_an_interrupted_attempt_without_a_replay_session(
 }
 
 #[test]
-fn applying_a_parked_method_rule_refreshes_the_active_sibling_and_releases_the_route_worker() {
+fn reclassifying_a_parked_method_refreshes_the_active_sibling_and_releases_the_route_worker() {
     let (target, state) = workflow();
     let store = RewriteStore::new(target.path()).unwrap();
     store.save(&state).unwrap();
-    let selected = inventory::scoped(&state, Some(&"GET /api".parse().unwrap())).unwrap();
-    let command = rewrite::evidence::commands(target.path(), &selected)
-        .into_iter()
-        .find(|command| command.query_id.ends_with("dirty-clusters"))
-        .unwrap();
-    let evidence = rewrite::evidence::query(target.path(), &selected, &command.query_id).unwrap();
-    let planned = rewrite::plan_rewrite_dependency_rule(
-        rewrite::RewriteContext {
-            target_root: target.path().into(),
-        },
-        rewrite::RewriteDependencyRulePlanOptions {
-            evidence_id: evidence.evidence_id,
-            ownership: rewrite::RewriteDependencyOwnership::ProcessOwned,
-            name: Some("stream-startup".into()),
-            source_evidence: Some("startup.rs starts process-wide stream".into()),
-            selector: rewrite::RewriteDependencyRuleSelector::Http {
-                authority: "stream.test".into(),
-                method: "GET".into(),
-                path_prefix: "/connect".into(),
-            },
-        },
-    )
-    .unwrap();
-    let report = rewrite::apply_rewrite_dependency_rule(
-        rewrite::RewriteContext {
-            target_root: target.path().into(),
-        },
-        &planned.plan_id.unwrap(),
-    )
-    .unwrap();
+    let mut updated = state;
+    test_session::classify_stream(target.path());
+    let report = apply(target.path(), &mut updated, "GET /api").unwrap();
     assert_eq!(
-        report.evidence_reclassification.unwrap()["updated_apis"],
+        report["updated_apis"],
         serde_json::json!(["GET /api", "OPTIONS /api"])
     );
+    store.save(&updated).unwrap();
     let updated = store.load().unwrap().unwrap();
     assert_eq!(updated.api, "OPTIONS /api");
     for api in ["GET /api", "OPTIONS /api"] {
@@ -245,39 +219,11 @@ fn partial_process_rule_apply_schedules_real_replay_while_retaining_the_dirty_is
     let store = RewriteStore::new(target.path()).unwrap();
     store.save(&state).unwrap();
     let owner = "GET /api";
-    let latest = store.load().unwrap().unwrap();
-    let selected = inventory::scoped(&latest, Some(&owner.parse().unwrap())).unwrap();
-    let command = rewrite::evidence::commands(target.path(), &selected)
-        .into_iter()
-        .find(|c| c.query_id.ends_with("dirty-clusters"))
-        .unwrap();
-    let evidence = rewrite::evidence::query(target.path(), &selected, &command.query_id).unwrap();
-    let planned = rewrite::plan_rewrite_dependency_rule(
-        rewrite::RewriteContext {
-            target_root: target.path().into(),
-        },
-        rewrite::RewriteDependencyRulePlanOptions {
-            evidence_id: evidence.evidence_id,
-            ownership: rewrite::RewriteDependencyOwnership::ProcessOwned,
-            name: Some("partial-stream-startup".into()),
-            source_evidence: Some("startup.rs starts the process-wide connection".into()),
-            selector: rewrite::RewriteDependencyRuleSelector::Http {
-                authority: "stream.test".into(),
-                method: "GET".into(),
-                path_prefix: "/connect".into(),
-            },
-        },
-    )
-    .unwrap();
-    let applied = rewrite::apply_rewrite_dependency_rule(
-        rewrite::RewriteContext {
-            target_root: target.path().into(),
-        },
-        &planned.plan_id.unwrap(),
-    )
-    .unwrap();
-    assert_eq!(applied.traffic_e2e_report["changed"], true);
-    let mut updated = store.load().unwrap().unwrap();
+    let mut updated = state;
+    test_session::classify_stream(target.path());
+    apply(target.path(), &mut updated, owner).unwrap();
+    rewrite::rule_replay::after_process_rule(&mut updated, owner, true);
+    store.save(&updated).unwrap();
     let remaining = inventory::scoped(&updated, Some(&"GET /api".parse().unwrap())).unwrap();
     assert_eq!(remaining.phase, RewritePhase::ImplementationRequired);
     assert!(remaining.rule_replay_pending);

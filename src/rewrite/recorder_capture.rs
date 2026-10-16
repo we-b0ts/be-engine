@@ -708,10 +708,31 @@ mod tests {
         let applied = apply(target.path(), &mut state, &planned.plan_id).unwrap();
         assert_eq!(applied.api, "GET /api");
         assert_eq!(state.phase, RewritePhase::AwaitingRecordingRefresh);
+        let identity = applied.traffic_e2e_report["resource_identity"]
+            .as_str()
+            .unwrap();
+        let updated = crate::policy::parse_policy(&fs::read_to_string(config).unwrap()).unwrap();
+        assert!(updated.rules.iter().any(|rule| {
+            rule.as_native().is_some_and(|rule| {
+                matches!(
+                    &rule.effect,
+                    crate::policy::native::NativeEffect::CaptureBreeze(capture)
+                    if capture.resources == [identity] && capture.snapshot_dir == snapshot
+                )
+            })
+        }));
+        let loaded =
+            crate::AppConfig::load(target.path().join(".traffic-e2e/project.yaml")).unwrap();
         assert!(
-            fs::read_to_string(config)
-                .unwrap()
-                .contains("capture_resources")
+            loaded
+                .dns_mock
+                .bypass_strategies
+                .iter()
+                .any(|strategy| matches!(
+                    strategy,
+                    crate::config::DnsBypassStrategyConfig::Breeze { capture_resources, .. }
+                if capture_resources == &[identity]
+                ))
         );
         assert_eq!(awaiting_apis(&state), ["GET /api"]);
     }

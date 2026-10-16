@@ -309,21 +309,14 @@ async fn timestamp_plan_apply_rechecks_evidence_and_requires_fresh_replay() {
         },
         source_evidence: "sdk.py:build_headers obtains current UTC time".into(),
     };
-    let plan = plan_http_header_timestamp(feedback.clone()).unwrap();
-    assert!(plan.report().changed && plan.report().requires_replay);
-    let mut stale = report.clone();
-    stale["finalized_at"] = json!("changed");
-    std::fs::write(&report_path, stale.to_string()).unwrap();
-    assert!(plan.apply().is_err());
-    std::fs::write(&report_path, report.to_string()).unwrap();
-    let applied = plan_http_header_timestamp(feedback.clone())
-        .unwrap()
-        .apply()
-        .unwrap();
-    assert!(applied.applied && applied.requires_replay);
-    let reuse = plan_http_header_timestamp(feedback.clone()).unwrap();
-    assert!(reuse.report().reused_existing);
-    assert!(!reuse.report().changed);
+    let error = plan_http_header_timestamp(feedback.clone()).err().unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("legacy rule authoring is retired")
+    );
+    let immutable = std::fs::read(case.join("dependencies.jsonl")).unwrap();
+    crate::replay::policy::test_fixture::install_http_header(feedback).unwrap();
     let (next_addr, next_runtime, next_task) =
         spawn_http_replay_with_policy(&case, vec![], Some(policy_path), None).await;
     send(
@@ -333,11 +326,10 @@ async fn timestamp_plan_apply_rechecks_evidence_and_requires_fresh_replay() {
     )
     .await;
     assert!(!next_runtime.state.lock().await.snapshot_report().is_dirty());
-    let path = case.join("dependencies.jsonl");
-    let mut record: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    record["request_headers"]["x-amz-date"] = json!([amz(source_time() + Duration::seconds(1))]);
-    std::fs::write(path, format!("{record}\n")).unwrap();
-    assert!(reuse.apply().is_err());
+    assert_eq!(
+        std::fs::read(case.join("dependencies.jsonl")).unwrap(),
+        immutable
+    );
     task.abort();
     next_task.abort();
 }

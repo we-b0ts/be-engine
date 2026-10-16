@@ -66,7 +66,7 @@ impl Fixture {
                 "capture":{"job_id":{"protocol":"mysql","target_host":"db.test","target_port":3306,
                     "database":"app","username":"writer","operation":"INSERT","table_patterns":["jobs_*"],
                     "row_match":{"role":"ASSISTANT"},"column":"id"}}},
-            "source_revision":"0123456789abcdef",
+            "source_revision":"sha256:1111111111111111111111111111111111111111111111111111111111111111",
             "source_evidence":"jobs.py:create detaches a task; jobs.py:finish reads its own captured job key"
         })).unwrap()]
     }
@@ -245,7 +245,7 @@ async fn redis_api_origin_unblocks_presence_and_preserves_finite_inventory_and_r
             2
         );
         fs::write(&report, snapshot.to_string()).unwrap();
-        let policy = f.root.join(".replay/source-traffic-policy.yaml");
+        let policy = f.root.join(".replay/policy.yaml");
         let mut config = crate::config::SourceTrafficPolicyConfig::empty();
         config.process_owned_dependencies = rules;
         fs::write(&policy, config.render().unwrap()).unwrap();

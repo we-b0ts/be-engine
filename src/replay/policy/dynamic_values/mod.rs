@@ -44,6 +44,7 @@ pub(in crate::replay) struct DynamicDecision {
     pub(super) pairs: Vec<(String, IdentityPair)>,
 }
 
+#[cfg(test)]
 type NormalizedArguments = (Vec<Vec<u8>>, Vec<Vec<u8>>);
 
 type CaseBindings = BTreeMap<String, BTreeMap<String, Vec<IdentityPair>>>;
@@ -141,6 +142,7 @@ impl DynamicValues {
             }
         }
     }
+    #[cfg(test)]
     fn selected<'a>(&'a self, case_id: &str, target: &TargetKey) -> Vec<&'a DynamicValueRule> {
         self.rules
             .iter()
@@ -151,6 +153,7 @@ impl DynamicValues {
             })
             .collect()
     }
+    #[cfg(test)]
     fn pairs(
         &self,
         case_id: &str,
@@ -217,6 +220,7 @@ impl DynamicValues {
         }
         Ok(())
     }
+    #[cfg(test)]
     pub(in crate::replay) fn normalize_arguments(
         &self,
         case_id: Option<&str>,

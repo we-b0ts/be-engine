@@ -341,6 +341,7 @@ mod tests {
     fn finalized_recording_requests_only_new_uncovered_apis_and_recanonicalizes_without_mutating_cases()
      {
         let target = configured_target();
+        crate::rewrite::test_support::install_source_snapshot(target.path());
         write_run(
             target.path(),
             "20260901000000",

@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
+use crate::replay::policy::test_fixture::managed_tempdir as tempdir;
 use hyper::client::conn::http1;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, RootCertStore};
-use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsConnector;
@@ -913,10 +913,4 @@ pub(crate) async fn spawn_coordinator_http_replay(
 
 pub(crate) async fn snapshot_http_replay(runtime: &TestHttpReplayRuntime) -> Value {
     serde_json::to_value(runtime.0.state.lock().await.snapshot_report()).unwrap()
-}
-
-pub(crate) async fn write_http_replay_evidence(path: &Path, report: &Value) {
-    crate::replay::report::write_final_report_value(path.to_path_buf(), report)
-        .await
-        .unwrap();
 }

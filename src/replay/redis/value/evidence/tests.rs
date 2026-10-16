@@ -1,8 +1,7 @@
 use super::super::tests::{args, match_value, selector, state};
 use super::*;
-use crate::replay::policy::ReplayPolicyRuntime;
 use crate::{RedisUnorderedFeedback, plan_redis_unordered};
-use std::{collections::BTreeMap, path::PathBuf};
+use std::path::PathBuf;
 const SOURCE: &[u8] = br#"{"ids":["secret-b","secret-a","secret-a"],"ordered":[1,2]}"#;
 const TARGET: &[u8] = br#"{"ids":["secret-a","secret-b","secret-a"],"ordered":[1,2]}"#;
 fn fixture(source: &[u8], target: &[u8]) -> (tempfile::TempDir, RedisUnorderedFeedback, PathBuf) {
@@ -39,60 +38,62 @@ fn fixture(source: &[u8], target: &[u8]) -> (tempfile::TempDir, RedisUnorderedFe
     (temp, feedback, dependencies)
 }
 #[test]
-fn discovery_plan_apply_preserves_policy_and_requires_finite_fresh_replay() {
-    let (_temp, feedback, _) = fixture(SOURCE, TARGET);
+fn discovery_and_source_proof_are_secret_free_and_authoring_is_retired() {
+    let (_temp, feedback, dependencies) = fixture(SOURCE, TARGET);
     let evidence = discover(&feedback.replay_report_path).unwrap();
     assert_eq!(evidence["candidates"].as_array().unwrap().len(), 1);
     assert!(!evidence.to_string().contains("secret-a"));
-    let plan = plan_redis_unordered(feedback.clone()).unwrap();
-    assert!(plan.report().changed && plan.report().requires_replay && !plan.report().applied);
-    assert!(plan.report().diff.contains("protocol: redis"));
-    plan.apply().unwrap();
+    verify(
+        &feedback.case_source,
+        &feedback.replay_report_path,
+        &feedback.selector,
+    )
+    .unwrap();
+    let before = [
+        fs::read(&feedback.policy_path).unwrap(),
+        fs::read(&feedback.replay_report_path).unwrap(),
+        fs::read(&dependencies).unwrap(),
+    ];
+    let error = plan_redis_unordered(feedback.clone()).err().unwrap();
     assert!(
-        fs::read_to_string(&feedback.policy_path)
-            .unwrap()
-            .contains("response_rules: {json: {}}")
+        error
+            .to_string()
+            .contains("legacy rule authoring is retired")
     );
-    let reused = plan_redis_unordered(feedback.clone()).unwrap();
-    assert!(reused.report().reused_existing);
-    assert!(!reused.report().changed);
-    let mut policy = ReplayPolicyRuntime::load(&feedback.policy_path, &BTreeMap::new()).unwrap();
-    let mut state = state(SOURCE);
-    state.value_rules = policy.redis_value_rules();
-    let matched = match_value(&mut state, TARGET).unwrap();
-    policy.commit_redis_value(Some("case"), &matched.rule_ids);
-    let usage = serde_json::to_value(policy.report()).unwrap();
-    assert_eq!(usage["dependency_rules"][0]["matches"], 1);
-    assert_eq!(usage["dependency_rules"][0]["validations"], 1);
-    state.complete_exchange(&matched);
-    assert!(match_value(&mut state, TARGET).is_err());
+    assert_eq!(
+        before,
+        [
+            fs::read(&feedback.policy_path).unwrap(),
+            fs::read(&feedback.replay_report_path).unwrap(),
+            fs::read(&dependencies).unwrap()
+        ]
+    );
 }
 #[test]
-fn apply_rejects_changed_policy_report_source_and_response() {
-    for change in ["policy", "report", "source", "response"] {
+fn source_proof_rejects_changed_request_and_response_bytes() {
+    for change in ["source", "response"] {
         let (_temp, feedback, dependencies) = fixture(SOURCE, TARGET);
-        let plan = plan_redis_unordered(feedback.clone()).unwrap();
-        match change {
-            "policy" => fs::write(&feedback.policy_path, "changed").unwrap(),
-            "report" => {
-                let mut report: Value =
-                    serde_json::from_slice(&fs::read(&feedback.replay_report_path).unwrap())
-                        .unwrap();
-                report["changed"] = true.into();
-                fs::write(&feedback.replay_report_path, report.to_string()).unwrap();
-            }
-            _ => {
-                let mut record: Value =
-                    serde_json::from_slice(&fs::read(&dependencies).unwrap()).unwrap();
-                if change == "source" {
-                    record["args"][0]["data"] = "changed".into();
-                } else {
-                    record["response"]["data"] = "+OTHER\r\n".into();
-                }
-                fs::write(dependencies, record.to_string()).unwrap();
-            }
+        verify(
+            &feedback.case_source,
+            &feedback.replay_report_path,
+            &feedback.selector,
+        )
+        .unwrap();
+        let mut record: Value = serde_json::from_slice(&fs::read(&dependencies).unwrap()).unwrap();
+        if change == "source" {
+            record["args"][0]["data"] = "changed".into();
+        } else {
+            record["response"]["data"] = "+OTHER\r\n".into();
         }
-        assert!(plan.apply().is_err(), "{change}");
+        fs::write(dependencies, record.to_string()).unwrap();
+        assert!(
+            verify(
+                &feedback.case_source,
+                &feedback.replay_report_path,
+                &feedback.selector
+            )
+            .is_err()
+        );
     }
 }
 #[test]
@@ -166,20 +167,25 @@ fn protobuf_discovery_requires_source_type_confirmation_and_plan_replays() {
         element_type: ProtobufRepeatedElementType::Message,
         display_path: "value.ids".into(),
     };
-    assert!(plan_redis_unordered(feedback.clone()).is_err());
+    assert!(
+        verify(
+            &feedback.case_source,
+            &feedback.replay_report_path,
+            &feedback.selector
+        )
+        .is_err()
+    );
     feedback.selector.field = RedisUnorderedField::Protobuf {
         field_path: ProtobufFieldPath(vec![4]),
         element_type: ProtobufRepeatedElementType::String,
         display_path: "value.ids".into(),
     };
-    plan_redis_unordered(feedback.clone())
-        .unwrap()
-        .apply()
-        .unwrap();
-    let policy = ReplayPolicyRuntime::load(&feedback.policy_path, &BTreeMap::new()).unwrap();
-    let mut state = state(source);
-    state.value_rules = policy.redis_value_rules();
-    assert!(match_value(&mut state, target).is_ok());
+    verify(
+        &feedback.case_source,
+        &feedback.replay_report_path,
+        &feedback.selector,
+    )
+    .unwrap();
 }
 #[test]
 fn old_unfinished_or_bounded_reports_cannot_authorize_rules() {
@@ -198,27 +204,35 @@ fn old_unfinished_or_bounded_reports_cannot_authorize_rules() {
             _ => report["redis"]["unordered_value"]["omitted_candidates"] = 1.into(),
         }
         fs::write(&feedback.replay_report_path, report.to_string()).unwrap();
-        assert!(plan_redis_unordered(feedback.clone()).is_err());
+        assert!(
+            verify(
+                &feedback.case_source,
+                &feedback.replay_report_path,
+                &feedback.selector
+            )
+            .is_err()
+        );
     }
 }
 #[test]
-fn overlapping_selectors_and_rule_id_collisions_are_rejected() {
-    let (_temp, feedback, _) = fixture(SOURCE, TARGET);
-    plan_redis_unordered(feedback.clone())
-        .unwrap()
-        .apply()
-        .unwrap();
-    let mut overlapping = feedback.clone();
-    overlapping.rule_id = "another".into();
-    overlapping.selector.key = RedisValueKeySelector::Exact {
-        value: "erp:membership:1".into(),
+fn overlapping_selectors_and_rule_id_collisions_are_rejected_by_the_shared_compiler() {
+    let rule = json!({"id":"membership","surface":"dependency.request","match":{
+        "api":"GET /api","resource":{"protocol":"redis","endpoint":"redis.test:6379"},"operation":"SET", "key":{"prefix":"erp:membership:"}},
+        "slot":"value","codec":"json","contract":{"/ids":{"kind":"unordered"}},
+        "proof":{"source":"service.py:216","fact":"Source builds membership from a set"}});
+    let compile = |rules: Value| {
+        crate::policy::parse_policy(
+            &json!({"format":"traffic-policy/v1","rules":rules}).to_string(),
+        )
     };
-    assert!(plan_redis_unordered(overlapping).is_err());
-    let mut collision = feedback.clone();
-    collision.selector.field = RedisUnorderedField::Json {
-        pointer: "/ordered".into(),
-    };
-    assert!(plan_redis_unordered(collision).is_err());
+    compile(json!([rule])).unwrap();
+    let mut overlapping = rule.clone();
+    overlapping["id"] = json!("another");
+    overlapping["match"]["key"] = json!({"exact":"erp:membership:1"});
+    assert!(compile(json!([rule, overlapping])).is_err());
+    let mut collision = rule.clone();
+    collision["contract"] = json!({"/ordered":{"kind":"unordered"}});
+    assert!(compile(json!([rule, collision])).is_err());
 }
 
 #[test]

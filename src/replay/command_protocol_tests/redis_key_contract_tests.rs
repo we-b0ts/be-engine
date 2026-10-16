@@ -1,10 +1,9 @@
 //! Key contracts through native TCP Replay, protected plan/apply and finite lanes.
 use super::*;
-use crate::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
 use serde_json::json;
 
 struct Fixture {
-    _temp: tempfile::TempDir,
+    _temp: crate::replay::policy::test_fixture::ManagedFixtureDirectory,
     case: PathBuf,
     policy: PathBuf,
     report: PathBuf,
@@ -12,7 +11,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new(records: Vec<Value>) -> Self {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
         let root = temp.path();
         let local = root.join(".traffic-e2e/local");
         let case = local.join("recordings/run/case");
@@ -50,12 +49,12 @@ impl Fixture {
             _temp: temp,
         }
     }
-    fn plan(&self, id: &str, redis: Value) -> crate::GeneratedValueRulePlan {
-        plan_dependency_request_rule(DependencyRequestRuleFeedback {
-            policy_path:self.policy.clone(),replay_report:self.report.clone(),
-            rule:json!({"id":id,"protocol":"redis","target":{"host":"redis.internal","port":6379},
-                "case":{"method":"PUT","path":"/scenario"},"source_evidence":"Session:create uses random identities with declared key and JSON references and current-time expiry","redis":redis})
-        }).unwrap()
+    fn install(&self, id: &str, redis: Value) -> anyhow::Result<()> {
+        crate::replay::install_dependency_rule_fixture(
+            &self.policy,
+            json!({"id":id,"protocol":"redis","target":{"host":"redis.internal","port":6379},
+                "case":{"method":"PUT","path":"/scenario"},"source_evidence":"Session:create declares key/JSON identity references and request-relative expiry","redis":redis}),
+        )
     }
 }
 fn session_rule() -> Value {
@@ -175,7 +174,7 @@ async fn redis_generated_keys_plan_in_stages_and_replay_with_consistent_json_ref
         task.abort();
         let report: Value = serde_json::from_slice(&report).unwrap();
         if stage == 0 {
-            f.plan("session-key", session_rule()).apply().unwrap();
+            f.install("session-key", session_rule()).unwrap();
         } else if stage == 1 {
             assert_eq!(
                 report["replay_policy"]["key_bindings"]
@@ -184,7 +183,7 @@ async fn redis_generated_keys_plan_in_stages_and_replay_with_consistent_json_ref
                     .len(),
                 1
             );
-            f.plan("ticket-key", ticket_rule()).apply().unwrap();
+            f.install("ticket-key", ticket_rule()).unwrap();
         } else {
             assert_eq!(report["redis"]["matched_count"], 2);
             assert_eq!(report["redis"]["unused_case"].as_array().unwrap().len(), 0);
@@ -249,8 +248,8 @@ async fn redis_key_window_preserves_multi_exec_order_and_finite_command_consumpt
         std::fs::write(&f.report, &report).unwrap();
         task.abort();
         if !applied {
-            f.plan("window",json!({"key":{"prefix":"rate:"},"key_contract":{"kind":"time_window","window_seconds":60},
-                "commands":[{"command":"INCRBY","argument_values":{}},{"command":"EXPIRE","argument_values":{}}]})).apply().unwrap();
+            f.install("window",json!({"key":{"prefix":"rate:"},"key_contract":{"kind":"time_window","window_seconds":60},
+                "commands":[{"command":"INCRBY","argument_values":{}},{"command":"EXPIRE","argument_values":{}}]})).unwrap();
         } else {
             let report: Value = serde_json::from_slice(&report).unwrap();
             assert_eq!(report["redis"]["matched_count"], 4);

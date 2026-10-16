@@ -25,9 +25,9 @@ async fn table_time_templates_replay_shards_without_consuming_a_wrong_shard() {
                     write["params"] = json!([{"kind":"datetime","value":"2020-01-01 00:00:00"},{"kind":"integer","value":7}]);
                 }
                 let (temp, addr, runtime, task) = fixture_with_policy(&[write], Some(&policy)).await;
-                let path = temp.path().join("case-id/dependencies.jsonl");
+                let path = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
                 let original = std::fs::read(&path).unwrap();
-                let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+                let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
                 let now = chrono::Utc::now().naive_utc().format("%Y-%m-%d %H:%M:%S%.6f").to_string();
                 for (attempt, table) in ["subtasks_0640", "subtasks_0155", "subtasks_0155"].into_iter().enumerate() {
                     let result = if target_prepared {
@@ -63,9 +63,9 @@ async fn dynamic_sql_time_matches_text_and_prepared_writes_without_consuming_wro
                 }
                 let records = [write, exchange("COMMIT", json!({"status":"ok"}))];
                 let (temp,addr,runtime,task) = fixture_with_policy(&records,Some(&policy(TEMPLATE))).await;
-                let path = temp.path().join("case-id/dependencies.jsonl");
+                let path = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
                 let original = std::fs::read(&path).unwrap();
-                let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+                let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
                 for attempt in 0..4 {
                     let now = chrono::Utc::now().naive_utc();
                     let timestamp = if attempt == 0 { "2020-01-01 00:00:00.340150".to_owned() } else { now.format("%Y-%m-%d %H:%M:%S%.6f").to_string() };
@@ -101,7 +101,7 @@ async fn dynamic_sql_time_preserves_recorded_errors_and_stable_sql() {
     tokio::time::timeout(Duration::from_secs(15), async {
         let write = exchange("UPDATE api_keys SET last_used_at='2020-01-01 00:00:00', updated_at=now() WHERE api_keys.id=7", json!({"status":"error","error_code":1213,"error_message":"deadlock"}));
         let (temp,addr,runtime,task) = fixture_with_policy(&[write],Some(&policy(TEMPLATE))).await;
-        let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let now = chrono::Utc::now().naive_utc().format("%Y-%m-%d %H:%M:%S%.6f").to_string();
         for template in [TEMPLATE.replace("api_keys", "other_keys"), TEMPLATE.replace("updated_at=now()", "updated_at=NULL"), TEMPLATE.replace("WHERE api_keys.id=?", "WHERE api_keys.id=? OR 1=1")] {
             assert!(sqlx::query(&template).bind(&now).bind(7_i64).execute(&mut client).await.is_err());
@@ -135,9 +135,9 @@ async fn dynamic_sql_time_matches_scalar_and_nested_json_fields_atomically() {
         );
         let (temp, addr, runtime, task) =
             fixture_with_policy(&[write], Some(&policy)).await;
-        let path = temp.path().join("case-id/dependencies.jsonl");
+        let path = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
         let original = std::fs::read(&path).unwrap();
-        let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let now = chrono::Utc::now();
         let observed_at = now.to_rfc3339();
         let updated_at = now.naive_utc();

@@ -19,9 +19,9 @@ async fn sqlx_projects_orm_columns_for_text_and_cached_prepared_queries() {
             empty["rows"] = json!([]);
             let records = [exchange(&source_sql(1), response.clone()), exchange(&source_sql(2), empty), exchange(&source_sql(3), response)];
             let (temp, addr, runtime, task) = fixture(&records, policy).await;
-            let path = temp.path().join("case-id/dependencies.jsonl");
+            let path = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
             let original = std::fs::read(&path).unwrap();
-            let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+            let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
             let sql = "SELECT t.payload AS data, t.missing AS optional, t.id AS task_id, t.title AS title FROM subtasks_0640 AS t WHERE t.id=? ORDER BY task_id DESC LIMIT 1";
             let row = sqlx::query(sql).bind(1_u64).fetch_one(&mut client).await.unwrap();
             assert_eq!(row.columns().iter().map(|c| c.name()).collect::<Vec<_>>(), ["data", "optional", "task_id", "title"]);
@@ -73,7 +73,7 @@ async fn sqlx_count_and_constant_aliases_preserve_values_and_conditions() {
             ),
         ];
         let (temp, addr, runtime, task) = fixture(&records, false).await;
-        let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         for invalid in [
             "SELECT COUNT(*) AS total FROM tasks WHERE status='DONE'",
             "SELECT COUNT(id) AS total FROM tasks WHERE status='RUNNING'",

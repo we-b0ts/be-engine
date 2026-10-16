@@ -1,40 +1,19 @@
-//! Plan/apply uses the same explicit clock relationships as live Redis matching.
+//! Clock relationships use the live owner's protected evidence verifier.
 use super::*;
 use crate::replay::policy::request_contract::tests::clock_groups::{actual, selector, source};
 
 #[test]
-fn grouped_clock_planning_preserves_witnesses_groups_and_fresh_replay_requirement() {
+fn grouped_clock_evidence_requires_explicit_relationships() {
     for grouped in [false, true] {
         let mut fixture = Fixture::new();
         fixture.candidate("EVALSHA", &source(), &actual());
         fixture.events.push(exchange("EVALSHA", &source()));
-        let plan = fixture.plan(selector(grouped));
-        assert_eq!(plan.is_ok(), grouped);
-        if let Ok(plan) = plan {
-            let before = fs::read(fixture.case.join("dependencies.jsonl")).unwrap();
-            assert!(plan.report().requires_fresh_replay);
-            plan.apply().unwrap();
-            assert_eq!(
-                before,
-                fs::read(fixture.case.join("dependencies.jsonl")).unwrap()
-            );
-            let loaded = crate::replay::policy::load_replay_policy(&fixture.policy).unwrap();
-            let serialized = serde_json::to_value(&loaded.document.dependency_rules[0]).unwrap();
-            assert_eq!(
-                serialized["redis"]["commands"][0]["argument_values"]["17"]["clock_group"],
-                "after_commit"
-            );
-            assert_eq!(
-                serialized["redis"]["commands"][0]["argument_values"]["15"]["json"]["/changed_at_us"]
-                    ["clock_group"],
-                "event"
-            );
-        }
+        assert_eq!(fixture.verify(selector(grouped)).is_ok(), grouped);
     }
 }
 
 #[test]
-fn grouped_clock_planning_rejects_bad_copies_windows_business_fields_and_stale_source() {
+fn grouped_clock_evidence_rejects_bad_copies_windows_business_fields_and_stale_source() {
     for (index, value) in [
         (14, "2000267684"),
         (17, "2005.316187"),
@@ -48,19 +27,12 @@ fn grouped_clock_planning_rejects_bad_copies_windows_business_fields_and_stale_s
         actual[index] = value;
         fixture.candidate("EVALSHA", &source(), &actual);
         fixture.events.push(exchange("EVALSHA", &source()));
-        assert!(fixture.plan(selector(true)).is_err());
+        assert!(fixture.verify(selector(true)).is_err());
     }
     let mut fixture = Fixture::new();
     fixture.candidate("EVALSHA", &source(), &actual());
     fixture.events.push(exchange("EVALSHA", &source()));
-    let plan = fixture.plan(selector(true)).unwrap();
-    fs::write(fixture.case.join("dependencies.jsonl"), "changed").unwrap();
-    assert!(plan.apply().is_err());
-    assert!(
-        crate::replay::policy::load_replay_policy(&fixture.policy)
-            .unwrap()
-            .document
-            .dependency_rules
-            .is_empty()
-    );
+    assert_eq!(fixture.verify(selector(true)).unwrap(), 1);
+    fixture.events[0]["args"][3]["data"] = json!("changed Source argument");
+    assert!(fixture.verify(selector(true)).is_err());
 }

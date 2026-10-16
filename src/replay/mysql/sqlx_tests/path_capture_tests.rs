@@ -91,7 +91,7 @@ async fn path_capture_plan_apply_then_http_put_and_prepared_sql_retain_identity_
         let empty="version: 3\nexpected_response: assertions_only\ndependency_rules: []\n";
         let (temp,_,runtime,task)=fixture_with_policy(&records(),Some(empty)).await;
         task.abort(); let (addr,task)=http_listener(runtime.clone()).await;
-        let immutable=std::fs::read(temp.path().join("case-id/dependencies.jsonl")).unwrap();
+        let immutable=std::fs::read(temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl")).unwrap();
         let key=format!("112233445566_{}_7_100",Utc::now().format("%Y%m%d%H%M%S"));
         let path=format!("/bucket/attachments/{key}?part=1");
         assert!(put(addr,&path,"file bytes").await.starts_with("HTTP/1.1 502"));
@@ -121,7 +121,7 @@ async fn path_capture_plan_apply_then_http_put_and_prepared_sql_retain_identity_
         let (next,_,runtime,task)=fixture_with_policy(&records(),Some(&policy)).await;
         task.abort(); let (addr,task)=http_listener(runtime.clone()).await;
         let (mysql_addr,mysql_task)=super::dynamic_values_tests::endpoint_listener(runtime.clone(),false).await;
-        let mut client=connect(mysql_addr,&next.path().join("case-id/.replay/ca.pem")).await;
+        let mut client=connect(mysql_addr,&next.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let key=format!("112233445566_{}_7_100",Utc::now().format("%Y%m%d%H%M%S"));
         let path=format!("/bucket/attachments/{key}?part=1");
         let sql="UPDATE subtask_contexts SET type_data=? WHERE id=?";
@@ -149,7 +149,7 @@ async fn path_capture_plan_apply_then_http_put_and_prepared_sql_retain_identity_
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
         let policy_report=state.replay_policy.as_ref().unwrap().report();
         assert_eq!(policy_report.dynamic_bindings.len(),1); assert_eq!(policy_report.dependency_rules[0].time_validations,1);
-        assert_eq!(std::fs::read(temp.path().join("case-id/dependencies.jsonl")).unwrap(),immutable);
+        assert_eq!(std::fs::read(temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl")).unwrap(),immutable);
         task.abort(); mysql_task.abort();
     }).await.expect("path capture HTTP/SQL Replay timed out");
 }

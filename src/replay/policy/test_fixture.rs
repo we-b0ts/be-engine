@@ -8,8 +8,10 @@ use super::{config as old, dynamic_values as d};
 use crate::policy::{self as p, native as n};
 
 mod dependency;
+mod feedback;
 mod identity;
 mod response;
+pub(crate) use feedback::*;
 
 pub(crate) fn convert_legacy_policy(
     yaml: &str,
@@ -117,14 +119,19 @@ pub(crate) fn write_policy(path: impl AsRef<Path>, yaml: impl AsRef<[u8]>) -> Re
 
 /// Install a domain regression fixture directly. This does not emulate planning
 /// or claim that synthetic Source facts authorize a production rule.
-pub(crate) fn install_dependency_rule(path:&Path,rule:serde_json::Value)->Result<()> {
-    let added=convert_legacy_policy(&serde_yaml::to_string(&serde_json::json!({"version":3,"expected_response":"assertions_only","dependency_rules":[rule]}))?,path.parent())?;
-    let mut policy=p::parse_policy(&std::fs::read_to_string(path)?)?;
+pub(crate) fn install_dependency_rule(path: &Path, rule: serde_json::Value) -> Result<()> {
+    let added = convert_legacy_policy(
+        &serde_yaml::to_string(
+            &serde_json::json!({"version":3,"expected_response":"assertions_only","dependency_rules":[rule]}),
+        )?,
+        path.parent(),
+    )?;
+    let mut policy = p::parse_policy(&std::fs::read_to_string(path)?)?;
     for added in added.rules {
-        policy.rules.retain(|rule|rule.id()!=added.id());
+        policy.rules.retain(|rule| rule.id() != added.id());
         policy.rules.push(added);
     }
-    write_policy(path,serde_yaml::to_string(&policy)?)
+    write_policy(path, serde_yaml::to_string(&policy)?)
 }
 
 fn proof(fact: &str) -> p::Proof {
@@ -274,13 +281,13 @@ fn key(value: &crate::replay::RedisValueKeySelector) -> p::KeySelector {
             ..Default::default()
         },
         crate::replay::RedisValueKeySelector::Affix { prefix, suffix } => p::KeySelector {
-            prefix: Some(prefix.clone()),
-            suffix: Some(suffix.clone()),
+            prefix: (!prefix.is_empty()).then(|| prefix.clone()),
+            suffix: (!suffix.is_empty()).then(|| suffix.clone()),
             ..Default::default()
         },
         crate::replay::RedisValueKeySelector::Numeric { prefix, suffix } => p::KeySelector {
-            prefix: Some(prefix.clone()),
-            suffix: Some(suffix.clone()),
+            prefix: (!prefix.is_empty()).then(|| prefix.clone()),
+            suffix: (!suffix.is_empty()).then(|| suffix.clone()),
             numeric: true,
             ..Default::default()
         },
@@ -587,4 +594,25 @@ impl Inventory {
             path
         )
     }
+}
+
+/// Isolated recorded fixtures use the same local AEAD key boundary as production.
+pub(crate) struct ManagedFixtureDirectory {
+    _root: tempfile::TempDir,
+    cases: std::path::PathBuf,
+}
+impl ManagedFixtureDirectory {
+    pub(crate) fn path(&self) -> &Path {
+        &self.cases
+    }
+}
+pub(crate) fn managed_tempdir() -> Result<ManagedFixtureDirectory> {
+    let root = tempfile::tempdir()?;
+    let local = root.path().join(".traffic-e2e/local");
+    let cases = local.join("cases");
+    std::fs::create_dir_all(&cases)?;
+    let key = local.join(crate::repository::LOCAL_ENCRYPTION_KEY_FROM_LOCAL);
+    std::fs::create_dir_all(key.parent().unwrap())?;
+    std::fs::write(key, crate::request_headers::generate_encryption_key()?)?;
+    Ok(ManagedFixtureDirectory { _root: root, cases })
 }

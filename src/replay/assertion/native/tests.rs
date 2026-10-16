@@ -53,6 +53,7 @@ fn signed_native_tokens_compose_inside_unordered_items_without_speculative_nonce
         joined: vec![],
         fields: vec![("order".into(), "/items".into(), FieldContract::Unordered)],
         codec: Some(crate::policy::Codec::Json),
+        codec_ids: vec![],
         jwt: vec![JwtField {
             id: "token".into(),
             rule: crate::replay::policy::native_projection::project_jwt(&effect, &proof(()).proof)

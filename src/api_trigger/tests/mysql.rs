@@ -44,7 +44,7 @@ fn integral_identity_capture_preserves_trailing_zeros_and_large_numeric_predicat
             .insert("id".into(), id.into());
         let index = load(
             &f.root,
-            &[selector.rule("integer-id", "0123456789abcdef", PROOF)],
+            &[selector.rule("integer-id", SOURCE_REVISION, PROOF)],
         )
         .unwrap();
         assert_eq!(
@@ -110,7 +110,7 @@ impl Fixture {
         fs::write(&self.report, report.to_string()).unwrap();
     }
     pub(super) fn mysql_rules(&self) -> Vec<BackgroundDependencyRuleConfig> {
-        vec![mysql_selector().rule("job-result", "0123456789abcdef", PROOF)]
+        vec![mysql_selector().rule("job-result", SOURCE_REVISION, PROOF)]
     }
     pub(super) fn mysql_plan(&self) -> anyhow::Result<crate::ApiTriggeredMysqlPlan> {
         plan_api_triggered_mysql(
@@ -118,7 +118,7 @@ impl Fixture {
             &self.report,
             &self.root,
             "job-result",
-            "0123456789abcdef",
+            SOURCE_REVISION,
             PROOF,
             &mysql_selector(),
         )
@@ -268,7 +268,7 @@ fn mysql_binding_accepts_singleton_in_and_rejects_unbounded_or_non_predicate_slo
         "SELECT id FROM {{table}} WHERE subtask_id IN (?) ORDER BY id ASC".into();
     let mut e = read(12);
     e["sql"] = "SELECT id FROM jobs_0001 WHERE subtask_id IN (12) ORDER BY id ASC".into();
-    let rule = selector.rule("x", "0123456789abcdef", PROOF);
+    let rule = selector.rule("x", SOURCE_REVISION, PROOF);
     crate::config::process_owned_dependencies::validate(std::slice::from_ref(&rule)).unwrap();
     assert_eq!(
         crate::config::api_trigger::mysql::identity(&rule, &e).as_deref(),
@@ -287,7 +287,7 @@ fn mysql_binding_accepts_singleton_in_and_rejects_unbounded_or_non_predicate_slo
         assert!(
             crate::config::process_owned_dependencies::validate(&[selector.rule(
                 "x",
-                "0123456789abcdef",
+                SOURCE_REVISION,
                 PROOF
             )])
             .is_err(),
@@ -299,7 +299,7 @@ fn mysql_binding_accepts_singleton_in_and_rejects_unbounded_or_non_predicate_slo
     assert!(
         crate::config::process_owned_dependencies::validate(&[selector.rule(
             "x",
-            "0123456789abcdef",
+            SOURCE_REVISION,
             PROOF
         )])
         .is_err()
@@ -416,7 +416,7 @@ async fn mysql_recorder_retains_idle_candidates_and_keeps_active_calls_case_owne
     config.dns_mock.registry_path = temp.path().join("dns.json");
     config.http_gateway.ready.enabled = false;
     config.process_owned_dependencies =
-        vec![mysql_selector().rule("background", "0123456789abcdef", PROOF)];
+        vec![mysql_selector().rule("background", SOURCE_REVISION, PROOF)];
     let state = crate::AppState::new(config).await.unwrap();
     let case = CaseContext {
         id: Uuid::new_v4(),

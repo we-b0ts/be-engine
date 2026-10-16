@@ -23,6 +23,7 @@ pub(super) fn plan(
     state: &mut RewriteState,
     mut options: RewriteRulePlanOptions,
 ) -> Result<RewriteRuleReport> {
+    crate::policy::retired_authoring()?;
     validate_companions(
         options.dynamic_value.is_some(),
         options.mysql_time.is_some(),

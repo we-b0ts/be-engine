@@ -586,15 +586,16 @@ mod tests {
     #[test]
     fn recorder_ports_remain_replay_defaults_when_explicit() {
         let directory = tempfile::tempdir().unwrap();
-        let recorder_config = directory.path().join("project.yaml");
+        std::fs::create_dir_all(directory.path().join(".traffic-e2e")).unwrap();
+        let recorder_config = directory.path().join(".traffic-e2e/project.yaml");
         std::fs::write(
             &recorder_config,
-            "version: 14\nproject:\n  recording:\n    source_traffic_policy: source-traffic-policy.yaml\nrecorder:\n  dns_mock:\n    listen: 127.0.0.153:15353\n  tcp_gateway:\n    listen: 127.0.0.1:15001\n  udp_gateway:\n    listen: 127.0.0.1:15002\n",
+            "version: 18\nproject:\n  policy: .traffic-e2e/policy.yaml\nrecorder:\n  dns_mock:\n    listen: 127.0.0.153:15353\n  tcp_gateway:\n    listen: 127.0.0.1:15001\n  udp_gateway:\n    listen: 127.0.0.1:15002\n",
         )
         .unwrap();
         std::fs::write(
-            directory.path().join("source-traffic-policy.yaml"),
-            "version: 2\nhttp:\n  case_path_patterns: []\n  allowed_unused_http_hosts: []\nbreeze_capture: []\nprocess_owned_dependencies: []\n",
+            directory.path().join(".traffic-e2e/policy.yaml"),
+            "format: traffic-policy/v1\nrules: []\n",
         )
         .unwrap();
         let mut args = replay_args(Some(directory.path().to_path_buf()), None);

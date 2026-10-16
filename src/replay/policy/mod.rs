@@ -35,7 +35,6 @@ pub(crate) use matcher::mysql_contract::{
     compare_values as compare_mysql_values, selected_value as mysql_contract_value,
     witness_matches as mysql_witness_matches,
 };
-pub(crate) use matcher::mysql_native::compare_native_values as compare_native_mysql_values;
 pub(crate) use matcher::mysql_native::witness_matches as mysql_native_witness_matches;
 mod pattern;
 mod protobuf;
@@ -62,7 +61,6 @@ pub use feedback::{
     ResponseRuleReport, plan_memcached_timestamp_rule, plan_mysql_time_rule,
     plan_response_body_rule, plan_response_rule,
 };
-pub(crate) use initialization::render_validated_replay_policy;
 pub use initialization::{
     ReplayPolicyInitOptions, ReplayPolicyInitResult, initialize_replay_policy,
 };

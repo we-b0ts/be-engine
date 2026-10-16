@@ -267,11 +267,7 @@ fn same_resource_read_permission_does_not_prove_transaction_boundaries() {
     f.mysql_events(&[query.clone(), commit.clone()]);
     let mut selector = mysql::mysql_selector();
     selector.include_transaction_boundaries = true;
-    let index = load(
-        &f.root,
-        &[selector.rule("reads", "0123456789abcdef", PROOF)],
-    )
-    .unwrap();
+    let index = load(&f.root, &[selector.rule("reads", SOURCE_REVISION, PROOF)]).unwrap();
     assert!(index.witness("victim", &query).unwrap().same_resource_read);
     assert!(index.witness("victim", &commit).is_none());
 }

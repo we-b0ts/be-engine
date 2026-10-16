@@ -277,8 +277,10 @@ pub(super) fn convert(
                         resource: Some(resource),
                         operation: Some(memcache.command.to_ascii_uppercase()),
                         key: Some(p::KeySelector {
-                            prefix: Some(memcache.key.prefix.clone()),
-                            suffix: Some(memcache.key.suffix.clone()),
+                            prefix: (!memcache.key.prefix.is_empty())
+                                .then(|| memcache.key.prefix.clone()),
+                            suffix: (!memcache.key.suffix.is_empty())
+                                .then(|| memcache.key.suffix.clone()),
                             numeric: true,
                             ..Default::default()
                         }),
@@ -531,8 +533,14 @@ fn generated(value: &old::DynamicValueRule) -> Result<n::GeneratedValue> {
         Some(old::ValueValidator::UuidV4) => n::GeneratedValue::UuidV4 {
             binding: value.bind.clone(),
         },
-        Some(old::ValueValidator::NonEmpty) | None => n::GeneratedValue::NonEmpty {
+        Some(old::ValueValidator::NonEmpty) => n::GeneratedValue::NonEmpty {
             binding: value.bind.clone(),
+        },
+        None => n::GeneratedValue::Bind {
+            binding: value
+                .bind
+                .clone()
+                .context("generated fixture requires a binding or explicit validation")?,
         },
     })
 }
@@ -616,8 +624,10 @@ fn sequence(value: &request::RedisRequestSelector, fact: &str) -> Result<n::Redi
                                                 .jwt
                                                 .dynamic_claims
                                                 .iter()
-                                                .map(|claim| proven(response::nonce(claim), fact))
-                                                .collect(),
+                                                .map(|claim| {
+                                                    Ok(proven(response::nonce(claim)?, fact))
+                                                })
+                                                .collect::<Result<_>>()?,
                                         },
                                     };
                                     Ok((pointer.clone(), proven(field, fact)))

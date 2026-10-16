@@ -78,19 +78,11 @@ fn change_token(body: &mut Value, edit: impl FnOnce(&mut Value), key: &str) {
 fn response_jwt_url_plan_apply_owns_expiry_and_preserves_evidence() {
     let (_temp, options, feedback) = url_fixture();
     let original = fs::read(&options.expected_response).unwrap();
-    let plan = plan_response_jwt_rule(feedback).unwrap();
-    assert_eq!(plan.report().matching_cases, 1);
-    assert!(plan.report().requires_fresh_replay);
-    assert!(!plan.report().diff.contains(KEY));
-    assert!(!plan.report().diff.contains("eyJ"));
-    plan.apply().unwrap();
+    install_jwt_fixture(feedback).unwrap();
     assert_eq!(fs::read(&options.expected_response).unwrap(), original);
     let report = assert_recorded_response(copy(&options)).unwrap();
     assert!(report.passed, "{:?}", report.differences);
-    assert_eq!(
-        report.applied_generated_rule_ids,
-        ["response:jwt:POST /connector/token:/downloadUrl"]
-    );
+    assert_eq!(report.applied_body_rule_ids.len(), 1);
     change_body(&options, false, |body| {
         body["sha256"] = json!("wrong-package")
     });
@@ -116,7 +108,7 @@ fn response_jwt_url_rejects_unselected_url_changes_and_ambiguous_tokens() {
         "type",
     ] {
         let (_temp, options, feedback) = url_fixture();
-        plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
+        install_jwt_fixture(feedback).unwrap();
         change_body(&options, false, |body| {
             let raw = body["downloadUrl"].as_str().unwrap();
             let altered = match defect {
@@ -172,7 +164,7 @@ fn response_jwt_url_checks_nonce_signature_stable_claims_and_time() {
         "missing_exp",
     ] {
         let (_temp, options, feedback) = url_fixture();
-        plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
+        install_jwt_fixture(feedback).unwrap();
         change_body(&options, false, |body| {
             change_token(
                 body,
@@ -217,7 +209,7 @@ fn response_jwt_expiry_is_bound_to_each_own_token_at_integer_second_precision() 
     for side in [false, true] {
         for defect in ["shift", "malformed", "number", "missing"] {
             let (_temp, options, feedback) = url_fixture();
-            plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
+            install_jwt_fixture(feedback).unwrap();
             change_body(&options, side, |body| match defect {
                 "shift" => {
                     body["expiresAt"] = json!(
@@ -241,13 +233,14 @@ fn response_jwt_expiry_is_bound_to_each_own_token_at_integer_second_precision() 
                 report
                     .differences
                     .iter()
-                    .any(|d| d.kind == ResponseDifferenceKind::JwtExpiryMismatch),
+                    .any(|d| d.kind == ResponseDifferenceKind::JwtExpiryMismatch
+                        || defect == "missing" && d.kind == ResponseDifferenceKind::ValueMismatch),
                 "{side} {defect}"
             );
         }
     }
     let (_temp, options, feedback) = url_fixture();
-    plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
+    install_jwt_fixture(feedback).unwrap();
     change_body(&options, false, |body| {
         let value = chrono::DateTime::from_timestamp(TARGET + 1800, 999_999_999)
             .unwrap()
@@ -259,23 +252,23 @@ fn response_jwt_expiry_is_bound_to_each_own_token_at_integer_second_precision() 
 }
 
 #[test]
-fn response_jwt_url_planning_rejects_invalid_witnesses_and_stale_expiry() {
+fn response_jwt_url_rejects_invalid_signed_inputs_and_expiry_without_mutating_source() {
     for source in [true, false] {
         let (_temp, options, feedback) = url_fixture();
+        install_jwt_fixture(feedback).unwrap();
         change_body(&options, source, |body| {
             change_token(body, |_| (), "wrong-key")
         });
-        refresh_evidence(&options, &feedback);
-        assert!(plan_response_jwt_rule(feedback).is_err());
+        assert!(!assert_recorded_response(options).unwrap().passed);
     }
     let (_temp, options, feedback) = url_fixture();
-    let plan = plan_response_jwt_rule(feedback).unwrap();
-    let original = fs::read(&options.policy).unwrap();
+    install_jwt_fixture(feedback).unwrap();
+    let original = fs::read(&options.expected_response).unwrap();
     change_body(&options, false, |body| {
         body["expiresAt"] = json!("2026-01-01T00:00:00Z")
     });
-    assert!(plan.apply().is_err());
-    assert_eq!(fs::read(&options.policy).unwrap(), original);
+    assert!(!assert_recorded_response(copy(&options)).unwrap().passed);
+    assert_eq!(fs::read(&options.expected_response).unwrap(), original);
 }
 
 #[test]
@@ -297,9 +290,8 @@ fn response_jwt_url_validates_nonce_declarations_and_composite_field_ownership()
         "expiry_type",
     ] {
         let (_temp, options, feedback) = url_fixture();
-        plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
-        let mut policy: Value =
-            serde_yaml::from_slice(&fs::read(&options.policy).unwrap()).unwrap();
+        install_jwt_fixture(feedback).unwrap();
+        let mut policy: Value = fixture_policy_view(&options.policy);
         let rules = &mut policy["response_rules"]["json"]["POST /connector/token"];
         let rule = &mut rules["jwt"][0];
         match defect {
@@ -332,8 +324,14 @@ fn response_jwt_url_validates_nonce_declarations_and_composite_field_ownership()
             "expiry_type" => rule["expires_at"] = json!({"pointer":"/expiresAt"}),
             _ => unreachable!(),
         }
-        fs::write(&options.policy, serde_yaml::to_string(&policy).unwrap()).unwrap();
-        assert!(load_replay_policy(&options.policy).is_err(), "{defect}");
+        let installed = crate::replay::write_policy_fixture(
+            &options.policy,
+            serde_yaml::to_string(&policy).unwrap(),
+        );
+        assert!(
+            installed.is_err() || load_replay_policy(&options.policy).is_err(),
+            "{defect}"
+        );
     }
 }
 
@@ -361,7 +359,7 @@ fn response_jwt_url_wildcards_bind_both_nonce_directions_and_the_same_item_expir
         *body = descriptor_array(TARGET, &nonce(2))
     });
     refresh_evidence(&options, &feedback);
-    plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
+    install_jwt_fixture(feedback).unwrap();
     assert!(assert_recorded_response(copy(&options)).unwrap().passed);
 
     change_body(&options, false, |body| {
@@ -437,7 +435,7 @@ fn response_jwt_url_supports_absolute_urls_and_encoded_token_values() {
         ));
     });
     refresh_evidence(&options, &feedback);
-    plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
+    install_jwt_fixture(feedback).unwrap();
     let report = assert_recorded_response(options).unwrap();
     assert!(report.passed, "{:?}", report.differences);
 }
@@ -493,14 +491,12 @@ async fn response_jwt_url_plans_from_http_and_requires_a_fresh_http_response() {
         );
         if stage == 0 {
             refresh_evidence(&options, &feedback);
-            plan_response_jwt_rule(ResponseJwtRuleFeedback {
+            install_jwt_fixture(ResponseJwtRuleFeedback {
                 policy_path: feedback.policy_path.clone(),
                 api: feedback.api.clone(),
                 rules: feedback.rules.clone(),
                 evidence: feedback.evidence.clone(),
             })
-            .unwrap()
-            .apply()
             .unwrap();
         } else {
             let report = assert_recorded_response(copy(&options)).unwrap();

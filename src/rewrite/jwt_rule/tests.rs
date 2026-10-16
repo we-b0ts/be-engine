@@ -1,9 +1,6 @@
 use super::*;
 use crate::request_rules::tests::request;
-use crate::rewrite::{
-    model::{RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewritePhase},
-    store::RewriteStore,
-};
+use crate::rewrite::model::{RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewritePhase};
 use chrono::DateTime;
 use std::fs;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -24,8 +21,8 @@ fn fixture() -> Fixture {
         None,
     );
     fs::write(
-        root.join(".traffic-e2e/verification.yaml"),
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+        root.join(".traffic-e2e/policy.yaml"),
+        "format: traffic-policy/v1\nrules: []\n",
     )
     .unwrap();
     fs::write(
@@ -155,48 +152,46 @@ fn options() -> JwtRulePlanOptions {
     }
 }
 
-fn plan_fixture(f: &mut Fixture) -> RewriteRuleReport {
-    let root = f.target.path();
-    let query = evidence::commands(root, &f.state)
-        .into_iter()
-        .find(|q| q.query_id.ends_with("jwt-time-validity"))
-        .unwrap();
-    let ev = evidence::query(root, &f.state, &query.query_id).unwrap();
-    assert_eq!(ev.applicable_rule_planners.len(), 1);
-    assert!(!ev.facts["signature_verified"].as_bool().unwrap());
-    plan(
-        root,
-        &mut f.state,
-        ev.evidence_id,
-        Some("auth.rs verifies SECRET_KEY HS256 session JWT with 60s expiration leeway".into()),
-        options(),
+fn install_input_fixture(root: &std::path::Path, location: Value, signing_key: Value) {
+    let policy = json!({"format":"traffic-policy/v1","rules":[{
+        "id":"session-jwt","match":{},"effect":{"kind":"input_jwt","location":location,
+        "algorithm":"HS256","signing_key":signing_key,"time":"preserve_relative"},
+        "proof":{"source":"fixture/auth.rs:1","fact":"Source verifies this signed JWT and its relative expiry"}}]});
+    let document = crate::policy::parse_policy(&policy.to_string()).unwrap();
+    crate::policy::compile_policy(&document).unwrap();
+    fs::write(
+        root.join(".traffic-e2e/policy.yaml"),
+        serde_yaml::to_string(&document).unwrap(),
     )
-    .unwrap()
+    .unwrap();
 }
 
 #[tokio::test]
 async fn discovery_plan_apply_and_real_http_replay_use_the_original_recording() {
     let mut f = fixture();
     let original = fs::read(&f.request).unwrap();
-    let preview = plan_fixture(&mut f);
-    assert_eq!(preview.traffic_e2e_report["signature_verified"], true);
-    assert!(
-        !f.target
-            .path()
-            .join(".traffic-e2e/local/secrets/jwt-signing-keys.json")
-            .exists()
+    let root = f.target.path();
+    let before = serde_json::to_value(&f.state).unwrap();
+    let policy_before = fs::read(root.join(".traffic-e2e/policy.yaml")).unwrap();
+    let error = plan(
+        root,
+        &mut f.state,
+        "old-evidence".into(),
+        Some("Source verifies JWT".into()),
+        options(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("retired"));
+    assert_eq!(serde_json::to_value(&f.state).unwrap(), before);
+    assert_eq!(
+        fs::read(root.join(".traffic-e2e/policy.yaml")).unwrap(),
+        policy_before
     );
-    assert!(
-        !fs::read_to_string(f.target.path().join(".traffic-e2e/verification.yaml"))
-            .unwrap()
-            .contains("request_rules")
+    install_input_fixture(
+        root,
+        json!({"kind":"bearer_header","name":"authorization"}),
+        json!({"kind":"target_env","name":"SECRET_KEY"}),
     );
-    let record = f.state.rule_plan.clone().unwrap();
-    let result = apply(f.target.path(), &mut f.state, record).unwrap();
-    assert_eq!(result.traffic_e2e_report["requires_rerecording"], false);
-    assert!(result.next_command.argv.iter().any(|s| s == "next"));
-    assert!(f.state.recording_refresh.is_none());
-    assert!(!f.state.e2e_current);
     assert_eq!(fs::read(&f.request).unwrap(), original);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -245,7 +240,7 @@ async fn discovery_plan_apply_and_real_http_replay_use_the_original_recording() 
     let response = make_client()
         .with_request_rules(
             f.target.path(),
-            &f.target.path().join(".traffic-e2e/verification.yaml"),
+            &f.target.path().join(".traffic-e2e/policy.yaml"),
         )
         .unwrap()
         .send(&f.request)
@@ -263,7 +258,7 @@ async fn discovery_plan_apply_and_real_http_replay_use_the_original_recording() 
         request: f.request.clone(),
         expected_response: f.request.parent().unwrap().join("expected-response.json"),
         actual_response: actual_path,
-        policy: f.target.path().join(".traffic-e2e/verification.yaml"),
+        policy: f.target.path().join(".traffic-e2e/policy.yaml"),
     })
     .unwrap();
     assert!(assertion.passed);
@@ -272,59 +267,37 @@ async fn discovery_plan_apply_and_real_http_replay_use_the_original_recording() 
 }
 
 #[test]
-fn source_401_does_not_offer_a_refresh_rule_and_apply_writes_no_binding() {
-    let mut f = fixture();
-    plan_fixture(&mut f);
-    let record = f.state.rule_plan.clone().unwrap();
-    let report = apply(f.target.path(), &mut f.state, record).unwrap();
-    let serialized = serde_json::to_string(&report).unwrap();
-    assert!(!serialized.contains("test-signing-key"));
-    assert!(!serialized.contains("test-user"));
-    let expected = f.request.parent().unwrap().join("expected-response.json");
-    fs::write(expected, r#"{"status":401}"#).unwrap();
-    assert!(
-        facts(f.target.path(), &f.state)
-            .unwrap()
-            .candidates
-            .is_empty()
-    );
-    assert!(
-        !f.target
-            .path()
-            .join(".traffic-e2e/local/secrets/jwt-signing-keys.json")
-            .exists()
-    );
-    let policy =
-        fs::read_to_string(f.target.path().join(".traffic-e2e/verification.yaml")).unwrap();
-    assert!(policy.contains("signing_key_source:"));
-    assert!(policy.contains("name: SECRET_KEY"));
-}
-
-#[test]
-fn apply_rejects_key_policy_and_evidence_changes_without_writing_rules() {
-    for change in ["key", "policy", "request"] {
+fn retired_jwt_planning_preserves_all_recorded_inputs_and_workflow() {
+    for location in [
+        JwtTokenLocation::BearerHeader {
+            header: "authorization".into(),
+        },
+        JwtTokenLocation::RawHeader {
+            raw_header: "x-token".into(),
+        },
+        JwtTokenLocation::QueryParameter {
+            query_param: "token".into(),
+        },
+    ] {
         let mut f = fixture();
-        plan_fixture(&mut f);
-        let record = f.state.rule_plan.clone().unwrap();
-        match change {
-            "key" => fs::write(
-                f.target.path().join(".traffic-e2e/local/target.env"),
-                "SECRET_KEY=rotated\n",
-            )
-            .unwrap(),
-            "policy" => fs::write(
-                f.target.path().join(".traffic-e2e/verification.yaml"),
-                "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n# changed\n",
-            )
-            .unwrap(),
-            _ => {
-                let mut value: Value =
-                    serde_json::from_slice(&fs::read(&f.request).unwrap()).unwrap();
-                value["uri"] = json!("/changed");
-                fs::write(&f.request, serde_json::to_vec(&value).unwrap()).unwrap();
-            }
-        }
-        assert!(apply(f.target.path(), &mut f.state, record).is_err());
+        let policy = f.target.path().join(".traffic-e2e/policy.yaml");
+        let before_policy = fs::read(&policy).unwrap();
+        let before_request = fs::read(&f.request).unwrap();
+        let before = serde_json::to_value(&f.state).unwrap();
+        let mut opts = options();
+        opts.location = location;
+        let error = plan(
+            f.target.path(),
+            &mut f.state,
+            "old-evidence".into(),
+            Some("Source JWT validation".into()),
+            opts,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("retired"));
+        assert_eq!(serde_json::to_value(&f.state).unwrap(), before);
+        assert_eq!(fs::read(&policy).unwrap(), before_policy);
+        assert_eq!(fs::read(&f.request).unwrap(), before_request);
         assert!(
             !f.target
                 .path()
@@ -335,42 +308,24 @@ fn apply_rejects_key_policy_and_evidence_changes_without_writing_rules() {
 }
 
 #[test]
-fn plan_rejects_wrong_key_and_insufficient_expiration_evidence() {
-    let mut f = fixture();
+fn source_authentication_failures_do_not_offer_input_time_adaptation() {
+    let f = fixture();
     fs::write(
-        f.target.path().join(".traffic-e2e/local/target.env"),
-        "SECRET_KEY=wrong-key\n",
+        f.request.parent().unwrap().join("expected-response.json"),
+        r#"{"status":401}"#,
     )
     .unwrap();
-    let query = evidence::commands(f.target.path(), &f.state)
-        .into_iter()
-        .find(|q| q.query_id.ends_with("jwt-time-validity"))
-        .unwrap();
-    let ev = evidence::query(f.target.path(), &f.state, &query.query_id).unwrap();
-    let error = plan(
-        f.target.path(),
-        &mut f.state,
-        ev.evidence_id,
-        Some("source uses JWT exp validation".into()),
-        options(),
-    )
-    .unwrap_err();
-    assert!(error.to_string().contains("does not verify"));
-    assert!(!error.to_string().contains("wrong-key"));
-    let mut candidate = facts(f.target.path(), &f.state)
-        .unwrap()
-        .candidates
-        .remove(0);
-    candidate.replayed_at = DateTime::from_timestamp(candidate.exp + 30, 0).unwrap();
-    let request =
-        serde_json::from_slice(&crate::request_headers::load_request_file(&f.request).unwrap())
-            .unwrap();
-    assert!(jwt_evidence::verify_candidate(&candidate, &request, b"test-signing-key", 60).is_err());
+    assert!(
+        facts(f.target.path(), &f.state)
+            .unwrap()
+            .candidates
+            .is_empty()
+    );
 }
 
 #[test]
 fn query_parameter_evidence_guides_and_plans_the_matching_location() {
-    let mut f = fixture();
+    let f = fixture();
     let recorded = 1_700_000_000;
     let raw = crate::request_rules::tests::token(
         json!({"sub":"test-user","exp":recorded+3600}),
@@ -400,33 +355,22 @@ fn query_parameter_evidence_guides_and_plans_the_matching_location() {
             .command
             .argv
             .windows(2)
-            .any(|pair| pair == ["--query-param", "download_token"])
+            .any(|pair| pair == ["rule", "plan"])
     );
-    assert!(!planner.command.argv.iter().any(|arg| arg == "--header"));
-
-    let mut options = options();
-    options.location = JwtTokenLocation::QueryParameter {
-        query_param: "download_token".into(),
-    };
-    let planned = plan(
-        f.target.path(),
-        &mut f.state,
-        report.evidence_id,
-        Some("auth.rs validates download_token with SECRET_KEY and 60s leeway".into()),
-        options,
-    )
-    .unwrap();
-    assert_eq!(
-        planned.traffic_e2e_report["rule"]["query_param"],
-        "download_token"
+    assert!(planner.command.argv.iter().any(|arg| arg == "--file"));
+    assert!(
+        !planner
+            .command
+            .argv
+            .iter()
+            .any(|arg| arg == "--query-param")
     );
-    assert!(planned.traffic_e2e_report["rule"].get("header").is_none());
 }
 
 #[test]
 fn raw_header_expiry_is_plannable_for_html_and_earlier_dependency_failures() {
     for actual_status in [200, 503] {
-        let mut f = fixture();
+        let f = fixture();
         let recorded = 1_700_000_000;
         let mut request = crate::request_rules::tests::request(
             json!({"sub":"test-user","exp":recorded+300}),
@@ -461,67 +405,22 @@ fn raw_header_expiry_is_plannable_for_html_and_earlier_dependency_failures() {
                 .command
                 .argv
                 .windows(2)
-                .any(|args| args == ["--header-scheme", "raw"])
+                .any(|args| args == ["rule", "plan"])
         );
-        let mut options = options();
-        options.location = JwtTokenLocation::RawHeader {
-            raw_header: "x-download-token".into(),
-        };
-        let planned = plan(
-            f.target.path(),
-            &mut f.state,
-            report.evidence_id,
-            Some("source checks the signed raw header before its HTML success response".into()),
-            options,
-        )
-        .unwrap();
-        assert_eq!(planned.traffic_e2e_report["rule"]["scheme"], "raw");
-        assert_eq!(planned.traffic_e2e_report["signature_verified"], true);
+        assert!(planner.command.argv.iter().any(|arg| arg == "--file"));
+        assert!(
+            !planner
+                .command
+                .argv
+                .iter()
+                .any(|arg| arg == "--header-scheme")
+        );
     }
 }
 
 #[test]
-fn global_apply_invalidates_other_completed_api_without_new_recording() {
-    let mut f = fixture();
-    f.state.api_inventory[1].status = super::super::model::RewriteApiStatus::Complete;
-    f.state.api_inventory[1].e2e_current = true;
-    plan_fixture(&mut f);
-    let id = f.state.rule_plan.as_ref().unwrap().id.clone();
-    RewriteStore::new(f.target.path())
-        .unwrap()
-        .save(&f.state)
-        .unwrap();
-    let report = super::super::apply_rewrite_rule(
-        crate::RewriteContext {
-            target_root: f.target.path().into(),
-        },
-        &id,
-    )
-    .unwrap();
-    let state = RewriteStore::new(f.target.path())
-        .unwrap()
-        .load()
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        state.api_inventory[1].status,
-        super::super::model::RewriteApiStatus::RevalidationPending
-    );
-    assert!(!state.api_inventory[1].e2e_current);
-    assert!(state.rule_replay_pending);
-    assert!(super::super::worker::runtime::acceptance_ready(
-        &state,
-        &crate::rewrite::RewriteWorkScope::Api {
-            api: crate::rewrite::api_selector::public_api(&state.api).to_string()
-        }
-    ));
-    assert!(state.recording_refresh.is_none());
-    assert_eq!(report.traffic_e2e_report["requires_rerecording"], false);
-}
-
-#[test]
 fn jwt_evidence_discovers_mounts_and_configured_file_source_without_exposing_values() {
-    let mut f = fixture();
+    let f = fixture();
     let root = f.target.path();
     let config_path = root.join(".traffic-e2e/project.yaml");
     let mut config: serde_yaml::Value =
@@ -575,35 +474,22 @@ fn jwt_evidence_discovers_mounts_and_configured_file_source_without_exposing_val
     ] {
         assert!(!serialized.contains(secret));
     }
-    let mut opts = options();
-    opts.key_source = Some(SigningKeySource::TargetFile {
-        path: discovery["startup_mounts"]["mounts"][0]["path"]
-            .as_str()
-            .unwrap()
-            .into(),
-        field: "SECRET_KEY".into(),
-    });
-    plan(
+    install_input_fixture(
         root,
-        &mut f.state,
-        ev.evidence_id,
-        Some("auth.rs loads SECRET_KEY from /app/.env with 60s leeway".into()),
-        opts,
-    )
-    .unwrap();
-    let record = f.state.rule_plan.clone().unwrap();
-    apply(root, &mut f.state, record).unwrap();
+        json!({"kind":"bearer_header","name":"authorization"}),
+        json!({"kind":"target_file","path":"/app/.env","field":"SECRET_KEY"}),
+    );
     assert!(
         !root
             .join(".traffic-e2e/local/secrets/jwt-signing-keys.json")
             .exists()
     );
     let discovery = discovery::query(root);
+    let profile = &discovery["configured_profiles"]["profiles"][0];
+    assert_eq!(profile["profile"], profile["signing_key_ref"]);
     assert_eq!(
-        discovery["configured_profiles"]["profiles"][0],
-        json!({"profile":"session-jwt", "signing_key_ref":"session-jwt", "signing_key_source":{
-            "kind":"target_file", "path":"/app/.env", "field":"SECRET_KEY"
-        }})
+        profile["signing_key_source"],
+        json!({"kind":"target_file","path":"/app/.env","field":"SECRET_KEY"})
     );
     assert!(
         keys::resolve_source(
@@ -717,7 +603,7 @@ fn both_auth_statuses_require_expiration_and_a_verified_signature_before_plannin
                 evidence.facts["candidates"].as_array().unwrap().len(),
                 usize::from(scenario != "unexpired")
             );
-            let policy_path = f.target.path().join(".traffic-e2e/verification.yaml");
+            let policy_path = f.target.path().join(".traffic-e2e/policy.yaml");
             let policy = fs::read(&policy_path).unwrap();
             let result = plan(
                 f.target.path(),
@@ -726,12 +612,8 @@ fn both_auth_statuses_require_expiration_and_a_verified_signature_before_plannin
                 Some("auth.rs verifies SECRET_KEY HS256 JWTs with 60s expiration leeway".into()),
                 options(),
             );
-            assert_eq!(
-                result.is_ok(),
-                scenario == "expired",
-                "{status}: {scenario}: {result:?}"
-            );
-            assert_eq!(f.state.rule_plan.is_some(), scenario == "expired");
+            assert!(result.unwrap_err().to_string().contains("retired"));
+            assert!(f.state.rule_plan.is_none());
             assert_eq!(fs::read(policy_path).unwrap(), policy);
         }
     }

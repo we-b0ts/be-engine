@@ -85,6 +85,22 @@ fn generated_capture_cannot_bind_fixed_input_or_missing_inbound_discriminator() 
         "source_evidence":"Emitter:delta generates a new identity; created forwards the inbound identity"
     }]});
     let fixture = policy_fixture(&serde_yaml::to_string(&document).unwrap());
+    let mut policy =
+        crate::policy::parse_policy(&fs::read_to_string(&fixture.policy_path).unwrap()).unwrap();
+    let native = policy
+        .rules
+        .iter_mut()
+        .find_map(|rule| match rule {
+            crate::policy::PolicyRule::Native(rule) => Some(rule),
+            _ => None,
+        })
+        .unwrap();
+    native.selector.api = Some("POST /events".into());
+    fs::write(
+        &fixture.policy_path,
+        serde_yaml::to_string(&policy).unwrap(),
+    )
+    .unwrap();
     let target = TargetKey {
         host: "cache.test".into(),
         port: 6379,

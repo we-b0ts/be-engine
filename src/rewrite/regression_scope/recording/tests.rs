@@ -17,17 +17,11 @@ fn target() -> tempfile::TempDir {
         None,
     );
     let mut source_policy = crate::config::SourceTrafficPolicyConfig::empty();
+    source_policy.http.source_revision = format!("sha256:{}", "1".repeat(64));
     source_policy.http.case_path_patterns = vec!["/users/*".into(), "/orders/*".into()];
     fs::write(
-        target
-            .path()
-            .join(".traffic-e2e/source-traffic-policy.yaml"),
+        target.path().join(".traffic-e2e/policy.yaml"),
         source_policy.render().unwrap(),
-    )
-    .unwrap();
-    fs::write(
-        target.path().join(".traffic-e2e/verification.yaml"),
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
     .unwrap();
     fs::write(
@@ -120,7 +114,7 @@ fn pinned_pattern_wait_reuses_observations_but_apply_still_validates_cases() {
     store.save(&state).unwrap();
     let state_path = crate::internal_runtime::root(root.path()).join("rewrite/state.json");
     let state_before = fs::read(&state_path).unwrap();
-    let policy_path = root.path().join(".traffic-e2e/source-traffic-policy.yaml");
+    let policy_path = root.path().join(".traffic-e2e/policy.yaml");
     let policy_before = fs::read(&policy_path).unwrap();
     fs::write(
         artifacts::recording_run(root.path(), A).join("apis/cases/case-0/request.json"),
@@ -162,9 +156,10 @@ fn pinned_pattern_snapshot_rechecks_selectors_rules_manifest_and_recording_ident
     assert!(super::super::apply(root.path(), &mut state).is_err());
     policy(root.path(), A, "only: [/users/*]\n");
     assert!(!super::super::apply(root.path(), &mut state).unwrap());
-    let path = root.path().join(".traffic-e2e/source-traffic-policy.yaml");
+    let path = root.path().join(".traffic-e2e/policy.yaml");
     let original_policy = fs::read(&path).unwrap();
     let mut policy_document = crate::config::SourceTrafficPolicyConfig::empty();
+    policy_document.http.source_revision = format!("sha256:{}", "1".repeat(64));
     policy_document.http.case_path_patterns = vec!["/orders/*".into()];
     fs::write(&path, policy_document.render().unwrap()).unwrap();
     assert!(super::super::apply(root.path(), &mut state).is_err());

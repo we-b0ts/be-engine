@@ -241,3 +241,27 @@ fn explicitly_independent_clocks_keep_each_anchor_window_and_strict_group_copies
     changed["b"] = json!(119_000_002);
     assert!(!compare(&source, &changed, &grouped, clocks()).passed());
 }
+
+#[test]
+fn absent_source_fields_are_inactive_but_body_shape_stays_exact() {
+    let unordered = FieldContract::Unordered;
+    let fields = [Field {
+        rule_id: "optional",
+        pointer: "/items/*/members",
+        contract: &unordered,
+    }];
+    for source in [
+        serde_json::json!({"stable":1}),
+        serde_json::json!({"items":[],"stable":1}),
+    ] {
+        assert!(compare(&source, &source, &fields, AnchorClocks::default()).passed());
+        let mut target = source.clone();
+        target["stable"] = serde_json::json!(2);
+        assert!(!compare(&source, &target, &fields, AnchorClocks::default()).passed());
+        target = source.clone();
+        target["items"] = serde_json::json!([{"members":[]}]);
+        assert!(!compare(&source, &target, &fields, AnchorClocks::default()).passed());
+    }
+    let malformed = serde_json::json!({"items":[{"members":1}]});
+    assert!(!compare(&malformed, &malformed, &fields, AnchorClocks::default()).passed());
+}

@@ -4,7 +4,7 @@ use super::*;
 fn cached_time_templates_follow_policy_reload_and_recheck_bound_values() {
     let policy = |column: &str| {
         format!(
-            "version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: time\n  protocol: mysql\n  mysql:\n    database: pluto_audit\n    sql: UPDATE {{{{table}}}} SET {column}=? WHERE id=?\n    table_series: {{prefix: tasks_, start: 0, end: 1023, width: 4}}\n    sql_values: {{0: {{time: preserve_relative}}}}\n"
+            "version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: time\n  protocol: mysql\n  target: {{host: audit.example.test, port: 3306}}\n  mysql:\n    command: COM_STMT_EXECUTE\n    database: pluto_audit\n    sql: UPDATE {{{{table}}}} SET {column}=? WHERE id=?\n    table_series: {{prefix: tasks_, start: 0, end: 1023, width: 4}}\n    sql_values: {{0: {{time: preserve_relative}}}}\n"
         )
     };
     let fixture = policy_fixture(&policy("updated_at"));

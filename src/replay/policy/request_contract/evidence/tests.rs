@@ -1,6 +1,6 @@
 //! Planning scope over protected failed requests and immutable Redis evidence.
 use super::*;
-use crate::{DependencyRequestRuleFeedback, GeneratedValueRulePlan, plan_dependency_request_rule};
+use crate::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
 use serde_json::json;
 use std::fs;
 
@@ -83,7 +83,7 @@ impl Fixture {
         assert_eq!(self.runtime.candidates().len(), before + 1);
     }
 
-    fn plan(&self, selector: Value) -> Result<GeneratedValueRulePlan> {
+    fn report(&self) -> Result<Value> {
         fs::write(
             self.case.join("dependencies.jsonl"),
             self.events
@@ -92,29 +92,39 @@ impl Fixture {
                 .collect::<Vec<_>>()
                 .join("\n"),
         )?;
-        fs::write(
-            &self.report,
-            json!({
-                "finalized":true,
-                "replay_policy":{
-                    "fingerprint":crate::replay::policy::load_replay_policy(&self.policy)?.fingerprint,
-                    "request_contract_candidates":self.runtime.candidates()
-                },
-                "cases":[{"case_id":"case","case_dir":self.case}]
-            })
-            .to_string(),
-        )?;
-        plan_dependency_request_rule(DependencyRequestRuleFeedback {
-            policy_path: self.policy.clone(),
-            replay_report: self.report.clone(),
-            rule: json!({
-                "id":"request-time","protocol":"redis",
-                "target":{"host":"cache.test","port":6379},
-                "case":{"method":"PUT","path":"/scenario"},
-                "source_evidence":"Service:update generates current request-relative timestamps",
-                "redis":selector
-            }),
+        let report = json!({
+            "finalized":true,
+            "replay_policy":{
+                "fingerprint":crate::replay::policy::load_replay_policy(&self.policy)?.fingerprint,
+                "request_contract_candidates":self.runtime.candidates()
+            },
+            "cases":[{"case_id":"case","case_dir":self.case}]
+        });
+        fs::write(&self.report, report.to_string())?;
+        Ok(report)
+    }
+
+    fn proposed_rule(selector: Value) -> Value {
+        json!({
+            "id":"request-time","protocol":"redis",
+            "target":{"host":"cache.test","port":6379},
+            "case":{"method":"PUT","path":"/scenario"},
+            "source_evidence":"Service:update generates current request-relative timestamps",
+            "redis":selector
         })
+    }
+
+    fn verify(&self, selector: Value) -> Result<usize> {
+        let report = self.report()?;
+        let rule: ReplayDependencyRule = serde_json::from_value(Self::proposed_rule(selector))?;
+        super::super::validate(&rule)?;
+        let mut document = crate::replay::policy::load_replay_policy(&self.policy)?.document;
+        document.dependency_rules.push(rule.clone());
+        let runtime = RequestContracts {
+            rules: Arc::new(vec![rule.clone()]),
+            ..Default::default()
+        };
+        super::verify(&runtime, &rule, &report, &document, &mut Vec::new())
     }
 }
 
@@ -162,15 +172,7 @@ fn planning_scopes_redis_candidates_by_command_and_key() {
         "ZREMRANGEBYSCORE",
         &["presence:1", "-inf", "1000"],
     ));
-    let plan = fixture.plan(sequence_selector()).unwrap();
-    assert_eq!(plan.report().matching_cases, 1);
-    assert!(plan.report().requires_fresh_replay);
-    let original = fs::read(fixture.case.join("dependencies.jsonl")).unwrap();
-    plan.apply().unwrap();
-    assert_eq!(
-        fs::read(fixture.case.join("dependencies.jsonl")).unwrap(),
-        original
-    );
+    assert_eq!(fixture.verify(sequence_selector()).unwrap(), 1);
 }
 
 #[test]
@@ -202,9 +204,7 @@ fn planning_scopes_same_key_script_candidates_by_exact_script_identity() {
             "command":command,"script":script,
             "argument_values":{"3":{"time":"preserve_relative","format":"unix_seconds"}}
         }]});
-        let plan = fixture.plan(selector).unwrap();
-        assert_eq!(plan.report().matching_cases, 1);
-        plan.apply().unwrap();
+        assert_eq!(fixture.verify(selector).unwrap(), 1);
     }
 }
 
@@ -232,7 +232,7 @@ fn planning_requires_all_selected_commands_from_same_key_and_endpoint_source() {
             }
             fixture.events.push(later);
         }
-        let error = fixture.plan(sequence_selector()).err().unwrap();
+        let error = fixture.verify(sequence_selector()).err().unwrap();
         assert!(error.to_string().contains("every configured Redis request command requires immutable same-case source evidence"), "{replacement}: {error:#}");
     }
 }
@@ -256,7 +256,7 @@ fn planning_requires_matching_source_for_the_selected_script_witness() {
         .events
         .push(exchange("EVALSHA", &[unrelated, "1", "events", "1000"]));
     let error = fixture
-        .plan(json!({"key":"events","commands":[{
+        .verify(json!({"key":"events","commands":[{
             "command":"EVALSHA","script":{"sha1":selected},
             "argument_values":{"3":{"time":"preserve_relative","format":"unix_seconds"}}
         }]}))
@@ -279,7 +279,7 @@ fn planning_keeps_covered_request_time_conflicts_strict() {
         "ZREMRANGEBYSCORE",
         &["presence:1", "-inf", "1000"],
     ));
-    let error = fixture.plan(sequence_selector()).err().unwrap();
+    let error = fixture.verify(sequence_selector()).err().unwrap();
     assert!(
         error
             .to_string()
@@ -288,7 +288,7 @@ fn planning_keeps_covered_request_time_conflicts_strict() {
 }
 
 #[test]
-fn script_json_microseconds_plan_apply_freezes_witnesses_and_rejects_bad_copies() {
+fn script_json_microseconds_evidence_rejects_bad_copies_and_business_changes() {
     let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let selector = json!({"key":"metrics","commands":[{"command":"EVALSHA","script":{"sha1":digest},"argument_values":{
         "3":{"time":"preserve_relative","format":"unix_seconds"},
@@ -312,18 +312,11 @@ fn script_json_microseconds_plan_apply_freezes_witnesses_and_rejects_bad_copies(
         let actual = [digest, "1", "metrics", "2000.123456", "2000123456", body];
         fixture.candidate("EVALSHA", &source, &actual);
         fixture.events.push(exchange("EVALSHA", &source));
-        let plan = fixture.plan(selector.clone());
+        let plan = fixture.verify(selector.clone());
         assert_eq!(plan.is_ok(), passes);
-        if let Ok(plan) = plan {
-            std::fs::write(fixture.case.join("dependencies.jsonl"), "changed").unwrap();
-            assert!(plan.apply().is_err());
-            assert!(
-                crate::replay::policy::load_replay_policy(&fixture.policy)
-                    .unwrap()
-                    .document
-                    .dependency_rules
-                    .is_empty()
-            );
+        if plan.is_ok() {
+            fixture.events[0]["args"][5]["data"] = json!("changed Source payload");
+            assert!(fixture.verify(selector.clone()).is_err());
         }
     }
 }
@@ -353,15 +346,44 @@ fn publish_time_planning_composes_existing_uuid_and_preserves_stable_fields() {
         fixture
             .events
             .push(exchange("PUBLISH", &["events", &source]));
-        let plan = fixture.plan(selector.clone());
+        let plan = fixture.verify(selector.clone());
         assert_eq!(plan.is_ok(), passes, "{time}: {status}");
-        if let Ok(plan) = plan {
-            assert!(plan.report().requires_fresh_replay);
-            plan.apply().unwrap();
-            let loaded = crate::replay::policy::load_replay_policy(&fixture.policy).unwrap();
-            assert_eq!(loaded.document.dependency_rules.len(), 2);
-        }
     }
 }
 
 mod clock_groups;
+
+#[test]
+fn retired_request_authoring_preserves_the_policy_and_protected_witnesses() {
+    let mut fixture = Fixture::new();
+    fixture.candidate(
+        "ZADD",
+        &["presence:1", "1090", "active"],
+        &["presence:1", "2090", "active"],
+    );
+    fixture
+        .events
+        .push(exchange("ZADD", &["presence:1", "1090", "active"]));
+    fixture.report().unwrap();
+    let policy = fs::read(&fixture.policy).unwrap();
+    let report = fs::read(&fixture.report).unwrap();
+    let source = fs::read(fixture.case.join("dependencies.jsonl")).unwrap();
+    let error = plan_dependency_request_rule(DependencyRequestRuleFeedback {
+        policy_path: fixture.policy.clone(),
+        replay_report: fixture.report.clone(),
+        rule: Fixture::proposed_rule(sequence_selector()),
+    })
+    .err()
+    .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("legacy rule authoring is retired")
+    );
+    assert_eq!(fs::read(&fixture.policy).unwrap(), policy);
+    assert_eq!(fs::read(&fixture.report).unwrap(), report);
+    assert_eq!(
+        fs::read(fixture.case.join("dependencies.jsonl")).unwrap(),
+        source
+    );
+}

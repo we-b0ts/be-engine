@@ -317,7 +317,7 @@ mod tests {
                 "--case-source",
                 "recordings/run/rule",
             ])
-            .is_ok()
+            .is_err()
         );
     }
 }

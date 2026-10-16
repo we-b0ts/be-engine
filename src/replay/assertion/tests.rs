@@ -726,8 +726,8 @@ fn motan2_hessian2_unordered_rule_keeps_metadata_exact() {
 fn generated_scalar_skips_only_its_literal_value() {
     let (_temp, options) = write_case(
         "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      uuid:\n        - pointer: /content\n          source_evidence: src/token.rs:issue_token\n          source_example: <redacted source UUID>\n          target_example: <redacted target UUID>\n",
-        json!("recorded"),
-        json!("actual"),
+        json!("11111111-1111-4111-8111-111111111111"),
+        json!("22222222-2222-4222-8222-222222222222"),
     );
 
     let report = assert_recorded_response(options).unwrap();
@@ -751,7 +751,7 @@ fn exact_mismatch_surfaces_a_dynamic_candidate() {
 fn dynamic_field_still_requires_the_same_scalar_type() {
     let (_temp, options) = write_case(
         "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      uuid:\n        - pointer: /content\n          source_evidence: src/token.rs:issue_token\n          source_example: <redacted source UUID>\n          target_example: <redacted target UUID>\n",
-        json!("recorded"),
+        json!("11111111-1111-4111-8111-111111111111"),
         json!(42),
     );
 
@@ -809,7 +809,7 @@ fn json_joined_string_rule_compares_a_multiset() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(report.passed);
-    assert_eq!(report.applied_unordered_joined_string_rule_ids.len(), 1);
+    assert_eq!(report.applied_body_rule_ids.len(), 1);
     assert!(
         report
             .unused_applicable_unordered_joined_string_rule_ids
@@ -845,7 +845,7 @@ fn unordered_array_compares_nested_values_as_a_multiset() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(report.passed);
-    assert_eq!(report.applied_unordered_rule_ids.len(), 1);
+    assert_eq!(report.applied_body_rule_ids.len(), 1);
     assert!(report.unused_applicable_unordered_rule_ids.is_empty());
 }
 
@@ -934,21 +934,16 @@ fn a_rule_present_on_only_one_side_remains_an_exact_difference() {
 }
 
 #[test]
-fn equal_non_json_body_passes_with_configured_response_rules() {
-    // A configured response rule (here uuid on /content) is JSON-pointer-based
-    // and cannot apply to a plain-text body, but when both bodies are byte-equal
-    // there is no difference for any rule to evaluate, so the case passes.
+fn explicit_json_codec_rejects_even_equal_non_json_bodies() {
+    // A selected explicit JSON codec is a Source contract, including equal bodies.
     let (_temp, options) = write_raw_case(
         "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      uuid:\n        - pointer: /content\n          source_evidence: src/token.rs:issue_token\n          source_example: <redacted source UUID>\n          target_example: <redacted target UUID>\n",
         "ip not found",
         "ip not found",
     );
 
-    let report = assert_recorded_response(options).unwrap();
-
-    assert!(report.passed);
-    assert_eq!(report.body_codec, ResponseBodyCodec::ExactBytes);
-    assert!(report.differences.is_empty());
+    let error = assert_recorded_response(options).unwrap_err();
+    assert!(error.to_string().contains("complete JSON"));
 }
 
 #[test]
@@ -964,9 +959,7 @@ fn differing_non_json_body_with_configured_rules_is_unevaluable() {
     let error = assert_recorded_response(options).unwrap_err();
 
     assert!(
-        error
-            .to_string()
-            .contains("response rules require JSON response bodies"),
+        error.to_string().contains("complete JSON"),
         "unexpected error: {error}"
     );
 }

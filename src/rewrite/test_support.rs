@@ -5,6 +5,10 @@ use super::model::{
     RewritePhase, RewriteRecordingSettings, RewriteSliceState, RewriteState, STATE_VERSION,
 };
 
+pub(in crate::rewrite) fn install_source_snapshot(target_root: &Path) -> String {
+    crate::source_snapshot::test_fixture::install(target_root)
+}
+
 pub(in crate::rewrite) fn test_state() -> RewriteState {
     RewriteState {
         version: STATE_VERSION,

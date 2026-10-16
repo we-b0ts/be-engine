@@ -10,7 +10,7 @@ fn query_body(query: &str, end: i64) -> Value {
 }
 
 struct Fixture {
-    _temp: tempfile::TempDir,
+    _temp: crate::replay::policy::test_fixture::ManagedFixtureDirectory,
     case: PathBuf,
     policy: PathBuf,
     report: PathBuf,
@@ -132,9 +132,15 @@ async fn json_time_planner_pairs_nine_candidates_and_fresh_replay_consumes_each_
             .len(),
         9
     );
-    let plan = fixture.plan().unwrap();
-    assert_eq!(plan.report().matching_cases, 1);
-    assert!(plan.apply().unwrap().requires_fresh_replay);
+    assert!(
+        fixture
+            .plan()
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("retired")
+    );
+    crate::replay::install_dependency_rule_fixture(&fixture.policy, rule()).unwrap();
     let (addr, runtime, task) =
         spawn_http_replay_with_policy(&fixture.case, vec![], Some(fixture.policy.clone()), None)
             .await;

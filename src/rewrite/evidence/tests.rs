@@ -310,7 +310,7 @@ fn response_source_process_evidence_exposes_bootstrap_redis_planner() {
         .unwrap();
     assert_eq!(planner.kind, "dependency_ownership");
     assert_eq!(planner.evidence_id, "evidence-bootstrap");
-    assert!(planner.command.argv.iter().any(|arg| arg == "redis"));
+    assert!(planner.command.argv.iter().any(|arg| arg == "--file"));
 }
 
 #[test]
@@ -385,13 +385,9 @@ fn parked_api_evidence_survives_unrelated_api_revisions() {
 #[test]
 fn representatives_return_the_exact_recorded_case_directory_and_response_difference() {
     let target = tempfile::tempdir().unwrap();
-    let policy = target.path().join(".traffic-e2e/verification.yaml");
+    let policy = target.path().join(".traffic-e2e/policy.yaml");
     std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
-    std::fs::write(
-        &policy,
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
-    )
-    .unwrap();
+    std::fs::write(&policy, "format: traffic-policy/v1\nrules: []\n").unwrap();
     let case_source = target.path().join("recording");
     let case_dir = case_source.join("case-status-mismatch");
     std::fs::create_dir_all(&case_dir).unwrap();
@@ -623,10 +619,12 @@ fn dirty_cluster_evidence_preserves_protocol_specific_ownership_help() {
             "backend-rewrite",
             "--target-root",
             target.path().to_str().unwrap(),
-            "dependency-rule",
+            "rule",
             "plan",
-            "memcached",
-            "--help",
+            "--file",
+            "<rule.yaml>",
+            "--evidence",
+            "evidence-current",
         ]
     );
     assert_eq!(
@@ -635,10 +633,12 @@ fn dirty_cluster_evidence_preserves_protocol_specific_ownership_help() {
             "backend-rewrite",
             "--target-root",
             target.path().to_str().unwrap(),
-            "dependency-rule",
+            "rule",
             "plan",
-            "mysql",
-            "--help",
+            "--file",
+            "<rule.yaml>",
+            "--evidence",
+            "evidence-current",
         ]
     );
 }
@@ -659,7 +659,7 @@ fn memcached_dirty_clusters_expose_the_value_rule_help_without_claiming_applicab
 
     assert_eq!(rules.len(), 1);
     assert_eq!(rules[0].capability, "memcached");
-    assert_eq!(rules[0].rule, "protobuf-timestamp");
+    assert_eq!(rules[0].rule, "value-contract");
     assert!(rules[0].hint.contains("Memcached SET value"));
     assert!(rules[0].hint.starts_with("Investigate"));
     assert_eq!(
@@ -668,10 +668,8 @@ fn memcached_dirty_clusters_expose_the_value_rule_help_without_claiming_applicab
             "backend-rewrite",
             "--target-root",
             target.path().to_str().unwrap(),
-            "dependency-rule",
+            "rule",
             "plan",
-            "memcached",
-            "protobuf-timestamp",
             "--help",
         ]
     );
@@ -710,12 +708,12 @@ fn focused_response_body_candidate_offers_the_unified_response_rule_planner() {
     assert_eq!(planners.len(), 1);
     assert_eq!(planners[0].kind, "response_body");
     assert_eq!(planners[0].capability, "protobuf");
-    assert!(
-        planners[0]
-            .command
-            .argv
-            .ends_with(&["--body-codec".to_string(), "protobuf".to_string(),])
-    );
+    assert!(planners[0].command.argv.ends_with(&[
+        "--file".to_string(),
+        "<rule.yaml>".to_string(),
+        "--evidence".to_string(),
+        "evidence-current".to_string()
+    ]));
 }
 
 #[test]
@@ -746,7 +744,7 @@ fn configured_response_body_candidate_offers_selector_help() {
     assert!(hints[0].hint.contains("source-proven"));
     assert_eq!(planners.len(), 1);
     assert_eq!(planners[0].capability, "hessian2");
-    assert_eq!(planners[0].command.argv.last().unwrap(), "--help");
+    assert_eq!(planners[0].command.argv.last().unwrap(), "evidence-current");
 }
 
 #[test]

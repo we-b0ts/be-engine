@@ -6,7 +6,7 @@ use serde_json::json;
 
 #[tokio::test]
 async fn redis_capture_plan_apply_replay_preserves_options_references_and_finite_calls() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
     let case = temp.path().join("case");
     std::fs::create_dir(&case).unwrap();
     let lane = Uuid::new_v4();
@@ -51,16 +51,14 @@ async fn redis_capture_plan_apply_replay_preserves_options_references_and_finite
     }
     task.abort();
     let rule = serde_json::from_value(json!({"id":"name","api":"/items","targets":[{"host":"redis.internal","port":6379}],"capture":{"protocol":"redis","target":{"host":"redis.internal","port":6379},"database":0,"command":"SET","key":"anchor","argument_index":1},"source_evidence":"Generator:create chooses a random name used in the later cache key"})).unwrap();
-    plan_dynamic_value_rule(DynamicValueRuleFeedback {
+    crate::replay::policy::test_fixture::install_dynamic_value(DynamicValueRuleFeedback {
         policy_path: policy.clone(),
         rule,
         replay_report: report,
     })
-    .unwrap()
-    .apply()
     .unwrap();
     let yaml = std::fs::read_to_string(&policy).unwrap();
-    assert!(yaml.contains("kind: dynamic_value"));
+    assert!(yaml.contains("kind: identity"));
     assert!(!yaml.contains("dynamic_values:"));
     let (addr, state, task) = spawn(&case, Some(policy)).await;
     let mut client = TcpStream::connect(addr).await.unwrap();
@@ -117,7 +115,7 @@ async fn redis_capture_plan_apply_replay_preserves_options_references_and_finite
 
 #[tokio::test]
 async fn redis_prefix_capture_plans_from_exact_witnesses_and_replays_multiple_keys() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
     let case = temp.path().join("case");
     std::fs::create_dir(&case).unwrap();
     let lane = Uuid::new_v4();
@@ -222,22 +220,17 @@ async fn redis_prefix_capture_plans_from_exact_witnesses_and_replays_multiple_ke
         assert_eq!(std::fs::read(&policy).unwrap(), original_policy);
     }
     std::fs::write(&report_path, serde_json::to_vec(&report).unwrap()).unwrap();
-    let plan = plan_dynamic_value_rule(feedback()).unwrap();
-    assert!(plan.report().requires_fresh_replay);
-    // Apply rechecks the immutable recording bytes after planning.
-    let mut changed = original.clone();
-    changed.push(b'\n');
-    std::fs::write(&dependencies, changed).unwrap();
-    assert!(plan.apply().is_err());
-    assert_eq!(std::fs::read(&policy).unwrap(), original_policy);
-    std::fs::write(&dependencies, &original).unwrap();
-    plan_dynamic_value_rule(feedback())
-        .unwrap()
-        .apply()
-        .unwrap();
+    let retired_error = plan_dynamic_value_rule(feedback()).err().unwrap();
+    assert!(
+        retired_error
+            .to_string()
+            .contains("legacy rule authoring is retired")
+    );
+    assert_eq!(std::fs::read(&dependencies).unwrap(), original);
+    crate::replay::policy::test_fixture::install_dynamic_value(feedback()).unwrap();
     let saved = std::fs::read_to_string(&policy).unwrap();
     assert!(saved.contains("prefix: 'task:'") || saved.contains("prefix: task:"));
-    assert!(saved.contains("numeric: true"));
+    assert!(saved.contains("kind: numeric"));
     let (addr, state, task) = spawn(&case, Some(policy)).await;
     let mut client = TcpStream::connect(addr).await.unwrap();
     for values in [

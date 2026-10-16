@@ -477,7 +477,7 @@ pub(crate) fn validate_codec(codec: &Codec) -> Result<()> {
     };
     ensure!(
         codec.fields.len() <= 256,
-        "Protobuf requires 1..256 explicit field bindings"
+        "Protobuf accepts at most 256 explicit field bindings"
     );
     let mut paths = BTreeSet::new();
     for (name, field) in &codec.fields {

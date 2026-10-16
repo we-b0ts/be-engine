@@ -55,10 +55,7 @@ fn response_jwt_rs256_recorded_public_key_and_integer_companions_plan_apply_repl
     let (_temp, options, feedback) = rsa_fixture();
     let expected = fs::read(&options.expected_response).unwrap();
     let dependencies = fs::read(options.request.with_file_name("dependencies.jsonl")).unwrap();
-    let plan = plan_response_jwt_rule(feedback).unwrap();
-    assert!(!plan.report().diff.contains("BEGIN PUBLIC KEY"));
-    assert!(!plan.report().diff.contains(super::keys::PRIVATE_DER));
-    plan.apply().unwrap();
+    install_jwt_fixture(feedback).unwrap();
     let report = assert_recorded_response(copy(&options)).unwrap();
     assert!(report.passed, "{:?}", report.differences);
     assert_eq!(expected, fs::read(&options.expected_response).unwrap());
@@ -86,7 +83,7 @@ fn response_jwt_rs256_rejects_signature_identity_algorithm_and_time_defects() {
         "missing_iat",
     ] {
         let (_temp, options, feedback) = rsa_fixture();
-        plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
+        install_jwt_fixture(feedback).unwrap();
         change_body(
             &options,
             defect == "source_signature",
@@ -154,12 +151,21 @@ fn response_jwt_rs256_key_selectors_fail_closed_and_freeze_dependencies() {
     ] {
         let (temp, options, mut feedback) = rsa_fixture();
         let path = temp.path().join("dependencies.jsonl");
-        let original_policy = fs::read(&options.policy).unwrap();
-        let plan = if defect == "after_plan" {
-            Some(plan_response_jwt_rule(feedback.clone()).unwrap())
-        } else {
-            None
-        };
+        install_jwt_fixture(feedback.clone()).unwrap();
+        let installed_policy = fs::read(&options.policy).unwrap();
+        let compiled = crate::policy::compile_policy(
+            &crate::policy::parse_policy(&fs::read_to_string(&options.policy).unwrap()).unwrap(),
+        )
+        .unwrap();
+        let frozen = crate::replay::NativeResponseContext::load(
+            &compiled,
+            "POST",
+            "/connector/token",
+            None,
+            temp.path(),
+            temp.path(),
+        )
+        .unwrap();
         let mut event: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         match defect {
             "missing" => event["sql"] = json!("SELECT document FROM signing_keys WHERE id = 8"),
@@ -192,12 +198,19 @@ fn response_jwt_rs256_key_selectors_fail_closed_and_freeze_dependencies() {
         } else {
             write(&path, &event);
         }
-        if let Some(plan) = plan {
-            assert!(plan.apply().is_err());
-        } else {
-            assert!(plan_response_jwt_rule(feedback).is_err(), "{defect}");
+        if defect == "after_plan" {
+            assert!(frozen.ensure_current().is_err());
         }
-        assert_eq!(fs::read(&options.policy).unwrap(), original_policy);
+        if defect == "params" {
+            install_jwt_fixture(feedback).unwrap();
+        }
+        assert!(
+            assert_recorded_response(copy(&options)).is_err(),
+            "{defect}"
+        );
+        if defect != "params" {
+            assert_eq!(fs::read(&options.policy).unwrap(), installed_policy);
+        }
     }
 }
 
@@ -214,7 +227,10 @@ fn response_jwt_rs256_planner_rejects_bad_signature_before_writing_policy() {
     });
     refresh(&options, &feedback);
     let error = plan_response_jwt_rule(feedback).err().unwrap().to_string();
-    assert!(error.contains("JwtAlgorithmMismatch"), "{error}");
+    assert!(
+        error.contains("legacy rule authoring is retired"),
+        "{error}"
+    );
     assert_eq!(policy, fs::read(&options.policy).unwrap());
 }
 
@@ -227,7 +243,7 @@ fn response_jwt_rs256_supports_prepared_key_reads_and_keeps_ttl_exact() {
     event["sql"] = json!("SELECT document FROM signing_keys WHERE id = ?");
     event["params"] = json!([{"kind":"integer","value":7}]);
     write(&path, &event);
-    plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
+    install_jwt_fixture(feedback).unwrap();
     assert!(assert_recorded_response(copy(&options)).unwrap().passed);
     change_body(&options, false, |body| {
         body["access_token"] = json!(signed(
@@ -270,7 +286,7 @@ fn response_jwt_rs256_companions_follow_wildcard_item_scope() {
     rule.expires_at = Some("/items/*/expiry".into());
     rule.ttl = Some("/items/*/ttl".into());
     refresh(&options, &feedback);
-    plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
+    install_jwt_fixture(feedback).unwrap();
     assert!(assert_recorded_response(copy(&options)).unwrap().passed);
     change_body(&options, false, |body| {
         body["items"][1]["expiry"] = json!(TARGET + 1800)

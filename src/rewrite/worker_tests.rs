@@ -629,11 +629,6 @@ pub(in crate::rewrite) fn configured_target() -> tempfile::TempDir {
         crate::rewrite::test_support::managed_test_recorder(),
         None,
     );
-    fs::write(
-        target.path().join(".traffic-e2e/verification.yaml"),
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
-    )
-    .unwrap();
     fs::write(target.path().join("lib.rs"), "pub fn value() -> u8 { 1 }\n").unwrap();
     git_ok(target.path(), &["init", "-q", "-b", "master"]);
     git_ok(target.path(), &["config", "user.email", "test@example.com"]);

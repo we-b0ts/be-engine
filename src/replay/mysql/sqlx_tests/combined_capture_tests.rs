@@ -12,9 +12,9 @@ async fn combined_capture_plan_from_real_unmatched_insert_then_fresh_replay_is_f
         source["parse_warnings"] = json!([]);
         let empty = "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n";
         let (temp,addr,runtime,task) = fixture_with_policy(std::slice::from_ref(&source),Some(empty)).await;
-        let path = temp.path().join("case-id/dependencies.jsonl");
+        let path = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
         let original = std::fs::read(&path).unwrap();
-        let mut client = connect(addr,&temp.path().join("case-id/.replay/ca.pem")).await;
+        let mut client = connect(addr,&temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         assert!(sqlx::query(SQL).bind(TARGET).bind(chrono::Utc::now().naive_utc()).bind(7_i64).execute(&mut client).await.is_err());
         client.close().await.unwrap();
         let replay_report = temp.path().join("replay.json");
@@ -34,7 +34,7 @@ async fn combined_capture_plan_from_real_unmatched_insert_then_fresh_replay_is_f
         let policy = std::fs::read_to_string(temp.path().join("policy.yaml")).unwrap();
         task.abort();
         let (fresh,addr,runtime,task) = fixture_with_policy(&[source],Some(&policy)).await;
-        let mut client = connect(addr,&fresh.path().join("case-id/.replay/ca.pem")).await;
+        let mut client = connect(addr,&fresh.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         assert!(sqlx::query(SQL).bind(TARGET).bind(chrono::Utc::now().naive_utc()).bind(8_i64).execute(&mut client).await.is_err());
         assert!(runtime.state.lock().await.replay_policy.as_ref().unwrap().report().dynamic_bindings.is_empty());
         let now = chrono::Utc::now().naive_utc();
@@ -62,9 +62,9 @@ async fn combined_table_capture_plans_once_and_replays_two_shards_without_cross_
         });
         let empty = "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n";
         let (temp,addr,runtime,task) = fixture_with_policy(&sources,Some(empty)).await;
-        let path = temp.path().join("case-id/dependencies.jsonl");
+        let path = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
         let original = std::fs::read(&path).unwrap();
-        let mut client = connect(addr,&temp.path().join("case-id/.replay/ca.pem")).await;
+        let mut client = connect(addr,&temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let first = SQL.replace("items","items_0001");
         let second = SQL.replace("items","items_0002");
         assert!(sqlx::query(&first).bind("target-1").bind(chrono::Utc::now().naive_utc()).bind(7_i64).execute(&mut client).await.is_err());
@@ -84,7 +84,7 @@ async fn combined_table_capture_plans_once_and_replays_two_shards_without_cross_
         let policy = std::fs::read_to_string(temp.path().join("policy.yaml")).unwrap();
         task.abort();
         let (fresh,addr,runtime,task) = fixture_with_policy(&sources,Some(&policy)).await;
-        let mut client = connect(addr,&fresh.path().join("case-id/.replay/ca.pem")).await;
+        let mut client = connect(addr,&fresh.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         // The recorded first write must not match a different allowed shard;
         // the real second write has another stable owner and remains finite.
         assert!(sqlx::query(&second).bind("target-1").bind(chrono::Utc::now().naive_utc()).bind(7_i64).execute(&mut client).await.is_err());

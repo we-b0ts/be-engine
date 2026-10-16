@@ -28,7 +28,7 @@ fn rule(jwt: bool) -> Value {
 
 #[tokio::test]
 async fn redis_rfc3339_time_rule_replays_finitely_and_rejects_changed_offsets() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
     let case = temp.path().join("case");
     std::fs::create_dir(&case).unwrap();
     std::fs::write(
@@ -94,7 +94,7 @@ async fn redis_rfc3339_time_rule_replays_finitely_and_rejects_changed_offsets() 
 async fn redis_request_contracts_discover_plan_apply_and_verify_json_jwts_and_fractional_time_sequence()
  {
     for jwt in [false, true] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
         let root = temp.path();
         let local = root.join(".traffic-e2e/local");
         let case = local.join("recordings/run/case");
@@ -210,31 +210,19 @@ async fn redis_request_contracts_discover_plan_apply_and_verify_json_jwts_and_fr
         }
         std::fs::write(&report, &report_bytes).unwrap();
         task.abort();
-        let plan = || {
-            plan_dependency_request_rule(DependencyRequestRuleFeedback {
-                policy_path: policy.clone(),
-                rule: rule(jwt),
-                replay_report: report.clone(),
-            })
-        };
-        let mut tampered: Value = serde_json::from_slice(&report_bytes).unwrap();
-        tampered["replay_policy"]["request_contract_candidates"][0]["actual_anchor"] =
-            json!("2020-01-01T00:00:00Z");
-        std::fs::write(&report, tampered.to_string()).unwrap();
-        assert!(plan().is_err());
-        std::fs::write(&report, &report_bytes).unwrap();
-        if jwt {
-            std::fs::write(local.join("target.env"), "SECRET_KEY=wrong-key\n").unwrap();
-            assert!(plan().is_err());
-            std::fs::write(local.join("target.env"), "SECRET_KEY=test-key\n").unwrap();
-        }
-        if jwt {
-            let pending = plan().unwrap();
-            std::fs::write(local.join("target.env"), "SECRET_KEY=changed-after-plan\n").unwrap();
-            assert!(pending.apply().is_err());
-            std::fs::write(local.join("target.env"), "SECRET_KEY=test-key\n").unwrap();
-        }
-        plan().unwrap().apply().unwrap();
+        let error = plan_dependency_request_rule(DependencyRequestRuleFeedback {
+            policy_path: policy.clone(),
+            rule: rule(jwt),
+            replay_report: report.clone(),
+        })
+        .err()
+        .unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("legacy rule authoring is retired")
+        );
+        crate::replay::install_dependency_rule_fixture(&policy, rule(jwt)).unwrap();
         let (addr, state, task) = redis_value_tests::spawn(&case, Some(policy.clone())).await;
         state
             .lock()
@@ -282,7 +270,7 @@ async fn redis_request_contracts_discover_plan_apply_and_verify_json_jwts_and_fr
 #[tokio::test]
 async fn script_and_rpush_contracts_plan_apply_and_replay_over_real_redis_clients() {
     for script in [true, false] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
         let root = temp.path();
         let local = root.join(".traffic-e2e/local");
         let case = local.join("recordings/run/case");
@@ -373,15 +361,7 @@ async fn script_and_rpush_contracts_plan_apply_and_replay_over_real_redis_client
             }
             task.abort();
             if identity_phase {
-                let rule = serde_json::from_value(json!({"id":"event-id","api":"/scenario","value_type":"integer","targets":[{"host":"redis.internal","port":6379}],"capture":{"protocol":"redis","target":{"host":"redis.internal","port":6379},"database":0,"command":"RPUSH","key":"events","argument_index":1,"json_pointer":"/id"},"source_evidence":"Emitter:enqueue generates one integer ID for its emitted event"})).unwrap();
-                crate::plan_dynamic_value_rule(crate::DynamicValueRuleFeedback {
-                    policy_path: policy.clone(),
-                    rule,
-                    replay_report: report.clone(),
-                })
-                .unwrap()
-                .apply()
-                .unwrap();
+                crate::replay::install_dependency_rule_fixture(&policy, json!({"kind":"dynamic_value","id":"event-id","api":"/scenario","value_type":"integer","targets":[{"host":"redis.internal","port":6379}],"capture":{"protocol":"redis","target":{"host":"redis.internal","port":6379},"database":0,"command":"RPUSH","key":"events","argument_index":1,"json_pointer":"/id"},"source_evidence":"Emitter:enqueue generates one integer ID for its emitted event"})).unwrap();
             } else {
                 let redis = if script {
                     json!({"key":"events","commands":[{"command":"EVALSHA","script":{"sha1":sha},"argument_values":{"3":{"time":"preserve_relative","format":"unix_milliseconds"}}}]})
@@ -389,14 +369,7 @@ async fn script_and_rpush_contracts_plan_apply_and_replay_over_real_redis_client
                     json!({"key":"events","commands":[{"command":"RPUSH","argument_values":{"1":{"json":{"/timestamp":{"time":"preserve_relative","format":"unix_seconds"}}}}}]})
                 };
                 let rule = json!({"id":"event-time","protocol":"redis","target":{"host":"redis.internal","port":6379},"case":{"method":"PUT","path":"/scenario"},"source_evidence":"Emitter:enqueue writes the current request time to Redis","redis":redis});
-                plan_dependency_request_rule(DependencyRequestRuleFeedback {
-                    policy_path: policy.clone(),
-                    rule,
-                    replay_report: report.clone(),
-                })
-                .unwrap()
-                .apply()
-                .unwrap();
+                crate::replay::install_dependency_rule_fixture(&policy, rule).unwrap();
             }
         }
         let (addr, state, task) = redis_value_tests::spawn(&case, Some(policy.clone())).await;

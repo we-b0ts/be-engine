@@ -301,15 +301,6 @@ pub(crate) fn validate_witness(
 }
 
 /// A state-free native SQL Source/Target preflight uses the same request owner.
-pub(crate) fn validate_native_values_witness(
-    source: &[u8],
-    target: &[u8],
-    rule: &crate::policy::CompiledNativeRule,
-    clocks: AnchorClocks,
-) -> Result<Comparison> {
-    validate_contract_witness(source, target, &[], &[rule], clocks)
-}
-
 /// Encoded fields and scalar times share one SQL remainder and clock scope.
 pub(crate) fn validate_contract_witness(
     source: &[u8],

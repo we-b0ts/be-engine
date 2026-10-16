@@ -152,32 +152,14 @@ async fn json_time_plan_apply_and_fresh_replay_preserve_contracts_and_consumptio
         invalid["http"]["json"]["time"][pointer] = field;
         assert!(plan(invalid).is_err());
     }
-    let pending = plan(rule()).unwrap();
-    std::fs::write(&dependencies, format!("{source}\n\n")).unwrap();
-    assert!(pending.apply().is_err());
-    std::fs::write(&dependencies, &original).unwrap();
-    let original_report = std::fs::read(&report).unwrap();
-    let mut tampered: Value = serde_json::from_slice(&original_report).unwrap();
-    tampered["replay_policy"]["request_contract_candidates"][0]["path"] =
-        json!("/query?mode=changed");
-    std::fs::write(&report, tampered.to_string()).unwrap();
-    assert!(plan(rule()).is_err());
-    std::fs::write(&report, original_report).unwrap();
-    for missing_clock in [true, false] {
-        let mut incomplete = source.clone();
-        if missing_clock {
-            incomplete
-                .as_object_mut()
-                .unwrap()
-                .remove("request_started_at");
-        } else {
-            incomplete["response_body"]["truncated"] = json!(true);
-        }
-        std::fs::write(&dependencies, format!("{incomplete}\n")).unwrap();
-        assert!(plan(rule()).is_err());
-    }
-    std::fs::write(&dependencies, &original).unwrap();
-    assert!(plan(rule()).unwrap().apply().unwrap().requires_fresh_replay);
+    let error = plan(rule()).err().unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("legacy rule authoring is retired")
+    );
+    crate::replay::install_dependency_rule_fixture(&policy, rule()).unwrap();
+    assert_eq!(std::fs::read(&dependencies).unwrap(), original);
 
     // Rejections must not consume the recorded response or increment successful validations.
     let (addr, runtime, task) =

@@ -35,9 +35,9 @@ async fn large_or_with_empty_names_uses_real_prepare_execute_and_projection_mapp
                         record["params"] = serde_json::to_value(params).unwrap();
                     }
                     let (temp, addr, runtime, task) = fixture(&[record], policy).await;
-                    let path = temp.path().join("case-id/dependencies.jsonl");
+                    let path = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
                     let original = std::fs::read(&path).unwrap();
-                    let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+                    let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
                     for attempt in 0..3 {
                         // First execution substitutes NULL for the empty string;
                         // a later correct execution must still use this evidence.
@@ -79,7 +79,7 @@ async fn five_tuple_in_with_is_true_matches_literal_and_bound_prepared_statement
         for bound in [false,true] {
             let source = "SELECT kinds.id AS kinds_id FROM kinds WHERE kinds.kind='Team' AND (kinds.name,kinds.namespace,kinds.user_id) IN (('深度研究','default',3780),('knowledge','default',0),('chat','default',0),('个案策划','default',3529),('task','default',0)) AND kinds.is_active IS true";
             let (temp,addr,runtime,task) = fixture(&[exchange(source,id_result())],false).await;
-            let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+            let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
             let row = if bound {
                 sqlx::query("SELECT id FROM kinds WHERE is_active IS TRUE AND (name,namespace,user_id) IN ((?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?)) AND kind=?")
                     .bind("chat").bind("default").bind(0_i64)

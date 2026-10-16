@@ -46,9 +46,9 @@ async fn select_sql_time_matches_counts_and_rows_across_text_and_prepared_protoc
                     .collect::<Vec<_>>();
                 let (temp, addr, runtime, task) =
                     fixture_with_policy(&records, Some(&policy())).await;
-                let path = temp.path().join("case-id/dependencies.jsonl");
+                let path = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
                 let original = std::fs::read(&path).unwrap();
-                let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+                let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
                 for template in [COUNT, LIST] {
                     for attempt in 0..4 {
                         let cutoff = if attempt == 0 {

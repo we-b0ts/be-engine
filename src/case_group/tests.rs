@@ -2,10 +2,9 @@ use tempfile::tempdir;
 
 use super::*;
 
-const CONFIG: &str = r#"version: 14
+const CONFIG: &str = r#"version: 18
 project:
-  recording:
-    source_traffic_policy: source-traffic-policy.yaml
+  policy: .traffic-e2e/policy.yaml
 recorder:
   http_gateway:
     enabled: true
@@ -99,7 +98,7 @@ fn options(
         method: "get".to_string(),
         source_route: source_route.to_string(),
         pattern: pattern.map(str::to_string),
-        source_revision: "source-abc123".to_string(),
+        source_revision: format!("sha256:{}", "1".repeat(64)),
         output: output.to_path_buf(),
         recorder_config: None,
     }
@@ -126,10 +125,11 @@ fn dynamic_group_collects_sibling_directories_applies_pattern_and_is_idempotent(
         "/api/huaweiyun/loadbalancers/get/beta",
     );
     let output = temporary.path().join("reports/case-groups.json");
-    let config = temporary.path().join("project.yaml");
+    fs::create_dir_all(temporary.path().join(".traffic-e2e")).unwrap();
+    let config = temporary.path().join(".traffic-e2e/project.yaml");
     fs::write(&config, CONFIG).unwrap();
     fs::write(
-        temporary.path().join("source-traffic-policy.yaml"),
+        temporary.path().join(".traffic-e2e/policy.yaml"),
         crate::config::SourceTrafficPolicyConfig::empty()
             .render()
             .unwrap(),
@@ -168,7 +168,7 @@ fn dynamic_group_collects_sibling_directories_applies_pattern_and_is_idempotent(
         created.manifest.display().to_string()
     );
     assert!(
-        fs::read_to_string(temporary.path().join("source-traffic-policy.yaml"))
+        fs::read_to_string(temporary.path().join(".traffic-e2e/policy.yaml"))
             .unwrap()
             .contains("/api/huaweiyun/loadbalancers/get/*")
     );

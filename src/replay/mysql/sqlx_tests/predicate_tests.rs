@@ -36,9 +36,9 @@ async fn sqlx_predicate_orders_match_all_protocol_pairs_and_cached_parameter_reb
                     };
                     let records = [source(7), source(8)];
                     let (temp, addr, runtime, task) = fixture(&records, policy).await;
-                    let capture = temp.path().join("case-id/dependencies.jsonl");
+                    let capture = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
                     let original = std::fs::read(&capture).unwrap();
-                    let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+                    let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
                     // The target uses its normal parameter binding, pool/session
                     // state, and column mapping. It never receives the fixture.
                     let target = "SELECT t.title AS title,t.id AS id FROM tasks t WHERE t.title IN (?,?) AND (t.id IN (?,?,?) AND t.tenant=?) ORDER BY id LIMIT 1";
@@ -157,7 +157,7 @@ async fn sqlx_predicate_prepare_keeps_fixed_values_and_execute_checks_remaining_
             json!([[{"kind":"integer","value":1}]]),
         );
         let (temp, addr, runtime, task) = fixture(&[exchange(sql, response)], false).await;
-        let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let target = "SELECT id FROM tasks WHERE tenant=? AND id IN (?,1,NULL)";
         assert!(
             sqlx::query(target)

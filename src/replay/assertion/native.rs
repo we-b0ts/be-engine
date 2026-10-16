@@ -5,7 +5,7 @@ mod tests;
 pub(crate) use body::{compare_body, compare_header};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::policy::native::{BodyCodec, BodyField, BodySelector, GeneratedResponse, NativeEffect};
@@ -37,6 +37,7 @@ pub(crate) struct NativeResponseContext {
     fields: Vec<(String, String, FieldContract)>,
     joined: Vec<(String, String, String)>,
     codec: Option<crate::policy::Codec>,
+    codec_ids: Vec<String>,
 }
 
 pub(crate) fn needs_startup(rules: &[&CompiledNativeRule]) -> bool {
@@ -72,6 +73,7 @@ pub(crate) fn selected<'a>(
 }
 
 impl NativeResponseContext {
+    #[cfg(test)]
     pub(crate) fn load(
         compiled: &CompiledPolicy,
         method: &str,
@@ -99,6 +101,7 @@ impl NativeResponseContext {
             fields: vec![],
             joined: vec![],
             codec: None,
+            codec_ids: vec![],
         };
         for compiled in rules {
             let rule = &compiled.rule;
@@ -280,6 +283,7 @@ impl NativeResponseContext {
             && self.jwt.is_empty()
             && self.fields.is_empty()
             && self.joined.is_empty()
+            && self.codec.is_none()
     }
 
     pub(crate) fn rule_ids(&self) -> Vec<String> {
@@ -289,6 +293,7 @@ impl NativeResponseContext {
             .chain(self.jwt.iter().map(|field| field.id.clone()))
             .chain(self.fields.iter().map(|(id, _, _)| id.clone()))
             .chain(self.joined.iter().map(|(id, _, _)| id.clone()))
+            .chain(self.codec_ids.iter().cloned())
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect()
@@ -318,6 +323,7 @@ impl NativeResponseContext {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn compare_json(
         &self,
         source: &Value,
@@ -325,7 +331,7 @@ impl NativeResponseContext {
         rules: &[&CompiledRule],
         clocks: AnchorClocks,
     ) -> Result<Comparison> {
-        ensure!(
+        anyhow::ensure!(
             self.payload_codec(rules)? == crate::policy::Codec::Json,
             "JSON comparison requires a JSON codec"
         );
@@ -471,16 +477,13 @@ impl NativeResponseContext {
                 verifier: verifier.as_ref(),
             })
             .collect::<Vec<_>>();
-        Ok(json::compare_with_verified(
-            source, target, &fields, &generated, &verified, clocks,
-        ))
+        let mut result =
+            json::compare_with_verified(source, target, &fields, &generated, &verified, clocks);
+        result.evaluated.extend(self.codec_ids.iter().cloned());
+        Ok(result)
     }
 }
 
 pub(crate) fn source_request_body(request: &Value) -> Option<Value> {
     crate::replay::policy::case_condition::request_body(request)
-}
-
-pub(crate) fn strict_json(bytes: &[u8]) -> Result<Value> {
-    crate::json_value::parse(bytes).context("response contract requires complete unambiguous JSON")
 }

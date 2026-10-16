@@ -62,7 +62,6 @@ pub use http::cross_case::HttpCrossCaseSelector;
 #[cfg(test)]
 pub(crate) use http::tests::{
     snapshot_http_replay, spawn_coordinator_http_replay, write_http_case,
-    write_http_replay_evidence,
 };
 pub(crate) use http::unordered as http_unordered;
 pub use http::unordered::HttpUnorderedSelector;
@@ -74,7 +73,6 @@ mod memcached;
 mod model;
 mod motan;
 mod mysql;
-pub(crate) use mysql::contracts::validate_native_values_witness as mysql_validate_native_values_witness;
 pub(crate) use mysql::contracts::{
     source_witness as mysql_source_witness, validate_witness as mysql_validate_witness,
     witness_values as mysql_witness_values,
@@ -179,7 +177,6 @@ pub(crate) use assertion::{
 };
 pub(crate) use policy::ReplayEvidencePolicyFreshness;
 pub use policy::ResponseHeaderDateRule;
-pub(crate) use policy::render_validated_replay_policy;
 pub use policy::{CaseCondition, JsonCondition};
 pub use policy::{
     DocxTimestampRule, Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath,

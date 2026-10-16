@@ -227,22 +227,10 @@ pub struct MysqlTimeRuleFeedback {
     pub source_evidence: String,
 }
 
-impl MysqlTimeRuleFeedback {
-    /// Shared by SQL-time admission and coordinator recovery; no policy mutation.
-    pub(crate) fn policy_evidence_stale(
-        policy_path: &std::path::Path,
-        report: &serde_json::Value,
-    ) -> Result<bool> {
-        let loaded = load_replay_policy(policy_path)?;
-        Ok(dynamic_policy_stale(&loaded, report))
-    }
-}
-
 fn dynamic_policy_stale(
     loaded: &super::super::config::LoadedReplayPolicy,
     report: &serde_json::Value,
 ) -> bool {
-    // Legacy SQL-time evidence without dynamic bindings remains usable.
     !loaded.document.dynamic_values.is_empty()
         && report["replay_policy"]["fingerprint"].as_str() != Some(loaded.fingerprint.as_str())
 }

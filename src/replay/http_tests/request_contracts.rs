@@ -108,24 +108,14 @@ async fn multipart_plan_apply_requires_immutable_current_witness_and_fresh_repla
             replay_report: report.clone(),
         })
     };
-    let pending = plan().unwrap();
-    std::fs::write(&dependencies, format!("{source}\n\n")).unwrap();
-    assert!(pending.apply().is_err());
-    std::fs::write(&dependencies, &original).unwrap();
-    let pending = plan().unwrap();
-    crate::replay::write_policy_fixture(
-        &policy,
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n# changed\n",
-    )
-    .unwrap();
-    assert!(pending.apply().is_err());
-    assert!(plan().is_err());
-    crate::replay::write_policy_fixture(
-        &policy,
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
-    )
-    .unwrap();
-    assert!(plan().unwrap().apply().unwrap().requires_fresh_replay);
+    let error = plan().err().unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("legacy rule authoring is retired")
+    );
+    crate::replay::install_dependency_rule_fixture(&policy, rule).unwrap();
+    assert_eq!(std::fs::read(&dependencies).unwrap(), original);
     let (addr, runtime, task) =
         spawn_http_replay_with_policy(&case, vec![], Some(policy.clone()), None).await;
     assert_eq!(

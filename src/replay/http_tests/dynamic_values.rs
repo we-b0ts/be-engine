@@ -1,6 +1,6 @@
 //! Actual HTTP capture authoring and later path/query/body references retain strict fields.
 use super::*;
-use crate::{DynamicValueRuleFeedback, plan_dynamic_value_rule};
+use crate::DynamicValueRuleFeedback;
 use serde_json::json;
 
 #[tokio::test]
@@ -55,13 +55,11 @@ async fn numeric_json_rpc_id_discovery_plan_apply_preserves_business_numbers_and
     }
     task.abort();
     let rule = serde_json::from_value(json!({"id":"rpc-id","api":"/knowledge/*/nodes","value_type":"integer","targets":[{"host":"api.example.test","port":80}],"capture":{"protocol":"http","target":{"host":"api.example.test","port":80},"method":"POST","path":"/rpc","json_pointer":"/id"},"source_evidence":"RpcClient:request assigns a monotonically generated integer correlation id"})).unwrap();
-    plan_dynamic_value_rule(DynamicValueRuleFeedback {
+    crate::replay::policy::test_fixture::install_dynamic_value(DynamicValueRuleFeedback {
         policy_path: policy.clone(),
         rule,
         replay_report: report,
     })
-    .unwrap()
-    .apply()
     .unwrap();
     let (addr, runtime, task) =
         spawn_http_replay_with_policy(&case, vec![], Some(policy), None).await;
@@ -157,13 +155,11 @@ async fn http_capture_plan_apply_replay_keeps_static_json_and_pending_bindings_s
     }
     task.abort();
     let rule = serde_json::from_value(json!({"id":"name","api":"/items","targets":[{"host":"api.example.test","port":80}],"capture":{"protocol":"http","target":{"host":"api.example.test","port":80},"method":"POST","path":"/create","json_pointer":"/name"},"source_evidence":"Generator:create sends a fresh random name and reuses it in later requests"})).unwrap();
-    plan_dynamic_value_rule(DynamicValueRuleFeedback {
+    crate::replay::policy::test_fixture::install_dynamic_value(DynamicValueRuleFeedback {
         policy_path: policy.clone(),
         rule,
         replay_report: report,
     })
-    .unwrap()
-    .apply()
     .unwrap();
     let (addr, runtime, task) =
         spawn_http_replay_with_policy(&case, Vec::new(), Some(policy), None).await;

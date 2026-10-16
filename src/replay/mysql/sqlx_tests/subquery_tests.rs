@@ -56,10 +56,10 @@ async fn subquery_reads_bind_identical_values_across_all_wire_forms_without_rule
                         source["params"] = json!([]);
                     }
                     let (temp, addr, runtime, task) = fixture(&[source], policy).await;
-                    let path = temp.path().join("case-id/dependencies.jsonl");
+                    let path = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
                     let immutable = std::fs::read(&path).unwrap();
                     let mut client =
-                        connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+                        connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
                     // Failed matches must leave the sole recorded query available.
                     for (id, user) in [(8, 42), (7, 43)] {
                         assert!(query(&mut client, target_mode, id, user).await.is_err());
@@ -92,7 +92,7 @@ async fn subquery_prepared_rebinding_preserves_types_predicates_and_recorded_err
     source["command"] = json!("COM_STMT_EXECUTE");
     source["params"] = json!([{"kind":"integer","value":7},{"kind":"integer","value":42}]);
     let (temp, addr, runtime, task) = fixture(&[source], true).await;
-    let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+    let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
     for bad in [
         inline("'7'", "42"),
         inline("7", "42").replace("'FAILED'", "'RUNNING'"),

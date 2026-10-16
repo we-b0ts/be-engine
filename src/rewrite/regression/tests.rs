@@ -251,6 +251,7 @@ fn new_round_preserves_recording_scope_and_replays_before_workers() {
 #[test]
 fn replay_purpose_identifies_uncovered_patterns_before_installing_inventory() {
     let target = fixture();
+    crate::rewrite::test_support::install_source_snapshot(target.path());
     let store = RewriteStore::new(target.path()).unwrap();
     let mut previous = store.load().unwrap().unwrap();
     previous.recording_apis.clear();

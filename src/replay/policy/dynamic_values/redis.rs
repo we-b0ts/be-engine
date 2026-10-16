@@ -44,6 +44,7 @@ impl DynamicValues {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(in crate::replay) fn redis(
         &self,
         case: Option<&str>,
