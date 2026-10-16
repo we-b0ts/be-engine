@@ -26,6 +26,7 @@ use crate::recorder::{
 use crate::recording_control::RecordingListener;
 
 mod admission;
+mod case_group;
 mod lifecycle;
 mod ready;
 mod recovery;
@@ -36,7 +37,7 @@ mod timeout_tests;
 pub(crate) mod transport;
 
 use admission::try_admit_case;
-use rules::{RuleDecision, evaluate_request, request_authority, resolve_case_group};
+use rules::{RuleDecision, evaluate_request, request_authority};
 use transport::{
     GatewayBody, build_downstream_response, build_fixed_response, build_upstream_request,
     build_upstream_uri, simple_response,
@@ -201,10 +202,7 @@ async fn handle_gateway_request(
     };
     let matched_rule_name = matched_rule.as_ref().map(|rule| rule.name.clone());
     let candidate_case = matched_rule.as_ref().map(|rule| {
-        let group = recording_api_pattern.as_ref().map_or_else(
-            || resolve_case_group(&original_uri, &config.case_path_patterns),
-            |pattern| resolve_case_group(&original_uri, std::slice::from_ref(pattern)),
-        );
+        let group = case_group::resolve(&method, &original_uri, &config.source_routes);
         let max_cases = config.per_api_case_limits.limit_for(&group.pattern);
         let recording_api = recording_api_pattern
             .as_ref()

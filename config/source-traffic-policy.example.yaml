@@ -1,7 +1,7 @@
 # Managed by the backend-rewrite coordinator. Do not edit manually.
 version: 2
 http:
-  case_path_patterns: []
+  source_routes: []
   allowed_unused_http_hosts: []
 breeze_capture: []
 process_owned_dependencies:

@@ -8,11 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::path_pattern::path_patterns_overlap;
 
-use super::discovery::{PublishedCase, inventory_id, portable_inventory_id, select_group_cases};
+use super::discovery::{PublishedCase, portable_inventory_id, select_group_cases};
 use super::{CaseGroupStatus, PatternOutcome};
 
-const LEGACY_INDEX_VERSION: u32 = 1;
-const INDEX_VERSION: u32 = 2;
+const INDEX_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -30,6 +29,11 @@ pub(super) struct CaseGroupIndex {
     pub(super) case_source: PathBuf,
     pub(super) source_revision: String,
     pub(super) groups: Vec<CaseGroupRecord>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::config::HttpSourceRoutes::is_empty"
+    )]
+    pub(super) source_routes: crate::config::HttpSourceRoutes,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +185,7 @@ pub(super) fn load_or_create_index(
                 case_source: storage.persist(case_source)?,
                 source_revision: source_revision.to_string(),
                 groups: Vec::new(),
+                source_routes: Default::default(),
             });
         }
         Err(error) => {
@@ -195,7 +200,7 @@ pub(super) fn load_or_create_index(
     );
     let index = read_index(output)?;
     ensure!(
-        matches!(index.version, LEGACY_INDEX_VERSION | INDEX_VERSION),
+        index.version == INDEX_VERSION,
         "unsupported group index version {}",
         index.version
     );
@@ -221,6 +226,14 @@ pub(super) fn load_or_create_index(
     Ok(index)
 }
 
+pub(super) fn register_source_routes(
+    index: &mut CaseGroupIndex,
+    routes: impl IntoIterator<Item = String>,
+) -> Result<()> {
+    index.source_routes = index.source_routes.merged(routes)?;
+    Ok(())
+}
+
 pub(super) fn read_index(output: &Path) -> Result<CaseGroupIndex> {
     let metadata = fs::symlink_metadata(output)
         .with_context(|| format!("failed to inspect group index {}", output.display()))?;
@@ -236,34 +249,6 @@ pub(super) fn read_index(output: &Path) -> Result<CaseGroupIndex> {
     .with_context(|| format!("failed to parse group index {}", output.display()))
 }
 
-pub(super) fn legacy_index_locations(index: &CaseGroupIndex) -> Result<(PathBuf, PathBuf)> {
-    ensure!(
-        index.version == LEGACY_INDEX_VERSION && index.path_anchor == CaseGroupPathAnchor::Absolute,
-        "group index is not a legacy absolute-path index"
-    );
-    ensure!(
-        index.case_source.is_absolute(),
-        "legacy group index case source must be absolute"
-    );
-    let output = index
-        .groups
-        .first()
-        .map(|group| group.manifest.clone())
-        .context("legacy group index contains no case groups")?;
-    ensure!(
-        output.is_absolute(),
-        "legacy group index output must be absolute"
-    );
-    ensure!(
-        index
-            .groups
-            .iter()
-            .all(|group| group.manifest == output && group.report_path == output),
-        "legacy group index contains inconsistent manifest or report paths"
-    );
-    Ok((index.case_source.clone(), output))
-}
-
 pub(super) fn validate_index(
     index: &CaseGroupIndex,
     storage: &IndexPathStorage,
@@ -271,8 +256,18 @@ pub(super) fn validate_index(
     cases: &[PublishedCase],
 ) -> Result<()> {
     let mut ids = BTreeSet::new();
+    validate_directory_ownership(index, cases)?;
     let mut group_ids = BTreeSet::new();
     for group in &index.groups {
+        let selector = group.pattern.as_deref().unwrap_or(&group.source_route);
+        ensure!(
+            group.method == "MOTAN"
+                || index.source_routes.entries().any(|route| {
+                    route.method().as_str() == group.method && route.path_pattern() == selector
+                }),
+            "group {} has no confirmed HTTP Source registration",
+            group.group_id
+        );
         let expected_status = if group.group_dir.is_none() {
             CaseGroupStatus::Created
         } else {
@@ -300,6 +295,7 @@ pub(super) fn validate_index(
             &group.method,
             &group.source_route,
             group.pattern.as_deref(),
+            &index.source_routes,
         )?;
         let selected_ids = selected
             .iter()
@@ -331,6 +327,7 @@ pub(super) fn validate_index(
         for right in index.groups.iter().skip(position + 1) {
             ensure!(
                 !route_specs_overlap(
+                    &index.source_routes,
                     left,
                     &right.method,
                     &right.source_route,
@@ -339,6 +336,26 @@ pub(super) fn validate_index(
                 "groups {} and {} have overlapping route specifications",
                 left.group_id,
                 right.group_id
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_directory_ownership(index: &CaseGroupIndex, cases: &[PublishedCase]) -> Result<()> {
+    let mut owners = std::collections::BTreeMap::new();
+    for case in cases {
+        let Some(owner) = index.source_routes.resolve(&case.method, &case.path) else {
+            // Unconfirmed paths are not Source APIs yet; full coverage still
+            // requires their independent confirmation before completion.
+            continue;
+        };
+        let api = owner.path_pattern().to_owned();
+        if let Some(previous) = owners.insert(&case.member_dir, api.clone()) {
+            ensure!(
+                previous == api,
+                "recording directory {} contains multiple canonical APIs ({previous} and {api}); mixed API directories are unsupported",
+                case.member_dir.display()
             );
         }
     }
@@ -363,7 +380,7 @@ pub(super) fn validate_index_origin(
     case_source: &Path,
 ) -> Result<()> {
     ensure!(
-        matches!(index.version, LEGACY_INDEX_VERSION | INDEX_VERSION),
+        index.version == INDEX_VERSION,
         "unsupported group index version {}",
         index.version
     );
@@ -383,15 +400,11 @@ pub(super) fn validate_index_origin(
 }
 
 pub(super) fn case_inventory_id(
-    index: &CaseGroupIndex,
+    _index: &CaseGroupIndex,
     case_source: &Path,
     cases: &[PublishedCase],
 ) -> Result<String> {
-    if index.version == LEGACY_INDEX_VERSION {
-        Ok(inventory_id(cases))
-    } else {
-        portable_inventory_id(case_source, cases)
-    }
+    portable_inventory_id(case_source, cases)
 }
 
 pub(super) fn reject_membership_overlap(
@@ -409,6 +422,7 @@ pub(super) fn reject_membership_overlap(
 }
 
 pub(super) fn reject_route_overlap(
+    registrations: &crate::config::HttpSourceRoutes,
     groups: &[CaseGroupRecord],
     method: &str,
     source_route: &str,
@@ -416,7 +430,7 @@ pub(super) fn reject_route_overlap(
 ) -> Result<()> {
     for group in groups {
         ensure!(
-            !route_specs_overlap(group, method, source_route, pattern),
+            !route_specs_overlap(registrations, group, method, source_route, pattern),
             "new route specification overlaps existing group {}",
             group.group_id
         );
@@ -425,6 +439,7 @@ pub(super) fn reject_route_overlap(
 }
 
 fn route_specs_overlap(
+    registrations: &crate::config::HttpSourceRoutes,
     existing: &CaseGroupRecord,
     method: &str,
     source_route: &str,
@@ -433,13 +448,12 @@ fn route_specs_overlap(
     if existing.method != method {
         return false;
     }
-    route_keys_overlap(
-        existing
-            .pattern
-            .as_deref()
-            .unwrap_or(&existing.source_route),
-        pattern.unwrap_or(source_route),
-    )
+    let left = existing
+        .pattern
+        .as_deref()
+        .unwrap_or(&existing.source_route);
+    let right = pattern.unwrap_or(source_route);
+    route_keys_overlap(left, right) && !registrations.permits_static_overlap(method, left, right)
 }
 
 fn route_keys_overlap(left: &str, right: &str) -> bool {

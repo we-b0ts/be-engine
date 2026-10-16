@@ -10,6 +10,7 @@ use crate::path_pattern::{matches_path_pattern, path_patterns_overlap, validate_
 
 pub(crate) mod methods;
 mod scope;
+pub(crate) mod source_routes;
 pub use scope::RecordingApiScope;
 pub(crate) use scope::identity;
 
@@ -95,9 +96,18 @@ impl FromStr for RecordingApi {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn validate_selection(
     selection: &[RecordingApi],
     rules: &[HttpGatewayRuleConfig],
+) -> Result<()> {
+    validate_selection_with_routes(selection, rules, &Default::default())
+}
+
+pub(crate) fn validate_selection_with_routes(
+    selection: &[RecordingApi],
+    rules: &[HttpGatewayRuleConfig],
+    registrations: &source_routes::HttpSourceRoutes,
 ) -> Result<()> {
     let mut unique = BTreeSet::new();
     for (position, api) in selection.iter().enumerate() {
@@ -109,6 +119,11 @@ pub(crate) fn validate_selection(
             selection[..position].iter().all(|previous| {
                 previous.method != api.method
                     || !path_patterns_overlap(&previous.path_pattern, &api.path_pattern)
+                    || registrations.permits_static_overlap(
+                        api.method.as_str(),
+                        &previous.path_pattern,
+                        &api.path_pattern,
+                    )
             }),
             "recording API selectors must not overlap for the same method: {api}"
         );

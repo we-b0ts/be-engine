@@ -22,14 +22,15 @@ recordings.
    implementation details or modify product code yet.
 3. Prepare the selected `METHOD API` against the original case source. The
    engine inspects all published request metadata and selects only cases whose
-   method and URI path match that exact route or confirmed pattern. Different
-   methods may share one physical recording directory.
+   method and URI path match that exact route or confirmed pattern. A registered
+   static route is excluded from its same-method wildcard. Different methods of
+   one canonical route may share a physical recording directory.
 4. For a dynamic route, supply the source-proven pattern with `--pattern`.
    For a static route, omit it. A homogeneous static directory may return
    `already_canonical` with `group_dir`; a shared or multi-directory static
    selection returns a manifest-backed `created` group with exact case IDs.
 5. Mark returned case IDs and the logical `METHOD API` processed. A physical
-   member directory may still contain another method or route to prepare.
+   member directory may still contain another method of the same route to prepare.
    Repeating the same group from a member returns `already_grouped` for a
    manifest group, or `already_canonical` for a whole static directory.
 6. Inspect or verify the selected group only after grouping reaches a valid
@@ -38,8 +39,11 @@ recordings.
    covered exactly once.
 
 The first case is a route-discovery sample, not evidence that the whole
-directory is homogeneous. Directory sharing is allowed; case-ID overlap is not. The exact selected case ids come from the complete
-group validation.
+directory is homogeneous. Sharing is allowed only for methods of the same
+confirmed canonical API; a mixed static/pattern directory is rejected.
+The exact selected case IDs come from complete group validation. Version-three
+indexes persist the method-specific registry; version-one/two execution is
+unsupported. Finish historical Replay with its original engine before upgrading.
 
 Discovery retains valid recorded HTTP paths exactly, including trailing slashes
 and repeated separators. Such a path must not block preparation of an unrelated

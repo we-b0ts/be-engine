@@ -78,6 +78,16 @@ is unclear.
   The review CLI adapts route selection and batch-file input without rebuilding
   identity or deciding which deliveries belong in an integration assignment.
 
+- `recording_api/source_routes` owns compiled method-specific Source registration,
+  exact-static precedence and unambiguous pattern coverage. `config/source_traffic_policy/source_routes`
+  publishes additive registrations under a local runtime lock. `rewrite/case_patterns/registration`
+  validates complete Source confirmations; observations never authorize methods.
+  `gateway/http/case_group` owns recording directory identity: confirmed methods
+  of one route share a directory, unconfirmed methods remain separate, and stable
+  suffixes avoid readable-name collisions. `case_group/index` persists the same
+  registry in version-three indexes and rejects mixed canonical API directories;
+  version-one/two grouping execution is unsupported.
+
 - `case_group/discovery` validates and retains raw recorded HTTP path identity;
   canonical route and pattern validation belongs to group selectors, so an
   unrelated valid noncanonical request cannot block inventory discovery.

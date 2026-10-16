@@ -633,8 +633,10 @@ identity hash so long Java signatures remain filesystem-safe.
 The HTTP gateway also limits successfully published cases per resolved case
 pattern within one recorder run. The default is
 `http_gateway.per_api_case_limits.default = 100`. Static paths are counted
-independently by exact URI path; a URI matched by `case_path_patterns` is
-counted under that configured pattern. Pattern-specific limits use exact keys:
+under their exact URI path; confirmed `http.source_routes` resolve each method
+to its canonical path or pattern. Confirmed methods of one template share its
+limit; unregistered methods do not inherit another method's wildcard.
+Pattern-specific limits use exact keys:
 
 ```toml
 [http_gateway.per_api_case_limits]
@@ -1141,13 +1143,18 @@ traffic-e2e diagnose case-group ensure \
   --recorder-config ../target/.traffic-e2e/project.yaml
 ```
 
-For an exact static route, omit `--pattern` and `--recorder-config`.
+For an exact static route, omit `--pattern`.
 The command validates every case in the current directory and returns
 `already_canonical`. A dynamic first call returns `created`; a repeat from any
 member directory returns `already_grouped`. Dynamic groups are manifest-backed
 and do not create or move a group directory. The output path must remain outside
 the canonical case source. Mixed directories, duplicate case ids, overlapping
 groups, a changed source revision, or a changed case inventory fail the command.
+Different confirmed canonical APIs cannot share a recording directory; methods
+of the same canonical route can. A registered static route takes precedence
+over its same-method pattern. Group indexes use version three and snapshot the
+method-specific registrations. Version-one/two execution is unsupported.
+See [Source route registration](source-route-registration.md).
 
 Replay-time route discovery can produce safe `case_path_patterns` feedback for
 a target repository. Apply focused, add-only feedback through the managed
@@ -1162,6 +1169,9 @@ traffic-e2e config recorder apply case-path-patterns \
   --pattern '/api/users/*/xxx'
 ```
 
+This methodless feedback remains limit/configuration metadata; it cannot
+register a Source API or authorize another method. Source confirmation uses
+`case-pattern apply --routes-json` with explicit method-qualified routes.
 The command updates the global HTTP policy, sorts and deduplicates patterns,
 validates the complete recorder config, and replaces the source traffic policy file
 atomically. Every authority mode is add-only: a full case source or full replay
@@ -1211,7 +1221,7 @@ backend-rewrite status
 backend-rewrite status --api '/api/widgets/*'
 backend-rewrite inventory
 backend-rewrite evidence <query-id>
-BACKEND_REWRITE_CASE_PATH_PATTERNS_JSON='["/api/tasks/*/tree"]' \
+BACKEND_REWRITE_SOURCE_ROUTES_JSON='["GET /api/tasks/*/tree"]' \
   backend-rewrite case-pattern apply <batch-id>
 # Provide finalized external recordings in .traffic-e2e/local/artifacts/recordings/<run-id>/.
 # Optionally select recording_run_id in .traffic-e2e/regression.yaml, then:
@@ -1726,16 +1736,16 @@ Gaps never count as passing traffic or allow successful terminal completion.
 current target fingerprint plus the existing review and publication gates.
 A commit preserving effective worktree content does not change the fingerprint.
 
-After a finalized unscoped standard recording, the coordinator compares its
-concrete APIs with a persistent historical API catalog canonicalized by current
-`case_path_patterns`. Only new uncovered APIs produce one
-`case_pattern_identification_required` batch. Its fixed apply command receives
-the complete JSON pattern list through
-`BACKEND_REWRITE_CASE_PATH_PATTERNS_JSON`; `[]` confirms that every candidate is
-static. This action has no source-revision or evidence input. Apply updates the
-managed source traffic policy and the catalog, while existing recording files
-remain immutable. The current recording inventory is then derived again under
-the updated policy.
+After a finalized unscoped recording, the coordinator compares observed methods
+and paths with explicit `http.source_routes` registrations in the managed Source
+traffic policy. Each entry is `METHOD path-or-pattern`; static registrations take
+precedence over same-method patterns. Uncovered observations produce one
+`case_pattern_identification_required` batch. Apply receives the complete Source
+registration list through `BACKEND_REWRITE_SOURCE_ROUTES_JSON`, including static
+routes. A GET pattern never confirms POST; recorded `api_pattern` and methodless
+`case_path_patterns` do not authorize ownership. Different methods with the same
+canonical template share one API work item and retain separate evidence.
+See [Source route registration](source-route-registration.md).
 
 Recording and focused Replay share one serialized traffic-runtime
 lease. Global status first returns any executable worker dispatch or feedback
@@ -2467,9 +2477,9 @@ While case pattern identification waits, a pinned recording reuses the pending
 batch's persisted API observations even before installing the API inventory.
 Status still checks the completed recording manifest and current selectors;
 pattern apply and initial adoption retain full case validation.
-Legacy selectors resolved only by recorded `api_pattern` metadata fall back to
-validated discovery when the current policy and observation snapshot cannot
-establish membership.
+Observed paths become canonical APIs only through confirmed method-specific
+Source registrations. Recorded `api_pattern` metadata does not supply a
+fallback ownership strategy.
 
 The committed file contains only business aggregates and the latest batch
 summary. Replay provenance, pending state, failure barriers,

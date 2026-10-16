@@ -114,13 +114,13 @@ impl Serialize for RewriteAction {
                     recording_run_id,
                     candidates,
                     pattern_input: RewriteCasePatternInput {
-                        environment_variable: "BACKEND_REWRITE_CASE_PATH_PATTERNS_JSON",
-                        format: "JSON array of path patterns",
-                        empty_array_meaning: "every candidate is a static path",
+                        environment_variable: "BACKEND_REWRITE_SOURCE_ROUTES_JSON",
+                        format: "JSON array of confirmed METHOD path-or-pattern registrations",
+                        empty_array_meaning: "no new registrations; every candidate must already be covered",
                         rules: [
                             "replace only variable whole path segments with *",
                             "use ** only as the final segment for a source-defined catch-all tail",
-                            "omit static paths from the array",
+                            "include static routes explicitly and preserve each Source HTTP method",
                         ],
                     },
                 },

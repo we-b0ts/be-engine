@@ -27,9 +27,15 @@ recorder:
 
 An optional `--source-traffic-policy PATH` /
 `TRAFFIC_E2E_SOURCE_TRAFFIC_POLICY` applies the existing source traffic policy
-overlay at startup, including HTTP case patterns, allowed unused HTTP hosts,
+overlay at startup, including confirmed HTTP `source_routes`, allowed unused HTTP hosts,
 HTTP response rewrites and process-owned dependency rules. HTTP include/exclude rules continue to apply. An explicit policy overrides the project's policy reference
 and is applied once. Without project configuration or a policy, HTTP cases use literal URI paths.
+
+Source registrations include the HTTP method. Exact registered static routes
+take precedence over same-method patterns; GET coverage never registers POST.
+Confirmed methods of the same route share one API directory, while unconfirmed
+methods remain separate. Methodless `case_path_patterns` are metadata and do not
+choose ownership. See [Source route registration](source-route-registration.md).
 
 Recorder accumulates observed method/path identities only after successful case
 publication. At recording finalization, `recording-run.json` adds `api_methods`,

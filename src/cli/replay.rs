@@ -8,7 +8,7 @@ use serde::Deserialize;
 use traffic_e2e::{
     AppConfig, DEFAULT_DNS_MOCK_LISTEN, DEFAULT_FAKE_CIDR, DEFAULT_TCP_GATEWAY_LISTEN,
     DEFAULT_UDP_GATEWAY_PORT, RecordingApi, ReplayAllowedUnusedHttpConfig, ReplayConfig,
-    ReplayLifecycleConfig, resolve_recording_api_case_ids, run_replay_with_counters,
+    ReplayLifecycleConfig, resolve_recording_api_case_ids_with_routes, run_replay_with_counters,
 };
 use uuid::Uuid;
 
@@ -239,7 +239,11 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
     let case_ids = if args.apis.is_empty() {
         args.case_ids
     } else {
-        resolve_recording_api_case_ids(&case, &args.apis)?
+        let routes = recorder_defaults
+            .as_ref()
+            .map(|config| config.http_gateway.source_routes.clone())
+            .unwrap_or_default();
+        resolve_recording_api_case_ids_with_routes(&case, &args.apis, &routes)?
     };
     let dns_listen = args
         .dns_listen

@@ -10,8 +10,7 @@ use super::store::RewriteStore;
 use super::{artifacts, execution, traffic_operation};
 use crate::case_group::{
     CaseGroupOptions, ensure_case_group_with_target_root, load_case_group_inventory,
-    load_complete_case_group_inventory, load_legacy_complete_case_group_inventory,
-    portable_case_inventory_id, resolve_recording_api_seed_member,
+    load_complete_case_group_inventory, resolve_recording_api_seed_member,
 };
 use crate::{E2eRunContext, RecordingApi};
 
@@ -74,40 +73,9 @@ pub fn rebuild_rewrite_case_groups(
         run_key: Some(options.recording_run_id.clone()),
     };
     let group_index = crate::e2e_run::prepare_case_group_index_rebuild(&context)?;
-    let (previous, case_source_relocated) = match load_case_group_inventory(
-        &group_index,
-        &case_source,
-    ) {
-        Ok(previous) => (previous, false),
-        Err(current_error) => {
-            let previous = load_legacy_complete_case_group_inventory(&group_index).with_context(
-                || {
-                    format!(
-                        "existing case group index is not valid for the current case source ({current_error:#}) and cannot be migrated safely"
-                    )
-                },
-            )?;
-            ensure!(
-                previous.case_source != fs::canonicalize(&case_source)?,
-                "legacy case group index failed current-source validation without changing case source"
-            );
-            ensure!(
-                previous
-                    .case_source
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    == Some(options.recording_run_id.as_str()),
-                "legacy case group index does not belong to recording run {}",
-                options.recording_run_id
-            );
-            ensure!(
-                portable_case_inventory_id(&previous.case_source)?
-                    == portable_case_inventory_id(&case_source)?,
-                "legacy and current case sources contain different case inventories"
-            );
-            (previous, true)
-        }
-    };
+    let previous = load_case_group_inventory(&group_index, &case_source).context(
+        "existing group index cannot be rebuilt; finish historical Replay using its original engine"
+    )?;
     let backup = backup_path(&group_index)?;
     fs::rename(&group_index, &backup).with_context(|| {
         format!(
@@ -149,7 +117,7 @@ pub fn rebuild_rewrite_case_groups(
                 backup,
                 groups,
                 cases,
-                case_source_relocated,
+                case_source_relocated: false,
                 run_index_backup,
             })
         }
@@ -188,6 +156,17 @@ fn rebuild_index(
     source_revision: &str,
     inventory: &[super::model::RewriteApiProgress],
 ) -> Result<(usize, usize, String)> {
+    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
+    let config = crate::config::AppConfig::load(&project.recorder_config)?;
+    let routes = config.http_gateway.source_routes.merged(
+        inventory
+            .iter()
+            .map(|item| item.api.parse::<RecordingApi>())
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|api| api.method().as_str() != "MOTAN")
+            .map(|api| api.to_string()),
+    )?;
     let mut expected_groups = BTreeSet::new();
     for item in inventory {
         let api = item.api.parse::<RecordingApi>()?;
@@ -197,7 +176,7 @@ fn rebuild_index(
                 item.api
             )
         })?;
-        let member = resolve_recording_api_seed_member(case_source, &api)?;
+        let member = resolve_recording_api_seed_member(case_source, &api, &routes)?;
         let result = ensure_case_group_with_target_root(
             CaseGroupOptions {
                 case_source: case_source.to_path_buf(),
@@ -207,7 +186,7 @@ fn rebuild_index(
                 pattern: api.is_dynamic().then(|| api.path_pattern().to_string()),
                 source_revision: source_revision.to_string(),
                 output: group_index.to_path_buf(),
-                recorder_config: None,
+                recorder_config: Some(project.recorder_config.clone()),
             },
             target_root,
         )?;
@@ -387,12 +366,12 @@ mod tests {
         assert!(!report.case_source_relocated);
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&report.group_index).unwrap()).unwrap();
-        assert_eq!(persisted["version"], 2);
+        assert_eq!(persisted["version"], 3);
         assert_eq!(persisted["path_anchor"], "target_root");
     }
 
     #[test]
-    fn relocates_a_copied_legacy_absolute_path_index() {
+    fn rejects_legacy_index_without_rewriting_original_or_copied_evidence() {
         let temporary = tempfile::tempdir().unwrap();
         let original_root = temporary.path().join("original-target");
         let target = temporary.path().join("moved-target");
@@ -482,44 +461,16 @@ mod tests {
         state.api_inventory = vec![progress("GET /health", "/health")];
         RewriteStore::new(&target).unwrap().save(&state).unwrap();
 
-        let report = rebuild_rewrite_case_groups(RewriteCaseGroupRebuildOptions {
+        let original_before = fs::read(&original_index).unwrap();
+        let copied_before = fs::read(&current_index).unwrap();
+        let error = rebuild_rewrite_case_groups(RewriteCaseGroupRebuildOptions {
             target_root: target.clone(),
             recording_run_id: run_id.to_string(),
             confirm_rebuild: true,
         })
-        .unwrap();
-
-        assert!(report.case_source_relocated);
-        assert!(report.backup.is_file());
-        assert!(
-            report
-                .run_index_backup
-                .as_ref()
-                .is_some_and(|path| path.is_file())
-        );
-        let rebuilt =
-            load_complete_case_group_inventory(&report.group_index, &current_source).unwrap();
-        assert_eq!(rebuilt.groups.len(), 1);
-        let persisted: serde_json::Value =
-            serde_json::from_slice(&fs::read(&report.group_index).unwrap()).unwrap();
-        assert_eq!(persisted["version"], 2);
-        assert_eq!(persisted["path_anchor"], "target_root");
-        assert_eq!(
-            persisted["case_source"],
-            format!(".traffic-e2e/local/artifacts/recordings/{run_id}")
-        );
-        let run_index: serde_yaml::Value = serde_yaml::from_slice(
-            &fs::read(report.group_index.with_file_name("state.yaml")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(run_index["path_anchor"], "target_root");
-        assert_eq!(
-            run_index["case_source"],
-            format!(".traffic-e2e/local/artifacts/recordings/{run_id}")
-        );
-        assert_eq!(
-            run_index["case_inventory_id"].as_str(),
-            Some(rebuilt.case_inventory_id.as_str())
-        );
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("unsupported group index version"));
+        assert_eq!(fs::read(&original_index).unwrap(), original_before);
+        assert_eq!(fs::read(&current_index).unwrap(), copied_before);
     }
 }
