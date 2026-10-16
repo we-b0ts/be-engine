@@ -19,6 +19,15 @@ It checks `filename*` too and retains static filename/header/body assertions;
 see [header date rules](../../../../../docs/response-header-date-rules.md).
 Only the coordinator plans/applies these rules, followed by fresh verification.
 
+For a JSON expiry or scheduled timestamp generated as current time plus a
+source-proven offset, return its pointer, timestamp format, source proof and
+observed source/target examples for `timestamp` with `time: preserve_relative`.
+The coordinator uses `--timestamp-mode preserve-relative`; default timestamp
+rules check the request-time window instead. Relative comparison keeps the
+offset from each side's captured request within five seconds, so wrong TTLs
+and fixed absolute expiry values remain checked. Existing recordings are reusable.
+See [JSON response time rules](../../../../../docs/response-time-rules.md).
+
 Check `facts.policy_freshness` before recommending a plan. If it requires fresh
 Replay, keep the source diagnosis and return the structured `refresh_command`
 to the coordinator. Any policy edit can stale earlier evidence, including a

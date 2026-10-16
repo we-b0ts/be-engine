@@ -2,7 +2,9 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use super::model::ResponseDifferenceKind;
-use crate::replay::policy::{ResponseDurationUnit, ResponseTimeRule, ResponseTimestampFormat};
+use crate::replay::policy::{
+    ResponseDurationUnit, ResponseTimeRule, ResponseTimestampFormat, ResponseTimestampMode,
+};
 
 const NANOS_PER_SECOND: i128 = 1_000_000_000;
 const TOLERANCE_NANOS: u128 = 5_000_000_000;
@@ -27,7 +29,10 @@ pub(in crate::replay) fn compare(
         return Err(ResponseDifferenceKind::TimeReferenceMissing);
     };
     match rule {
-        ResponseTimeRule::Timestamp { format } => {
+        ResponseTimeRule::Timestamp { format, mode } => {
+            if mode == ResponseTimestampMode::PreserveRelative {
+                return compare_preserved_timestamp(format, expected, actual, times);
+            }
             let source = timestamp_nanos(expected, format).ok_or(invalid)?;
             let target = timestamp_nanos(actual, format).ok_or(invalid)?;
             if source.abs_diff(date_nanos(source_time)) > TOLERANCE_NANOS

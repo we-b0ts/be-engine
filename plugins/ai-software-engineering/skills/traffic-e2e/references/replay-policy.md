@@ -356,6 +356,13 @@ No current wall-clock fallback or configurable tolerance is allowed.
 - `timestamp` requires `format: unix_seconds`, `unix_milliseconds`, or
   `rfc3339`. Each source/target timestamp must be within five seconds of its
   own request start, even if the two field literals are equal.
+  Explicit `time: preserve_relative` instead preserves the timestamp's offset
+  from each side's captured request start within five seconds. Use it for a
+  source-proven expiry or scheduled time; a wrong TTL or fixed absolute expiry
+  remains checked. CLI: `--kind timestamp --timestamp-format rfc3339
+  --timestamp-mode preserve-relative`. Omitting the mode keeps the existing
+  request-window contract. Plan and Replay share the comparator; apply retains
+  frozen-witness checks. See [JSON response time rules](../../../../../docs/response-time-rules.md).
 - `duration` requires `unit: milliseconds`, `seconds`, `minutes`, or `hours`.
   After conversion to the same unit, it requires
   `abs((target_duration - source_duration) - (target_request_time - source_request_time)) <= 5 seconds`.

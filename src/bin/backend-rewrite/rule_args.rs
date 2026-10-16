@@ -74,6 +74,9 @@ pub(super) struct RulePlanArgs {
     pub(super) unit: Option<traffic_e2e::ResponseDurationUnit>,
     #[arg(long, value_enum)]
     pub(super) timestamp_format: Option<traffic_e2e::ResponseTimestampFormat>,
+    /// Timestamp comparison: request-window (default) or preserve each side's request-relative offset.
+    #[arg(long, value_enum, requires = "kind")]
+    pub(super) timestamp_mode: Option<traffic_e2e::ResponseTimestampMode>,
     #[arg(long)]
     pub(super) json_pointer: Option<String>,
     #[arg(long)]
@@ -391,6 +394,53 @@ mod generated_tests {
                 &duplicate_scope.to_string(),
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn relative_timestamp_mode_is_available_through_response_rule_cli() {
+        use super::super::{Cli, RewriteCommand, RuleCommand};
+        let parsed = Cli::try_parse_from([
+            "backend-rewrite",
+            "rule",
+            "plan",
+            "--evidence-id",
+            "current",
+            "--body-codec",
+            "json",
+            "--kind",
+            "timestamp",
+            "--timestamp-format",
+            "rfc3339",
+            "--timestamp-mode",
+            "preserve-relative",
+            "--json-pointer",
+            "/expires_at",
+            "--source-evidence",
+            "SessionService:create uses current time plus TTL",
+            "--source-example",
+            "2023-11-14T23:13:20Z",
+            "--target-example",
+            "2023-11-14T23:14:20Z",
+        ])
+        .unwrap();
+        let RewriteCommand::Rule(command) = parsed.command else {
+            panic!("rule command")
+        };
+        let RuleCommand::Plan(options) = command.command else {
+            panic!("plan command")
+        };
+        let time = traffic_e2e::ResponseTimeRule::from_options_with_mode(
+            options.kind.map(Into::into),
+            options.unit,
+            options.timestamp_format,
+            options.timestamp_mode,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            time.timestamp_mode(),
+            Some(traffic_e2e::ResponseTimestampMode::PreserveRelative)
         );
     }
 }

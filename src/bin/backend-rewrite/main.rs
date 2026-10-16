@@ -547,10 +547,11 @@ async fn run(cli: Cli) -> Result<()> {
                             .map(Into::into)
                             .unwrap_or(ResponseBodyCodec::Json),
                         jwt: args.jwt.options()?,
-                        time: traffic_e2e::ResponseTimeRule::from_options(
+                        time: traffic_e2e::ResponseTimeRule::from_options_with_mode(
                             args.kind.map(Into::into),
                             args.unit,
                             args.timestamp_format,
+                            args.timestamp_mode,
                         )?,
                         kind: args.kind.map(Into::into),
                         json_pointer: args.json_pointer,

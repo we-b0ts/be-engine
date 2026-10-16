@@ -37,6 +37,18 @@ the rule. Replay loads the applied selector from
 `.traffic-e2e/verification.yaml` and normalize source and target observations
 without changing target code, configuration, or RPC signatures.
 
+For a source-proven JSON expiry or scheduled timestamp, use `--kind timestamp
+--timestamp-format rfc3339 --timestamp-mode preserve-relative` with the worker's
+pointer, source proof and observed examples. This preserves the offset from
+each side's captured request within five seconds; the default timestamp mode
+checks the request-time window. See [JSON response time rules](../../../../../docs/response-time-rules.md).
+
+If a pending MySQL SQL-time plan was validated before another API changed the
+dynamic-binding policy, follow the returned `recover` command. Retain the
+returned `retired_plan` selector and source proof, then follow `next_command`
+through the normal review and Replay gates before replanning from current
+evidence. Recovery does not apply the old plan or revert the shared policy.
+
 JSON rules use `--kind`, `--json-pointer`, and their top-level justification
 arguments. Protobuf and Hessian2 rules instead use typed path JSON and MUST NOT
 carry any of those JSON arguments. For a protobuf repeated field:

@@ -26,12 +26,12 @@ pub use crate::replay::{
     ResponseBodyUnorderedPathCandidate, ResponseDifference, ResponseDifferenceKind,
     ResponseDurationUnit, ResponseGatewayProtocol, ResponseHeaderDateCandidate,
     ResponseHeaderDateRule, ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan,
-    ResponseRuleReport, ResponseTimeRule, ResponseTimestampFormat, aggregate_replay_reports,
-    aggregate_replay_reports_with_options, assert_recorded_response, initialize_replay_policy,
-    plan_http_cross_case, plan_memcached_timestamp_rule, plan_mysql_time_rule,
-    plan_redis_cross_case, plan_response_body_rule, plan_response_rule, run_mysql_replay,
-    run_mysql_replay_control, run_replay, run_replay_control, run_replay_with_counters,
-    run_replay_with_lifecycle, validate_replay_policy,
+    ResponseRuleReport, ResponseTimeRule, ResponseTimestampFormat, ResponseTimestampMode,
+    aggregate_replay_reports, aggregate_replay_reports_with_options, assert_recorded_response,
+    initialize_replay_policy, plan_http_cross_case, plan_memcached_timestamp_rule,
+    plan_mysql_time_rule, plan_redis_cross_case, plan_response_body_rule, plan_response_rule,
+    run_mysql_replay, run_mysql_replay_control, run_replay, run_replay_control,
+    run_replay_with_counters, run_replay_with_lifecycle, validate_replay_policy,
 };
 pub use crate::replay::{
     DynamicValueMysqlTimeRule, DynamicValueRedisTimeRule, DynamicValueRuleFeedback,

@@ -1,5 +1,7 @@
 use super::*;
 use crate::rewrite::model::RewriteDependencyRulePlanRecord;
+#[path = "tests/mysql_time.rs"]
+mod mysql_time;
 
 fn state() -> RewriteState {
     let mut state = crate::rewrite::worker::tests::implementation_state_with_inventory(false);
@@ -69,11 +71,11 @@ fn persisted_plan_recovers_only_after_evidence_loss_and_never_during_active_repl
     let context = || RewriteContext {
         target_root: root.into(),
     };
-    assert!(!evidence_missing(root, &state).unwrap());
+    assert!(!evidence_unusable(root, &state).unwrap());
     assert!(required_action(root, &state).is_none());
     assert!(recover_rewrite_rule_plan(context(), "plan").is_err());
     std::fs::remove_file(&sidecar).unwrap();
-    assert!(evidence_missing(root, &state).unwrap());
+    assert!(evidence_unusable(root, &state).unwrap());
     let action = required_action(root, &state).unwrap();
     let super::super::model::RewriteAction::PlanApplyRequired { command, .. } = action else {
         panic!("recover the pending plan")

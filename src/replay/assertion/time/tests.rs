@@ -11,6 +11,7 @@ fn times() -> RequestTimes {
 #[test]
 fn timestamps_must_match_each_own_request_window_even_if_literals_are_equal() {
     let rule = ResponseTimeRule::Timestamp {
+        mode: Default::default(),
         format: ResponseTimestampFormat::UnixSeconds,
     };
     for (source, target, valid) in [
@@ -100,6 +101,7 @@ fn time_rules_parse_milliseconds_rfc3339_and_numeric_strings() {
     for (rule, source, target) in [
         (
             ResponseTimeRule::Timestamp {
+                mode: Default::default(),
                 format: ResponseTimestampFormat::UnixMilliseconds,
             },
             json!(1_700_000_000_000_u64),
@@ -107,6 +109,7 @@ fn time_rules_parse_milliseconds_rfc3339_and_numeric_strings() {
         ),
         (
             ResponseTimeRule::Timestamp {
+                mode: Default::default(),
                 format: ResponseTimestampFormat::Rfc3339,
             },
             json!("2023-11-15T06:13:20+08:00"),

@@ -17,7 +17,10 @@ pub(in crate::replay) fn validate(
         return Err("timestamp header must occur exactly once on both requests".into());
     }
     compare(
-        ResponseTimeRule::Timestamp { format },
+        ResponseTimeRule::Timestamp {
+            format,
+            mode: Default::default(),
+        },
         &Value::String(expected[0].clone()),
         &Value::String(actual[0].clone()),
         times,

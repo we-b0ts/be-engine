@@ -2,6 +2,7 @@ use super::*;
 
 fn uuid(pointer: &str) -> GeneratedResponseRule {
     GeneratedResponseRule {
+        time: None,
         unit: None,
         format: None,
         pointer: pointer.to_string(),
@@ -182,6 +183,7 @@ fn rejects_generated_rules_without_auditable_evidence() {
             "GET /api/resource".to_string(),
             JsonResponseRules {
                 uuid: vec![GeneratedResponseRule {
+                    time: None,
                     unit: None,
                     format: None,
                     pointer: "/content".to_string(),

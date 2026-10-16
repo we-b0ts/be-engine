@@ -13,7 +13,9 @@ mod jwt;
 mod time_rule;
 use json_validation::validate_json_rule_map;
 pub use jwt::{ResponseJwtAlgorithm, ResponseJwtKeySource, ResponseJwtRule};
-pub use time_rule::{ResponseDurationUnit, ResponseTimeRule, ResponseTimestampFormat};
+pub use time_rule::{
+    ResponseDurationUnit, ResponseTimeRule, ResponseTimestampFormat, ResponseTimestampMode,
+};
 
 pub(crate) use json_pointer::response_locations_overlap;
 pub(in crate::replay) use json_pointer::{
@@ -181,9 +183,13 @@ impl ResponseRules {
                     .generated()
                     .map(move |(kind, field)| {
                         let mut selected = response_field(kind, api, &field.pointer, None);
-                        selected.time =
-                            ResponseTimeRule::from_options(Some(kind), field.unit, field.format)
-                                .expect("response time settings were validated on load");
+                        selected.time = ResponseTimeRule::from_options_with_mode(
+                            Some(kind),
+                            field.unit,
+                            field.format,
+                            field.time,
+                        )
+                        .expect("response time settings were validated on load");
                         selected
                     })
                     .chain(rules.jwt.iter().map(move |rule| {
@@ -502,6 +508,8 @@ pub(in crate::replay) struct GeneratedResponseRule {
     pub(in crate::replay) unit: Option<ResponseDurationUnit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) format: Option<ResponseTimestampFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) time: Option<ResponseTimestampMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -756,7 +764,7 @@ mod response_body_tests;
 mod tests;
 
 fn validate_generated_rule(kind: ResponseRuleKind, rule: &GeneratedResponseRule) -> Result<()> {
-    ResponseTimeRule::from_options(Some(kind), rule.unit, rule.format)?;
+    ResponseTimeRule::from_options_with_mode(Some(kind), rule.unit, rule.format, rule.time)?;
     ensure!(
         kind.is_generated(),
         "generated response rule has an invalid kind"
