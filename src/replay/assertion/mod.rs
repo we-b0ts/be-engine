@@ -542,6 +542,17 @@ fn evaluate_response(
             } else {
                 ResponseBodyCodec::Json
             };
+            if report.body_codec == ResponseBodyCodec::Protobuf && !comparison.passed() {
+                if let Ok(mut diagnosis) = diagnose_response_body(
+                    expected_body.body(),
+                    actual_body.body(),
+                    ResponseBodyCodec::Protobuf,
+                ) {
+                    diagnosis.configured = true;
+                    diagnosis.used_for_verdict = false;
+                    report.body_diagnosis = Some(diagnosis);
+                }
+            }
             report.applied_body_rule_ids.extend(comparison.evaluated);
             for diff in comparison.differences {
                 report.differences.push(unified::contract_difference(diff));

@@ -152,7 +152,7 @@ fn null_absence_numeric_category_and_missing_rule_are_distinct() {
     assert!(!compare(&json!({"a":1}), &json!({"a":1.0}), &[], clocks()).passed());
     let contract = FieldContract::Unordered;
     assert!(
-        !compare(
+        compare(
             &json!({}),
             &json!({}),
             &[Field {

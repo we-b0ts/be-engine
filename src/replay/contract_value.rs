@@ -23,6 +23,14 @@ impl Delivery {
     ) -> Result<Self> {
         let codec = merged_codec(rules)?;
         let decoded = CodecView::decode(&codec, source)?;
+        for rule in rules {
+            for pointer in rule.delivery_time.keys() {
+                ensure!(
+                    crate::value_contract::json::pointer_observed(&decoded.logical, pointer),
+                    "Source delivery timestamp {pointer:?} was not observed"
+                );
+            }
+        }
         let source_clock =
             |pair: crate::value_contract::time::ClockPair| crate::value_contract::time::ClockPair {
                 source: pair.source,

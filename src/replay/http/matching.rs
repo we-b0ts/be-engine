@@ -196,6 +196,7 @@ impl ReplayState {
                             body,
                             started_at: request_started_at,
                         },
+                        &policy_decision.dynamic_query_params,
                     )
                 {
                     match result {

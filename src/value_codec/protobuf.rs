@@ -99,8 +99,8 @@ impl Document {
 
 fn bindings(codec: &ProtobufCodec) -> Result<Binding> {
     ensure!(
-        !codec.fields.is_empty() && codec.fields.len() <= 256,
-        "Protobuf requires 1..256 typed bindings"
+        codec.fields.len() <= 256,
+        "Protobuf accepts at most 256 typed bindings"
     );
     let mut root = Binding::default();
     for (alias, field) in &codec.fields {

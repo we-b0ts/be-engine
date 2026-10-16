@@ -343,11 +343,13 @@ pub(in crate::replay) fn source_observation(
     if record.command.eq_ignore_ascii_case("set") && value.is_some() || !request_rules.is_empty() {
         if let Some(value) = &value {
             if !request_rules.is_empty() {
-                crate::replay::contract_value::Delivery::prepare(value, &request_rules, clocks)?;
+                let checked = crate::replay::contract_value::Delivery::prepare(
+                    value,
+                    &request_rules,
+                    clocks,
+                )?;
+                contracts.observe_value_slot_applicable(checked.validation().evaluated.clone());
             }
-            contracts.observe_value_slot_applicable(
-                request_rules.iter().map(|rule| rule.rule.id.clone()),
-            );
         } else {
             contracts.observe_value_slot_unavailable(
                 request_rules.iter().map(|rule| rule.rule.id.clone()),
@@ -408,6 +410,7 @@ pub(in crate::replay) fn source_observation(
             crate::memcached::value_slot::extract(&frames, &record.wire_protocol)?
         };
         let mut applicable = std::collections::BTreeSet::new();
+        let mut available = std::collections::BTreeSet::new();
         for slot in slots {
             let selected = response_rules
                 .iter()
@@ -424,18 +427,19 @@ pub(in crate::replay) fn source_observation(
             if selected.is_empty() {
                 continue;
             }
-            crate::replay::contract_value::Delivery::prepare(
+            let checked = crate::replay::contract_value::Delivery::prepare(
                 &frames[slot.frame][slot.payload],
                 &selected,
                 clocks,
             )?;
-            applicable.extend(selected.iter().map(|rule| rule.rule.id.clone()));
+            available.extend(selected.iter().map(|rule| rule.rule.id.clone()));
+            applicable.extend(checked.validation().evaluated.iter().cloned());
         }
         contracts.observe_value_slot_unavailable(
             response_rules
                 .iter()
                 .map(|rule| rule.rule.id.clone())
-                .filter(|id| !applicable.contains(id)),
+                .filter(|id| !available.contains(id)),
         );
         contracts.observe_value_slot_applicable(applicable);
         source["response_frames"] = encoded_frames(&frames);

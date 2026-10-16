@@ -46,6 +46,42 @@ pub(super) fn project(output: &mut NativeRuntimeProjection, rule: &n::NativeRule
                 .push(header);
         }
         n::NativeEffect::ResponseBody(effect) => {
+            // Codec selection itself is a strict body contract, including zero
+            // relaxed fields. Preserve it in the typed domain projection.
+            match effect.codec {
+                n::BodyCodec::Json => {
+                    output
+                        .document
+                        .response_rules
+                        .json
+                        .entry(api.into())
+                        .or_default();
+                }
+                n::BodyCodec::Protobuf => {
+                    output
+                        .document
+                        .response_rules
+                        .protobuf
+                        .entry(api.into())
+                        .or_default();
+                }
+                n::BodyCodec::Hessian2 => {
+                    output
+                        .document
+                        .response_rules
+                        .hessian2
+                        .entry(api.into())
+                        .or_default();
+                }
+                n::BodyCodec::Docx => {
+                    output
+                        .document
+                        .response_rules
+                        .docx
+                        .entry(api.into())
+                        .or_default();
+                }
+            }
             for field in &effect.fields {
                 body_field(output, rule, api, &field.contract, &field.proof)?;
             }

@@ -617,3 +617,62 @@ rules:
         assert_eq!(&patched[actual_slots[0].payload.clone()], payload);
     }
 }
+
+#[test]
+fn comparison_fields_absent_from_a_complete_payload_remain_inactive_and_strict() {
+    let (temp, _) = source_fixture();
+    let path = temp.path().join("policy.yaml");
+    let raw = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        raw.replace("    delivery: {rebase_time: [/expires_at]}\n", ""),
+    )
+    .unwrap();
+    let dir = temp.path().join(".traffic-e2e/local/recordings/case");
+    let cases = BTreeMap::from([(
+        "case".into(),
+        crate::replay::ReplayCase {
+            id: "case".into(),
+            dir: dir.clone(),
+            dependencies_path: dir.join("dependencies.jsonl"),
+            status: crate::replay::ReplayCaseStatus::Pending,
+        },
+    )]);
+    let runtime = ReplayPolicyRuntime::load(&path, &cases).unwrap();
+    let source = br#"{"stable":7}"#;
+    let mut frame = format!("VALUE session 0 {}\r\n", source.len()).into_bytes();
+    frame.extend(source);
+    frame.extend(b"\r\nEND\r\n");
+    source_observation(
+        &runtime.request_contracts,
+        "case",
+        &source_event(Some(&frame)),
+    )
+    .unwrap();
+    let report = runtime.report();
+    assert!(!report.dependency_rules[0].applicable);
+    assert!(report.unavailable_value_slots.is_empty());
+    let target = TargetKey {
+        host: "cache.test".into(),
+        port: 11211,
+    };
+    let rules = runtime.request_contracts.memcached_compiled_rules(
+        Surface::DependencyResponse,
+        Some("case"),
+        &target,
+        "get",
+        Some(b"session"),
+    );
+    let equal =
+        crate::replay::contract_value::compare(source, source, &rules, Default::default()).unwrap();
+    assert!(equal.passed());
+    assert!(equal.evaluated.is_empty());
+    let added = crate::replay::contract_value::compare(
+        source,
+        br#"{"stable":7,"expires_at":1000}"#,
+        &rules,
+        Default::default(),
+    )
+    .unwrap();
+    assert!(!added.passed());
+}

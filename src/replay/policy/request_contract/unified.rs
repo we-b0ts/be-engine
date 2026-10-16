@@ -430,29 +430,44 @@ impl RequestContracts {
         }
         let mut ids = BTreeSet::new();
         for surface in [Surface::DependencyRequest, Surface::DependencyResponse] {
-            let selected = self
-                .unified_selected(&context, &key, surface, source.get(1).map(Vec::as_slice))
-                .iter()
-                .map(|rule| rule.rule.id.clone())
-                .collect::<Vec<_>>();
+            let selected =
+                self.unified_selected(&context, &key, surface, source.get(1).map(Vec::as_slice));
             if selected.is_empty() {
                 continue;
             }
-            if surface == Surface::DependencyResponse {
+            let payload = if surface == Surface::DependencyResponse {
                 let ordinary = event["outcome"]
                     .as_str()
                     .is_none_or(|outcome| outcome == "response");
-                let available = ordinary
-                    && super::unified_response::redis_bulk_payload(&evidence::decode(
+                if ordinary {
+                    super::unified_response::redis_bulk_payload(&evidence::decode(
                         &event["response"],
                     )?)?
-                    .is_some();
-                if !available {
-                    self.observe_value_slot_unavailable(selected);
-                    continue;
+                } else {
+                    None
                 }
-            }
-            ids.extend(selected);
+            } else {
+                value_index(context.command, source.len())
+                    .and_then(|index| source.get(index).cloned())
+            };
+            let Some(payload) = payload else {
+                self.observe_value_slot_unavailable(
+                    selected.iter().map(|rule| rule.rule.id.clone()),
+                );
+                continue;
+            };
+            let clocks = self.contract_clocks(
+                Some(case),
+                context.recorded_at,
+                None,
+                event["timestamp"]
+                    .as_str()
+                    .and_then(|value| value.parse().ok()),
+                None,
+            );
+            let validation =
+                crate::replay::contract_value::Delivery::prepare(&payload, &selected, clocks)?;
+            ids.extend(validation.validation().evaluated.iter().cloned());
         }
         self.state
             .lock()

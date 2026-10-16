@@ -99,7 +99,7 @@ pub(super) fn contract_difference(
         .unwrap_or_else(|| match diff.reason.as_str() {
             "authenticated nonce bijection changed" => K::JwtNonceMismatch,
             "field presence changed" => K::MissingActual,
-            "unexpected field" => K::MissingExpected,
+            "unexpected field" => K::UnexpectedActual,
             "array cardinality changed" => K::ArrayLengthMismatch,
             "generated contract rejected value: InvalidType" => K::GeneratedFieldNotScalar,
             "unordered requires two arrays" => K::UnorderedFieldNotArray,

@@ -61,6 +61,7 @@ pub(super) fn preview_request(
     policy: &ReplayPolicyRuntime,
     exchange: &ReplayHttpExchange,
     actual: &RequestView<'_>,
+    validated_query_params: &[String],
 ) -> Option<Result<crate::replay::policy::request_contract::Decision>> {
     if exchange.source != ReplaySource::Case || exchange.shared_origin.is_some() {
         return None;
@@ -76,6 +77,15 @@ pub(super) fn preview_request(
         return None;
     }
     Some((|| {
+        anyhow::ensure!(
+            uri_mismatch_reason(
+                &exchange.record.uri,
+                &actual.uri.to_string(),
+                validated_query_params
+            )
+            .is_none(),
+            "HTTP body contract preserves path and unowned query parameters"
+        );
         let source = decode_body(&exchange.record.request_body)?;
         let clocks = policy.request_contracts.contract_clocks(
             exchange.case_id.as_deref(),
@@ -213,10 +223,12 @@ pub(in crate::replay) fn observe_source(
         match witness_value(&bytes, surface)? {
             Some(payload) => {
                 if !rules.is_empty() {
-                    crate::replay::contract_value::Delivery::prepare(&payload, &rules, clocks)?;
+                    let validation =
+                        crate::replay::contract_value::Delivery::prepare(&payload, &rules, clocks)?;
+                    contracts.observe_value_slot_applicable(
+                        validation.validation().evaluated.iter().cloned(),
+                    );
                 }
-                contracts
-                    .observe_value_slot_applicable(rules.iter().map(|rule| rule.rule.id.clone()));
             }
             None => contracts
                 .observe_value_slot_unavailable(rules.iter().map(|rule| rule.rule.id.clone())),
