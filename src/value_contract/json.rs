@@ -46,11 +46,30 @@ pub(crate) struct Comparison {
     pub(crate) evaluated: BTreeSet<String>,
     pub(crate) time_validations: BTreeMap<String, usize>,
     pub(crate) differences: Vec<Difference>,
+    #[serde(skip)]
+    pub(crate) relationships: BTreeMap<(TimeAnchor, Option<String>), Vec<(i128, i128)>>,
 }
 
 impl Comparison {
     pub(crate) fn passed(&self) -> bool {
         self.differences.is_empty()
+    }
+    pub(crate) fn merge_and_validate(&mut self, other: Comparison) {
+        self.evaluated.extend(other.evaluated);
+        self.differences.extend(other.differences);
+        for (rule_id, count) in other.time_validations {
+            *self.time_validations.entry(rule_id).or_default() += count;
+        }
+        for (scope, values) in other.relationships {
+            self.relationships.entry(scope).or_default().extend(values);
+        }
+        if let Some(error) = self
+            .relationships
+            .values()
+            .find_map(|values| time::validate_relationships(values).err())
+        {
+            self.differences.push(difference("", &error.to_string()));
+        }
     }
 }
 
@@ -103,6 +122,7 @@ pub(crate) fn compare(
         evaluated: decisions.evaluated,
         time_validations: decisions.time_validations,
         differences: result.err().into_iter().collect(),
+        relationships: decisions.times,
     }
 }
 

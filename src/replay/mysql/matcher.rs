@@ -147,6 +147,7 @@ impl ReplayState {
         sql: Option<&str>,
         params: Option<&[RecordedMysqlValue]>,
     ) -> Option<MatchedExchange> {
+        let request_observed_at = Utc::now();
         let observed_sql = sql;
         let observed_params = params;
         let baseline_normalized_sql = sql.map(normalize_sql);
@@ -180,6 +181,26 @@ impl ReplayState {
                         || !identity_matches_exchange(identity, &exchange.identity)
                     {
                         continue;
+                    }
+                    if source == ReplaySource::Case
+                        && let (Some(policy), Some(case)) =
+                            (&self.replay_policy, active_case_id.as_deref())
+                        && let Err(error) = contracts::record_request(
+                            &policy.request_contracts,
+                            case,
+                            identity,
+                            &exchange.record,
+                            command,
+                            observed_sql,
+                            observed_params,
+                            request_observed_at,
+                        )
+                    {
+                        self.mysql
+                            .events
+                            .metadata_warnings
+                            .push(format!("SQL request witness unavailable: {error:#}"));
+                        return None;
                     }
                     let dynamic = self.replay_policy.as_ref().and_then(|policy| {
                         policy.dynamic_values.mysql(&MysqlPolicyContext {
@@ -241,15 +262,28 @@ impl ReplayState {
                             sql_match::prepared_values_match(&exchange.record, command, sql, params)
                         });
                     let sql_value_decision = self.replay_policy.as_ref().and_then(|policy| {
-                        policy.preview_mysql_sql_values(&MysqlPolicyContext {
-                            case_id: active_case_id.as_deref(),
-                            identity,
-                            command,
-                            recorded_sql: exchange.record.sql.as_deref(),
-                            sql,
-                            recorded: exchange.record.params.as_deref(),
-                            actual: params,
-                        })
+                        policy
+                            .request_contracts
+                            .preview_mysql_values(
+                                active_case_id.as_deref(),
+                                identity,
+                                &self.mysql.exchanges[index].record,
+                                command,
+                                observed_sql,
+                                observed_params,
+                                request_observed_at,
+                            )
+                            .or_else(|| {
+                                policy.preview_mysql_sql_values(&MysqlPolicyContext {
+                                    case_id: active_case_id.as_deref(),
+                                    identity,
+                                    command,
+                                    recorded_sql: exchange.record.sql.as_deref(),
+                                    sql,
+                                    recorded: exchange.record.params.as_deref(),
+                                    actual: params,
+                                })
+                            })
                     });
                     let (policy_decision, projected) = if let Some(decision) = sql_value_decision {
                         let Ok(decision) = decision else {
@@ -414,6 +448,35 @@ impl ReplayState {
                         exchange.record.response = response;
                         response_time_shift_rules = ids;
                     }
+                    let value_delivery = if source == ReplaySource::Case {
+                        if let (Some(policy), Some(case)) =
+                            (&self.replay_policy, active_case_id.as_deref())
+                        {
+                            let mut original = self.mysql.exchanges[index].record.clone();
+                            original.response = match original.response.materialize() {
+                                Ok(response) => response,
+                                Err(_) => continue,
+                            };
+                            match contracts::prepare_delivery(
+                                &policy.request_contracts,
+                                case,
+                                identity,
+                                &original,
+                                &exchange.record.response,
+                                command,
+                                observed_sql,
+                                observed_params,
+                                request_observed_at,
+                            ) {
+                                Ok(prepared) => prepared,
+                                Err(_) => continue,
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
                     self.mysql.exchanges[index].status =
                         if exchange.record.outcome.is_client_terminated() {
                             ReplayExchangeStatus::AwaitingClientTermination
@@ -444,6 +507,7 @@ impl ReplayState {
                         target_event_index: None,
                     };
                     return Some(MatchedExchange {
+                        value_delivery,
                         response_time_shift_rules,
                         source: exchange.source,
                         index,

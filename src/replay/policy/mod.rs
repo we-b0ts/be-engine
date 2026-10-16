@@ -26,6 +26,10 @@ pub use feedback::{
 };
 mod initialization;
 mod matcher;
+pub(crate) use matcher::mysql_contract::{
+    compare_values as compare_mysql_values, selected_value as mysql_contract_value,
+    witness_matches as mysql_witness_matches,
+};
 mod pattern;
 mod protobuf;
 mod report;

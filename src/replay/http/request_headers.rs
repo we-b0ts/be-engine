@@ -115,6 +115,36 @@ pub(in crate::replay) fn exact_contract_match(
     filter(expected) == filter(actual)
 }
 
+/// Match the native audit's acceptance modes. Body contracts cannot turn
+/// presence-only credentials or observational negotiation into exact values.
+pub(super) fn native_contract_match(expected: &HeaderSnapshot, actual: &HeaderSnapshot) -> bool {
+    let expected = normalized(expected);
+    let actual = normalized(actual);
+    let connection_headers = [&expected, &actual]
+        .into_iter()
+        .filter_map(|headers| headers.get("connection"))
+        .flatten()
+        .flat_map(|value| value.split(','))
+        .map(|name| name.trim().to_ascii_lowercase())
+        .collect::<BTreeSet<_>>();
+    expected.keys().chain(actual.keys()).all(|name| {
+        let before = expected.get(name);
+        let after = actual.get(name);
+        match mode(name, &connection_headers) {
+            Mode::Ignore | Mode::Observe => true,
+            Mode::Presence => before.is_some() == after.is_some(),
+            Mode::SourcePresence => before.is_none() || after.is_some(),
+            Mode::Strict => {
+                if before.is_some_and(|values| values.iter().any(|value| value == "<redacted>")) {
+                    before.is_some() == after.is_some()
+                } else {
+                    before == after
+                }
+            }
+        }
+    })
+}
+
 fn mode(name: &str, connection_headers: &BTreeSet<String>) -> Mode {
     if TRANSPORT_HEADERS.contains(&name)
         || name.starts_with("x-recorder-")

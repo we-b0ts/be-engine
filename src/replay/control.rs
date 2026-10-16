@@ -406,6 +406,21 @@ async fn finalize_replay(
     state: Arc<Mutex<ReplayState>>,
 ) -> (Value, Option<Value>) {
     let mut state = state.lock().await;
+    if state.mysql.exchanges.iter().any(|e| {
+        matches!(
+            e.status,
+            ReplayExchangeStatus::Responding | ReplayExchangeStatus::AwaitingClientTermination
+        )
+    }) || state.redis.has_in_flight()
+        || state.memcached.has_in_flight()
+        || state.motan.has_in_flight()
+        || state.http_has_in_flight()
+    {
+        return (
+            serde_json::json!({"ok":false,"complete":false,"error":"cannot finalize Replay while dependency delivery or termination evidence is still in flight"}),
+            None,
+        );
+    }
     let mut report = state.snapshot_report();
     let complete = report_is_complete(&report);
     let dirty = report_is_dirty(&report);
@@ -471,6 +486,9 @@ pub(super) async fn begin_case(
     };
     let counter_reader = {
         let state = state.lock().await;
+        if state.finalized_at.is_some() {
+            return serde_json::json!({"ok":false,"error":"finalized Replay requires a fresh session"});
+        }
         if state.deferred.is_some()
             && state
                 .cases

@@ -28,6 +28,7 @@ mod sql_values_tests;
 mod subquery_tests;
 mod time_shift_tests;
 mod tuple_tests;
+mod unified_contracts;
 
 fn exchange(sql: &str, response: Value) -> Value {
     json!({"event_type":"mysql_exchange", "target_host":"127.0.0.1", "target_port":3306,
@@ -78,8 +79,23 @@ async fn fixture_with_global(
     tokio::task::JoinHandle<()>,
 ) {
     let temp = tempdir().unwrap();
-    let case = temp.path().join("case-id");
-    std::fs::create_dir(&case).unwrap();
+    let unified = policy.is_some_and(|text| text.contains("format: traffic-policy/v1"));
+    let case = temp.path().join(if unified {
+        ".traffic-e2e/local/recordings/case-id"
+    } else {
+        "case-id"
+    });
+    std::fs::create_dir_all(&case).unwrap();
+    if unified {
+        let local = temp.path().join(".traffic-e2e/local");
+        let key = local.join(crate::repository::LOCAL_ENCRYPTION_KEY_FROM_LOCAL);
+        std::fs::create_dir_all(key.parent().unwrap()).unwrap();
+        std::fs::write(
+            key,
+            crate::request_headers::generate_encryption_key().unwrap(),
+        )
+        .unwrap();
+    }
     std::fs::write(
         case.join("dependencies.jsonl"),
         records

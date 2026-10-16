@@ -9,7 +9,7 @@ use crate::replay::policy::config::{MysqlTimeValueRule, TimeRule};
 use crate::replay::policy::sql_template::{SqlValueTemplate, bounded_statement_tokens, extract};
 use crate::replay::policy::value::validate_relative_time;
 
-fn materialized(
+pub(super) fn materialized(
     sql: Option<&str>,
     params: Option<&[RecordedMysqlValue]>,
 ) -> Result<Vec<Token>, String> {

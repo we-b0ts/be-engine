@@ -1,0 +1,213 @@
+use super::*;
+use sqlx::Executor;
+
+fn policy(surface: &str, operation: &str, sql: &str, slot: &str, delivery: bool) -> String {
+    format!(
+        r#"
+format: traffic-policy/v1
+rules:
+- id: sql-payload
+  surface: {surface}
+  match:
+    api: GET /users
+    resource: {{protocol: mysql, endpoint: '127.0.0.1:3306', database: appdb, username: root}}
+    operation: {operation}
+    sql: {sql:?}
+  slot: {slot}
+  codec: json
+  contract:
+    /members: {{kind: unordered}}
+    /time: {{kind: time, format: unix_microseconds, relation: preserve_offset, anchor: case.request_start}}
+  proof: {{source: 'sql_payload.py:10-25', fact: 'Source serializes a membership set and a request-relative microsecond timestamp'}}
+{}
+"#,
+        if delivery {
+            "  delivery: {rebase_time: [/time]}"
+        } else {
+            ""
+        }
+    )
+}
+
+fn payload(micros: i64, members: Value) -> String {
+    json!({"members":members,"time":micros+1_000_000,"stable":"checked"}).to_string()
+}
+
+#[tokio::test]
+async fn sql_json_contract_preserves_statement_and_finite_consumption_over_tls() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let sql = "UPDATE widgets SET payload=? WHERE id=?";
+        let mut write = exchange(sql, json!({"status":"ok","affected_rows":1}));
+        write["command"] = json!("COM_STMT_EXECUTE");
+        write["connection_id"] = json!(uuid::Uuid::new_v4());
+        write["query_sequence"] = json!(1);
+        write["params"] = json!([{"kind":"string","value":payload(1_577_836_800_000_000,json!(["a","b","a"]))},{"kind":"integer","value":7}]);
+        let (temp, addr, runtime, task) = fixture_with_policy(&[write], Some(&policy("dependency.request", "COM_STMT_EXECUTE", sql, "{sql_value: 0}", false))).await;
+        let original = std::fs::read(temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl")).unwrap();
+        let anchor = runtime.state.lock().await.replay_policy.as_ref().unwrap().request_contracts.request_times("case-id").target.unwrap().timestamp_micros();
+        let good = payload(anchor,json!(["a","a","b"]));
+        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
+        for (body, id, valid) in [(good.replace("checked","changed"),7,false),(good.clone(),8,false),(good.clone(),7,true),(good,7,false)] {
+            let result = sqlx::query(sql).bind(body).bind(id).execute(&mut client).await;
+            if valid { assert_eq!(result.unwrap().rows_affected(),1); } else { assert!(result.is_err()); }
+        }
+        client.close().await.unwrap();
+        let state = runtime.state.lock().await;
+        assert_eq!(state.mysql.events.matched_query_count,1);
+        assert_eq!(state.mysql.events.unmatched_queries.len(),3);
+        let report = state.replay_policy.as_ref().unwrap().report();
+        assert_eq!(report.dependency_rules.iter().find(|r| r.id=="sql-payload").unwrap().time_validations,1);
+        assert_eq!(std::fs::read(temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl")).unwrap(),original);
+        task.abort();
+    }).await.unwrap();
+}
+
+#[tokio::test]
+async fn sql_json_response_changes_only_explicit_delivery_time() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let sql = "SELECT payload FROM widgets WHERE id=7";
+        let source = payload(1_577_836_800_000_000, json!(["a", "b", "a"]));
+        let mut record = exchange(
+            sql,
+            result(
+                json!([{"name":"payload","family":"string","sql_type":"VARCHAR"}]),
+                json!([[{"kind":"string","value":source}]]),
+            ),
+        );
+        record["connection_id"] = json!(uuid::Uuid::new_v4());
+        record["query_sequence"] = json!(1);
+        let (temp, addr, runtime, task) = fixture_with_policy(
+            &[record],
+            Some(&policy(
+                "dependency.response",
+                "COM_QUERY",
+                "SELECT payload FROM widgets WHERE id=?",
+                "{sql_column: payload}",
+                true,
+            )),
+        )
+        .await;
+        let original = std::fs::read(
+            temp.path()
+                .join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl"),
+        )
+        .unwrap();
+        let anchor = runtime
+            .state
+            .lock()
+            .await
+            .replay_policy
+            .as_ref()
+            .unwrap()
+            .request_contracts
+            .request_times("case-id")
+            .target
+            .unwrap()
+            .timestamp_micros();
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
+        let row = (&mut client).fetch_one(sql).await.unwrap();
+        let body: Value = serde_json::from_str(row.get::<&str, _>("payload")).unwrap();
+        assert_eq!(body["time"], json!(anchor + 1_000_000));
+        assert_eq!(body["members"], json!(["a", "b", "a"]));
+        assert_eq!(body["stable"], "checked");
+        assert!((&mut client).fetch_one(sql).await.is_err());
+        client.close().await.unwrap();
+        let state = runtime.state.lock().await;
+        assert_eq!(state.mysql.events.matched_query_count, 1);
+        assert_eq!(
+            std::fs::read(
+                temp.path()
+                    .join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl")
+            )
+            .unwrap(),
+            original
+        );
+        task.abort();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn finalized_evidence_waits_for_actual_dependency_delivery() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let sql = "SELECT id FROM widgets WHERE id=7";
+        let mut record = exchange(
+            sql,
+            result(
+                json!([{"name":"id","family":"integer","sql_type":"BIGINT"}]),
+                json!([[{"kind":"integer","value":7}]]),
+            ),
+        );
+        record["duration_ms"] = json!(500);
+        let (temp, addr, runtime, server) = fixture_with_policy(&[record], None).await;
+        let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+        let query = tokio::spawn(async move {
+            (&mut client).fetch_one(sql).await.unwrap();
+            client.close().await.unwrap();
+        });
+        loop {
+            if runtime
+                .state
+                .lock()
+                .await
+                .mysql
+                .exchanges
+                .iter()
+                .any(|e| e.status == ReplayExchangeStatus::Responding)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        let request = |command: &str, case_id| crate::replay::control::ReplayControlRequest {
+            command: command.into(),
+            case_id,
+            fail_on_dirty: false,
+            fail_on_incomplete: false,
+        };
+        let (ended, _) = crate::replay::control::handle_control_request(
+            request("end", Some("case-id".into())),
+            runtime.state.clone(),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(ended["ok"], true);
+        let (pending, _) = crate::replay::control::handle_control_request(
+            request("finalize", None),
+            runtime.state.clone(),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(pending["ok"], false);
+        assert!(runtime.state.lock().await.finalized_at.is_none());
+        query.await.unwrap();
+        let (finished, _) = crate::replay::control::handle_control_request(
+            request("finalize", None),
+            runtime.state.clone(),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(finished["ok"], true);
+        let (reopened, _) = crate::replay::control::handle_control_request(
+            request("begin", Some("case-id".into())),
+            runtime.state.clone(),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(reopened["ok"], false);
+        server.abort();
+    })
+    .await
+    .unwrap();
+}

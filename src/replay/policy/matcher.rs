@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 mod memcached;
+pub(in crate::replay::policy) mod mysql_contract;
 pub(in crate::replay::policy) mod mysql_response;
 pub(in crate::replay::policy) mod mysql_selectors;
 pub(super) mod mysql_values;

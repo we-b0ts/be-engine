@@ -49,6 +49,11 @@ pub use egress_counter::{
 #[cfg(test)]
 mod global_dependency_tests;
 mod http;
+pub(crate) use http::contracts::{
+    source_witness as http_source_witness, validate_witness as http_validate_witness,
+    witness_matches as http_witness_matches,
+    witness_metadata_matches as http_witness_metadata_matches, witness_value as http_witness_value,
+};
 pub(crate) use http::cross_case as http_cross_case;
 pub use http::cross_case::HttpCrossCaseSelector;
 #[cfg(test)]
@@ -66,6 +71,11 @@ mod memcached;
 mod model;
 mod motan;
 mod mysql;
+pub(crate) use mysql::contracts::{
+    source_witness as mysql_source_witness, validate_witness as mysql_validate_witness,
+    witness_values as mysql_witness_values,
+};
+pub(crate) use policy::mysql_witness_matches;
 mod network_access;
 mod policy;
 pub(crate) use policy::replace_request_rule_section;

@@ -34,6 +34,7 @@ impl RedisReplayState {
                                     .checked_sub_signed(chrono::TimeDelta::milliseconds(duration))
                             })
                     }),
+                    actual_at: self.request_observed_at,
                     connection_id: Some(exchange.record.connection_id),
                     sequence: Some(exchange.record.sequence),
                 },

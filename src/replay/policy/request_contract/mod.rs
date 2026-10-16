@@ -2,8 +2,10 @@
 pub(crate) mod config;
 pub(in crate::replay::policy) mod evidence;
 mod http_json;
+mod http_value;
 mod key;
 mod memcached;
+mod mysql;
 mod value_decision;
 pub(in crate::replay) use key::KeyBindingReport;
 mod overlap;

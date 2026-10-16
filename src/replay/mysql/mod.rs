@@ -1,5 +1,6 @@
 mod broker;
 mod cleanup_selection;
+pub(in crate::replay) mod contracts;
 mod evidence;
 mod matcher;
 mod model;

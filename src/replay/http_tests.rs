@@ -81,6 +81,7 @@ fn one_fake_ip_is_reused_for_all_ports_on_a_host() {
 #[test]
 fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
     let record = RecordedHttpExchange {
+        id: None,
         response_evidence: None,
         outcome: crate::DependencyExchangeOutcome::Response,
         duration_ms: None,
@@ -143,6 +144,7 @@ fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
 #[test]
 fn response_discovered_http_target_reserves_its_recorded_fake_ip() {
     let record = RecordedHttpExchange {
+        id: None,
         response_evidence: None,
         outcome: crate::DependencyExchangeOutcome::Response,
         duration_ms: None,
@@ -473,6 +475,7 @@ async fn preflight_probe_global_exchange_is_repeatable_for_system_and_target_che
     let temp = tempdir().unwrap();
     let dependency = serde_json::json!({
         "event_type": "http_exchange",
+        "id": uuid::Uuid::new_v4(),
         "scheme": "fake_ip_http",
         "method": "POST",
         "uri": "/probe",
@@ -866,6 +869,7 @@ pub(super) async fn write_http_dependency(
     let dependency = serde_json::json!({
         "event_type": "http_exchange",
         "scheme": scheme,
+        "id": uuid::Uuid::new_v4(),
         "method": "POST",
         "uri": uri,
         "authority": authority,

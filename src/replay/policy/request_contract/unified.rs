@@ -15,6 +15,7 @@ pub(in crate::replay) struct RedisRequestContext<'a> {
     pub username: Option<&'a str>,
     pub command: &'a str,
     pub recorded_at: Option<DateTime<Utc>>,
+    pub actual_at: Option<DateTime<Utc>>,
     pub connection_id: Option<uuid::Uuid>,
     pub sequence: Option<u64>,
 }
@@ -34,6 +35,7 @@ impl<'a> RedisRequestContext<'a> {
             username: None,
             command,
             recorded_at: None,
+            actual_at: None,
             connection_id: None,
             sequence: None,
         }
@@ -52,6 +54,9 @@ pub(super) fn source_body(request: &Value) -> Option<Value> {
 }
 
 impl RequestContracts {
+    pub(in crate::replay) fn retains_value_witnesses(&self) -> bool {
+        self.witnesses.is_some()
+    }
     pub(in crate::replay::policy) fn configure_compiled(
         &mut self,
         compiled: Option<Arc<CompiledPolicy>>,
@@ -227,11 +232,9 @@ impl RequestContracts {
                     source: anchor.recorded,
                     target: anchor.actual,
                 },
-                // No target dependency clock is available at this boundary yet.
-                // Missing clocks fail closed; never substitute a case clock.
                 dependency: ClockPair {
                     source: context.recorded_at,
-                    target: None,
+                    target: context.actual_at,
                 },
                 ..Default::default()
             };
@@ -308,6 +311,8 @@ impl RequestContracts {
 
     pub(super) fn observe_unified_source(&self, case: &str, event: &Value) -> Result<()> {
         self.observe_unified_memcached_source(case, event)?;
+        self.observe_unified_http_source(case, event)?;
+        self.observe_unified_mysql_source(case, event)?;
         if self.compiled.is_none()
             || event["event_type"] != "redis_exchange"
             || event["replay_safe"] != true
@@ -335,6 +340,7 @@ impl RequestContracts {
             database: event["database"].as_i64().unwrap_or_default(),
             username: event["username"].as_str(),
             command: event["command"].as_str().unwrap_or_default(),
+            actual_at: None,
             recorded_at: event["request_started_at"]
                 .as_str()
                 .and_then(|value| value.parse().ok())
@@ -451,7 +457,7 @@ impl RequestContracts {
                 },
                 dependency: WitnessClockPair {
                     source: context.recorded_at,
-                    target: None,
+                    target: context.actual_at,
                 },
                 ..Default::default()
             },
@@ -512,7 +518,7 @@ impl RequestContracts {
                 },
                 dependency: WitnessClockPair {
                     source: context.recorded_at,
-                    target: None,
+                    target: context.actual_at,
                 },
                 delivery: WitnessClockPair {
                     source: delivered,

@@ -1,3 +1,4 @@
+pub(in crate::replay) mod contracts;
 mod matching;
 pub(in crate::replay) mod multipart;
 use std::collections::{BTreeMap, BTreeSet};
@@ -51,6 +52,8 @@ pub(super) use request_headers::HeaderDifferenceReport;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct RecordedHttpExchange {
+    #[serde(default)]
+    id: Option<String>,
     #[serde(skip)]
     response_evidence: Option<crate::dependency_index::RecordRef>,
     scheme: String,
@@ -658,9 +661,21 @@ fn response_from_record(record: RecordedHttpExchange) -> Result<Response<Full<By
         .map(decode_body)
         .transpose()?
         .unwrap_or_default();
+    let body_length = body.len();
     let mut response = Response::new(Full::new(Bytes::from(body)));
     *response.status_mut() = status;
-    if let Some(headers) = record.response_headers {
+    *response.headers_mut() =
+        response_headers_for_payload(record.response_headers.as_ref(), body_length, Utc::now());
+    Ok(response)
+}
+
+fn response_headers_for_payload(
+    headers: Option<&HeaderSnapshot>,
+    body_length: usize,
+    delivered_at: chrono::DateTime<Utc>,
+) -> hyper::HeaderMap {
+    let mut output = hyper::HeaderMap::new();
+    if let Some(headers) = headers {
         for (name, values) in headers {
             if is_hop_by_hop_header(&name) {
                 continue;
@@ -670,12 +685,25 @@ fn response_from_record(record: RecordedHttpExchange) -> Result<Response<Full<By
             };
             for value in values {
                 if let Ok(value) = hyper::header::HeaderValue::from_str(&value) {
-                    response.headers_mut().append(name.clone(), value);
+                    output.append(name.clone(), value);
                 }
             }
         }
     }
-    Ok(response)
+    output.insert(
+        CONTENT_LENGTH,
+        hyper::header::HeaderValue::from(body_length),
+    );
+    if !output.contains_key(hyper::header::DATE) {
+        output.insert(
+            hyper::header::DATE,
+            hyper::header::HeaderValue::from_str(
+                &delivered_at.format("%a, %d %b %Y %H:%M:%S GMT").to_string(),
+            )
+            .expect("UTC HTTP dates are valid header values"),
+        );
+    }
+    output
 }
 
 fn is_hop_by_hop_header(name: &str) -> bool {
@@ -719,5 +747,17 @@ pub(super) fn release_consumed_payloads(
                 body.data = String::new();
             }
         }
+    }
+}
+
+impl ReplayState {
+    pub(in crate::replay) fn http_has_in_flight(&self) -> bool {
+        self.http_exchanges.iter().any(|e| {
+            matches!(
+                e.status,
+                super::ReplayExchangeStatus::Responding
+                    | super::ReplayExchangeStatus::AwaitingClientTermination
+            )
+        })
     }
 }

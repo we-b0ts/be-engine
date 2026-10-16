@@ -61,7 +61,7 @@ async fn deliver_matched(
     stream: &mut (impl MysqlReplayIo + ?Sized),
     state: Arc<Mutex<ReplayState>>,
     session: &mut ReplaySession,
-    matched: MatchedExchange,
+    mut matched: MatchedExchange,
     row_encoding: ResultRowEncoding,
 ) -> Result<SessionDirective> {
     if matched.timing.outcome().is_client_terminated() {
@@ -81,6 +81,20 @@ async fn deliver_matched(
     }
 
     matched.timing.delay_response().await;
+    let rendered_at = Utc::now();
+    if let Some(prepared) = &matched.value_delivery {
+        match prepared.render(rendered_at) {
+            Ok(response) => matched.record.response = response,
+            Err(error) => {
+                state.lock().await.fail_exchange(
+                    &matched,
+                    &session.identity(),
+                    &format!("SQL response contract: {error:#}"),
+                );
+                return Err(error);
+            }
+        }
+    }
     session.observe_response(
         matched.record.sql.as_deref().unwrap_or_default(),
         &matched.record.response,
@@ -100,7 +114,22 @@ async fn deliver_matched(
         );
         return Err(error);
     }
-    state.lock().await.complete_exchange(&matched);
+    let mut replay = state.lock().await;
+    if let (Some(prepared), Some(policy)) = (&matched.value_delivery, replay.replay_policy.as_ref())
+        && let Err(error) = prepared.commit(
+            &policy.request_contracts,
+            &matched.record.response,
+            rendered_at,
+        )
+    {
+        replay.fail_exchange(
+            &matched,
+            &session.identity(),
+            &format!("SQL response witness: {error:#}"),
+        );
+        return Err(error);
+    }
+    replay.complete_exchange(&matched);
     Ok(SessionDirective::Continue)
 }
 

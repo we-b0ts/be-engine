@@ -301,6 +301,10 @@ fn validate_match(rule: &Rule) -> Result<()> {
         }
         Protocol::Mysql => {
             ensure!(
+                matches!(operation, "COM_QUERY" | "COM_STMT_EXECUTE"),
+                "MySQL value slots require COM_QUERY or COM_STMT_EXECUTE"
+            );
+            ensure!(
                 matches!(rule.slot, Slot::SqlValue(_) | Slot::SqlColumn(_))
                     && selector.key.is_none()
                     && selector.path.is_none(),
@@ -325,6 +329,30 @@ fn validate_match(rule: &Rule) -> Result<()> {
                 "match.sql",
                 65536,
             )?;
+            let sql = selector.sql.as_deref().expect("SQL selector was required");
+            ensure!(
+                !sql.contains("{{table}}"),
+                "generic SQL slots select an exact physical table; bounded table families use a typed native effect"
+            );
+            let tokens = crate::mysql::sql::tokens(sql)
+                .context("SQL selector cannot be tokenized completely")?;
+            ensure!(
+                !tokens.is_empty()
+                    && tokens.len() <= 16_384
+                    && !tokens.iter().any(|token| token.is(";"))
+                    && crate::mysql::access::analyze_sql(sql).statements_complete,
+                "SQL selector requires one bounded complete statement without a statement separator"
+            );
+            if let Slot::SqlValue(index) = &rule.slot {
+                let values = tokens
+                    .iter()
+                    .filter(|token| **token == crate::mysql::sql::Token::Placeholder)
+                    .count();
+                ensure!(
+                    *index < values,
+                    "SQL value index {index} exceeds {values} explicit placeholder slots"
+                );
+            }
             if let Some(database) = &resource.database {
                 text(
                     database.name().context("MySQL database must be a name")?,

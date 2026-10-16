@@ -84,6 +84,7 @@ impl RedisReplayState {
         command: &str,
         args: &[Vec<u8>],
     ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
+        self.request_observed_at = Some(chrono::Utc::now());
         let matched = preferred_match(&self.exchanges, active_case_id, |exchange| {
             (exchange.status.is_available()
                 || (exchange.reusable_snapshot && exchange.status != ReplayExchangeStatus::Failed))
@@ -226,7 +227,8 @@ impl RedisReplayState {
             }
         })?;
         let exchange = &self.exchanges[index];
-        let unified_delivery = (exchange.record.outcome == crate::DependencyExchangeOutcome::Response)
+        let unified_delivery = (exchange.record.outcome
+            == crate::DependencyExchangeOutcome::Response)
             .then_some(exchange.case_id.as_deref())
             .flatten()
             .and_then(|case| {

@@ -135,6 +135,7 @@ struct MatchedRedisExchange {
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayState {
+    request_observed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub(in crate::replay) pubsub: pubsub::PubSubState,
     pub(super) request_contracts: super::policy::request_contract::RequestContracts,
     pub(super) dynamic_values: super::policy::dynamic_values::DynamicValues,
@@ -166,6 +167,15 @@ pub(super) struct RedisReplayEvents {
 }
 
 impl RedisReplayState {
+    pub(in crate::replay) fn has_in_flight(&self) -> bool {
+        self.exchanges.iter().any(|e| {
+            matches!(
+                e.status,
+                ReplayExchangeStatus::Responding | ReplayExchangeStatus::AwaitingClientTermination
+            )
+        })
+    }
+
     pub(in crate::replay) fn validate_pubsub(&self) -> Result<()> {
         self.pubsub.validate_subscriptions(&self.exchanges)
     }
