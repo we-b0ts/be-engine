@@ -7,13 +7,6 @@ use serde_json::{Value, json};
 use super::{RewriteContext, action, inventory, model::RewriteState, store::RewriteStore};
 
 pub(super) fn evidence_unusable(target_root: &Path, state: &RewriteState) -> Result<bool> {
-    if let Some(plan) = state
-        .rule_plan
-        .as_ref()
-        .and_then(|plan| plan.unified.as_ref())
-    {
-        return Ok(super::unified_rule::stale(target_root, state, plan));
-    }
     let context = crate::E2eRunContext {
         target_root: target_root.into(),
         case_source: state
@@ -24,6 +17,13 @@ pub(super) fn evidence_unusable(target_root: &Path, state: &RewriteState) -> Res
     };
     let api = state.group_id.as_deref().context("plan has no API group")?;
     crate::e2e_run::ensure_response_rule_evidence_inactive(context.clone(), api)?;
+    if let Some(plan) = state
+        .rule_plan
+        .as_ref()
+        .and_then(|plan| plan.unified.as_ref())
+    {
+        return Ok(super::unified_rule::stale(target_root, state, plan));
+    }
     if state
         .rule_plan
         .as_ref()

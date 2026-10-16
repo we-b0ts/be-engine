@@ -75,6 +75,10 @@ pub struct ExecutionIdentity {
     attempt: u64,
     target_inputs: String,
     engine: String,
+    #[serde(default)]
+    recorded_replay: Option<String>,
+    #[serde(default)]
+    recorded_engine: Option<String>,
 }
 
 impl ExecutionIdentity {
@@ -117,6 +121,11 @@ impl ExecutionIdentity {
             attempt: summary.attempt,
             target_inputs: fingerprint::review_fingerprint(root)?,
             engine: fingerprint::traffic_e2e_revision()?,
+            recorded_replay: state.replay_identity.clone(),
+            recorded_engine: state
+                .attempts
+                .last()
+                .and_then(|a| a.engine_fingerprint.clone()),
         })
     }
 }
@@ -155,6 +164,13 @@ impl Bundle {
         };
         output.replay = output.json(&evidence.replay)?;
         output.assertions = output.json(&evidence.assertions)?;
+        let runner_state = evidence
+            .replay
+            .parent()
+            .and_then(Path::parent)
+            .context("Replay report has no published state directory")?
+            .join("state.yaml");
+        output.freeze(&runner_state)?;
         let aggregate = output.json(&evidence.aggregate)?;
         ensure!(
             output.replay["finalized"] == true && aggregate["complete"] == true,

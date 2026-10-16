@@ -143,6 +143,10 @@ pub(super) fn query(
             ),
         });
     }
+    let mut hints = rule_hints(target_root, kind, &facts);
+    if let Some(hint) = unified_rule_hint(target_root, state) {
+        hints.push(hint);
+    }
     Ok(RewriteEvidenceReport {
         schema_version: 4,
         context: None,
@@ -150,7 +154,7 @@ pub(super) fn query(
         issue_id: issue.id.clone(),
         query: kind.to_string(),
         applicable_rule_planners: planners,
-        rule_hints: rule_hints(target_root, kind, &facts),
+        rule_hints: hints,
         facts,
         queries: Vec::new(),
         does_not_prove,
@@ -550,12 +554,6 @@ fn representative_guidance(kind: RewriteIssueKind) -> (Vec<String>, String) {
 
 fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str, &'static str)> {
     let mut queries = Vec::new();
-    if matches!(
-        issue.kind,
-        RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
-    ) {
-        queries.push((QUERY_UNIFIED_RULE_CANDIDATES,"Discover bounded typed rule drafts from complete observed JSON differences, or enter a Source-proven field"));
-    }
     let typed_body_candidate = issue
         .representative
         .as_ref()
@@ -643,7 +641,27 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
             "Compare response convergence with the previous attempt",
         ));
     }
+    if matches!(
+        issue.kind,
+        RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
+    ) {
+        queries.push((QUERY_UNIFIED_RULE_CANDIDATES,"Discover bounded typed rule drafts from complete observed JSON differences, or enter a Source-proven field"));
+    }
     queries
+}
+
+pub(super) fn unified_rule_hint(
+    root: &Path,
+    state: &RewriteState,
+) -> Option<super::evidence_model::RewriteRuleHint> {
+    let command = commands(root, state)
+        .into_iter()
+        .find(|q| q.query_id.ends_with("unified-rule-candidates"))?;
+    Some(super::evidence_model::RewriteRuleHint {
+        capability:"unified_value_contract".into(),rule:"traffic-policy/v1".into(),
+        hint:"Inspect observed typed rule drafts, or enter a specific Source-proven field. Fill the self-contained rule's proof, then plan and apply through the returned commands; bounded drafts never establish complete coverage or successful Replay.".into(),
+        help:command.command,
+    })
 }
 
 fn source_process_evidence_relevant(issue: &RewriteIssue) -> bool {

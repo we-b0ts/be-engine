@@ -1,6 +1,9 @@
 use super::{manifest::Artifact, *};
 use serde_json::json;
 
+#[path = "transaction.rs"]
+mod transaction;
+
 fn rule() -> serde_json::Value {
     json!({"id":"members","surface":"api.response","match":{"api":"GET /api"},"slot":"body","codec":"json",
         "contract":{"/members":{"kind":"unordered"}},"proof":{"source":"src/members.rs:12","fact":"Source uses an unordered set"}})

@@ -91,7 +91,7 @@ pub(super) fn report(
         facts,
         queries,
         applicable_rule_planners: Vec::new(),
-        rule_hints: Vec::new(),
+        rule_hints: super::unified_rule_hint(target_root,state).into_iter().collect(),
         does_not_prove: vec![
             "Issue ownership and possible causes are investigation guidance, not a proven root cause."
                 .to_string(),

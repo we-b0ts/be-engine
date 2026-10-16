@@ -166,6 +166,10 @@ fn plan(
     }
     let compiled = compile_policy(&document)?;
     let current = crate::validate_replay_policy(&config.replay_policy)?;
+    ensure!(
+        state.replay_identity.as_ref() == Some(&fingerprint::replay_identity(root)?),
+        "Target code, startup inputs or policy changed since genuine Replay; run fresh Replay before planning"
+    );
     let identity = manifest::ExecutionIdentity::current(root, state)?;
     let mut bundle = manifest::Bundle::load(root, state, &current.fingerprint)?;
     let preflight = preflight::verify(&mut bundle, &compiled, &rule_ids)?;
