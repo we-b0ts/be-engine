@@ -128,6 +128,18 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
     );
     validate_codec(&rule.codec)?;
     for (path, contract) in &rule.contract {
+        if let Some(time) = contract.time() {
+            if let Some(group) = &time.clock_group {
+                ensure!(
+                    !group.is_empty()
+                        && group.len() <= 64
+                        && group
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte)),
+                    "clock_group requires a bounded Source-proven identifier"
+                );
+            }
+        }
         validate_pointer(path, true)?;
         validate_contract_binding(&rule.codec, path, contract)?;
         if let Some(time) = contract.time() {

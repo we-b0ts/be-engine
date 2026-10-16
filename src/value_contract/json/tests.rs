@@ -57,6 +57,7 @@ fn time_requires_independent_anchors_even_for_equal_values() {
         relation: TimeRelation::PreserveOffset,
         anchor: TimeAnchor::ApiRequestStart,
         utc_offset: None,
+        clock_group: None,
     };
     let fields = [Field {
         rule_id: "clock",
@@ -77,6 +78,7 @@ fn unordered_time_pairs_whole_elements_and_rejects_relationship_changes() {
         relation: TimeRelation::PreserveOffset,
         anchor: TimeAnchor::ApiRequestStart,
         utc_offset: None,
+        clock_group: None,
     };
     let fields = [
         Field {
@@ -135,4 +137,62 @@ fn evaluated_usage_includes_equal_selected_fields() {
     );
     assert!(result.passed());
     assert!(result.evaluated.contains("evaluated"));
+}
+
+#[test]
+fn explicitly_independent_clocks_keep_each_anchor_window_and_strict_group_copies() {
+    let clock = |group: Option<&str>| FieldContract::Time {
+        format: TimestampFormat::UnixMicroseconds,
+        relation: TimeRelation::PreserveOffset,
+        anchor: TimeAnchor::ApiRequestStart,
+        utc_offset: None,
+        clock_group: group.map(str::to_owned),
+    };
+    let shared = clock(None);
+    let event = clock(Some("event"));
+    let independent = clock(Some("after_commit"));
+    let source = json!({"a":12_000_001,"copy":12_000_001,"b":13_000_002});
+    let target = json!({"a":112_000_001,"copy":112_000_001,"b":113_500_002});
+    let default = [
+        Field {
+            rule_id: "time",
+            pointer: "/a",
+            contract: &shared,
+        },
+        Field {
+            rule_id: "time",
+            pointer: "/copy",
+            contract: &shared,
+        },
+        Field {
+            rule_id: "time",
+            pointer: "/b",
+            contract: &shared,
+        },
+    ];
+    assert!(!compare(&source, &target, &default, clocks()).passed());
+    let grouped = [
+        Field {
+            rule_id: "time",
+            pointer: "/a",
+            contract: &event,
+        },
+        Field {
+            rule_id: "time",
+            pointer: "/copy",
+            contract: &event,
+        },
+        Field {
+            rule_id: "time",
+            pointer: "/b",
+            contract: &independent,
+        },
+    ];
+    assert!(compare(&source, &target, &grouped, clocks()).passed());
+    let mut changed = target.clone();
+    changed["copy"] = json!(112_000_002);
+    assert!(!compare(&source, &changed, &grouped, clocks()).passed());
+    changed = target;
+    changed["b"] = json!(119_000_002);
+    assert!(!compare(&source, &changed, &grouped, clocks()).passed());
 }

@@ -4,9 +4,10 @@ Task: `KCYgNKF0ZW`. Design and implementation baseline: `14439d5`
 (`feat(replay): validate generated Redis timestamps precisely`).
 
 This document is the P0 requirements and boundary agreement. P0 is complete;
-P1 through P5 are pending implementation. Configuration examples specify the
-new design and do not claim that the baseline engine accepts them. Each phase
-must be committed separately and its status updated with actual validation.
+P1 JSON runtime and policy transactions are implemented in `ac1428d`; coordinator
+integration tests and typed hints follow in a separate P1 commit. P2 through P5
+remain in progress. Each phase may contain several focused commits; update its
+status using actual validation rather than implementation intent.
 
 The objective is reusable, concise rules with complete evidence. A new
 combination of an existing protocol slot, encoding and value contract must not
@@ -268,6 +269,11 @@ For Source/Target values `S`, `T` and trusted anchors `As`, `At`:
   require exactly equal Target instants; distinct Source instants may have
   translation-offset differences of at most one microsecond. The five-second
   anchor window is not a replacement for this relationship check.
+- Integrate master `f82a7b6` clock groups without weakening this default.
+  `clock_group` is optional on timestamp contracts. Absent names share a strict
+  group; explicit different groups require Source proof of independent clock
+  reads. Each field still satisfies its own fixed anchor window, and each group
+  retains copy equality and one-microsecond shift consistency.
 - Preserve sequence-level relationships for scalar and nested JSON script
   timestamps. Validate script digest/body, numkeys, KEYS, ARGV and selected
   indices together without evaluating Lua.
@@ -393,7 +399,7 @@ quality and Source-review gates remain in force.
 | Phase | Status at P0 | Deliverable and hard prerequisite | Exit evidence |
 | --- | --- | --- | --- |
 | P0 | Complete | Requirement map, new document vocabulary, boundaries and nonnegotiable effect/evidence contracts. | This reviewed document against baseline and reference configuration; no implementation claim. |
-| P1 | Pending | Smallest complete JSON path through all three surfaces, Source proof entry, discovery/plan/apply/audit/recovery and verification. Includes the strict schema, typed IR/capability boundary, shared time core, pure decisions and frozen evidence needed for this path. | Self-contained JSON comparison/delivery examples; bounded discovery, reviewable plan, stale-safe apply/recovery, strict remainder, microsecond precision and required fresh genuine Replay. |
+| P1 | In progress | Smallest complete JSON path through all three surfaces, Source proof entry, discovery/plan/apply/audit/recovery and verification. Includes the strict schema, typed IR/capability boundary, shared time core, pure decisions and frozen evidence needed for this path. | Self-contained JSON comparison/delivery examples; bounded discovery, reviewable plan, stale-safe apply/recovery, strict remainder, microsecond precision and required fresh genuine Replay. |
 | P2 | Pending | PB plus Memcached/HTTP/SQL cross-protocol slot/codec reuse. Requires the complete P1 JSON transaction rather than a compiler-only foundation. | JSON/PB contract parity, explicit typed PB fields and later descriptors, writable envelope preservation, HTTP/Redis/Memcached/SQL symmetry and unchanged protocol lifecycle. |
 | P3 | Pending | Identity, nonce, cryptographic envelopes and propagation. Requires P1 staged decisions and P2 typed extraction/reconstruction. | One-to-one capture/reference, script/PUBLISH/time composition, JWT/URL/crypto checks, stable remainder and atomic failure behavior. |
 | P4 | Pending | API origin, ownership, finite sharing, snapshot and Source capture/inbound input domains. Requires independent P1-P3 value decisions and effect identities. | Immutable Source cause/identity proof; strict lane/transaction/finite gates; reversible classification; explicit input/signature transformations and capture obligations. |

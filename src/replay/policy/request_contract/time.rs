@@ -4,6 +4,14 @@ use crate::value_contract::time::{self, TimeMode, TimestampFormat};
 use chrono::{FixedOffset, Timelike};
 use config::{RequestTimestampFormat as Format, TimeField};
 
+/// A validated timestamp pair and its explicitly declared relationship scope.
+#[derive(Debug, Clone)]
+pub(super) struct ComparedTime {
+    pub(super) source: i128,
+    pub(super) actual: i128,
+    pub(super) group: Option<String>,
+}
+
 // JWT contracts retain their seconds interface; request times use integer nanoseconds.
 pub(super) fn number(value: &Value) -> Result<f64> {
     let value = value.as_f64().context("timestamp must be numeric")?;
@@ -43,13 +51,17 @@ pub(super) fn compare(
     actual: &Value,
     rule: &TimeField,
     anchor: crate::replay::assertion::RequestTimes,
-) -> Result<(i128, i128)> {
+) -> Result<ComparedTime> {
     time::validate_numeric_category(source, actual)?;
     let pair = (timestamp(source, rule)?, timestamp(actual, rule)?);
     config::tolerance(&rule.tolerance)?;
     time::compare_timestamp_nanos(pair.0, pair.1, TimeMode::PreserveRelative, anchor)
         .map_err(|_| anyhow::anyhow!("request timestamp differs from its recorded relative time or is missing its request anchor"))?;
-    Ok(pair)
+    Ok(ComparedTime {
+        source: pair.0,
+        actual: pair.1,
+        group: rule.clock_group.clone(),
+    })
 }
 
 pub(super) fn timestamp(value: &Value, rule: &TimeField) -> Result<i128> {
@@ -87,8 +99,19 @@ pub(super) fn timestamp(value: &Value, rule: &TimeField) -> Result<i128> {
     Ok(nanos)
 }
 
-pub(super) fn validate_relationships(times: &[(i128, i128)]) -> Result<()> {
-    time::validate_relationships(times).context("request time parameter relationship changed")
+pub(super) fn validate_relationships(times: &[ComparedTime]) -> Result<()> {
+    let mut groups: BTreeMap<Option<&str>, Vec<(i128, i128)>> = BTreeMap::new();
+    for value in times {
+        groups
+            .entry(value.group.as_deref())
+            .or_default()
+            .push((value.source, value.actual));
+    }
+    for values in groups.values() {
+        time::validate_relationships(values)
+            .context("request time parameter relationship changed")?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

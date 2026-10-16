@@ -592,3 +592,5 @@ fn publish_time_contract_requires_exact_channel_and_only_present_source_fields()
     selector.key = serde_json::from_value(json!({"prefix":"event"})).unwrap();
     assert!(validate(&broad).is_err());
 }
+
+pub(super) mod clock_groups;

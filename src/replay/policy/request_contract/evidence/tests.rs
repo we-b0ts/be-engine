@@ -363,3 +363,5 @@ fn publish_time_planning_composes_existing_uuid_and_preserves_stable_fields() {
         }
     }
 }
+
+mod clock_groups;

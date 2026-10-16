@@ -325,6 +325,8 @@ pub enum FieldContract {
         anchor: TimeAnchor,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         utc_offset: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        clock_group: Option<String>,
     },
     Duration {
         unit: DurationUnit,
@@ -340,11 +342,13 @@ impl FieldContract {
                 relation,
                 anchor,
                 utc_offset,
+                clock_group,
             } => Some(TimeContract {
                 format: *format,
                 relation: *relation,
                 anchor: *anchor,
                 utc_offset: utc_offset.clone(),
+                clock_group: clock_group.clone(),
             }),
             _ => None,
         }
@@ -359,6 +363,8 @@ pub struct TimeContract {
     pub anchor: TimeAnchor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utc_offset: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_group: Option<String>,
 }
 
 impl TimeContract {

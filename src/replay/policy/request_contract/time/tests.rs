@@ -46,7 +46,19 @@ fn microseconds_keep_integer_precision_and_fixed_inclusive_tolerance() {
         timestamp(&json!(large), &rule).unwrap(),
         timestamp(&json!(large + 1_000_000), &rule).unwrap(),
     );
-    assert!(validate_relationships(&[pair, (pair.0, pair.1 + 1000)]).is_err());
+    let observations = [
+        ComparedTime {
+            source: pair.0,
+            actual: pair.1,
+            group: None,
+        },
+        ComparedTime {
+            source: pair.0,
+            actual: pair.1 + 1000,
+            group: None,
+        },
+    ];
+    assert!(validate_relationships(&observations).is_err());
     assert!(
         compare(
             &json!(1_000_000_000_i64),
@@ -98,4 +110,74 @@ fn naive_iso_requires_declared_offset_and_preserves_relative_time() {
     rule.format = Format::Rfc3339;
     rule.utc_offset = Some("+08:00".into());
     assert!(rule.validate().is_err());
+}
+
+#[test]
+fn group_names_are_bounded_explicit_and_omitted_for_legacy_rules() {
+    let mut field = rule("unix_seconds");
+    assert!(
+        serde_json::to_value(&field)
+            .unwrap()
+            .get("clock_group")
+            .is_none()
+    );
+    for invalid in [
+        "".to_string(),
+        " ".into(),
+        "event.time".into(),
+        "时钟".into(),
+        "x".repeat(65),
+    ] {
+        field.clock_group = Some(invalid);
+        assert!(field.validate().is_err());
+    }
+    for valid in ["event".to_string(), "after-commit_2".into(), "x".repeat(64)] {
+        field.clock_group = Some(valid.clone());
+        field.validate().unwrap();
+        assert_eq!(serde_json::to_value(&field).unwrap()["clock_group"], valid);
+    }
+    assert!(
+        serde_json::from_value::<TimeField>(
+            json!({"time":"preserve_relative","format":"unix_seconds","clock_group":1})
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn groups_preserve_rigid_relations_and_do_not_infer_clock_identity_from_equal_values() {
+    let observation = |source, actual, group: Option<&str>| ComparedTime {
+        source,
+        actual,
+        group: group.map(str::to_owned),
+    };
+    let first = || observation(1_000_267_683_000, 2_000_267_683_000, Some("event"));
+    let later = || observation(1_000_316_186_000, 2_000_267_685_000, Some("after_commit"));
+    assert!(validate_relationships(&[first(), later()]).is_ok());
+    let mut same = later();
+    same.group = Some("event".into());
+    assert!(validate_relationships(&[first(), same]).is_err());
+    for group in [None, Some("event")] {
+        let first = || observation(1000, 2000, group);
+        assert!(validate_relationships(&[first(), observation(1000, 2001, group)]).is_err());
+        assert!(validate_relationships(&[first(), observation(1100, 3100, group)]).is_ok());
+        assert!(validate_relationships(&[first(), observation(1100, 3101, group)]).is_err());
+    }
+    // Independent coarse-resolution reads can coincide in Source without being one read.
+    assert!(
+        validate_relationships(&[
+            first(),
+            observation(1_000_267_683_000, 2_000_267_684_000, Some("other"))
+        ])
+        .is_ok()
+    );
+    // Unnamed fields still share a legacy group even alongside named fields.
+    assert!(
+        validate_relationships(&[
+            first(),
+            observation(1000, 2000, None),
+            observation(1000, 2001, None)
+        ])
+        .is_err()
+    );
 }

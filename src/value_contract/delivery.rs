@@ -60,6 +60,7 @@ pub(crate) fn materialize(
                         relation: time.relation,
                         anchor: time.anchor,
                         utc_offset: time.utc_offset.clone(),
+                        clock_group: time.clock_group.clone(),
                     },
                 )
             })

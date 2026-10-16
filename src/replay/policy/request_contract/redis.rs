@@ -215,7 +215,7 @@ impl RequestContracts {
                     .times
                     .iter()
                     .chain(&times)
-                    .copied()
+                    .cloned()
                     .collect::<Vec<_>>(),
             )?;
             let next = (location + 1) % selector.commands.len();

@@ -182,7 +182,9 @@ is unclear.
   envelopes without evaluating Lua. Redis compares dynamic-identity copies
   before disjoint request-time contracts; overlapping field ownership is rejected.
   Its `time` child adapts request-specific source format and calendar constraints
-  to `value_contract/time`. `redis/publish/json` owns UUID-only JSON comparison copies for composition with time contracts; `redis/matching/request` commits their bindings only after all request checks pass. Planning uses the same copies without mutating recorded evidence. `http_json` owns JSON body stable-field pairing and time comparisons
+  to `value_contract/time`. Explicit clock groups retain a strict shared default;
+  request sequence state carries group observations across commands.
+  `redis/publish/json` owns UUID-only JSON comparison copies for composition with time contracts; `redis/matching/request` commits their bindings only after all request checks pass. Planning uses the same copies without mutating recorded evidence. `http_json` owns JSON body stable-field pairing and time comparisons
   using dependency-local clocks, and `evidence/http_json` protects and verifies
   failed target witnesses before planning.
   `replay/policy/case_condition` owns bounded scalar conditions on immutable

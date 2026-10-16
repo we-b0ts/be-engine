@@ -232,3 +232,42 @@ fn json_request_time_requires_exact_endpoint_inbound_case_and_dependency_method(
         .method = "GET".into();
     assert!(check("case", &target, "POST", "/query").is_none());
 }
+
+#[test]
+fn http_json_clock_groups_keep_window_and_copies_while_accepting_independent_reads() {
+    let mut rule = rule();
+    let http = rule.http.as_mut().unwrap();
+    for field in http.json.time.values_mut() {
+        field.clock_group = Some("window".into());
+    }
+    let independent = serde_json::from_value(
+        json!({"time":"preserve_relative","format":"unix_seconds","clock_group":"later"}),
+    )
+    .unwrap();
+    http.json.time.insert("/independent".into(), independent);
+    validate(http).unwrap();
+    let mut source = values(1000.0);
+    source["independent"] = json!(1000.048503);
+    let mut actual = values(2000.0);
+    actual["independent"] = json!(2000.000002);
+    let check = |http: &crate::replay::policy::config::HttpSelector, actual: &Value| {
+        compare(
+            http,
+            source.to_string().as_bytes(),
+            actual.to_string().as_bytes(),
+            clocks(),
+        )
+    };
+    assert!(check(http, &actual).is_ok());
+    for (pointer, value) in [
+        ("/nested/ms", json!(2_301_000.0)),
+        ("/independent", json!(2006.0)),
+        ("/nested/stable", json!(false)),
+    ] {
+        let mut wrong = actual.clone();
+        *wrong.pointer_mut(pointer).unwrap() = value;
+        assert!(check(http, &wrong).is_err());
+    }
+    http.json.time.get_mut("/independent").unwrap().clock_group = Some("window".into());
+    assert!(check(http, &actual).is_err());
+}

@@ -58,7 +58,7 @@ impl Comparison {
 struct Decisions {
     evaluated: BTreeSet<String>,
     selected: BTreeSet<usize>,
-    times: BTreeMap<TimeAnchor, Vec<(i128, i128)>>,
+    times: BTreeMap<(TimeAnchor, Option<String>), Vec<(i128, i128)>>,
     time_validations: BTreeMap<String, usize>,
 }
 
@@ -221,12 +221,14 @@ impl Comparator<'_> {
                     relation,
                     anchor,
                     utc_offset,
+                    clock_group,
                 } => {
                     let config = crate::policy::TimeContract {
                         format: *format,
                         relation: *relation,
                         anchor: *anchor,
                         utc_offset: utc_offset.clone(),
+                        clock_group: clock_group.clone(),
                     };
                     let result = compare_time(source, target, &config, self.clocks.get(*anchor));
                     let pair = result.map_err(|e| difference(pointer, &e.to_string()))?;
@@ -234,7 +236,11 @@ impl Comparator<'_> {
                         .time_validations
                         .entry(field.rule_id.into())
                         .or_default() += 1;
-                    decisions.times.entry(*anchor).or_default().push(pair);
+                    decisions
+                        .times
+                        .entry((*anchor, clock_group.clone()))
+                        .or_default()
+                        .push(pair);
                     return validate_relationships(decisions)
                         .map_err(|e| difference(pointer, &e.to_string()));
                 }
