@@ -41,6 +41,13 @@ The first case is a route-discovery sample, not evidence that the whole
 directory is homogeneous. Directory sharing is allowed; case-ID overlap is not. The exact selected case ids come from the complete
 group validation.
 
+Discovery retains valid recorded HTTP paths exactly, including trailing slashes
+and repeated separators. Such a path must not block preparation of an unrelated
+canonical API. Source-route and pattern selectors retain their canonical
+separator requirements: discovery never trims or aliases recorded paths to make
+them match. Unselected cases remain in the inventory and still require explicit
+coverage before a full round can advance.
+
 ## Required Invocation
 
 Use one runner-owned persisted index for the whole original case source and

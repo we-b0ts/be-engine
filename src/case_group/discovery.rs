@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use crate::path_pattern::matches_path_pattern;
 
-use super::{normalize_route, validate_single_line};
+use super::validate_single_line;
 
 const IGNORED_DIRECTORIES: &[&str] = &["failed", "staging", ".replay", ".partial", ".truncated"];
 
@@ -159,7 +159,16 @@ fn ignored_directory(directory: &Path) -> bool {
 fn request_path(uri: &str) -> Result<String> {
     validate_single_line("recorded request URI", uri)?;
     let end = uri.find(['?', '#']).unwrap_or(uri.len());
-    normalize_route(&uri[..end], "recorded request path")
+    let path = &uri[..end];
+    ensure!(
+        path.starts_with('/'),
+        "recorded request path must start with '/'"
+    );
+    path.parse::<hyper::http::uri::PathAndQuery>()
+        .context("recorded request path is not a valid HTTP path")?;
+    // Raw HTTP paths may have a trailing slash or repeated separators. Preserve
+    // their identity; canonical route/pattern constraints belong to selectors.
+    Ok(path.to_owned())
 }
 
 pub(super) fn reject_duplicate_case_ids(cases: &[PublishedCase]) -> Result<()> {

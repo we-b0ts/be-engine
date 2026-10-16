@@ -71,7 +71,10 @@ is unclear.
   result-transition cleanup. E2E state/result publication preserves the actual
   executor revision; `build_info` exposes its build-time constant without status I/O.
 
-- `case_group/snapshot` reads prepared membership for read-only projections
+- `case_group/discovery` validates and retains raw recorded HTTP path identity;
+  canonical route and pattern validation belongs to group selectors, so an
+  unrelated valid noncanonical request cannot block inventory discovery.
+  `case_group/snapshot` reads prepared membership for read-only projections
   without discovering recording cases. `e2e_run/reclassify/status` owns the
   query-scoped shared-session snapshot and compact report classification codec;
   `reclassify/session` retains the common identity/membership checks and full

@@ -694,3 +694,133 @@ fn absolute_index_is_not_silently_rebased_to_another_case_source() {
     let error = load_complete_case_group_inventory(&copied_output, &copied_source).unwrap_err();
     assert!(error.to_string().contains("different case source"));
 }
+
+#[test]
+fn unrelated_valid_raw_paths_do_not_block_a_canonical_dynamic_group() {
+    let temporary = tempdir().unwrap();
+    let source = temporary.path().join("cases");
+    let docx = write_recording_case(
+        &source,
+        "docx",
+        "case-docx",
+        "POST",
+        "/api/tasks/7/export/docx/download-url?message_ids=1%2C2",
+        "/api/tasks/*/export/docx/download-url",
+    );
+    let slash = write_recording_case(
+        &source,
+        "auth",
+        "case-auth",
+        "POST",
+        "/api/v1/auth/tokens/",
+        "/api/v1/auth/tokens/",
+    );
+    let repeated = write_recording_case(
+        &source,
+        "other",
+        "case-other",
+        "GET",
+        "/api//other",
+        "/api//other",
+    );
+    let original =
+        [&docx, &slash, &repeated].map(|case| fs::read(case.join("request.json")).unwrap());
+    let output = temporary.path().join("reports/case-groups.json");
+    let mut request = options(
+        &source,
+        docx.parent().unwrap(),
+        &output,
+        "/api/tasks/{task_id}/export/docx/download-url",
+        Some("/api/tasks/*/export/docx/download-url"),
+    );
+    request.method = "POST".into();
+    let group = ensure_case_group(request.clone()).unwrap();
+    assert_eq!(group.status, CaseGroupStatus::Created);
+    assert_eq!(group.case_ids, ["case-docx"]);
+    assert_eq!(
+        ensure_case_group(request).unwrap().status,
+        CaseGroupStatus::AlreadyGrouped
+    );
+    let published = discover_published_cases(&source).unwrap();
+    assert_eq!(published.len(), 3);
+    assert_eq!(
+        published
+            .iter()
+            .find(|case| case.id == "case-auth")
+            .unwrap()
+            .path,
+        "/api/v1/auth/tokens/"
+    );
+    assert_eq!(
+        published
+            .iter()
+            .find(|case| case.id == "case-other")
+            .unwrap()
+            .path,
+        "/api//other"
+    );
+    assert!(
+        load_complete_case_group_inventory(&output, &source).is_err(),
+        "unselected raw paths remain part of full coverage"
+    );
+    for (case, bytes) in [&docx, &slash, &repeated].into_iter().zip(original) {
+        assert_eq!(fs::read(case.join("request.json")).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn recorded_trailing_slashes_never_alias_static_or_dynamic_group_membership() {
+    let temporary = tempdir().unwrap();
+    let source = temporary.path().join("cases");
+    for (id, path) in [
+        ("plain", "/api/items"),
+        ("plain-slash", "/api/items/"),
+        ("item", "/api/items/7"),
+        ("item-slash", "/api/items/7/"),
+    ] {
+        write_recording_case(&source, "shared", id, "GET", path, path);
+    }
+    let member = source.join("apis/shared");
+    let output = temporary.path().join("reports/case-groups.json");
+    let plain = ensure_case_group(options(&source, &member, &output, "/api/items", None)).unwrap();
+    assert_eq!(plain.case_ids, ["plain"]);
+    let item = ensure_case_group(options(
+        &source,
+        &member,
+        &output,
+        "/api/items/{id}",
+        Some("/api/items/*"),
+    ))
+    .unwrap();
+    assert_eq!(item.case_ids, ["item"]);
+    assert!(load_complete_case_group_inventory(&output, &source).is_err());
+    for (route, pattern) in [
+        ("/api/items/", None),
+        ("/api/items/{id}", Some("/api/items/*/")),
+        ("/api/items/{id}", Some("/api//items/*")),
+    ] {
+        assert!(
+            ensure_case_group(options(
+                &source,
+                &member,
+                &temporary.path().join("invalid/index.json"),
+                route,
+                pattern
+            ))
+            .is_err(),
+            "canonical selectors stay strict: {route} {pattern:?}"
+        );
+    }
+}
+
+#[test]
+fn discovery_still_rejects_invalid_recorded_http_paths() {
+    for path in ["api/items", "/api/bad path", "/api/bad\npath"] {
+        let temporary = tempdir().unwrap();
+        write_case(temporary.path(), "member", "case", "GET", path);
+        assert!(
+            discover_published_cases(temporary.path()).is_err(),
+            "{path:?}"
+        );
+    }
+}
