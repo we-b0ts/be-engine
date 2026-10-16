@@ -547,3 +547,5 @@ async fn omitted_null_and_empty_recording_ids_wait_for_external_evidence() {
         assert!(state.recording_run_id.is_empty());
     }
 }
+
+mod literal_paths;

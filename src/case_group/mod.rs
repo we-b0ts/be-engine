@@ -353,12 +353,18 @@ fn ensure_case_group_impl(
     let current_dir = resolve_member_dir(&requested_dir, &cases)?;
 
     let method = options.method.trim().to_ascii_uppercase();
-    let source_route = normalize_route(&options.source_route, "source route")?;
     let pattern = options
         .pattern
         .as_deref()
         .map(validate_pattern)
         .transpose()?;
+    let source_route = if pattern.is_some() {
+        normalize_route(&options.source_route, "source route")?
+    } else {
+        crate::path_pattern::validate_literal_path(&options.source_route)
+            .context("invalid exact source route")?;
+        options.source_route.clone()
+    };
     if let Some(pattern) = &pattern {
         validate_pattern_against_source_route(pattern, &source_route)?;
     }

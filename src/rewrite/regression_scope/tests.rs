@@ -224,3 +224,35 @@ fn config_changes_wait_for_the_active_traffic_operation() {
     apply(root.path(), &mut state).unwrap();
     assert_eq!(state.api, "GET /b");
 }
+
+#[test]
+fn literal_path_skip_preserves_distinct_methods_paths_and_unverified_history() {
+    let root = target();
+    let mut state = test_support::test_state();
+    inventory::install(
+        &mut state,
+        vec![
+            "POST /api/v1/auth/tokens/".into(),
+            "GET /api/v1/auth/tokens/".into(),
+            "POST /api/v1/auth/tokens".into(),
+        ],
+    )
+    .unwrap();
+    write(root.path(), "skip: [/api/v1/auth/tokens/]\n");
+    apply(root.path(), &mut state).unwrap();
+    assert!(is_skipped(&state, "POST /api/v1/auth/tokens/"));
+    assert!(is_skipped(&state, "GET /api/v1/auth/tokens/"));
+    assert!(!is_skipped(&state, "POST /api/v1/auth/tokens"));
+    assert_eq!(inventory::view(&state).completed, 0);
+    assert_eq!(inventory::view(&state).skipped, 1);
+    assert!(!state.e2e_current);
+    write(root.path(), "skip: []\n");
+    apply(root.path(), &mut state).unwrap();
+    assert_eq!(inventory::view(&state).skipped, 0);
+    assert!(
+        state
+            .api_inventory
+            .iter()
+            .all(|i| i.attempts == 0 && !i.e2e_current)
+    );
+}

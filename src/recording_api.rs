@@ -6,7 +6,9 @@ use anyhow::{Context, Result, ensure};
 use hyper::{Method, Uri};
 
 use crate::config::HttpGatewayRuleConfig;
-use crate::path_pattern::{matches_path_pattern, path_patterns_overlap, validate_path_pattern};
+use crate::path_pattern::{
+    matches_path_pattern, path_patterns_overlap, validate_path_pattern, validate_path_selector,
+};
 
 pub(crate) mod methods;
 mod scope;
@@ -84,10 +86,16 @@ impl FromStr for RecordingApi {
             method.as_str() == method.as_str().to_ascii_uppercase(),
             "recording API method must use canonical uppercase form: {value:?}"
         );
-        if path_pattern != "/" {
-            validate_path_pattern(path_pattern)
-                .with_context(|| format!("invalid recording API {value:?}"))?;
-        }
+        let validation = if method.as_str() == "MOTAN" {
+            if path_pattern == "/" {
+                Ok(())
+            } else {
+                validate_path_pattern(path_pattern)
+            }
+        } else {
+            validate_path_selector(path_pattern)
+        };
+        validation.with_context(|| format!("invalid recording API {value:?}"))?;
         Ok(Self {
             method,
             path_pattern: path_pattern.to_string(),
@@ -133,6 +141,9 @@ fn pattern_can_match_prefix(pattern: &str, prefix: &str) -> bool {
         return true;
     }
     let prefix = prefix.trim_end_matches('/');
+    if !pattern.contains('*') {
+        return pattern == prefix || pattern.starts_with(&format!("{prefix}/"));
+    }
     path_patterns_overlap(pattern, prefix)
         || path_patterns_overlap(pattern, &format!("{prefix}/**"))
 }
@@ -197,3 +208,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "recording_api/tests/literal_paths.rs"]
+mod literal_path_tests;

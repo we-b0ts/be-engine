@@ -164,7 +164,7 @@ fn request_path(uri: &str) -> Result<String> {
         path.starts_with('/'),
         "recorded request path must start with '/'"
     );
-    path.parse::<hyper::http::uri::PathAndQuery>()
+    crate::path_pattern::validate_literal_path(path)
         .context("recorded request path is not a valid HTTP path")?;
     // Raw HTTP paths may have a trailing slash or repeated separators. Preserve
     // their identity; canonical route/pattern constraints belong to selectors.

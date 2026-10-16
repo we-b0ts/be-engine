@@ -71,7 +71,7 @@ impl RegressionScope {
 
 pub(crate) const GITIGNORE_RULE: &str = "/.traffic-e2e/regression.yaml";
 pub(crate) const GIT_PATHSPEC: &str = ":(exclude).traffic-e2e/regression.yaml";
-pub(crate) const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# Without a pin, rewrite selects an existing completed run and keeps it fixed.\n# recording_run_id: \"20260911093000\"\n# HTTP API routes must match backend-rewrite inventory exactly, without methods.\n# Each route includes all its recorded methods.\n# Omitted or empty only selects all APIs; skip takes precedence.\n# only:\n#   - \"/api/users/*\"\n# Continue only successful Replay when the existing scheduler selects Replay again.\nauto_next: false\nonly: []\nskip: []\n";
+pub(crate) const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# Without a pin, rewrite selects an existing completed run and keeps it fixed.\n# recording_run_id: \"20260911093000\"\n# HTTP API routes must match backend-rewrite inventory exactly, without methods.\n# Each route includes all its recorded methods.\n# Exact paths preserve trailing/repeated slashes; wildcard patterns stay canonical.\n# Omitted or empty only selects all APIs; skip takes precedence.\n# only:\n#   - \"/api/users/*\"\n# Continue only successful Replay when the existing scheduler selects Replay again.\nauto_next: false\nonly: []\nskip: []\n";
 
 /// Low-level project initialization also installs the local policy without
 /// replacing user choices. Full repository initialization creates it atomically
@@ -161,5 +161,39 @@ mod tests {
                 .unwrap()
                 .includes("GET /a")
         );
+    }
+}
+
+#[cfg(test)]
+mod literal_path_tests {
+    use super::*;
+    #[test]
+    fn skip_is_exact_for_raw_paths_and_never_aliases_the_plain_route() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join(".traffic-e2e")).unwrap();
+        std::fs::write(
+            root.path().join(PATH),
+            "skip: [/api/v1/auth/tokens/, /api//other]\n",
+        )
+        .unwrap();
+        let policy = RegressionScope::load(root.path()).unwrap();
+        assert!(!policy.includes("POST /api/v1/auth/tokens/"));
+        assert!(!policy.includes("GET /api/v1/auth/tokens/"));
+        assert!(policy.includes("POST /api/v1/auth/tokens"));
+        assert!(policy.includes("POST /api/other"));
+        for invalid in [
+            "/api/*/",
+            "/api//*/x",
+            "/api/a?x=1",
+            "/api/a#fragment",
+            "/api/a b",
+        ] {
+            std::fs::write(
+                root.path().join(PATH),
+                serde_yaml::to_string(&serde_json::json!({"skip":[invalid]})).unwrap(),
+            )
+            .unwrap();
+            assert!(RegressionScope::load(root.path()).is_err(), "{invalid}");
+        }
     }
 }
