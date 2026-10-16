@@ -2,7 +2,7 @@ use tempfile::tempdir;
 
 use super::*;
 
-const CONFIG: &str = r#"version: 14
+pub(super) const CONFIG: &str = r#"version: 14
 project:
   recording:
     source_traffic_policy: source-traffic-policy.yaml
@@ -17,7 +17,13 @@ recorder:
     access_policy: unrestricted
 "#;
 
-fn write_case(root: &Path, group: &str, case_id: &str, method: &str, uri: &str) -> PathBuf {
+pub(super) fn write_case(
+    root: &Path,
+    group: &str,
+    case_id: &str,
+    method: &str,
+    uri: &str,
+) -> PathBuf {
     let directory = root.join(group).join(case_id);
     write_case_files(&directory, method, uri);
     directory
@@ -86,7 +92,7 @@ fn write_case_at(
     directory
 }
 
-fn options(
+pub(super) fn options(
     case_source: &Path,
     case_dir: &Path,
     output: &Path,
@@ -196,23 +202,21 @@ fn replay_api_selection_collects_cases_across_member_directories() {
 }
 
 #[test]
-fn replay_api_selection_rejects_overlapping_selectors() {
+fn replay_api_selection_preserves_explicit_static_and_pattern_selectors() {
     let temporary = tempdir().unwrap();
     let source = temporary.path().join("cases");
     write_case(&source, "get-alpha", "case-a", "GET", "/api/widgets/alpha");
+    write_case(&source, "get-beta", "case-b", "GET", "/api/widgets/beta");
 
-    let error = resolve_recording_api_case_ids(
+    let selected = resolve_recording_api_case_ids(
         &source,
         &[
             "GET /api/widgets/*".parse().unwrap(),
             "GET /api/widgets/alpha".parse().unwrap(),
         ],
     )
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("overlapping replay API selectors"));
-    assert!(error.contains("case-a"));
+    .unwrap();
+    assert_eq!(selected, ["case-a", "case-b"]);
 }
 
 #[test]
@@ -642,7 +646,7 @@ fn target_root_relative_index_survives_moving_the_target() {
     .unwrap();
 
     let persisted: serde_json::Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
-    assert_eq!(persisted["version"], 2);
+    assert_eq!(persisted["version"], 3);
     assert_eq!(persisted["path_anchor"], "target_root");
     assert_eq!(persisted["case_source"], "recordings/run");
     assert_eq!(
@@ -778,15 +782,15 @@ fn recorded_trailing_slashes_never_alias_static_or_dynamic_group_membership() {
         ("item", "/api/items/7"),
         ("item-slash", "/api/items/7/"),
     ] {
-        write_recording_case(&source, "shared", id, "GET", path, path);
+        write_recording_case(&source, id, id, "GET", path, path);
     }
-    let member = source.join("apis/shared");
+    let member = source.join("apis/plain");
     let output = temporary.path().join("reports/case-groups.json");
     let plain = ensure_case_group(options(&source, &member, &output, "/api/items", None)).unwrap();
     assert_eq!(plain.case_ids, ["plain"]);
     let item = ensure_case_group(options(
         &source,
-        &member,
+        &source.join("apis/item"),
         &output,
         "/api/items/{id}",
         Some("/api/items/*"),

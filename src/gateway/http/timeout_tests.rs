@@ -192,7 +192,20 @@ async fn failed_source_transport_after_timeout_stops_admission() {
 }
 
 fn only_case(group: &std::path::Path) -> std::path::PathBuf {
-    let cases = std::fs::read_dir(group)
+    let group = std::fs::read_dir(group.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(&format!(
+                    "{}-",
+                    group.file_name().unwrap().to_string_lossy()
+                ))
+        })
+        .expect("recorded directory with exact readable prefix and identity suffix");
+    let cases = std::fs::read_dir(&group)
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .collect::<Vec<_>>();

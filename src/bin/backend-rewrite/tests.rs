@@ -225,8 +225,8 @@ fn parses_the_bounded_rewrite_surface() {
             "case-pattern",
             "apply",
             "case-patterns-current",
-            "--patterns-json",
-            r#"["/api/tasks/*/tree"]"#,
+            "--routes-json",
+            r#"["GET /api/tasks/*/tree"]"#,
         ])
         .is_ok()
     );

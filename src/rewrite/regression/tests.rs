@@ -298,8 +298,10 @@ fn replay_purpose_identifies_uncovered_patterns_before_installing_inventory() {
     assert_eq!(
         value["action"]["details"]["candidates"],
         serde_json::json!([
+            "GET /api",
             "GET /api/knowledge-bases/304487/artifacts",
-            "GET /api/knowledge-bases/304541/artifacts"
+            "GET /api/knowledge-bases/304541/artifacts",
+            "GET /other"
         ])
     );
 
@@ -313,7 +315,11 @@ fn replay_purpose_identifies_uncovered_patterns_before_installing_inventory() {
     case_patterns::apply(case_patterns::RewriteCasePatternApplyOptions {
         target_root: target.path().into(),
         batch_id: pending.id,
-        patterns: vec!["/api/knowledge-bases/*/artifacts".into()],
+        source_routes: vec![
+            "GET /api".into(),
+            "GET /other".into(),
+            "GET /api/knowledge-bases/*/artifacts".into(),
+        ],
     })
     .unwrap();
 

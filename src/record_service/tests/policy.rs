@@ -4,6 +4,7 @@ use std::path::Path;
 const POLICY: &str = r#"version: 2
 http:
   case_path_patterns: [/api/teams/*/skills]
+  source_routes: [GET /api/teams/*/skills]
   allowed_unused_http_hosts: [config.example]
 process_owned_dependencies:
 - protocol: http
@@ -181,11 +182,25 @@ fn loaded_policy_groups_team_ids_and_shares_the_case_limit() {
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect::<Vec<_>>();
         group_names.sort();
+        let group_names = group_names
+            .iter()
+            .map(|name| name.rsplit_once('-').unwrap().0.to_owned())
+            .collect::<Vec<_>>();
         assert_eq!(
             group_names,
             ["api-teams-wildcard-skills", "api-users-me-pet"]
         );
-        let cases = std::fs::read_dir(apis.join("api-teams-wildcard-skills"))
+        let team_group = std::fs::read_dir(&apis)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("api-teams-wildcard-skills-")
+            })
+            .unwrap();
+        let cases = std::fs::read_dir(team_group)
             .unwrap()
             .map(|entry| entry.unwrap().path())
             .collect::<Vec<_>>();
