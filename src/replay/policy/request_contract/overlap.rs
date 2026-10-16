@@ -101,27 +101,27 @@ pub(in crate::replay::policy) fn validate(
                             .iter()
                             .filter(|c| c.command == *command)
                             .any(|c| {
-                                c.argument_values.get(argument_index).is_some_and(|field| {
-                                    match (field, json_pointer) {
-                                        (config::ArgumentRule::Json(json), Some(pointer)) => {
-                                            std::iter::once(pointer)
-                                                .chain(
-                                                    references
-                                                        .iter()
-                                                        .flatten()
-                                                        .map(|reference| &reference.json_pointer),
-                                                )
-                                                .any(|selected| {
-                                                    json.json.keys().any(|other| {
+                                a.key_contract.is_some()
+                                    || c.argument_values.get(argument_index).is_some_and(|field| {
+                                        match (field, json_pointer) {
+                                            (config::ArgumentRule::Json(json), Some(pointer)) => {
+                                                std::iter::once(pointer)
+                                                    .chain(
+                                                        references.iter().flatten().map(
+                                                            |reference| &reference.json_pointer,
+                                                        ),
+                                                    )
+                                                    .any(|selected| {
+                                                        json.json.keys().any(|other| {
                                                         super::super::response_locations_overlap(
                                                             selected, other,
                                                         )
                                                     })
-                                                })
+                                                    })
+                                            }
+                                            _ => true,
                                         }
-                                        _ => true,
-                                    }
-                                })
+                                    })
                             })
                 }
                 (

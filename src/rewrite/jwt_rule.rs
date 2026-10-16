@@ -101,13 +101,17 @@ pub(super) fn plan(
             id: options.id,
             header: match &options.location {
                 JwtTokenLocation::BearerHeader { header } => Some(header.clone()),
+                JwtTokenLocation::RawHeader { raw_header } => Some(raw_header.clone()),
                 JwtTokenLocation::QueryParameter { .. } => None,
             },
-            scheme: matches!(options.location, JwtTokenLocation::BearerHeader { .. })
-                .then(|| "bearer".into()),
+            scheme: match &options.location {
+                JwtTokenLocation::BearerHeader { .. } => Some("bearer".into()),
+                JwtTokenLocation::RawHeader { .. } => Some("raw".into()),
+                JwtTokenLocation::QueryParameter { .. } => None,
+            },
             query_param: match &options.location {
                 JwtTokenLocation::QueryParameter { query_param } => Some(query_param.clone()),
-                JwtTokenLocation::BearerHeader { .. } => None,
+                JwtTokenLocation::BearerHeader { .. } | JwtTokenLocation::RawHeader { .. } => None,
             },
             profile: options.signing_key_ref.clone(),
         },

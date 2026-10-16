@@ -53,10 +53,22 @@ impl RequestContracts {
         source: &[Vec<u8>],
         actual: &[Vec<u8>],
     ) {
-        if source.len() != actual.len() || source.first() != actual.first() || source == actual {
+        if source.len() != actual.len() || source == actual {
             return;
         }
-        let capability = if matches!(command, "SET" | "RPUSH")
+        let capability = if source.first() != actual.first()
+            && matches!(command, "SET" | "INCRBY" | "EXPIRE")
+            && source
+                .first()
+                .is_some_and(|v| v.len() <= 1024 && std::str::from_utf8(v).is_ok())
+            && actual
+                .first()
+                .is_some_and(|v| v.len() <= 1024 && std::str::from_utf8(v).is_ok())
+        {
+            "redis_key_request"
+        } else if source.first() != actual.first() {
+            return;
+        } else if matches!(command, "SET" | "RPUSH")
             && source.len() >= 2
             && crate::replay::json_order::parse(&source[1]).is_some()
             && crate::replay::json_order::parse(&actual[1]).is_some()
@@ -205,6 +217,7 @@ pub(in crate::replay::policy) fn verify(
     dynamic_rules: &[super::super::dynamic_values::DynamicValueRule],
     witnesses: &mut Vec<(PathBuf, String)>,
 ) -> Result<usize> {
+    runtime.restore_key_binding_proofs(report)?;
     verify_capture(runtime, rule, report, dynamic_rules, witnesses, None)
 }
 
@@ -604,6 +617,12 @@ fn validate_source_commands(
                             .pointer(pointer)
                             .context("source selected JSON field missing")?;
                         match field {
+                            config::JsonField::Identity(_) => {
+                                ensure!(
+                                    value.is_string(),
+                                    "source identity reference is not a string"
+                                );
+                            }
                             config::JsonField::Time(field) => {
                                 super::time::timestamp(value, field.format)?;
                             }

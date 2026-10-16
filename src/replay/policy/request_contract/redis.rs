@@ -55,7 +55,7 @@ impl RequestContracts {
         actual: &[Vec<u8>],
     ) -> Result<Decision> {
         ensure!(
-            source.len() == actual.len() && source.first() == actual.first(),
+            source.len() == actual.len(),
             "Redis key or argument count changed"
         );
         let location = selector
@@ -83,8 +83,19 @@ impl RequestContracts {
             ids: vec![rule.id.clone()],
             ..Default::default()
         };
+        self.compare_key(
+            case,
+            rule,
+            selector,
+            source.first().context("source key missing")?,
+            actual.first().context("target key missing")?,
+            &mut decision,
+        )?;
         let mut times = Vec::new();
         for (index, (source, actual)) in source.iter().zip(actual).enumerate() {
+            if index == 0 {
+                continue;
+            }
             match config.argument_values.get(&index) {
                 None => ensure!(source == actual, "unselected Redis argument differs"),
                 Some(ArgumentRule::Time(field)) => {
@@ -108,6 +119,17 @@ impl RequestContracts {
                             .pointer(pointer)
                             .context("target request field is missing")?;
                         match field {
+                            JsonField::Identity(reference) => self.compare_identity(
+                                case,
+                                rule,
+                                selector.database,
+                                &reference.identity,
+                                a.as_str()
+                                    .context("source identity reference is not a string")?,
+                                b.as_str()
+                                    .context("target identity reference is not a string")?,
+                                &mut decision,
+                            )?,
                             JsonField::Time(field) => {
                                 times.push(super::time::compare(a, b, field, anchor)?);
                                 decision.time_validations += 1;
@@ -163,6 +185,12 @@ impl RequestContracts {
                 previous.next == location,
                 "request time sequence differs from configured order"
             );
+            if let Some(key) = &previous.actual_key {
+                ensure!(
+                    Some(key) == actual.first(),
+                    "key changed within a command sequence"
+                );
+            }
             if let Some(first) = previous.times.first() {
                 for pair in &times {
                     ensure!(
@@ -177,7 +205,14 @@ impl RequestContracts {
             } else {
                 previous.times.into_iter().chain(times).collect()
             };
-            decision.sequence = Some((key, Sequence { next, times }));
+            decision.sequence = Some((
+                key,
+                Sequence {
+                    next,
+                    times,
+                    actual_key: (next != 0).then(|| actual[0].clone()),
+                },
+            ));
         }
         Ok(decision)
     }

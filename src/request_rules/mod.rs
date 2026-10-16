@@ -130,6 +130,7 @@ impl<'de> Deserialize<'de> for JwtRules {
 #[serde(untagged)]
 pub enum JwtTokenLocation {
     BearerHeader { header: String },
+    RawHeader { raw_header: String },
     QueryParameter { query_param: String },
 }
 
@@ -137,6 +138,7 @@ impl JwtTokenLocation {
     fn selector_key(&self) -> (&'static str, &str) {
         match self {
             Self::BearerHeader { header } => ("header", header),
+            Self::RawHeader { raw_header } => ("header", raw_header),
             Self::QueryParameter { query_param } => ("query_param", query_param),
         }
     }
@@ -147,8 +149,8 @@ impl JwtRule {
         match (&self.header, &self.scheme, &self.query_param) {
             (Some(header), Some(scheme), None) => {
                 ensure!(
-                    scheme == "bearer",
-                    "JWT header rules currently support the bearer scheme"
+                    scheme == "bearer" || scheme == "raw",
+                    "JWT header rules require bearer or raw scheme"
                 );
                 ensure!(
                     hyper::header::HeaderName::from_bytes(header.as_bytes()).is_ok(),
@@ -158,8 +160,14 @@ impl JwtRule {
                     header == &header.to_ascii_lowercase(),
                     "JWT header must be lowercase"
                 );
-                Ok(JwtTokenLocation::BearerHeader {
-                    header: header.clone(),
+                Ok(if scheme == "raw" {
+                    JwtTokenLocation::RawHeader {
+                        raw_header: header.clone(),
+                    }
+                } else {
+                    JwtTokenLocation::BearerHeader {
+                        header: header.clone(),
+                    }
                 })
             }
             (None, None, Some(query_param)) => {
@@ -176,7 +184,9 @@ impl JwtRule {
                     query_param: query_param.clone(),
                 })
             }
-            _ => anyhow::bail!("JWT rule must select exactly one bearer header or one query_param"),
+            _ => anyhow::bail!(
+                "JWT rule must select exactly one header with an explicit scheme or one query_param"
+            ),
         }
     }
 }

@@ -52,6 +52,21 @@ pub(in crate::rewrite::evidence) fn has_response_jwt(value: &Value) -> bool {
 
 pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleHint> {
     let mut hints = Vec::new();
+    if query == QUERY_DIRTY_CLUSTERS
+        && facts["dependency_request_candidates"]
+            .as_array()
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item["capability"] == "redis_key_request")
+            })
+    {
+        hints.push(RewriteRuleHint {
+            capability: "redis_key_request".into(), rule: "dependency-request".into(),
+            hint: "A Redis key mismatch is a candidate, not proof of generation. Trace Source and use rule plan --dependency-request with an exact endpoint/database/case and explicit redis.key_contract. time_window validates one canonical numeric segment against each inbound request clock (fixed five-second window); INCRBY/EXPIRE order, increment, TTL and stable segments remain exact. SET capture requires one fixed-affix template, binding and bounded hex/base64url/uuid_v4 format; JSON identity references and request-relative time fields are checked atomically with the key. Failed comparisons commit no bindings. Later key/JSON references require a committed case-local binding; transform: sha256 verifies derivation only from that binding. Digest-shaped captures alone are opaque identities. Apply the first capture and fresh Replay before planning a later reference; fingerprint-only key_bindings carry the proof. Do not combine a key contract with a legacy dynamic capture on the same command/key. Authentication, lanes, stable fields and finite consumption remain strict. See docs/redis-key-contracts.md; recordings remain unchanged.".into(),
+            help: super::super::super::action::command(root, vec!["rule".into(), "plan".into(), "--help".into()], Vec::new()),
+        });
+    }
     if query == QUERY_REPRESENTATIVES && has_response_jwt(facts) {
         hints.push(RewriteRuleHint {
             capability: "response_jwt".into(), rule: "response-jwt".into(),
@@ -203,6 +218,15 @@ mod tests {
         assert_eq!(
             hints(root, QUERY_DIRTY_CLUSTERS, &request)[0].capability,
             "dependency_request"
+        );
+        let request = json!({"dependency_request_candidates":[{"capability":"redis_key_request"}]});
+        let hints = hints(root, QUERY_DIRTY_CLUSTERS, &request);
+        assert!(
+            hints
+                .iter()
+                .any(|hint| hint.capability == "redis_key_request"
+                    && hint.hint.contains("not proof")
+                    && hint.hint.contains("key_contract"))
         );
     }
 }

@@ -153,6 +153,10 @@ is unclear.
 - `replay/policy/request_contract` owns explicit dependency request selectors,
   atomic comparison decisions, case-local time/nonce state and protected failed
   request witnesses. Its config and overlap children validate ownership; its
+  `key` child owns bounded Redis key-window derivation, shaped key captures,
+  declared JSON/key identity references, atomic case-local bindings and their
+  fingerprint-only planning/audit projection. This is request comparison policy;
+  protocol lanes and finite consumption remain with the Redis matcher. Its
   evidence child validates immutable recording witnesses. Redis matching and
   HTTP matching call it only for case-owned exchanges. `replay/http/multipart`
   owns bounded multipart parsing; `replay/http/matching` owns HTTP selection.
