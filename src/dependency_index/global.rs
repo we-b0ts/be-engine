@@ -1,4 +1,6 @@
 //! Portable Global record metadata and notification locations, without response payloads.
+#[cfg(test)]
+mod portable_tests;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -286,6 +288,32 @@ pub(crate) fn load_global_index(
     load_global_index_cancellable(path, validate, &AtomicBool::new(false))
 }
 
+fn load_sealed_index(
+    path: &Path,
+    parent: &Path,
+    stamp: &FileStamp,
+    cancelled: &AtomicBool,
+) -> Result<Option<GlobalIndex>> {
+    let Ok(mut index) = store::read_json::<GlobalIndex>(&parent.join(GLOBAL_FRAGMENT)) else {
+        return Ok(None);
+    };
+    // Completed recordings are immutable trusted artifacts. A normal copy keeps
+    // source length and nanosecond mtime while changing inode, device and ctime.
+    if index.version != VERSION
+        || index.stamp.size != stamp.size
+        || index.stamp.modified != stamp.modified
+    {
+        return Ok(None);
+    }
+    store::check_cancelled(cancelled)?;
+    ensure!(
+        FileStamp::read(path)? == *stamp,
+        "Global evidence changed while loading sealed index"
+    );
+    index.stamp = stamp.clone();
+    Ok(Some(index))
+}
+
 pub(crate) fn load_global_index_cancellable(
     path: &Path,
     validate: fn(&Value) -> Result<()>,
@@ -296,10 +324,7 @@ pub(crate) fn load_global_index_cancellable(
     let parent = path
         .parent()
         .context("Global dependency file has no parent")?;
-    if let Ok(index) = store::read_json::<GlobalIndex>(&parent.join(GLOBAL_FRAGMENT))
-        && index.version == VERSION
-        && index.stamp == stamp
-    {
+    if let Some(index) = load_sealed_index(path, parent, &stamp, cancelled)? {
         return Ok((index, parent.to_owned()));
     }
     let root = store::cache_directory(path).join("global-v1");

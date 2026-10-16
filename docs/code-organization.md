@@ -106,7 +106,11 @@ is unclear.
   separate index preparation deadline and phase publication.
 
   `dependency_index/global` projects portable Global metadata and groups generic
-  notification locations; `pages`, `stream` and `reference` own disk pages,
+  notification locations. Sealed fragments from trusted immutable completed
+  recordings survive ordinary copies by matching source size and nanosecond
+  mtime, then binding the current full file stamp in memory; their relative pages
+  remain under the sealed recording root. Local rebuild caches still require the
+  full stamp. `pages`, `stream` and `reference` own disk pages,
   immutable traversal and shared original-byte reads. `replay/global` registers
   these inventories through protocol-owned evidence adapters. Redis Pub/Sub's
   `inventory` owns session consumption and its `notifications` child owns ordered

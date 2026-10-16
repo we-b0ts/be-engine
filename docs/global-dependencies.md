@@ -22,11 +22,21 @@ For older recordings, the first preparation builds the Global index outside
 the immutable recording, under the project's private local dependency-index
 cache. Builds use a file lock, atomic checksummed manifests, progress events and
 the existing cancellable index preparation deadline. Later preparations reuse
-the source identity and version. A changed source causes reconstruction; each
+the full local source identity and version. A changed source causes reconstruction; each
 materialized original record is additionally checked against its byte range and
 SHA-256. Corrupt pages fail explicitly rather than becoming an empty inventory.
-Copying a recording to a different filesystem changes its identity and can
-require reconstruction. Moving a sealed tree preserves its relative page links.
+
+Completed recordings are trusted immutable artifacts. Copying the complete
+sealed tree, including its relative page files, can reuse the Recorder's index
+when Global source size and nanosecond mtime match. Preserve timestamps during
+transfer, for example with `rsync -a`. Different device, inode or ctime values do
+not force reconstruction: the loader binds the destination's current full file
+stamp in memory and keeps the pages under that copied recording root. The
+original sealed index is not rewritten, and reuse does not scan the entire
+Global file. Missing or invalid sealed indexes, unsupported versions, or changed
+source size/mtime use the existing local rebuild path. Page checksums and original
+record SHA-256 checks remain in place, as do guards against source changes after
+loading. This reuse relies on completed recording contents remaining immutable.
 
 Managed E2E prepares Case and Global indexes in the `preparing_index` phase,
 before building Target and starting Replay readiness. For direct inspection:
