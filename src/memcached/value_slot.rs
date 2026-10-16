@@ -246,7 +246,10 @@ mod tests {
         frame[16..24].copy_from_slice(&456_u64.to_be_bytes());
         frame.extend([0, 0, 0, 7]);
         frame.extend(b"keyold");
-        let slot = extract(&[frame.clone()], "binary").unwrap().pop().unwrap();
+        let slot = extract(std::slice::from_ref(&frame), "binary")
+            .unwrap()
+            .pop()
+            .unwrap();
         let patched = replace(&frame, &slot, b"longer").unwrap();
         assert_eq!(&patched[12..31], &frame[12..31]);
         assert_eq!(&patched[31..], b"longer");
@@ -259,7 +262,7 @@ mod tests {
     #[test]
     fn text_patch_preserves_cas_and_other_entries() {
         let frame = b"VALUE key 7 3 456\r\nold\r\nVALUE other 0 4\r\nsame\r\nEND\r\n".to_vec();
-        let slots = extract(&[frame.clone()], "text").unwrap();
+        let slots = extract(std::slice::from_ref(&frame), "text").unwrap();
         assert_eq!(slots.len(), 2);
         let patched = replace(&frame, &slots[0], b"longer").unwrap();
         assert_eq!(

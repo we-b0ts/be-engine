@@ -203,11 +203,6 @@ pub(super) fn verify(
                 );
                 let raw = dependency::source_witness(surface, &event, &directory)?;
                 let source_time = timestamp(&request["timestamp"]);
-                let mut source_clocks = AnchorClocks::default();
-                source_clocks.case = crate::value_contract::time::ClockPair {
-                    source: source_time,
-                    target: source_time,
-                };
                 let completed = timestamp(&event["timestamp"]);
                 let started = timestamp(&event["request_started_at"]).or_else(|| {
                     completed
@@ -218,13 +213,19 @@ pub(super) fn verify(
                             ))
                         })
                 });
-                source_clocks.dependency = crate::value_contract::time::ClockPair {
-                    source: started,
-                    target: started,
-                };
-                source_clocks.delivery = crate::value_contract::time::ClockPair {
-                    source: completed,
-                    target: completed,
+                let source_clocks = AnchorClocks {
+                    case: crate::value_contract::time::ClockPair {
+                        source: source_time,
+                        target: source_time,
+                    },
+                    dependency: crate::value_contract::time::ClockPair {
+                        source: started,
+                        target: started,
+                    },
+                    delivery: crate::value_contract::time::ClockPair {
+                        source: completed,
+                        target: completed,
+                    },
                 };
                 let checked = dependency::compare_source(
                     surface,

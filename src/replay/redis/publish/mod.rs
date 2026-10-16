@@ -233,7 +233,6 @@ impl PublishRules {
                     },
                     Some(&crate::policy::Database::Index(exchange.record.database)),
                     exchange.record.username.as_deref(),
-                    false,
                 )
             })
             .collect::<Vec<_>>();

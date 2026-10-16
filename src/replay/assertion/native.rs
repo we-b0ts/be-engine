@@ -131,7 +131,7 @@ impl NativeResponseContext {
                         crate::policy::native::ResponseSigningKey::RecordedPublicKey {
                             resource,
                             ..
-                        } => Some(resource),
+                        } => Some(resource.as_ref()),
                         _ => None,
                     };
                     let key = super::jwt::keys::VerificationKey::resolve_scoped(

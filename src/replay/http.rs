@@ -677,14 +677,14 @@ fn response_headers_for_payload(
     let mut output = hyper::HeaderMap::new();
     if let Some(headers) = headers {
         for (name, values) in headers {
-            if is_hop_by_hop_header(&name) {
+            if is_hop_by_hop_header(name) {
                 continue;
             }
             let Ok(name) = hyper::header::HeaderName::from_bytes(name.as_bytes()) else {
                 continue;
             };
             for value in values {
-                if let Ok(value) = hyper::header::HeaderValue::from_str(&value) {
+                if let Ok(value) = hyper::header::HeaderValue::from_str(value) {
                     output.append(name.clone(), value);
                 }
             }

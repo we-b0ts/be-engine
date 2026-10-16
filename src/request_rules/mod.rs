@@ -376,8 +376,8 @@ impl RequestRuleRuntime {
             .unwrap_or_default();
         let source_body = crate::replay::native_source_request_body(request);
         for configured in &self.rules {
-            if let Some((scope, when)) = &configured.scope {
-                if !scope.api.as_deref().is_none_or(|api| {
+            if let Some((scope, when)) = &configured.scope
+                && (!scope.api.as_deref().is_none_or(|api| {
                     api.split_once(' ').is_some_and(|(method, path)| {
                         method == source_method
                             && crate::path_pattern::matches_path_pattern(path, &source_path)
@@ -386,9 +386,9 @@ impl RequestRuleRuntime {
                     source_body
                         .as_ref()
                         .is_some_and(|body| when.matches_body(body))
-                }) {
-                    continue;
-                }
+                }))
+            {
+                continue;
             }
             let rule = &configured.rule;
             let profile = &configured.profile;

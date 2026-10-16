@@ -482,9 +482,9 @@ fn metadata(
     WitnessMetadata {
         surface,
         source_role: if surface == Surface::DependencyRequest {
-            SourceRole::RecordedDependencyRequest
+            SourceRole::DependencyRequest
         } else {
-            SourceRole::RecordedDependencyResponse
+            SourceRole::DependencyResponse
         },
         target_role,
         source: SourceIdentity {

@@ -78,9 +78,9 @@ fn install(fixture: &Fixture, event: serde_json::Value, target: impl FnOnce(Vec<
             WitnessMetadata {
                 surface: rule.surface,
                 source_role: if rule.surface == Surface::DependencyRequest {
-                    SourceRole::RecordedDependencyRequest
+                    SourceRole::DependencyRequest
                 } else {
-                    SourceRole::RecordedDependencyResponse
+                    SourceRole::DependencyResponse
                 },
                 target_role: if rule.surface == Surface::DependencyRequest {
                     TargetRole::IndependentTargetObservation
@@ -263,13 +263,12 @@ fn sql_template_slot_keeps_other_literals_and_requires_explicit_discovery_bindin
                 .iter()
                 .all(|candidate| candidate["rule"]["match"]["resource"]["protocol"] != "mysql")
         );
-        assert_eq!(
+        assert!(
             evidence.facts["source_entry"]["bindings"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|binding| binding["needs_sql_template"] == true),
-            true
+                .any(|binding| binding["needs_sql_template"] == true)
         );
         let result = fixture.plan();
         if change_tenant {

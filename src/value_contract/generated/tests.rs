@@ -34,7 +34,7 @@ fn encode<C: BlockEncrypt + KeyInit>(plaintext: &[u8], key: &[u8], iv: [u8; 16])
     padded.resize(padded.len() + padding, padding as u8);
     let mut envelope = iv.to_vec();
     let mut previous = iv;
-    for chunk in padded.chunks_exact_mut(16) {
+    for chunk in padded.as_chunks_mut::<16>().0 {
         for (byte, previous) in chunk.iter_mut().zip(previous) {
             *byte ^= previous;
         }
@@ -50,7 +50,9 @@ fn cbc_decryption_matches_aes128_cbc_known_vector() {
     let bytes = |value: &str| {
         value
             .as_bytes()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
             .collect::<Vec<_>>()
     };

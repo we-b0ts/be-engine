@@ -157,9 +157,7 @@ pub(super) fn convert(
                         p::Slot::Body,
                         p::Codec::Json,
                         contract,
-                        &rule.source_evidence,
-                        when.clone(),
-                        None,
+                        value_semantics(&rule.source_evidence, when.clone(), None),
                     )
                     .into(),
                 );
@@ -292,9 +290,7 @@ pub(super) fn convert(
                     p::Slot::Value,
                     p::Codec::Protobuf(p::ProtobufCodec { fields }),
                     contract,
-                    &rule.source_evidence,
-                    when,
-                    None,
+                    value_semantics(&rule.source_evidence, when, None),
                 )
                 .into(),
             );
@@ -445,9 +441,7 @@ pub(super) fn convert(
                                 p::Slot::Value,
                                 p::Codec::Json,
                                 contract,
-                                &rule.source_evidence,
-                                when,
-                                delivery,
+                                value_semantics(&rule.source_evidence, when, delivery),
                             )
                             .into(),
                         );
@@ -507,9 +501,7 @@ pub(super) fn convert(
                                 p::Codec::Protobuf(p::ProtobufCodec { fields: protobuf })
                             },
                             contract,
-                            &rule.source_evidence,
-                            when,
-                            None,
+                            value_semantics(&rule.source_evidence, when, None),
                         )
                         .into(),
                     );

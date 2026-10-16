@@ -23,6 +23,7 @@ pub use config::{
     RedisDerivedIdentity,
 };
 pub(in crate::replay) use http::HttpInput;
+pub(in crate::replay) use redis::RedisIdentity;
 pub(in crate::replay) use source::from_event as recorded_capture;
 pub(in crate::replay) use strings::capture as capture_string;
 

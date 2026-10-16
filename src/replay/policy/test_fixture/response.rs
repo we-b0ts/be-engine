@@ -55,9 +55,11 @@ pub(super) fn convert(
                     p::Slot::Body,
                     p::Codec::Json,
                     fields,
-                    "Synthetic response fields explicitly selected by this fixture",
-                    None,
-                    None,
+                    value_semantics(
+                        "Synthetic response fields explicitly selected by this fixture",
+                        None,
+                        None,
+                    ),
                 )
                 .into(),
             );
@@ -121,7 +123,7 @@ pub(super) fn convert(
                     algorithm_pointer,
                     kid,
                 } => n::ResponseSigningKey::RecordedPublicKey {
-                    resource: p::Resource {
+                    resource: Box::new(p::Resource {
                         protocol: p::Protocol::Mysql,
                         endpoint: p::Endpoint {
                             host: host.clone(),
@@ -129,7 +131,7 @@ pub(super) fn convert(
                         },
                         database: Some(p::Database::Name(database.clone())),
                         username: None,
-                    },
+                    }),
                     sql: sql.clone(),
                     params: params
                         .iter()

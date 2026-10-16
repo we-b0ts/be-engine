@@ -192,9 +192,7 @@ fn value(
     slot: p::Slot,
     codec: p::Codec,
     contract: BTreeMap<String, p::FieldContract>,
-    fact: &str,
-    when: Option<p::SourceCondition>,
-    delivery: Option<p::Delivery>,
+    semantics: ValueSemantics<'_>,
 ) -> p::Rule {
     p::Rule {
         id: id.into(),
@@ -203,7 +201,23 @@ fn value(
         slot,
         codec,
         contract,
-        proof: proof(fact),
+        proof: proof(semantics.fact),
+        when: semantics.when,
+        delivery: semantics.delivery,
+    }
+}
+struct ValueSemantics<'a> {
+    fact: &'a str,
+    when: Option<p::SourceCondition>,
+    delivery: Option<p::Delivery>,
+}
+fn value_semantics(
+    fact: &str,
+    when: Option<p::SourceCondition>,
+    delivery: Option<p::Delivery>,
+) -> ValueSemantics<'_> {
+    ValueSemantics {
+        fact,
         when,
         delivery,
     }
@@ -376,32 +390,6 @@ struct Inventory {
     methods: BTreeMap<String, String>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn production_loader_rejects_all_legacy_versions() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("policy.yaml");
-        for version in [1, 2, 3] {
-            std::fs::write(
-                &path,
-                format!(
-                    "version: {version}\nexpected_response: assertions_only\ndependency_rules: []\n"
-                ),
-            )
-            .unwrap();
-            assert!(old::load_replay_policy(&path).is_err());
-        }
-        write_policy(
-            &path,
-            "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
-        )
-        .unwrap();
-        assert!(old::load_replay_policy(&path).is_ok());
-    }
-}
 impl Inventory {
     fn new(document: &old::ReplayPolicyDocument, fixture_root: Option<&Path>) -> Self {
         let mut resources = document
@@ -478,16 +466,13 @@ impl Inventory {
                 let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
                     continue;
                 };
-                if name == "request.json" {
-                    if let Ok(bytes) = std::fs::read(&path) {
-                        if let Some(value) = crate::json_value::parse(&bytes) {
-                            if let (Some(method), Some(uri)) =
-                                (value["method"].as_str(), value["uri"].as_str())
-                            {
-                                methods.insert(super::pattern::uri_path(uri), method.into());
-                            }
-                        }
-                    }
+                if name == "request.json"
+                    && let Ok(bytes) = std::fs::read(&path)
+                    && let Some(value) = crate::json_value::parse(&bytes)
+                    && let (Some(method), Some(uri)) =
+                        (value["method"].as_str(), value["uri"].as_str())
+                {
+                    methods.insert(super::pattern::uri_path(uri), method.into());
                 }
                 if name != "dependencies.jsonl" {
                     continue;
@@ -621,4 +606,31 @@ pub(crate) fn managed_tempdir() -> Result<ManagedFixtureDirectory> {
     std::fs::create_dir_all(key.parent().unwrap())?;
     std::fs::write(key, crate::request_headers::generate_encryption_key()?)?;
     Ok(ManagedFixtureDirectory { _root: root, cases })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn production_loader_rejects_all_legacy_versions() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("policy.yaml");
+        for version in [1, 2, 3] {
+            std::fs::write(
+                &path,
+                format!(
+                    "version: {version}\nexpected_response: assertions_only\ndependency_rules: []\n"
+                ),
+            )
+            .unwrap();
+            assert!(old::load_replay_policy(&path).is_err());
+        }
+        write_policy(
+            &path,
+            "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+        )
+        .unwrap();
+        assert!(old::load_replay_policy(&path).is_ok());
+    }
 }

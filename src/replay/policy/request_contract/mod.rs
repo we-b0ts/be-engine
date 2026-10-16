@@ -344,7 +344,6 @@ impl RequestContracts {
                     &target,
                     database.as_ref(),
                     event["username"].as_str(),
-                    false,
                 ) {
                     continue;
                 }
@@ -453,7 +452,6 @@ impl RequestContracts {
                     target,
                     None,
                     None,
-                    false,
                 ) && r.http.as_ref().is_some_and(|h| {
                     h.multipart.is_some()
                         && h.method == method

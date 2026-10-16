@@ -36,7 +36,6 @@ impl PublishRules {
                     },
                     Some(&crate::policy::Database::Index(context.database)),
                     context.username,
-                    false,
                 ) && r.selector.host.eq_ignore_ascii_case(context.host)
                     && r.selector.port == context.port
                     && source

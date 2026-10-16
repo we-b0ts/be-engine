@@ -211,7 +211,6 @@ impl LockTokens {
                     },
                     Some(&crate::policy::Database::Index(exchange.record.database)),
                     exchange.record.username.as_deref(),
-                    false,
                 ) {
                     continue;
                 }

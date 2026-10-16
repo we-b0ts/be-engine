@@ -13,6 +13,9 @@ pub(crate) use native::{LeafContext, LeafObservations, NativeField, NonceIdentit
 const MAX_COMPARISONS: usize = 16_384;
 const MAX_DEPTH: usize = 128;
 
+type TimeRelationships = BTreeMap<(TimeAnchor, Option<String>), Vec<(i128, i128)>>;
+type NonceRelationships = BTreeMap<(String, String), Vec<([u8; 32], [u8; 32])>>;
+
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct AnchorClocks {
     pub(crate) case: ClockPair,
@@ -49,9 +52,9 @@ pub(crate) struct Comparison {
     pub(crate) time_validations: BTreeMap<String, usize>,
     pub(crate) differences: Vec<Difference>,
     #[serde(skip)]
-    pub(crate) relationships: BTreeMap<(TimeAnchor, Option<String>), Vec<(i128, i128)>>,
+    pub(crate) relationships: TimeRelationships,
     #[serde(skip)]
-    pub(crate) nonce_relationships: BTreeMap<(String, String), Vec<([u8; 32], [u8; 32])>>,
+    pub(crate) nonce_relationships: NonceRelationships,
 }
 
 impl Comparison {
@@ -97,9 +100,17 @@ struct Decisions {
     evaluated: BTreeSet<String>,
     selected: BTreeSet<usize>,
     selected_native: BTreeSet<usize>,
-    times: BTreeMap<(TimeAnchor, Option<String>), Vec<(i128, i128)>>,
+    times: TimeRelationships,
     time_validations: BTreeMap<String, usize>,
-    nonces: BTreeMap<(String, String), Vec<([u8; 32], [u8; 32])>>,
+    nonces: NonceRelationships,
+}
+
+struct MultisetSlice<'a> {
+    source: &'a [Value],
+    target: &'a [Value],
+    source_pointer: &'a str,
+    target_pointer: &'a str,
+    depth: usize,
 }
 
 struct Comparator<'a> {
@@ -371,14 +382,16 @@ impl Comparator<'_> {
                         ));
                     }
                     return self.pair(
-                        source,
-                        target,
-                        pointer,
-                        target_pointer,
+                        &MultisetSlice {
+                            source,
+                            target,
+                            source_pointer: pointer,
+                            target_pointer,
+                            depth: depth + 1,
+                        },
                         0,
                         &mut vec![false; target.len()],
                         decisions,
-                        depth + 1,
                     );
                 }
                 FieldContract::Time {
@@ -480,53 +493,37 @@ impl Comparator<'_> {
 
     fn pair(
         &mut self,
-        source: &[Value],
-        target: &[Value],
-        pointer: &str,
-        target_pointer: &str,
+        values: &MultisetSlice<'_>,
         index: usize,
         used: &mut [bool],
         decisions: &mut Decisions,
-        depth: usize,
     ) -> Result<(), Difference> {
-        if index == source.len() {
+        if index == values.source.len() {
             return Ok(());
         }
         // Matching whole elements preserves associations between their fields.
         // Each speculative branch owns a copy of its decisions; failed branches
         // neither capture bindings nor leak time relationships to another match.
-        for candidate in 0..target.len() {
+        for candidate in 0..values.target.len() {
             if used[candidate] {
                 continue;
             }
             let mut staged = decisions.clone();
             if self
                 .node(
-                    &source[index],
-                    &target[candidate],
-                    &format!("{pointer}/{index}"),
-                    &format!("{target_pointer}/{candidate}"),
+                    &values.source[index],
+                    &values.target[candidate],
+                    &format!("{}/{index}", values.source_pointer),
+                    &format!("{}/{candidate}", values.target_pointer),
                     &mut staged,
-                    depth,
+                    values.depth,
                 )
                 .is_err()
             {
                 continue;
             }
             used[candidate] = true;
-            if self
-                .pair(
-                    source,
-                    target,
-                    pointer,
-                    target_pointer,
-                    index + 1,
-                    used,
-                    &mut staged,
-                    depth,
-                )
-                .is_ok()
-            {
+            if self.pair(values, index + 1, used, &mut staged).is_ok() {
                 *decisions = staged;
                 return Ok(());
             }
@@ -536,7 +533,7 @@ impl Comparator<'_> {
             }
         }
         Err(difference(
-            pointer,
+            values.source_pointer,
             "no bounded multiset pairing preserves all contracts",
         ))
     }

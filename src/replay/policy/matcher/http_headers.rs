@@ -26,7 +26,6 @@ impl ReplayPolicyRuntime {
                         context.target,
                         None,
                         None,
-                        false,
                     )
             })
             .flat_map(|rule| {

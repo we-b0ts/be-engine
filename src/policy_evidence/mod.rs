@@ -64,11 +64,13 @@ pub(crate) struct WitnessMetadata {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub(crate) enum SourceRole {
-    RecordedDependencyRequest,
-    RecordedDependencyResponse,
-    RecordedApiResponse,
+    #[serde(rename = "recorded_dependency_request")]
+    DependencyRequest,
+    #[serde(rename = "recorded_dependency_response")]
+    DependencyResponse,
+    #[serde(rename = "recorded_api_response")]
+    ApiResponse,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,9 +84,9 @@ pub(crate) enum TargetRole {
 impl WitnessMetadata {
     fn validate_roles(&self, has_target: bool) -> Result<()> {
         let source = match self.surface {
-            Surface::ApiResponse => SourceRole::RecordedApiResponse,
-            Surface::DependencyRequest => SourceRole::RecordedDependencyRequest,
-            Surface::DependencyResponse => SourceRole::RecordedDependencyResponse,
+            Surface::ApiResponse => SourceRole::ApiResponse,
+            Surface::DependencyRequest => SourceRole::DependencyRequest,
+            Surface::DependencyResponse => SourceRole::DependencyResponse,
         };
         ensure!(
             self.source_role == source,

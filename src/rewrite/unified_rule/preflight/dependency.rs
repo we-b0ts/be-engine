@@ -70,13 +70,12 @@ pub(in crate::rewrite::unified_rule) fn selects(
     if resource.protocol == Protocol::Mysql {
         return crate::replay::mysql_witness_matches(event, rule);
     }
-    if let Some(field) = &rule.rule.selector.hash_field {
-        if !super::arguments(event)?
+    if let Some(field) = &rule.rule.selector.hash_field
+        && !super::arguments(event)?
             .get(1)
             .is_some_and(|value| field.matches(value))
-        {
-            return Ok(false);
-        }
+    {
+        return Ok(false);
     }
     Ok(keys(event)?.iter().any(|key| {
         rule.rule

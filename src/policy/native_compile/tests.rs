@@ -77,22 +77,22 @@ fn proof_edits_do_not_invalidate_execution_but_a_semantic_field_named_proof_does
     let baseline = compile_native(&original).unwrap();
     let mut changed = original.clone();
     changed.proof.fact = "more exact Source explanation".into();
-    if let NativeEffect::Identity(effect) = &mut changed.effect {
-        if let IdentityCapture::HttpPath { segment } = &mut effect.capture {
-            segment.fields.get_mut("proof").unwrap().proof.fact = "nonce generated once".into();
-        }
+    if let NativeEffect::Identity(effect) = &mut changed.effect
+        && let IdentityCapture::HttpPath { segment } = &mut effect.capture
+    {
+        segment.fields.get_mut("proof").unwrap().proof.fact = "nonce generated once".into();
     }
     assert_eq!(
         compile_native(&changed).unwrap().fingerprint,
         baseline.fingerprint
     );
-    if let NativeEffect::Identity(effect) = &mut changed.effect {
-        if let IdentityCapture::HttpPath { segment } = &mut effect.capture {
-            segment.fields.get_mut("proof").unwrap().contract = PathIdentityField::Random {
-                format: PathRandomFormat::Hex,
-                length: 13,
-            };
-        }
+    if let NativeEffect::Identity(effect) = &mut changed.effect
+        && let IdentityCapture::HttpPath { segment } = &mut effect.capture
+    {
+        segment.fields.get_mut("proof").unwrap().contract = PathIdentityField::Random {
+            format: PathRandomFormat::Hex,
+            length: 13,
+        };
     }
     assert_ne!(
         compile_native(&changed).unwrap().fingerprint,
@@ -183,12 +183,11 @@ fn grouped_clock_names_are_semantic_and_sequence_claims_keep_command_slots() {
             .as_deref(),
         Some("writer")
     );
-    if let NativeEffect::RedisSequence(effect) = &mut rule.effect {
-        if let SequenceArgument::Time(time) =
+    if let NativeEffect::RedisSequence(effect) = &mut rule.effect
+        && let SequenceArgument::Time(time) =
             &mut effect.commands[0].arguments.get_mut(&1).unwrap().contract
-        {
-            time.clock_group = Some("independent-read".into());
-        }
+    {
+        time.clock_group = Some("independent-read".into());
     }
     assert_ne!(compile_native(&rule).unwrap().fingerprint, baseline);
 }

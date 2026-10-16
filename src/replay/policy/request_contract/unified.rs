@@ -170,7 +170,6 @@ impl RequestContracts {
         target: &TargetKey,
         database: Option<&crate::policy::Database>,
         username: Option<&str>,
-        is_reference: bool,
     ) -> bool {
         let Some(compiled) = self.compiled.as_ref() else {
             return true;
@@ -183,11 +182,7 @@ impl RequestContracts {
         };
         let guard = super::super::native_projection::NativeScopeGuard::from_rule(&rule.rule);
         guard.matches_case(&anchor.method, &anchor.path, anchor.source_body.as_ref())
-            && if is_reference {
-                guard.matches_reference_resource(protocol, target, database, username)
-            } else {
-                guard.matches_capture_resource(protocol, target, database, username)
-            }
+            && guard.matches_capture_resource(protocol, target, database, username)
     }
 
     pub(in crate::replay) fn contract_clocks(
@@ -222,17 +217,7 @@ impl RequestContracts {
         actual: &[Vec<u8>],
     ) -> Option<Result<Decision>> {
         self.preview_unified_redis(context, source, actual)
-            .or_else(|| {
-                self.preview_redis_legacy(
-                    context.case,
-                    context.target,
-                    context.database,
-                    context.username,
-                    context.command,
-                    source,
-                    actual,
-                )
-            })
+            .or_else(|| self.preview_redis_legacy(context, source, actual))
     }
 
     pub(super) fn preview_unified_redis(
@@ -491,7 +476,7 @@ impl RequestContracts {
         };
         let metadata = WitnessMetadata {
             surface: Surface::DependencyRequest,
-            source_role: SourceRole::RecordedDependencyRequest,
+            source_role: SourceRole::DependencyRequest,
             target_role: if target.is_some() {
                 TargetRole::IndependentTargetObservation
             } else {
@@ -551,7 +536,7 @@ impl RequestContracts {
         };
         let metadata = WitnessMetadata {
             surface: Surface::DependencyResponse,
-            source_role: SourceRole::RecordedDependencyResponse,
+            source_role: SourceRole::DependencyResponse,
             target_role: TargetRole::Unavailable,
             source: SourceIdentity {
                 exchange_id: None,

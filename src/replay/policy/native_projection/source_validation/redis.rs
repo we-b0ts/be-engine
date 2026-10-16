@@ -83,8 +83,7 @@ pub(super) fn validate(
     if let Some(normalized) = runtime.dynamic_values.redis_with_identity(
         Some(case.id),
         &target,
-        database,
-        username,
+        super::super::super::dynamic_values::RedisIdentity { database, username },
         command,
         &args,
         &args,

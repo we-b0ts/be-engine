@@ -159,9 +159,9 @@ impl RequestContracts {
         WitnessMetadata {
             surface,
             source_role: if surface == Surface::DependencyRequest {
-                SourceRole::RecordedDependencyRequest
+                SourceRole::DependencyRequest
             } else {
-                SourceRole::RecordedDependencyResponse
+                SourceRole::DependencyResponse
             },
             target_role: role,
             source: SourceIdentity {

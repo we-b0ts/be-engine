@@ -44,7 +44,7 @@ pub enum ResponseSigningKey {
     },
     /// Recorded public keys are assertion oracles and cannot sign inbound requests.
     RecordedPublicKey {
-        resource: Resource,
+        resource: Box<Resource>,
         sql: String,
         params: Vec<Literal>,
         column: String,

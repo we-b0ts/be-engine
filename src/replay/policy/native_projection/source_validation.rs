@@ -56,18 +56,18 @@ pub(crate) fn validate_native_source_dependencies(
     for case in cases {
         input::validate(compiled, target_root, case, &mut checked)?;
         for event in ordered(case.events)? {
-            if event["session_setup"] != true {
-                if let (Some(connection), Some(sequence)) = (
+            if event["session_setup"] != true
+                && let (Some(connection), Some(sequence)) = (
                     event["connection_id"].as_str(),
                     event["sequence"]
                         .as_u64()
                         .or_else(|| event["query_sequence"].as_u64()),
-                ) {
-                    ensure!(
-                        identities.insert((connection.to_owned(), sequence)),
-                        "duplicate complete Source exchange identity"
-                    );
-                }
+                )
+            {
+                ensure!(
+                    identities.insert((connection.to_owned(), sequence)),
+                    "duplicate complete Source exchange identity"
+                );
             }
             match event["event_type"].as_str() {
                 Some("redis_exchange") => redis::validate(
@@ -164,13 +164,12 @@ fn ordered(events: &[Value]) -> Result<Vec<&Value>> {
             event["sequence"]
                 .as_u64()
                 .or_else(|| event["query_sequence"].as_u64()),
-        ) {
-            if let Some(previous) = lanes.insert(connection, sequence) {
-                ensure!(
-                    previous < sequence,
-                    "Source clocks reverse or repeat a connection lane"
-                );
-            }
+        ) && let Some(previous) = lanes.insert(connection, sequence)
+        {
+            ensure!(
+                previous < sequence,
+                "Source clocks reverse or repeat a connection lane"
+            );
         }
     }
     Ok(events.into_iter().map(|(_, _, event)| event).collect())

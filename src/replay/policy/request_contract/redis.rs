@@ -20,19 +20,27 @@ impl RequestContracts {
         ) {
             return Some(result);
         }
-        self.preview_redis_legacy(case, target, database, None, command, source, actual)
+        self.preview_redis_legacy(
+            &RedisRequestContext::without_exchange(case, target, database, command),
+            source,
+            actual,
+        )
     }
 
     pub(super) fn preview_redis_legacy(
         &self,
-        case: &str,
-        target: &TargetKey,
-        database: i64,
-        username: Option<&str>,
-        command: &str,
+        context: &RedisRequestContext<'_>,
         source: &[Vec<u8>],
         actual: &[Vec<u8>],
     ) -> Option<Result<Decision>> {
+        let RedisRequestContext {
+            case,
+            target,
+            database,
+            username,
+            command,
+            ..
+        } = *context;
         let rules: Vec<_> = self
             .selected(case, target, DependencyProtocol::Redis)
             .into_iter()
@@ -49,7 +57,6 @@ impl RequestContracts {
                     target,
                     Some(&crate::policy::Database::Index(database)),
                     username,
-                    false,
                 ) && selector.database == database
                     && selector.commands.iter().any(|entry| {
                         entry.command == command

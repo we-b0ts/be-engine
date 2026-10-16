@@ -664,6 +664,15 @@ impl SnapshotHash {
     }
 }
 
+/// Exact files read by the frozen Source environment projection.
+pub(crate) fn target_environment_witness_paths(target_root: &Path) -> Result<Vec<PathBuf>> {
+    let snapshot = load(target_root)?;
+    Ok(vec![
+        snapshot.root.join("manifest.json"),
+        snapshot.root.join("runtime.json"),
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -787,13 +796,4 @@ mod tests {
         assert_eq!(listed.variables, ["DATABASE_URL", "PORT"]);
         assert_eq!(listed.overrides, ["PORT"]);
     }
-}
-
-/// Exact files read by the frozen Source environment projection.
-pub(crate) fn target_environment_witness_paths(target_root: &Path) -> Result<Vec<PathBuf>> {
-    let snapshot = load(target_root)?;
-    Ok(vec![
-        snapshot.root.join("manifest.json"),
-        snapshot.root.join("runtime.json"),
-    ])
 }

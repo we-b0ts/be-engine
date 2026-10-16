@@ -719,15 +719,15 @@ async fn deliver_redis_exchange(
     }
     let state_ref = state;
     let mut state = state_ref.lock().await;
-    if let Some(delivery) = &matched.unified_delivery {
-        if let Err(error) = state.redis.request_contracts.commit_redis_delivery(
+    if let Some(delivery) = &matched.unified_delivery
+        && let Err(error) = state.redis.request_contracts.commit_redis_delivery(
             delivery,
             response,
             unified_rendered_at,
-        ) {
-            state.redis.fail_exchange(matched, error.to_string());
-            return Err(error);
-        }
+        )
+    {
+        state.redis.fail_exchange(matched, error.to_string());
+        return Err(error);
     }
     if let (Some(shift), Some((_, offset_milliseconds))) = (&matched.response_time_shift, rendered)
     {

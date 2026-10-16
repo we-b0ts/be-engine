@@ -177,18 +177,17 @@ fn key(value: &KeySelector) -> NativeKeySelector {
 }
 
 fn scopes_overlap(left: &NativeMatch, right: &NativeMatch) -> Result<bool> {
-    if let (Some(left), Some(right)) = (&left.resource, &right.resource) {
-        if left.protocol != right.protocol
+    if let (Some(left), Some(right)) = (&left.resource, &right.resource)
+        && (left.protocol != right.protocol
             || !left
                 .endpoint
                 .host
                 .eq_ignore_ascii_case(&right.endpoint.host)
             || left.endpoint.port != right.endpoint.port
             || disjoint(left.database.as_ref(), right.database.as_ref())
-            || disjoint(left.username.as_ref(), right.username.as_ref())
-        {
-            return Ok(false);
-        }
+            || disjoint(left.username.as_ref(), right.username.as_ref()))
+    {
+        return Ok(false);
     }
     if disjoint(left.operation.as_ref(), right.operation.as_ref())
         || !paths_overlap(left.api.as_deref(), right.api.as_deref(), true)

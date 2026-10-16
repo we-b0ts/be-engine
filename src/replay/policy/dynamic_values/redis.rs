@@ -7,6 +7,12 @@ pub(in crate::replay) struct ArgumentNormalization {
     pub decision: DynamicDecision,
 }
 
+#[derive(Clone, Copy)]
+pub(in crate::replay) struct RedisIdentity<'a> {
+    pub database: i64,
+    pub username: Option<&'a str>,
+}
+
 impl DynamicDecision {
     pub(in crate::replay::policy) fn differs(&self, rule: &str) -> bool {
         self.pairs
@@ -54,20 +60,30 @@ impl DynamicValues {
         source: &[Vec<u8>],
         actual: &[Vec<u8>],
     ) -> Option<Result<ArgumentNormalization>> {
-        self.redis_with_identity(case, target, database, None, command, source, actual)
+        self.redis_with_identity(
+            case,
+            target,
+            RedisIdentity {
+                database,
+                username: None,
+            },
+            command,
+            source,
+            actual,
+        )
     }
 
     pub(in crate::replay) fn redis_with_identity(
         &self,
         case: Option<&str>,
         target: &TargetKey,
-        database: i64,
-        username: Option<&str>,
+        identity: RedisIdentity<'_>,
         command: &str,
         source: &[Vec<u8>],
         actual: &[Vec<u8>],
     ) -> Option<Result<ArgumentNormalization>> {
         let case = case?;
+        let RedisIdentity { database, username } = identity;
         let database_identity = crate::policy::Database::Index(database);
         let scope = super::scopes::ResourceContext {
             protocol: crate::policy::Protocol::Redis,

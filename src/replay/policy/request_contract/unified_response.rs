@@ -86,7 +86,7 @@ impl RequestContracts {
                 use crate::policy_evidence::*;
                 WitnessMetadata {
                     surface: Surface::DependencyResponse,
-                    source_role: SourceRole::RecordedDependencyResponse,
+                    source_role: SourceRole::DependencyResponse,
                     target_role: TargetRole::DerivedDelivery,
                     source: SourceIdentity {
                         case_id: case.into(),

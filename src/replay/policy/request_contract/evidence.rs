@@ -416,8 +416,10 @@ pub(in crate::replay::policy) fn verify_capture(
                             host: candidate.host.clone(),
                             port: candidate.port,
                         },
-                        candidate.database,
-                        event["username"].as_str(),
+                        super::super::dynamic_values::RedisIdentity {
+                            database: candidate.database,
+                            username: event["username"].as_str(),
+                        },
                         &candidate.command,
                         &source,
                         &actual,

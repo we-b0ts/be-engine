@@ -408,17 +408,15 @@ fn hash_read_plans_merge_keys_and_patterns_into_compatible_existing_rules() {
     }
     let mut original = crate::policy::parse_policy(&rules.render().unwrap()).unwrap();
     for entry in &mut original.rules {
-        if let crate::policy::PolicyRule::Native(rule) = entry {
-            if let crate::policy::NativeEffect::ProcessOwned(effect) = &rule.effect {
-                if let crate::policy::native::ProcessSelector::Redis { operation, .. } =
-                    &effect.selector
-                {
-                    rule.proof = crate::policy::Proof {
-                        source: "TrafficServiceImpl.loadAllCacheData".into(),
-                        fact: format!("loadAllCacheData {operation} warm-up"),
-                    };
-                }
-            }
+        if let crate::policy::PolicyRule::Native(rule) = entry
+            && let crate::policy::NativeEffect::ProcessOwned(effect) = &rule.effect
+            && let crate::policy::native::ProcessSelector::Redis { operation, .. } =
+                &effect.selector
+        {
+            rule.proof = crate::policy::Proof {
+                source: "TrafficServiceImpl.loadAllCacheData".into(),
+                fact: format!("loadAllCacheData {operation} warm-up"),
+            };
         }
     }
     fs::write(&config, serde_yaml::to_string(&original).unwrap()).unwrap();

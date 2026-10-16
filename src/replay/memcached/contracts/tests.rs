@@ -606,14 +606,15 @@ rules:
         let mut frame = format!("VALUE session 17 {} 12345\r\n", source.len()).into_bytes();
         frame.extend(&source);
         frame.extend(b"\r\nEND\r\n");
-        let slots = crate::memcached::value_slot::extract(&[frame.clone()], "text").unwrap();
+        let slots =
+            crate::memcached::value_slot::extract(std::slice::from_ref(&frame), "text").unwrap();
         let patched = crate::memcached::value_slot::replace(&frame, &slots[0], &payload).unwrap();
         assert!(
             patched.starts_with(format!("VALUE session 17 {} 12345\r\n", payload.len()).as_bytes())
         );
         assert!(patched.ends_with(b"\r\nEND\r\n"));
         let actual_slots =
-            crate::memcached::value_slot::extract(&[patched.clone()], "text").unwrap();
+            crate::memcached::value_slot::extract(std::slice::from_ref(&patched), "text").unwrap();
         assert_eq!(&patched[actual_slots[0].payload.clone()], payload);
     }
 }

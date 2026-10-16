@@ -266,7 +266,7 @@ where
     C::BlockSize: aes_gcm::aes::cipher::typenum::Unsigned,
 {
     let cipher = C::new_from_slice(key).map_err(|_| GeneratedError::InvalidKeyLength)?;
-    for (index, chunk) in plaintext.chunks_exact_mut(16).enumerate() {
+    for (index, chunk) in plaintext.as_chunks_mut::<16>().0.iter_mut().enumerate() {
         let block = Block::<C>::from_mut_slice(chunk);
         cipher.decrypt_block(block);
         for (byte, previous) in chunk.iter_mut().zip(&envelope[index * 16..index * 16 + 16]) {

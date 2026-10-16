@@ -13,7 +13,7 @@ fn setup() -> (tempfile::TempDir, PathBuf, WitnessStore, WitnessMetadata) {
     let store = WitnessStore::new(&artifacts).unwrap();
     let metadata = WitnessMetadata {
         surface: Surface::DependencyRequest,
-        source_role: SourceRole::RecordedDependencyRequest,
+        source_role: SourceRole::DependencyRequest,
         target_role: TargetRole::IndependentTargetObservation,
         source: SourceIdentity {
             exchange_id: None,
@@ -130,7 +130,7 @@ fn publication_carries_private_artifact_without_changing_relative_identity() {
 fn derived_dependency_delivery_is_not_an_independent_target_observation() {
     let (_temp, artifacts, store, mut metadata) = setup();
     metadata.surface = Surface::DependencyResponse;
-    metadata.source_role = SourceRole::RecordedDependencyResponse;
+    metadata.source_role = SourceRole::DependencyResponse;
     assert!(
         store
             .record(metadata.clone(), &artifacts, b"source", Some(b"derived"))

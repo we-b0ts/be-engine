@@ -199,17 +199,17 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
                 "field condition constants must have the same scalar type"
             );
         }
-        if let Some(time) = contract.unconditional().time() {
-            if let Some(group) = &time.clock_group {
-                ensure!(
-                    !group.is_empty()
-                        && group.len() <= 64
-                        && group
-                            .bytes()
-                            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte)),
-                    "clock_group requires a bounded Source-proven identifier"
-                );
-            }
+        if let Some(time) = contract.unconditional().time()
+            && let Some(group) = &time.clock_group
+        {
+            ensure!(
+                !group.is_empty()
+                    && group.len() <= 64
+                    && group
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte)),
+                "clock_group requires a bounded Source-proven identifier"
+            );
         }
         validate_pointer(path, true)?;
         validate_contract_binding(&rule.codec, path, contract)?;
@@ -680,18 +680,17 @@ fn selectors_overlap(left: &MatchSpec, right: &MatchSpec) -> bool {
     {
         return false;
     }
-    if let (Some(left), Some(right)) = (&left.resource, &right.resource) {
-        if left.protocol != right.protocol
+    if let (Some(left), Some(right)) = (&left.resource, &right.resource)
+        && (left.protocol != right.protocol
             || left.endpoint.port != right.endpoint.port
             || !left
                 .endpoint
                 .host
                 .eq_ignore_ascii_case(&right.endpoint.host)
             || optional_disjoint(&left.database, &right.database)
-            || optional_disjoint(&left.username, &right.username)
-        {
-            return false;
-        }
+            || optional_disjoint(&left.username, &right.username))
+    {
+        return false;
     }
     if !key_scopes_overlap(left.key.as_ref(), right.key.as_ref())
         || !key_scopes_overlap(left.hash_field.as_ref(), right.hash_field.as_ref())

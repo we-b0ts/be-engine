@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::*;
 use crate::policy::native::{Proven, TemplateToken};
 
-fn parts(template: &str) -> Result<(Vec<(&str, &str)>, &str), GeneratedError> {
+type TemplateParts<'a> = (Vec<(&'a str, &'a str)>, &'a str);
+
+fn parts(template: &str) -> Result<TemplateParts<'_>, GeneratedError> {
     if template.is_empty() || template.len() > 4096 {
         return Err(GeneratedError::InvalidShape);
     }

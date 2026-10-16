@@ -45,8 +45,7 @@ impl ReplayState {
                 if exchange.record.method.eq_ignore_ascii_case(method.as_str())
                     && uri_path_only(&exchange.record.uri) == uri.path()
                     && let Some(policy) = &self.replay_policy
-                {
-                    if let Err(error) = contracts::record_request(
+                    && let Err(error) = contracts::record_request(
                         policy,
                         exchange,
                         &contracts::RequestView {
@@ -56,12 +55,12 @@ impl ReplayState {
                             body,
                             started_at: request_started_at,
                         },
-                    ) {
-                        closest_mismatch.get_or_insert_with(|| {
-                            format!("HTTP request witness unavailable: {error:#}")
-                        });
-                        continue;
-                    }
+                    )
+                {
+                    closest_mismatch.get_or_insert_with(|| {
+                        format!("HTTP request witness unavailable: {error:#}")
+                    });
+                    continue;
                 }
                 if let Some(origin) = &exchange.shared_origin
                     && &origin.request_fingerprint
