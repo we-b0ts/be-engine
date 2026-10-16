@@ -142,13 +142,7 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
                 }
             };
             add(S::DependencyRequest, slot, location, false);
-            if let IdentityCapture::RedisArgument {
-                index,
-                copies,
-                derived_from,
-                ..
-            } = &effect.capture
-            {
+            if let IdentityCapture::RedisArgument { index, copies, .. } = &effect.capture {
                 let slot = redis_argument(
                     rule.selector.operation.as_deref().unwrap_or_default(),
                     *index,
@@ -158,14 +152,6 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
                         S::DependencyRequest,
                         slot.clone(),
                         json(&copy.contract.pointer),
-                        false,
-                    );
-                }
-                if let Some(derived) = derived_from {
-                    add(
-                        S::DependencyRequest,
-                        slot,
-                        json(&derived.contract.pointer),
                         false,
                     );
                 }

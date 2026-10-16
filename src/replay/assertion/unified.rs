@@ -98,6 +98,10 @@ pub(super) fn contract_difference(
         .find(|kind| diff.reason.contains(&format!("{kind:?}")))
         .unwrap_or_else(|| match diff.reason.as_str() {
             "authenticated nonce bijection changed" => K::JwtNonceMismatch,
+            "field presence changed" => K::MissingActual,
+            "unexpected field" => K::MissingExpected,
+            "array cardinality changed" => K::ArrayLengthMismatch,
+            "generated contract rejected value: InvalidType" => K::GeneratedFieldNotScalar,
             "unordered requires two arrays" => K::UnorderedFieldNotArray,
             "unordered multiset changed" => K::UnorderedArrayContentMismatch,
             "joined collection requires two strings" => K::UnorderedJoinedStringFieldNotString,

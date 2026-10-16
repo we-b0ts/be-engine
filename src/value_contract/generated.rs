@@ -74,8 +74,8 @@ pub(crate) fn compare_value(
             fields,
         } => {
             let key = key.ok_or(GeneratedError::MissingKey)?;
-            let mut source = decrypt_json(source, key)?;
-            let mut target = decrypt_json(target, key)?;
+            let (mut source, source_iv) = decrypt_json(source, key)?;
+            let (mut target, target_iv) = decrypt_json(target, key)?;
             let mut owned = BTreeMap::new();
             for (pointer, field) in fields {
                 let contract = match &field.contract {
@@ -112,6 +112,11 @@ pub(crate) fn compare_value(
                 return Err(GeneratedError::ContractMismatch);
             }
             compared.evaluated.insert(rule_id.into());
+            compared
+                .nonce_relationships
+                .entry((rule_id.into(), "cbc_iv".into()))
+                .or_default()
+                .push((source_iv, target_iv));
             Ok(compared)
         }
     }
@@ -203,11 +208,17 @@ fn random_value(
     valid.then_some(()).ok_or(GeneratedError::InvalidShape)
 }
 
-fn decrypt_json(value: &str, key: &[u8]) -> Result<Value, GeneratedError> {
+fn decrypt_json(value: &str, key: &[u8]) -> Result<(Value, [u8; 32]), GeneratedError> {
+    use sha2::{Digest, Sha256};
     let mut plaintext = decrypt(value, key)?;
-    let result = crate::json_value::parse(&plaintext).ok_or(GeneratedError::InvalidJson);
+    let parsed = crate::json_value::parse(&plaintext).ok_or(GeneratedError::InvalidJson);
     plaintext.fill(0);
-    result
+    let envelope = STANDARD
+        .decode(value)
+        .map_err(|_| GeneratedError::InvalidCiphertext)?;
+    // The successfully decrypted envelope has a validated 16-byte IV. Retain
+    // only its digest for response-local bijection, never ciphertext or key.
+    Ok((parsed?, Sha256::digest(&envelope[..16]).into()))
 }
 
 /// CBC is an encryption envelope, not an authentication or signature claim.

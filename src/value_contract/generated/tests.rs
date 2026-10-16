@@ -278,3 +278,63 @@ fn generated_shape_contracts_reject_wrong_versions_encodings_and_lengths() {
         GeneratedError::InvalidShape
     );
 }
+
+#[test]
+fn encrypted_iv_identity_cannot_collapse_or_split_within_one_rule() {
+    let key = [8u8; 32];
+    let contract = encrypted(BTreeMap::new());
+    let value = |iv| json!(encode::<Aes256>(br#"{"stable":true}"#, &key, [iv; 16]));
+    let pair = |source, target| {
+        compare_value(
+            &value(source),
+            &value(target),
+            &contract,
+            Some(&key),
+            "cipher",
+            AnchorClocks::default(),
+        )
+        .unwrap()
+    };
+    let merge = |mut first: Comparison, next: Comparison| {
+        first.merge_and_validate(next);
+        first
+    };
+    let first = pair(1, 3);
+    assert!(merge(first.clone(), pair(2, 4)).passed());
+    assert!(!merge(first.clone(), pair(2, 3)).passed());
+    assert!(!merge(first.clone(), pair(1, 4)).passed());
+    assert!(merge(first, pair(1, 3)).passed());
+}
+
+#[test]
+fn encrypted_iv_bindings_survive_unordered_pairing_without_committing_failed_candidates() {
+    let key = [8u8; 32];
+    let contract = encrypted(BTreeMap::new());
+    let ciphertext = |iv| encode::<Aes256>(br#"{"stable":true}"#, &key, [iv; 16]);
+    let source =
+        json!({"items":[{"name":"A","cipher":ciphertext(1)}, {"name":"B","cipher":ciphertext(2)}]});
+    let target =
+        json!({"items":[{"name":"B","cipher":ciphertext(4)}, {"name":"A","cipher":ciphertext(3)}]});
+    let unordered = FieldContract::Unordered;
+    let fields = [json::Field {
+        rule_id: "order",
+        pointer: "/items",
+        contract: &unordered,
+    }];
+    let native = [json::NativeField {
+        rule_id: "cipher",
+        pointer: "/items/*/cipher",
+        contract: &contract,
+        key: Some(&key),
+    }];
+    let compare = |target| {
+        json::compare_with_native(&source, target, &fields, &native, AnchorClocks::default())
+    };
+    assert!(compare(&target).passed());
+    let mut collapsed = target.clone();
+    collapsed["items"][0]["cipher"] = collapsed["items"][1]["cipher"].clone();
+    assert!(!compare(&collapsed).passed());
+    let mut changed = target.clone();
+    changed["items"][0]["name"] = json!("C");
+    assert!(!compare(&changed).passed());
+}

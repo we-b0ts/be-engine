@@ -152,27 +152,23 @@ pub(crate) fn compare_with_verified(
     let result = comparator
         .node(source, target, "", "", &mut decisions, 0)
         .and_then(|()| {
-            if decisions.selected.len() != fields.len() {
-                let missing = fields
-                    .iter()
-                    .enumerate()
-                    .find(|(i, _)| !decisions.selected.contains(i))
-                    .unwrap()
-                    .1;
+            if let Some(missing) = fields.iter().enumerate().find(|(index, field)| {
+                !decisions.selected.contains(index) && pointer_observed(source, field.pointer)
+            }) {
                 return Err(difference(
-                    missing.pointer,
+                    missing.1.pointer,
                     "selected field was not observed",
                 ));
             }
-            if decisions.selected_native.len() != native.len() + verified.len() {
-                let missing = native
-                    .iter()
-                    .map(|field| field.pointer)
-                    .chain(verified.iter().map(|field| field.pointer))
-                    .enumerate()
-                    .find(|(index, _)| !decisions.selected_native.contains(index))
-                    .unwrap()
-                    .1;
+            if let Some((_, missing)) = native
+                .iter()
+                .map(|field| field.pointer)
+                .chain(verified.iter().map(|field| field.pointer))
+                .enumerate()
+                .find(|(index, pointer)| {
+                    !decisions.selected_native.contains(index) && pointer_observed(source, pointer)
+                })
+            {
                 return Err(difference(
                     missing,
                     "selected native field was not observed",
@@ -194,6 +190,23 @@ fn difference(pointer: &str, reason: &str) -> Difference {
         pointer: pointer.into(),
         reason: reason.into(),
     }
+}
+
+/// A Source shape with no selected leaf leaves the entire value exact.
+pub(crate) fn pointer_observed(root: &Value, pattern: &str) -> bool {
+    fn visit(root: &Value, segments: &[&str]) -> bool {
+        let Some((segment, rest)) = segments.split_first() else {
+            return true;
+        };
+        if *segment == "*" {
+            root.as_array()
+                .is_some_and(|values| values.iter().any(|value| visit(value, rest)))
+        } else {
+            root.pointer(&format!("/{segment}"))
+                .is_some_and(|value| visit(value, rest))
+        }
+    }
+    visit(root, &pattern.split('/').skip(1).collect::<Vec<_>>())
 }
 
 fn pointer_matches(pattern: &str, pointer: &str, root: &Value) -> bool {
@@ -417,8 +430,17 @@ impl Comparator<'_> {
         }
         match (source, target) {
             (Value::Object(source), Value::Object(target)) => {
-                if source.len() != target.len() {
-                    return Err(difference(pointer, "object cardinality changed"));
+                if let Some(key) = source.keys().find(|key| !target.contains_key(*key)) {
+                    return Err(difference(
+                        &format!("{pointer}/{}", escape(key)),
+                        "field presence changed",
+                    ));
+                }
+                if let Some(key) = target.keys().find(|key| !source.contains_key(*key)) {
+                    return Err(difference(
+                        &format!("{pointer}/{}", escape(key)),
+                        "unexpected field",
+                    ));
                 }
                 for (key, source) in source {
                     let child = format!("{pointer}/{}", escape(key));

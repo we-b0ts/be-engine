@@ -567,6 +567,7 @@ fn evaluate_response(
                 &mut report,
             )?;
         }
+        applicable_ids.retain(|id| report.applied_body_rule_ids.contains(id));
         report.finish(&[], &applicable_ids);
         return Ok(report);
     }

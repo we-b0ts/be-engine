@@ -319,8 +319,8 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
         NativeEffect::ResponseBody(effect) => {
             response_scope(rule)?;
             ensure!(
-                (1..=128).contains(&effect.fields.len()),
-                "structured response requires 1..128 fields"
+                effect.fields.len() <= 128,
+                "structured response accepts at most 128 fields"
             );
             for field in &effect.fields {
                 proven(field, |field| validate_body_field(effect.codec, field))?;
