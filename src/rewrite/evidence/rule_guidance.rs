@@ -99,7 +99,7 @@ pub(super) fn rule_hints(
     }) {
         hints.push(RewriteRuleHint {
             capability: "api_triggered_process_traffic".into(), rule: "mysql-api-triggered".into(),
-            hint: "A source-proven detached API task can produce unused MySQL SELECTs/UPDATEs inside another API case. Trace direct and indirect terminal-result collectors, not only polling/cancel endpoints. Use mysql --trigger-source JSON --identity-value-index N to bind a SELECT template '?' slot to one uniquely captured INSERT identity. request_body_json selects the trigger request BODY. Plan verifies identity and foreign-case evidence; source_evidence must prove caller ownership. Complete transaction boundaries require --include-transaction-boundaries and wire/status evidence; explicit read-only --transaction-member selectors cover only helpers inside that anchored transaction. Same-name ordinary SELECT rules with the exact selector may be narrowed; target failures and direct trigger/resource calls remain required. See docs/api-triggered-process-traffic.md.".into(),
+            hint: "Discovery only: unused MySQL calls are not evidence of process ownership. First trace request-owned calls, including ORM expiration/refresh after commit or rollback and later attribute access; see mysql_unused_diagnosis. A source-proven detached API task can produce unused MySQL SELECTs/UPDATEs inside another API case. Trace direct and indirect terminal-result collectors, not only polling/cancel endpoints. Use mysql --trigger-source JSON --identity-value-index N to bind a SELECT template '?' slot to one uniquely captured INSERT identity. request_body_json selects the trigger request BODY. Plan verifies identity and foreign-case evidence; source_evidence must prove caller ownership. Complete transaction boundaries require --include-transaction-boundaries and wire/status evidence; explicit read-only --transaction-member selectors cover only helpers inside that anchored transaction. Same-name ordinary SELECT rules with the exact selector may be narrowed; target failures and direct trigger/resource calls remain required. See docs/api-triggered-process-traffic.md.".into(),
             help: super::super::action::command(target_root, vec!["dependency-rule".into(),"plan".into(),"mysql".into(),"--help".into()], Vec::new()),
         });
     }
@@ -516,9 +516,9 @@ pub(super) fn applicable_rule_planners(
             RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
         )
         && facts["clusters"].as_array().is_some_and(|clusters| {
-            clusters
-                .iter()
-                .any(|cluster| cluster["protocol"] == "mysql")
+            clusters.iter().any(|cluster| {
+                cluster["protocol"] == "mysql" && cluster["reason"] == "unmatched_target"
+            })
         })
     {
         planners.push(RewriteApplicableRulePlanner {
@@ -603,7 +603,7 @@ mod tests {
                 Path::new("/target"),
                 kind,
                 QUERY_DIRTY_CLUSTERS,
-                &serde_json::json!({"clusters":[{"protocol":"mysql"}]}),
+                &serde_json::json!({"clusters":[{"protocol":"mysql", "reason":"unmatched_target"}]}),
                 "current",
             );
             let time = planners

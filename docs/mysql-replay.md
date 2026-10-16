@@ -89,7 +89,26 @@ with known exclusions, not a proof of arbitrary stored-function/UDF behavior.
 
 SQL query matching remains independent and strict. Business reads are still
 required dependencies; this classification only governs optional session
-setup/cleanup. Writes, explicit BEGIN, locks, savepoints and excluded calls
+setup/cleanup. This includes ORM refreshes after a commit or rollback expires
+an object: later attribute access can issue a primary-key SELECT without an
+explicit `get()` call. Equal rows from an earlier authentication read do not
+make that later read optional. Column aliases or LIMIT shape do not identify
+the source caller; supported alias/projection adaptation does not remove the
+finite-consumption requirement.
+
+Dirty-cluster evidence labels `unused_recorded` as an unconsumed recorded call,
+with source ownership unresolved. Its `mysql_unused_diagnosis` directs the
+source trace through request dependencies, helper commits, expiration and
+refresh. MySQL dependency details expose captured `server_status_before` and
+`server_status_after` alongside connection/query locators; bit `0x0001` is
+IN_TRANS, zero is known and an absent field is unknown. Representative details
+remain bounded and may omit other calls. These facts do not identify a source
+caller or authorize omission. Rule hints and planner help are discovery;
+empty candidates do not prove an engine gap. A MySQL time planner is offered
+for `unmatched_target`, not an unused-only cluster: a time rule cannot consume
+an omitted call. Request-owned reads require normal target implementation.
+
+Writes, explicit BEGIN, locks, savepoints and excluded calls
 interrupt the read span. Unknown transaction starts, sequence gaps, errors or
 truncated evidence prevent a read-only proof. Replay retains compact tails of
 complete read spans from `global-dependencies.jsonl` once at load time. Only a

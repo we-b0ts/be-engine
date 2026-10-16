@@ -591,7 +591,7 @@ fn motan_dirty_cluster_guidance_rules_out_business_argument_mismatch() {
 }
 
 #[test]
-fn dirty_cluster_evidence_returns_only_protocol_specific_rule_planners() {
+fn dirty_cluster_evidence_preserves_protocol_specific_ownership_help() {
     let target = tempfile::tempdir().unwrap();
     let planners = applicable_rule_planners(
         target.path(),
@@ -603,16 +603,14 @@ fn dirty_cluster_evidence_returns_only_protocol_specific_rule_planners() {
                 {"protocol": "http"},
                 {"protocol": "memcached"},
                 {"protocol": "redis", "operations": {"SCARD": 29, "HGETALL": 1}},
-                {"protocol": "mysql"}
+                {"protocol": "mysql", "reason": "unused_recorded"}
             ]
         }),
         "evidence-current",
     );
 
-    assert_eq!(planners.len(), 5);
-    assert_eq!(planners[0].capability, "mysql_sql_time");
-    assert_eq!(planners[0].kind, "dependency_value");
-    let planners = &planners[1..];
+    assert_eq!(planners.len(), 4);
+    assert!(planners.iter().all(|p| p.kind == "dependency_ownership"));
     assert_eq!(planners[0].capability, "http");
     assert_eq!(planners[1].capability, "memcached");
     assert_eq!(planners[2].capability, "mysql");

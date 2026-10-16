@@ -27,7 +27,9 @@ fn returned_detail_command_exposes_mysql_rule_inputs_without_reading_raw_capture
             .join(", ")
     );
     assert!(sql.len() > MAX_PREVIEW_BYTES);
-    let query_event = event(&sql);
+    let mut query_event = event(&sql);
+    query_event["server_status_before"] = json!(0);
+    query_event["response"]["server_status"] = json!(1);
     let mut other = event("SELECT unrelated FROM other WHERE id=1");
     other["target_host"] = json!("other.internal");
     let raw = format!("{query_event}\n{other}\n");
@@ -73,6 +75,8 @@ fn returned_detail_command_exposes_mysql_rule_inputs_without_reading_raw_capture
     assert_eq!(exchange["column_names"][0]["data"], "id");
     assert_eq!(exchange["connection_id"], "connection-1");
     assert_eq!(exchange["query_sequence"], 7);
+    assert_eq!(exchange["server_status_before"], 0);
+    assert_eq!(exchange["server_status_after"], 1);
     assert_eq!(exchange["case_dependency_matched_by"], "active_window");
     assert!(!detail.to_string().contains("row-payload-not-projected"));
     assert!(!detail.to_string().contains("unrelated"));
@@ -191,4 +195,28 @@ fn errors_and_missing_metadata_are_preserved_without_inventing_success() {
     );
     assert_eq!(sample.row_count, None);
     assert_eq!(sample.rows_truncated, None);
+    let encoded = serde_json::to_value(sample).unwrap();
+    assert!(encoded.get("server_status_before").is_none());
+    assert!(encoded.get("server_status_after").is_none());
+}
+
+#[test]
+fn transaction_status_distinguishes_representatives_without_treating_zero_as_missing() {
+    let mut builder = OperationBuilder::default();
+    for (sequence, before, after) in [(1, 0, 1), (2, 1, 1), (3, 0, 1)] {
+        let mut e = event("SELECT id FROM users WHERE id=7");
+        e["query_sequence"] = json!(sequence);
+        e["server_status_before"] = json!(before);
+        e["response"]["server_status"] = json!(after);
+        builder.record(&e).unwrap();
+    }
+    let details = finish(BTreeMap::from([("COM_QUERY".into(), builder)]));
+    let op = &details[0];
+    assert_eq!(op.count, 3);
+    assert_eq!(op.representative_exchanges.len(), 2);
+    assert_eq!(op.omitted_representative_exchanges, 1);
+    assert_eq!(op.representative_exchanges[0].server_status_before, Some(0));
+    assert_eq!(op.representative_exchanges[0].server_status_after, Some(1));
+    assert_eq!(op.representative_exchanges[1].server_status_before, Some(1));
+    assert_eq!(op.representative_exchanges[1].query_sequence, Some(2));
 }

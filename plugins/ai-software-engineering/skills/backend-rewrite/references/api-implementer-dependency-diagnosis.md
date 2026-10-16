@@ -91,6 +91,18 @@ immutable cases rerun; an engine revision change alone is not functional accepta
 
 ### Read-Only Session Cleanup
 
+For MySQL `unused_recorded`, read `mysql_unused_diagnosis` before proposing a
+rule or engine gap. Trace the complete request, including authentication and
+helper calls. A commit or rollback can expire an ORM object; later attribute
+access, explicit refresh or lazy loading may issue a required SELECT without
+an explicit `get()` call. SQL aliases and LIMIT shape do not identify the
+caller. Use connection/query locators and captured before/after server-status
+flags in dependency details as bounded transaction facts, not ownership proof.
+Equal rows, passing responses, empty candidates or empty planners do not make
+a business read optional or establish an engine capability gap. Proven
+request-owned reads require normal target implementation; retain unresolved
+ownership when source proof is missing.
+
 Keep ordinary read requests on the shared pool. Source ORMs may close an
 implicit read-only session with ROLLBACK. The engine allows this cleanup to be
 omitted when semantic recording proves a transaction-free start, consecutive
