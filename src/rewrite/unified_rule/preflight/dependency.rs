@@ -214,11 +214,6 @@ pub(super) fn compare_source(
             report.passed(),
             "Source SQL value contract preflight failed"
         );
-        for rule in rules {
-            if !crate::replay::mysql_witness_values(raw, surface, rule)?.is_empty() {
-                checked.insert(rule.rule.id.clone());
-            }
-        }
         checked.extend(report.evaluated);
         return Ok(checked);
     }
@@ -229,8 +224,7 @@ pub(super) fn compare_source(
         if selected.is_empty() {
             continue;
         }
-        compare(&value, &value, &selected, clocks)?;
-        checked.extend(selected.iter().map(|rule| rule.rule.id.clone()));
+        checked.extend(compare(&value, &value, &selected, clocks)?);
     }
     Ok(checked)
 }
@@ -304,10 +298,10 @@ pub(super) fn compare_pair(
                 &delivered == target,
                 "derived delivery changed bytes outside the same rule's explicit delivery effects"
             );
-        } else {
-            compare(source, target, &selected, clocks)?;
+            count += 1;
+        } else if !compare(source, target, &selected, clocks)?.is_empty() {
+            count += 1;
         }
-        count += 1;
     }
     Ok(count)
 }
@@ -361,14 +355,14 @@ fn compare(
     target: &[u8],
     rules: &[&CompiledRule],
     clocks: AnchorClocks,
-) -> Result<()> {
+) -> Result<BTreeSet<String>> {
     let report = encoded::compare(source, target, rules, clocks)?;
     ensure!(
         report.passed(),
         "unified contract preflight failed: {}",
         serde_json::to_string(&report.differences)?
     );
-    Ok(())
+    Ok(report.evaluated)
 }
 
 fn database_matches(database: &Database, observed: &Value) -> bool {

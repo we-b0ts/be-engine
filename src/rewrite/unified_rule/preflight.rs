@@ -321,7 +321,7 @@ pub(super) fn verify(
                         result.stateful_target_obligations.extend(stateful);
                         continue;
                     }
-                    dependency::compare_pair(
+                    let evaluated = dependency::compare_pair(
                         surface,
                         &event,
                         &raw,
@@ -330,6 +330,9 @@ pub(super) fn verify(
                         &native_sql,
                         clocks,
                     )?;
+                    if evaluated == 0 {
+                        continue;
+                    }
                     // One physical observation may be recorded once per SQL slot.
                     // Validate every protected envelope, then count the observation once.
                     if !observations.insert((

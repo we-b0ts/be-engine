@@ -355,6 +355,69 @@ fn dependency_only_rules_cannot_replace_the_finished_primary_response_oracle() {
 }
 
 #[test]
+fn missing_json_and_presence_sensitive_protobuf_fields_cannot_authorize_a_rule() {
+    for protobuf in [false, true] {
+        let fixture = Fixture::new();
+        let mut rule = dependency_rule("redis", "cache.test:6379", "SET");
+        rule["match"]["key"] = json!({"exact":"session"});
+        rule["contract"] = json!({"/absent":{"kind":"unordered"}});
+        if protobuf {
+            rule["codec"] = json!({"kind":"protobuf","fields":{
+                "/absent":{"field_path":[9],"field_type":"int64"}
+            }});
+            rule["contract"] = json!({"/absent":{"kind":"time","format":"unix_microseconds",
+                "relation":"preserve_offset","anchor":"dependency.request_start"}});
+        }
+        write(&fixture.proposal, rule);
+        let source: &[u8] = if protobuf {
+            b"\x0a\x01a"
+        } else {
+            br#"{"members":[1,2]}"#
+        };
+        let event = json!({"event_type":"redis_exchange","connection_id":uuid::Uuid::nil(),"sequence":1,
+            "timestamp":"2026-10-16T00:00:00Z","duration_ms":0,"target_host":"cache.test","target_port":6379,
+            "command":"SET","args":[raw_body(b"session"),raw_body(source)],"response":raw_body(b"+OK\r\n")});
+        install(&fixture, event, |raw| raw);
+        fixture.confirm();
+        let error = fixture.plan().err().unwrap();
+        assert!(format!("{error:#}").contains("selects no complete Source witness"));
+        assert!(fixture.state().rule_plan.is_none());
+    }
+}
+
+#[test]
+fn empty_protobuf_repeated_fields_are_complete_source_values_and_cannot_gain_members() {
+    for add_member in [false, true] {
+        let fixture = Fixture::new();
+        let mut rule = dependency_rule("redis", "cache.test:6379", "SET");
+        rule["match"]["key"] = json!({"exact":"session"});
+        rule["codec"] = json!({"kind":"protobuf","fields":{
+            "/members":{"field_path":[9],"field_type":"string","repeated":true}
+        }});
+        write(&fixture.proposal, rule);
+        let event = json!({"event_type":"redis_exchange","connection_id":uuid::Uuid::nil(),"sequence":1,
+            "timestamp":"2026-10-16T00:00:00Z","duration_ms":0,"target_host":"cache.test","target_port":6379,
+            "command":"SET","args":[raw_body(b"session"),raw_body(b"\x0a\x01a")],"response":raw_body(b"+OK\r\n")});
+        install(&fixture, event, |raw| {
+            let mut args: Vec<Vec<u8>> = serde_json::from_slice(&raw).unwrap();
+            if add_member {
+                args[1].extend_from_slice(b"\x4a\x01b");
+            }
+            serde_json::to_vec(&args).unwrap()
+        });
+        fixture.confirm();
+        let result = fixture.plan();
+        if add_member {
+            assert!(result.is_err());
+        } else {
+            let report = result.unwrap().traffic_e2e_report;
+            assert_eq!(report["preflight"]["source_validations"], 1);
+            assert_eq!(report["preflight"]["independent_target_validations"], 1);
+        }
+    }
+}
+
+#[test]
 fn response_compare_contract_does_not_implicitly_authorize_delivery_rewrites() {
     for unauthorized in [false, true] {
         let fixture = Fixture::new();
