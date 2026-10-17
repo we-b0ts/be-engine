@@ -211,8 +211,8 @@ fn initial_failure_without_rules_retains_source_and_independent_target_payloads(
     );
     let manifest = store.sealed_manifest().unwrap();
     assert!(manifest.complete);
-    let independent = manifest
-        .witnesses
+    let witnesses = manifest.witnesses().unwrap();
+    let independent = witnesses
         .iter()
         .find(|witness| witness.metadata.target_role == TargetRole::IndependentTargetObservation)
         .unwrap();
@@ -676,4 +676,74 @@ fn comparison_fields_absent_from_a_complete_payload_remain_inactive_and_strict()
     )
     .unwrap();
     assert!(!added.passed());
+}
+
+#[test]
+fn payload_evidence_budget_keeps_native_memcached_matching_and_marks_coverage_incomplete() {
+    let (temp, mut runtime) = source_fixture_with(true, "");
+    let artifacts = temp.path().join(".traffic-e2e/local/runtime/attempt");
+    let store = crate::policy_evidence::WitnessStore::new(&artifacts).unwrap();
+    runtime
+        .request_contracts
+        .configure_witnesses(store.clone(), false)
+        .unwrap();
+    let value = vec![b'x'; 1024 * 1024 + 32];
+    let capture = |value: &[u8]| json!({"encoding":"base64","data":STANDARD.encode(value)});
+    let mut event = source_event(Some(b"STORED\r\n"));
+    event["command"] = "set".into();
+    event["args"] = json!([
+        capture(b"0"),
+        capture(b"0"),
+        capture(value.len().to_string().as_bytes())
+    ]);
+    event["value"] = capture(&value);
+    let record: RecordedExchange = serde_json::from_value(event).unwrap();
+    let mut state = super::super::MemcachedReplayState::default();
+    state
+        .register_exchange(
+            record,
+            ReplaySource::Case,
+            Some("case"),
+            &mut BTreeMap::new(),
+        )
+        .unwrap();
+    let request = MemcachedRequest {
+        raw: bytes::Bytes::new(),
+        command: "set".into(),
+        opcode: None,
+        opaque: None,
+        key: Some(b"session".to_vec()),
+        args: vec![
+            b"0".to_vec(),
+            b"0".to_vec(),
+            value.len().to_string().into_bytes(),
+        ],
+        value: Some(value),
+        extras: None,
+        cas: None,
+        quiet: false,
+        noreply: false,
+    };
+    assert!(
+        state
+            .match_memcached(super::super::MemcachedMatchContext {
+                active_case_id: Some("case"),
+                target: &TargetKey {
+                    host: "cache.test".into(),
+                    port: 11211
+                },
+                wire_protocol: MemcachedWireProtocol::Text,
+                request: &request,
+                policy: Some(&runtime),
+                observed_at: DateTime::from_timestamp(2000, 0).unwrap(),
+            })
+            .is_ok()
+    );
+    let manifest = store.sealed_manifest().unwrap();
+    assert_eq!(
+        (manifest.observed, manifest.recorded, manifest.omitted),
+        (1, 0, 1)
+    );
+    assert!(!manifest.complete);
+    assert!(crate::policy_evidence::verify(&artifacts.join("replay.json"), &manifest).is_err());
 }

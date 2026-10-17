@@ -9,6 +9,9 @@ pub(crate) use witness::{
 };
 
 pub(super) struct RequestView<'a> {
+    pub(super) observation_id: Option<uuid::Uuid>,
+    pub(super) scheme: HttpReplayScheme,
+    pub(super) target: &'a TargetKey,
     pub(super) method: &'a Method,
     pub(super) uri: &'a Uri,
     pub(super) headers: &'a HeaderSnapshot,
@@ -30,13 +33,9 @@ pub(super) fn record_request(
     let Some(case) = exchange.case_id.as_deref() else {
         return Ok(());
     };
-    let source = witness::from_record(&exchange.record, Surface::DependencyRequest)?;
-    let mut target = source.clone();
-    target["method"] = actual.method.as_str().to_ascii_uppercase().into();
-    target["uri"] = actual.uri.to_string().into();
-    target["request_headers"] = serde_json::to_value(actual.headers)?;
-    target["request_body"] = STANDARD.encode(actual.body).into();
-    target["request_started_at"] = serde_json::to_value(actual.started_at)?;
+    let Some(observation_id) = actual.observation_id else {
+        return Ok(());
+    };
     let clocks = policy.request_contracts.contract_clocks(
         Some(case),
         request_headers::time_reference::source(&exchange.record),
@@ -44,16 +43,62 @@ pub(super) fn record_request(
         None,
         None,
     );
-    policy.request_contracts.record_value_witness(
-        metadata(
+    let metadata = metadata(
+        &exchange.record,
+        case,
+        Surface::DependencyRequest,
+        TargetRole::IndependentTargetObservation,
+        clocks,
+    )?;
+    let id = observation_id.to_string();
+    if policy
+        .request_contracts
+        .associate_value_witness(&metadata, &id, None)?
+        == crate::policy_evidence::AssociationOutcome::SourceRequired
+    {
+        let source = serde_json::to_vec(&witness::from_record(
             &exchange.record,
-            case,
             Surface::DependencyRequest,
-            TargetRole::IndependentTargetObservation,
-            clocks,
-        )?,
-        &serde_json::to_vec(&source)?,
-        Some(&serde_json::to_vec(&target)?),
+        )?)?;
+        policy
+            .request_contracts
+            .associate_value_witness(&metadata, &id, Some(&source))?;
+    }
+    Ok(())
+}
+
+pub(super) fn record_target(
+    policy: &ReplayPolicyRuntime,
+    case: &str,
+    actual: &RequestView<'_>,
+) -> Result<crate::policy_evidence::ObservationRetention> {
+    let owner = &policy.request_contracts;
+    if owner.compiled_rules().is_none() || !owner.retains_value_witnesses() {
+        return Ok(crate::policy_evidence::ObservationRetention::Retained);
+    }
+    let target = serde_json::json!({"protocol":"http", "exchange_id":actual.observation_id,
+        "scheme":actual.scheme, "endpoint":{"host":actual.target.host,"port":actual.target.port},
+        "method":actual.method.as_str().to_ascii_uppercase(), "uri":actual.uri.to_string(),
+        "request_headers":actual.headers, "request_body":STANDARD.encode(actual.body),
+        "request_started_at":actual.started_at});
+    owner.record_independent_request(
+        &actual
+            .observation_id
+            .context("HTTP Target observation identity is missing")?
+            .to_string(),
+        case,
+        Some(crate::policy::Resource {
+            protocol: crate::policy::Protocol::Http,
+            endpoint: crate::policy::Endpoint {
+                host: actual.target.host.clone(),
+                port: actual.target.port,
+            },
+            database: None,
+            username: None,
+        }),
+        actual.method.as_str(),
+        actual.started_at,
+        &serde_json::to_vec(&target)?,
     )
 }
 

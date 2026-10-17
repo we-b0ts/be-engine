@@ -11,9 +11,13 @@ use sha2::{Digest, Sha256};
 use crate::policy::{Resource, Slot, Surface};
 
 mod store;
-pub(crate) use store::WitnessStore;
+pub(crate) use store::{AssociationOutcome, ObservationRetention, WitnessStore};
 mod publication;
 pub(crate) use publication::stage;
+mod v2;
+pub(crate) use v2::{ObservationGraph, TargetMetadata};
+mod witnesses;
+pub(crate) use witnesses::WitnessEntries;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ClockPair {
@@ -116,6 +120,10 @@ pub(crate) struct WitnessRef {
     pub sha256: String,
     pub source_sha256: String,
     pub target_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_observation_id: Option<String>,
+    #[serde(skip)]
+    proof: Option<Box<v2::PairProof>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -129,7 +137,47 @@ pub(crate) struct WitnessManifest {
     pub omitted: usize,
     pub complete: bool,
     pub sealed: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub witnesses: Vec<WitnessRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observations: Option<ObservationGraph>,
+}
+
+impl WitnessManifest {
+    /// Borrow inventory entries before expanding only the selected candidate.
+    pub(crate) fn witness_entries(&self) -> Result<WitnessEntries<'_>> {
+        WitnessEntries::new(self)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn witnesses(&self) -> Result<Vec<WitnessRef>> {
+        self.witness_entries()?
+            .map(|entry| Ok(entry?.expand()?.into_owned()))
+            .collect()
+    }
+}
+
+pub(crate) fn verify_case_clock(witness: &WitnessRef, report: &serde_json::Value) -> Result<()> {
+    if witness.target_sha256.is_none() {
+        return Ok(());
+    }
+    let case = report["cases"]
+        .as_array()
+        .and_then(|cases| {
+            cases
+                .iter()
+                .find(|case| case["case_id"] == witness.metadata.source.case_id)
+        })
+        .context("Target witness Case is absent from the Replay report")?;
+    let clock = case["target_request_started_at"]
+        .as_str()
+        .map(str::parse::<DateTime<Utc>>)
+        .transpose()?;
+    ensure!(
+        clock == witness.metadata.clocks.case.target,
+        "protected Target Case clock differs from the current Replay report"
+    );
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -175,6 +223,9 @@ pub(crate) fn artifact_path(report: &Path, manifest: &WitnessManifest) -> Result
 }
 
 pub(crate) fn verify(report: &Path, manifest: &WitnessManifest) -> Result<PathBuf> {
+    if manifest.version == 2 {
+        return v2::verify(report, manifest);
+    }
     ensure!(
         manifest.version == 1
             && manifest.sealed
@@ -222,6 +273,9 @@ pub(crate) fn read(
     witness: &WitnessRef,
     key_context: &Path,
 ) -> Result<(Vec<u8>, Option<Vec<u8>>)> {
+    if let Some(proof) = &witness.proof {
+        return v2::read(path, witness, proof, key_context);
+    }
     use std::io::{Read, Seek, SeekFrom};
     ensure!(
         witness.length <= 4 * 1024 * 1024,

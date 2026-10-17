@@ -63,6 +63,7 @@ pub(super) fn record_request(
     exchange: &ReplayExchange,
     request: &MemcachedRequest,
     observed_at: DateTime<Utc>,
+    observation_id: Option<uuid::Uuid>,
 ) -> Result<()> {
     if policy.request_contracts.compiled_rules().is_none()
         || !request.command.eq_ignore_ascii_case("set")
@@ -74,9 +75,52 @@ pub(super) fn record_request(
     let Some(case) = exchange.case_id.as_deref() else {
         return Ok(());
     };
-    let source = request_envelope(exchange);
+    let Some(observation_id) = observation_id else {
+        return Ok(());
+    };
+    let clocks = policy.request_contracts.contract_clocks(
+        Some(case),
+        source_start(&exchange.record),
+        Some(observed_at),
+        None,
+        None,
+    );
+    let metadata = metadata(
+        &exchange.record,
+        case,
+        Surface::DependencyRequest,
+        TargetRole::IndependentTargetObservation,
+        clocks,
+    );
+    let id = observation_id.to_string();
+    if policy
+        .request_contracts
+        .associate_value_witness(&metadata, &id, None)?
+        == crate::policy_evidence::AssociationOutcome::SourceRequired
+    {
+        let source = serde_json::to_vec(&request_envelope(exchange))?;
+        policy
+            .request_contracts
+            .associate_value_witness(&metadata, &id, Some(&source))?;
+    }
+    Ok(())
+}
+
+pub(super) fn record_target(
+    policy: &ReplayPolicyRuntime,
+    case: &str,
+    target: &TargetKey,
+    wire: &str,
+    request: &MemcachedRequest,
+    observation: (uuid::Uuid, DateTime<Utc>),
+) -> Result<crate::policy_evidence::ObservationRetention> {
+    let owner = &policy.request_contracts;
+    if owner.compiled_rules().is_none() || !owner.retains_value_witnesses() {
+        return Ok(crate::policy_evidence::ObservationRetention::Retained);
+    }
+    let (id, observed_at) = observation;
     let mut actual = envelope(
-        &exchange.record.wire_protocol,
+        wire,
         &request.command,
         request.key.as_deref(),
         &request.args,
@@ -89,23 +133,21 @@ pub(super) fn record_request(
     actual["opcode"] = serde_json::to_value(request.opcode)?;
     actual["observed_at"] = serde_json::to_value(observed_at)?;
     actual["request_started_at"] = serde_json::to_value(observed_at)?;
-    let clocks = policy.request_contracts.contract_clocks(
-        Some(case),
-        source_start(&exchange.record),
-        Some(observed_at),
-        None,
-        None,
-    );
-    policy.request_contracts.record_value_witness(
-        metadata(
-            &exchange.record,
-            case,
-            Surface::DependencyRequest,
-            TargetRole::IndependentTargetObservation,
-            clocks,
-        ),
-        &serde_json::to_vec(&source)?,
-        Some(&serde_json::to_vec(&actual)?),
+    owner.record_independent_request(
+        &id.to_string(),
+        case,
+        Some(crate::policy::Resource {
+            protocol: Protocol::Memcached,
+            endpoint: crate::policy::Endpoint {
+                host: target.host.clone(),
+                port: target.port,
+            },
+            database: None,
+            username: None,
+        }),
+        &request.command.to_ascii_uppercase(),
+        observed_at,
+        &serde_json::to_vec(&actual)?,
     )
 }
 

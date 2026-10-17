@@ -3,8 +3,8 @@
 use super::*;
 use crate::policy::{CompiledPolicy, CompiledRule, Protocol, Surface};
 use crate::policy_evidence::{
-    ClockPair as WitnessClockPair, SourceIdentity, SourceRole, TargetRole, WitnessClocks,
-    WitnessMetadata, WitnessStore,
+    AssociationOutcome, ClockPair as WitnessClockPair, ObservationRetention, SourceIdentity,
+    SourceRole, TargetRole, WitnessClocks, WitnessMetadata, WitnessStore,
 };
 use crate::value_contract::{json, time::ClockPair};
 
@@ -18,6 +18,7 @@ pub(in crate::replay) struct RedisRequestContext<'a> {
     pub actual_at: Option<DateTime<Utc>>,
     pub connection_id: Option<uuid::Uuid>,
     pub sequence: Option<u64>,
+    pub observation_id: Option<uuid::Uuid>,
 }
 
 impl<'a> RedisRequestContext<'a> {
@@ -38,6 +39,7 @@ impl<'a> RedisRequestContext<'a> {
             actual_at: None,
             connection_id: None,
             sequence: None,
+            observation_id: Some(uuid::Uuid::new_v4()),
         }
     }
 }
@@ -137,6 +139,81 @@ impl RequestContracts {
         Ok(())
     }
 
+    pub(in crate::replay) fn record_delivery_witness(
+        &self,
+        id: &str,
+        metadata: WitnessMetadata,
+        source: &[u8],
+        target: &[u8],
+    ) -> Result<()> {
+        let Some(store) = &self.witnesses else {
+            return Ok(());
+        };
+        let anchor = self.anchor(&metadata.source.case_id)?;
+        store.record_observation(metadata, &anchor.dir, source, Some(target), Some(id))?;
+        Ok(())
+    }
+
+    pub(in crate::replay) fn record_target_observation(
+        &self,
+        id: &str,
+        metadata: crate::policy_evidence::TargetMetadata,
+        payload: &[u8],
+    ) -> Result<ObservationRetention> {
+        let Some(store) = &self.witnesses else {
+            return Ok(ObservationRetention::Retained);
+        };
+        let anchor = self.anchor(&metadata.case_id)?;
+        store.record_target(id, metadata, &anchor.dir, payload)
+    }
+
+    pub(in crate::replay) fn record_independent_request(
+        &self,
+        id: &str,
+        case: &str,
+        resource: Option<crate::policy::Resource>,
+        operation: &str,
+        observed: DateTime<Utc>,
+        payload: &[u8],
+    ) -> Result<ObservationRetention> {
+        let clocks = self.contract_clocks(Some(case), None, Some(observed), None, None);
+        self.record_target_observation(
+            id,
+            crate::policy_evidence::TargetMetadata {
+                case_id: case.into(),
+                surface: Surface::DependencyRequest,
+                role: TargetRole::IndependentTargetObservation,
+                resource,
+                operation: operation.into(),
+                clocks: WitnessClocks {
+                    case: WitnessClockPair {
+                        source: None,
+                        target: clocks.case.target,
+                    },
+                    dependency: WitnessClockPair {
+                        source: None,
+                        target: clocks.dependency.target,
+                    },
+                    delivery: WitnessClockPair::default(),
+                },
+            },
+            payload,
+        )
+    }
+
+    pub(in crate::replay) fn associate_value_witness(
+        &self,
+        metadata: &WitnessMetadata,
+        target_id: &str,
+        source: Option<&[u8]>,
+    ) -> Result<AssociationOutcome> {
+        let Some(store) = &self.witnesses else {
+            return Ok(AssociationOutcome::Retained);
+        };
+        let anchor = self.anchor(&metadata.source.case_id)?;
+        store.associate(metadata, target_id, &anchor.dir, source)
+    }
+
     pub(in crate::replay) fn compiled_rules(&self) -> Option<&Arc<CompiledPolicy>> {
         self.compiled.as_ref()
     }
@@ -227,11 +304,8 @@ impl RequestContracts {
         source: &[Vec<u8>],
         actual: &[Vec<u8>],
     ) -> Option<Result<Decision>> {
-        if self.compiled.is_some() && !source.is_empty() {
-            // Native argument/key/script owners need the complete envelope even
-            // before a rule exists and when the value slot is unavailable.
-            self.record_unified_request(context, source, Some(actual));
-        }
+        // Matchers retain the original independent Target before normalization.
+        // Re-evaluating comparison copies must never create another observation.
         let rules = self.unified_selected(
             context,
             source.first()?.as_slice(),
@@ -374,6 +448,7 @@ impl RequestContracts {
             username: event["username"].as_str(),
             command: event["command"].as_str().unwrap_or_default(),
             actual_at: None,
+            observation_id: None,
             recorded_at: event["request_started_at"]
                 .as_str()
                 .and_then(|value| value.parse().ok())
@@ -463,7 +538,7 @@ impl RequestContracts {
         Ok(())
     }
 
-    fn record_unified_request(
+    pub(in crate::replay) fn record_unified_request(
         &self,
         context: &RedisRequestContext<'_>,
         source: &[Vec<u8>],
@@ -513,14 +588,57 @@ impl RequestContracts {
             },
         };
         let result = (|| -> Result<()> {
-            let source = serde_json::to_vec(source)?;
-            let target = target.map(serde_json::to_vec).transpose()?;
-            store.record(metadata, &anchor.dir, &source, target.as_deref())?;
+            if target.is_some() {
+                let Some(id) = context.observation_id else {
+                    return Ok(());
+                };
+                let id = id.to_string();
+                if store.associate(&metadata, &id, &anchor.dir, None)?
+                    == AssociationOutcome::SourceRequired
+                {
+                    let source = serde_json::to_vec(source)?;
+                    store.associate(&metadata, &id, &anchor.dir, Some(&source))?;
+                }
+            } else {
+                store.record(metadata, &anchor.dir, &serde_json::to_vec(source)?, None)?;
+            }
             Ok(())
         })();
         if let Err(error) = result {
             tracing::warn!(%error, "unified request witness could not be persisted; evidence coverage is incomplete");
         }
+    }
+
+    pub(in crate::replay) fn record_redis_target(
+        &self,
+        context: &RedisRequestContext<'_>,
+        args: &[Vec<u8>],
+    ) -> Result<ObservationRetention> {
+        if self.compiled.is_none() || self.witnesses.is_none() {
+            return Ok(ObservationRetention::Retained);
+        }
+        let id = context
+            .observation_id
+            .context("Redis Target observation identity is missing")?;
+        let observed = context
+            .actual_at
+            .context("Redis Target observation clock is missing")?;
+        self.record_independent_request(
+            &id.to_string(),
+            context.case,
+            Some(crate::policy::Resource {
+                protocol: Protocol::Redis,
+                endpoint: crate::policy::Endpoint {
+                    host: context.target.host.clone(),
+                    port: context.target.port,
+                },
+                database: Some(crate::policy::Database::Index(context.database)),
+                username: context.username.map(str::to_owned),
+            }),
+            context.command,
+            observed,
+            &serde_json::to_vec(args)?,
+        )
     }
 
     fn record_unified_response_source(

@@ -107,3 +107,85 @@ fn publish_time_and_uuid_bind_only_after_complete_match_and_consume_once() {
     assert!(state.snapshot().unused_case.is_empty());
     assert!(call(&mut state, &arguments(TARGET, None, "RUNNING")).is_err());
 }
+
+#[test]
+fn payload_evidence_budget_keeps_native_redis_matching_without_recounting_omissions() {
+    let temp = tempfile::tempdir().unwrap();
+    let local = temp.path().join(".traffic-e2e/local");
+    let case = local.join("recordings/case");
+    std::fs::create_dir_all(&case).unwrap();
+    let key = local.join(crate::repository::LOCAL_ENCRYPTION_KEY_FROM_LOCAL);
+    std::fs::create_dir_all(key.parent().unwrap()).unwrap();
+    std::fs::write(
+        key,
+        crate::request_headers::generate_encryption_key().unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        case.join("request.json"),
+        json!({"method":"POST","uri":"/large","timestamp":"1970-01-01T00:16:40Z"}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(case.join("expected-response.json"), "{}").unwrap();
+    std::fs::write(case.join("dependencies.jsonl"), "").unwrap();
+    let path = temp.path().join("policy.yaml");
+    std::fs::write(&path, "format: traffic-policy/v1\nrules: []\n").unwrap();
+    let cases = BTreeMap::from([(
+        "case".into(),
+        ReplayCase {
+            id: "case".into(),
+            dir: case.clone(),
+            dependencies_path: case.join("dependencies.jsonl"),
+            status: ReplayCaseStatus::Pending,
+        },
+    )]);
+    let mut runtime = ReplayPolicyRuntime::load(&path, &cases).unwrap();
+    let artifacts = local.join("runtime/attempt");
+    let store = crate::policy_evidence::WitnessStore::new(&artifacts).unwrap();
+    runtime
+        .request_contracts
+        .configure_witnesses(store.clone(), false)
+        .unwrap();
+    let value = "x".repeat(1024 * 1024 + 32);
+    let record = serde_json::from_value(json!({"connection_id":Uuid::new_v4(),"sequence":1,
+        "target_host":"redis.test","target_port":6379,"resp_version":2,"database":0,"command":"SET",
+        "args":[{"encoding":"utf8","data":"key"},{"encoding":"utf8","data":value}],
+        "response_kind":"simple_string","response":{"encoding":"utf8","data":"+OK\r\n"},"replay_safe":true})).unwrap();
+    let mut state = RedisReplayState {
+        request_contracts: runtime.request_contracts.clone(),
+        ..Default::default()
+    };
+    state
+        .register_exchange(
+            record,
+            ReplaySource::Case,
+            Some("case"),
+            &mut BTreeMap::new(),
+            &[],
+        )
+        .unwrap();
+    assert!(
+        state
+            .match_redis(
+                Some("case"),
+                &TargetKey {
+                    host: "redis.test".into(),
+                    port: 6379
+                },
+                TargetConnection::default(),
+                2,
+                0,
+                None,
+                "SET",
+                &[b"key".to_vec(), value.into_bytes()]
+            )
+            .is_ok()
+    );
+    let manifest = store.sealed_manifest().unwrap();
+    assert_eq!(
+        (manifest.observed, manifest.recorded, manifest.omitted),
+        (1, 0, 1)
+    );
+    assert!(!manifest.complete);
+    assert!(crate::policy_evidence::verify(&artifacts.join("replay.json"), &manifest).is_err());
+}

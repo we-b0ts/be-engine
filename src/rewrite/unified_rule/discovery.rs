@@ -63,11 +63,13 @@ pub(in crate::rewrite) fn facts(root: &Path, state: &RewriteState) -> Result<Val
         && manifest.sealed
     {
         let private = crate::policy_evidence::verify(&evidence.replay, manifest)?;
-        for witness in &manifest.witnesses {
+        for entry in manifest.witness_entries()? {
             if drafts.observations >= OBSERVATION_LIMIT {
                 drafts.limited = true;
                 break;
             }
+            let witness = entry?.expand()?;
+            let witness = witness.as_ref();
             drafts.observations += 1;
             let case = report["cases"].as_array().and_then(|items| {
                 items
@@ -77,6 +79,7 @@ pub(in crate::rewrite) fn facts(root: &Path, state: &RewriteState) -> Result<Val
             let Some(directory) = case.and_then(|c| c["case_dir"].as_str()) else {
                 continue;
             };
+            crate::policy_evidence::verify_case_clock(witness, &report)?;
             let (source, target) =
                 crate::policy_evidence::read(&private, witness, Path::new(directory))?;
             let Some(resource) = &witness.metadata.resource else {

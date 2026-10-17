@@ -162,6 +162,7 @@ struct MatchedRedisExchange {
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayState {
     request_observed_at: Option<chrono::DateTime<chrono::Utc>>,
+    request_observation_id: Option<uuid::Uuid>,
     pub(in crate::replay) pubsub: pubsub::PubSubState,
     pub(super) request_contracts: super::policy::request_contract::RequestContracts,
     pub(super) dynamic_values: super::policy::dynamic_values::DynamicValues,

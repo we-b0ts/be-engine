@@ -148,6 +148,35 @@ impl ReplayState {
         params: Option<&[RecordedMysqlValue]>,
     ) -> Option<MatchedExchange> {
         let request_observed_at = Utc::now();
+        let mut observation_id = Some(uuid::Uuid::new_v4());
+        if let (Some(policy), Some(case)) = (&self.replay_policy, self.active_case_id.as_deref()) {
+            match contracts::record_target(
+                &policy.request_contracts,
+                case,
+                identity,
+                contracts::ObservedRequest {
+                    observation_id,
+                    command,
+                    sql,
+                    params,
+                    started_at: request_observed_at,
+                },
+            ) {
+                Ok(crate::policy_evidence::ObservationRetention::Unavailable) => {
+                    observation_id = None
+                }
+                Ok(crate::policy_evidence::ObservationRetention::Retained) => {}
+                Err(error) => {
+                    self.mysql
+                        .events
+                        .metadata_warnings
+                        .push(format!("SQL Target observation unavailable: {error:#}"));
+                    // Global candidates do not own Case rule witnesses. Keep the
+                    // identity so an ordinary Case candidate still fails closed
+                    // when association cannot find its retained Target.
+                }
+            }
+        }
         let observed_sql = sql;
         let observed_params = params;
         let baseline_normalized_sql = sql.map(normalize_sql);
@@ -191,6 +220,7 @@ impl ReplayState {
                             identity,
                             &exchange.record,
                             contracts::ObservedRequest {
+                                observation_id,
                                 command,
                                 sql: observed_sql,
                                 params: observed_params,
@@ -467,6 +497,7 @@ impl ReplayState {
                                 &original,
                                 &exchange.record.response,
                                 contracts::ObservedRequest {
+                                    observation_id,
                                     command,
                                     sql: observed_sql,
                                     params: observed_params,

@@ -154,6 +154,18 @@ pub(crate) fn validate_witness(
         "HTTP Source request clock differs from its protected metadata"
     );
     if surface == Surface::DependencyRequest {
+        // Each side retains its own independently authenticated exchange id.
+        // Legacy v1 targets copied the Source id. Both remain outside the native
+        // endpoint/method/header/body comparison contract.
+        ensure!(
+            source["exchange_id"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty())
+                && target["exchange_id"]
+                    .as_str()
+                    .is_some_and(|id| !id.is_empty()),
+            "HTTP witness requires independent exchange identities"
+        );
         ensure!(
             target["request_started_at"] == serde_json::to_value(clocks.dependency.target)?,
             "HTTP Target request clock differs from its protected metadata"
@@ -175,6 +187,7 @@ pub(crate) fn validate_witness(
         );
         for value in [&mut source, &mut target] {
             for field in [
+                "exchange_id",
                 "request_headers",
                 "request_body",
                 "request_started_at",

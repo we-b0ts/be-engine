@@ -243,52 +243,50 @@ pub(super) fn verify(
                 for id in checked {
                     *result.rules.entry(id).or_default() += 1;
                 }
-                let refs = manifest
-                    .as_ref()
-                    .map(|m| {
-                        m.witnesses
-                            .iter()
-                            .filter(|w| {
-                                w.metadata.surface == surface
-                                    && w.metadata.source.case_id == case_id
-                                    && (dependency::protocol(&event) == Some(Protocol::Http)
-                                        || event["connection_id"].is_string()
-                                            && if dependency::protocol(&event)
-                                                == Some(Protocol::Mysql)
-                                            {
-                                                event["query_sequence"].is_u64()
-                                            } else {
-                                                event["sequence"].is_u64()
-                                            })
-                                    && w.metadata.source.connection_id.as_deref()
-                                        == event["connection_id"].as_str()
-                                    && w.metadata.source.sequence
-                                        == if dependency::protocol(&event) == Some(Protocol::Mysql)
-                                        {
-                                            event["query_sequence"].as_u64()
-                                        } else {
-                                            event["sequence"].as_u64()
-                                        }
-                                    && (dependency::protocol(&event) != Some(Protocol::Http)
-                                        || event["id"].is_string())
-                                    && w.metadata.source.exchange_id.as_deref()
-                                        == if dependency::protocol(&event) == Some(Protocol::Http) {
-                                            event["id"].as_str()
-                                        } else {
-                                            None
-                                        }
-                                    && w.source_sha256 == crate::policy_evidence::digest(&raw)
-                                    && w.target_sha256.is_some()
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                if refs.is_empty() || private.is_none() {
+                let Some(manifest) = manifest.as_ref().filter(|_| private.is_some()) else {
                     result.missing_target_witnesses += 1;
                     continue;
-                }
+                };
+                let source_sha256 = crate::policy_evidence::digest(&raw);
+                let mut found = false;
                 let mut observations = BTreeSet::new();
-                for witness in refs {
+                for entry in manifest.witness_entries()? {
+                    let entry = entry?;
+                    let metadata = entry.metadata();
+                    let matches = metadata.surface == surface
+                        && metadata.source.case_id == case_id
+                        && (dependency::protocol(&event) == Some(Protocol::Http)
+                            || event["connection_id"].is_string()
+                                && if dependency::protocol(&event) == Some(Protocol::Mysql) {
+                                    event["query_sequence"].is_u64()
+                                } else {
+                                    event["sequence"].is_u64()
+                                })
+                        && metadata.source.connection_id.as_deref()
+                            == event["connection_id"].as_str()
+                        && metadata.source.sequence
+                            == if dependency::protocol(&event) == Some(Protocol::Mysql) {
+                                event["query_sequence"].as_u64()
+                            } else {
+                                event["sequence"].as_u64()
+                            }
+                        && (dependency::protocol(&event) != Some(Protocol::Http)
+                            || event["id"].is_string())
+                        && metadata.source.exchange_id.as_deref()
+                            == if dependency::protocol(&event) == Some(Protocol::Http) {
+                                event["id"].as_str()
+                            } else {
+                                None
+                            }
+                        && entry.source_sha256()? == source_sha256
+                        && entry.has_target();
+                    if !matches {
+                        continue;
+                    }
+                    found = true;
+                    let witness = entry.expand()?;
+                    let witness = witness.as_ref();
+                    crate::policy_evidence::verify_case_clock(witness, &bundle.replay)?;
                     dependency::validate_metadata(witness, &event)?;
                     let clocks = witness.metadata.clocks.comparison();
                     ensure!(
@@ -337,7 +335,10 @@ pub(super) fn verify(
                     // One physical observation may be recorded once per SQL slot.
                     // Validate every protected envelope, then count the observation once.
                     if !observations.insert((
-                        witness.target_sha256.clone(),
+                        witness
+                            .target_observation_id
+                            .clone()
+                            .or_else(|| witness.target_sha256.clone()),
                         serde_json::to_string(&witness.metadata.target_role)?,
                     )) {
                         continue;
@@ -351,6 +352,9 @@ pub(super) fn verify(
                             anyhow::bail!("Target witness has no independent or derived role")
                         }
                     }
+                }
+                if !found {
+                    result.missing_target_witnesses += 1;
                 }
             }
         }

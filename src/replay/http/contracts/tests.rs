@@ -176,8 +176,8 @@ async fn request_and_response_json_and_protobuf_share_native_safe_contracts_and_
                 .request_contracts
                 .witness_manifest()
                 .unwrap();
-            let derived = manifest
-                .witnesses
+            let witnesses = manifest.witnesses().unwrap();
+            let derived = witnesses
                 .iter()
                 .find(|witness| witness.metadata.target_role == TargetRole::DerivedDelivery)
                 .unwrap();
@@ -267,7 +267,7 @@ async fn body_contract_rejects_unselected_fields_and_retains_the_failed_target_p
         .request_contracts
         .witness_manifest()
         .unwrap();
-    assert!(manifest.witnesses.iter().any(|witness|witness.metadata.target_role==TargetRole::IndependentTargetObservation));
+    assert!(manifest.witnesses().unwrap().iter().any(|witness|witness.metadata.target_role==TargetRole::IndependentTargetObservation));
     task.abort();
 }
 
@@ -336,8 +336,8 @@ async fn first_body_failure_without_rules_keeps_complete_independent_target_evid
         .witness_manifest()
         .unwrap();
     assert!(manifest.complete);
-    let target = manifest
-        .witnesses
+    let witnesses = manifest.witnesses().unwrap();
+    let target = witnesses
         .iter()
         .find(|witness| witness.metadata.target_role == TargetRole::IndependentTargetObservation)
         .unwrap();
@@ -424,4 +424,106 @@ fn native_header_contract_uses_presence_and_observation_modes_without_relaxing_b
     let mut changed = target;
     changed.insert("tenant-id".into(), vec!["8".into()]);
     assert!(!request_headers::native_contract_match(&source, &changed));
+}
+
+#[tokio::test]
+async fn unmatched_requests_without_any_source_candidate_keep_distinct_target_observations() {
+    let (_temp, case, path, mut event) = fixture(false);
+    // Keep a real HTTP endpoint registered, without a candidate for /dependency.
+    event["uri"] = "/unrelated".into();
+    std::fs::write(case.join("dependencies.jsonl"), event.to_string()).unwrap();
+    std::fs::write(&path, "format: traffic-policy/v1\nrules: []\n").unwrap();
+    let (address, runtime, task) =
+        super::super::tests::spawn_http_replay_with_policy(&case, vec![], Some(path), None).await;
+    for _ in 0..2 {
+        let response = send(address, b"same genuine request body".to_vec(), "7").await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        response.into_body().collect().await.unwrap();
+    }
+    {
+        let state = runtime.state.lock().await;
+        let owner = &state.replay_policy.as_ref().unwrap().request_contracts;
+        owner.seal_witnesses().unwrap();
+        let manifest = owner.witness_manifest().unwrap();
+        let graph = manifest.observations.as_ref().unwrap();
+        assert!(manifest.complete && manifest.sealed);
+        assert_eq!(graph.sources.len(), 2);
+        assert!(graph.sources.iter().all(|source| {
+            source.metadata.source.exchange_id.as_deref() == event["id"].as_str()
+        }));
+        assert!(graph.associations.is_empty());
+        assert_eq!(graph.targets.len(), 2);
+        assert_ne!(graph.targets[0].id, graph.targets[1].id);
+        assert!(
+            graph
+                .targets
+                .iter()
+                .all(|target| target.metadata.role == TargetRole::IndependentTargetObservation)
+        );
+        let report = case.join(".replay/replay.json");
+        std::fs::write(
+            &report,
+            serde_json::to_vec(&state.snapshot_report()).unwrap(),
+        )
+        .unwrap();
+        crate::policy_evidence::verify(&report, &manifest).unwrap();
+    }
+    task.abort();
+}
+
+#[tokio::test]
+async fn target_observation_io_failure_preserves_global_matching_and_rejects_case_candidates() {
+    for global in [false, true] {
+        let (_temp, case, path, event) = fixture(false);
+        std::fs::write(&path, "format: traffic-policy/v1\nrules: []\n").unwrap();
+        if global {
+            std::fs::write(case.join("dependencies.jsonl"), "").unwrap();
+            std::fs::write(
+                case.parent().unwrap().join("global-dependencies.jsonl"),
+                event.to_string(),
+            )
+            .unwrap();
+        }
+        let (address, runtime, task) =
+            super::super::tests::spawn_http_replay_with_policy(&case, vec![], Some(path), None)
+                .await;
+        let store =
+            crate::policy_evidence::WitnessStore::new(&case.join(".replay/io-failure")).unwrap();
+        store.fail_writes_for_test().unwrap();
+        {
+            let mut state = runtime.state.lock().await;
+            state
+                .replay_policy
+                .as_mut()
+                .unwrap()
+                .request_contracts
+                .configure_witnesses(store, false)
+                .unwrap();
+        }
+        let response = send(address, payload(false, 1000, false, 7), "7").await;
+        assert_eq!(
+            response.status(),
+            if global {
+                StatusCode::OK
+            } else {
+                StatusCode::BAD_GATEWAY
+            }
+        );
+        response.into_body().collect().await.unwrap();
+        let state = runtime.state.lock().await;
+        assert_eq!(state.http_events.matched_count, usize::from(global));
+        assert_eq!(state.http_events.unmatched.len(), usize::from(!global));
+        let manifest = state
+            .replay_policy
+            .as_ref()
+            .unwrap()
+            .request_contracts
+            .witness_manifest()
+            .unwrap();
+        assert!(!manifest.complete);
+        assert!(manifest.omitted > 0);
+        assert!(manifest.observations.as_ref().unwrap().targets.is_empty());
+        assert_eq!(state.http_exchanges[0].status.is_consumed(), global);
+        task.abort();
+    }
 }

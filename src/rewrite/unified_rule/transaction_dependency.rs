@@ -56,7 +56,16 @@ fn install(fixture: &Fixture, event: serde_json::Value, target: impl FnOnce(Vec<
         }
         target = serde_json::to_vec(&envelope).unwrap();
     }
-    let store = WitnessStore::new(fixture.paths.replay.parent().unwrap()).unwrap();
+    let mut report: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture.paths.replay).unwrap()).unwrap();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    report["session_id"] = json!(session_id);
+    let store = WitnessStore::new_bound(
+        fixture.paths.replay.parent().unwrap(),
+        &session_id,
+        report["replay_policy"]["fingerprint"].as_str().unwrap(),
+    )
+    .unwrap();
     let source_time = "2026-10-16T00:00:00Z".parse().unwrap();
     let target_time = "2026-10-16T00:01:00Z".parse().unwrap();
     let clocks = WitnessClocks {
@@ -111,8 +120,7 @@ fn install(fixture: &Fixture, event: serde_json::Value, target: impl FnOnce(Vec<
             Some(&target),
         )
         .unwrap();
-    let mut report: serde_json::Value =
-        serde_json::from_slice(&fs::read(&fixture.paths.replay).unwrap()).unwrap();
+    report["cases"][0]["target_request_started_at"] = json!(target_time);
     report["policy_witnesses"] = serde_json::to_value(store.sealed_manifest().unwrap()).unwrap();
     write(&fixture.paths.replay, report);
 }

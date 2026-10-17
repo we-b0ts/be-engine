@@ -6,6 +6,7 @@ use crate::value_contract::json::{AnchorClocks, Comparison};
 
 #[derive(Debug, Clone, Copy)]
 pub(in crate::replay) struct ObservedRequest<'a> {
+    pub observation_id: Option<uuid::Uuid>,
     pub command: &'a str,
     pub sql: Option<&'a str>,
     pub params: Option<&'a [RecordedMysqlValue]>,
@@ -50,6 +51,7 @@ struct ResponseEnvelope {
 
 #[derive(Debug, Clone)]
 pub(in crate::replay) struct PreparedDelivery {
+    observation_id: uuid::Uuid,
     original: Vec<u8>,
     base: ResponseEnvelope,
     rules: Vec<CompiledRule>,
@@ -83,7 +85,12 @@ impl PreparedDelivery {
         for metadata in &self.metadata {
             let mut metadata = metadata.clone();
             metadata.clocks.delivery.target = Some(now);
-            owner.record_value_witness(metadata, &self.original, Some(&target))?;
+            owner.record_delivery_witness(
+                &self.observation_id.to_string(),
+                metadata,
+                &self.original,
+                &target,
+            )?;
         }
         owner.commit(policy::request_contract::Decision::from_value_comparison(
             self.validation.clone(),
@@ -148,6 +155,7 @@ pub(in crate::replay) fn prepare_delivery(
         })
         .collect();
     Ok(Some(PreparedDelivery {
+        observation_id: uuid::Uuid::new_v4(),
         original,
         base: ResponseEnvelope {
             response_delivered_at: None,
@@ -172,8 +180,9 @@ pub(in crate::replay) fn record_request(
     if !owner.retains_value_witnesses() || owner.compiled_rules().is_none() {
         return Ok(());
     }
-    let source = serde_json::to_vec(&RequestEnvelope::recorded(record))?;
-    let actual = serde_json::to_vec(&RequestEnvelope::observed(request))?;
+    let Some(observation_id) = request.observation_id else {
+        return Ok(());
+    };
     let clocks = owner.contract_clocks(
         Some(case),
         source_started(record),
@@ -191,20 +200,57 @@ pub(in crate::replay) fn record_request(
         slots.push(Slot::SqlValue(0));
     }
     for slot in slots {
-        owner.record_value_witness(
-            owner.mysql_metadata(
-                case,
-                identity,
-                record,
-                (Surface::DependencyRequest, slot),
-                TargetRole::IndependentTargetObservation,
-                clocks,
-            ),
-            &source,
-            Some(&actual),
-        )?;
+        let metadata = owner.mysql_metadata(
+            case,
+            identity,
+            record,
+            (Surface::DependencyRequest, slot),
+            TargetRole::IndependentTargetObservation,
+            clocks,
+        );
+        let id = observation_id.to_string();
+        if owner.associate_value_witness(&metadata, &id, None)?
+            == crate::policy_evidence::AssociationOutcome::SourceRequired
+        {
+            let source = serde_json::to_vec(&RequestEnvelope::recorded(record))?;
+            owner.associate_value_witness(&metadata, &id, Some(&source))?;
+        }
     }
     Ok(())
+}
+
+pub(in crate::replay) fn record_target(
+    owner: &policy::request_contract::RequestContracts,
+    case: &str,
+    identity: &ReplaySessionIdentity,
+    request: ObservedRequest<'_>,
+) -> Result<crate::policy_evidence::ObservationRetention> {
+    if !owner.retains_value_witnesses() || owner.compiled_rules().is_none() {
+        return Ok(crate::policy_evidence::ObservationRetention::Retained);
+    }
+    let resource = identity
+        .target
+        .as_ref()
+        .map(|target| crate::policy::Resource {
+            protocol: crate::policy::Protocol::Mysql,
+            endpoint: crate::policy::Endpoint {
+                host: target.host.clone(),
+                port: target.port,
+            },
+            database: identity.database.clone().map(crate::policy::Database::Name),
+            username: identity.username.clone(),
+        });
+    owner.record_independent_request(
+        &request
+            .observation_id
+            .context("SQL Target observation identity is missing")?
+            .to_string(),
+        case,
+        resource,
+        request.command,
+        request.started_at,
+        &serde_json::to_vec(&RequestEnvelope::observed(request))?,
+    )
 }
 
 pub(crate) fn source_witness(event: &Value, surface: Surface) -> Result<Vec<u8>> {

@@ -290,6 +290,26 @@ impl MemcachedReplayState {
             observed_at,
         } = context;
         let wire = wire_protocol.as_str();
+        let request_id = uuid::Uuid::new_v4();
+        let mut observation_id = Some(request_id);
+        if let (Some(policy), Some(case)) = (policy, active_case_id) {
+            match contracts::record_target(
+                policy,
+                case,
+                target,
+                wire,
+                request,
+                (request_id, observed_at),
+            ) {
+                Ok(crate::policy_evidence::ObservationRetention::Unavailable) => {
+                    observation_id = None
+                }
+                Ok(crate::policy_evidence::ObservationRetention::Retained) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "failed to preserve independent Memcached Target observation")
+                }
+            }
+        }
         let matched = preferred_match(&self.exchanges, active_case_id, |exchange| {
             exchange.status.is_available()
                 && target_matches(
@@ -305,9 +325,13 @@ impl MemcachedReplayState {
                 && binary_get_opcodes_match(exchange.record.opcode, request.opcode)
                 && exchange.key == request.key
                 && policy.is_none_or(|policy| {
-                    if let Err(error) =
-                        contracts::record_request(policy, exchange, request, observed_at)
-                    {
+                    if let Err(error) = contracts::record_request(
+                        policy,
+                        exchange,
+                        request,
+                        observed_at,
+                        observation_id,
+                    ) {
                         tracing::warn!(%error, "failed to preserve Memcached request witness");
                         return false;
                     }

@@ -249,13 +249,18 @@ impl ReplayRuntime {
             .into_iter()
             .map(|value| value.to_ascii_lowercase())
             .collect::<Vec<_>>();
+        let session_id = Uuid::new_v4();
         let mut replay_policy = config
             .policy_path
             .as_deref()
             .map(|path| ReplayPolicyRuntime::load_with_sources(path, &cases, !lazy))
             .transpose()?;
         if let Some(policy) = &mut replay_policy {
-            let witnesses = crate::policy_evidence::WitnessStore::new(&replay_artifact_dir)?;
+            let witnesses = crate::policy_evidence::WitnessStore::new_bound(
+                &replay_artifact_dir,
+                &session_id.to_string(),
+                &policy.report().fingerprint,
+            )?;
             policy
                 .request_contracts
                 .configure_witnesses(witnesses, !lazy)?;
@@ -302,7 +307,7 @@ impl ReplayRuntime {
             egress_counter_reader: None,
             egress_counter_starts: BTreeMap::new(),
             egress_rejections: BTreeMap::new(),
-            session_id: Uuid::new_v4(),
+            session_id,
             started_at: Utc::now(),
             finalized_at: None,
             dns_listen,
