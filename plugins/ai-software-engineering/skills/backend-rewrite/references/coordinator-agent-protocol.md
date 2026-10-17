@@ -210,7 +210,7 @@ Never replace a stale result's report with a newer one. Execute the returned
 | `idle` | The worker stopped without a usable handoff; resume is required. |
 | `handoff_ready` | The coordinator received a reviewable handoff. |
 | `integrated` | The identified handoff and required inputs are published with a current passing integration report. |
-| `rework_required` | The identified handoff needs worker changes, such as an integration conflict or a failed quality gate. |
+| `rework_required` | The identified handoff needs API-worker changes, such as a business conflict or behavior defect. Routine formatting/Clippy repairs stay with the integrator. |
 
 For `running`, `queued`, and `idle`, report a fresh runtime observation for the
 current assignment. Never relabel a delayed completion as a current observation.
@@ -250,8 +250,10 @@ source evidence; send semantic questions back to its author.
 Report `handoff_ready` with `--review-report` or
 `BACKEND_REWRITE_WORKER_REVIEW_REPORT`. An unaccepted incomplete delivery from
 an ended worker is `idle`, so the same worker can resume and finish its review.
-The report must pass the complete shared source, Replay-isolation, domain and
-configured repository quality checks against current canonical inputs.
+The worker report must pass Source, Replay-isolation, domain, assignment and
+delivery-identity checks against current canonical inputs. It has no mandatory
+fmt, workspace-test or Clippy gate. Workers build/debug and run relevant tests
+as needed; the distinct final pre-revalidation stage owns the full quality suite.
 
 A usable handoff contains the original overview's workflow/recording,
 work scope, issue, binding and dispatch identities, proven cause and

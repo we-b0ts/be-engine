@@ -1,28 +1,49 @@
 # Coordinator Review Actions
 
-Use for handoff admission, `source_review_required`, or a returned quality
-finding. Consume reports and version-bound agent results; delegate source
-inspection instead of proving semantics yourself.
+Use for handoff admission, `source_review_required`,
+`pre_revalidation_review_required`, or a returned quality finding. Consume
+reports and version-bound agent results; delegate source inspection instead of
+proving semantics yourself.
 
 ## Admit A Worker Handoff
 
 Check that the worker's identity, exact commit, report, and required evidence
 are present and match the retained assignment. Report `handoff_ready` with
 `--review-report` or `BACKEND_REWRITE_WORKER_REVIEW_REPORT`. The engine rejects
-missing, failing, wrong-dispatch, and stale reports. A passing report must cover
-the full shared quality suite, including Replay isolation and configured
-repository gates; a source-only report is insufficient.
+missing, failing, wrong-dispatch, and stale reports. A passing worker report must
+cover Source rules, Replay isolation and current delivery identity. It does not
+execute repository quality commands or certify full integration quality. Workers
+build/debug and run relevant tests as needed and do not need Clippy. The
+integrator runs the engine-managed final full checks before revalidation.
 
 An ended worker with incomplete unaccepted delivery is `idle`; resume the same
 binding for missing material. Use `rework_required` only after an accepted
 handoff. Admission does not replace integration or formal acceptance.
 
+## Final Review Before Full Revalidation
+
+On `pre_revalidation_review_required`, delegate the exact returned `commands.check`
+to the retained integrator in its assigned worktree. Its form is `review check
+--pre-revalidation --worktree ...`; this single engine entrypoint executes the
+full fmt/test/Clippy suite and source/isolation checks, then writes a final-stage
+receipt. The skill requires this command rather than duplicate Cargo commands.
+
+Publish the exact passing candidate and invoke `review accept --report
+/absolute/final-report.json` through the
+[final publication protocol](coordinator-integration.md#admit-the-final-pre-revalidation-candidate).
+The state machine validates code, relevant inputs, policy, inventory and adopted
+recording before it permits full revalidation. Ordinary worker or integration
+reports, failing reports and stale receipts cannot open the gate. Relevant
+changes require fresh final proof; progress-only publication can reuse an
+already admitted matching receipt. Check acceptance never repeats the suite.
+
 ## Delegate Candidate Review And Admit The Report
 
 Purpose confirmation establishes the committed `pr_base` snapshot as trusted.
 Adopt completed external recordings and run Replay; an unchanged baseline needs no source review
-at startup or final completion. Ignore historical receipts as a reason to create
-an integrator assignment. Progress-only commits do not change this exemption.
+at startup. Ignore historical ordinary review receipts as a reason to create an
+assignment. Progress-only commits do not change this Source-review exemption;
+it does not substitute for the final pre-revalidation gate.
 Source/configuration changes relative to the purpose baseline restore normal
 review admission before verification and delivery, including external edits.
 Worker handoff and outstanding finding admission still require their reports.
@@ -32,8 +53,12 @@ available. Delegate missing/stale quality proof or findings to the retained
 code integrator through [coordinator-integration.md](coordinator-integration.md).
 Supply `commands.check` as an integrator-local command with its actual assigned
 worktree; never execute checks in the canonical coordinator worktree.
-Candidate review covers the whole branch against `pr_base` and runs the same
-complete quality implementation as worker review.
+Ordinary engine candidate review covers the whole branch against `pr_base` and
+repeats Source/Replay-isolation checks without mandatory repository commands.
+Do not require a full fmt/test/Clippy suite for each integration. The separate
+`pre_revalidation_review_required` action supplies the engine's full-check
+command and requires its distinct final-stage report. Do not ask the integrator
+to run that same suite manually before calling the engine command.
 Changes already published on the canonical branch still need a current receipt;
 use that exact version for a global quality refresh without manufacturing a
 worker handoff. Follow the integration protocol to synchronize a retained
@@ -75,9 +100,12 @@ Do not invent an integrator owner value or route to whichever API is selected.
 Preserve integrator-authored provenance in feedback to the responsible worker;
 use the existing work-item repair path for code changes.
 
-Configured command failures and `quality.replay_isolation.violations`, including
+Routine formatting and Clippy failures stay with the integrator for repair and
+a fresh final-stage check when required; they do not require a worker round trip.
+Final-stage command failures and `quality.replay_isolation.violations`, including
 public-domain findings, do not necessarily have source finding IDs. For a defect
-in an accepted handoff, use its existing `rework_required` worker report with
+requiring API behavior decisions in an accepted handoff, use its existing
+`rework_required` worker report with
 the original dispatch and handoff identity; return exact command logs or
 file/line/domain evidence to that worker. Keep integration-induced errors with
 the integrator. Without an accepted handoff, retain the failed candidate and

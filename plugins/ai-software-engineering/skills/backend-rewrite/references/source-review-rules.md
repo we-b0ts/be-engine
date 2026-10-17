@@ -4,9 +4,16 @@ Read when your assignment requires checking changed target code or supplying
 source evidence. This reference defines source rules and evidence format only.
 Use your role's entrypoint for report execution and handoff.
 
-`backend-rewrite review check` runs the complete shared delivery quality suite.
-Its source review includes the following rules. Do not substitute an untracked
-shell check or a prose assertion that review passed.
+`backend-rewrite review check` applies the same source and Replay-isolation
+rules to worker, integration and final pre-revalidation candidates. Worker and
+ordinary integration review do not execute mandatory fmt, workspace tests or
+Clippy. Implementers build/debug and run relevant tests as needed; they do not
+need Clippy. The integrator executes the engine-issued `review check
+--pre-revalidation --worktree ...` before final full revalidation. This command
+runs the full quality suite and the source/isolation checks, and records their
+real results in a final-stage receipt. The skill does not require running the
+same Cargo suite separately. Do not substitute an ordinary integration report,
+an untracked shell check or prose assertion for that receipt.
 
 - Changed production Rust files must have at most 1000 complete physical lines,
   including comments, blank lines and a final line without a trailing newline.
@@ -19,8 +26,9 @@ modules/functions. The full-file line limit still includes their lines. It does
 not prove a call graph or discover every macro/wrapper. When changing callers of
 an existing task launcher, inspect its ownership even if no new spawn is found.
 
-The same command also checks Replay isolation and runs the engine-standard
-quality gates for every managed project in the reviewed worktree. Source-sensitive
+All review stages also check Replay isolation. The final pre-revalidation
+command runs repository quality checks for the target and managed Rust projects.
+Source-sensitive
 `demo.test` and `sample.test` values are checked in test code too. `.trp.test`
 is prohibited in all added Rust lines; other private Replay hostnames, fake
 addresses, private state and recording artifacts cannot enter production paths.

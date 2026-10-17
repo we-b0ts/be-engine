@@ -25,16 +25,19 @@ paths such as `../backend-rs/src/lib.rs`; use those exact paths in review
 evidence. Tracked candidate changes outside the target and managed paths are
 rejected rather than silently omitted.
 
-The command runs the same complete quality implementation for worker and
-integration deliveries: source rules, Replay isolation, source-sensitive public
-domain checks (including tests), and every configured repository gate such as
-fmt, test, and clippy. It reads the canonical project's gate configuration and
-executes those exact commands in the assigned worktree. A locally modified
-project configuration cannot waive a required gate. Failures stay with the
-delivery: fix them before returning a handoff.
+Worker review checks source rules, Replay isolation, source-sensitive public
+domain values (including test code), and the exact assignment/code/input
+identities. It does not execute repository commands such as fmt, workspace
+tests or Clippy. Run tests relevant to the changes as needed and return their
+results. Build and debug as needed to establish API correctness. You do not
+need to run Clippy; the code integrator runs the engine-managed full quality
+check before final revalidation. A passing worker report establishes handoff
+eligibility; it does not certify complete integration quality. Fix source and
+isolation findings before returning a handoff.
 
 Consume `status`, `findings`, `quality`, `next_step`, and `report_path`. The
-quality section retains isolation findings and each command's result/log path.
+quality section retains isolation findings; worker review has no mandatory
+repository-command results.
 Exit code zero only
 means the command executed. For `changes_required`, fix the code. For
 `evidence_required`, inspect source using the evidence contract and extend the
@@ -48,7 +51,9 @@ Public-domain exceptions never waive private Replay markers.
 The bundled organization script may be an earlier local check; it does not
 replace this report. Reports bind the code, canonical configuration, runtime
 inputs, and rules. Any later edit, commit, or relevant input change requires
-another check. A source-only legacy report cannot qualify as full quality proof.
+another check. Reports identify the worker check stage; an obsolete or missing
+stage cannot qualify for handoff. A worker report cannot replace integration
+review or the separate final pre-revalidation receipt.
 
 ## Return And Stop
 

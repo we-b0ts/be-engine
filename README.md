@@ -75,6 +75,16 @@ transitions, and exposes only bounded evidence queries. Direct `prepare`,
 `run-api` and report-oriented commands remain available to traffic
 operators and system maintainers.
 
+Workers build and run relevant tests as needed; ordinary worker/integration
+review checks Source rules, Replay isolation and delivery identity. Before the
+final full revalidation, the engine returns `pre_revalidation_review_required`.
+The integrator executes the supplied `review check --pre-revalidation
+--worktree ...` once for the final candidate, including full format/tests/Clippy,
+then the coordinator publishes and admits that exact report. The skill does not
+require a duplicate Cargo suite. Ordinary review receipts cannot replace this
+final proof; relevant changes invalidate it, while progress-only publication can
+reuse matching admitted proof.
+
 Nonpassing focused E2E attempts reuse the active immutable standard cases.
 Recording is external to rewrite. Place completed batches in
 `.traffic-e2e/local/artifacts/recordings/<run-id>/`; use `recording_run_id` in
