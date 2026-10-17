@@ -611,6 +611,12 @@ fn sequence(value: &request::RedisRequestSelector, fact: &str) -> Result<n::Redi
                                                 transform: transform_kind(field.identity.transform),
                                             })
                                         }
+                                        request::JsonField::Random(field) => {
+                                            n::SequenceField::Random {
+                                                format: field.random.format.clone(),
+                                                length: field.random.length,
+                                            }
+                                        }
                                         request::JsonField::Jwt(field) => n::SequenceField::Jwt {
                                             algorithm: algorithm(field.jwt.algorithm),
                                             signing_key: startup(&field.jwt.signing_key_source),

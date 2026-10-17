@@ -218,6 +218,14 @@ decoded slashes, backslashes and control characters are rejected.
   Missing clocks, invalid dates and out-of-window values fail even when the
   source and target literals are equal. There is no configurable tolerance.
 
+  With explicit Source proof that overwrite requests reuse an existing object
+  key, `mode: preserve_or_request_window` also permits a valid timestamp outside
+  that window when the **entire decoded path identity** is byte-identical.
+  Changing a nonce or any other identity component still requires both clocks
+  to satisfy the ordinary request window. Invalid calendar dates always fail.
+  The default `mode: request_window` retains the strict behavior above. Do not
+  relabel an old calendar date as random hex to bypass its contract.
+
 Capture changes only the declared path identity. Uploaded bodies retain
 ordinary strict comparison, including text that contains the filename.
 Surrounding path segments, queries, headers and finite exchange inventory keep

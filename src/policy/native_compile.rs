@@ -608,6 +608,11 @@ fn validate_sequence(rule: &NativeRule, sequence: &RedisSequenceEffect) -> Resul
                         proven(field, |field| match field {
                             SequenceField::Time(time) => validate_time(time),
                             SequenceField::Identity(reference) => validate_reference(reference),
+                            SequenceField::Random { format, length } => {
+                                crate::value_contract::generated::validate_bounded_random(
+                                    format, *length,
+                                )
+                            }
                             SequenceField::Jwt {
                                 algorithm,
                                 signing_key,

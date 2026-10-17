@@ -3,6 +3,8 @@ use super::*;
 use crate::policy::{Slot, Surface};
 use crate::policy_evidence::{SourceIdentity, SourceRole, TargetRole, WitnessMetadata};
 use crate::value_contract::json::AnchorClocks;
+#[cfg(test)]
+mod attachment_tests;
 mod witness;
 pub(crate) use witness::{
     source_witness, validate_witness, witness_matches, witness_metadata_matches, witness_value,

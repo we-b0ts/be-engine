@@ -1,5 +1,6 @@
 //! Complete native HTTP envelopes; codec decoding never normalizes HTTP headers.
 use super::*;
+use crate::dependency::http_limits::{MAX_BASE64_BODY_BYTES, MAX_BODY_BYTES, MAX_WITNESS_BYTES};
 use anyhow::ensure;
 use std::path::Path;
 
@@ -79,20 +80,13 @@ pub(super) fn from_record(record: &RecordedHttpExchange, surface: Surface) -> Re
     let identity = identity_from_record(record)?;
     let mut value = serde_json::json!({"protocol":"http","exchange_id":record.id,"scheme":identity.scheme,
         "endpoint":{"host":identity.target.host,"port":identity.target.port},"method":record.method.to_ascii_uppercase(),
-        "uri":record.uri,"request_headers":record.request_headers,"request_body":STANDARD.encode(decode_body(&record.request_body)?),
+        "uri":record.uri,"request_headers":record.request_headers,"request_body":encode_body(&record.request_body)?,
         "request_started_at":request_headers::time_reference::source(record)});
     if surface == Surface::DependencyResponse {
         value["response_status"] = serde_json::to_value(record.response_status)?;
         value["response_headers"] = serde_json::to_value(&record.response_headers)?;
-        value["response_body"] = serde_json::to_value(
-            record
-                .response_body
-                .as_ref()
-                .map(decode_body)
-                .transpose()?
-                .as_ref()
-                .map(|body| STANDARD.encode(body)),
-        )?;
+        value["response_body"] =
+            serde_json::to_value(record.response_body.as_ref().map(encode_body).transpose()?)?;
         value["response_delivered_at"] = serde_json::to_value(record.timestamp)?;
         value["outcome"] = serde_json::to_value(record.outcome)?;
         value["error"] = serde_json::to_value(&record.error)?;
@@ -263,15 +257,31 @@ fn target_bytes(value: &Value) -> Result<Vec<u8>> {
     Ok(serde_json::to_vec(value)?)
 }
 fn capture(value: &Value) -> Result<Vec<u8>> {
-    Ok(STANDARD.decode(
-        value
-            .as_str()
-            .context("HTTP witness body capture unavailable")?,
-    )?)
+    let encoded = value
+        .as_str()
+        .context("HTTP witness body capture unavailable")?;
+    ensure!(
+        encoded.len() <= MAX_BASE64_BODY_BYTES,
+        "HTTP witness body exceeds 64 MiB"
+    );
+    let body = STANDARD.decode(encoded)?;
+    ensure!(
+        body.len() <= MAX_BODY_BYTES,
+        "HTTP witness body exceeds 64 MiB"
+    );
+    Ok(body)
+}
+fn encode_body(capture: &RecordedBodyCapture) -> Result<String> {
+    let body = decode_body(capture)?;
+    ensure!(
+        body.len() <= MAX_BODY_BYTES,
+        "HTTP witness body exceeds 64 MiB"
+    );
+    Ok(STANDARD.encode(body))
 }
 fn parse(bytes: &[u8]) -> Result<Value> {
     ensure!(
-        bytes.len() <= 8 * 1024 * 1024,
+        bytes.len() <= MAX_WITNESS_BYTES,
         "HTTP witness envelope is oversized"
     );
     let value: Value = serde_json::from_slice(bytes)?;

@@ -20,6 +20,17 @@ contract. This preserves strict stable fields and avoids exempting an entire SET
 
 ## Source request conditions
 
+An atomic native `redis_sequence` may select an independent generated JSON
+token with `{kind: random, format: base64url, length: 43}` (or `format: hex`).
+`length` is the encoded ASCII length and must be 1–1024; base64url is canonical
+and unpadded. For `token_urlsafe(32)`, use length 43. Each selected field needs
+Source generation proof. The contract validates both values without deriving
+the token from a separately captured key identity. Key capture, creation/expiry
+time contracts, exact unselected JSON fields, TTL/options, lane order and finite
+consumption still apply. It does not authorize a token in a PUBLISH body or
+create a cross-request identity binding. Plan/apply retains genuine Target
+Replay obligations even when the immutable Source trace validates.
+
 Both rule families accept an optional top-level `when` to select the Source
 branch that generates a dependency value. For Redis protocol rules, only argument
 request contracts support `when`; unordered values, lock tokens, PUBLISH UUIDs

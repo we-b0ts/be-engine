@@ -1,6 +1,7 @@
 use super::*;
 use serde_json::json;
 mod protocols;
+mod recorded_skip;
 
 fn proof() -> Value {
     json!({"source":"source.rs:trace","fact":"The complete Source trace validates every selected relationship"})
@@ -42,6 +43,51 @@ fn redis(command: &str, args: &[&str], sequence: u64) -> Value {
 }
 fn resource() -> Value {
     json!({"protocol":"redis","endpoint":"cache.test:6379","database":0,"username":"writer"})
+}
+
+#[test]
+fn source_session_validates_independent_random_json_with_a_generated_session_key() {
+    use base64::Engine as _;
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([17; 32]);
+    let definition = json!({"id":"create-session","match":{"api":"POST /tasks","resource":resource(),
+        "key":{"kind":"affix","prefix":"sessions:"}},"effect":{"kind":"redis_sequence",
+        "key":{"contract":{"kind":"capture","binding":"session","template":"sessions:{value}","format":{"kind":"uuid_v4"}},"proof":proof()},
+        "commands":[{"operation":"SET","arguments":{"1":{"contract":{"kind":"json","fields":{
+            "/poll_token":{"contract":{"kind":"random","format":"base64url","length":43},"proof":proof()},
+            "/created_at":{"contract":{"kind":"time","format":"unix_seconds","relation":"preserve_offset","anchor":"case.request_start"},"proof":proof()}
+        }},"proof":proof()}}}]},"proof":proof()});
+    let policy = compile(vec![definition.clone()]);
+    let data = json!({"poll_token":token,"created_at":1000,"status":"pending"}).to_string();
+    let event = redis(
+        "SET",
+        &[
+            "sessions:01234567-89ab-4def-8123-456789abcdef",
+            &data,
+            "EX",
+            "300",
+        ],
+        1,
+    );
+    assert_eq!(
+        check(&policy, std::slice::from_ref(&event)).unwrap().rules["create-session"],
+        1
+    );
+    let mut bad = event;
+    bad["args"][1]["data"] =
+        json!(json!({"poll_token":"bad","created_at":1000,"status":"pending"}).to_string());
+    assert!(check(&policy, &[bad]).is_err());
+    for (field, value) in [
+        ("format", json!("string")),
+        ("length", json!(0)),
+        ("length", json!(1025)),
+    ] {
+        let mut bad = definition.clone();
+        bad["effect"]["commands"][0]["arguments"]["1"]["contract"]["fields"]["/poll_token"]["contract"]
+            [field] = value;
+        let document =
+            serde_json::from_value(json!({"format":"traffic-policy/v1","rules":[bad]})).unwrap();
+        assert!(crate::policy::compile_policy(&document).is_err());
+    }
 }
 
 #[test]

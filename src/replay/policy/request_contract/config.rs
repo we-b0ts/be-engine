@@ -49,6 +49,46 @@ pub(crate) enum JsonField {
     Time(TimeField),
     Jwt(JwtField),
     Identity(super::key::IdentityField),
+    Random(RandomField),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RandomField {
+    pub random: RandomContract,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RandomContract {
+    pub format: crate::policy::native::RandomEncoding,
+    pub length: usize,
+}
+
+impl RandomContract {
+    pub(crate) fn validate(&self) -> Result<()> {
+        crate::value_contract::generated::validate_bounded_random(&self.format, self.length)
+    }
+
+    pub(super) fn compare(
+        &self,
+        source: &serde_json::Value,
+        target: &serde_json::Value,
+    ) -> Result<()> {
+        crate::value_contract::generated::compare_value(
+            source,
+            target,
+            &crate::policy::native::GeneratedResponse::Random {
+                format: self.format.clone(),
+                length: Some(self.length),
+            },
+            None,
+            "redis-json-random",
+            crate::value_contract::json::AnchorClocks::default(),
+        )
+        .map_err(|_| anyhow::anyhow!("random Redis JSON field has invalid type or encoding"))?;
+        Ok(())
+    }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -225,6 +265,7 @@ impl RedisRequestSelector {
                             );
                             match field {
                                 JsonField::Identity(reference) => reference.identity.validate()?,
+                                JsonField::Random(field) => field.random.validate()?,
                                 JsonField::Time(time) => {
                                     time.validate()?;
                                 }

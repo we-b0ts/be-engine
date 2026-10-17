@@ -28,6 +28,11 @@ pub enum PathSegmentField {
         format: String,
         #[serde(default = "utc_timezone", skip_serializing_if = "is_utc_timezone")]
         timezone: String,
+        #[serde(
+            default,
+            skip_serializing_if = "crate::policy::native::PathTimestampMode::is_request_window"
+        )]
+        mode: crate::policy::native::PathTimestampMode,
     },
 }
 
@@ -81,7 +86,9 @@ impl PathSegmentCapture {
                     format == "hex" && (1..=1024).contains(length),
                     "random path fields require format hex and length 1..1024"
                 ),
-                PathSegmentField::Timestamp { format, timezone } => ensure!(
+                PathSegmentField::Timestamp {
+                    format, timezone, ..
+                } => ensure!(
                     format == "%Y%m%d%H%M%S" && timezone == "UTC",
                     "path timestamp requires format %Y%m%d%H%M%S and timezone UTC"
                 ),
@@ -192,7 +199,7 @@ impl PathSegmentCapture {
                         && value.bytes().all(|byte| byte.is_ascii_hexdigit())),
                     "random path field has invalid shape"
                 ),
-                PathSegmentField::Timestamp { format, .. } => {
+                PathSegmentField::Timestamp { format, mode, .. } => {
                     let parse = |text: &str| -> Result<DateTime<Utc>> {
                         ensure!(
                             text.len() == 14 && text.bytes().all(|byte| byte.is_ascii_digit()),
@@ -211,6 +218,11 @@ impl PathSegmentCapture {
                         Ok(parsed.and_utc())
                     };
                     let (a, b) = (parse(a)?, parse(b)?);
+                    if *mode == crate::policy::native::PathTimestampMode::PreserveOrRequestWindow
+                        && source == target
+                    {
+                        continue;
+                    }
                     compare(
                         ResponseTimeRule::Timestamp {
                             mode: Default::default(),

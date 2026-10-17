@@ -274,3 +274,40 @@ fn stateful_sequence_plan_requires_the_complete_source_trace_and_preserves_targe
         assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
     }
 }
+
+#[test]
+fn independent_redis_nonce_with_key_capture_survives_public_plan_and_apply() {
+    let fixture = Fixture::new();
+    let proof = json!({"source":"src/auth.rs:create_session","fact":"Source writes an independent canonical token_urlsafe(32) with a fresh UUID key and fixed TTL"});
+    write(
+        &fixture.proposal,
+        json!({"id":"session-nonce","match":{"api":"GET /api",
+        "resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},
+        "key":{"kind":"affix","prefix":"sessions:"}},"effect":{"kind":"redis_sequence",
+        "key":{"kind":"capture","binding":"session","template":"sessions:{value}","format":{"kind":"uuid_v4"}},
+        "commands":[{"operation":"SET","arguments":{"1":{"kind":"json","fields":{
+            "/poll_token":{"kind":"random","format":"base64url","length":43}
+        }}}}]},"proof":proof}),
+    );
+    let source = fixture
+        .state()
+        .case_source
+        .as_ref()
+        .unwrap()
+        .join("apis/api/case-1");
+    fs::write(source.join("dependencies.jsonl"),json!({"event_type":"redis_exchange","timestamp":"2026-10-16T00:00:00Z",
+        "connection_id":uuid::Uuid::nil(),"sequence":1,"duration_ms":0,"target_host":"cache.test","target_port":6379,
+        "database":0,"resp_version":2,"command":"SET","args":[raw_body(b"sessions:01234567-89ab-4def-8123-456789abcdef"),
+            raw_body(json!({"poll_token":"A".repeat(43),"status":"pending"}).to_string().as_bytes()),raw_body(b"EX"),raw_body(b"300")],
+        "response_kind":"simple_string","response":raw_body(b"+OK\r\n"),"outcome":"response","replay_safe":true}).to_string()).unwrap();
+    fixture.confirm();
+    let planned = fixture.plan().unwrap();
+    assert_eq!(planned.traffic_e2e_report["status"], "planned_needs_replay");
+    assert_eq!(
+        planned.traffic_e2e_report["preflight"]["rules"]["session-nonce"],
+        1
+    );
+    let applied = apply_rewrite_rule(fixture.context(), &planned.plan_id).unwrap();
+    assert_eq!(applied.traffic_e2e_report["verified"], false);
+    assert!(fixture.state().rule_replay_pending);
+}

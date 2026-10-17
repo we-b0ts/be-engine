@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_FAKE_CIDR: &str = "198.19.0.0/16";
-pub(crate) const DEFAULT_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const DEFAULT_BODY_LIMIT_BYTES: usize = crate::dependency::http_limits::MAX_BODY_BYTES;
 
 mod allowed_unused_http;
 pub(crate) mod api_trigger;

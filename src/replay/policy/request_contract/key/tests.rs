@@ -17,6 +17,59 @@ fn capture() -> ReplayDependencyRule {
         }}}}]}),
     )
 }
+
+#[test]
+fn independent_random_json_tokens_compose_with_key_capture_and_time_contracts() {
+    let mut selected = serde_json::to_value(capture()).unwrap();
+    selected["redis"]["commands"][0]["argument_values"]["1"]["json"]["/poll_token"] =
+        json!({"random":{"format":"base64url","length":43}});
+    let selected: ReplayDependencyRule = serde_json::from_value(selected).unwrap();
+    validate(&selected).unwrap();
+    let runtime = runtime(selected);
+    use base64::Engine as _;
+    let encode = |byte| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([byte; 32]);
+    let source = json!({"id":"aabb","poll_token":encode(1),"expires_at":1300,"status":"pending"})
+        .to_string();
+    let actual = json!({"id":"1122","poll_token":encode(2),"expires_at":2300,"status":"pending"})
+        .to_string();
+    compare(
+        &runtime,
+        "SET",
+        &["sessions:aabb", &source, "EX", "300"],
+        &["sessions:1122", &actual, "EX", "300"],
+    )
+    .unwrap();
+    for (pointer, value) in [
+        ("/poll_token", json!("a".repeat(42))),
+        ("/poll_token", json!("/".repeat(43))),
+        ("/poll_token", json!(format!("{}B", "A".repeat(42)))),
+        ("/poll_token", json!(7)),
+        ("/status", json!("done")),
+        ("/expires_at", json!(2310)),
+        ("/id", json!("3344")),
+    ] {
+        let mut changed: serde_json::Value = serde_json::from_str(&actual).unwrap();
+        *changed.pointer_mut(pointer).unwrap() = value;
+        assert!(
+            compare(
+                &runtime,
+                "SET",
+                &["sessions:aabb", &source, "EX", "300"],
+                &["sessions:1122", &changed.to_string(), "EX", "300"]
+            )
+            .is_err()
+        );
+    }
+    assert!(
+        compare(
+            &runtime,
+            "SET",
+            &["sessions:aabb", &source, "EX", "300"],
+            &["sessions:1122", &actual, "EX", "301"]
+        )
+        .is_err()
+    );
+}
 fn compare(
     runtime: &RequestContracts,
     command: &str,
