@@ -76,3 +76,9 @@ payload bytes and per-case timings across repeated runs. These measurements
 isolate the engine stages; they are not application HTTP throughput or a full
 API correctness verdict. A recording with previously omitted Target observations
 only supplies its retained request subset and must be labelled accordingly.
+
+`scripts/bench-recorded-replay-performance.py` runs each API/repeat in a fresh
+saved test process, records process CPU/RSS and checks the original input hashes.
+Run baseline and candidate sequentially with no build in flight. The measured
+[sync-device/tasks comparison](replay-candidate-benchmark.md) includes all private
+directory and payload bytes in its storage totals.
