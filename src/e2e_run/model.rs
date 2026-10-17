@@ -76,13 +76,6 @@ pub(super) struct TargetProjectConfig {
     pub runtime_outputs: Vec<crate::runtime_output::RuntimeOutputConfig>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct TargetQualityGateConfig {
-    pub name: String,
-    pub argv: Vec<String>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ReplayProjectConfig {
@@ -189,7 +182,6 @@ pub(crate) struct ResolvedProjectConfig {
     pub(crate) target_readiness_status: u16,
     pub(crate) target_startup_timeout: Duration,
     pub(crate) target_request_timeout: Duration,
-    pub(crate) target_quality_gates: Vec<TargetQualityGateConfig>,
     pub(crate) target_max_response_bytes: usize,
     pub(crate) replay_policy: PathBuf,
     pub(crate) replay_case_dependency_post_response_window: Duration,

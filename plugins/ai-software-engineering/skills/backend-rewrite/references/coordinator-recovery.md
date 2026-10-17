@@ -19,8 +19,11 @@ required repair. The coordinator does not repair code while idle. Read global
 status again after installing the repair.
 Until the relevant revision changes, it is counted in `waiting.system_repair`
 and `action.details.acceptance_ready` is false. Other ready worker work continues. The engine can park this API with its exact
-issue, evidence, route, and repair identity while verifying other APIs. After every implementation is accepted or confirmed as a gap, deferred
-revalidation starts a persistent round. Drain all its members before acting on
+issue, evidence, route, and repair identity while verifying other APIs. After
+every implementation is accepted or confirmed as a gap, the engine requires
+current final pre-revalidation proof before deferred revalidation starts a
+persistent round. Follow `pre_revalidation_review_required` through
+[final review](coordinator-review.md#final-review-before-full-revalidation). Drain all its members before acting on
 new repair or worker handoffs, even if individual APIs fail. Recovery retains
 remaining membership; fingerprint changes do not repeat finished members.
 After eligible revalidation drains, a global `blocked` action stops this run

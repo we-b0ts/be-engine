@@ -1,6 +1,9 @@
 use super::*;
 use crate::rewrite::worker::tests::{configured_target, implementation_state_with_inventory};
 
+#[path = "tests/worker_quality.rs"]
+mod worker_quality;
+
 pub(in crate::rewrite) fn worker_report(root: &Path, scope: RewriteWorkScope) -> PathBuf {
     check(RewriteReviewOptions {
         target_root: root.into(),
@@ -584,7 +587,7 @@ fn nested_target_maps_repository_worktree_and_reviews_managed_sibling() {
 }
 
 #[test]
-fn review_applies_the_same_rust_gates_to_a_managed_sibling() {
+fn review_covers_managed_siblings_without_executing_cargo() {
     let repository = tempfile::tempdir().unwrap();
     let target = repository.path().join("service");
     let sibling = repository.path().join("shared");
@@ -644,15 +647,10 @@ fn review_applies_the_same_rust_gates_to_a_managed_sibling() {
     .unwrap();
     assert_eq!(
         unchanged.required_gates,
-        [
-            "source-review",
-            "replay-isolation",
-            "managed-1-rust-format",
-            "managed-1-rust-test",
-            "managed-1-rust-clippy"
-        ]
+        ["source-review", "replay-isolation"]
     );
-    assert_eq!(unchanged.quality.unwrap().commands.len(), 3);
+    assert!(unchanged.quality.unwrap().commands.is_empty());
+    assert!(!sibling.join("target").exists());
 
     fs::write(
         sibling.join("src/lib.rs"),
@@ -675,15 +673,10 @@ fn review_applies_the_same_rust_gates_to_a_managed_sibling() {
     assert_eq!(changed.status, ReviewStatus::Passed);
     assert_eq!(
         changed.required_gates,
-        [
-            "source-review",
-            "replay-isolation",
-            "managed-1-rust-format",
-            "managed-1-rust-test",
-            "managed-1-rust-clippy"
-        ]
+        ["source-review", "replay-isolation"]
     );
-    assert_eq!(changed.quality.unwrap().commands.len(), 3);
+    assert!(changed.quality.unwrap().commands.is_empty());
+    assert!(!sibling.join("target").exists());
 }
 
 #[test]

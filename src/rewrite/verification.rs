@@ -30,6 +30,11 @@ async fn run_attempt_and_transition(
     state: &mut RewriteState,
     route_batch: bool,
 ) -> Result<bool> {
+    // Explicit API selection and a resumed round must share the same admission
+    // boundary as status/next before starting any traffic execution.
+    if super::review::pre_revalidation::required_action(target_root, state)?.is_some() {
+        return Ok(false);
+    }
     let in_round = state.revalidation_round.is_some();
     let replay_target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
     let case_source = state
@@ -71,4 +76,32 @@ async fn run_attempt_and_transition(
     Ok(!results.is_empty()
         && (results.iter().all(|result| result.passed)
             || in_round && state.revalidation_round.is_some()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn missing_final_review_stops_at_the_replay_execution_boundary() {
+        let target = crate::rewrite::worker::tests::configured_target();
+        let mut state = crate::rewrite::test_state();
+        crate::rewrite::inventory::install(&mut state, vec!["GET /a".into()]).unwrap();
+        state.api_inventory[0].status =
+            crate::rewrite::model::RewriteApiStatus::RevalidationPending;
+        state.phase = RewritePhase::SliceComplete;
+        state.current_api_index = None;
+        assert!(crate::rewrite::inventory::revalidation_round::begin(
+            &mut state
+        ));
+        // No case source is prepared: reaching execution setup would fail. The
+        // final gate must stop even callers that already hold a round member.
+        assert!(state.case_source.is_none());
+        assert!(
+            !run_and_transition(target.path(), &mut state, false)
+                .await
+                .unwrap()
+        );
+        assert!(state.attempts.is_empty());
+    }
 }

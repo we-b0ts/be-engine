@@ -2,7 +2,7 @@
 pub(in crate::replay) use crate::value_contract::encoded::{compare, merged_codec};
 use crate::{
     policy::CompiledRule,
-    value_codec::{CodecView, DecodedValue},
+    value_codec::{CodecPlan, DecodedValue},
     value_contract::json::{AnchorClocks, Comparison},
 };
 use anyhow::{Result, ensure};
@@ -21,8 +21,8 @@ impl Delivery {
         rules: &[&CompiledRule],
         clocks: AnchorClocks,
     ) -> Result<Self> {
-        let codec = merged_codec(rules)?;
-        let decoded = CodecView::decode(&codec, source)?;
+        let codec = CodecPlan::compile(&merged_codec(rules)?)?;
+        let decoded = codec.decode(source)?;
         for rule in rules {
             for pointer in rule.delivery_time.keys() {
                 ensure!(
@@ -36,9 +36,9 @@ impl Delivery {
                 source: pair.source,
                 target: pair.source,
             };
-        let check = compare(
-            source,
-            source,
+        let check = crate::value_contract::encoded::compare_decoded(
+            &decoded,
+            &decoded,
             rules,
             AnchorClocks {
                 case: source_clock(clocks.case),
@@ -74,3 +74,6 @@ impl Delivery {
         &self.source_validation
     }
 }
+
+#[cfg(test)]
+mod tests;

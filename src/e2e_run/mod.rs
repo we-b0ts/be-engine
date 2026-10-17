@@ -26,7 +26,6 @@ mod runtime;
 mod startup_inputs;
 mod store;
 mod support;
-mod target_quality_config;
 #[cfg(test)]
 pub(crate) mod test_session;
 
@@ -66,7 +65,7 @@ pub(crate) use execute::{recover_focused_e2e_api, run_e2e_apis};
 pub(crate) use http_driver::wait_until_ready;
 pub use model::DEFAULT_MAX_FAILED_CASES_PER_API;
 use model::{CaseStatus, RunStatus};
-pub(crate) use model::{ResolvedProjectConfig, TargetBuildContext, TargetQualityGateConfig};
+pub(crate) use model::{ResolvedProjectConfig, TargetBuildContext};
 pub(crate) use reclassify::{
     FocusedBackgroundReclassification, ensure_focused_background_reclassification_revisable,
     focused_background_reclassification_pending,

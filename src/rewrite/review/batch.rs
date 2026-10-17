@@ -189,7 +189,14 @@ pub fn check_file(options: RewriteReviewOptions, path: &Path) -> Result<RewriteR
                 );
             }
             // Use the same state snapshot for identity checks and the complete review.
-            super::check_candidate(&target_root, &project, &state, options, Some(&selections))
+            super::check_candidate(
+                &target_root,
+                &project,
+                &state,
+                options,
+                Some(&selections),
+                false,
+            )
         }
     }
 }

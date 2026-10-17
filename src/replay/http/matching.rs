@@ -14,6 +14,7 @@ impl ReplayState {
         request_started_at: chrono::DateTime<Utc>,
     ) -> std::result::Result<RecordedHttpExchange, HttpReplayMatchError> {
         let active_case_id = self.active_case_id.clone();
+        let mut observation_id = Some(uuid::Uuid::new_v4());
         if let Some(host) = host
             && !host_matches_target(host, target)
         {
@@ -25,6 +26,33 @@ impl ReplayState {
             return Err(HttpReplayMatchError::BadGateway(reason));
         }
 
+        if let (Some(policy), Some(case)) = (&self.replay_policy, active_case_id.as_deref()) {
+            match contracts::record_target(
+                policy,
+                case,
+                &contracts::RequestView {
+                    observation_id,
+                    scheme,
+                    target,
+                    method,
+                    uri,
+                    headers,
+                    body,
+                    started_at: request_started_at,
+                },
+            ) {
+                Ok(crate::policy_evidence::ObservationRetention::Unavailable) => {
+                    observation_id = None
+                }
+                Ok(crate::policy_evidence::ObservationRetention::Retained) => {}
+                Err(error) => {
+                    tracing::warn!(error = %error, "HTTP Target observation unavailable");
+                    // Global and shared-origin candidates keep native matching.
+                    // Keep the identity: a Case candidate must still associate
+                    // its retained Target before any rule comparison succeeds.
+                }
+            }
+        }
         let mut matching_index = None;
         let mut matching_policy_decision = DependencyRuleDecision::default();
         let mut matching_dynamic_decision =
@@ -49,6 +77,9 @@ impl ReplayState {
                         policy,
                         exchange,
                         &contracts::RequestView {
+                            observation_id,
+                            scheme,
+                            target,
                             method,
                             uri,
                             headers,
@@ -189,6 +220,9 @@ impl ReplayState {
                         policy,
                         exchange,
                         &contracts::RequestView {
+                            observation_id,
+                            scheme,
+                            target,
                             method,
                             uri,
                             headers,
@@ -374,6 +408,7 @@ impl ReplayState {
             && (exchange.record.error.is_some() || exchange.record.response_status.is_none())
         {
             self.http_exchanges[index].status = crate::replay::ReplayExchangeStatus::Consumed;
+            self.refresh_http_global_report(index);
             let reason = "recorded HTTP exchange contains an upstream error that replay v1 cannot synthesize"
                 .to_string();
             if let Some(case_id) = &exchange.case_id {
@@ -446,6 +481,7 @@ impl ReplayState {
             )));
         }
         self.http_exchanges[index].status = crate::replay::ReplayExchangeStatus::Consumed;
+        self.refresh_http_global_report(index);
         self.complete_http_exchange(detail);
         Ok(exchange.record)
     }

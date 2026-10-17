@@ -1,4 +1,5 @@
 use super::*;
+mod observations;
 
 fn setup() -> (tempfile::TempDir, PathBuf, WitnessStore, WitnessMetadata) {
     let temp = tempfile::tempdir().unwrap();
@@ -35,12 +36,24 @@ fn sealed_private_witnesses_preserve_roles_bytes_and_complete_coverage() {
     let source = b"private-source-body";
     let target = b"private-target-body";
     let reference = store
-        .record(metadata.clone(), &artifacts, source, Some(target))
+        .record_observation(
+            metadata.clone(),
+            &artifacts,
+            source,
+            Some(target),
+            Some("request-1"),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(
         store
-            .record(metadata, &artifacts, source, Some(target))
+            .record_observation(
+                metadata,
+                &artifacts,
+                source,
+                Some(target),
+                Some("request-1")
+            )
             .unwrap(),
         Some(reference.clone())
     );
@@ -48,7 +61,7 @@ fn sealed_private_witnesses_preserve_roles_bytes_and_complete_coverage() {
     assert!(manifest.complete && manifest.sealed);
     assert_eq!(
         (manifest.observed, manifest.recorded, manifest.omitted),
-        (1, 1, 0)
+        (2, 2, 0)
     );
     let report = artifacts.join("replay.json");
     let path = verify(&report, &manifest).unwrap();

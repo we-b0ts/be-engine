@@ -1,7 +1,7 @@
 //! Pure typed-codec comparison shared by Replay and evidence preflight.
 use crate::{
     policy::{Codec, CompiledRule},
-    value_codec::CodecView,
+    value_codec::{CodecPlan, DecodedValue},
     value_contract::json::{self, AnchorClocks, Comparison, Field},
 };
 use anyhow::{Context, Result, ensure};
@@ -13,13 +13,13 @@ pub(crate) fn materialize(
     rules: &[&CompiledRule],
     clocks: AnchorClocks,
 ) -> Result<Vec<u8>> {
-    let codec = merged_codec(rules)?;
-    let decoded = CodecView::decode(&codec, source)?;
+    let codec = CodecPlan::compile(&merged_codec(rules)?)?;
+    let decoded = codec.decode(source)?;
     materialize_decoded(&decoded, rules, clocks)
 }
 
 pub(crate) fn materialize_decoded(
-    decoded: &crate::value_codec::DecodedValue,
+    decoded: &DecodedValue,
     rules: &[&CompiledRule],
     clocks: AnchorClocks,
 ) -> Result<Vec<u8>> {
@@ -49,9 +49,20 @@ pub(crate) fn compare(
     rules: &[&CompiledRule],
     clocks: AnchorClocks,
 ) -> Result<Comparison> {
-    let codec = merged_codec(rules)?;
-    let source = CodecView::decode(&codec, source)?;
-    let target = CodecView::decode(&codec, target)?;
+    let codec = CodecPlan::compile(&merged_codec(rules)?)?;
+    let source = codec.decode(source)?;
+    let target = codec.decode(target)?;
+    compare_decoded(&source, &target, rules, clocks)
+}
+
+/// Reuse immutable decoded evidence, while evaluating permissions, conditions
+/// and independently supplied clocks afresh for this comparison.
+pub(crate) fn compare_decoded(
+    source: &DecodedValue,
+    target: &DecodedValue,
+    rules: &[&CompiledRule],
+    clocks: AnchorClocks,
+) -> Result<Comparison> {
     let fields = rules
         .iter()
         .flat_map(|rule| {
@@ -65,12 +76,12 @@ pub(crate) fn compare(
                 })
         })
         .collect::<Vec<_>>();
-    Ok(json::compare(
-        &source.comparison_value(&comparison_paths(&source.logical, rules)?),
-        &target.comparison_value(&comparison_paths(&target.logical, rules)?),
-        &fields,
-        clocks,
-    ))
+    let source_view = source.comparison_view(&comparison_paths(&source.logical, rules)?);
+    if std::ptr::eq(source, target) {
+        return Ok(json::compare(&source_view, &source_view, &fields, clocks));
+    }
+    let target_view = target.comparison_view(&comparison_paths(&target.logical, rules)?);
+    Ok(json::compare(&source_view, &target_view, &fields, clocks))
 }
 
 /// Retain native PB wire identity for every inactive field. The actual field

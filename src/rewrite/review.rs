@@ -14,6 +14,7 @@ mod candidate;
 mod evidence;
 mod integrated;
 mod model;
+pub(in crate::rewrite) mod pre_revalidation;
 mod repair;
 mod scan;
 pub use batch::{
@@ -35,7 +36,7 @@ pub fn check(options: RewriteReviewOptions) -> Result<RewriteReviewReport> {
     let state = RewriteStore::new(&target_root)?
         .load()?
         .context("rewrite workflow is not initialized")?;
-    check_candidate(&target_root, &project, &state, options, None)
+    check_candidate(&target_root, &project, &state, options, None, false)
 }
 
 pub fn check_batch(
@@ -57,17 +58,63 @@ pub fn check_batch(
     let state = RewriteStore::new(&target_root)?
         .load()?
         .context("rewrite workflow is not initialized")?;
-    check_candidate(&target_root, &project, &state, options, Some(&handoffs))
+    check_candidate(
+        &target_root,
+        &project,
+        &state,
+        options,
+        Some(&handoffs),
+        false,
+    )
 }
 
-// The only complete quality-check pipeline. Both worker and integrator invoke
-// this explicitly in their delivery worktree; coordinator advancement never does.
+/// The integrator's sole complete-check entry point, serialized with coordinator
+/// transitions so concurrent invocations cannot duplicate the heavy suite.
+pub fn check_pre_revalidation(mut options: RewriteReviewOptions) -> Result<RewriteReviewReport> {
+    ensure!(
+        options.scope.is_none() && options.handoff_id.is_none() && options.worktree.is_some(),
+        "pre-revalidation review requires a global integration worktree without a handoff"
+    );
+    options.integration = true;
+    let (root, project) = crate::e2e_run::resolve_project(&options.target_root)?;
+    let store = RewriteStore::new(&root)?;
+    let _lock = store.lock()?;
+    ensure!(
+        matches!(
+            super::traffic_operation::state(&root)?,
+            super::traffic_operation::TrafficOperationState::Absent
+        ),
+        "final review must wait for traffic verification"
+    );
+    let state = store
+        .load()?
+        .context("rewrite workflow is not initialized")?;
+    ensure!(
+        pre_revalidation::ready(&state),
+        "finish API implementations and integrations before final review"
+    );
+    if let Some(report) = pre_revalidation::reusable(
+        &root,
+        options.worktree.as_deref().expect("worktree checked above"),
+        &state,
+        &project,
+    )? {
+        return Ok(report);
+    }
+    let mut report = check_candidate(&root, &project, &state, options, None, true)?;
+    pre_revalidation::remember(&root, &mut report)?;
+    Ok(report)
+}
+
+// Ordinary delivery checks are lightweight; the explicit final mode executes
+// repository commands and binds its receipt to the complete regression scope.
 fn check_candidate(
     target_root: &Path,
     project: &crate::e2e_run::ResolvedProjectConfig,
     state: &RewriteState,
     mut options: RewriteReviewOptions,
     batch: Option<&[IntegrationHandoffSelection]>,
+    final_review: bool,
 ) -> Result<RewriteReviewReport> {
     options.scope = options
         .scope
@@ -83,7 +130,20 @@ fn check_candidate(
         candidate_project.managed_paths == project.managed_paths,
         "delivery.managed_paths differs from the canonical target; publish configuration changes before reviewing code"
     );
+    if final_review {
+        pre_revalidation::ensure_committed(&root)?;
+    }
     let integration_mode = options.integration || options.worktree.is_none();
+    let final_context = final_review
+        .then(|| pre_revalidation::context(target_root, state))
+        .transpose()?;
+    let quality_scope = if final_review {
+        super::quality::QualityScope::PreRevalidation
+    } else if integration_mode {
+        super::quality::QualityScope::Integration
+    } else {
+        super::quality::QualityScope::Worker
+    };
     let canonical_head = candidate::head(target_root)?;
     let canonical_fingerprint = fingerprint::repository_fingerprint(target_root)?;
     let (base, dispatch, integration) = if integration_mode {
@@ -141,6 +201,9 @@ fn check_candidate(
         code_fingerprint: fingerprint::code_fingerprint(&root)?,
         context_fingerprint: candidate::context(target_root, project)?,
         scan_base_revision: candidate::scan_base(&root, &project.pr_base)?,
+        final_inputs_fingerprint: final_review
+            .then(|| pre_revalidation::input_fingerprint(&root))
+            .transpose()?,
     };
     source_diff::ensure_changed_paths_managed(&root, &validation.scan_base_revision)?;
     // Scan the whole PR in both modes, including code inherited before dispatch.
@@ -153,13 +216,32 @@ fn check_candidate(
     integrated::reuse_evidence(target_root, &root, state, &findings, &mut evidence)?;
     let (mut status, evidence_files) = evidence::evaluate(&root, &findings, &evidence)?;
     let quality = if status == ReviewStatus::Passed {
-        let quality = crate::rewrite::quality::run(
-            &root,
-            &validation.scan_base_revision,
-            &project.target_quality_gates,
-            &options.hardcode_ai_verified,
-        )?;
-        if !quality.passed(&project.target_quality_gates) {
+        let quality = if final_review {
+            super::quality::run_pre_revalidation(
+                &root,
+                &validation.scan_base_revision,
+                &project.managed_paths,
+                &options.hardcode_ai_verified,
+            )?
+        } else if integration_mode {
+            super::quality::run(
+                &root,
+                &validation.scan_base_revision,
+                &options.hardcode_ai_verified,
+            )?
+        } else {
+            super::quality::run_worker(
+                &root,
+                &validation.scan_base_revision,
+                &options.hardcode_ai_verified,
+            )?
+        };
+        let passed = if quality_scope == super::quality::QualityScope::Integration {
+            quality.passed()
+        } else {
+            quality.passed_for(quality_scope)
+        };
+        if !passed {
             status = ReviewStatus::ChangesRequired;
         }
         Some(quality)
@@ -184,9 +266,24 @@ fn check_candidate(
             "canonical base changed while preparing integration review; refresh the candidate"
         );
     }
+    if let Some(context) = final_context.as_ref() {
+        ensure!(
+            validation.final_inputs_fingerprint.as_ref()
+                == Some(&pre_revalidation::input_fingerprint(&root)?),
+            "Cargo or toolchain inputs changed during final review; rerun final review"
+        );
+        let fresh_state = RewriteStore::new(target_root)?
+            .load()?
+            .context("workflow disappeared during final review")?;
+        ensure!(
+            pre_revalidation::ready(&fresh_state)
+                && context == &pre_revalidation::context(target_root, &fresh_state)?,
+            "final regression scope or policy changed during review; rerun final review"
+        );
+    }
     // A returned delivery path must retain its original dispatch even after
     // another review or resumed turn. The coordinator submits this exact file.
-    let report_path = if options.scope.is_some() || batch.is_some() {
+    let report_path = if final_review || options.scope.is_some() || batch.is_some() {
         crate::internal_runtime::root(&root)
             .join("review-reports")
             .join(format!("{}.json", uuid::Uuid::new_v4().simple()))
@@ -199,19 +296,27 @@ fn check_candidate(
     } else {
         unreachable!("worker review requires a scope")
     };
+    let required_gates = if final_review {
+        super::quality::final_gate_names(&root, &project.managed_paths)
+    } else {
+        super::quality::gate_names()
+    };
     let report = RewriteReviewReport {
         schema_version: if batch.is_some() { 3 } else { 2 },
         rules_version: RULE_VERSION.into(), workflow_id: state.workflow_id.clone(),
         dispatch_id: dispatch, scope: options.scope, worktree: root, base_revision: base,
         head_revision: head, target_fingerprint: current, status, files, findings, evidence, evidence_files,
-        report_path: report_path.clone(), quality, validation: Some(validation), integration,
+        report_path: report_path.clone(), quality, validation: Some(validation), integration, pre_revalidation: final_context,
         hardcode_ai_verified: options.hardcode_ai_verified, accepted_target_fingerprint: None,
-        required_gates: crate::rewrite::quality::gate_names(&project.target_quality_gates),
+        required_gates,
         next_step: match status {
-            ReviewStatus::Passed if batch.is_some() => "Return the exact candidate and this report. The coordinator must publish head_revision to canonical HEAD, then use current inventory to report integrated only for listed handoffs still handoff_ready, with this same report. Retain already integrated handoffs; their inclusion binds them to the complete candidate review without repeating their merge or acceptance. Resume only unreported handoffs after interruption; review check does not publish or verify APIs.",
-            ReviewStatus::Passed if integration_mode => "Return the exact candidate and this report. The coordinator must publish head_revision to canonical HEAD before submitting this report through worker report --activity integrated --review-report, or review accept --report for an unscoped review. If both HEADs already match, no merge or new commit is needed; equal file content alone is insufficient. Publication or verification is not performed by review check.",
-            ReviewStatus::Passed => "Deliver this exact code and complete quality report; the coordinator must inspect source evidence before reporting handoff_ready with --review-report.",
-            ReviewStatus::ChangesRequired => "Fix the reported source or quality findings in the delivery worktree. Inspect quality command log_path for compiler/test errors; for hardcoded domains follow the exact source-evidence contract and --hardcode-ai-verified. Rerun review check before returning a handoff.",
+            ReviewStatus::Passed if final_review => "Publish this exact checked candidate, then use review accept --report to admit its final receipt and start the full revalidation sweep. Do not run a duplicate manual Cargo suite. Progress-only publication preserves the receipt; code, inputs, policy or scope changes require a fresh final check.",
+            ReviewStatus::ChangesRequired if final_review => "Inspect the final quality logs. The integrator fixes routine formatting and Clippy findings, commits corrections and reruns review check --pre-revalidation. Return API behavior decisions to the responsible worker. Full revalidation starts only after the passing exact candidate is published and admitted.",
+            ReviewStatus::Passed if batch.is_some() => "Return the exact candidate, this engine source/isolation report, and any targeted tests performed. This ordinary review does not run fmt, tests or Clippy. The coordinator must publish head_revision, then use this report for listed handoffs still handoff_ready. Retain already integrated handoffs and resume only unreported handoffs after interruption; review check does not publish or verify APIs.",
+            ReviewStatus::Passed if integration_mode => "Return this exact candidate, the engine source/isolation report, and any targeted tests performed. This ordinary review does not run fmt, tests or Clippy. The coordinator must publish head_revision before worker report --activity integrated --review-report or review accept --report. Matching HEADs need no new commit; equal files alone do not prove publication. Formal API acceptance remains separate.",
+            ReviewStatus::Passed => "Deliver this exact code and worker source/isolation report, with the relevant tests you ran. Clippy is performed once by the code integrator with review check --pre-revalidation before the final full sweep. The coordinator must inspect source evidence before handoff_ready; integration requires its own candidate review.",
+            ReviewStatus::ChangesRequired if integration_mode => "Fix the reported source/isolation findings in the assigned integration worktree. The integrator owns routine formatting/Clippy repairs; full checks run only through review check --pre-revalidation. Return API behavior decisions to the responsible worker. Follow the exact hardcode source-evidence contract when applicable, commit corrections and rerun candidate review.",
+            ReviewStatus::ChangesRequired => "Fix the reported source or Replay-isolation findings in the assigned worker worktree, then rerun worker review. For hardcoded domains follow the exact source-evidence contract and --hardcode-ai-verified. Run relevant tests as needed; the integrator runs the final Clippy check before full revalidation.",
             ReviewStatus::EvidenceRequired => "Trace each spawn's startup entry and callers; supply --evidence with source locations and ownership, then rerun review check. Unknown/request ownership cannot pass.",
         }.into(),
     };

@@ -21,6 +21,9 @@ changing code, startup, or configuration, read
 [target-code-rules.md](target-code-rules.md).
 Edit and test only the assigned worktree. Preserve unintegrated changes when
 synchronizing with the supplied canonical base; resolve your own source conflicts.
+Build and debug as needed, and run tests relevant to the changes. You do not
+need to run Clippy; the code integrator runs the engine-managed final checks
+before full revalidation.
 
 When the coordinator forwards an expert report, check its evidence and inspected
 revisions against the current issue and code. Use applicable findings in your

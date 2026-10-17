@@ -1,37 +1,88 @@
+//! Bounded session-local observation inventory and encrypted content storage.
+use super::v2::{
+    BlobEnvelope, BlobRef, CandidateAssociation, SourceObservation, TargetObservation,
+};
+use super::*;
+use anyhow::{Context, Result, ensure};
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs::{File, OpenOptions},
     io::Write,
     path::Path,
     sync::{Arc, Mutex},
 };
 
-use anyhow::{Context, Result, ensure};
-
-use super::*;
-
-const MAX_RECORDS: usize = 16_384;
+const MAX_OBSERVATIONS: usize = 16_384;
+const MAX_ASSOCIATIONS: usize = 262_144;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_PAYLOAD: usize = 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ObservationRetention {
+    Retained,
+    Unavailable,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AssociationOutcome {
+    Retained,
+    SourceRequired,
+    Unavailable,
+    Incompatible,
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct WitnessStore {
     state: Arc<Mutex<State>>,
 }
-
 #[derive(Debug)]
 struct State {
     file: File,
     path: PathBuf,
+    bytes: u64,
+    hasher: Sha256,
     observed: usize,
     omitted: usize,
-    bytes: u64,
     sealed: bool,
-    refs: Vec<WitnessRef>,
-    identities: std::collections::BTreeMap<String, WitnessRef>,
+    graph: ObservationGraph,
+    key: Vec<u8>,
+    sources: BTreeMap<String, usize>,
+    unavailable_sources: BTreeSet<String>,
+    source_tracking_exhausted: bool,
+    targets: BTreeMap<String, usize>,
+    associations: BTreeMap<(usize, usize), usize>,
+    blobs: BTreeMap<String, usize>,
+    sealed_manifest: Option<WitnessManifest>,
 }
 
 impl WitnessStore {
+    #[cfg(test)]
     pub(crate) fn new(artifact_dir: &Path) -> Result<Self> {
+        Self::create(artifact_dir)
+    }
+
+    pub(crate) fn new_bound(
+        artifact_dir: &Path,
+        session_id: &str,
+        policy_fingerprint: &str,
+    ) -> Result<Self> {
+        ensure!(
+            !session_id.is_empty() && !policy_fingerprint.is_empty(),
+            "policy observations require Replay session and policy identities"
+        );
+        let store = Self::create(artifact_dir)?;
+        store
+            .state
+            .lock()
+            .expect("new observation store")
+            .graph
+            .replay = Some(v2::ReplayBinding {
+            session_id: session_id.into(),
+            policy_fingerprint: policy_fingerprint.into(),
+        });
+        Ok(store)
+    }
+
+    fn create(artifact_dir: &Path) -> Result<Self> {
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
         std::fs::create_dir_all(artifact_dir)?;
         let path = artifact_dir.join(format!("policy-witnesses-{}.jsonl", uuid::Uuid::new_v4()));
@@ -41,28 +92,60 @@ impl WitnessStore {
             .mode(0o600)
             .open(&path)?;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        let mut key = vec![0; 32];
+        getrandom::fill(&mut key).map_err(|error| {
+            anyhow::anyhow!("observation session key generation failed: {error}")
+        })?;
         Ok(Self {
             state: Arc::new(Mutex::new(State {
                 file,
                 path,
+                bytes: 0,
+                hasher: Sha256::new(),
                 observed: 0,
                 omitted: 0,
-                bytes: 0,
                 sealed: false,
-                refs: Vec::new(),
-                identities: Default::default(),
+                graph: ObservationGraph {
+                    session_id: uuid::Uuid::new_v4().to_string(),
+                    ..Default::default()
+                },
+                key,
+                sources: Default::default(),
+                unavailable_sources: Default::default(),
+                source_tracking_exhausted: false,
+                targets: Default::default(),
+                associations: Default::default(),
+                blobs: Default::default(),
+                sealed_manifest: None,
             })),
         })
     }
 
-    /// Record every eligible observation, including the first run without rules.
-    /// A bound or persistence failure makes coverage incomplete, never truncated-successful.
+    /// A standalone call denotes a new physical Target observation. Matchers
+    /// explicitly register a request UUID once and associate candidates separately.
     pub(crate) fn record(
         &self,
         metadata: WitnessMetadata,
         key_context: &Path,
         source: &[u8],
         target: Option<&[u8]>,
+    ) -> Result<Option<WitnessRef>> {
+        self.record_observation(
+            metadata,
+            key_context,
+            source,
+            target,
+            target.map(|_| uuid::Uuid::new_v4().to_string()).as_deref(),
+        )
+    }
+
+    pub(crate) fn record_observation(
+        &self,
+        metadata: WitnessMetadata,
+        key_context: &Path,
+        source: &[u8],
+        target: Option<&[u8]>,
+        target_id: Option<&str>,
     ) -> Result<Option<WitnessRef>> {
         let mut state = self
             .state
@@ -72,73 +155,136 @@ impl WitnessStore {
             !state.sealed,
             "policy witness store has already been sealed"
         );
-        if let Err(error) = metadata.validate_roles(target.is_some()) {
-            state.observed += 1;
-            state.omitted += 1;
-            return Err(error);
-        }
-        let identity = digest(&serde_json::to_vec(&(
-            &metadata,
-            digest(source),
-            target.map(digest),
-        ))?);
-        if let Some(witness) = state.identities.get(&identity) {
-            return Ok(Some(witness.clone()));
-        }
-        state.observed += 1;
-        if source.len() > MAX_PAYLOAD
-            || target.is_some_and(|b| b.len() > MAX_PAYLOAD)
-            || state.refs.len() >= MAX_RECORDS
-        {
-            state.omitted += 1;
-            return Ok(None);
-        }
+        let mut source_unavailable = false;
         let result = (|| -> Result<Option<WitnessRef>> {
-            let id = uuid::Uuid::new_v4().to_string();
-            let payload = serde_json::to_vec(&ProtectedPayload {
-                source: STANDARD.encode(source),
-                target: target.map(|b| STANDARD.encode(b)),
-            })?;
-            let encrypted = crate::request_headers::encrypt_evidence(
-                key_context,
-                &label(&id, &metadata)?,
-                &payload,
-            )?;
-            let mut bytes = serde_json::to_vec(&Envelope {
-                id: id.clone(),
-                metadata: metadata.clone(),
-                encrypted,
-            })?;
-            bytes.push(b'\n');
-            let length = u64::try_from(bytes.len())?;
-            if length > 4 * 1024 * 1024
-                || state
-                    .bytes
-                    .checked_add(length)
-                    .is_none_or(|n| n > MAX_BYTES)
-            {
+            metadata.validate_roles(target.is_some())?;
+            let Some(source_index) = state.source(&metadata, key_context, source)? else {
+                source_unavailable = true;
                 return Ok(None);
-            }
-            let witness = WitnessRef {
-                id,
-                metadata,
-                offset: state.bytes,
-                length,
-                sha256: digest(&bytes),
-                source_sha256: digest(source),
-                target_sha256: target.map(digest),
             };
-            state.file.write_all(&bytes)?;
-            state.file.sync_data()?;
-            state.bytes += length;
-            state.refs.push(witness.clone());
-            state.identities.insert(identity, witness.clone());
-            Ok(Some(witness))
+            if let Some(target) = target {
+                let target_id =
+                    target_id.context("Target observation requires an explicit identity")?;
+                let Some(target_index) = state.target(
+                    target_id,
+                    TargetMetadata::from_pair(&metadata),
+                    key_context,
+                    target,
+                )?
+                else {
+                    return Ok(None);
+                };
+                let Some(index) = state.associate(source_index, target_index)? else {
+                    return Ok(None);
+                };
+                state
+                    .graph
+                    .pair(source_index, Some(&state.graph.associations[index]))
+                    .map(Some)
+            } else {
+                state.graph.pair(source_index, None).map(Some)
+            }
         })();
+        if result.is_err() || !source_unavailable && matches!(&result, Ok(None)) {
+            state.omitted += 1;
+        }
+        result.context("failed to retain complete protected policy observations")
+    }
+
+    /// Retain the genuine request before scanning Source candidates, including
+    /// requests for which no recorded candidate will ever be selected.
+    pub(crate) fn record_target(
+        &self,
+        id: &str,
+        metadata: TargetMetadata,
+        key_context: &Path,
+        payload: &[u8],
+    ) -> Result<ObservationRetention> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("policy witness lock poisoned"))?;
+        ensure!(
+            !state.sealed,
+            "policy witness store has already been sealed"
+        );
+        let result = state.target(id, metadata, key_context, payload);
         if !matches!(&result, Ok(Some(_))) {
             state.omitted += 1;
         }
-        result.context("failed to retain complete protected policy witness")
+        Ok(if result?.is_some() {
+            ObservationRetention::Retained
+        } else {
+            ObservationRetention::Unavailable
+        })
+    }
+
+    /// Fast path references immutable Source inventory and an independently
+    /// registered Target. A cache miss requests the original Source bytes only.
+    pub(crate) fn associate(
+        &self,
+        metadata: &WitnessMetadata,
+        target_id: &str,
+        key_context: &Path,
+        source: Option<&[u8]>,
+    ) -> Result<AssociationOutcome> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("policy witness lock poisoned"))?;
+        ensure!(
+            !state.sealed,
+            "policy witness store has already been sealed"
+        );
+        let mut source_unavailable = false;
+        let result = (|| -> Result<AssociationOutcome> {
+            metadata.validate_roles(true)?;
+            let key = target_key(target_id, metadata.surface, metadata.target_role);
+            let target_index = *state
+                .targets
+                .get(&key)
+                .context("independent Target observation is missing")?;
+            if !v2::compatible(metadata, &state.graph.targets[target_index].metadata) {
+                return Ok(AssociationOutcome::Incompatible);
+            }
+            let source_key = v2::source_key(metadata)?;
+            let source_index = source_key
+                .as_ref()
+                .and_then(|key| state.sources.get(key).copied());
+            if source_index.is_none()
+                && (state.source_tracking_exhausted
+                    || source_key
+                        .as_ref()
+                        .is_some_and(|key| state.unavailable_sources.contains(key)))
+            {
+                source_unavailable = true;
+                return Ok(AssociationOutcome::Unavailable);
+            }
+            let source_index = match (source_index, source) {
+                (Some(index), None) => index,
+                (_, Some(source)) => match state.source(metadata, key_context, source)? {
+                    Some(index) => index,
+                    None => {
+                        source_unavailable = true;
+                        return Ok(AssociationOutcome::Unavailable);
+                    }
+                },
+                (None, None) => return Ok(AssociationOutcome::SourceRequired),
+            };
+            Ok(if state.associate(source_index, target_index)?.is_some() {
+                AssociationOutcome::Retained
+            } else {
+                AssociationOutcome::Unavailable
+            })
+        })();
+        // An ordinary Source lookup miss is not omitted evidence: the caller
+        // immediately supplies immutable bytes. All actual persistence errors are.
+        if result.is_err()
+            || !source_unavailable && matches!(&result, Ok(AssociationOutcome::Unavailable))
+        {
+            state.omitted += 1;
+        }
+        result
     }
 
     pub(crate) fn manifest(&self) -> Result<WitnessManifest> {
@@ -146,35 +292,265 @@ impl WitnessStore {
             .state
             .lock()
             .map_err(|_| anyhow::anyhow!("policy witness lock poisoned"))?;
-        snapshot(&state)
+        Ok(state
+            .sealed_manifest
+            .clone()
+            .unwrap_or_else(|| snapshot(&state)))
     }
-
     pub(crate) fn sealed_manifest(&self) -> Result<WitnessManifest> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| anyhow::anyhow!("policy witness lock poisoned"))?;
+        if let Some(manifest) = &state.sealed_manifest {
+            return Ok(manifest.clone());
+        }
         state.file.sync_all()?;
+        ensure!(
+            digest(&std::fs::read(&state.path)?)
+                == format!("sha256:{:x}", state.hasher.clone().finalize()),
+            "policy observation artifact changed before sealing"
+        );
         state.sealed = true;
-        snapshot(&state)
+        let mut manifest = snapshot(&state);
+        if !state.graph.key_envelope.is_empty() {
+            manifest.observations.as_mut().unwrap().authentication =
+                v2::manifest_signature(&manifest, &state.key)?;
+        }
+        state.sealed_manifest = Some(manifest.clone());
+        Ok(manifest)
     }
 }
 
-fn snapshot(state: &State) -> Result<WitnessManifest> {
-    Ok(WitnessManifest {
-        version: 1,
+impl State {
+    fn ensure_key(&mut self, context: &Path) -> Result<()> {
+        if self.graph.key_envelope.is_empty() {
+            self.graph.key_envelope = crate::request_headers::encrypt_evidence(
+                context,
+                &v2::key_label(&self.graph.session_id),
+                &self.key,
+            )?;
+        }
+        Ok(())
+    }
+    fn blob(&mut self, context: &Path, payload: &[u8]) -> Result<Option<usize>> {
+        if payload.len() > MAX_PAYLOAD {
+            return Ok(None);
+        }
+        let id = digest(payload);
+        if let Some(index) = self.blobs.get(&id) {
+            return Ok(Some(*index));
+        }
+        self.ensure_key(context)?;
+        let encrypted = crate::request_headers::encrypt_evidence(
+            context,
+            &v2::blob_label(&self.graph.session_id, &id),
+            payload,
+        )?;
+        let mut bytes = serde_json::to_vec(&BlobEnvelope {
+            id: id.clone(),
+            encrypted,
+        })?;
+        bytes.push(b'\n');
+        let length = u64::try_from(bytes.len())?;
+        if self
+            .bytes
+            .checked_add(length)
+            .is_none_or(|bytes| bytes > MAX_BYTES)
+        {
+            return Ok(None);
+        }
+        let index = self.graph.blobs.len();
+        let reference = BlobRef {
+            id: id.clone(),
+            offset: self.bytes,
+            length,
+            sha256: digest(&bytes),
+            plaintext_bytes: payload.len(),
+        };
+        self.file.write_all(&bytes)?;
+        self.hasher.update(&bytes);
+        self.bytes += length;
+        self.graph.payload_bytes += payload.len();
+        self.graph.blobs.push(reference);
+        self.blobs.insert(id, index);
+        Ok(Some(index))
+    }
+    fn source(
+        &mut self,
+        metadata: &WitnessMetadata,
+        context: &Path,
+        payload: &[u8],
+    ) -> Result<Option<usize>> {
+        let metadata = v2::source_metadata(metadata);
+        let key = v2::source_key(&metadata)?;
+        if let Some(index) = key.as_ref().and_then(|key| self.sources.get(key)).copied() {
+            ensure!(
+                self.graph.blobs[self.graph.sources[index].blob].id == digest(payload),
+                "one immutable Source identity has conflicting payloads"
+            );
+            return Ok(Some(index));
+        }
+        if self.source_tracking_exhausted
+            || key
+                .as_ref()
+                .is_some_and(|key| self.unavailable_sources.contains(key))
+        {
+            return Ok(None);
+        }
+        if self.sources.len() + self.unavailable_sources.len() >= MAX_OBSERVATIONS {
+            self.observed += 1;
+            self.source_tracking_exhausted = true;
+            self.mark_source_unavailable(None);
+            return Ok(None);
+        }
+        self.observed += 1;
+        if self.graph.sources.len() + self.graph.targets.len() >= MAX_OBSERVATIONS {
+            self.mark_source_unavailable(key);
+            return Ok(None);
+        }
+        let Some(blob) = self.blob(context, payload)? else {
+            self.mark_source_unavailable(key);
+            return Ok(None);
+        };
+        let id = uuid::Uuid::new_v4().to_string();
+        let authentication = v2::sign(
+            &self.key,
+            "source",
+            &(
+                &self.graph.session_id,
+                &id,
+                &metadata,
+                &self.graph.blobs[blob],
+            ),
+        )?;
+        let index = self.graph.sources.len();
+        self.graph.sources.push(SourceObservation {
+            id,
+            metadata,
+            blob,
+            authentication,
+        });
+        if let Some(key) = key {
+            self.sources.insert(key, index);
+        }
+        Ok(Some(index))
+    }
+
+    fn mark_source_unavailable(&mut self, key: Option<String>) {
+        self.omitted += 1;
+        if let Some(key) = key {
+            if self.sources.len() + self.unavailable_sources.len() < MAX_OBSERVATIONS {
+                self.unavailable_sources.insert(key);
+            } else {
+                // Tracking itself is bounded. Once full, unseen identities
+                // stay unavailable; retained identities still validate bytes.
+                self.source_tracking_exhausted = true;
+            }
+        }
+    }
+    fn target(
+        &mut self,
+        id: &str,
+        metadata: TargetMetadata,
+        context: &Path,
+        payload: &[u8],
+    ) -> Result<Option<usize>> {
+        metadata.validate()?;
+        ensure!(
+            !id.is_empty(),
+            "Target observation requires a request identity"
+        );
+        let key = target_key(id, metadata.surface, metadata.role);
+        if let Some(index) = self.targets.get(&key).copied() {
+            let previous = &self.graph.targets[index];
+            ensure!(
+                previous.metadata == metadata
+                    && self.graph.blobs[previous.blob].id == digest(payload),
+                "one genuine Target observation has conflicting metadata or payloads"
+            );
+            return Ok(Some(index));
+        }
+        self.observed += 1;
+        if self.graph.sources.len() + self.graph.targets.len() >= MAX_OBSERVATIONS {
+            return Ok(None);
+        }
+        let Some(blob) = self.blob(context, payload)? else {
+            return Ok(None);
+        };
+        let id = format!("{id}:{:?}:{:?}", metadata.surface, metadata.role);
+        let authentication = v2::sign(
+            &self.key,
+            "target",
+            &(
+                &self.graph.session_id,
+                &id,
+                &metadata,
+                &self.graph.blobs[blob],
+            ),
+        )?;
+        let index = self.graph.targets.len();
+        self.graph.targets.push(TargetObservation {
+            id,
+            metadata,
+            blob,
+            authentication,
+        });
+        self.targets.insert(key, index);
+        Ok(Some(index))
+    }
+    fn associate(&mut self, source: usize, target: usize) -> Result<Option<usize>> {
+        self.graph.association_attempts += 1;
+        if let Some(index) = self.associations.get(&(source, target)) {
+            return Ok(Some(*index));
+        }
+        if self.graph.associations.len() >= MAX_ASSOCIATIONS {
+            return Ok(None);
+        }
+        let left = &self.graph.sources[source];
+        let right = &self.graph.targets[target];
+        ensure!(
+            v2::compatible(&left.metadata, &right.metadata),
+            "candidate association crosses Case, surface, resource or operation"
+        );
+        let authentication = v2::sign(
+            &self.key,
+            "association",
+            &(&self.graph.session_id, &left.id, &right.id),
+        )?;
+        let index = self.graph.associations.len();
+        self.graph.associations.push(CandidateAssociation {
+            source,
+            target,
+            authentication,
+        });
+        self.associations.insert((source, target), index);
+        Ok(Some(index))
+    }
+}
+fn target_key(id: &str, surface: Surface, role: TargetRole) -> String {
+    format!("{id}:{surface:?}:{role:?}")
+}
+fn snapshot(state: &State) -> WitnessManifest {
+    let recorded = state.graph.sources.len() + state.graph.targets.len();
+    WitnessManifest {
+        version: 2,
         artifact: state
             .path
             .file_name()
-            .context("policy witness filename missing")?
+            .expect("witness filename")
             .to_string_lossy()
             .into_owned(),
-        sha256: digest(&std::fs::read(&state.path)?),
+        sha256: format!("sha256:{:x}", state.hasher.clone().finalize()),
         observed: state.observed,
-        recorded: state.refs.len(),
+        recorded,
         omitted: state.omitted,
-        complete: state.omitted == 0 && state.observed == state.refs.len(),
+        complete: state.omitted == 0 && state.observed == recorded,
         sealed: state.sealed,
-        witnesses: state.refs.clone(),
-    })
+        witnesses: Vec::new(),
+        observations: Some(state.graph.clone()),
+    }
 }
+
+#[cfg(test)]
+mod tests;

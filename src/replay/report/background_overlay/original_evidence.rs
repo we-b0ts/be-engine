@@ -2,7 +2,7 @@
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use super::{MATCHED_RULE, ORIGINAL_CASE_ID};
+use super::{MATCHED_RULE, ORIGINAL_CASE_ID, take_array};
 
 pub(crate) fn parse_background_dependency_evidence<T: DeserializeOwned>(
     raw: &str,
@@ -31,14 +31,8 @@ fn restore_array(report: &mut Value, global_field: &str, case_field: &str) {
     let Some(object) = report.as_object_mut() else {
         return;
     };
-    let mut global = object
-        .remove(global_field)
-        .and_then(|value| value.as_array().cloned())
-        .unwrap_or_default();
-    let mut case = object
-        .remove(case_field)
-        .and_then(|value| value.as_array().cloned())
-        .unwrap_or_default();
+    let mut global = take_array(object, global_field);
+    let mut case = take_array(object, case_field);
     let mut retained = Vec::with_capacity(global.len());
     let original_len = global.len();
     for mut event in global.drain(..) {

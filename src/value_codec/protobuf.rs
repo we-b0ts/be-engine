@@ -1,7 +1,9 @@
 //! Explicit typed projection with a complete per-message raw remainder.
 mod scalar;
+mod schema;
 mod wire;
 
+pub(super) use schema::{Schema, schema};
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, ensure};
@@ -18,11 +20,10 @@ pub(super) const INTERNAL_KEY: &str = "\0protobuf";
 
 #[derive(Debug, Clone)]
 pub(super) struct Document {
-    pub logical: Value,
     message: Message,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Binding {
     value: Option<(Vec<String>, ProtobufField)>,
     children: BTreeMap<u32, Binding>,
@@ -85,13 +86,6 @@ impl Budget {
 }
 
 impl Document {
-    pub(super) fn decode(codec: &ProtobufCodec, bytes: &[u8]) -> Result<Self> {
-        let binding = bindings(codec)?;
-        let (message, logical) =
-            decode_message(bytes, &binding, &[], &[], None, &mut Budget::default(), 0)?;
-        Ok(Self { message, logical })
-    }
-
     pub(super) fn encode(&self, logical: &Value) -> Result<Vec<u8>> {
         Ok(self.message.encode(logical)?.0)
     }
@@ -205,7 +199,7 @@ fn decode_message(
         }
     }
     for (number, child) in &binding.children {
-        let indices = groups.get(number).cloned().unwrap_or_default();
+        let indices = groups.get(number).map_or(&[][..], Vec::as_slice);
         let Some((alias, spec)) = &child.value else {
             ensure!(
                 indices.len() <= 1,
@@ -328,8 +322,8 @@ fn decode_message(
         }
         if !indices.is_empty() {
             known.insert(pointer(relative), if spec.repeated {
-                serde_json::json!({"raw": raw_values(&fields, &indices), "elements": element_raw})
-            } else { raw_values(&fields, &indices) });
+                serde_json::json!({"raw": raw_values(&fields, indices), "elements": element_raw})
+            } else { raw_values(&fields, indices) });
         }
     }
     let mut remainder = Map::from_iter([

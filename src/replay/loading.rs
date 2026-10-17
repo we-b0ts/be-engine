@@ -48,8 +48,13 @@ impl ReplayRuntime {
             discover_replay_cases(&root_dir, &selected_case_ids).await?;
         let ca = Arc::new(MitmCa::load_or_generate(&ca_cert_path, &ca_key_path)?);
         let (global_path, global_debug_path) = find_run_level_dependencies(&root_dir);
+        let global_report_stamp = global_path
+            .as_ref()
+            .map(|path| crate::dependency_index::FileStamp::read(path))
+            .transpose()?;
         let mut mysql = MysqlReplayState::default();
         let mut http_exchanges = Vec::new();
+        let mut http_events = http::HttpReplayEvents::default();
         let mut http_blackholes = Vec::new();
         let mut redis = redis::RedisReplayState::default();
         let mut memcached = memcached::MemcachedReplayState::default();
@@ -88,6 +93,17 @@ impl ReplayRuntime {
             )
             .await?;
         }
+        // Source-owned Global slots are stable across selected APIs. Later
+        // Case-derived Global aliases remain small session-specific evidence.
+        global_source::freeze(
+            &mut mysql,
+            &mut http_events,
+            http_exchanges.len(),
+            &mut redis,
+            &mut memcached,
+            &mut kafka,
+            &mut motan,
+        );
         if let Some(path) = global_debug_path {
             load_motan_debug_file(&path, &mut motan, &mut targets).await?;
         }
@@ -249,13 +265,18 @@ impl ReplayRuntime {
             .into_iter()
             .map(|value| value.to_ascii_lowercase())
             .collect::<Vec<_>>();
+        let session_id = Uuid::new_v4();
         let mut replay_policy = config
             .policy_path
             .as_deref()
             .map(|path| ReplayPolicyRuntime::load_with_sources(path, &cases, !lazy))
             .transpose()?;
         if let Some(policy) = &mut replay_policy {
-            let witnesses = crate::policy_evidence::WitnessStore::new(&replay_artifact_dir)?;
+            let witnesses = crate::policy_evidence::WitnessStore::new_bound(
+                &replay_artifact_dir,
+                &session_id.to_string(),
+                &policy.report().fingerprint,
+            )?;
             policy
                 .request_contracts
                 .configure_witnesses(witnesses, !lazy)?;
@@ -297,12 +318,23 @@ impl ReplayRuntime {
                 known_targets,
             ))
         });
-        let state = ReplayState {
+        let regular_policy_identity = report::global_evidence::preparation::policy_identity(
+            process_owned_dependencies,
+            replay_policy
+                .as_ref()
+                .map(|policy| policy.report().fingerprint)
+                .as_deref(),
+        )?;
+        let regular_report = config
+            .report_path
+            .clone()
+            .unwrap_or_else(|| replay_artifact_dir.join("replay-report.json"));
+        let mut state = ReplayState {
             deferred,
             egress_counter_reader: None,
             egress_counter_starts: BTreeMap::new(),
             egress_rejections: BTreeMap::new(),
-            session_id: Uuid::new_v4(),
+            session_id,
             started_at: Utc::now(),
             finalized_at: None,
             dns_listen,
@@ -313,6 +345,7 @@ impl ReplayRuntime {
             active_case_id,
             case_dependency_post_response_window: lifecycle.case_dependency_post_response_window,
             global_path,
+            regular_global: BTreeMap::new(),
             targets,
             mysql,
             http_exchanges,
@@ -322,7 +355,7 @@ impl ReplayRuntime {
             memcached,
             kafka,
             motan,
-            http_events: http::HttpReplayEvents::default(),
+            http_events,
             ca_cert_path,
             replay_policy,
             http_ignore_query_params,
@@ -336,6 +369,28 @@ impl ReplayRuntime {
             unrecorded_targets: Vec::new(),
             unrecorded_case_ids: BTreeSet::new(),
         };
+        let state = tokio::task::spawn_blocking(move || -> Result<_> {
+            if let (Some(source), Some(expected)) = (&state.global_path, &global_report_stamp) {
+                ensure!(
+                    crate::dependency_index::FileStamp::read(source)? == *expected,
+                    "Global Source changed before report projection preparation"
+                );
+            }
+            report::global_evidence::regular::initialize(
+                &mut state,
+                &regular_report,
+                &regular_policy_identity,
+            )?;
+            if let (Some(source), Some(expected)) = (&state.global_path, &global_report_stamp) {
+                ensure!(
+                    crate::dependency_index::FileStamp::read(source)? == *expected,
+                    "Global Source changed while preparing report projection"
+                );
+            }
+            Ok(state)
+        })
+        .await
+        .context("Global report inventory preparation failed")??;
         let runtime = Self {
             state: Arc::new(Mutex::new(state)),
             ca,

@@ -105,7 +105,8 @@ listed protocol before handling that action.
 | `implementation_required`, `worker_status_required` | Dispatch/resume/query the bound implementer and report actual runtime observations | API implementer | [agent protocol](coordinator-agent-protocol.md) |
 | `expert_required` | Reserve, dispatch, reconcile, forward, and close exactly as returned | API expert, reporting to the existing API implementer | [API expert assistance](coordinator-agent-protocol.md#api-expert-assistance) |
 | `integration_required` | Retain identity, publish only the reviewed candidate, then report integration | Code integrator | [integration](coordinator-integration.md) |
-| `source_review_required`, `target_quality_required` | Delegate candidate review or rework and admit only a matching report | Code integrator; API implementer only for a routed work-item defect | [review actions](coordinator-review.md) |
+| `source_review_required`, `target_quality_required` | Delegate ordinary candidate review or rework and admit only a matching report | Code integrator; API implementer only for a routed work-item defect | [review actions](coordinator-review.md) |
+| `pre_revalidation_review_required` | Delegate the engine's final full-check command, publish the exact candidate, and accept its final-stage receipt | Code integrator | [final review](coordinator-review.md#final-review-before-full-revalidation) |
 | `plan_apply_required` | Apply the unchanged engine plan with source-proven inputs | Inputs originate from the assigned API implementer worker | [rule actions](coordinator-rule-actions.md) |
 | `input_required` | Resolve only the named input and resume the retained invocation | Delegate semantic/source questions to the owning API implementer or code integrator | [input handling](#input_required) and, for startup inputs, [startup inputs](coordinator-startup-inputs.md) |
 | `system_repair_required`, `recovery_required`, `blocked` | Execute only the returned acceptance/recovery action or stop with retained context | External system owner may install the named repair | [recovery and system repair](coordinator-recovery.md) |
@@ -374,7 +375,8 @@ wait. The coordinator consumes actions and reports task runtime events; it does 
 rebuild that queue from API counters or historical confirmations.
 
 An integrated API handoff schedules its own Replay. After ordinary work drains,
-the engine verifies every included API against one integrated content fingerprint.
+the engine requires final pre-revalidation review, then verifies every included
+API against the admitted integrated content fingerprint.
 
 ### `execution_failed`
 
@@ -386,23 +388,44 @@ record uses the existing recovery action.
 
 ### `source_review_required`
 
-Worker and integration handoffs require passing reports from the same complete
-local quality suite. A `source_review_required` action requests candidate
+Worker handoffs require current source/isolation reports. Ordinary integration
+handoffs require the candidate's stage-bound source/isolation report, without
+mandatory fmt, workspace tests or Clippy. API workers build/debug and run
+relevant tests as needed and do not need Clippy. A `source_review_required`
+action requests candidate
 review, evidence or worker rework through
 [coordinator-review.md](coordinator-review.md). It is actionable work, not an execution
 failure. Return to global status after handling it. A new purpose trusts the
 committed `pr_base` snapshot: adopt external evidence and run initial Replay
 without source review.
-If no source/configuration changes were made, passing verification and committed
-progress can complete without a review receipt. Historical review files do not
-change this. Once the purpose has changes relative to that baseline, verification
-and final delivery require a current accepted integration quality report even
-when no API remains in implementation. Delegate those checks to the integrator;
-the coordinator consumes reports and does not run the quality suite itself.
+An unchanged purpose baseline does not require ordinary source review;
+historical ordinary review files do not change that. Once code/configuration
+changes relative to that baseline, verification requires a current accepted
+integration report even when no API remains in implementation. This exemption
+does not replace the separate final pre-revalidation gate. Delegate checks to
+the integrator; the coordinator consumes reports and does not run the quality
+suite itself.
 Once a finding has been routed, worker dispatch, status and integration take
 priority. With no such action ready, `wait_required` on `source_review_rework`
 waits for that repair; follow `commands.wait` and runtime events. Scoped status
 continues exposing each worker's own handoff commands.
+
+### `pre_revalidation_review_required`
+
+This is an engine state-machine prerequisite before final full revalidation,
+not a skill reminder. Delegate the returned `review check --pre-revalidation
+--worktree ...` to the retained integrator. That command is the only required
+entrypoint for the full format/test/Clippy suite and source/isolation checks;
+do not require a second manual Cargo run. The integrator fixes routine
+formatting/lint issues directly and returns the exact candidate and final-stage
+receipt. Follow [final review](coordinator-review.md#final-review-before-full-revalidation).
+
+Publish the exact candidate and submit `review accept`. The engine requires
+current code, relevant inputs, check policy, inventory and immutable recording
+bindings. Missing, failing, ordinary-integration and stale reports cannot permit
+full revalidation. Relevant changes require fresh final proof; a progress-only
+publication can retain an already admitted matching receipt. Return to global
+status after admission; the engine starts the revalidation round.
 
 ### `target_quality_required`
 

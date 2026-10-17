@@ -5,6 +5,76 @@ use sqlx::Executor;
 const SQL: &str =
     "UPDATE entries_0031 SET json=?, is_active=?, updated_at=? WHERE entries_0031.id=?";
 
+#[tokio::test]
+async fn target_observation_io_failure_preserves_global_matching_and_rejects_case_candidates() {
+    let sql = "SELECT id FROM entries";
+    for global in [false, true] {
+        let record = exchange(sql, json!({"status":"ok", "affected_rows":0}));
+        let (temp, _addr, runtime, task) = fixture_with_global(
+            if global {
+                &[]
+            } else {
+                std::slice::from_ref(&record)
+            },
+            if global {
+                std::slice::from_ref(&record)
+            } else {
+                &[]
+            },
+            Some("format: traffic-policy/v1\nrules: []\n"),
+        )
+        .await;
+        let store =
+            crate::policy_evidence::WitnessStore::new(&temp.path().join("io-failure")).unwrap();
+        store.fail_writes_for_test().unwrap();
+        let mut state = runtime.state.lock().await;
+        state
+            .replay_policy
+            .as_mut()
+            .unwrap()
+            .request_contracts
+            .configure_witnesses(store, false)
+            .unwrap();
+        let identity = ReplaySessionIdentity {
+            target: Some(TargetKey {
+                host: "127.0.0.1".into(),
+                port: 3306,
+            }),
+            database: Some("appdb".into()),
+            username: Some("root".into()),
+        };
+        let matched = state.match_exchange(&identity, "COM_QUERY", Some(sql), None);
+        assert_eq!(matched.is_some(), global);
+        assert!(
+            state
+                .mysql
+                .events
+                .metadata_warnings
+                .iter()
+                .any(|warning| warning.contains("SQL Target observation unavailable"))
+        );
+        let manifest = state
+            .replay_policy
+            .as_ref()
+            .unwrap()
+            .request_contracts
+            .witness_manifest()
+            .unwrap();
+        assert!(!manifest.complete);
+        assert!(manifest.omitted > 0);
+        assert!(manifest.observations.as_ref().unwrap().targets.is_empty());
+        assert_eq!(
+            state.mysql.exchanges[0].status,
+            if global {
+                ReplayExchangeStatus::Responding
+            } else {
+                ReplayExchangeStatus::Available
+            }
+        );
+        task.abort();
+    }
+}
+
 fn text_sql(payload: &str, timestamp: &str, id: i64) -> String {
     format!(
         "UPDATE entries_0031 SET json='{payload}', is_active=0, updated_at='{timestamp}' WHERE entries_0031.id={id}"
@@ -115,4 +185,45 @@ dependency_rules:
     })
     .await
     .expect("large SQL value replay timed out");
+}
+
+#[tokio::test]
+async fn payload_evidence_budget_does_not_reject_a_valid_large_native_sql_match() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let sql = format!(
+            "UPDATE entries SET payload='{}' WHERE id=7",
+            "x".repeat(1024 * 1024 + 32)
+        );
+        let write = exchange(&sql, json!({"status":"ok","affected_rows":1}));
+        let (temp, addr, runtime, task) =
+            fixture_with_policy(&[write], Some("format: traffic-policy/v1\nrules: []\n")).await;
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
+        assert_eq!(
+            (&mut client)
+                .execute(sql.as_str())
+                .await
+                .unwrap()
+                .rows_affected(),
+            1
+        );
+        client.close().await.unwrap();
+        let state = runtime.state.lock().await;
+        assert_eq!(state.mysql.events.matched_query_count, 1);
+        let owner = &state.replay_policy.as_ref().unwrap().request_contracts;
+        owner.seal_witnesses().unwrap();
+        let manifest = owner.witness_manifest().unwrap();
+        assert!(!manifest.complete && manifest.omitted > 0);
+        assert!(
+            crate::policy_evidence::verify(&temp.path().join("replay.json"), &manifest).is_err()
+        );
+        task.abort();
+    })
+    .await
+    .expect("large native SQL budget regression timed out");
 }

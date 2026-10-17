@@ -1,0 +1,239 @@
+//! Optional, portable recording-time projections. These are derived Source
+//! indexes, never independent Target witnesses or a substitute for Replay admission.
+use super::artifact::ArtifactReference;
+use super::regular_store::{Identity, Inventory};
+use crate::dependency_index::store;
+use anyhow::{Context, Result, ensure};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::Path;
+
+const MARKER: &str = ".global-report-preparation.json";
+const VERSION: u32 = 1;
+#[cfg(test)]
+mod tests;
+
+pub(super) fn import_notifications(
+    source: &Path,
+    report: &Path,
+    key: &str,
+) -> Result<Option<super::shared::SharedReference>> {
+    let marker = source
+        .parent()
+        .context("Global Source has no parent")?
+        .join(MARKER);
+    let status: Preparation = match store::read_json(&marker) {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+    if status.version != VERSION || status.status != "ready" {
+        return Ok(None);
+    }
+    let Some(reference) = status
+        .notifications
+        .filter(|reference| reference.key() == key)
+    else {
+        return Ok(None);
+    };
+    match reference
+        .validate_pages(&marker)
+        .and_then(|()| reference.stage(&marker, report))
+    {
+        Ok(reference) => Ok(Some(reference)),
+        Err(error) => {
+            tracing::warn!(error=%error, "optional recording notification projection is unavailable; rebuilding from Source");
+            Ok(None)
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Preparation {
+    version: u32,
+    status: String,
+    policy: String,
+    source_sha256: Option<String>,
+    inventories: BTreeMap<String, ArtifactReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    notifications: Option<super::shared::SharedReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
+pub(crate) fn policy_identity(
+    rules: &[crate::BackgroundDependencyRuleConfig],
+    fingerprint: Option<&str>,
+) -> Result<String> {
+    Ok(crate::policy_evidence::digest(&serde_json::to_vec(&(
+        rules,
+        fingerprint,
+    ))?))
+}
+
+pub(crate) async fn prewarm(
+    run: &Path,
+    rules: &[crate::BackgroundDependencyRuleConfig],
+    fingerprint: Option<&str>,
+) -> Result<()> {
+    let policy = policy_identity(rules, fingerprint)?;
+    let source = run.join("global-dependencies.jsonl");
+    let mut status = Preparation {
+        version: VERSION,
+        status: "prewarm_failed".into(),
+        policy: policy.clone(),
+        source_sha256: None,
+        inventories: BTreeMap::new(),
+        notifications: None,
+        reason: None,
+    };
+    match source.try_exists() {
+        Ok(false) => {
+            status.status = "not_needed".into();
+            status.reason = Some("recording has no Global dependency file".into());
+            return store::write_json(&run.join(MARKER), &status);
+        }
+        Err(error) => {
+            status.reason = Some(error.to_string());
+            tracing::warn!(error=%error, "optional Global prewarm could not inspect Source");
+            return store::write_json(&run.join(MARKER), &status);
+        }
+        Ok(true) => {}
+    }
+    let result = async {
+        let stamp = crate::dependency_index::FileStamp::read(&source)?;
+        let prepared = crate::replay::global_source::GlobalSource::load(&source, rules).await?;
+        let run = run.to_owned();
+        tokio::task::spawn_blocking(move || -> Result<_> {
+            let (index, _) = crate::dependency_index::global::load_global_index(
+                &source,
+                crate::replay::validate_index_record,
+            )?;
+            ensure!(
+                index.stamp == stamp,
+                "Global Source changed during recording preparation"
+            );
+            let marker = run.join(MARKER);
+            let view = prepared.view();
+            let mut inventories = BTreeMap::new();
+            for protocol in super::PROTOCOLS {
+                let identity = Identity {
+                    source_sha256: index.sha256.clone(),
+                    source_bytes: index.stamp.size,
+                    policy: policy.clone(),
+                    protocol: protocol.into(),
+                    layout: view.layout(protocol)?,
+                };
+                let reference = super::regular::retain_reference(
+                    &marker,
+                    identity.clone(),
+                    true,
+                    None,
+                    |visitor| view.visit(protocol, visitor),
+                )?;
+                let (inventory, _) = reference.load::<Inventory>(&marker)?;
+                inventory.validate(&reference)?;
+                ensure!(
+                    inventory.identity == identity,
+                    "recording Global projection identity changed"
+                );
+                inventories.insert(protocol.to_owned(), reference);
+            }
+            let session = prepared.redis.global_notification_evidence()?;
+            let notifications = if session.lanes.is_empty() {
+                None
+            } else {
+                Some(super::shared::retain_portable(&marker, &session.lanes)?)
+            };
+            ensure!(
+                crate::dependency_index::FileStamp::read(&source)? == stamp,
+                "Global Source changed while preparing report projection"
+            );
+            Ok((index.sha256, inventories, notifications))
+        })
+        .await
+        .context("recording Global projection task failed")?
+    }
+    .await;
+    match result {
+        Ok((sha256, inventories, notifications)) => {
+            status.status = "ready".into();
+            status.source_sha256 = Some(sha256);
+            status.inventories = inventories;
+            status.notifications = notifications;
+        }
+        Err(error) => {
+            status.reason = Some(format!("{error:#}"));
+            tracing::warn!(run_dir=%run.display(), error=%error, "optional Global report prewarm failed; original recording is preserved");
+        }
+    }
+    // Caller treats even a derived-state publication failure as an optimization
+    // failure; it cannot turn a Source recording into a failed recording.
+    store::write_json(&run.join(MARKER), &status)
+}
+
+pub(super) fn import(
+    source: &Path,
+    report: &Path,
+    expected: &Identity,
+) -> Result<Option<ArtifactReference>> {
+    // The Source owner is passed explicitly by the initialize call; arbitrary
+    // ancestor searches and external cache paths are intentionally unsupported.
+    let marker = source
+        .parent()
+        .context("Global Source has no parent")?
+        .join(MARKER);
+    {
+        let marker = marker.as_path();
+        let status: Preparation = match store::read_json(marker) {
+            Ok(value) => value,
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                return Ok(None);
+            }
+            Err(error) => {
+                tracing::warn!(error=%error, "recording Global prewarm metadata is unavailable; rebuilding");
+                return Ok(None);
+            }
+        };
+        if status.version != VERSION
+            || status.status != "ready"
+            || status.policy != expected.policy
+            || status.source_sha256.as_deref() != Some(&expected.source_sha256)
+        {
+            return Ok(None);
+        }
+        let Some(reference) = status.inventories.get(&expected.protocol) else {
+            return Ok(None);
+        };
+        if reference.key() != expected.key()? {
+            return Ok(None);
+        }
+        let imported = (|| -> Result<ArtifactReference> {
+            let (inventory, root) = reference.load::<Inventory>(marker)?;
+            inventory.validate(reference)?;
+            ensure!(
+                &inventory.identity == expected,
+                "recording Global projection does not match current Source/policy/layout"
+            );
+            // Only the first cross-owner import traverses pages. Once retained,
+            // local manifests win and all report reads remain lazy and strict.
+            for page in 0..inventory.pages.len() {
+                inventory.read_page(&root, page)?;
+            }
+            reference.stage::<Inventory>(marker, report, |inventory, root, staging| {
+                inventory.stage(root, staging)
+            })
+        })();
+        match imported {
+            Ok(reference) => Ok(Some(reference)),
+            Err(error) => {
+                tracing::warn!(error=%error, "optional recording Global projection is unavailable; rebuilding from Source");
+                Ok(None)
+            }
+        }
+    }
+}

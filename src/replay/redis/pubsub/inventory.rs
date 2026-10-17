@@ -2,7 +2,13 @@
 use super::*;
 pub(super) use crate::dependency_index::global::NotificationEntry;
 use crate::dependency_index::{PageWriter, Paged, RecordRef, RecordSource};
+pub(in crate::replay) use evidence::{
+    NotificationDelta, NotificationIdentity, NotificationLaneEvidence, NotificationSessionEvidence,
+};
 use std::path::Path;
+mod evidence;
+#[cfg(test)]
+mod tests;
 
 #[derive(Debug)]
 pub(super) struct IndexedLane {
@@ -12,7 +18,10 @@ pub(super) struct IndexedLane {
     pub(super) source: Arc<RecordSource>,
     pub(super) pages: Option<Paged<NotificationEntry>>,
     writer: Option<PageWriter<NotificationEntry>>,
-    statuses: Vec<ReplayExchangeStatus>,
+    count: usize,
+    // Available is implicit. A notification costs session memory only after an
+    // actual Target subscription attempts its delivery.
+    statuses: BTreeMap<usize, ReplayExchangeStatus>,
 }
 
 #[derive(Debug, Default)]
@@ -64,7 +73,8 @@ impl IndexedNotifications {
                 source: source.clone(),
                 pages: Some(pages),
                 writer: None,
-                statuses: vec![ReplayExchangeStatus::Available; count],
+                count,
+                statuses: BTreeMap::new(),
             });
             self.total += count;
         }
@@ -110,7 +120,8 @@ impl IndexedNotifications {
                     source: reference.source.clone(),
                     pages: None,
                     writer: Some(PageWriter::new(reference.source.path())?),
-                    statuses: Vec::new(),
+                    count: 0,
+                    statuses: BTreeMap::new(),
                 });
                 self.by_anchor.insert(key, index);
                 index
@@ -137,7 +148,7 @@ impl IndexedNotifications {
                 duration_ms,
                 ordinal: self.total,
             })?;
-        lane.statuses.push(ReplayExchangeStatus::Available);
+        lane.count += 1;
         self.total += 1;
         Ok(())
     }
@@ -150,7 +161,7 @@ impl IndexedNotifications {
             ensure!(
                 lane.pages
                     .as_ref()
-                    .is_some_and(|pages| pages.count == lane.statuses.len()),
+                    .is_some_and(|pages| pages.count == lane.count),
                 "notification index count mismatch"
             );
         }
@@ -168,31 +179,43 @@ impl IndexedNotifications {
     }
 
     pub(super) fn available(&self, lane: usize, index: usize) -> bool {
-        self.lanes[lane].statuses[index].is_available()
+        let lane = &self.lanes[lane];
+        assert!(index < lane.count);
+        lane.statuses
+            .get(&index)
+            .is_none_or(|status| status.is_available())
     }
     pub(super) fn responding(&mut self, lane: usize, index: usize) {
-        self.lanes[lane].statuses[index] = ReplayExchangeStatus::Responding;
+        assert!(index < self.lanes[lane].count);
+        self.lanes[lane]
+            .statuses
+            .insert(index, ReplayExchangeStatus::Responding);
     }
     pub(super) fn complete(&mut self, lane: usize, index: usize) {
-        let status = &mut self.lanes[lane].statuses[index];
-        if *status == ReplayExchangeStatus::Consumed {
+        assert!(index < self.lanes[lane].count);
+        let status = self.lanes[lane]
+            .statuses
+            .insert(index, ReplayExchangeStatus::Consumed);
+        if status == Some(ReplayExchangeStatus::Consumed) {
             return;
         }
-        if *status == ReplayExchangeStatus::Failed {
+        if status == Some(ReplayExchangeStatus::Failed) {
             self.failed -= 1;
         }
-        *status = ReplayExchangeStatus::Consumed;
         self.delivered += 1;
     }
     pub(super) fn fail(&mut self, lane: usize, index: usize) {
-        let status = &mut self.lanes[lane].statuses[index];
+        assert!(index < self.lanes[lane].count);
+        let status = self.lanes[lane].statuses.get(&index);
         if matches!(
             status,
-            ReplayExchangeStatus::Consumed | ReplayExchangeStatus::Failed
+            Some(ReplayExchangeStatus::Consumed | ReplayExchangeStatus::Failed)
         ) {
             return;
         }
-        *status = ReplayExchangeStatus::Failed;
+        self.lanes[lane]
+            .statuses
+            .insert(index, ReplayExchangeStatus::Failed);
         self.failed += 1;
     }
 
@@ -204,8 +227,8 @@ impl IndexedNotifications {
             };
             let mut loaded_page = None;
             let mut entries = Vec::new();
-            for (index, status) in lane.statuses.iter().enumerate() {
-                if *status == ReplayExchangeStatus::Consumed {
+            for index in 0..lane.count {
+                if lane.statuses.get(&index) == Some(&ReplayExchangeStatus::Consumed) {
                     continue;
                 }
                 if result.len() >= limit {
@@ -236,38 +259,5 @@ impl IndexedNotifications {
             }
         }
         result
-    }
-
-    pub(super) fn visit_unused(
-        &self,
-        visitor: &mut dyn FnMut(serde_json::Value) -> Result<()>,
-    ) -> Result<()> {
-        for lane in &self.lanes {
-            let pages = lane
-                .pages
-                .as_ref()
-                .context("notification index is not sealed")?;
-            let mut index = 0;
-            for page in 0..pages.pages() {
-                for entry in pages.read_page(page)? {
-                    if !lane.statuses[index].is_consumed() {
-                        visitor(serde_json::to_value(CommandUnusedReport {
-                            index: entry.location.line - 1,
-                            case_id: None,
-                            source: ReplaySource::Global,
-                            target: TargetKey {
-                                host: normalize_host(&lane.record.target_host),
-                                port: lane.record.target_port,
-                            },
-                            connection_id: lane.record.connection_id,
-                            sequence: lane.record.subscription_sequence,
-                            command: "PUBSUB_PUSH".into(),
-                        })?)?;
-                    }
-                    index += 1;
-                }
-            }
-        }
-        Ok(())
     }
 }

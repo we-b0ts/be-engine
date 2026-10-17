@@ -411,6 +411,8 @@ pub(super) struct RewriteState {
     pub api_inventory: Vec<RewriteApiProgress>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revalidation_round: Option<super::inventory::revalidation_round::RevalidationRound>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_revalidation_review: Option<super::review::pre_revalidation::AcceptedReview>,
     /// Original scheduling status retained while regression policy excludes an API.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub skipped_api_statuses: BTreeMap<String, RewriteApiStatus>,
@@ -683,6 +685,11 @@ pub enum RewriteAction {
         operation_id: String,
         retry: RewriteCommandSpec,
         status: RewriteCommandSpec,
+    },
+    PreRevalidationReviewRequired {
+        summary: String,
+        check: RewriteCommandSpec,
+        accept: RewriteCommandSpec,
     },
     SourceReviewRequired {
         summary: String,

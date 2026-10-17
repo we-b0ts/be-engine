@@ -31,6 +31,7 @@ use super::{
 
 mod auth;
 mod evidence;
+mod report_inventory;
 
 use auth::Authentication;
 
@@ -156,6 +157,7 @@ pub(super) struct MotanReplayState {
 
 #[derive(Debug, Default)]
 pub(super) struct MotanReplayEvents {
+    global_report: crate::replay::report::global_evidence::regular_usage::Usage,
     dirty_case_ids: BTreeSet<String>,
     connections: usize,
     matched_count: usize,
@@ -412,6 +414,7 @@ impl MotanReplayState {
 
     fn complete(&mut self, matched: &MatchedExchange) {
         self.exchanges[matched.index].status = ReplayExchangeStatus::Consumed;
+        self.refresh_global_report(matched.index);
         let case_id = matched.report.case_id.clone();
         push_success_detail(
             &mut self.events.matched_count,
@@ -430,6 +433,7 @@ impl MotanReplayState {
 
     fn fail(&mut self, matched: &MatchedExchange, reason: String) {
         self.exchanges[matched.index].status = ReplayExchangeStatus::Failed;
+        self.refresh_global_report(matched.index);
         if let Some(case_id) = &matched.report.case_id {
             self.events.dirty_case_ids.insert(case_id.clone());
         }

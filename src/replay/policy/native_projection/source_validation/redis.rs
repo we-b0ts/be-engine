@@ -97,6 +97,7 @@ pub(super) fn validate(
     }
     let clock = started(event)?;
     let context = RedisRequestContext {
+        observation_id: None,
         case: case.id,
         target: &target,
         database,

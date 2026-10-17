@@ -30,6 +30,7 @@ pub(crate) mod memcached;
 pub(crate) mod motan;
 pub(crate) mod mysql;
 mod network;
+mod preparation;
 pub(crate) mod readiness;
 pub(crate) mod redis;
 mod run;
@@ -60,6 +61,7 @@ struct RecorderOptions {
 
 #[derive(Clone)]
 pub struct Recorder {
+    global_preparation: Option<Arc<preparation::GlobalPreparation>>,
     pub(crate) redis_rpc: Arc<std::sync::Mutex<redis::rpc::CaptureState>>,
     artifact_owner: Option<ArtifactOwner>,
     traffic_jsonl: TrafficJsonlMode,
@@ -189,6 +191,7 @@ impl Recorder {
             .map(|(api, _)| api.clone())
             .collect();
         let recorder = Self {
+            global_preparation: None,
             redis_rpc: Default::default(),
             artifact_owner,
             traffic_jsonl,

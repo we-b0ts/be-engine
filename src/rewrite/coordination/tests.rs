@@ -170,3 +170,53 @@ fn initialized_project_without_workflow_starts_from_read_only_status() {
             .is_none()
     );
 }
+
+#[test]
+fn final_review_is_one_ready_step_without_parallel_replay_claims() {
+    let target = configured_target();
+    let mut state = rewrite::test_state();
+    rewrite::inventory::install(&mut state, vec!["GET /a".into(), "POST /b".into()]).unwrap();
+    for item in &mut state.api_inventory {
+        item.status = RewriteApiStatus::RevalidationPending;
+    }
+    state.phase = RewritePhase::SliceComplete;
+    state.current_api_index = None;
+    assert!(rewrite::inventory::revalidation_round::begin(&mut state));
+    let command = rewrite::action::status_command_for_api(target.path(), None);
+    let gate = RewriteAction::PreRevalidationReviewRequired {
+        summary: "review the final candidate".into(),
+        check: command.clone(),
+        accept: command,
+    };
+    let selected = rewrite::action::select_action(target.path(), &state, gate.clone());
+    assert!(matches!(
+        selected,
+        RewriteAction::PreRevalidationReviewRequired { .. }
+    ));
+    let projected = super::projected_details(target.path(), &state, &gate, &selected, false);
+    assert_eq!(projected.ready.len(), 1);
+    assert_eq!(projected.ready["pre_revalidation_review"], 1);
+    assert_eq!(projected.waiting["final_revalidation"], 2);
+    let value = serde_json::to_value(&selected).unwrap();
+    assert_eq!(value["kind"], "pre_revalidation_review_required");
+    assert_eq!(value["details"]["check_owner"], "code-integrator");
+    assert!(value["commands"].get("check").is_some());
+    assert!(value["commands"].get("accept").is_some());
+
+    let wait = RewriteAction::WaitRequired {
+        summary: "suspend the changed final candidate".into(),
+        execution_mode: None,
+        resource: "pre_revalidation_candidate".into(),
+        requested_api: None,
+        blocking_api: None,
+        active_operation: None,
+        retry_after_seconds: 5,
+        status: rewrite::action::status_command_for_api(target.path(), None),
+    };
+    let selected = rewrite::action::select_action(target.path(), &state, wait.clone());
+    assert!(matches!(selected, RewriteAction::WaitRequired { .. }));
+    let projected = super::projected_details(target.path(), &state, &wait, &selected, false);
+    assert_eq!(projected.ready.len(), 1);
+    assert_eq!(projected.ready["wait"], 1);
+    assert_eq!(projected.waiting["pre_revalidation_candidate"], 1);
+}

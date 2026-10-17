@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use std::path::Path;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
+mod compact_evidence;
 mod scale;
 mod subscription_evidence;
 

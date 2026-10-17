@@ -148,6 +148,35 @@ impl ReplayState {
         params: Option<&[RecordedMysqlValue]>,
     ) -> Option<MatchedExchange> {
         let request_observed_at = Utc::now();
+        let mut observation_id = Some(uuid::Uuid::new_v4());
+        if let (Some(policy), Some(case)) = (&self.replay_policy, self.active_case_id.as_deref()) {
+            match contracts::record_target(
+                &policy.request_contracts,
+                case,
+                identity,
+                contracts::ObservedRequest {
+                    observation_id,
+                    command,
+                    sql,
+                    params,
+                    started_at: request_observed_at,
+                },
+            ) {
+                Ok(crate::policy_evidence::ObservationRetention::Unavailable) => {
+                    observation_id = None
+                }
+                Ok(crate::policy_evidence::ObservationRetention::Retained) => {}
+                Err(error) => {
+                    self.mysql
+                        .events
+                        .metadata_warnings
+                        .push(format!("SQL Target observation unavailable: {error:#}"));
+                    // Global candidates do not own Case rule witnesses. Keep the
+                    // identity so an ordinary Case candidate still fails closed
+                    // when association cannot find its retained Target.
+                }
+            }
+        }
         let observed_sql = sql;
         let observed_params = params;
         let baseline_normalized_sql = sql.map(normalize_sql);
@@ -191,6 +220,7 @@ impl ReplayState {
                             identity,
                             &exchange.record,
                             contracts::ObservedRequest {
+                                observation_id,
                                 command,
                                 sql: observed_sql,
                                 params: observed_params,
@@ -467,6 +497,7 @@ impl ReplayState {
                                 &original,
                                 &exchange.record.response,
                                 contracts::ObservedRequest {
+                                    observation_id,
                                     command,
                                     sql: observed_sql,
                                     params: observed_params,
@@ -488,6 +519,7 @@ impl ReplayState {
                         } else {
                             ReplayExchangeStatus::Responding
                         };
+                    self.refresh_mysql_global_report(index);
                     if let Some(policy) = &mut self.replay_policy {
                         if let (Some(case_id), Some(normalized)) =
                             (active_case_id.as_deref(), dynamic.as_ref())
@@ -553,6 +585,14 @@ impl ReplayState {
                     continue;
                 }
                 exchange.status = ReplayExchangeStatus::Consumed;
+                if exchange.source == ReplaySource::Global {
+                    self.mysql.events.global_report.observe(
+                        0,
+                        index,
+                        exchange.optional_session.is_none(),
+                        false,
+                    );
+                }
                 return Some((exchange.source, index));
             }
         }
@@ -751,6 +791,7 @@ impl ReplayState {
             return;
         };
         exchange.status = ReplayExchangeStatus::Consumed;
+        self.refresh_mysql_global_report(matched.index);
         if let Some(policy) = &mut self.replay_policy {
             policy.commit_mysql_response_shift(&matched.response_time_shift_rules);
         }
@@ -777,6 +818,7 @@ impl ReplayState {
         if let Some(exchange) = self.mysql.exchanges.get_mut(matched.index) {
             exchange.status = ReplayExchangeStatus::Failed;
         }
+        self.refresh_mysql_global_report(matched.index);
         self.record_unmatched(
             identity,
             &matched.record.command,

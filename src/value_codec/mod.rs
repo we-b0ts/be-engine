@@ -1,12 +1,21 @@
 //! Bounded payload decoding with typed values and lossless protocol remainders.
 mod protobuf;
 
+use std::{borrow::Cow, sync::Arc};
+
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 
 use crate::policy::Codec;
 
 pub(crate) struct CodecView;
+
+/// Immutable schema preparation only. Payloads, permissions and clocks are
+/// evaluated independently for every decode and comparison.
+#[derive(Debug, Clone)]
+pub(crate) struct CodecPlan {
+    protobuf: Option<Arc<protobuf::Schema>>,
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct DecodedValue {
@@ -17,19 +26,36 @@ pub(crate) struct DecodedValue {
 
 impl CodecView {
     pub(crate) fn decode(codec: &Codec, bytes: &[u8]) -> Result<DecodedValue> {
+        CodecPlan::compile(codec)?.decode(bytes)
+    }
+}
+
+impl CodecPlan {
+    pub(crate) fn compile(codec: &Codec) -> Result<Self> {
+        Ok(Self {
+            protobuf: match codec {
+                Codec::Json => None,
+                Codec::Protobuf(codec) => Some(protobuf::schema(codec)?),
+            },
+        })
+    }
+
+    pub(crate) fn decode(&self, bytes: &[u8]) -> Result<DecodedValue> {
+        #[cfg(test)]
+        DECODE_CALLS.with(|calls| calls.set(calls.get() + 1));
         ensure!(
             bytes.len() <= 1024 * 1024,
             "payload exceeds the 1 MiB codec limit"
         );
-        let (logical, protobuf) = match codec {
-            Codec::Json => (
+        let (logical, protobuf) = match &self.protobuf {
+            None => (
                 crate::json_value::parse(bytes)
                     .context("payload requires complete JSON without duplicate members")?,
                 None,
             ),
-            Codec::Protobuf(codec) => {
-                let document = protobuf::Document::decode(codec, bytes)?;
-                (document.logical.clone(), Some(document))
+            Some(schema) => {
+                let (document, logical) = schema.decode(bytes)?;
+                (logical, Some(document))
             }
         };
         Ok(DecodedValue {
@@ -44,11 +70,16 @@ impl DecodedValue {
     /// Codec declarations describe types, not permission to ignore encoded data.
     /// Only actual contract locations lose their corresponding raw identity.
     pub(crate) fn comparison_value(&self, contract_paths: &[String]) -> Value {
-        let mut logical = self.logical.clone();
-        if self.protobuf.is_some() {
-            protobuf::prepare_comparison(&mut logical, "", contract_paths);
+        self.comparison_view(contract_paths).into_owned()
+    }
+
+    pub(crate) fn comparison_view(&self, contract_paths: &[String]) -> Cow<'_, Value> {
+        if self.protobuf.is_none() || contract_paths.is_empty() {
+            return Cow::Borrowed(&self.logical);
         }
-        logical
+        let mut logical = self.logical.clone();
+        protobuf::prepare_comparison(&mut logical, "", contract_paths);
+        Cow::Owned(logical)
     }
 
     /// The caller supplies the same rule's authorized delivery selectors. Shape,
@@ -139,15 +170,28 @@ fn validate_changes(
 }
 
 pub(super) fn pointer_matches(pattern: &str, pointer: &str) -> bool {
-    let pattern = pattern.split('/').collect::<Vec<_>>();
-    let pointer = pointer.split('/').collect::<Vec<_>>();
-    pattern.len() == pointer.len()
-        && pattern.iter().zip(pointer).all(|(expected, actual)| {
-            *expected == actual
-                || *expected == "*"
-                    && actual.parse::<usize>().is_ok()
-                    && (actual == "0" || !actual.starts_with('0'))
-        })
+    pattern.split('/').count() == pointer.split('/').count()
+        && pattern
+            .split('/')
+            .zip(pointer.split('/'))
+            .all(|(expected, actual)| {
+                expected == actual
+                    || expected == "*"
+                        && actual.parse::<usize>().is_ok()
+                        && (actual == "0" || !actual.starts_with('0'))
+            })
+}
+
+#[cfg(test)]
+thread_local! {
+    static DECODE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn measured_decodes<T>(operation: impl FnOnce() -> T) -> (T, usize) {
+    let before = DECODE_CALLS.with(std::cell::Cell::get);
+    let result = operation();
+    (result, DECODE_CALLS.with(std::cell::Cell::get) - before)
 }
 
 pub(super) fn escape(value: &str) -> String {

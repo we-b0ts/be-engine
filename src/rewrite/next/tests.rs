@@ -122,6 +122,22 @@ fn ready(state: &mut RewriteState) {
     observation.handoff_id = Some("retained-handoff".into());
 }
 
+fn admit_final(root: &Path) {
+    let report =
+        crate::rewrite::review::check_pre_revalidation(crate::rewrite::RewriteReviewOptions {
+            target_root: root.into(),
+            worktree: Some(root.into()),
+            scope: None,
+            evidence: None,
+            integration: false,
+            handoff_id: None,
+            hardcode_ai_verified: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(report.status, crate::rewrite::review::ReviewStatus::Passed);
+    crate::rewrite::review::accept(root.into(), report.report_path).unwrap();
+}
+
 #[test]
 fn mode_uses_invocation_intent_instead_of_the_internal_selection() {
     let target = configured_target();
@@ -309,6 +325,7 @@ async fn failed_members_and_a_ready_handoff_do_not_interrupt_the_round() {
     add_revalidation(&mut state, "GET /stale-b");
     let store = RewriteStore::new(target.path()).unwrap();
     store.save(&state).unwrap();
+    admit_final(target.path());
     let mut calls = 0;
     let output = run_steps(
         options(target.path()),
@@ -345,6 +362,66 @@ async fn failed_members_and_a_ready_handoff_do_not_interrupt_the_round() {
         saved.parked_slices["GET /stale-a"].phase,
         RewritePhase::ImplementationRequired
     );
+}
+
+#[tokio::test]
+async fn changed_final_round_can_activate_the_integrated_failed_member() {
+    for remaining_api in ["POST /other", "POST /api"] {
+        let target = configured_target();
+        let root = target.path();
+        let mut state = test_state();
+        inventory::install(&mut state, vec!["GET /api".into(), remaining_api.into()]).unwrap();
+        for item in &mut state.api_inventory {
+            item.status = RewriteApiStatus::RevalidationPending;
+        }
+        state.phase = RewritePhase::SliceComplete;
+        state.current_api_index = None;
+        let store = RewriteStore::new(root).unwrap();
+        store.save(&state).unwrap();
+        admit_final(root);
+        replay(options(root), false, worker::integrate_current_for_test);
+        let mut state = store.load().unwrap().unwrap();
+        inventory::activate_requested(&mut state, Some(&remaining_api.parse().unwrap())).unwrap();
+        store.save(&state).unwrap();
+        fs::write(root.join("lib.rs"), "pub fn value() -> u8 { 2 }\n").unwrap();
+
+        let mut projected = state.clone();
+        assert!(crate::rewrite::review::pre_revalidation::reconcile(root, &mut projected).unwrap());
+        assert_eq!(projected.phase, RewritePhase::SliceComplete);
+        assert!(projected.current_api_index.is_none());
+        inventory::activate_requested(&mut projected, Some(&"GET /api".parse().unwrap())).unwrap();
+        assert_eq!(projected.api, "GET /api");
+
+        let before = serde_json::to_value(store.load().unwrap().unwrap()).unwrap();
+        let global = next_rewrite(options(root)).await.unwrap();
+        assert!(matches!(
+            global.action,
+            RewriteAction::SourceReviewRequired { .. }
+        ));
+        assert_eq!(
+            before,
+            serde_json::to_value(store.load().unwrap().unwrap()).unwrap()
+        );
+
+        let mut invocation = options(root);
+        invocation.api = Some("/api".parse().unwrap());
+        let result = crate::rewrite::advance::advance_rewrite(invocation)
+            .await
+            .unwrap();
+        assert!(matches!(
+            result.envelope.action,
+            RewriteAction::SourceReviewRequired { .. }
+        ));
+        assert!(!result.replay_can_continue);
+        let saved = store.load().unwrap().unwrap();
+        assert_eq!(saved.api, "GET /api", "remaining method: {remaining_api}");
+        assert!(saved.revalidation_round.is_none());
+        assert_eq!(saved.attempts.len(), 1);
+        assert_eq!(
+            saved.api_inventory[1].status,
+            RewriteApiStatus::RevalidationPending
+        );
+    }
 }
 
 #[tokio::test]

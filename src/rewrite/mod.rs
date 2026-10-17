@@ -87,6 +87,7 @@ pub use review::{
     RewriteIntegrationBatchReport, RewriteReviewOptions, RewriteReviewReport,
     accept as accept_rewrite_review, check as check_rewrite_review,
     check_batch as check_batch_rewrite_review, check_batch_file as check_rewrite_review_batch_file,
+    check_pre_revalidation as check_rewrite_pre_revalidation,
     export_batch as export_rewrite_integration_batch, rework as rework_rewrite_review,
     rework_with_report as rework_rewrite_review_with_report, show as show_rewrite_review,
 };

@@ -138,7 +138,7 @@ mod tests {
             ]))
         );
         let commit_action =
-            serde_json::to_value(super::super::action::for_state(target.path(), &state)).unwrap();
+            serde_json::to_value(publication_action(target.path(), &state)).unwrap();
         assert_eq!(
             commit_action.pointer("/action/kind"),
             Some(&serde_json::json!("input_required"))
@@ -176,7 +176,7 @@ mod tests {
 
         git(target.path(), &["add", ".traffic-e2e/progress.yaml"]);
         git(target.path(), &["commit", "-m", "publish progress"]);
-        let published = super::super::action::for_state(target.path(), &state);
+        let published = publication_action(target.path(), &state);
         // Publication alone cannot bypass the independent source review gate.
         assert!(!published.terminal_allowed);
         assert_eq!(
@@ -206,8 +206,7 @@ mod tests {
             Some(PublicationState::CommitRequired(expected.clone()))
         );
 
-        let action =
-            serde_json::to_value(super::super::action::for_state(target.path(), &state)).unwrap();
+        let action = serde_json::to_value(publication_action(target.path(), &state)).unwrap();
         assert_eq!(
             action.pointer("/action/details/required"),
             Some(&serde_json::json!(expected))
@@ -216,7 +215,16 @@ mod tests {
 
         git(target.path(), &["add", "."]);
         git(target.path(), &["commit", "-m", "publish delivery files"]);
-        assert!(!super::super::action::for_state(target.path(), &state).terminal_allowed);
+        assert!(!publication_action(target.path(), &state).terminal_allowed);
+    }
+
+    // These tests isolate publication. Final review precedence is covered by
+    // the state-machine tests, while envelope still enforces terminal gates.
+    fn publication_action(
+        root: &Path,
+        state: &RewriteState,
+    ) -> super::super::model::RewriteActionEnvelope {
+        super::super::action::envelope(root, state, super::super::action::state_action(root, state))
     }
 
     fn complete_state() -> RewriteState {

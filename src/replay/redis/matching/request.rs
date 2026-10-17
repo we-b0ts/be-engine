@@ -21,6 +21,7 @@ impl RedisReplayState {
         let preview = |source: &[Vec<u8>], actual: &[Vec<u8>]| {
             self.request_contracts.preview_redis_context(
                 &crate::replay::policy::request_contract::RedisRequestContext {
+                    observation_id: None,
                     case,
                     target: &target,
                     database: exchange.record.database,

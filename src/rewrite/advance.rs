@@ -22,9 +22,11 @@ pub(super) async fn advance_rewrite(options: RewriteNextOptions) -> Result<Advan
     let api = match options.api.as_ref() {
         Some(RewriteApiSelector::Motan(api)) => Some(api.clone()),
         Some(selector @ RewriteApiSelector::Route(_)) => {
-            let state = RewriteStore::new(&options.target_root)?.load()?.context(
+            let (root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
+            let mut state = RewriteStore::new(&root)?.load()?.context(
                 "route selection requires a recorded API inventory; start with next without --api",
             )?;
+            review::pre_revalidation::reconcile(&root, &mut state)?;
             Some(api_selector::select(&state, selector)?)
         }
         None => None,
@@ -129,6 +131,8 @@ async fn advance_atomic(
             let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
             let invalidated =
                 inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
+            let invalidated =
+                review::pre_revalidation::reconcile(&target_root, &mut state)? || invalidated;
             if recording::begin_pending_capture_refresh(&target_root, &mut state)? {
                 store.save(&state)?;
             }
@@ -160,6 +164,13 @@ async fn advance_atomic(
                     &state,
                     requested_api.to_string(),
                 ));
+            }
+            if let Some(required) = review::pre_revalidation::required_action(&target_root, &state)?
+            {
+                if migrated || invalidated {
+                    store.save(&state)?;
+                }
+                return Ok(action::envelope(&target_root, &state, required));
             }
             if let Some(api) = options.api.as_ref()
                 && let Some(envelope) =

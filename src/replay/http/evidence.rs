@@ -40,6 +40,9 @@ impl ReplayState {
         Ok(())
     }
     pub(in crate::replay) fn global_http_unused_count(&self) -> usize {
+        if let Some(count) = self.http_global_report_usage().count() {
+            return count + self.global_http_extra_unused_count();
+        }
         self.unused_http_iter(ReplaySource::Global, false).count()
     }
 }

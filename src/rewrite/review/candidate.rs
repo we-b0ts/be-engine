@@ -36,7 +36,7 @@ pub(super) fn scan_base(root: &Path, pr_base: &str) -> Result<String> {
 pub(super) fn context(root: &Path, project: &ResolvedProjectConfig) -> Result<String> {
     Ok(fingerprint::id(&[
         "review-validation-context-v1",
-        &crate::rewrite::quality::policy_fingerprint(&project.target_quality_gates)?,
+        &crate::rewrite::quality::policy_fingerprint()?,
         &project.pr_base,
         &serde_json::to_string(&project.managed_paths)?,
         &crate::startup::startup_snapshot_revision(root)?,
@@ -185,6 +185,17 @@ pub(super) fn fresh(
             && validation.scan_base_revision == scan_base(code_root, &project.pr_base)?,
         "review configuration, base or canonical inputs changed; rerun review check"
     );
+    if let Some(binding) = report.pre_revalidation.as_ref() {
+        ensure!(
+            validation.final_inputs_fingerprint.as_ref()
+                == Some(&pre_revalidation::input_fingerprint(code_root)?),
+            "Cargo or toolchain inputs changed after final review; rerun review check --pre-revalidation"
+        );
+        ensure!(
+            binding == &pre_revalidation::context(root, state)?,
+            "final review scope, recording or policy changed; rerun review check --pre-revalidation"
+        );
+    }
     Ok(())
 }
 
@@ -209,6 +220,10 @@ pub(super) fn validate_accepted(
     report: &RewriteReviewReport,
     project: &ResolvedProjectConfig,
 ) -> Result<()> {
+    ensure!(
+        report.integration.is_some(),
+        "accepted review requires a complete integration receipt; rerun integration review"
+    );
     fresh(root, root, state, report, project)?;
     ensure!(
         report.accepted_target_fingerprint.as_deref()
@@ -227,7 +242,7 @@ pub(super) fn validate_accepted(
     checks_passed(root, report, project)
 }
 
-fn checks_passed(
+pub(super) fn checks_passed(
     code_root: &Path,
     report: &RewriteReviewReport,
     project: &ResolvedProjectConfig,
@@ -236,11 +251,21 @@ fn checks_passed(
         report.status == ReviewStatus::Passed,
         "review did not pass; fix the delivery and rerun review check"
     );
-    report
+    let quality = report
         .quality
         .as_ref()
-        .context("review lacks mandatory quality checks")?
-        .ensure_passed(&project.target_quality_gates)?;
+        .context("review lacks mandatory quality checks")?;
+    if report.pre_revalidation.is_some() {
+        pre_revalidation::ensure_committed(code_root)?;
+        ensure!(report.integration.is_some() && report.scope.is_none()
+            && report.integration.as_ref().is_some_and(|review| review.handoff_id.is_none() && review.handoffs.is_empty()),
+            "final review must cover the global integration candidate");
+        quality.ensure_pre_revalidation(code_root, &project.managed_paths)?;
+    } else if report.integration.is_some() {
+        quality.ensure_passed()?;
+    } else {
+        quality.ensure_passed_for(crate::rewrite::quality::QualityScope::Worker)?;
+    }
     let (status, _) = evidence::evaluate(code_root, &report.findings, &report.evidence)?;
     ensure!(
         status == ReviewStatus::Passed,
@@ -325,6 +350,17 @@ pub(in crate::rewrite) fn accept_locked(
         );
     }
     let (_, project) = crate::e2e_run::resolve_project(root)?;
+    if report.pre_revalidation.is_some() && pre_revalidation::current(root, state) {
+        fresh(root, root, state, &report, &project)?;
+        checks_passed(root, &report, &project)?;
+        source_diff::git_text(
+            root,
+            &["merge-base", "--is-ancestor", &report.head_revision, "HEAD"],
+        )?;
+        // An already-admitted candidate survives progress-only publication. A
+        // repeated accept is a no-op and cannot reset its remaining API sweep.
+        return Ok(None);
+    }
     require_published_head(root, &report, integration)?;
     validate(root, root, state, &report, &project)?;
     source_diff::git_text(
@@ -358,6 +394,9 @@ pub(in crate::rewrite) fn accept_locked(
         None
     };
     report.accepted_target_fingerprint = Some(fingerprint::review_fingerprint(root)?);
+    if report.pre_revalidation.is_some() {
+        pre_revalidation::admit(root, state, &report)?;
+    }
     write_json(&integrated_path(root), &report)?;
     // Admission remains mandatory even when a receipt is lost or old caches
     // are invalidated by rule/configuration changes.

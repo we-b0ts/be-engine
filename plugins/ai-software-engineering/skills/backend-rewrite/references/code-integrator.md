@@ -1,7 +1,7 @@
 # Code Integrator
 
-Use only the coordinator's current `integrate` or `review` assignment. Work in
-the assigned integration worktree. Do not read API diagnosis or coordinator
+Use only the coordinator's current `integrate`, `review` or
+`pre_revalidation_review` assignment. Work in the assigned integration worktree. Do not read API diagnosis or coordinator
 operating protocols, select another handoff, or mutate workflow state.
 
 ## Input
@@ -17,8 +17,12 @@ commit, and relevant source locations.
   metadata, `batch_path`, and the complete `check` command. Use the exported
   `delivery_commit` for Git operations; preserve the independent `handoff_id`.
 - `review`: inspected target version, current findings/report when available,
-  and available commit-to-work-item provenance. This includes a missing or stale
-  final quality report. No API issue is implied by this assignment.
+  and available commit-to-work-item provenance. No API issue is implied by this
+  assignment.
+- `pre_revalidation_review`: the engine's final-stage action and exact check
+  command, inspected target version, canonical inputs and current findings/report
+  when available. This is the mandatory stage before final full revalidation,
+  not a new API handoff.
 
 Return missing material. Preserve original identities; there is no dedicated
 integrator evidence endpoint or engine integration activity to invent.
@@ -37,9 +41,10 @@ integrator evidence endpoint or engine integration activity to invent.
    mechanical. Return unresolved business decisions to the responsible owner.
 4. Check combined module boundaries, affected startup ownership, and evidence
    locations. Commit the candidate and record every conflict resolution and
-   original-to-result mapping. Execute the engine-exported `check` command for
-   complete candidate review. It already includes the integration worktree and
-   generated batch path; no identity probing or manual JSON assembly is needed.
+   original-to-result mapping. Build and run relevant tests as needed, then
+   execute the engine-exported `check` command for source/isolation review. It
+   includes the integration worktree and generated batch path; no identity probing
+   or manual JSON assembly is needed.
 
    Existing retained assignments may still supply a single-handoff command:
 
@@ -67,27 +72,33 @@ integrator evidence endpoint or engine integration activity to invent.
    coordinator for reconciliation and regeneration.
    Supply current `--evidence` and
    `--hardcode-ai-verified` mappings when required. Only a `passed` report
-   qualifies. Resolve integration-induced failures here; return original
-   implementation defects with exact findings to their responsible worker.
+   qualifies. Resolve routine formatting/lint findings and integration-induced
+   failures here. Full Clippy is required by the final stage below, not by each
+   integration. Preserve behavior and record repairs in the candidate provenance.
+   Return changes requiring API behavior decisions with exact findings to their
+   responsible worker. Commit corrections and rerun complete candidate review.
 5. Return the candidate and its absolute passing `report_path` based on the
    exact assigned base. Do not write product
    code or configuration in the canonical worktree or touch another worker tree.
 
-A worker's passing report covers its delivery. Integration review runs the same
-source, Replay-isolation, public-domain, and engine-standard quality checks against
-the complete merged candidate. It binds the accepted handoff, canonical check
-configuration and runtime inputs, and exact candidate code. A batch report binds
-every included handoff to that candidate. Never reuse a
-worker report for integration or a candidate report after subsequent changes.
+A worker's passing report covers source rules, Replay isolation and delivery
+identity. Ordinary integration review repeats those checks against the complete
+merged candidate without mandatory fmt, workspace tests or Clippy. It binds the
+accepted handoff, canonical review policy and runtime inputs, and exact candidate
+code. A batch report binds every included handoff to that candidate. It does not
+certify that the final full quality suite ran. Never reuse a worker report for
+integration, an ordinary integration report for the final stage, or a candidate
+report after subsequent relevant changes.
 
-Each accepted worker handoff has already passed the same complete quality suite.
-Do not independently re-prove its business logic; inspect code as needed for
-actual merge conflicts or required quality evidence. After merging, invoke
-`review check --integration` directly: it runs Rust fmt,
-test, and clippy for every managed Rust project. Do not manually run those same
-full-suite commands before it. Use the candidate report to identify any failures;
-focused checks for conflict resolutions or reported failures remain appropriate.
-Candidate or relevant input changes still require a fresh complete review.
+Workers run relevant tests as needed and do not need to run Clippy. Their
+accepted reports certify engine source/isolation checks and delivery identity.
+Do not independently re-prove API business logic; inspect code for merge
+conflicts, routine quality repairs and required evidence.
+
+Build and run focused tests as needed during ordinary integration; a full
+fmt/test/Clippy run is not a per-delivery gate. Include the local checks you
+actually executed with their outcomes. The separate final stage below owns the
+mandatory full suite.
 
 When the reviewed handoff needs no code change after input application, the
 candidate may equal the assigned base. Return the identity and checks without
@@ -137,19 +148,63 @@ Prepare the required source-evidence commit in your worktree and return its
 candidate and exact mappings. This permits evidence metadata, not an unrelated
 product repair.
 
-For an evidence-only candidate or final quality refresh, run `review check
---integration --worktree /absolute/integration` against the canonical target
-root, with neither a scope nor handoff ID. Return its passing report with the
-exact candidate. The coordinator accepts that report after publication; do not
-include `--batch-handoffs` or invent a worker handoff for global quality work.
-Receipt expiry does not reset handoff integration states. If all retained
-handoffs are already integrated, use this global refresh instead of a batch.
-If required canonical inputs
-are still changing, return them first and recheck against their final state.
+For an evidence-only candidate or ordinary source-review refresh, run the
+supplied `review check --integration --worktree /absolute/integration` against
+the canonical target root without scope or handoff ID. Return its passing
+report with the exact candidate. It does not satisfy final pre-revalidation
+review. Do not invent a worker handoff or batch when all deliveries have already
+been integrated. If canonical inputs are still changing, return them first and
+recheck against their final state. Receipt expiry does not undo integrations.
 
-A review assignment does not authorize business-code edits. Return concrete
-findings and repair ownership. Source analysis that cannot prove a safe merge
+A review assignment permits routine formatting and lint repairs in the assigned
+integration worktree, followed by a new commit and complete review. It does not
+authorize changes to API behavior. Return concrete business findings and repair
+ownership. Source analysis that cannot prove a safe merge
 or an allowed constant returns the missing proof; do not weaken the check.
+
+## Final Pre-Revalidation Review
+
+The engine issues `pre_revalidation_review_required` only when ordinary work is
+ready for the final full revalidation or completion. This final gate also
+applies to an unchanged purpose baseline: ordinary Source-review exemption is
+not final quality proof. Work in the retained integration worktree at the
+assigned canonical base, preserving any unfinished changes. Execute the
+returned check command; its form is:
+
+```bash
+backend-rewrite --target-root /absolute/canonical review check \
+  --pre-revalidation --worktree /absolute/integration
+```
+
+This is the single entrypoint for the full quality suite. It runs format,
+workspace tests and Clippy for the target and configured managed Rust projects,
+plus Source, keyword and Replay-isolation checks. Do not manually run the same
+full Cargo suite before calling it, and do not substitute `--integration`, a
+batch report or a worker report. Keep scope/handoff selectors out of this global
+check. Each Rust project's commands execute in its own directory; the receipt
+binds that working directory and the applicable repository Cargo/toolchain
+inputs. Commit the target/managed code and any changed tracked Cargo or toolchain
+inputs before checking. Progress, policy and private runtime keep their existing
+separate handling. Supply current Source evidence and exact hardcode mappings
+when required.
+
+Inspect the report status and actual command results/logs. Repair routine
+formatting/lint failures directly in this worktree, commit the corrected
+candidate, then repeat the final-stage command. Return API behavior decisions
+with exact evidence to their responsible implementer. A failure or stale
+receipt cannot advance full revalidation. Do not modify code after a passing
+check and continue to describe that report as current.
+
+Return the exact checked candidate and absolute passing final `report_path`.
+The coordinator publishes that candidate, applies any required supported inputs,
+and invokes `review accept`; you do not publish or accept it. The engine binds
+the receipt to code, canonical inputs, review policy, inventory and immutable
+recording. Relevant changes require a fresh final-stage check. Progress-only
+publication does not invalidate an already admitted matching receipt. When the
+engine reuses current final proof, do not run another full suite merely because
+another API in the same revalidation round is next. Retrying the identical
+successful candidate reuses the cached result and restores its report file if
+needed; it does not execute a second suite.
 
 ## Output
 
@@ -158,7 +213,8 @@ Return one outcome:
 
 - `ready`: candidate commit when applicable, result content identity, provenance,
   conflict resolutions, local checks, source evidence, required inputs, and the
-  absolute passing integration `report_path` for every candidate being delivered.
+  absolute passing stage-appropriate `report_path` for every candidate being
+  delivered. Final-stage assignments must return a pre-revalidation receipt.
 - `rework`: responsible work item, exact failure/conflict, evidence, and requested
   repair. Include the failed candidate's absolute `report_path` and source
   finding IDs when available; for standard commands or isolation/domain

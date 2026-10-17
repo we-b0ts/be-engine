@@ -279,17 +279,26 @@ other managed directories. Managed sibling files are reported relative to the
 target, for example `../backend-rs/src/lib.rs`. Once managed paths are present,
 a candidate with tracked changes outside the target and those paths is rejected.
 
-Review runs the same complete quality implementation for worker and integration
-deliveries. It enforces complete changed production Rust files <=1000 lines.
-Added Tokio spawn paths
-require structured startup ownership evidence via `--evidence`; request-owned
+Worker, integration and final pre-revalidation review share Source and
+Replay-isolation checks. Worker and ordinary integration review do not execute
+mandatory repository quality commands. Final pre-revalidation review is a
+separate engine stage that executes the full suite once for the final candidate.
+All review stages enforce complete changed production Rust files <=1000 lines.
+Added Tokio spawn paths require structured startup ownership evidence via `--evidence`; request-owned
 and unknown ownership cannot pass. The scanner uses syntax, ordinary imports and
 source spans; it does not expand macros, infer types or prove call graphs.
 It also performs the mandatory Replay-isolation and source-sensitive public
-domain checks, including `demo.test` occurrences in test fixtures, then executes
-every configured repository gate with its exact arguments in the delivery
-worktree. Configuration comes from the canonical target, so changing a worker's
-local gate configuration cannot skip checks. Worker review checks the frozen
+domain checks, including `demo.test` occurrences in test fixtures. API workers
+build/debug and run relevant tests as needed; they do not need to run Clippy.
+The integrator builds and tests as needed during daily integration. At
+`pre_revalidation_review_required`, it executes the returned `review check
+--pre-revalidation --worktree /absolute/integration`; that single command runs
+format, workspace tests and Clippy plus source/isolation checks. The skill
+requires this command without a duplicate manual suite. Routine formatting/lint
+repairs stay with the integrator. Stage-bound receipts prevent a worker report
+from replacing integration review or an ordinary integration report from
+replacing final pre-revalidation proof.
+Worker review checks the frozen
 dispatch ancestry and uses the same full PR diff baseline as integration review.
 See the [API implementer review protocol](../plugins/ai-software-engineering/skills/backend-rewrite/references/api-implementer-review.md).
 
@@ -299,9 +308,12 @@ After publishing that exact candidate, the coordinator
 reports `worker report ... --activity integrated --review-report
 /absolute/integration-report.json`. This requires an integration report for the
 original accepted handoff, not its earlier worker report. Global evidence-only
-or final quality review uses `review check --integration --worktree
-/absolute/integration` without scope or handoff ID; after publication the
-coordinator admits it using `review accept --report /absolute/report.json`.
+or ordinary source-review refresh uses `review check --integration --worktree
+/absolute/integration` without scope or handoff ID. Final review uses the
+distinct `review check --pre-revalidation --worktree /absolute/integration`
+without worker or batch selectors. After exact publication the coordinator
+admits either global report using `review accept --report /absolute/report.json`;
+only the final-stage report can satisfy the final full-revalidation gate.
 For selected current API handoffs, the coordinator runs
 `review batch --worktree /absolute/integration --api '/a' --api '/b'` (or its
 returned `commands.export_batch` with the retained worktree environment input).
@@ -341,7 +353,8 @@ Checks and evidence reports are not traffic evidence and never change recordings
 Quality results are bound to candidate code, canonical check configuration,
 runtime inputs, rules and the diff base. Publication admission matches actual
 code content without substituting a worker's private runtime fingerprint for the
-canonical identity. Code or input changes invalidate the report. Source-only reports do not waive full checks.
+canonical identity. Code or input changes invalidate the report. Worker and ordinary integration
+reports do not waive final full checks.
 Admission requires the exact reviewed commit. After admission, an ordinary
 progress-only commit may retain that receipt: the reviewed commit must remain
 an ancestor, with code, canonical inputs, rules and the diff base unchanged,
@@ -349,9 +362,11 @@ and no new `Hardcode-Source-Evidence` commit trailers.
 The engine checks this automatically; do not manufacture another handoff or
 rerun checks merely to publish progress metadata.
 
-Changes confined to the file named by `project.policy` preserve an accepted code review receipt when
-its other freshness conditions still hold. These files are excluded from review
-code identity and the purpose baseline comparison, but remain part of the traffic
+Changes confined to the file named by `project.policy` preserve an accepted
+ordinary code review receipt when its other freshness conditions still hold.
+The final pre-revalidation receipt additionally binds the effective verification
+policy, inventory and immutable recording, so relevant changes still require
+fresh final proof. The policy file is excluded from ordinary review code identity and the purpose baseline comparison, but remain part of the traffic
 verification fingerprint: policy edits invalidate prior E2E evidence
 and require fresh verification. The persistent-configuration commit gate still
 requires these edits to be committed before continuing verification. Receipts
@@ -1522,11 +1537,13 @@ starting Replay, preserving the prior issue and attempt history. A running retry
 does not dispatch its old issue again. Failure, process restart, and recovery never
 refund the permit; a new result determines the next action. Other issue kinds and
 unaccepted sibling methods retain their existing handoff and repair gates.
-Quality gates execute during worker and integration review before delivery.
-The coordinator admits version-bound integration reports; the legacy
-`target-quality run` entry point only validates an existing receipt.
-One admitted integrated API handoff schedules that API's Replay. Final unified verification handles shared
-changes after ordinary work drains.
+Worker and ordinary integration review execute source/isolation and identity
+gates before delivery. The coordinator admits version-bound integration reports;
+the legacy `target-quality run` entrypoint only validates an existing receipt.
+One admitted integrated API handoff schedules that API's Replay. After ordinary
+work drains, `pre_revalidation_review_required` blocks the final full sweep until
+the integrator's full-check candidate is published and its final-stage receipt
+is admitted. Final unified verification then handles shared changes.
 
 Returned `next` commands omit `--api`; the engine retains its selected route
 independently of command arguments. Explicit `next --api '/route'` remains a
@@ -1663,15 +1680,16 @@ query confirming that worker is missing.
 
 The committed `pr_base` revision captured by purpose confirmation is the trusted
 review baseline. An unchanged baseline proceeds directly through recording/Replay
-and can complete without a source-review receipt, including when an old or broken
-`source-review.json` remains on disk. Committing engine progress files or changing
+without an ordinary source-review receipt, including when an old or broken
+`source-review.json` remains on disk. This Source-review exemption does not
+replace the final pre-revalidation gate. Committing engine progress files or changing
 only source traffic or verification policy does not create a source-review
 obligation. Other committed, staged, working-tree or untracked source/configuration
 changes require a current accepted integration review before
 verification and final delivery. Pending handoff/finding admission retains its
 ordinary review contract; the exemption does not admit an unpublished candidate.
-Source review and engine-standard quality commands belong to the delegated integrator,
-not the coordinator's startup path.
+Source review and engine-issued final pre-revalidation checks belong to the
+delegated integrator, not the coordinator's startup path.
 
 An actual active/stale engine operation must finish or recover before replacement;
 this is the serialized traffic lease, not an old task-runtime liveness check.
@@ -1693,8 +1711,46 @@ not immediately replay them. Automatic revalidation starts only when every
 included method contract is complete, pending revalidation, or at a confirmed
 system-repair gap. Skipped methods are excluded. Pending implementation,
 unintegrated handoffs, integrated-but-unverified deliveries and recording-refresh
-waiters must finish their existing acceptance/input flow first.
+waiters must finish their existing acceptance/input flow first. Before starting
+a full revalidation round, the engine requires current final pre-revalidation
+proof. The same final gate applies before successful completion when the
+inventory already has current passing evidence; an unchanged purpose baseline
+is not an exemption. The engine returns `pre_revalidation_review_required` with
+the exact check and admission commands when proof is missing or stale:
 
+```bash
+backend-rewrite --target-root /absolute/canonical review check \
+  --pre-revalidation --worktree /absolute/integration
+```
+
+The retained integrator executes this command, which runs full format/tests/
+Clippy and source/isolation checks and records real outcomes/logs. The skill does
+not add a manual duplicate Cargo suite. The integrator repairs routine
+formatting/lint issues in its worktree, commits the candidate, and rechecks.
+Changes requiring API behavior decisions return to the responsible implementer.
+Only the coordinator publishes the exact passing candidate and calls `review
+accept --report ...`; acceptance validates proof without repeating execution.
+
+The final receipt binds candidate code, canonical inputs, check policy,
+verification policy, inventory and immutable recording. It also hashes
+`Cargo.toml`, `Cargo.lock`, `.cargo/config`, `.cargo/config.toml` and
+`rust-toolchain`/`rust-toolchain.toml` in each managed project and its ancestors
+through the repository root. Target/managed code and changed tracked Cargo or
+toolchain inputs must be committed before final checking and admission;
+progress, policy and private runtime retain their existing separate treatment.
+Failing, stale or ordinary-integration reports cannot start the full sweep.
+
+Relevant changes invalidate final proof. Retrying the same successful final
+candidate reuses its cached report and restores its delivery report file if
+needed, without executing the suite again. Progress-only publication and moving
+between APIs in the unchanged round retain matching admitted proof. The durable
+sweep binds the exact final report's SHA256 identity, so an interrupted
+replacement admission cannot reuse another candidate's consumed membership.
+Missing or stale proof is a normal state-machine action, not an API Replay failure.
+
+Admitting a new final candidate schedules every included successful method for
+another full sweep, even if its first-pass evidence was current. Confirmed
+system gaps keep their repair identities and do not block other runnable APIs.
 Starting revalidation persists the complete set of stale method contracts in
 inventory order. Run every member once before returning to implementation or
 repair acceptance. A terminal failure records its issue and consumes that round
@@ -1752,15 +1808,21 @@ managed resources and allocates a replacement run. A pending rule plan produces
 the evidence validation performed at plan time, so its own workflow revision
 does not make apply stale. A corrected plan using the same evidence ID replaces
 the pending preview before apply; recorder configuration is still changed only
-by apply. Worker and integration `review check` run the engine-standard format,
-workspace tests, Clippy, and mandatory source/Replay-isolation suite before delivery. The
-coordinator admits the integration report for the exact published candidate;
-`advance_required` then starts Replay. Missing or stale proof returns
-`source_review_required` for the code integrator, including before revalidation
-when code or required inputs have changed. Initial diagnostic Replay can run
+by apply. Worker `review check` enforces Source/Replay-isolation rules and
+delivery identity without running repository commands. Workers run relevant
+tests as needed; they do not need Clippy. Ordinary integration `review check`
+checks Source/Replay-isolation rules and identity against the combined candidate
+without mandatory Cargo commands. The coordinator admits the integration report
+for the exact published candidate; `advance_required` can then start focused
+Replay. Missing or stale ordinary proof returns `source_review_required`.
+Before the final full revalidation, the distinct
+`pre_revalidation_review_required` stage requires the integrator to execute
+`review check --pre-revalidation`, publish the exact candidate and admit its
+final-stage receipt. The command executes the full quality suite once; the skill
+does not duplicate it. Code or relevant input changes require fresh final proof. Initial diagnostic Replay can run
 before the workflow has a delivery report. Repository-specific development
 requirements belong in `AGENTS.md` or `CLAUDE.md`; project configuration cannot
-replace or disable the engine-standard quality checks.
+replace or disable the engine Source/Replay-isolation checks.
 
 A failed focused E2E attempt reuses the same finalized standard cases after the
 target changes. Backend rewrite consumes external evidence and never starts
@@ -2127,13 +2189,18 @@ omitted and accepts values through 1800 seconds. The target request timeout is 3
 timeout remains a coordinator-owned default. The target's native HTTP port is the port in
 `recorder.http_gateway.matched_upstream`; Replay uses it on loopback.
 
-`review check` owns the quality standard; `project.yaml` has no configurable
-quality-command field. For each Rust target, it runs format, workspace tests,
-and Clippy. It applies the same checks to every managed directory that
-contains `Cargo.toml`, using the target-relative `--manifest-path` so that
-directory is tested independently instead of merely compiled as a dependency.
-Repository-specific development requirements belong in `AGENTS.md` or
-`CLAUDE.md` and do not replace the engine standard.
+`review check` owns the Source/Replay-isolation standard; `project.yaml` has no
+configurable quality-command field. Worker and ordinary integration review do
+not execute mandatory fmt, tests or Clippy. The engine's final
+`review check --pre-revalidation` runs format, workspace tests and Clippy for
+each Rust target and every managed directory containing `Cargo.toml`. Each
+command executes in that project's own directory, preserving its Cargo
+configuration discovery; the target-relative working directory is part of the
+receipt and check-policy identity. Managed projects are tested independently
+rather than only compiled as dependencies. The integrator calls this single
+entrypoint and returns its actual final-stage report; the skill does not require
+a duplicate manual Cargo suite. Repository-specific development requirements
+belong in `AGENTS.md` or `CLAUDE.md` and do not replace the engine standard.
 
 Managed replay reads its target response limit from
 `recorder.recording.max_body_bytes` in `project.yaml`.

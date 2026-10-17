@@ -44,6 +44,32 @@ is unclear.
   Protocol adapters supply independent observed clocks and original exchange
   identities. Assertion and request adapters map the same compiled contracts
   into their existing status, lane, admission and consumption lifecycles.
+  Its versioned observation graph separates immutable Source observations,
+  independently identified Target requests, derived deliveries and authenticated
+  candidate references. Content sharing never merges physical request identities.
+  Offline discovery and preflight expand these references through the evidence
+  reader; runtime candidate search does not copy complete payload pairs.
+
+- `replay/report/global_evidence` owns durable, source-bound shared Global report
+  inventories and lazy detail projection. Its artifact child owns atomic private
+  storage and portable publication; protocol children supply immutable report rows
+  and sparse visibility changes using their existing consumption semantics.
+  Generic Pub/Sub notifications retain Source-confirmed lane identities and their
+  own sparse delivery state. These inventories are evidence, separate from the
+  disposable dependency-index cache. Case reclassification remains a reversible
+  report overlay. The report layer never grants matching or consumption permission.
+  `replay/global_source` supplies a read-only projection view and Source-only
+  preparation through the same protocol adapters. Recorder's preparation child
+  invokes it after its writers and native indexes are sealed, without a Target,
+  Case response oracle, CA or listener. `global_evidence/preparation` owns portable
+  source/policy/version binding and prewarm import; failure remains explicit and
+  does not change Recorder's original completion contract.
+- `value_codec` prepares immutable typed decoding plans and bounded schema reuse;
+  decoded Source values may be shared within a comparison. The pure value kernel
+  still evaluates every applicable permission and supplied clock independently.
+  `replay/policy/request_contract/mysql_selection` owns immutable SQL selector
+  preparation and bounded raw-token reuse; bound parameters and live applicability
+  never belong in that cache.
 
 - `config/api_trigger` owns API-origin process-rule schema, SQL identity slots and bounded key-template
   validation; `api_trigger` owns immutable origin evidence and disposable index
@@ -494,10 +520,18 @@ is unclear.
   boundary for `status` and `next`; it detects pending configuration before
   dispatch or verification without committing files or treating routine progress
   updates as configuration changes.
-- Within `rewrite`, `quality.rs` owns delivery-time isolation and the standard
-  managed-project quality execution shared by worker and integration review. Its `commands`
-  child runs exact engine-owned argv in the delivery worktree and retains result
-  logs. `target_quality.rs` is a compatibility boundary for validation of an
+- Within `rewrite`, `quality.rs` owns delivery-time isolation and explicit worker,
+  integration and final pre-revalidation receipt scope and policy identities.
+  Worker and ordinary integration stages run source/isolation checks without
+  mandatory repository commands. The final stage owns full fmt/test/Clippy
+  execution with real command outcomes/logs, not skill-attested shell results.
+  `quality/commands` derives project-local Cargo commands and their relative
+  working directories, runs them serially with private logs, and binds command
+  inventory plus cwd into receipt validation and policy identity.
+  Worker receipts cannot satisfy integration admission; ordinary integration
+  receipts cannot satisfy the final gate. Historical command DTOs remain readable
+  but do not grant current admission. `target_quality.rs` is a
+  compatibility boundary for validation of an
   already admitted receipt; it never executes repository checks. The
   `target_replay_isolation` module, owned by `quality`, owns the mandatory,
   deterministic scan that prevents production Rust source from consuming
@@ -523,13 +557,23 @@ is unclear.
   validates AI-provided locations and lifecycle explanations without claiming
   call-graph proof. `candidate` owns cross-worktree candidate identity, frozen
   canonical check context, and publication receipt admission without check
-  execution. `integrated` owns freshness, action projection and unchanged-purpose
-  baseline admission. Its baseline comparison uses `fingerprint::matches_revision`
-  to include tracked/untracked source and configuration changes while excluding
-  source traffic acquisition and verification policy, private runtime and progress
-  publication.
-  Review fingerprints use the same policy exclusion; traffic verification
-  fingerprints continue to include both traffic policies. `repair`
+  execution. `integrated` owns ordinary freshness, action projection and
+  unchanged-purpose baseline admission. Its baseline comparison uses
+  `fingerprint::matches_revision` to include tracked/untracked source and
+  configuration changes while excluding traffic policy, private runtime and
+  progress publication. Ordinary review fingerprints use the same policy
+  exclusion; traffic verification fingerprints retain configured traffic policy.
+  `review/pre_revalidation` owns the final state-machine gate, exact-candidate
+  check reuse and admission, preserved system-repair slices, and the complete
+  post-admission sweep. It binds durable sweep progress to the accepted report's
+  SHA256 identity, preserving crash recovery without inheriting an earlier
+  candidate's consumed membership. Its `inputs` child hashes Cargo manifests,
+  lockfiles, Cargo configuration and Rust toolchain files from each managed
+  project through its repository ancestors, and enforces tracked build-input
+  commits. Final checking/admission also requires committed target/managed code.
+  Final proof binds canonical inputs, check policy, verification policy,
+  inventory and immutable recording; progress-only publication can reuse a
+  matching receipt without another suite execution. `repair`
   returns quality findings to existing API worker ownership,
   including fresh unpublished candidate reports without admitting failed code.
   Review does not create traffic failures or a second migration state machine.

@@ -117,6 +117,8 @@ pub struct RewriteReviewReport {
     pub validation: Option<ReviewValidation>,
     #[serde(default)]
     pub integration: Option<IntegrationReview>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_revalidation: Option<String>,
     #[serde(default)]
     pub hardcode_ai_verified: Vec<String>,
     #[serde(default)]
@@ -130,6 +132,8 @@ pub struct ReviewValidation {
     pub code_fingerprint: String,
     pub context_fingerprint: String,
     pub scan_base_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_inputs_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

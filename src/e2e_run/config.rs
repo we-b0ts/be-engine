@@ -9,7 +9,6 @@ use super::model::{
     TargetProjectConfig, VerificationProjectConfig,
 };
 use super::project_validation::validate_project_config;
-use super::target_quality_config::inferred_target_quality_gates;
 use super::{E2eRunInitOptions, E2eRunInitResult, branch};
 use crate::replay::validate_replay_policy;
 use anyhow::{Context, Result, bail, ensure};
@@ -236,7 +235,6 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
             Ok::<String, anyhow::Error>(format!("127.0.0.1:{port}"))
         })
         .transpose()?;
-    let target_quality_gates = inferred_target_quality_gates(&target_root, &managed.paths);
     let project = ResolvedProjectConfig {
         replay_loading: config.project.replay.dependency_loading,
         target_dockerfile: resolve_under(&target_root, &config.project.target.dockerfile),
@@ -254,7 +252,6 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         target_readiness_status: recorder.http_gateway.ready.success_status,
         target_startup_timeout: Duration::from_secs(config.project.target.startup_timeout_seconds),
         target_request_timeout,
-        target_quality_gates,
         target_max_response_bytes,
         replay_policy: policy_path,
         replay_case_dependency_post_response_window: Duration::from_millis(
@@ -752,40 +749,6 @@ mod tests {
         assert_eq!(
             config.target_motan_upstream.as_deref(),
             Some("127.0.0.1:8884")
-        );
-    }
-
-    #[test]
-    fn rust_target_infers_standard_quality_gates() {
-        let target = target();
-        fs::write(
-            target.path().join("Cargo.toml"),
-            "[workspace]\nresolver = \"2\"\n",
-        )
-        .unwrap();
-        initialize(options(target.path())).unwrap();
-
-        let (_, config) = resolve_project(target.path()).unwrap();
-
-        assert_eq!(
-            config
-                .target_quality_gates
-                .iter()
-                .map(|gate| gate.name.as_str())
-                .collect::<Vec<_>>(),
-            ["rust-format", "rust-test", "rust-clippy"]
-        );
-        assert_eq!(
-            config.target_quality_gates[2].argv,
-            [
-                "cargo",
-                "clippy",
-                "--workspace",
-                "--all-targets",
-                "--",
-                "-D",
-                "warnings"
-            ]
         );
     }
 

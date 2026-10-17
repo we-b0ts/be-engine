@@ -153,6 +153,13 @@ impl SqlValueTemplate {
     }
 
     pub(in crate::replay::policy) fn matches(&self, sql: &str) -> bool {
+        if !self.could_match(sql) {
+            return false;
+        }
+        bounded_statement_tokens(sql).is_some_and(|actual| self.matches_tokens(&actual))
+    }
+
+    pub(in crate::replay::policy) fn could_match(&self, sql: &str) -> bool {
         // This is only a rejection shortcut. Ambiguous prefixes still use the
         // full tokenizer, and matching verbs still require every normal check.
         if let (Some(actual), Some(Token::Word(expected))) =
@@ -161,9 +168,37 @@ impl SqlValueTemplate {
         {
             return false;
         }
-        bounded_statement_tokens(sql).is_some_and(|actual| {
-            self.bind(&actual)
-                .is_some_and(|bound| extract(&bound, &actual).is_some())
+        true
+    }
+
+    pub(in crate::replay::policy) fn matches_tokens(&self, actual: &[Token]) -> bool {
+        if self.tokens.len() != actual.len() {
+            return false;
+        }
+        let table = if let Some(tables) = &self.tables {
+            let Some(position) = self.tokens.iter().position(|token| token.is(TABLE)) else {
+                return false;
+            };
+            let Token::Word(table) = &actual[position] else {
+                return false;
+            };
+            if !tables.matches(table) {
+                return false;
+            }
+            Some(table)
+        } else {
+            None
+        };
+        self.tokens.iter().zip(actual).all(|(expected, actual)| {
+            if expected.is(TABLE)
+                && let Some(table) = table
+            {
+                matches!(actual, Token::Word(name) if name == table)
+            } else {
+                expected == actual
+                    || *expected == Token::Placeholder
+                        && (actual.is_value() || *actual == Token::Placeholder)
+            }
         })
     }
 }
@@ -192,12 +227,13 @@ fn plain_statement_verb(sql: &str) -> Option<&str> {
         .iter()
         .take(64)
         .position(|byte| !byte.is_ascii_whitespace())?;
-    let verb = sql.get(start..start + 6)?;
-    if !sql.as_bytes().get(start + 6)?.is_ascii_whitespace() {
+    let length = sql.as_bytes()[start..]
+        .iter()
+        .take(64)
+        .take_while(|byte| byte.is_ascii_alphabetic())
+        .count();
+    if length == 0 || !sql.as_bytes().get(start + length)?.is_ascii_whitespace() {
         return None;
     }
-    ["select", "insert", "update", "delete"]
-        .iter()
-        .any(|expected| expected.eq_ignore_ascii_case(verb))
-        .then_some(verb)
+    sql.get(start..start + length)
 }

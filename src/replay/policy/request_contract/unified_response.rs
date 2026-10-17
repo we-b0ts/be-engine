@@ -5,6 +5,7 @@ use crate::replay::contract_value::Delivery;
 
 #[derive(Debug, Clone)]
 pub(in crate::replay) struct PreparedRedisDelivery {
+    observation_id: uuid::Uuid,
     original: Vec<u8>,
     value: Delivery,
     witness: Option<crate::policy_evidence::WitnessMetadata>,
@@ -122,6 +123,7 @@ impl RequestContracts {
                 }
             });
             Ok(PreparedRedisDelivery {
+                observation_id: uuid::Uuid::new_v4(),
                 original: response.into(),
                 value,
                 witness,
@@ -138,7 +140,12 @@ impl RequestContracts {
         if let Some(metadata) = &prepared.witness {
             let mut metadata = metadata.clone();
             metadata.clocks.delivery.target = Some(rendered_at);
-            self.record_value_witness(metadata, &prepared.original, Some(delivered))?;
+            self.record_delivery_witness(
+                &prepared.observation_id.to_string(),
+                metadata,
+                &prepared.original,
+                delivered,
+            )?;
         }
         self.commit(Decision::from_value_comparison(
             prepared.value.validation().clone(),

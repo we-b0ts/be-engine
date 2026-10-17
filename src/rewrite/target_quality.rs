@@ -1,5 +1,6 @@
 //! Compatibility admission for the retired coordinator quality execution step.
-//! Complete checks run only through delivery-time review; this module reads receipts.
+//! Ordinary delivery review checks source and isolation. Final commands run
+//! through review check --pre-revalidation; this module only reads receipts.
 use super::model::{RewriteAction, RewriteActionEnvelope, RewritePhase, RewriteState};
 use super::store::RewriteStore;
 use super::{action, review, traffic_operation, worker};
@@ -42,7 +43,7 @@ pub fn run(options: RewriteTargetQualityOptions) -> Result<RewriteActionEnvelope
     Ok(action::advance_envelope(
         &root,
         &scoped,
-        "complete delivery quality receipt is current; advance coordinator verification".into(),
+        "integration source/isolation receipt is current; advance coordinator verification".into(),
     ))
 }
 
@@ -64,6 +65,6 @@ pub(super) fn status_action(root: &Path, state: &RewriteState) -> Result<Option<
     Ok(Some(action::replay_advance(
         root,
         &state.api,
-        "complete delivery quality receipt is current; advance coordinator verification".into(),
+        "integration source/isolation receipt is current; advance coordinator verification".into(),
     )))
 }

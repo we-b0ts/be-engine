@@ -25,8 +25,22 @@ fifth agent role and is never workflow authority.
 | Rewrite engine | `backend-rewrite` and `traffic-e2e` | Workflow state, legal action selection, evidence identity, traffic serialization, verification, and terminal eligibility | Invent task-runtime state or perform source diagnosis |
 | Rewrite coordinator | Main/root `coordinator` task | Execute engine actions, dispatch and reconcile agents, apply coordinator-owned inputs, publish reviewed integration candidates, invoke acceptance, and deliver | Diagnose business source, edit target code, or mark work complete from an agent report |
 | API implementer | `api-implementer` assignment | Diagnose and implement exactly one API route work item (all included recorded methods), run its local review, and return a version-bound handoff | Mutate workflow state, publish to the canonical target, or accept its own work |
-| Code integrator | `code-integrator` assignment | Prepare one retained integration/review candidate, resolve assigned conflicts, run candidate review, and return a version-bound result | Act as an API implementer, mutate engine state, or report implementation-worker activity |
+| Code integrator | `code-integrator` assignment | Prepare one retained integration/review candidate, resolve assigned conflicts and routine quality issues, run candidate review, and return a version-bound result | Act as an API implementer, mutate engine state, or report implementation-worker activity |
 | API expert | Engine-requested `api-expert` assignment | Investigate one reserved API read-only and return evidence-backed findings for its existing API implementer | Edit code, own the API, mutate workflow state, or satisfy implementation/acceptance gates |
+
+API implementers build/debug and run tests relevant to their changes as needed;
+they do not need to run Clippy. Worker and ordinary integration review check
+Source rules, Replay isolation and exact delivery identity without executing
+repository quality commands. Daily integration uses focused builds/tests as
+needed. After implementation and ordinary delivery drain, the engine requires
+`pre_revalidation_review_required`: the retained integrator executes the returned
+`review check --pre-revalidation --worktree ...` command. That single engine
+entrypoint runs the full quality suite, including Clippy, and source/isolation
+checks, producing a final-stage receipt. Do not manually run the same full suite
+before this command. The integrator fixes routine formatting/lint issues; API
+behavior decisions return to the responsible implementer. Only the coordinator
+publishes and admits the exact checked candidate. The state machine requires a
+current final-stage receipt before full revalidation and final delivery.
 
 The normal ownership flow is:
 

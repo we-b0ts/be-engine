@@ -12,6 +12,31 @@ impl RedisReplayState {
         if exchange.rpc_push.is_some() {
             return self.pubsub.matches(exchange, args).unwrap_or(false);
         }
+        if exchange.source == ReplaySource::Case
+            && exchange.shared_rule_id.is_none()
+            && let Some(case) = exchange.case_id.as_deref()
+        {
+            let target = TargetKey {
+                host: exchange.record.target_host.clone(),
+                port: exchange.record.target_port,
+            };
+            self.request_contracts.record_unified_request(
+                &crate::replay::policy::request_contract::RedisRequestContext {
+                    case,
+                    target: &target,
+                    database: exchange.record.database,
+                    username: exchange.record.username.as_deref(),
+                    command: &exchange.record.command,
+                    recorded_at: exchange.record.started_at(),
+                    actual_at: self.request_observed_at,
+                    connection_id: Some(exchange.record.connection_id),
+                    sequence: Some(exchange.record.sequence),
+                    observation_id: self.request_observation_id,
+                },
+                &exchange.args,
+                Some(args),
+            );
+        }
         let normalized =
             if exchange.source == ReplaySource::Case && exchange.shared_rule_id.is_none() {
                 match self
@@ -91,6 +116,32 @@ impl RedisReplayState {
         args: &[Vec<u8>],
     ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
         self.request_observed_at = Some(chrono::Utc::now());
+        self.request_observation_id = Some(uuid::Uuid::new_v4());
+        if let Some(case) = active_case_id {
+            match self.request_contracts.record_redis_target(
+                &crate::replay::policy::request_contract::RedisRequestContext {
+                    case,
+                    target,
+                    database,
+                    username,
+                    command,
+                    recorded_at: None,
+                    actual_at: self.request_observed_at,
+                    connection_id: None,
+                    sequence: None,
+                    observation_id: self.request_observation_id,
+                },
+                args,
+            ) {
+                Ok(crate::policy_evidence::ObservationRetention::Unavailable) => {
+                    self.request_observation_id = None
+                }
+                Ok(crate::policy_evidence::ObservationRetention::Retained) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "failed to preserve independent Redis Target observation")
+                }
+            }
+        }
         let matched = preferred_match(&self.exchanges, active_case_id, |exchange| {
             (exchange.status.is_available()
                 || (exchange.reusable_snapshot && exchange.status != ReplayExchangeStatus::Failed))

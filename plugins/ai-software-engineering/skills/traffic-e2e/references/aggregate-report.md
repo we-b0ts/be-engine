@@ -70,8 +70,15 @@ Version six replay reports retain only a bounded prefix of successful event
 details per executed case and category. The aggregate MUST use their explicit
 success counters, not the retained array lengths. Reports without
 `success_detail_scope: case` use the legacy report-wide bound. Dirty and unused
-arrays remain complete evidence,
-including non-blocking unused-Global diagnostics. Older replay report versions
+evidence remains complete, including non-blocking unused-Global diagnostics.
+Global details may be represented by a source-bound shared inventory plus
+sparse session changes instead of repeated arrays. Use the explicit counters
+for aggregation and `traffic-e2e diagnose global-dependencies --report <path>
+--protocol <name> --offset 0 --limit 100` for bounded detail inspection during
+an engine capability investigation. Retain or export the referenced inventory
+with its report; the disposable dependency-index cache is not its evidence
+owner. An unused Global exemption does not authorize omitting Case dependencies
+or actual failed deliveries. Older replay report versions
 are rejected; there is no bootstrap-to-Global compatibility mapping.
 
 Completion runs MUST use both `--fail-on-incomplete` and `--fail-on-dirty`.

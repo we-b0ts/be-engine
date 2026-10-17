@@ -630,7 +630,6 @@ mod tests {
             target_readiness_status: 404,
             target_startup_timeout: Duration::from_secs(1),
             target_request_timeout: Duration::from_secs(1),
-            target_quality_gates: Vec::new(),
             target_max_response_bytes: 1024,
             replay_policy: PathBuf::from("/target/config/replay.yaml"),
             replay_case_dependency_post_response_window: Duration::from_millis(10),

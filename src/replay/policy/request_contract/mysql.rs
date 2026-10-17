@@ -15,6 +15,7 @@ impl RequestContracts {
         identity: &ReplaySessionIdentity,
         record: &RecordedMysqlExchange,
     ) -> Vec<&CompiledRule> {
+        let mut statement = None;
         self.compiled_rules()
             .into_iter()
             .flat_map(|compiled| &compiled.rules)
@@ -36,18 +37,9 @@ impl RequestContracts {
                                 .is_none_or(|u| Some(u) == identity.username.as_deref())
                     })
                     && rule.selector.operation.as_deref() == Some(record.command.as_str())
-                    && rule.selector.sql.as_deref().is_some_and(|sql| {
-                        super::super::sql_template::SqlValueTemplate::new(sql, &[], &[], None)
-                            .ok()
-                            .is_some_and(|template| {
-                                super::super::matcher::mysql_values::template_values(
-                                    &template,
-                                    record.sql.as_deref(),
-                                    record.params.as_deref(),
-                                )
-                                .is_ok()
-                            })
-                    })
+                    && self
+                        .mysql_selection
+                        .matches(&rule.id, record, &mut statement)
             })
             .collect()
     }
@@ -126,6 +118,7 @@ impl RequestContracts {
         let Some(anchor) = case.and_then(|id| self.anchor(id).ok()) else {
             return vec![];
         };
+        let mut statement = None;
         self.compiled_rules().into_iter().flat_map(|compiled| &compiled.native).filter(|compiled| {
             let rule = &compiled.rule;
             matches!(&rule.effect, crate::policy::NativeEffect::MysqlValues(effect) if !effect.values.is_empty() || !effect.params.is_empty())
@@ -137,9 +130,7 @@ impl RequestContracts {
                     && r.database.as_ref().is_none_or(|d| d.name()==identity.database.as_deref())
                     && r.username.as_deref().is_none_or(|u|Some(u)==identity.username.as_deref()))
                 && rule.selector.operation.as_deref().is_none_or(|op|op==record.command)
-                && rule.selector.sql.as_deref().is_some_and(|sql|super::super::sql_template::SqlValueTemplate::new(
-                    sql,&rule.selector.tables,&rule.selector.table_patterns,rule.selector.table_series.as_ref()).ok().is_some_and(|template|
-                        super::super::matcher::mysql_values::template_values(&template,record.sql.as_deref(),record.params.as_deref()).is_ok()))
+                && self.mysql_selection.matches(&rule.id, record, &mut statement)
         }).collect()
     }
     pub(in crate::replay) fn mysql_metadata(

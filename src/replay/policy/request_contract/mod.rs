@@ -6,6 +6,7 @@ mod http_value;
 pub(in crate::replay::policy) mod key;
 mod memcached;
 mod mysql;
+mod mysql_selection;
 pub(in crate::replay::policy) mod native_projection;
 mod value_decision;
 pub(in crate::replay) use key::KeyBindingReport;
@@ -71,6 +72,7 @@ struct Sequence {
 #[derive(Clone, Default)]
 pub(in crate::replay) struct RequestContracts {
     compiled: Option<Arc<crate::policy::CompiledPolicy>>,
+    mysql_selection: Arc<mysql_selection::MysqlSelection>,
     witnesses: Option<crate::policy_evidence::WitnessStore>,
     rules: Arc<Vec<ReplayDependencyRule>>,
     keys: Arc<BTreeMap<(String, String), crate::request_rules::keys::ResolvedSigningKey>>,
@@ -153,6 +155,7 @@ impl RequestContracts {
         }
         Ok(Self {
             compiled: None,
+            mysql_selection: Arc::default(),
             witnesses: None,
             rules: Arc::new(
                 rules

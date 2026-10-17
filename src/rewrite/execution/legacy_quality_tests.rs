@@ -175,8 +175,7 @@ fn old_failed_quality_retry_admits_current_receipt_without_reexecuting_checks() 
     .unwrap();
     assert_eq!(report.status, ReviewStatus::Passed);
     crate::rewrite::review::accept(target.path().into(), report.report_path).unwrap();
-    let review_invocations = fs::read_to_string(&counter).unwrap();
-    assert!(!review_invocations.is_empty());
+    assert!(!counter.exists());
     let result = retry_without_relaunch(target.path());
     assert!(matches!(
         result.action,
@@ -190,5 +189,5 @@ fn old_failed_quality_retry_admits_current_receipt_without_reexecuting_checks() 
         status.action,
         RewriteAction::AdvanceRequired { .. }
     ));
-    assert_eq!(fs::read_to_string(&counter).unwrap(), review_invocations);
+    assert!(!counter.exists());
 }

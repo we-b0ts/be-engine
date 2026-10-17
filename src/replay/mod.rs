@@ -43,6 +43,7 @@ mod dns;
 mod egress_counter;
 mod exchange;
 mod global;
+mod global_source;
 #[cfg(test)]
 mod global_test_support;
 mod snapshot;
@@ -97,8 +98,10 @@ use exchange::*;
 use model::*;
 use mysql::*;
 use policy::*;
+#[cfg(test)]
+pub(crate) use report::reclassify_background_dependencies;
 use report::*;
-pub(crate) use report::{BackgroundReclassification, reclassify_background_dependencies};
+pub(crate) use report::{BackgroundReclassification, reclassify_background_report};
 #[cfg(test)]
 use test_support::write_test_recording_network_manifest;
 
@@ -207,10 +210,12 @@ pub use policy::{
     plan_dynamic_value_redis_time_rule, plan_dynamic_value_rule, plan_response_header_date_rule,
 };
 pub(crate) use redis::snapshot_overlay::inspect_case_source_snapshot_overlay;
-pub(crate) use report::aggregate::aggregate_runner_replay_report;
 pub use report::aggregate::{
     ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,
     aggregate_replay_reports_with_options,
+};
+pub(crate) use report::aggregate::{
+    aggregate_runner_replay_report, aggregate_runner_replay_report_value,
 };
 pub use report::global_evidence::{GlobalDependencyPage, read_global_dependency_page};
 
@@ -394,6 +399,7 @@ struct ReplayState {
     active_case_id: Option<String>,
     case_dependency_post_response_window: std::time::Duration,
     global_path: Option<PathBuf>,
+    regular_global: BTreeMap<String, report::global_evidence::regular::RegularBaseline>,
     targets: Vec<ReplayTarget>,
     mysql: mysql::MysqlReplayState,
     http_exchanges: Vec<http::ReplayHttpExchange>,

@@ -210,7 +210,7 @@ fn validate_confirmation(record: &RecordedExchange) -> Result<Vec<Vec<u8>>> {
     Ok(args)
 }
 
-fn loaded_subscriptions(
+pub(super) fn loaded_subscriptions(
     exchanges: &[ReplayExchange],
 ) -> Result<BTreeMap<Anchor, (usize, RecordedExchange)>> {
     let mut records = BTreeMap::new();
