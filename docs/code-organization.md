@@ -906,6 +906,12 @@ explicit repository-wide audit.
   their broader inventory; ordinary payload rules retain their prepared API scope.
   Coordinator admission preserves write intents and fresh real verification
   obligations across crashes. Bounded hints never substitute for full coverage.
+  MySQL's `contracts` adapter filters structurally unrelated request candidates
+  before scalar contract comparison. Preflight counts only validated pairs;
+  an unpaired Source exchange retains its fresh-Replay obligation.
+  `preflight/mysql_candidates` correlates each protected Target observation over
+  the complete selected Source scope, rejecting related Targets without a valid
+  pair while retaining failed cross-row search edges as evidence.
 - Historical feedback DTOs may remain as domain data or journal recovery inputs.
   Their old authoring entrypoints reject and production loaders accept only
   `traffic-policy/v1`. Test-only explicit fixture migration is not a reader

@@ -22,6 +22,7 @@ use crate::{
 
 mod api;
 pub(super) mod dependency;
+mod mysql_candidates;
 mod session;
 mod source;
 
@@ -76,6 +77,7 @@ pub(super) fn verify(
     selected: &BTreeSet<String>,
 ) -> Result<Preflight> {
     let mut result = Preflight::default();
+    let mut mysql_candidates = mysql_candidates::Candidates::default();
     source::verify(root, state, bundle, policy, selected, &mut result)?;
     let manifest = bundle
         .replay
@@ -317,7 +319,6 @@ pub(super) fn verify(
                     if !matches {
                         continue;
                     }
-                    found = true;
                     let witness = entry.expand()?;
                     let witness = witness.as_ref();
                     crate::policy_evidence::verify_case_clock(witness, &bundle.replay)?;
@@ -352,9 +353,10 @@ pub(super) fn verify(
                         // Scalar masks prove neither a case binding nor its later references.
                         // Preserve the complete observation without claiming Target validation.
                         result.stateful_target_obligations.extend(stateful);
+                        found = true;
                         continue;
                     }
-                    let evaluated = dependency::compare_pair(
+                    let comparison = dependency::compare_pair(
                         surface,
                         &event,
                         &raw,
@@ -362,10 +364,25 @@ pub(super) fn verify(
                         &rules,
                         &native_sql,
                         clocks,
-                    )?;
+                    )
+                    .with_context(|| {
+                        let rules = rules.iter().map(|r| r.rule.id.as_str())
+                            .chain(native_sql.iter().map(|r| r.rule.id.as_str())).collect::<Vec<_>>();
+                        format!("dependency preflight failed for rules {rules:?}, Case {case_id}, Source connection {:?} sequence {:?}, Target observation {:?}",
+                            witness.metadata.source.connection_id, witness.metadata.source.sequence,
+                            witness.target_observation_id.as_deref().unwrap_or(&witness.id))
+                    });
+                    let evaluated = if surface == Surface::DependencyRequest
+                        && dependency::protocol(&event) == Some(Protocol::Mysql)
+                    {
+                        mysql_candidates.observe(witness, comparison)?
+                    } else {
+                        comparison?
+                    };
                     if evaluated == 0 {
                         continue;
                     }
+                    found = true;
                     // One physical observation may be recorded once per SQL slot.
                     // Validate every protected envelope, then count the observation once.
                     if !observations.insert((
@@ -393,6 +410,7 @@ pub(super) fn verify(
             }
         }
     }
+    mysql_candidates.finish()?;
     session::verify(root, bundle, policy, selected, &mut result)?;
     for id in selected {
         ensure!(

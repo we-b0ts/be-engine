@@ -369,6 +369,20 @@ pub(crate) fn validate_contract_witness(
     native: &[&crate::policy::CompiledNativeRule],
     clocks: AnchorClocks,
 ) -> Result<Comparison> {
+    validate_contract_candidate(source, target, values, native, clocks)?
+        .context("SQL witness statements are structurally unrelated")
+}
+
+/// Search edges retain every visited statement in a resource/command scope.
+/// Exclude structurally different statements before validating scalar values;
+/// an excluded edge supplies no independent Target validation.
+pub(crate) fn validate_contract_candidate(
+    source: &[u8],
+    target: &[u8],
+    values: &[&CompiledRule],
+    native: &[&crate::policy::CompiledNativeRule],
+    clocks: AnchorClocks,
+) -> Result<Option<Comparison>> {
     let source: RequestEnvelope = serde_json::from_slice(source)?;
     let target: RequestEnvelope = serde_json::from_slice(target)?;
     validate_request_clocks(&source, &target, clocks)?;
@@ -382,6 +396,28 @@ pub(crate) fn validate_contract_witness(
         ),
         "native SQL time values require the query adapter"
     );
+    let statement = |request: &RequestEnvelope| {
+        crate::mysql::sql::bounds::statement(
+            request
+                .sql
+                .as_deref()
+                .context("SQL witness has no statement")?,
+        )
+        .context("SQL witness statement is invalid or exceeds the supported bounds")
+    };
+    let source_tokens = statement(&source)?;
+    let target_tokens = statement(&target)?;
+    let scalar = |token: &crate::mysql::sql::Token| {
+        token.is_value() || *token == crate::mysql::sql::Token::Placeholder
+    };
+    if source_tokens.len() != target_tokens.len()
+        || !source_tokens
+            .iter()
+            .zip(&target_tokens)
+            .all(|(source, target)| source == target || scalar(source) && scalar(target))
+    {
+        return Ok(None);
+    }
     policy::compare_mysql_contracts(
         source.sql.as_deref(),
         source.params.as_deref(),
@@ -391,6 +427,7 @@ pub(crate) fn validate_contract_witness(
         native,
         clocks,
     )
+    .map(Some)
 }
 
 pub(crate) fn witness_values(

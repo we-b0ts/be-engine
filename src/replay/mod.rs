@@ -693,7 +693,10 @@ pub(crate) use assertion::native::{
     compare_header as native_response_header, selected as native_response_selected,
 };
 pub(crate) use assertion::response_payload_pair;
-pub(crate) use mysql::contracts::validate_contract_witness as mysql_validate_contract_witness;
+pub(crate) use mysql::contracts::{
+    validate_contract_candidate as mysql_validate_contract_candidate,
+    validate_contract_witness as mysql_validate_contract_witness,
+};
 pub(crate) use policy::native_projection::validate_native_adapter;
 
 pub(crate) use assertion::native::source_request_body as native_source_request_body;
