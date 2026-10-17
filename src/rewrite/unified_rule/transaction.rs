@@ -13,6 +13,8 @@ mod concurrency_transaction;
 mod dependency_transaction;
 #[path = "transaction_header.rs"]
 mod header_transaction;
+#[path = "transaction_mysql_candidates.rs"]
+mod mysql_candidates_transaction;
 #[path = "transaction_native.rs"]
 mod native_transaction;
 #[path = "transaction_recovery.rs"]

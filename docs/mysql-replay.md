@@ -15,6 +15,31 @@ configuration anchor is required. An explicit `case.request_start` remains
 available for values actually generated at API entry, and retains that behavior;
 it is not automatically migrated. PREPARE does not invent an execution clock.
 
+Rule planning retains complete candidate evidence but compares only structurally
+corresponding MySQL requests. Different statement structures supply no independent
+Target validation. Same-structure candidates still validate every selected value,
+unselected scalar, parameter and clock. Each related Target observation must
+validate against a Source statement in the complete selected scope; failed
+cross-row search edges do not invalidate its valid pair with another row.
+Source exchanges without a corresponding
+Target witness produce `planned_needs_replay`; applying the rule preserves the
+requirement for fresh genuine Replay.
+
+The public transaction regressions run with `cargo test --lib mysql_candidates_transaction`.
+For a private finalized recording and reviewed MySQL proposal, run its original
+protected witnesses through the same preflight without changing project state:
+
+```bash
+TRAFFIC_E2E_MYSQL_PLAN_PROJECT=/absolute/project \
+TRAFFIC_E2E_MYSQL_PLAN_REPORT=/absolute/finalized/replay-report.json \
+TRAFFIC_E2E_MYSQL_PLAN_PROPOSAL=/private/mysql-proposal.yaml \
+  cargo test --lib recorded_mysql_candidate_preflight -- --ignored --nocapture
+```
+
+This fixture checks three Source statements, one independently observed request
+and two missing Target witnesses. It preserves the original artifact hashes and
+does not replace a successful genuine API Replay.
+
 > Rule authoring now uses self-contained `traffic-policy/v1` records in
 > `project.policy` and `rule plan --file … --evidence …`. Legacy rule YAML and
 > commands below are historical semantic references; protocol/TLS/transaction

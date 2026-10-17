@@ -239,7 +239,13 @@ pub(super) fn compare_pair(
 ) -> Result<usize> {
     if protocol(event) == Some(Protocol::Mysql) {
         let report = if surface == Surface::DependencyRequest {
-            crate::replay::mysql_validate_contract_witness(source, target, rules, native, clocks)?
+            let Some(report) = crate::replay::mysql_validate_contract_candidate(
+                source, target, rules, native, clocks,
+            )?
+            else {
+                return Ok(0);
+            };
+            report
         } else {
             crate::replay::mysql_validate_witness(source, target, surface, rules, clocks)?
         };
