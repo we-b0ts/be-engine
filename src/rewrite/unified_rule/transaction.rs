@@ -13,6 +13,8 @@ mod dependency_transaction;
 mod native_transaction;
 #[path = "transaction_recovery.rs"]
 mod recovery_transaction;
+#[path = "transaction_header.rs"]
+mod header_transaction;
 
 #[test]
 fn compact_proposals_expand_source_proof_in_public_plan_apply_and_keep_stale_guards() {

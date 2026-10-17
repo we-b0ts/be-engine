@@ -3,6 +3,18 @@ use anyhow::{Context, Result, ensure};
 
 const MAX_URL_BYTES: usize = 128 * 1024;
 
+pub(crate) fn validate_parameter(parameter: &str) -> Result<()> {
+    ensure!(
+        !parameter.is_empty()
+            && parameter.len() <= 128
+            && parameter
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"-._~".contains(&byte)),
+        "JWT URL query selector requires an unreserved ASCII name"
+    );
+    Ok(())
+}
+
 pub(crate) struct QueryToken<'a> {
     pub token: String,
     pub prefix: &'a str,

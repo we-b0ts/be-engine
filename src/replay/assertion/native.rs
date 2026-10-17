@@ -1,5 +1,6 @@
 //! Native JSON assertions share traversal, strict remainder and staged bindings.
 pub(super) mod body;
+mod header_jwt;
 #[cfg(test)]
 mod tests;
 pub(crate) use body::{compare_body, compare_header};
@@ -34,6 +35,7 @@ struct JwtField {
 pub(crate) struct NativeResponseContext {
     generated: Vec<GeneratedField>,
     jwt: Vec<JwtField>,
+    header_jwt: Vec<JwtField>,
     fields: Vec<(String, String, FieldContract)>,
     joined: Vec<(String, String, String)>,
     codec: Option<crate::policy::Codec>,
@@ -98,6 +100,7 @@ impl NativeResponseContext {
         let mut output = Self {
             generated: vec![],
             jwt: vec![],
+            header_jwt: vec![],
             fields: vec![],
             joined: vec![],
             codec: None,
@@ -124,7 +127,9 @@ impl NativeResponseContext {
                     }
                 }
                 NativeEffect::ResponseJwt(effect) => {
-                    output.add_codec(crate::policy::Codec::Json)?;
+                    if effect.location.is_none() {
+                        output.add_codec(crate::policy::Codec::Json)?;
+                    }
                     let jwt =
                         crate::replay::policy::native_projection::project_jwt(effect, &rule.proof)?;
                     let resource = match &effect.signing_key {
@@ -140,7 +145,12 @@ impl NativeResponseContext {
                         case_dir,
                         resource,
                     )?;
-                    output.jwt.push(JwtField {
+                    let fields = if effect.location.is_some() {
+                        &mut output.header_jwt
+                    } else {
+                        &mut output.jwt
+                    };
+                    fields.push(JwtField {
                         id: rule.id.clone(),
                         rule: jwt,
                         key,
@@ -302,6 +312,7 @@ impl NativeResponseContext {
     pub(crate) fn key_witnesses(&self) -> impl Iterator<Item = &(PathBuf, String)> {
         self.jwt
             .iter()
+            .chain(&self.header_jwt)
             .flat_map(|field| field.key.witnesses())
             .chain(
                 self.generated
@@ -317,7 +328,7 @@ impl NativeResponseContext {
                 key.ensure_current()?;
             }
         }
-        for field in &self.jwt {
+        for field in self.jwt.iter().chain(&self.header_jwt) {
             field.key.ensure_current()?;
         }
         Ok(())

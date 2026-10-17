@@ -4,6 +4,7 @@ use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde_json::{Value, json};
 use std::path::Path;
 
+mod header;
 mod keys;
 mod rsa;
 mod url;

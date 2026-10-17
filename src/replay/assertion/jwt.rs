@@ -7,6 +7,7 @@ use super::{RequestTimes, ResponseDifferenceKind};
 pub(in crate::replay) mod companions;
 pub(in crate::replay) mod keys;
 mod rsa;
+mod url;
 use crate::{
     replay::policy::{ResponseField, ResponseJwtRule},
     request_rules::jwt::contract::{self, Contract, Failure},
@@ -143,27 +144,10 @@ pub(in crate::replay) fn compare(
     let nanos = |time: chrono::DateTime<chrono::Utc>| {
         i128::from(time.timestamp()) * 1_000_000_000 + i128::from(time.timestamp_subsec_nanos())
     };
-    let extracted = if let Some(parameter) = &rule.url_query_param {
-        let [left, right] = [source, target].map(|value| {
-            value
-                .as_str()
-                .ok_or(ResponseDifferenceKind::JwtInvalid)
-                .and_then(|raw| {
-                    crate::request_rules::jwt::url_query::select(raw, parameter)
-                        .map_err(|_| ResponseDifferenceKind::JwtInvalid)
-                })
-        });
-        let (left, right) = (left?, right?);
-        if left.prefix != right.prefix || left.suffix != right.suffix {
-            return Err(ResponseDifferenceKind::JwtUrlMismatch);
-        }
-        Some([Value::String(left.token), Value::String(right.token)])
-    } else {
-        None
-    };
+    let extracted = url::extract(rule, source, target)?;
     let [source, target] = extracted
         .as_ref()
-        .map(|values| [&values[0], &values[1]])
+        .map(|values| [&values.tokens[0], &values.tokens[1]])
         .unwrap_or([source, target]);
     let anchors = [nanos(source_time), nanos(target_time)];
     let validated = if let Some(algorithm) = rule.algorithm.hmac() {
@@ -181,12 +165,27 @@ pub(in crate::replay) fn compare(
     } else {
         rsa::compare(source, target, key, kid, anchors, &rule.dynamic_claims)
     };
-    validated.map_err(|failure| match failure {
+    let validated = validated.map_err(|failure| match failure {
         Failure::Invalid => ResponseDifferenceKind::JwtInvalid,
         Failure::Algorithm => ResponseDifferenceKind::JwtAlgorithmMismatch,
         Failure::Signature => ResponseDifferenceKind::JwtSignatureInvalid,
         Failure::Claims => ResponseDifferenceKind::JwtClaimsMismatch,
         Failure::Time => ResponseDifferenceKind::JwtTimeMismatch,
         Failure::Nonce => ResponseDifferenceKind::JwtNonceMismatch,
-    })
+    })?;
+    if let [Some(source_iat), Some(target_iat)] = validated.iat
+        && validated.exp[0].checked_sub(source_iat) != validated.exp[1].checked_sub(target_iat)
+    {
+        return Err(ResponseDifferenceKind::JwtTimeMismatch);
+    }
+    if let Some(extracted) = &extracted {
+        for (claim, echoes) in &extracted.echoes {
+            if !validated.nonces.iter().any(|nonce| {
+                &nonce.claim == claim && nonce.source == echoes[0] && nonce.target == echoes[1]
+            }) {
+                return Err(ResponseDifferenceKind::JwtNonceMismatch);
+            }
+        }
+    }
+    Ok(validated)
 }

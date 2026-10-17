@@ -505,6 +505,24 @@ fn evaluate_response(
             }
         }
     }
+    if let Some(context) = &native_context {
+        for (id, header, result) in
+            context.header_results(expected_headers.as_ref(), actual_headers.as_ref(), times)
+        {
+            let pointer = format!("$headers/{header}");
+            if result.is_ok() {
+                report
+                    .differences
+                    .retain(|difference| difference.pointer != pointer);
+                report.applied_header_rule_ids.push(id);
+            } else {
+                report.unused_applicable_header_rule_ids.push(id);
+                report
+                    .differences
+                    .push(ResponseDifference::header(&header, result.unwrap_err()));
+            }
+        }
+    }
     if !unified_rules.is_empty()
         || native_context
             .as_ref()

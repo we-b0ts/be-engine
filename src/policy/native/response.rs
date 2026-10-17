@@ -9,11 +9,14 @@ use crate::policy::{DurationUnit, Resource, TimestampFormat};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResponseJwtEffect {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pointer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<ResponseJwtLocation>,
     pub algorithm: SignatureAlgorithm,
     pub signing_key: ResponseSigningKey,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub nonces: Vec<Proven<NonceClaim>>,
+    pub nonces: Vec<Proven<ResponseNonceClaim>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url_query_param: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -27,6 +30,31 @@ pub struct ResponseJwtEffect {
     pub issued_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ttl: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResponseJwtLocation {
+    pub header: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResponseNonceClaim {
+    pub pointer: String,
+    pub format: super::NonceFormat,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub echo_query_param: Option<String>,
+}
+
+impl From<NonceClaim> for ResponseNonceClaim {
+    fn from(value: NonceClaim) -> Self {
+        Self {
+            pointer: value.pointer,
+            format: value.format,
+            echo_query_param: None,
+        }
+    }
 }
 
 fn default_expiry_format() -> TimestampFormat {

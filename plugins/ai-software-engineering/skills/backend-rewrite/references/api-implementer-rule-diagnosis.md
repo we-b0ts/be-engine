@@ -30,7 +30,7 @@ on other endpoints, operations or surfaces.
 | SET NX lock and conditional release | `effect.kind: redis_lock` with endpoint/database/user/key scope | Successful acquisition completion before reference, token equality, NX/TTL/script and finite consumption |
 | Script ARGV/time-key or INCRBY/EXPIRE chain | `effect.kind: redis_sequence` with Source-proven ordered commands | Script identity, numkeys, KEYS, stable ARGV, sequence closure and derived key relationships |
 | PUBLISH UUID and JSON times | Typed publisher identity plus disjoint shared time contracts | Channel, publisher bijection and atomic commit |
-| Signed JWT, including URL-contained tokens | `effect.kind: response_jwt` with inline key provenance and nonce contracts | Both signatures, stable claims/URL bytes, related expiry/issued-at/TTL |
+| Signed JWT, including URL-contained tokens | `effect.kind: response_jwt`; body `pointer` or `location: {header: location}`, inline key provenance and nonce contracts; `echo_query_param` for a signed nonce repeated in the URL | Both signatures, stable claims/URL bytes, unique header/query values, exact signed lifetime and body expiry/issued-at/TTL |
 | Encrypted JSON with random IV | `response_generated` / `encrypted_json` with declared envelope and effective startup key | Valid padding, plaintext structure and all unselected plaintext; ciphertext is not whole-field random |
 | Generated URL/session fragments | `response_generated` / `template` with explicitly typed tokens and shared bindings | Fixed scheme/authority/path/query and identity equality |
 | Current date in a header or DOCX field | `response_header_date` or `response_body` | Timezone, static filename/header/XML and other archive parts |
