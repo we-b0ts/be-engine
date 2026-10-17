@@ -114,11 +114,14 @@ fn read(
     visitor: &mut impl FnMut(&Value) -> Result<()>,
 ) -> Result<()> {
     ensure!(
-        location.length <= 8 * 1024 * 1024,
-        "Source rule record exceeds 8 MiB working-set bound"
+        location.length <= crate::dependency::http_limits::MAX_RECORD_BYTES as u64,
+        "Source rule record exceeds the supported HTTP capture envelope bound"
     );
     let bytes = reader.read(path, stamp, location)?;
-    let event = crate::json_value::parse(&bytes)
-        .ok_or_else(|| anyhow::anyhow!("Source rule record must be complete unique-member JSON"))?;
+    let event = crate::json_value::parse_with_limit(
+        &bytes,
+        crate::dependency::http_limits::MAX_RECORD_BYTES,
+    )
+    .ok_or_else(|| anyhow::anyhow!("Source rule record must be complete unique-member JSON"))?;
     visitor(&event)
 }

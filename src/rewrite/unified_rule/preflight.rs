@@ -167,7 +167,7 @@ pub(super) fn verify(
         for line in BufReader::new(file).lines() {
             let line = line?;
             ensure!(
-                line.len() <= 16 * 1024 * 1024,
+                line.len() <= crate::dependency::http_limits::MAX_RECORD_BYTES,
                 "recorded exchange exceeds the supported evidence bound"
             );
             if line.trim().is_empty() {

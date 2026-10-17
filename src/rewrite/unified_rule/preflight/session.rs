@@ -49,7 +49,7 @@ pub(super) fn verify(
             .checked_add(bytes.len())
             .context("Source trace inventory size overflow")?;
         ensure!(
-            total <= 512 * 1024 * 1024,
+            total <= 1024 * 1024 * 1024,
             "Source trace inventory exceeds supported evidence bounds"
         );
         ensure!(
@@ -61,7 +61,7 @@ pub(super) fn verify(
             .filter(|line| !line.iter().all(u8::is_ascii_whitespace))
             .map(|line| {
                 ensure!(
-                    line.len() <= 16 * 1024 * 1024,
+                    line.len() <= crate::dependency::http_limits::MAX_RECORD_BYTES,
                     "Source exchange exceeds supported evidence bounds"
                 );
                 serde_json::from_slice(line).context("invalid immutable Source dependency exchange")

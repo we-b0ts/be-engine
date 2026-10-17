@@ -1,5 +1,13 @@
 # Candidate matching and policy evidence
 
+HTTP attachment witnesses support complete bodies up to 64 MiB **per body**.
+The envelope budget includes base64 expansion for both request and response,
+plus 1 MiB of metadata. Original JSONL record budgets also cover worst-case
+JSON escaping of two UTF-8 bodies. Dependency summaries and Source rule proofs
+use that same record budget; diagnostic case files and preflight Source traces
+have a separate 1 GiB limit. These limits do not enlarge JSON/Protobuf value
+codec budgets, expose payloads in summaries, or permit truncated bodies.
+
 MySQL scopes are indexed by Case/Global origin, endpoint, normalized session
 identity and compatible command family. Text queries and prepared execution
 remain compatible; PREPARE exchange lookup is separate from result metadata

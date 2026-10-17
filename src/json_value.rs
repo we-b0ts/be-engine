@@ -54,7 +54,10 @@ impl<'de> Deserialize<'de> for Strict {
     }
 }
 pub(crate) fn parse(bytes: &[u8]) -> Option<Value> {
-    if bytes.len() > 1024 * 1024 {
+    parse_with_limit(bytes, 1024 * 1024)
+}
+pub(crate) fn parse_with_limit(bytes: &[u8], limit: usize) -> Option<Value> {
+    if bytes.len() > limit {
         return None;
     }
     if !numbers::preserves_decimal_tokens(bytes) {

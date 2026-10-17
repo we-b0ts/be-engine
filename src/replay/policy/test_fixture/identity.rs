@@ -121,12 +121,15 @@ pub(super) fn convert(rule: &d::DynamicValueRule, inventory: &Inventory) -> Resu
                                             length: *length,
                                         }
                                     }
-                                    d::PathSegmentField::Timestamp { format, timezone } => {
-                                        n::PathIdentityField::Timestamp {
-                                            format: format.clone(),
-                                            timezone: timezone.clone(),
-                                        }
-                                    }
+                                    d::PathSegmentField::Timestamp {
+                                        format,
+                                        timezone,
+                                        mode,
+                                    } => n::PathIdentityField::Timestamp {
+                                        mode: *mode,
+                                        format: format.clone(),
+                                        timezone: timezone.clone(),
+                                    },
                                 };
                                 (name.clone(), proven(field, &rule.source_evidence))
                             })

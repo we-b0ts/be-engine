@@ -2,6 +2,8 @@
 use super::*;
 pub(super) mod prefetch;
 #[cfg(test)]
+mod recorded_skip_tests;
+#[cfg(test)]
 mod tests;
 use crate::dependency_index::{FileIndex, RecordLocation, RecordReader};
 

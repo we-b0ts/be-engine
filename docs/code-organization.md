@@ -761,6 +761,10 @@ explicit repository-wide audit.
 - `json_value` owns bounded strict JSON decoding with duplicate-member
   rejection. Replay JSON normalization and signed-token validation share it;
   selector expansion and collection normalization stay in Replay.
+  Original semantic record readers may supply their envelope budget explicitly;
+  ordinary value decoding retains its 1 MiB bound. `dependency/http_limits` owns
+  the 64 MiB raw-body and derived HTTP witness/record byte budgets, shared by
+  recording defaults, Replay, Source proof and dependency diagnostics.
 - `replay/policy/response/jwt` owns explicit JWT response selectors, response-only
   algorithms, typed public/startup key references and companion time fields.
   Its `key_source` child validates exact recorded MySQL selectors; `input`

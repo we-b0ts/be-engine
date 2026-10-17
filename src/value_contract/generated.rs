@@ -22,6 +22,19 @@ pub(crate) mod template;
 
 const MAX_CIPHERTEXT: usize = 1024 * 1024;
 
+/// Independent Redis nonces have a closed encoding and an explicit byte length.
+pub(crate) fn validate_bounded_random(
+    format: &RandomEncoding,
+    length: usize,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        matches!(format, RandomEncoding::Hex | RandomEncoding::Base64url)
+            && (1..=1024).contains(&length),
+        "random Redis JSON fields require hex or base64url and length 1..1024"
+    );
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum GeneratedError {

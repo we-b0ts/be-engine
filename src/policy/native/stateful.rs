@@ -96,7 +96,23 @@ pub enum PathIdentityField {
     Timestamp {
         format: String,
         timezone: String,
+        #[serde(default, skip_serializing_if = "PathTimestampMode::is_request_window")]
+        mode: PathTimestampMode,
     },
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PathTimestampMode {
+    #[default]
+    RequestWindow,
+    PreserveOrRequestWindow,
+}
+
+impl PathTimestampMode {
+    pub(crate) fn is_request_window(&self) -> bool {
+        *self == Self::RequestWindow
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,6 +163,10 @@ pub enum SequenceArgument {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SequenceField {
     Time(NativeTime),
+    Random {
+        format: super::RandomEncoding,
+        length: usize,
+    },
     Jwt {
         algorithm: SignatureAlgorithm,
         signing_key: StartupKey,

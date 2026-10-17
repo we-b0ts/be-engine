@@ -33,6 +33,9 @@ pub(in crate::replay::policy) fn sequence(
                             let field=match &field.contract {
                                 n::SequenceField::Time(value)=>config::JsonField::Time(time(&rule.id,&location,value)?),
                                 n::SequenceField::Identity(value)=>config::JsonField::Identity(key::IdentityField {identity:reference(value)}),
+                                n::SequenceField::Random {format, length}=>config::JsonField::Random(config::RandomField {
+                                    random: config::RandomContract { format: format.clone(), length: *length },
+                                }),
                                 n::SequenceField::Jwt {algorithm,signing_key,relative_to,nonces}=>{
                                     config::JsonField::Jwt(config::JwtField {jwt:config::JwtContract {
                                         signing_key_source:super::super::native_projection::startup_key(signing_key),

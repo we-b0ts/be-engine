@@ -161,6 +161,7 @@ impl RequestContracts {
                             .pointer(pointer)
                             .context("target request field is missing")?;
                         match field {
+                            JsonField::Random(field) => field.random.compare(a, b)?,
                             JsonField::Identity(reference) => self.compare_identity(
                                 case,
                                 rule,

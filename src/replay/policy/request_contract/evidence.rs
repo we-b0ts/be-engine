@@ -656,6 +656,9 @@ fn validate_source_commands(
                             .pointer(pointer)
                             .context("source selected JSON field missing")?;
                         match field {
+                            config::JsonField::Random(field) => {
+                                field.random.compare(value, value)?
+                            }
                             config::JsonField::Identity(_) => {
                                 ensure!(
                                     value.is_string(),

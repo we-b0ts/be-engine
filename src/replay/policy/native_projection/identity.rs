@@ -120,12 +120,15 @@ pub(super) fn project(
                                     length: *length,
                                 }
                             }
-                            n::PathIdentityField::Timestamp { format, timezone } => {
-                                d::PathSegmentField::Timestamp {
-                                    format: format.clone(),
-                                    timezone: timezone.clone(),
-                                }
-                            }
+                            n::PathIdentityField::Timestamp {
+                                format,
+                                timezone,
+                                mode,
+                            } => d::PathSegmentField::Timestamp {
+                                mode: *mode,
+                                format: format.clone(),
+                                timezone: timezone.clone(),
+                            },
                         };
                         (name.clone(), field)
                     })

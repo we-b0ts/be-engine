@@ -222,6 +222,47 @@ fn path_timestamps_use_independent_clocks_and_inclusive_five_second_window() {
 }
 
 #[test]
+fn preserved_path_timestamps_require_the_entire_original_identity_to_stay_equal() {
+    let mut rule = rule();
+    let DynamicValueCapture::Http {
+        path_segment: Some(capture),
+        ..
+    } = &mut rule.capture
+    else {
+        unreachable!()
+    };
+    let source = "aabbccddeeff_20200101000000_7_100";
+    let times = RequestTimes {
+        source: Some(clock("2026-10-10T00:00:00Z")),
+        target: Some(clock("2026-10-18T00:00:00Z")),
+    };
+    assert!(capture.compare(source, source, times).is_err());
+    let PathSegmentField::Timestamp { mode, .. } = capture.fields.get_mut("created_at").unwrap()
+    else {
+        unreachable!()
+    };
+    *mode = crate::policy::native::PathTimestampMode::PreserveOrRequestWindow;
+    capture.compare(source, source, times).unwrap();
+    for changed in [
+        "112233445566_20200101000000_7_100",
+        "aabbccddeeff_20200101000000_8_100",
+        "aabbccddeeff_20200101000000_7_101",
+        "aabbccddeeff_20200101000001_7_100",
+    ] {
+        assert!(capture.compare(source, changed, times).is_err());
+    }
+    let invalid = "aabbccddeeff_20200230000000_7_100";
+    assert!(capture.compare(invalid, invalid, times).is_err());
+    capture
+        .compare(
+            "aabbccddeeff_20261010000000_7_100",
+            "112233445566_20261018000000_7_100",
+            times,
+        )
+        .unwrap();
+}
+
+#[test]
 fn pending_path_capture_preserves_payload_and_committed_binding_checks_sql_json_references() {
     let rule = rule();
     let runtime = DynamicValues::new(

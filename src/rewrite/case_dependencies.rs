@@ -21,9 +21,9 @@ pub use model::{
     RewriteMysqlParameterDetail, RewriteRedisExchangeDetail, RewriteRedisOperationDetail,
 };
 
-const MAX_DEPENDENCIES_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_DEPENDENCIES_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_DEPENDENCY_EVENTS: usize = 100_000;
-const MAX_EVENT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_EVENT_BYTES: usize = crate::dependency::http_limits::MAX_RECORD_BYTES;
 const MAX_TARGETS: usize = 512;
 const MAX_COMMANDS_PER_TARGET: usize = 256;
 const MAX_REPRESENTATIVES: usize = 3;

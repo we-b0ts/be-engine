@@ -2,6 +2,7 @@ use std::net::Ipv4Addr;
 
 use serde::{Deserialize, Serialize};
 
+pub(crate) mod http_limits;
 pub(crate) mod termination;
 
 /// How a dependency exchange ended from the application's point of view.
