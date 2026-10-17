@@ -98,9 +98,9 @@ use model::*;
 use mysql::*;
 use policy::*;
 use report::*;
-pub(crate) use report::{
-    BackgroundReclassification, reclassify_background_dependencies, reclassify_background_report,
-};
+#[cfg(test)]
+pub(crate) use report::reclassify_background_dependencies;
+pub(crate) use report::{BackgroundReclassification, reclassify_background_report};
 #[cfg(test)]
 use test_support::write_test_recording_network_manifest;
 

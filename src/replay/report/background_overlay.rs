@@ -39,6 +39,7 @@ struct ExchangeIdentity {
     sequence: u64,
 }
 
+#[cfg(test)]
 pub(crate) fn reclassify_background_dependencies(
     source_traffic_policy: &Path,
     report_path: &Path,
