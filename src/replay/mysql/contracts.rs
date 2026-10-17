@@ -115,6 +115,9 @@ pub(in crate::replay) fn prepare_delivery(
     {
         return Ok(None);
     }
+    let mut original = record.clone();
+    original.response = record.response.materialize()?;
+    let record = &original;
     let clocks = owner.contract_clocks(
         Some(case),
         source_started(record),

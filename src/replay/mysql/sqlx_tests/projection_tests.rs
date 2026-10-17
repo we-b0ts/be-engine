@@ -190,6 +190,7 @@ async fn projection_keeps_scope_identity_exact_precedence_and_single_consumption
     // A Global candidate remains available across cases, and is still finite.
     state.mysql.exchanges[0].source = ReplaySource::Global;
     state.mysql.exchanges[0].case_id = None;
+    state.mysql.invalidate_scope_index();
     state.mysql.exchanges[0].status = ReplayExchangeStatus::Available;
     state.active_case_id = Some("other-case".into());
     let global = state
