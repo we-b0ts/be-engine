@@ -61,6 +61,7 @@ impl RequestContracts {
         &mut self,
         compiled: Option<Arc<CompiledPolicy>>,
     ) -> Result<()> {
+        self.mysql_selection = Arc::new(mysql_selection::MysqlSelection::new(compiled.as_deref())?);
         self.compiled = compiled;
         Ok(())
     }

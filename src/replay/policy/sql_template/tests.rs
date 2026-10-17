@@ -1,4 +1,5 @@
 use super::*;
+mod materialization;
 
 const STATEMENT_PAIRS: [(&str, &str); 4] = [
     (

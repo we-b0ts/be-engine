@@ -58,6 +58,7 @@ impl RequestContracts {
         }
         Ok(Self {
             compiled: None,
+            mysql_selection: Arc::default(),
             witnesses: None,
             rules: Arc::new(
                 rules

@@ -12,7 +12,13 @@ pub(in crate::replay) fn materialize(
     sql: &str,
     params: &[RecordedMysqlValue],
 ) -> Option<Vec<Token>> {
-    let mut tokens = tokens(sql)?;
+    materialize_tokens(tokens(sql)?, params)
+}
+
+pub(in crate::replay) fn materialize_tokens(
+    mut tokens: Vec<Token>,
+    params: &[RecordedMysqlValue],
+) -> Option<Vec<Token>> {
     let mut values = params.iter();
     for token in &mut tokens {
         if *token == Token::Placeholder {
