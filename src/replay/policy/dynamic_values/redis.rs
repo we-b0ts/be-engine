@@ -7,6 +7,12 @@ pub(in crate::replay) struct ArgumentNormalization {
     pub decision: DynamicDecision,
 }
 
+#[derive(Clone, Copy)]
+pub(in crate::replay) struct RedisIdentity<'a> {
+    pub database: i64,
+    pub username: Option<&'a str>,
+}
+
 impl DynamicDecision {
     pub(in crate::replay::policy) fn differs(&self, rule: &str) -> bool {
         self.pairs
@@ -44,6 +50,7 @@ impl DynamicValues {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(in crate::replay) fn redis(
         &self,
         case: Option<&str>,
@@ -53,9 +60,40 @@ impl DynamicValues {
         source: &[Vec<u8>],
         actual: &[Vec<u8>],
     ) -> Option<Result<ArgumentNormalization>> {
+        self.redis_with_identity(
+            case,
+            target,
+            RedisIdentity {
+                database,
+                username: None,
+            },
+            command,
+            source,
+            actual,
+        )
+    }
+
+    pub(in crate::replay) fn redis_with_identity(
+        &self,
+        case: Option<&str>,
+        target: &TargetKey,
+        identity: RedisIdentity<'_>,
+        command: &str,
+        source: &[Vec<u8>],
+        actual: &[Vec<u8>],
+    ) -> Option<Result<ArgumentNormalization>> {
         let case = case?;
-        let rules = self.selected(case, target);
-        if rules.is_empty() {
+        let RedisIdentity { database, username } = identity;
+        let database_identity = crate::policy::Database::Index(database);
+        let scope = super::scopes::ResourceContext {
+            protocol: crate::policy::Protocol::Redis,
+            target,
+            database: Some(&database_identity),
+            username,
+            operation: command,
+        };
+        let rules = self.selected_scoped(case, scope, true);
+        if rules.is_empty() && self.selected_scoped(case, scope, false).is_empty() {
             return None;
         }
         let captures = rules
@@ -80,15 +118,30 @@ impl DynamicValues {
             })
             .collect::<Vec<_>>();
         if captures.is_empty() {
-            return self
-                .normalize_arguments(Some(case), target, source, actual)
-                .map(|result| {
-                    result.map(|(source, actual)| ArgumentNormalization {
-                        source,
-                        actual,
-                        decision: DynamicDecision::default(),
-                    })
-                });
+            let pairs = self.scoped_pairs(case, scope, &DynamicDecision::default());
+            if !source
+                .iter()
+                .any(|value| strings::contains_identity(value, &pairs))
+            {
+                return None;
+            }
+            return Some((|| {
+                ensure!(
+                    source.len() == actual.len(),
+                    "dynamic request argument count differs"
+                );
+                Ok(ArgumentNormalization {
+                    source: source
+                        .iter()
+                        .map(|value| strings::normalize(value, &pairs, false))
+                        .collect::<Result<_>>()?,
+                    actual: actual
+                        .iter()
+                        .map(|value| strings::normalize(value, &pairs, true))
+                        .collect::<Result<_>>()?,
+                    decision: DynamicDecision::default(),
+                })
+            })());
         }
         Some((|| {
             ensure!(
@@ -155,7 +208,7 @@ impl DynamicValues {
             }
             // A new strict capture owns only its declared JSON pointers. Its
             // pending identity must never normalize another argument or field.
-            let pairs = self.pairs(case, target, &legacy_decision);
+            let pairs = self.scoped_pairs(case, scope, &legacy_decision);
             ensure!(
                 source.len() == actual.len(),
                 "dynamic Redis argument counts differ"

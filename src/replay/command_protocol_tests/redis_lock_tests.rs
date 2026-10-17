@@ -1,11 +1,11 @@
 //! Actual RESP client verifies discovery, authoring and finite correlated replay.
 use super::*;
-use crate::{RedisLockFeedback, RedisLockSelector, RedisValueKeySelector, plan_redis_lock};
+use crate::{RedisLockFeedback, RedisLockSelector, RedisValueKeySelector};
 use redis_value_tests::{request, spawn};
 #[tokio::test]
 async fn redis_lock_plan_apply_then_cross_connection_set_mget_evalsha_keeps_nonce_and_script_identity()
  {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
     let case = temp.path().join("apis/delete/case");
     std::fs::create_dir_all(&case).unwrap();
     std::fs::write(
@@ -38,7 +38,21 @@ async fn redis_lock_plan_apply_then_cross_connection_set_mget_evalsha_keeps_nonc
         b":1\r\n",
     );
     let dependencies = case.join("dependencies.jsonl");
-    std::fs::write(&dependencies, format!("{set}\n{read}\n{release}\n")).unwrap();
+    let records = [set, read, release].map(|mut event| {
+        event["timestamp"] = serde_json::json!("1970-01-01T00:16:40Z");
+        event["request_started_at"] = event["timestamp"].clone();
+        event["duration_ms"] = serde_json::json!(0);
+        event
+    });
+    std::fs::write(
+        &dependencies,
+        records
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
     let immutable = std::fs::read(&dependencies).unwrap();
     std::fs::write(
         case.join("request.json"),
@@ -72,13 +86,13 @@ async fn redis_lock_plan_apply_then_cross_connection_set_mget_evalsha_keeps_nonc
         .unwrap();
     }
     task.abort();
-    let policy = temp.path().join("verification.yaml");
-    std::fs::write(
+    let policy = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
     .unwrap();
-    plan_redis_lock(RedisLockFeedback {
+    crate::replay::policy::test_fixture::install_redis_lock(RedisLockFeedback {
         policy_path: policy.clone(),
         case_source: case.clone(),
         replay_report_path: report,
@@ -94,8 +108,6 @@ async fn redis_lock_plan_apply_then_cross_connection_set_mget_evalsha_keeps_nonc
         source_evidence: "LockStore.java:acquire/release uses random token and conditional delete"
             .into(),
     })
-    .unwrap()
-    .apply()
     .unwrap();
     let (addr, state, task) = spawn(&case, Some(policy)).await;
     let mut client = TcpStream::connect(addr).await.unwrap();

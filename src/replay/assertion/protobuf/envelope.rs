@@ -32,3 +32,11 @@ pub(super) fn parse_bodies<'a>(
     );
     Ok((expected_envelope, expected, actual))
 }
+
+pub(in crate::replay) fn payload_pair<'a>(
+    source: &'a [u8],
+    target: &'a [u8],
+) -> Result<(&'a [u8], &'a [u8])> {
+    let (_, source, target) = parse_bodies(source, target)?;
+    Ok((source, target))
+}

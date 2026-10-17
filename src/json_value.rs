@@ -1,4 +1,5 @@
 //! Strict JSON decoding: duplicate object members must not be silently discarded.
+mod numbers;
 use serde::{
     Deserialize, Deserializer,
     de::{self, MapAccess, SeqAccess, Visitor},
@@ -54,6 +55,9 @@ impl<'de> Deserialize<'de> for Strict {
 }
 pub(crate) fn parse(bytes: &[u8]) -> Option<Value> {
     if bytes.len() > 1024 * 1024 {
+        return None;
+    }
+    if !numbers::preserves_decimal_tokens(bytes) {
         return None;
     }
     serde_json::from_slice::<Strict>(bytes).ok().map(|v| v.0)

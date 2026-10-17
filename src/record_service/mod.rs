@@ -39,11 +39,11 @@ pub async fn run(options: RecordOptions) -> Result<()> {
             post_ready_max_wait_ms = config.recording.post_ready_max_wait_ms,
             "recording service project Recorder configuration loaded");
     }
-    if let Some(path) = &options.source_traffic_policy {
+    if let Some(path) = &options.policy {
         info!(
             path = %path.display(),
             case_path_patterns = config.http_gateway.case_path_patterns.len(),
-            "recording service source traffic policy loaded"
+            "recording service unified policy Source projection loaded"
         );
     }
     let coordination = coordination::Coordination::connect(&options).await?;

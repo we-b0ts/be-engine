@@ -18,6 +18,7 @@ pub(crate) struct ResolvedSigningKey {
     root: PathBuf,
     source: SigningKeySource,
     value: Vec<u8>,
+    witnesses: Vec<(PathBuf, String)>,
 }
 
 impl ResolvedSigningKey {
@@ -26,10 +27,14 @@ impl ResolvedSigningKey {
             root: root.into(),
             source: source.clone(),
             value: resolve_source(root, source)?,
+            witnesses: source_witnesses(root, source)?,
         })
     }
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.value
+    }
+    pub(crate) fn witnesses(&self) -> impl Iterator<Item = &(PathBuf, String)> {
+        self.witnesses.iter()
     }
     pub(crate) fn ensure_current(&self) -> Result<()> {
         ensure!(
@@ -46,6 +51,7 @@ impl ResolvedSigningKey {
                 name: "TEST_KEY".into(),
             },
             value: value.into(),
+            witnesses: vec![],
         }
     }
 }
@@ -105,4 +111,35 @@ pub(crate) fn resolve_source(root: &Path, source: &SigningKeySource) -> Result<V
     };
     ensure!(!value.trim().is_empty(), "JWT signing key is empty");
     Ok(value.into_bytes())
+}
+
+fn source_witnesses(root: &Path, source: &SigningKeySource) -> Result<Vec<(PathBuf, String)>> {
+    let paths = match source {
+        SigningKeySource::TargetEnv { .. } => {
+            crate::startup::startup_environment_witness_paths(root)?
+        }
+        SigningKeySource::TargetFile { path, .. } => vec![
+            root.join(crate::repository::LOCAL_STARTUP_MANIFEST_PATH),
+            crate::startup::startup_mount_source(root, path)?,
+        ],
+    };
+    paths
+        .into_iter()
+        .map(|path| {
+            use sha2::{Digest, Sha256};
+            let metadata = std::fs::symlink_metadata(&path)?;
+            ensure!(
+                metadata.is_file()
+                    && !metadata.file_type().is_symlink()
+                    && metadata.len() <= 16 * 1024 * 1024,
+                "signing input witness must be a bounded regular file"
+            );
+            let bytes = std::fs::read(&path)?;
+            ensure!(
+                bytes.len() <= 16 * 1024 * 1024,
+                "signing input witness exceeds bound"
+            );
+            Ok((path, format!("sha256:{:x}", Sha256::digest(bytes))))
+        })
+        .collect()
 }

@@ -44,7 +44,7 @@ fn field_payload(binary: bool, id: &str, stage: u8) -> Vec<u8> {
 #[tokio::test]
 async fn redis_publish_uuid_field_preserves_other_uuids_when_payload_positions_change() {
     for binary in [false, true] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
         let case = temp.path().join("apis/publish/case");
         std::fs::create_dir_all(&case).unwrap();
         std::fs::write(
@@ -55,7 +55,7 @@ async fn redis_publish_uuid_field_preserves_other_uuids_when_payload_positions_c
         let lane = Uuid::new_v4();
         let records = [1_u8,2].map(|stage| {
             let mut record = redis_hash_dependency(lane,stage.into(),"PUBLISH",&["events","placeholder"],b":1\r\n");
-            record["args"][1] = serde_json::json!({"encoding":"base64","data":STANDARD.encode(field_payload(binary,SOURCE_A,stage))});
+            record["args"][1] = serde_json::json!({"encoding":"base64","truncated":false,"data":STANDARD.encode(field_payload(binary,SOURCE_A,stage))});
             record["response_kind"] = "integer".into();record
         });
         std::fs::write(
@@ -93,8 +93,8 @@ async fn redis_publish_uuid_field_preserves_other_uuids_when_payload_positions_c
             .unwrap();
         }
         task.abort();
-        let policy = temp.path().join("verification.yaml");
-        std::fs::write(
+        let policy = temp.path().join("policy.yaml");
+        crate::replay::write_policy_fixture(
             &policy,
             "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
         )
@@ -116,7 +116,7 @@ async fn redis_publish_uuid_field_preserves_other_uuids_when_payload_positions_c
         let mut wrong = feedback.clone();
         wrong.selector.uuid_field = Some("other".into());
         assert!(plan_redis_publish(wrong).is_err());
-        plan_redis_publish(feedback).unwrap().apply().unwrap();
+        crate::replay::policy::test_fixture::install_redis_publish(feedback).unwrap();
         let (addr, _, task) = spawn(&case, Some(policy)).await;
         let mut client = TcpStream::connect(addr).await.unwrap();
         publish(
@@ -164,7 +164,7 @@ async fn publish(client: &mut TcpStream, channel: &str, payload: &[u8], expected
 #[tokio::test]
 async fn redis_publish_plan_apply_preserves_uuid_relations_order_and_finite_binary_evidence() {
     for binary in [false, true] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
         let case = temp.path().join("apis/publish/case");
         std::fs::create_dir_all(&case).unwrap();
         std::fs::write(
@@ -175,7 +175,7 @@ async fn redis_publish_plan_apply_preserves_uuid_relations_order_and_finite_bina
         let lane = Uuid::new_v4();
         let records = [(SOURCE_A,1),(SOURCE_A,2),(SOURCE_B,3)].map(|(id,stage)| {
             let mut record = redis_hash_dependency(lane, stage.into(), "PUBLISH", &["events","placeholder"],format!(":{stage}\r\n").as_bytes());
-            record["args"][1] = serde_json::json!({"encoding":"base64","data":STANDARD.encode(payload(binary,id,stage))});
+            record["args"][1] = serde_json::json!({"encoding":"base64","truncated":false,"data":STANDARD.encode(payload(binary,id,stage))});
             record["response_kind"] = "integer".into();
             record
         });
@@ -221,10 +221,10 @@ async fn redis_publish_plan_apply_preserves_uuid_relations_order_and_finite_bina
             std::fs::write(&report_path, report).unwrap();
         }
         task.abort();
-        let policy_path = temp.path().join("verification.yaml");
+        let policy_path = temp.path().join("policy.yaml");
         let original_policy =
             "# keep\nversion: 3\nexpected_response: assertions_only\ndependency_rules: []\n";
-        std::fs::write(&policy_path, original_policy).unwrap();
+        crate::replay::write_policy_fixture(&policy_path, original_policy).unwrap();
         let feedback = RedisPublishFeedback {
             policy_path: policy_path.clone(),
             case_source: case.clone(),
@@ -240,39 +240,14 @@ async fn redis_publish_plan_apply_preserves_uuid_relations_order_and_finite_bina
             source_evidence: "publisher.py:host_id is uuid4().hex generated once per publisher"
                 .into(),
         };
-        let stale = plan_redis_publish(feedback.clone()).unwrap();
-        std::fs::write(&policy_path, format!("{original_policy}# changed\n")).unwrap();
-        assert!(stale.apply().is_err());
-        std::fs::write(&policy_path, original_policy).unwrap();
-        let stale = plan_redis_publish(feedback.clone()).unwrap();
-        // A semantic source change invalidates the witness.
-        std::fs::write(
-            &dependencies,
-            String::from_utf8(immutable.clone())
-                .unwrap()
-                .replace("\"sequence\":1", "\"sequence\":4"),
-        )
-        .unwrap();
-        assert!(stale.apply().is_err());
-        std::fs::write(&dependencies, &immutable).unwrap();
-        let mut invalid = feedback.clone();
-        invalid.selector.uuid_index = Some(1);
-        assert!(plan_redis_publish(invalid).is_err());
-        plan_redis_publish(feedback.clone())
-            .unwrap()
-            .apply()
-            .unwrap();
+        let error = plan_redis_publish(feedback.clone()).err().unwrap();
         assert!(
-            plan_redis_publish(feedback)
-                .unwrap()
-                .report()
-                .reused_existing
+            error
+                .to_string()
+                .contains("legacy rule authoring is retired")
         );
-        assert!(
-            std::fs::read_to_string(&policy_path)
-                .unwrap()
-                .starts_with("# keep\n")
-        );
+        crate::replay::policy::test_fixture::install_redis_publish(feedback).unwrap();
+        assert_eq!(std::fs::read(&dependencies).unwrap(), immutable);
         let (addr, state, task) = spawn(&case, Some(policy_path)).await;
         let mut client = TcpStream::connect(addr).await.unwrap();
         let mut second = TcpStream::connect(addr).await.unwrap();

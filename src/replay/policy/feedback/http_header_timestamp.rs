@@ -42,6 +42,7 @@ impl HttpHeaderTimestampPlan {
         &self.report
     }
     pub fn apply(self) -> Result<HttpHeaderTimestampReport> {
+        crate::policy::retired_authoring()?;
         ensure!(
             fs::read_to_string(&self.feedback.policy_path)? == self.original,
             "policy changed after planning; rerun HTTP header timestamp plan"
@@ -67,6 +68,7 @@ impl HttpHeaderTimestampPlan {
 pub fn plan_http_header_timestamp(
     mut feedback: HttpHeaderTimestampFeedback,
 ) -> Result<HttpHeaderTimestampPlan> {
+    crate::policy::retired_authoring()?;
     feedback.selector.header = feedback.selector.header.to_ascii_lowercase();
     feedback.selector.host = feedback.selector.host.to_ascii_lowercase();
     feedback.selector.method = feedback.selector.method.to_ascii_uppercase();

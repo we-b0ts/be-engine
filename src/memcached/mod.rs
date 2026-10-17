@@ -1,4 +1,5 @@
 pub(crate) mod access;
+pub(crate) mod value_slot;
 mod wire;
 
 pub(crate) use wire::{

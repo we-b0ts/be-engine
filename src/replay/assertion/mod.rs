@@ -3,6 +3,8 @@ mod binary_body;
 mod compare;
 pub(in crate::replay) mod docx;
 pub(in crate::replay) mod headers;
+pub(crate) mod native;
+mod unified;
 pub use headers::date::ResponseHeaderDateCandidate;
 pub(in crate::replay) mod hessian2;
 mod joined_string;
@@ -11,6 +13,8 @@ mod model;
 pub(in crate::replay) mod time;
 pub(in crate::replay) use time::RequestTimes;
 mod motan;
+mod payload;
+pub(crate) use payload::response_payload_pair;
 pub(in crate::replay) mod protobuf;
 mod sse;
 
@@ -239,27 +243,11 @@ fn assert_recorded_response_with_policy(
     let actual_body = decode_body(&actual.body, "actual response")?;
     let actual_status = actual.status;
     let expected_request_headers = request.headers.clone();
-    let (expected_body, actual_body, expected_status, actual_status) = if request.has_motan_frame()
-        && !oneway
-    {
-        let expected_frame = motan::comparable_response_frame(&expected_body, "expected response")?;
-        let actual_frame = motan::comparable_response_frame(&actual_body, "actual response")?;
-        let expected_status = expected_frame.status_code();
-        let actual_status = actual_frame.status_code();
-        (
-            AssertionBody::MotanFrame(expected_frame),
-            AssertionBody::MotanFrame(actual_frame),
-            expected_status,
-            actual_status,
-        )
-    } else {
-        (
-            AssertionBody::Bytes(expected_body),
-            AssertionBody::Bytes(actual_body),
-            expected_status,
-            actual_status,
-        )
-    };
+    let expected_body =
+        payload::business_body(&request, expected_body, oneway, "expected response")?;
+    let actual_body = payload::business_body(&request, actual_body, oneway, "actual response")?;
+    let expected_status = expected_body.carrier_status().unwrap_or(expected_status);
+    let actual_status = actual_body.carrier_status().unwrap_or(actual_status);
     evaluate_response(
         AssertionInputs {
             times: RequestTimes {
@@ -384,14 +372,77 @@ fn evaluate_response(
         "runner-owned response assertions require replay policy version 3"
     );
     let path = uri_path(&request.uri);
-    let response_fields = loaded
-        .document
-        .response_rules
-        .matching_replay_fields(&request.method, &path);
-    let body_rules = loaded
-        .document
-        .response_rules
-        .matching_response_body_rules(&request.method, &path);
+    let source_request_body = request
+        .body
+        .as_ref()
+        .map(|body| decode_body(body, "immutable Source request"))
+        .transpose()?
+        .and_then(|body| crate::json_value::parse(&body));
+    let native_selected = loaded
+        .compiled
+        .as_ref()
+        .map(|compiled| {
+            native::selected(
+                compiled,
+                &request.method,
+                &path,
+                source_request_body.as_ref(),
+            )
+        })
+        .unwrap_or_default();
+    let native_root = if native::needs_startup(&native_selected) {
+        crate::config::resolve_unified_policy_root(&loaded.path)?
+    } else {
+        PathBuf::from(".")
+    };
+    let native_context = loaded
+        .compiled
+        .as_ref()
+        .map(|_| {
+            native::NativeResponseContext::from_rules(
+                &native_selected,
+                &native_root,
+                request_path.parent().unwrap_or(Path::new(".")),
+            )
+        })
+        .transpose();
+    let (native_context, native_key_unavailable) = match native_context {
+        Ok(context) => (context, false),
+        Err(_)
+            if native_selected.iter().any(|rule| {
+                matches!(
+                    rule.rule.effect,
+                    crate::policy::NativeEffect::ResponseJwt(_)
+                )
+            }) =>
+        {
+            (None, true)
+        }
+        Err(error) => return Err(error),
+    };
+    let native_body_ids = native_selected.iter().filter(|rule|
+        matches!(&rule.rule.effect, crate::policy::NativeEffect::ResponseBody(effect) if effect.codec != crate::policy::native::BodyCodec::Json))
+        .map(|rule| rule.rule.id.clone()).collect::<Vec<_>>();
+    let native_headers = loaded
+        .compiled
+        .as_ref()
+        .map(|_| {
+            let rules = native_selected.iter().copied().cloned().collect::<Vec<_>>();
+            super::policy::native_projection::project_native(&rules)
+        })
+        .transpose()?;
+    let response_rules = native_headers
+        .as_ref()
+        .map_or(&loaded.document.response_rules, |projection| {
+            &projection.document.response_rules
+        });
+    let response_fields = response_rules.matching_replay_fields(&request.method, &path);
+    let body_rules = response_rules.matching_response_body_rules(&request.method, &path);
+    let body_rules = if loaded.compiled.is_some() {
+        native::body::merge_opaque(body_rules)?
+    } else {
+        body_rules
+    };
     ensure!(
         body_rules.len() <= 1,
         "multiple response-body rules match {} {}",
@@ -399,9 +450,10 @@ fn evaluate_response(
         path
     );
     let gateway_protocol = request.gateway_protocol()?;
+    let unified_rules = unified::selected(loaded, &request, &path)?;
     let mut report = ResponseAssertionCaseReport::new(
         case_id,
-        request.method,
+        request.method.clone(),
         path,
         gateway_protocol,
         request_path.display().to_string(),
@@ -412,6 +464,11 @@ fn evaluate_response(
         actual_path.display().to_string(),
         actual_fingerprint,
     );
+    if native_key_unavailable {
+        let mut difference = ResponseDifference::body_value_mismatch();
+        difference.kind = ResponseDifferenceKind::JwtSigningKeyUnavailable;
+        report.differences.push(difference);
+    }
     if expected_status != actual_status {
         report
             .differences
@@ -428,10 +485,103 @@ fn evaluate_response(
             actual_headers.as_ref(),
             expected_request_headers.as_ref(),
             actual_request_headers.as_ref(),
-            &loaded.document.response_rules.headers,
+            native_headers
+                .as_ref()
+                .map_or(&loaded.document.response_rules.headers, |projection| {
+                    &projection.document.response_rules.headers
+                }),
             times,
             &mut report,
         )?;
+    }
+    if let Some(projection) = &native_headers {
+        for id in report
+            .applied_header_rule_ids
+            .iter_mut()
+            .chain(&mut report.unused_applicable_header_rule_ids)
+        {
+            if let Some(native_id) = projection.response_aliases.get(id) {
+                *id = native_id.clone();
+            }
+        }
+    }
+    if !unified_rules.is_empty()
+        || native_context
+            .as_ref()
+            .is_some_and(|context| !context.is_empty())
+    {
+        let mut applicable_ids = unified_rules
+            .iter()
+            .map(|rule| rule.rule.id.clone())
+            .collect::<Vec<_>>();
+        if let Some(context) = native_context
+            .as_ref()
+            .filter(|context| !context.is_empty())
+        {
+            let codec = context.payload_codec(&unified_rules)?;
+            ensure!(
+                body_rules.is_empty()
+                    || matches!(codec, crate::policy::Codec::Protobuf(_))
+                        && body_rules
+                            .iter()
+                            .all(|rule| rule.codec == ResponseBodyCodec::Protobuf),
+                "native value contracts cannot consume another opaque body codec"
+            );
+            let comparison = context.compare_encoded(
+                expected_body.body(),
+                actual_body.body(),
+                &unified_rules,
+                crate::value_contract::json::AnchorClocks {
+                    case: times,
+                    ..Default::default()
+                },
+            )?;
+            applicable_ids.extend(context.rule_ids());
+            report.body_codec = if matches!(codec, crate::policy::Codec::Protobuf(_)) {
+                ResponseBodyCodec::Protobuf
+            } else {
+                ResponseBodyCodec::Json
+            };
+            if report.body_codec == ResponseBodyCodec::Protobuf
+                && !comparison.passed()
+                && let Ok(mut diagnosis) = diagnose_response_body(
+                    expected_body.body(),
+                    actual_body.body(),
+                    ResponseBodyCodec::Protobuf,
+                )
+            {
+                diagnosis.configured = true;
+                diagnosis.used_for_verdict = false;
+                report.body_diagnosis = Some(diagnosis);
+            }
+            report.applied_body_rule_ids.extend(comparison.evaluated);
+            for diff in comparison.differences {
+                report.differences.push(unified::contract_difference(diff));
+            }
+            if let Some(difference) = expected_body.type_difference(&actual_body) {
+                report.differences.push(difference);
+            }
+            if !expected_body.gateway_metadata_matches(&actual_body) {
+                report
+                    .differences
+                    .push(ResponseDifference::gateway_metadata_mismatch());
+            }
+        } else {
+            ensure!(
+                body_rules.is_empty(),
+                "generic and native opaque body contracts require one compiled codec owner"
+            );
+            unified::compare(
+                &unified_rules,
+                &expected_body,
+                &actual_body,
+                times,
+                &mut report,
+            )?;
+        }
+        applicable_ids.retain(|id| report.applied_body_rule_ids.contains(id));
+        report.finish(&[], &applicable_ids);
+        return Ok(report);
     }
     if let Some(rule) = body_rules.first() {
         ensure!(
@@ -580,7 +730,11 @@ fn evaluate_response(
             }
             codec => anyhow::bail!("unsupported configured response-body codec {codec:?}"),
         };
-        report.applied_body_rule_ids.push(rule.id.clone());
+        if loaded.compiled.is_some() {
+            report.applied_body_rule_ids.extend(native_body_ids.clone());
+        } else {
+            report.applied_body_rule_ids.push(rule.id.clone());
+        }
         report.body_diagnosis = Some(body_diagnosis);
         let body_type_difference = expected_body.type_difference(&actual_body);
         if !body_matches
@@ -601,7 +755,14 @@ fn evaluate_response(
                     .push(ResponseDifference::gateway_metadata_mismatch());
             }
         }
-        report.finish(&[], std::slice::from_ref(&rule.id));
+        report.finish(
+            &[],
+            if loaded.compiled.is_some() {
+                &native_body_ids
+            } else {
+                std::slice::from_ref(&rule.id)
+            },
+        );
         return Ok(report);
     }
 

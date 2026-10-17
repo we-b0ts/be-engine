@@ -3,7 +3,7 @@
 Use the single `traffic-e2e record` command inside the prepared Source environment:
 
 ```bash
-traffic-e2e record --config /etc/traffic-e2e/project.yaml \
+traffic-e2e record --config /etc/traffic-e2e/.traffic-e2e/project.yaml \
   --source-workdir /app --data-root /data/traffic-e2e \
   -- <source-command> [args...]
 ```
@@ -31,7 +31,9 @@ docker run --rm --cap-add NET_ADMIN --cap-add NET_RAW \
 ```
 
 Keep Source's real business configuration. Mount project Recorder configuration
-and its referenced source traffic policy when needed. The default HTTP include
+and its `project.policy` file, preserving repository-relative paths. With no
+project YAML, `record --policy PATH` loads the same typed policy Source effects.
+With a project YAML, an explicit `--policy` must name that same file. The default HTTP include
 rule covers all methods and paths; existing exclusions still apply. Keep
 Source and Recorder on separate loopback ports in the container namespace.
 For a host bind mount, set `TRAFFIC_E2E_ARTIFACT_OWNER` to the host user's numeric

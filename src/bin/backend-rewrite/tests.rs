@@ -72,7 +72,6 @@ fn exposes_only_the_rewrite_coordinator_surface() {
             "case-pattern",
             "evidence",
             "rule",
-            "dependency-rule",
             "recorder-capture",
             "route",
             "repair",
@@ -266,151 +265,21 @@ fn parses_the_bounded_rewrite_surface() {
         ])
         .is_err()
     );
-    let hessian2_unordered_path = r#"{"value_path":["result","groups","*","whiteList"],"display_path":"$.result.groups[*].whiteList","source_evidence":"src/rule.rs:whiteList is a Set"}"#;
     assert!(
         Cli::try_parse_from([
             "test",
             "rule",
             "plan",
-            "--evidence-id",
-            "evidence-current",
-            "--body-codec",
-            "hessian2",
-            "--unordered-path",
-            hessian2_unordered_path,
+            "--file",
+            "rules.yaml",
+            "--evidence",
+            "current"
         ])
         .is_ok()
     );
-    assert!(
-        Cli::try_parse_from([
-            "test",
-            "rule",
-            "plan",
-            "--evidence-id",
-            "evidence-current",
-            "--body-codec",
-            "hessian2",
-            "--kind",
-            "unordered",
-            "--json-pointer",
-            "$.result.groups[*].whiteList",
-            "--unordered-path",
-            hessian2_unordered_path,
-        ])
-        .is_err()
-    );
-    assert!(
-        Cli::try_parse_from([
-            "test",
-            "rule",
-            "plan",
-            "--evidence-id",
-            "evidence-current",
-            "--body-codec",
-            "json",
-            "--kind",
-            "uuid",
-            "--json-pointer",
-            "/request_id",
-            "--source-evidence",
-            "src/request.rs:request_id generates a UUID",
-            "--source-example",
-            "source-uuid",
-            "--target-example",
-            "target-uuid",
-        ])
-        .is_ok()
-    );
-    assert!(
-        Cli::try_parse_from([
-            "test",
-            "rule",
-            "plan",
-            "--evidence-id",
-            "evidence-current",
-            "--kind",
-            "dynamic",
-            "--json-pointer",
-            "/request_id",
-            "--source-evidence",
-            "src/request.rs:request_id generation",
-        ])
-        .is_err()
-    );
-    assert!(
-        Cli::try_parse_from([
-            "test",
-            "rule",
-            "plan",
-            "--evidence-id",
-            "evidence-current",
-            "--body-codec",
-            "protobuf",
-        ])
-        .is_ok()
-    );
-    assert!(
-        Cli::try_parse_from([
-            "test",
-            "rule",
-            "plan",
-            "--evidence-id",
-            "evidence-current",
-            "--body-codec",
-            "protobuf",
-            "--unordered-path",
-            r#"{"field_path":[3,1,6,3],"display_path":"rule_collection.experiments.groups.white_list","element_type":"string","source_evidence":"src/rule.rs:white_list is a Set"}"#,
-        ])
-        .is_ok()
-    );
-    assert!(
-        Cli::try_parse_from([
-            "test",
-            "rule",
-            "motan",
-            "--evidence-id",
-            "evidence-current",
-            "--protocol",
-            "protobuf",
-        ])
-        .is_err()
-    );
-    assert!(
-        Cli::try_parse_from([
-            "test",
-            "rule",
-            "motan",
-            "--evidence-id",
-            "evidence-current",
-            "--protocol",
-            "protobuf",
-            "--unordered-path",
-            r#"{"field_path":[3],"display_path":"payload","element_type":"bytes","source_evidence":"src/rule.rs:payload is a Set"}"#,
-        ])
-        .is_err()
-    );
-    assert!(
-        Cli::try_parse_from([
-            "test",
-            "dependency-rule",
-            "plan",
-            "memcached",
-            "protobuf-timestamp",
-            "--evidence-id",
-            "evidence-current",
-            "--rule-id",
-            "user-info-loading-time",
-            "--port",
-            "15138",
-            "--key-prefix",
-            "u",
-            "--field-number",
-            "50",
-            "--source-evidence",
-            "CacheService.java:2044 sets loading_time from Unix seconds",
-        ])
-        .is_ok()
-    );
+    for retired in ["dependency-rule", "jwt-rule"] {
+        assert!(Cli::try_parse_from(["test", retired, "plan"]).is_err());
+    }
     assert!(
         Cli::try_parse_from([
             "test",
@@ -803,148 +672,24 @@ fn parses_the_bounded_rewrite_surface() {
         ])
         .is_err()
     );
-    assert!(
-        Cli::try_parse_from([
-            "test",
-            "dependency-rule",
-            "plan",
-            "memcached",
-            "get",
-            "--evidence-id",
-            "evidence-1",
-            "--ownership",
-            "process-owned",
-            "--name",
-            "planet-video-cache-warm",
-            "--source-evidence",
-            "TopUserServiceImpl.java:691 scheduled cache warm",
-            "--breeze-resource",
-            "user-video",
-            "--key-start",
-            "0",
-            "--key-end",
-            "4095",
-            "--key-suffix",
-            "pl_video",
-        ])
-        .is_ok()
-    );
-    assert!(
-        Cli::try_parse_from([
-            "test",
-            "dependency-rule",
-            "plan",
-            "memcached",
-            "get",
-            "--evidence-id",
-            "evidence-1",
-            "--ownership",
-            "process-owned",
-            "--name",
-            "cache-warm",
-            "--source-evidence",
-            "src/cache.rs:init",
-            "--breeze-resource",
-            "user-video",
-            "--key-start",
-            "0",
-            "--key-end",
-            "1",
-            "--key-suffix",
-            "warm",
-            "--authority",
-            "config.internal",
-        ])
-        .is_err()
-    );
+    assert!(Cli::try_parse_from(["test", "rule", "plan", "--evidence", "current"]).is_err());
 }
 
 #[test]
-fn dependency_rule_help_is_protocol_specific_and_has_no_api_context() {
-    let memcached = Cli::try_parse_from([
-        "test",
-        "dependency-rule",
-        "plan",
-        "memcached",
-        "get",
-        "--help",
-    ])
-    .unwrap_err()
-    .to_string();
-    assert!(memcached.contains("--breeze-resource"));
-    assert!(memcached.contains("--key-start"));
-    assert!(!memcached.contains("--authority"));
-    assert!(!memcached.contains("--api"));
-    assert!(!memcached.contains("--case-source"));
-    assert!(!memcached.contains("--source-revision"));
-
-    let http = Cli::try_parse_from(["test", "dependency-rule", "plan", "http", "--help"])
+fn rule_help_exposes_one_document_and_actual_evidence_for_every_domain() {
+    let help = Cli::try_parse_from(["test", "rule", "plan", "--help"])
         .unwrap_err()
         .to_string();
-    assert!(http.contains("--authority"));
-    assert!(http.contains("--path-prefix"));
-    assert!(!http.contains("--breeze-resource"));
-    assert!(!http.contains("--key-start"));
-
-    let zcount = Cli::try_parse_from([
-        "test",
-        "dependency-rule",
-        "plan",
-        "redis",
-        "zcount",
-        "--help",
-    ])
-    .unwrap_err()
-    .to_string();
-    assert!(zcount.contains("--key-prefix"));
-    assert!(!zcount.contains("--key <"));
-    assert!(!zcount.contains("--initial-load-timeout-ms"));
-
-    let get = Cli::try_parse_from(["test", "dependency-rule", "plan", "redis", "get", "--help"])
-        .unwrap_err()
-        .to_string();
-    assert!(get.contains("--key <"));
-    assert!(get.contains("--initial-load-timeout-ms"));
-    assert!(!get.contains("--key-prefix"));
-
-    for command in ["scard", "hgetall"] {
-        let help = Cli::try_parse_from([
-            "test",
-            "dependency-rule",
-            "plan",
-            "redis",
-            command,
-            "--help",
-        ])
-        .unwrap_err()
-        .to_string();
-        assert!(help.contains("--key <"));
-        assert!(help.contains("--initial-load-timeout-ms"));
-        assert!(!help.contains("--key-prefix"));
-        assert!(!help.contains("--command"));
+    for required in ["--file", "--evidence", "traffic-policy/v1"] {
+        assert!(help.contains(required), "{help}");
     }
-}
-
-#[test]
-fn memcached_protobuf_timestamp_help_is_rule_specific() {
-    let help = Cli::try_parse_from([
-        "test",
-        "dependency-rule",
-        "plan",
-        "memcached",
-        "protobuf-timestamp",
-        "--help",
-    ])
-    .unwrap_err()
-    .to_string();
-
-    assert!(help.contains("protobuf Unix timestamp"));
-    assert!(help.contains("--rule-id <RULE_ID>"));
-    assert!(help.contains("--port <PORT>"));
-    assert!(help.contains("--field-number <FIELD_NUMBER>"));
-    assert!(help.contains("--source-evidence <SOURCE_EVIDENCE>"));
-    assert!(!help.contains("--namespace"));
-    assert!(!help.contains("--group"));
-    assert!(!help.contains("--tolerance"));
-    assert!(!help.contains("--offset"));
+    for retired in [
+        "--kind",
+        "--body-codec",
+        "--json-pointer",
+        "--dynamic-value",
+        "--mysql-time",
+    ] {
+        assert!(!help.contains(retired), "{help}");
+    }
 }

@@ -3,6 +3,8 @@ use std::path::Path;
 use std::process::Command;
 
 use super::*;
+
+const CONFIGURATION_PATHS: &[&str] = &[".traffic-e2e/project.yaml", ".traffic-e2e/policy.yaml"];
 use crate::rewrite::{self, RewriteContext, RewriteNextOptions, next_rewrite, test_support};
 
 fn git(root: &Path, args: &[&str]) {
@@ -28,8 +30,8 @@ fn target() -> tempfile::TempDir {
         None,
     );
     fs::write(
-        root.path().join(".traffic-e2e/verification.yaml"),
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+        root.path().join(".traffic-e2e/policy.yaml"),
+        "format: traffic-policy/v1\nrules: []\n",
     )
     .unwrap();
     fs::write(root.path().join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();
@@ -120,18 +122,17 @@ fn includes_new_deleted_staged_and_unstaged_configuration_but_excludes_progress_
     git(root.path(), &["add", "--", CONFIGURATION_PATHS[1]]);
     git(
         root.path(),
-        &["rm", "--cached", "--", CONFIGURATION_PATHS[2]],
+        &["rm", "--cached", "--", CONFIGURATION_PATHS[1]],
     );
-    git(
-        root.path(),
-        &["commit", "-qm", "remove verification from index"],
-    );
+    git(root.path(), &["commit", "-qm", "remove policy from index"]);
     // The source policy commit above is followed by a new unstaged edit.
     fs::write(root.path().join(CONFIGURATION_PATHS[1]), "another policy\n").unwrap();
     let envelope = pending(root.path()).unwrap().unwrap();
     let mut paths = required(&envelope.action).to_vec();
     paths.sort();
-    assert_eq!(paths, CONFIGURATION_PATHS);
+    let mut expected = CONFIGURATION_PATHS.to_vec();
+    expected.sort();
+    assert_eq!(paths, expected);
     let json = serde_json::to_value(envelope).unwrap();
     assert_eq!(
         json["action"]["details"]["reason"],
@@ -151,8 +152,8 @@ fn reports_configuration_paths_relative_to_a_nested_target() {
         None,
     );
     fs::write(
-        target_root.join(".traffic-e2e/verification.yaml"),
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+        target_root.join(".traffic-e2e/policy.yaml"),
+        "format: traffic-policy/v1\nrules: []\n",
     )
     .unwrap();
     fs::write(target_root.join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();

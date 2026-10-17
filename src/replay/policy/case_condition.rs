@@ -117,7 +117,7 @@ impl JsonCondition {
 }
 
 /// Absence, malformed JSON and type mismatches never satisfy either operator.
-fn request_body(request: &Value) -> Option<Value> {
+pub(in crate::replay) fn request_body(request: &Value) -> Option<Value> {
     let body = &request["body"];
     if body.get("truncated").is_some_and(|v| v != false)
         || body.get("decode_error").is_some_and(|v| !v.is_null())

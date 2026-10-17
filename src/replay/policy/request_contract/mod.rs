@@ -2,13 +2,24 @@
 pub(crate) mod config;
 pub(in crate::replay::policy) mod evidence;
 mod http_json;
-mod key;
+mod http_value;
+pub(in crate::replay::policy) mod key;
+mod memcached;
+mod mysql;
+pub(in crate::replay::policy) mod native_projection;
+mod value_decision;
 pub(in crate::replay) use key::KeyBindingReport;
 mod overlap;
 mod redis;
+mod unified_response;
+pub(in crate::replay) use unified_response::PreparedRedisDelivery;
+pub(crate) use unified_response::redis_bulk_payload;
 mod script;
+mod source_session;
 mod time;
+mod unified;
 pub(in crate::replay::policy) use overlap::validate as validate_overlaps;
+pub(in crate::replay) use unified::RedisRequestContext;
 #[cfg(test)]
 mod tests;
 use super::config::{DependencyProtocol, ReplayDependencyRule};
@@ -32,6 +43,7 @@ struct CaseAnchor {
     actual: Option<DateTime<Utc>>,
     dir: PathBuf,
     conditions: BTreeSet<String>,
+    source_body: Option<Value>,
 }
 type SequenceKey = (String, String, Vec<u8>);
 
@@ -45,6 +57,7 @@ struct State {
     applicable: BTreeSet<String>,
     usage: BTreeMap<String, usize>,
     time_validations: BTreeMap<String, usize>,
+    unavailable_value_slots: BTreeMap<String, usize>,
     candidates: Vec<Candidate>,
     sequences: BTreeMap<SequenceKey, Sequence>,
     nonces: BTreeMap<(String, String, String), BTreeMap<String, String>>,
@@ -57,6 +70,8 @@ struct Sequence {
 }
 #[derive(Clone, Default)]
 pub(in crate::replay) struct RequestContracts {
+    compiled: Option<Arc<crate::policy::CompiledPolicy>>,
+    witnesses: Option<crate::policy_evidence::WitnessStore>,
     rules: Arc<Vec<ReplayDependencyRule>>,
     keys: Arc<BTreeMap<(String, String), crate::request_rules::keys::ResolvedSigningKey>>,
     state: Arc<Mutex<State>>,
@@ -76,6 +91,7 @@ pub(in crate::replay) struct Decision {
     time_validations: usize,
     sequence: Option<(SequenceKey, Sequence)>,
     nonces: Vec<((String, String, String), String, String)>,
+    unified_time_validations: BTreeMap<String, usize>,
 }
 impl RequestContracts {
     pub(in crate::replay::policy) fn load(
@@ -83,11 +99,7 @@ impl RequestContracts {
         policy: &Path,
         cases: &BTreeMap<String, ReplayCase>,
     ) -> Result<Self> {
-        let root = policy
-            .parent()
-            .and_then(Path::parent)
-            .unwrap_or(Path::new("."))
-            .to_path_buf();
+        let mut root = None;
         let mut keys = BTreeMap::new();
         for rule in rules {
             if let Some(super::redis_value::RedisSelector::Requests(selector)) = &rule.redis {
@@ -99,7 +111,9 @@ impl RequestContracts {
                                     keys.insert(
                                         (rule.id.clone(), pointer.clone()),
                                         crate::request_rules::keys::ResolvedSigningKey::resolve(
-                                            &root,
+                                            root.get_or_insert(
+                                                crate::config::resolve_unified_policy_root(policy)?,
+                                            ),
                                             &field.jwt.signing_key_source,
                                         )?,
                                     );
@@ -133,10 +147,13 @@ impl RequestContracts {
                                 .map(|condition| (rule.id.as_str(), condition))
                         }),
                     ),
+                    source_body: unified::source_body(&request),
                 },
             );
         }
         Ok(Self {
+            compiled: None,
+            witnesses: None,
             rules: Arc::new(
                 rules
                     .iter()
@@ -225,7 +242,7 @@ impl RequestContracts {
                         .as_ref()
                         .is_some_and(|host| host.eq_ignore_ascii_case(&target.host))
                     && r.target.port == Some(target.port)
-                    && r.case_selector.as_ref().is_some_and(|selector| {
+                    && r.case_selector.as_ref().is_none_or(|selector| {
                         selector.method == anchor.method
                             && super::pattern::path_pattern_matches(&selector.path, &anchor.path)
                     })
@@ -238,7 +255,11 @@ impl RequestContracts {
             *state.key_binds.entry(id.clone()).or_default() += decision.key_bindings.len();
             *state.identity_references.entry(id.clone()).or_default() +=
                 decision.identity_references;
-            *state.time_validations.entry(id.clone()).or_default() += decision.time_validations;
+            *state.time_validations.entry(id.clone()).or_default() += decision
+                .unified_time_validations
+                .get(&id)
+                .copied()
+                .unwrap_or(decision.time_validations);
             *state.usage.entry(id).or_default() += 1;
         }
         if let Some((key, sequence)) = decision.sequence {
@@ -257,6 +278,13 @@ impl RequestContracts {
     }
     pub(in crate::replay) fn enabled(&self) -> bool {
         !self.rules.is_empty()
+            || self.witnesses.is_some()
+            || self.compiled.as_ref().is_some_and(|policy| {
+                policy
+                    .rules
+                    .iter()
+                    .any(|rule| rule.rule.surface != crate::policy::Surface::ApiResponse)
+            })
     }
     pub(in crate::replay) fn observe_source(&self, case: &str, bytes: &[u8]) -> Result<()> {
         if !self.enabled() {
@@ -267,6 +295,7 @@ impl RequestContracts {
             if event["global_dependency_reason"].is_string() {
                 continue;
             }
+            self.observe_unified_source(case, &event)?;
             let protocol = match event["event_type"].as_str() {
                 Some("redis_exchange") => DependencyProtocol::Redis,
                 Some("http_exchange") => DependencyProtocol::Http,
@@ -300,6 +329,24 @@ impl RequestContracts {
                 }
             };
             for rule in self.selected(case, &target, protocol) {
+                let native_protocol = if protocol == DependencyProtocol::Redis {
+                    crate::policy::Protocol::Redis
+                } else {
+                    crate::policy::Protocol::Http
+                };
+                let database = event["database"]
+                    .as_i64()
+                    .map(crate::policy::Database::Index);
+                if !self.native_rule_scope_matches(
+                    &rule.id,
+                    Some(case),
+                    native_protocol,
+                    &target,
+                    database.as_ref(),
+                    event["username"].as_str(),
+                ) {
+                    continue;
+                }
                 let matches = if let Some(super::redis_value::RedisSelector::Requests(selector)) =
                     &rule.redis
                 {
@@ -379,6 +426,7 @@ impl RequestContracts {
                         .unwrap_or_default(),
                 }
             })
+            .chain(self.unified_reports(&state))
             .collect()
     }
     #[allow(clippy::too_many_arguments)]
@@ -397,7 +445,14 @@ impl RequestContracts {
             .selected(case, target, DependencyProtocol::Http)
             .into_iter()
             .filter(|r| {
-                r.http.as_ref().is_some_and(|h| {
+                self.native_rule_scope_matches(
+                    &r.id,
+                    Some(case),
+                    crate::policy::Protocol::Http,
+                    target,
+                    None,
+                    None,
+                ) && r.http.as_ref().is_some_and(|h| {
                     h.multipart.is_some()
                         && h.method == method
                         && super::pattern::path_pattern_matches(&h.path, path)

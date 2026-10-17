@@ -31,9 +31,9 @@ async fn sqlx_tuple_in_matches_all_protocol_pairs_with_projection_and_fresh_bind
                         record
                     };
                     let (temp, addr, runtime, task) = fixture(&[source(7), source(8)], policy).await;
-                    let capture = temp.path().join("case-id/dependencies.jsonl");
+                    let capture = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
                     let original = std::fs::read(&capture).unwrap();
-                    let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+                    let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
                     let target = "SELECT t.title AS title,t.id AS id FROM tasks t WHERE (t.kind,t.namespace) IN ((?,?),(?,?),(?,?)) AND t.tenant=? ORDER BY id LIMIT 1";
                     let mut compilations = 0;
                     for (attempt, tenant) in [7_i64,999,8,8].into_iter().enumerate() {
@@ -82,7 +82,13 @@ async fn sqlx_tuple_prepare_is_injective_and_execute_checks_row_pairing() {
             ),
         );
         let (temp, addr, runtime, task) = fixture(&[record], true).await;
-        let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         let target = "SELECT id FROM tasks WHERE (kind,uid) IN ((?,2),(1,?)) AND tenant=?";
         assert!(
             sqlx::query(target)
@@ -121,7 +127,7 @@ async fn sqlx_workspace_reference_tuples_match_nine_and_eighteen_row_permutation
                 json!([{"name":"id","family":"integer","sql_type":"INT"}]),
                 json!([[{"kind":"integer","value":42}]])));
             let (temp,addr,runtime,task) = fixture(&[record], true).await;
-            let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+            let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
             let target = format!("SELECT id FROM task_resources_0007 WHERE kind=? AND is_active=? AND (user_id,namespace,name) IN ({})", vec!["(?,?,?)";count].join(","));
             let mut query = sqlx::query(&target).bind("Workspace").bind(1_i32);
             for i in (0..count).rev() {

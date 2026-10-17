@@ -30,12 +30,14 @@ impl Fixture {
             "other",
             "other.example.com:6379,shared.example.com:6379",
         );
-        let project = directory.path().join("project.yaml");
-        let rules = directory.path().join("source-traffic-policy.yaml");
+        let managed = directory.path().join(".traffic-e2e");
+        fs::create_dir(&managed).unwrap();
+        let project = managed.join("project.yaml");
+        let rules = managed.join("policy.yaml");
         fs::write(
             &project,
             format!(
-                "project:\n  recording:\n    source_traffic_policy: source-traffic-policy.yaml\nrecorder:\n  dns_mock:\n    enabled: true\n    bypass_strategies:\n    - strategy: breeze\n      snapshot_dir: {}\n  tcp_gateway:\n    enabled: true\n",
+                "project:\n  policy: .traffic-e2e/policy.yaml\nrecorder:\n  dns_mock:\n    enabled: true\n    bypass_strategies:\n    - strategy: breeze\n      snapshot_dir: {}\n  tcp_gateway:\n    enabled: true\n",
                 snapshot_dir.display()
             ),
         )

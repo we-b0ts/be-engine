@@ -25,8 +25,20 @@ impl DynamicValues {
             return None;
         }
         let endpoint = context.identity.target.as_ref()?;
-        let rules = self.selected(case_id, endpoint);
-        if rules.is_empty() {
+        let database = context
+            .identity
+            .database
+            .as_ref()
+            .map(|value| crate::policy::Database::Name(value.clone()));
+        let scope = super::scopes::ResourceContext {
+            protocol: crate::policy::Protocol::Mysql,
+            target: endpoint,
+            database: database.as_ref(),
+            username: context.identity.username.as_deref(),
+            operation: context.command,
+        };
+        let rules = self.selected_scoped(case_id, scope, true);
+        if rules.is_empty() && self.selected_scoped(case_id, scope, false).is_empty() {
             return None;
         }
         Some((|| {
@@ -66,7 +78,7 @@ impl DynamicValues {
                 self.check_pair(case_id, rule, &pair, &decision)?;
                 decision.pairs.push((rule.id.clone(), pair));
             }
-            let pairs = self.pairs(case_id, endpoint, &decision);
+            let pairs = self.scoped_pairs(case_id, scope, &decision);
             Ok(MysqlNormalization {
                 source_sql: normalize_sql(context.recorded_sql, &pairs, false)?,
                 source_params: normalize_params(context.recorded, &pairs, false)?,

@@ -4,7 +4,7 @@ use redis_value_tests::{request, spawn};
 
 #[tokio::test]
 async fn redis_get_del_on_pooled_connections_keeps_lane_order_across_response_delivery() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
     let case = temp.path().join("case");
     std::fs::create_dir_all(&case).unwrap();
     let lane = Uuid::new_v4();

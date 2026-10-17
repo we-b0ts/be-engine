@@ -59,6 +59,7 @@ impl MemcachedTimestampRulePlan {
     }
 
     pub fn apply(self) -> Result<MemcachedTimestampRuleReport> {
+        crate::policy::retired_authoring()?;
         let current = fs::read_to_string(&self.policy_path).with_context(|| {
             format!(
                 "failed to reread replay policy {}",
@@ -81,6 +82,7 @@ impl MemcachedTimestampRulePlan {
 pub fn plan_memcached_timestamp_rule(
     feedback: MemcachedTimestampRuleFeedback,
 ) -> Result<MemcachedTimestampRulePlan> {
+    crate::policy::retired_authoring()?;
     let original = fs::read_to_string(&feedback.policy_path).with_context(|| {
         format!(
             "failed to read replay policy {}",
@@ -233,35 +235,8 @@ mod tests {
     }
 
     #[test]
-    fn plans_and_applies_a_minimal_cache_service_rule() {
-        let temp = tempfile::tempdir().unwrap();
-        let policy_path = temp.path().join("verification.yaml");
-        fs::write(
-            &policy_path,
-            "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
-        )
-        .unwrap();
-
-        let plan = plan_memcached_timestamp_rule(feedback(policy_path.clone())).unwrap();
-        assert_eq!(plan.report().fixed_tolerance_seconds, 5);
-        assert_eq!(plan.report().resource_kind, "cache_service");
-        assert_eq!(plan.report().port, 15138);
-        assert!(plan.report().changed);
-        assert!(plan.updated.contains("kind: cache_service"));
-        assert!(plan.updated.contains("port: 15138"));
-        assert!(plan.updated.contains("50:"));
-        assert!(!plan.updated.contains("target: {}"));
-        assert!(!plan.updated.contains("namespace:"));
-        assert!(!plan.updated.contains("tolerance"));
-
-        let report = plan.apply().unwrap();
-        assert!(report.applied);
-        let applied = fs::read_to_string(&policy_path).unwrap();
-        assert!(applied.contains("user-info-loading-time"));
-        super::super::super::config::load_replay_policy(&policy_path).unwrap();
-
-        let reused = plan_memcached_timestamp_rule(feedback(policy_path)).unwrap();
-        assert!(reused.report().reused_existing);
-        assert!(!reused.report().changed);
+    fn retired_memcached_timestamp_planner_cannot_create_a_parallel_policy() {
+        let fixture = super::super::tests::RetiredFixture::new();
+        fixture.check(|| plan_memcached_timestamp_rule(feedback(fixture.policy.clone())));
     }
 }

@@ -58,9 +58,9 @@ fn fixture() -> (
         request: root.join("request.json"),
         expected_response: root.join("expected.json"),
         actual_response: root.join("actual.json"),
-        policy: root.join(".traffic-e2e/verification.yaml"),
+        policy: root.join(".traffic-e2e/policy.yaml"),
     };
-    fs::write(
+    crate::replay::write_policy_fixture(
         &options.policy,
         "# retained\nversion: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
@@ -110,6 +110,22 @@ fn fixture() -> (
     (temp, options, feedback)
 }
 
+// This writes an explicit synthetic rule fixture; no production authoring API
+// or fallback accepts the old DTO. Actual assertions use the compiled new AST.
+fn install_jwt_fixture(feedback: ResponseJwtRuleFeedback) -> Result<()> {
+    let mut document = load_replay_policy(&feedback.policy_path)?.document;
+    document
+        .response_rules
+        .json
+        .entry(feedback.api)
+        .or_default()
+        .jwt = feedback.rules;
+    crate::replay::write_policy_fixture(&feedback.policy_path, serde_yaml::to_string(&document)?)
+}
+fn fixture_policy_view(path: &Path) -> Value {
+    serde_json::to_value(load_replay_policy(path).unwrap().document).unwrap()
+}
+
 fn change_body(
     options: &ResponseAssertionOptions,
     expected: bool,
@@ -131,20 +147,11 @@ fn change_body(
 fn response_jwt_plan_apply_preserves_recording_and_checks_fresh_execution() {
     let (_temp, options, feedback) = fixture();
     let original = fs::read(&options.expected_response).unwrap();
-    let plan = plan_response_jwt_rule(feedback).unwrap();
-    assert_eq!(plan.report().matching_cases, 1);
-    assert_eq!(plan.report().selected_difference_cases, 1);
-    assert!(plan.report().requires_fresh_replay);
-    assert!(!plan.report().diff.contains(KEY));
-    assert!(!plan.report().diff.contains("eyJ"));
-    plan.apply().unwrap();
+    install_jwt_fixture(feedback).unwrap();
     assert_eq!(fs::read(&options.expected_response).unwrap(), original);
     let report = assert_recorded_response(copy(&options)).unwrap();
     assert!(report.passed, "{:?}", report.differences);
-    assert_eq!(
-        report.applied_generated_rule_ids,
-        ["response:jwt:POST /connector/token:/access_token"]
-    );
+    assert_eq!(report.applied_body_rule_ids.len(), 1);
     change_body(&options, false, |body| body["token_type"] = json!("other"));
     assert!(!assert_recorded_response(options).unwrap().passed);
 }
@@ -171,7 +178,7 @@ fn response_jwt_rejects_signature_identity_time_and_shape_defects() {
         "identical_old_token",
     ] {
         let (_temp, options, feedback) = fixture();
-        plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
+        install_jwt_fixture(feedback).unwrap();
         let mut value = claims(TARGET);
         let mut key = KEY;
         let mut algorithm = Algorithm::HS256;
@@ -224,7 +231,7 @@ fn response_jwt_rejects_signature_identity_time_and_shape_defects() {
 fn response_jwt_five_second_window_is_inclusive_and_uses_request_anchors() {
     for offset in [-6, -5, 5, 6] {
         let (_temp, options, feedback) = fixture();
-        plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
+        install_jwt_fixture(feedback).unwrap();
         change_body(&options, false, |body| {
             body["access_token"] = json!(token(&claims(TARGET + offset), Algorithm::HS256, KEY))
         });
@@ -235,7 +242,7 @@ fn response_jwt_five_second_window_is_inclusive_and_uses_request_anchors() {
         );
     }
     let (_temp, options, feedback) = fixture();
-    plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
+    install_jwt_fixture(feedback).unwrap();
     let mut response: Value =
         serde_json::from_slice(&fs::read(&options.actual_response).unwrap()).unwrap();
     response.as_object_mut().unwrap().remove("request_sent_at");
@@ -248,75 +255,29 @@ fn response_jwt_five_second_window_is_inclusive_and_uses_request_anchors() {
 }
 
 #[test]
-fn response_jwt_authoring_rejects_stale_evidence_policy_keys_and_incomplete_scope() {
-    for defect in ["response", "detail", "policy", "key", "incomplete", "scope"] {
-        let (temp, options, mut feedback) = fixture();
-        let original = fs::read(&options.policy).unwrap();
-        let plan = if matches!(defect, "incomplete" | "scope") {
-            None
-        } else {
-            Some(
-                plan_response_jwt_rule(ResponseJwtRuleFeedback {
-                    policy_path: feedback.policy_path.clone(),
-                    api: feedback.api.clone(),
-                    rules: feedback.rules.clone(),
-                    evidence: feedback.evidence.clone(),
-                })
-                .unwrap(),
-            )
-        };
-        match defect {
-            "response" => {
-                let mut bytes = fs::read(&options.actual_response).unwrap();
-                bytes.push(b' ');
-                fs::write(&options.actual_response, bytes).unwrap();
-            }
-            "detail" => fs::write(temp.path().join("detail.json"), "{}").unwrap(),
-            "policy" => {
-                let mut bytes = original.clone();
-                bytes.push(b' ');
-                fs::write(&options.policy, bytes).unwrap();
-            }
-            "key" => fs::write(
-                temp.path().join(".traffic-e2e/local/target.env"),
-                "SECRET_KEY=changed-key\n",
-            )
-            .unwrap(),
-            "incomplete" => {
-                let path = temp.path().join("aggregate.json");
-                let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-                value["complete"] = json!(false);
-                write(&path, &value);
-            }
-            "scope" => feedback.api = "PUT /connector/token".into(),
-            _ => unreachable!(),
-        }
-        if defect == "key" {
-            GeneratedValueRulePlan::ensure_evidence_current(
-                &plan.as_ref().unwrap().evidence_witnesses(),
-            )
-            .unwrap(); // Rotating a key does not change the frozen signed files.
-        }
-        assert!(plan_response_jwt_rule(feedback).is_err(), "{defect}");
-        if let Some(plan) = plan {
-            assert!(plan.apply().is_err(), "{defect}");
-        }
-        if defect != "policy" {
-            assert_eq!(fs::read(&options.policy).unwrap(), original);
-        }
-    }
+fn old_response_jwt_authoring_is_retired_without_writing() {
+    let (_temp, options, feedback) = fixture();
+    let original = fs::read(&options.policy).unwrap();
+    let error = plan_response_jwt_rule(feedback).err().unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("legacy rule authoring is retired")
+    );
+    assert_eq!(fs::read(&options.policy).unwrap(), original);
 }
 
 #[test]
 fn response_jwt_wildcard_binds_uuid_jti_and_rejects_many_to_one() {
     let (_temp, options, feedback) = fixture();
-    plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
-    let mut policy: Value = serde_yaml::from_slice(&fs::read(&options.policy).unwrap()).unwrap();
+    install_jwt_fixture(feedback).unwrap();
+    let mut policy: Value = fixture_policy_view(&options.policy);
     policy["response_rules"]["json"]["POST /connector/token"]["jwt"][0]["pointer"] =
         json!("/items/*/token");
     policy["response_rules"]["json"]["POST /connector/token"]["jwt"][0]["dynamic_claims"] =
         json!(["/jti"]);
-    fs::write(&options.policy, serde_yaml::to_string(&policy).unwrap()).unwrap();
+    crate::replay::write_policy_fixture(&options.policy, serde_yaml::to_string(&policy).unwrap())
+        .unwrap();
     let left = uuid::Uuid::new_v4().to_string();
     let right = uuid::Uuid::new_v4().to_string();
     let make = |time, nonce: &str| {
@@ -355,12 +316,15 @@ fn response_jwt_all_hmac_algorithms_and_strict_declarations() {
         ("HS512", Algorithm::HS512),
     ] {
         let (_temp, options, feedback) = fixture();
-        plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
-        let mut policy: Value =
-            serde_yaml::from_slice(&fs::read(&options.policy).unwrap()).unwrap();
+        install_jwt_fixture(feedback).unwrap();
+        let mut policy: Value = fixture_policy_view(&options.policy);
         policy["response_rules"]["json"]["POST /connector/token"]["jwt"][0]["algorithm"] =
             json!(name);
-        fs::write(&options.policy, serde_yaml::to_string(&policy).unwrap()).unwrap();
+        crate::replay::write_policy_fixture(
+            &options.policy,
+            serde_yaml::to_string(&policy).unwrap(),
+        )
+        .unwrap();
         change_body(&options, true, |body| {
             body["access_token"] = json!(token(&claims(SOURCE), algorithm, KEY))
         });
@@ -378,9 +342,8 @@ fn response_jwt_all_hmac_algorithms_and_strict_declarations() {
         "literal_key",
     ] {
         let (_temp, options, feedback) = fixture();
-        plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
-        let mut policy: Value =
-            serde_yaml::from_slice(&fs::read(&options.policy).unwrap()).unwrap();
+        install_jwt_fixture(feedback).unwrap();
+        let mut policy: Value = fixture_policy_view(&options.policy);
         let rules = &mut policy["response_rules"]["json"]["POST /connector/token"];
         match defect {
             "random_overlap" | "ancestor_overlap" => {
@@ -394,8 +357,14 @@ fn response_jwt_all_hmac_algorithms_and_strict_declarations() {
             }
             _ => unreachable!(),
         }
-        fs::write(&options.policy, serde_yaml::to_string(&policy).unwrap()).unwrap();
-        assert!(load_replay_policy(&options.policy).is_err(), "{defect}");
+        let written = crate::replay::write_policy_fixture(
+            &options.policy,
+            serde_yaml::to_string(&policy).unwrap(),
+        );
+        assert!(
+            written.is_err() || load_replay_policy(&options.policy).is_err(),
+            "{defect}"
+        );
     }
 }
 
@@ -405,7 +374,7 @@ fn response_jwt_rejects_duplicate_claims_and_headers_and_missing_signing_input()
     use hmac::{Hmac, Mac};
     for defect in ["claims", "header", "key"] {
         let (temp, options, feedback) = fixture();
-        plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
+        install_jwt_fixture(feedback).unwrap();
         if defect == "key" {
             fs::remove_file(temp.path().join(".traffic-e2e/local/target.env")).unwrap();
         } else {
@@ -450,7 +419,7 @@ async fn response_jwt_verifies_a_fresh_token_issued_over_http() {
     use hyper::{Request, Response, service::service_fn};
     use hyper_util::rt::{TokioExecutor, TokioIo};
     let (_temp, options, feedback) = fixture();
-    plan_response_jwt_rule(feedback).unwrap().apply().unwrap();
+    install_jwt_fixture(feedback).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {

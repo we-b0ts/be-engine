@@ -256,6 +256,7 @@ async fn truncated_confirmation_is_never_published_as_subscription_proof() {
         cache_snapshot_key: None,
         cache_snapshot_hit: false,
         started: Instant::now(),
+        request_started_at: Utc::now(),
     };
     record_exchange(
         &state,

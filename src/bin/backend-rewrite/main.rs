@@ -1,7 +1,7 @@
-mod jwt_rule;
 mod review;
 use std::io::Write;
 use std::path::PathBuf;
+mod rule;
 mod rule_args;
 use rule_args::RulePlanArgs;
 use std::process::ExitCode;
@@ -10,20 +10,17 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_e2e::{
-    ResponseBodyCodec, ResponseRuleKind, RewriteCaseDependenciesOptions,
-    RewriteCasePatternApplyOptions, RewriteContext, RewriteNextOptions,
-    RewriteRevalidationRequestOptions, RewriteRouteCause, RewriteRouteOptions,
-    RewriteRulePlanOptions, RewriteTargetQualityOptions, RewriteWorkerConfirmOptions,
-    RewriteWorkerReportOptions, RewriteWorkerTransferOptions, apply_rewrite_case_patterns,
-    apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite, plan_rewrite_rule,
-    query_rewrite_case_dependencies, recover_rewrite, report_rewrite_worker,
+    RewriteCaseDependenciesOptions, RewriteCasePatternApplyOptions, RewriteContext,
+    RewriteNextOptions, RewriteRevalidationRequestOptions, RewriteRouteCause, RewriteRouteOptions,
+    RewriteTargetQualityOptions, RewriteWorkerConfirmOptions, RewriteWorkerReportOptions,
+    RewriteWorkerTransferOptions, apply_rewrite_case_patterns, confirm_rewrite_worker,
+    inventory_rewrite, query_rewrite_case_dependencies, recover_rewrite, report_rewrite_worker,
     request_rewrite_revalidation, resume_rewrite_replay_planning, retry_rewrite_operation,
     route_rewrite, start_rewrite_next, start_rewrite_target_quality, status_rewrite,
     transfer_rewrite_worker, verify_rewrite_repair,
 };
 
 mod config_protocol;
-mod dependency_rule;
 mod evidence;
 mod expert;
 mod project_init;
@@ -127,10 +124,8 @@ enum RewriteCommand {
     CasePattern(CasePatternArgs),
     /// Inspect an issue overview or execute one returned bounded evidence query.
     Evidence(evidence::EvidenceArgs),
-    /// Plan or apply evidence-backed inbound request, dependency request or response rules.
+    /// Plan/apply/recover self-contained rules using current Source-backed evidence.
     Rule(RuleArgs),
-    /// Classify dependency ownership or plan/apply dependency value and scope rules.
-    DependencyRule(dependency_rule::DependencyRuleArgs),
     /// Plan or apply one source-proven Breeze resource capture rule.
     RecorderCapture(recorder_capture::RecorderCaptureArgs),
     /// Submit a source-backed non-target-code attribution for controlled routing.
@@ -233,17 +228,19 @@ enum RuleCommand {
 
 #[derive(Debug, Args)]
 struct RuleApplyArgs {
-    plan_id: String,
+    #[arg(required_unless_present = "plan", conflicts_with = "plan")]
+    plan_id: Option<String>,
+    #[arg(long, value_name = "PLAN_ID")]
+    plan: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum RuleKindArg {
-    Timestamp,
-    Duration,
-    Uuid,
-    Random,
-    Unordered,
-    UnorderedJoinedString,
+impl RuleApplyArgs {
+    fn identifier(&self) -> &str {
+        self.plan
+            .as_deref()
+            .or(self.plan_id.as_deref())
+            .expect("clap requires a plan ID")
+    }
 }
 
 #[derive(Debug, Args)]
@@ -530,55 +527,7 @@ async fn run(cli: Cli) -> Result<()> {
         RewriteCommand::Evidence(args) => {
             print_json(&args.query(RewriteContext { target_root })?, pretty)
         }
-        RewriteCommand::Rule(args) => match args.command {
-            RuleCommand::Plan(args) => print_json(
-                &plan_rewrite_rule(
-                    RewriteContext { target_root },
-                    RewriteRulePlanOptions {
-                        response_jwts: args.response_jwts,
-                        header_dates: args.header_dates,
-                        dynamic_value: args.dynamic_value,
-                        mysql_time: args.mysql_time,
-                        redis_time: args.redis_time,
-                        dependency_request: args.dependency_request,
-                        evidence_id: args.evidence_id,
-                        body_codec: args
-                            .body_codec
-                            .map(Into::into)
-                            .unwrap_or(ResponseBodyCodec::Json),
-                        jwt: args.jwt.options()?,
-                        time: traffic_e2e::ResponseTimeRule::from_options_with_mode(
-                            args.kind.map(Into::into),
-                            args.unit,
-                            args.timestamp_format,
-                            args.timestamp_mode,
-                        )?,
-                        kind: args.kind.map(Into::into),
-                        json_pointer: args.json_pointer,
-                        source_evidence: args.source_evidence,
-                        source_example: args.source_example,
-                        target_example: args.target_example,
-                        separator: args.separator,
-                        unordered_paths: args.unordered_paths,
-                        unordered_joined_string_paths: args.unordered_joined_string_paths,
-                        docx_timestamps: args.docx_timestamps,
-                    },
-                )?,
-                pretty,
-            ),
-            RuleCommand::Apply(args) => print_json(
-                &apply_rewrite_rule(RewriteContext { target_root }, &args.plan_id)?,
-                pretty,
-            ),
-            RuleCommand::Recover(args) => print_json(
-                &traffic_e2e::recover_rewrite_rule_plan(
-                    RewriteContext { target_root },
-                    &args.plan_id,
-                )?,
-                pretty,
-            ),
-        },
-        RewriteCommand::DependencyRule(args) => dependency_rule::run(target_root, args, pretty),
+        RewriteCommand::Rule(args) => rule::run(target_root, args, pretty),
         RewriteCommand::RecorderCapture(args) => recorder_capture::run(target_root, args, pretty),
         RewriteCommand::Route(args) => {
             let cause = if matches!(args.cause, RouteCauseArg::UnrecordedIp) {
@@ -681,19 +630,6 @@ async fn run(cli: Cli) -> Result<()> {
             &recover_rewrite(RewriteContext { target_root }).await?,
             pretty,
         ),
-    }
-}
-
-impl From<RuleKindArg> for ResponseRuleKind {
-    fn from(value: RuleKindArg) -> Self {
-        match value {
-            RuleKindArg::Timestamp => Self::Timestamp,
-            RuleKindArg::Duration => Self::Duration,
-            RuleKindArg::Uuid => Self::Uuid,
-            RuleKindArg::Random => Self::Random,
-            RuleKindArg::Unordered => Self::Unordered,
-            RuleKindArg::UnorderedJoinedString => Self::UnorderedJoinedString,
-        }
     }
 }
 

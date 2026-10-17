@@ -7,10 +7,14 @@ use anyhow::{Context, Result, ensure};
 mod cache;
 mod engine;
 
-const TRAFFIC_POLICY_PATHSPECS: &[&str] = &[
-    ":(exclude).traffic-e2e/source-traffic-policy.yaml",
-    ":(exclude).traffic-e2e/verification.yaml",
-];
+pub(super) fn policy_file(target_root: &Path) -> Result<std::path::PathBuf> {
+    let project = target_root.join(".traffic-e2e/project.yaml");
+    if project.is_file() {
+        crate::config::resolve_unified_policy_path(&project)
+    } else {
+        Ok(target_root.join(".traffic-e2e/policy.yaml"))
+    }
+}
 
 const RUNTIME_PROGRESS_PATHSPECS: &[&str] = &[
     ":(exclude).traffic-e2e/progress.yaml",
@@ -39,17 +43,13 @@ pub(super) fn replay_identity(target_root: &Path) -> Result<String> {
     let mut hash = Fnv1a::default();
     hash.update(b"rewrite-replay-identity-v1");
     hash.update(review_fingerprint(target_root)?.as_bytes());
-    let policy = if target_root.join(".traffic-e2e/project.yaml").is_file() {
-        crate::e2e_run::resolve_project(target_root)?
-            .1
-            .replay_policy
-    } else {
-        target_root.join(".traffic-e2e/verification.yaml")
-    };
+    let policy = policy_file(target_root)?;
     match fs::read(&policy) {
         Ok(bytes) => {
-            hash.update(b"verification-policy");
-            hash.update(&bytes);
+            let policy = crate::policy::parse_policy(std::str::from_utf8(&bytes)?)?;
+            let compiled = crate::policy::compile_policy(&policy)?;
+            hash.update(b"runtime-policy-effects-v1");
+            hash.update(compiled.fingerprints.runtime.as_bytes());
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             hash.update(b"no-verification-policy")
@@ -81,9 +81,10 @@ fn repository_files_hash(target_root: &Path, review: bool) -> Result<Fnv1a> {
     if let Some(hash) = cache::repository_files(target_root, review) {
         return Ok(hash);
     }
+    let policy = policy_file(target_root)?;
     let managed = crate::e2e_run::resolve_managed_directories(target_root)?;
     if managed.len() == 1 {
-        let hash = directory_files_hash(&managed[0].root, review)?;
+        let hash = directory_files_hash(&managed[0].root, review, &policy)?;
         cache::insert_repository_files(target_root.to_path_buf(), review, hash);
         return Ok(hash);
     }
@@ -93,7 +94,7 @@ fn repository_files_hash(target_root: &Path, review: bool) -> Result<Fnv1a> {
         hash.update(directory.target_relative.as_os_str().as_encoded_bytes());
         hash.update(&[0]);
         hash.update(
-            directory_files_hash(&directory.root, review)?
+            directory_files_hash(&directory.root, review, &policy)?
                 .finish()
                 .as_bytes(),
         );
@@ -107,7 +108,7 @@ pub(super) fn with_repository_cache<T>(operation: impl FnOnce() -> T) -> T {
     cache::scope(operation)
 }
 
-fn directory_files_hash(target_root: &Path, review: bool) -> Result<Fnv1a> {
+fn directory_files_hash(target_root: &Path, review: bool, policy: &Path) -> Result<Fnv1a> {
     let mut paths_args = vec![
         "ls-files",
         "--cached",
@@ -120,13 +121,15 @@ fn directory_files_hash(target_root: &Path, review: bool) -> Result<Fnv1a> {
     ];
     paths_args.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
     paths_args.push(crate::config::regression::GIT_PATHSPEC);
-    if review {
-        paths_args.extend_from_slice(TRAFFIC_POLICY_PATHSPECS);
-    }
     let listed = git_bytes(target_root, &paths_args)?;
     let mut paths = listed
         .split(|byte| *byte == 0)
         .filter(|path| !path.is_empty())
+        .filter(|path| {
+            !review
+                || std::str::from_utf8(path)
+                    .is_ok_and(|relative| target_root.join(relative) != policy)
+        })
         .collect::<Vec<_>>();
     paths.sort_unstable();
     paths.dedup();
@@ -144,9 +147,10 @@ pub(super) fn matches_revision(target_root: &Path, revision: &str) -> Result<boo
     if let Some(matches) = cache::revision_matches(target_root, revision) {
         return Ok(matches);
     }
+    let policy = policy_file(target_root)?;
     let mut matches = true;
     for directory in crate::e2e_run::resolve_managed_directories(target_root)? {
-        if !directory_matches_revision(&directory.root, revision)? {
+        if !directory_matches_revision(&directory.root, revision, &policy)? {
             matches = false;
             break;
         }
@@ -155,7 +159,7 @@ pub(super) fn matches_revision(target_root: &Path, revision: &str) -> Result<boo
     Ok(matches)
 }
 
-fn directory_matches_revision(target_root: &Path, revision: &str) -> Result<bool> {
+fn directory_matches_revision(target_root: &Path, revision: &str, policy: &Path) -> Result<bool> {
     let mut diff = vec![
         "diff",
         "--no-ext-diff",
@@ -168,9 +172,14 @@ fn directory_matches_revision(target_root: &Path, revision: &str) -> Result<bool
         crate::internal_runtime::LOCAL_GIT_PATHSPEC,
         crate::config::regression::GIT_PATHSPEC,
     ];
-    diff.extend_from_slice(TRAFFIC_POLICY_PATHSPECS);
     diff.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
-    if !git_bytes(target_root, &diff)?.is_empty() {
+    if git_bytes(target_root, &diff)?
+        .split(|b| *b == 0)
+        .filter(|p| !p.is_empty())
+        .any(|p| {
+            std::str::from_utf8(p).map_or(true, |relative| target_root.join(relative) != policy)
+        })
+    {
         return Ok(false);
     }
     let mut untracked = vec![
@@ -183,9 +192,13 @@ fn directory_matches_revision(target_root: &Path, revision: &str) -> Result<bool
         crate::internal_runtime::LOCAL_GIT_PATHSPEC,
         crate::config::regression::GIT_PATHSPEC,
     ];
-    untracked.extend_from_slice(TRAFFIC_POLICY_PATHSPECS);
     untracked.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
-    Ok(git_bytes(target_root, &untracked)?.is_empty())
+    Ok(!git_bytes(target_root, &untracked)?
+        .split(|b| *b == 0)
+        .filter(|p| !p.is_empty())
+        .any(|p| {
+            std::str::from_utf8(p).map_or(true, |relative| target_root.join(relative) != policy)
+        }))
 }
 
 fn hash_repository_path(target_root: &Path, relative: &str, hash: &mut Fnv1a) -> Result<()> {
@@ -261,10 +274,13 @@ pub(super) fn project_config_revision(target_root: &Path) -> Result<String> {
 }
 
 pub(super) fn source_traffic_policy_revision(target_root: &Path) -> Result<String> {
-    config_file_revision(
-        target_root,
-        ".traffic-e2e/source-traffic-policy.yaml",
-        "source traffic policy",
+    let path = policy_file(target_root)?;
+    let source = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read traffic policy {}", path.display()))?;
+    Ok(
+        crate::policy::compile_policy(&crate::policy::parse_policy(&source)?)?
+            .fingerprints
+            .capture,
     )
 }
 
@@ -355,7 +371,7 @@ mod tests {
         )
         .unwrap();
         fs::write(
-            repository.path().join(".traffic-e2e/verification.yaml"),
+            repository.path().join(".traffic-e2e/policy.yaml"),
             "version: 2\n",
         )
         .unwrap();
@@ -412,7 +428,7 @@ mod tests {
         assert_eq!(repository_fingerprint(repository.path()).unwrap(), baseline);
 
         fs::write(
-            repository.path().join(".traffic-e2e/verification.yaml"),
+            repository.path().join(".traffic-e2e/policy.yaml"),
             "version: 2\nresponses: changed\n",
         )
         .unwrap();
@@ -420,7 +436,7 @@ mod tests {
 
         git_ok(
             repository.path(),
-            &["checkout", "--", ".traffic-e2e/verification.yaml"],
+            &["checkout", "--", ".traffic-e2e/policy.yaml"],
         );
         fs::write(
             repository.path().join("src/lib.rs"),
@@ -462,7 +478,7 @@ mod tests {
 
     #[test]
     fn traffic_policy_changes_affect_verification_but_not_review() {
-        for policy_name in ["source-traffic-policy.yaml", "verification.yaml"] {
+        for policy_name in [".traffic-e2e/policy.yaml", "contracts/rules.yaml"] {
             assert_traffic_policy_fingerprints(policy_name);
         }
     }
@@ -472,7 +488,21 @@ mod tests {
         let root = repository.path();
         fs::create_dir_all(root.join(".traffic-e2e")).unwrap();
         fs::write(root.join("lib.rs"), "pub fn value() {}\n").unwrap();
-        git_ok(root, &["init", "-q"]);
+        crate::rewrite::test_support::install_project_config(
+            root,
+            "integration",
+            crate::rewrite::test_support::managed_test_recorder(),
+            None,
+        );
+        let project = root.join(".traffic-e2e/project.yaml");
+        let mut document: serde_yaml::Value =
+            serde_yaml::from_str(&fs::read_to_string(&project).unwrap()).unwrap();
+        document["project"]["policy"] = serde_yaml::Value::String(policy_name.into());
+        fs::write(&project, serde_yaml::to_string(&document).unwrap()).unwrap();
+        fs::remove_file(root.join(".traffic-e2e/policy.yaml")).unwrap();
+        let policy = root.join(policy_name);
+        fs::create_dir_all(policy.parent().unwrap()).unwrap();
+        git_ok(root, &["init", "-q", "-b", "integration"]);
         git_ok(root, &["config", "user.email", "test@example.com"]);
         git_ok(root, &["config", "user.name", "Test"]);
         git_ok(root, &["add", "."]);
@@ -482,7 +512,7 @@ mod tests {
         let code = code_fingerprint(root).unwrap();
         let review = review_fingerprint(root).unwrap();
         let verification = repository_fingerprint(root).unwrap();
-        let policy = root.join(".traffic-e2e").join(policy_name);
+        let policy = root.join(policy_name);
         fs::write(&policy, "version: 2\n").unwrap();
         let with_policy = repository_fingerprint(root).unwrap();
         for stage in ["untracked", "staged", "committed", "modified", "deleted"] {

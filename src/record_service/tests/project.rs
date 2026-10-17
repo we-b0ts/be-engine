@@ -2,15 +2,16 @@ use super::*;
 use std::path::PathBuf;
 
 pub(super) fn fixture(temp: &tempfile::TempDir) -> PathBuf {
-    let path = temp.path().join("project.yaml");
+    let directory = temp.path().join(".traffic-e2e");
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("project.yaml");
     std::fs::write(
         &path,
         r#"version: 18
 project:
   target:
     startup_timeout_seconds: 1
-  recording:
-    source_traffic_policy: source-traffic-policy.yaml
+  policy: .traffic-e2e/policy.yaml
 recorder:
   dns_mock:
     enabled: true
@@ -47,20 +48,7 @@ recorder:
 "#,
     )
     .unwrap();
-    std::fs::write(
-        temp.path().join("source-traffic-policy.yaml"),
-        r#"version: 2
-http:
-  case_path_patterns: [/api/teams/*/skills]
-http_response_rewrite:
-- name: sandbox.example
-  rules:
-  - path_pattern: GET /sandboxes/*
-    pointer: /base_url
-    source_evidence: source consumes the sandbox URL
-"#,
-    )
-    .unwrap();
+    std::fs::write(directory.join("policy.yaml"), super::policy::POLICY).unwrap();
     path
 }
 
@@ -82,8 +70,8 @@ fn project_recording_settings_and_policy_survive_online_routing() {
     let path = fixture(&temp);
     let mut options = options(&path);
     options.data_root = temp.path().join("mounted-data");
-    // A separately mounted policy must override the reference without double application.
-    options.source_traffic_policy = Some(temp.path().join("source-traffic-policy.yaml"));
+    // An explicit same policy is accepted once; it cannot override project.policy.
+    options.policy = Some(path.parent().unwrap().join("policy.yaml"));
     let config = options.config().unwrap();
     assert_eq!(options.startup_timeout_seconds, 300);
     assert_eq!(config.recording.post_ready_max_wait_ms, 30_000);
@@ -166,4 +154,31 @@ fn missing_project_or_invalid_post_ready_cap_fails_configuration() {
     }
     std::fs::remove_file(&path).unwrap();
     assert!(options(&path).config().is_err());
+}
+
+#[test]
+fn explicit_policy_cannot_override_the_project_authority() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = fixture(&temp);
+    let mut configured = options(&path);
+    let other = temp.path().join("other-policy.yaml");
+    std::fs::write(&other, super::policy::POLICY).unwrap();
+    configured.policy = Some(other);
+    assert!(
+        configured
+            .config()
+            .unwrap_err()
+            .to_string()
+            .contains("same file as project.policy")
+    );
+    assert!(
+        OptionsCli::try_parse_from([
+            "traffic-e2e record",
+            "--source-traffic-policy",
+            "old.yaml",
+            "--",
+            "true"
+        ])
+        .is_err()
+    );
 }

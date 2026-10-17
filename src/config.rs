@@ -29,12 +29,16 @@ mod initialization;
 mod managed_fields;
 mod motan_gateway;
 pub(crate) mod mysql_tables;
+pub(crate) mod native_policy;
 pub(crate) mod process_owned_dependencies;
 mod recording;
 mod repository_initialization;
 mod repository_protocol;
 pub(crate) mod rule_document;
 pub(crate) mod source_traffic_policy;
+mod unified_policy_path;
+pub use unified_policy_path::resolve_unified_policy_path;
+pub(crate) use unified_policy_path::resolve_unified_policy_root;
 
 pub use allowed_unused_http::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
@@ -97,9 +101,7 @@ pub use repository_initialization::{
 pub use repository_protocol::{
     MotanProtocolConfigOptions, MotanProtocolConfigResult, enable_repository_motan_protocol,
 };
-pub use source_traffic_policy::{
-    SOURCE_TRAFFIC_POLICY_FILE, SourceTrafficBreezeCaptureConfig, SourceTrafficPolicyConfig,
-};
+pub use source_traffic_policy::{SourceTrafficBreezeCaptureConfig, SourceTrafficPolicyConfig};
 pub const DEFAULT_DNS_MOCK_PORT: u16 = 4_053;
 pub const DEFAULT_TCP_GATEWAY_PORT: u16 = 4_001;
 pub const DEFAULT_UDP_GATEWAY_PORT: u16 = 4_002;
@@ -255,31 +257,11 @@ pub struct TlsConfig {
 
 impl AppConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
-        Self::load_with_source_traffic_policy(path, None)
-    }
-
-    pub fn load_with_source_traffic_policy(
-        path: impl AsRef<Path>,
-        policy_path: Option<&Path>,
-    ) -> Result<Self> {
         let path = path.as_ref();
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config {}", path.display()))?;
         let mut config = Self::parse_static(path, &raw)?;
-        let reference: ProjectPolicyReferenceDocument =
-            serde_yaml::from_str(&raw).with_context(|| {
-                format!(
-                    "failed to parse project policy reference from {}",
-                    path.display()
-                )
-            })?;
-        let rules_path = match policy_path {
-            Some(path) => path.to_owned(),
-            None => source_traffic_policy::resolve_from_project_config(
-                path,
-                &reference.project.recording.source_traffic_policy,
-            )?,
-        };
+        let rules_path = resolve_unified_policy_path(path)?;
         let rules = SourceTrafficPolicyConfig::load(rules_path)?;
         rules.apply_to(&mut config)?;
         config
@@ -371,23 +353,8 @@ impl AppConfig {
 }
 
 #[derive(Debug, Deserialize)]
-struct ProjectPolicyReferenceDocument {
-    project: ProjectPolicyReference,
-}
-
-#[derive(Debug, Deserialize)]
 struct RecorderConfigDocument {
     recorder: AppConfig,
-}
-
-#[derive(Debug, Deserialize)]
-struct ProjectPolicyReference {
-    recording: ProjectRecordingPolicyReference,
-}
-
-#[derive(Debug, Deserialize)]
-struct ProjectRecordingPolicyReference {
-    source_traffic_policy: PathBuf,
 }
 
 impl Default for HttpConfig {
@@ -544,14 +511,24 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("config")
             .join("project.example.yaml");
-        AppConfig::load(path).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let managed = temp.path().join(".traffic-e2e");
+        std::fs::create_dir(&managed).unwrap();
+        let project = managed.join("project.yaml");
+        std::fs::copy(path, &project).unwrap();
+        std::fs::write(
+            managed.join("policy.yaml"),
+            native_policy::empty_policy().unwrap(),
+        )
+        .unwrap();
+        AppConfig::load(project).unwrap();
     }
 
     #[test]
     fn loads_example_source_traffic_policy() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("config")
-            .join("source-traffic-policy.example.yaml");
+            .join("policy.example.yaml");
         SourceTrafficPolicyConfig::load(path).unwrap();
     }
 

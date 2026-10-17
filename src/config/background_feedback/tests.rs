@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::config::SourceTrafficPolicyConfig;
 
-const REVISION: &str = "0123456789abcdef";
+const REVISION: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 const EVIDENCE: &str = "src/config/refresh.rs:42 process-level scheduled refresh";
 
 struct Fixture {
@@ -173,11 +173,11 @@ fn plan_and_apply_add_a_valid_idempotent_managed_rule() {
     assert!(applied.applied);
 
     let raw = fs::read_to_string(&fixture.config).unwrap();
-    assert!(raw.contains("Managed by the backend-rewrite coordinator"));
-    assert!(raw.contains("process_owned_dependencies:"));
+    assert!(raw.contains("format: traffic-policy/v1"));
+    assert!(raw.contains("kind: process_owned"));
     assert!(raw.contains("protocol: http"));
     assert!(!raw.contains("response_role"));
-    assert!(!raw.contains("source_revision"));
+    assert!(raw.contains("source_revision:"));
     assert!(raw.contains(EVIDENCE));
     let config = SourceTrafficPolicyConfig::load(&fixture.config).unwrap();
     assert_eq!(config.process_owned_dependencies.len(), 1);
@@ -349,6 +349,6 @@ fn rejects_unknown_fields_in_the_source_traffic_policy() {
         plan_background_dependency(fixture.feedback())
             .unwrap_err()
             .to_string()
-            .contains("failed to parse source traffic policy")
+            .contains("failed to parse unified traffic policy")
     );
 }

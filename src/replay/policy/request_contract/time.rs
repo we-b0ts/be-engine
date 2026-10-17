@@ -1,7 +1,7 @@
 //! Exact request timestamp parsing and independently captured clock validation.
 use super::*;
-use crate::replay::assertion::time::{compare_timestamp_delta, date_nanos, numeric_nanos_scaled};
-use chrono::{FixedOffset, NaiveDateTime, Timelike};
+use crate::value_contract::time::{self, TimeMode, TimestampFormat};
+use chrono::{FixedOffset, Timelike};
 use config::{RequestTimestampFormat as Format, TimeField};
 
 /// A validated timestamp pair and its explicitly declared relationship scope.
@@ -10,16 +10,6 @@ pub(super) struct ComparedTime {
     pub(super) source: i128,
     pub(super) actual: i128,
     pub(super) group: Option<String>,
-}
-
-// JWT contracts retain their seconds interface; request times use integer nanoseconds.
-pub(super) fn number(value: &Value) -> Result<f64> {
-    let value = value.as_f64().context("timestamp must be numeric")?;
-    ensure!(
-        value.is_finite() && (-62_135_596_800.0..=253_402_300_799.0).contains(&value),
-        "timestamp must be finite Unix seconds within years 1..9999"
-    );
-    Ok(value)
 }
 
 pub(super) fn offset(rule: &TimeField) -> Result<FixedOffset> {
@@ -52,13 +42,10 @@ pub(super) fn compare(
     rule: &TimeField,
     anchor: crate::replay::assertion::RequestTimes,
 ) -> Result<ComparedTime> {
-    ensure!(
-        source.is_i64() == actual.is_i64() && source.is_u64() == actual.is_u64(),
-        "timestamp numeric category changed"
-    );
+    time::validate_numeric_category(source, actual)?;
     let pair = (timestamp(source, rule)?, timestamp(actual, rule)?);
     config::tolerance(&rule.tolerance)?;
-    compare_timestamp_delta(pair.0, pair.1, anchor)
+    time::compare_timestamp_nanos(pair.0, pair.1, TimeMode::PreserveRelative, anchor)
         .map_err(|_| anyhow::anyhow!("request timestamp differs from its recorded relative time or is missing its request anchor"))?;
     Ok(ComparedTime {
         source: pair.0,
@@ -69,7 +56,7 @@ pub(super) fn compare(
 
 pub(super) fn timestamp(value: &Value, rule: &TimeField) -> Result<i128> {
     rule.validate()?;
-    let nanos = match rule.format {
+    let (format, utc_offset) = match rule.format {
         Format::Rfc3339 => {
             let parsed = DateTime::parse_from_rfc3339(
                 value
@@ -80,43 +67,23 @@ pub(super) fn timestamp(value: &Value, rule: &TimeField) -> Result<i128> {
                 parsed.nanosecond() < 1_000_000_000,
                 "leap seconds are unsupported"
             );
-            date_nanos(parsed.with_timezone(&Utc))
+            (TimestampFormat::Rfc3339, None)
         }
-        Format::Iso8601Naive => {
-            let text = value
-                .as_str()
-                .context("timestamp must be a naive ISO8601 string")?;
-            ensure!(
-                (19..=29).contains(&text.len())
-                    && text.as_bytes().get(10) == Some(&b'T')
-                    && (text.len() == 19
-                        || text.as_bytes()[19] == b'.'
-                            && text.len() > 20
-                            && text.as_bytes()[20..].iter().all(u8::is_ascii_digit)),
-                "naive ISO8601 requires YYYY-MM-DDTHH:MM:SS[.fraction] without a timezone"
-            );
-            let parsed = NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f")?;
-            ensure!(
-                parsed.nanosecond() < 1_000_000_000,
-                "leap seconds are unsupported"
-            );
-            let parsed = parsed
-                .and_local_timezone(offset(rule)?)
-                .single()
-                .context("invalid naive timestamp")?;
-            date_nanos(parsed.with_timezone(&Utc))
-        }
+        Format::Iso8601Naive => (TimestampFormat::Iso8601Naive, Some(offset(rule)?)),
+        Format::SqlDatetime => (TimestampFormat::SqlDatetime, Some(offset(rule)?)),
+        Format::AmzDate => (TimestampFormat::AmzDate, None),
         format => {
             ensure!(value.is_number(), "timestamp must be numeric");
-            let scale = match format {
-                Format::UnixSeconds => 9,
-                Format::UnixMilliseconds => 6,
-                Format::UnixMicroseconds => 3,
+            let format = match format {
+                Format::UnixSeconds => TimestampFormat::UnixSeconds,
+                Format::UnixMilliseconds => TimestampFormat::UnixMilliseconds,
+                Format::UnixMicroseconds => TimestampFormat::UnixMicroseconds,
                 _ => unreachable!(),
             };
-            numeric_nanos_scaled(value, scale, 1).context("invalid numeric timestamp")?
+            (format, None)
         }
     };
+    let nanos = time::parse_timestamp(value, format, utc_offset)?;
     ensure!(
         (-62_135_596_800_000_000_000..=253_402_300_799_999_999_999).contains(&nanos),
         "timestamp must be within years 1..9999"
@@ -125,20 +92,16 @@ pub(super) fn timestamp(value: &Value, rule: &TimeField) -> Result<i128> {
 }
 
 pub(super) fn validate_relationships(times: &[ComparedTime]) -> Result<()> {
-    for (i, a) in times.iter().enumerate() {
-        for b in &times[i + 1..] {
-            if a.group != b.group {
-                continue;
-            }
-            ensure!(
-                if a.source == b.source {
-                    a.actual == b.actual
-                } else {
-                    (a.actual - a.source).abs_diff(b.actual - b.source) <= 1000
-                },
-                "request time parameter relationship changed"
-            );
-        }
+    let mut groups: BTreeMap<Option<&str>, Vec<(i128, i128)>> = BTreeMap::new();
+    for value in times {
+        groups
+            .entry(value.group.as_deref())
+            .or_default()
+            .push((value.source, value.actual));
+    }
+    for values in groups.values() {
+        time::validate_relationships(values)
+            .context("request time parameter relationship changed")?;
     }
     Ok(())
 }

@@ -1,17 +1,17 @@
 use super::tests::{send_request, spawn_http_replay_with_policy, write_http_case};
 use super::*;
+use crate::replay::policy::test_fixture::ManagedFixtureDirectory as TempDir;
 use serde_json::json;
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-use tempfile::TempDir;
 
 const HOST: &str = "erp.example.test";
 const BODY: &str = "client_id=client&client_secret=private";
 
 async fn fixture() -> (TempDir, PathBuf, PathBuf) {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
     fs::write(
         temp.path().join("recording-run.json"),
         r#"{"status":"completed","run_id":"one"}"#,
@@ -49,8 +49,8 @@ async fn fixture() -> (TempDir, PathBuf, PathBuf) {
 }
 
 fn policy(root: &Path) -> PathBuf {
-    let path = root.join("verification.yaml");
-    fs::write(&path, format!("version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: token\n  protocol: http\n  target: {{host: {HOST}, port: 80}}\n  http: {{method: POST, path: /token}}\n  replay_scope: recording_run\n  source_evidence: 'erp.py:ensure_token caches a shared token with expiry'\n")).unwrap();
+    let path = root.join("policy.yaml");
+    crate::replay::write_policy_fixture(&path, format!("version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: token\n  protocol: http\n  target: {{host: {HOST}, port: 80}}\n  http: {{method: POST, path: /token}}\n  replay_scope: recording_run\n  source_evidence: 'erp.py:ensure_token caches a shared token with expiry'\n")).unwrap();
     path
 }
 
@@ -92,13 +92,13 @@ async fn unmatched_discovers_other_api_without_serving_it_and_plan_apply_enables
     );
     task.abort();
 
-    let path = temp.path().join("verification.yaml");
-    fs::write(
+    let path = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &path,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
     .unwrap();
-    let plan = crate::plan_http_cross_case(crate::HttpCrossCaseFeedback {
+    crate::replay::policy::test_fixture::install_http_cross_case(crate::HttpCrossCaseFeedback {
         policy_path: path.clone(),
         case_source: consumer.clone(),
         replay_report_path: report,
@@ -112,8 +112,6 @@ async fn unmatched_discovers_other_api_without_serving_it_and_plan_apply_enables
         source_evidence: "erp.py:ensure_token shared cache with expiry".into(),
     })
     .unwrap();
-    assert!(plan.report().requires_replay);
-    plan.apply().unwrap();
     assert!(!fs::read_to_string(&path).unwrap().contains("query:"));
     let (addr, runtime, task) =
         spawn_http_replay_with_policy(&consumer, vec![], Some(path), None).await;
@@ -244,7 +242,7 @@ async fn different_query_or_body_never_produces_a_verified_candidate() {
 
 #[tokio::test]
 async fn old_report_only_hints_and_changed_evidence_rejects_apply() {
-    let (temp, origin, consumer) = fixture().await;
+    let (temp, _origin, consumer) = fixture().await;
     let (addr, runtime, task) = spawn_http_replay_with_policy(&consumer, vec![], None, None).await;
     assert_eq!(
         call(addr, "/token?audience=erp", BODY).await.status(),
@@ -252,8 +250,8 @@ async fn old_report_only_hints_and_changed_evidence_rejects_apply() {
     );
     let report = temp.path().join("failed.json");
     finalized_report(&runtime, &report).await;
-    let policy_path = temp.path().join("verification.yaml");
-    fs::write(
+    let policy_path = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy_path,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
@@ -271,15 +269,16 @@ async fn old_report_only_hints_and_changed_evidence_rejects_apply() {
         },
         source_evidence: "erp.py:ensure_token shared cache".into(),
     };
-    let plan = crate::plan_http_cross_case(feedback.clone()).unwrap();
-    let file = origin.join("dependencies.jsonl");
-    let original = fs::read_to_string(&file).unwrap();
-    fs::write(&file, format!("{original}\n")).unwrap();
-    assert!(plan.apply().is_err());
+    let error = crate::plan_http_cross_case(feedback.clone()).err().unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("legacy rule authoring is retired")
+    );
     assert!(
         !fs::read_to_string(&policy_path)
             .unwrap()
-            .contains("recording_run")
+            .contains("finite_sharing")
     );
     let mut old: Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
     old["unmatched_http_requests"][0]

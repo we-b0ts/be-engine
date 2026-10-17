@@ -147,9 +147,7 @@ fn ip_preflight_returns_guidance_then_plan_apply_parks_for_refresh() {
         ip_capture::ensure_before_system_repair(target.path(), &state, "recorder_capability_gap")
             .is_err()
     );
-    let config = target
-        .path()
-        .join(".traffic-e2e/source-traffic-policy.yaml");
+    let config = target.path().join(".traffic-e2e/policy.yaml");
     let before = fs::read_to_string(&config).unwrap();
     let planned = checked_plan(target.path(), &mut state, options(&report));
     assert_eq!(fs::read_to_string(&config).unwrap(), before);
@@ -211,12 +209,23 @@ fn rule(pattern: &str) -> HttpResponseRewriteRuleConfig {
 }
 
 fn install_rules(target: &Path, rules: Vec<HttpResponseRewriteRuleConfig>) {
-    let path = super::super::source_traffic_policy_path(target);
-    let mut policy =
-        crate::config::SourceTrafficPolicyConfig::parse(&fs::read_to_string(&path).unwrap(), &path)
-            .unwrap();
+    let path = super::super::source_traffic_policy_path(target).unwrap();
+    let original = fs::read_to_string(&path).unwrap();
+    let mut policy = crate::config::SourceTrafficPolicyConfig::parse(&original, &path).unwrap();
     policy.http_response_rewrite = rules;
-    fs::write(path, policy.render().unwrap()).unwrap();
+    fs::write(
+        path,
+        crate::config::native_policy::render_updated(
+            &original,
+            &policy,
+            &crate::policy::Proof {
+                source: "src/SandboxClient.java:42 response URL construction".into(),
+                fact: "sandbox_id varies; consume base_url".into(),
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
 }
 
 fn configured_rules(target: &Path) -> Vec<HttpResponseRewriteRuleConfig> {
@@ -239,16 +248,25 @@ fn first_plan_requires_explicit_review_without_a_proof_format_or_apply_command()
             .contains("BACKEND_REWRITE_SOURCE_EVIDENCE")
     );
     assert!(!initial.to_string().contains("json-url-"));
+    let initial_argv = initial["argv"].as_array().unwrap();
+    assert!(initial_argv.contains(&json!("--file")));
+    assert!(initial_argv.contains(&json!("--evidence")));
+    assert!(initial_argv.contains(&json!(report.evidence.evidence_id)));
     assert!(
-        initial["argv"]
+        report.evidence.facts["http_response_url_candidates"]
             .as_array()
             .unwrap()
-            .contains(&json!("GET /executor-manager/sandboxes/123"))
+            .iter()
+            .any(
+                |candidate| candidate["path"] == "/executor-manager/sandboxes/123"
+                    && candidate["response_id"] == "response-1"
+            )
     );
     let mut input = options(&report);
     input.pattern_checked = false;
     input.source_evidence.clear();
-    let before = fs::read(super::super::source_traffic_policy_path(target.path())).unwrap();
+    let before =
+        fs::read(super::super::source_traffic_policy_path(target.path()).unwrap()).unwrap();
     let result =
         serde_json::to_value(plan(target.path(), &mut state, input.clone()).unwrap()).unwrap();
     assert_eq!(result["status"], "path_pattern_review_required");
@@ -266,7 +284,7 @@ fn first_plan_requires_explicit_review_without_a_proof_format_or_apply_command()
     );
     assert!(state.recorder_capture_plan.is_none());
     assert_eq!(
-        fs::read(super::super::source_traffic_policy_path(target.path())).unwrap(),
+        fs::read(super::super::source_traffic_policy_path(target.path()).unwrap()).unwrap(),
         before
     );
     input.pattern_checked = true;
@@ -366,6 +384,8 @@ fn checked_pattern_merges_old_ids_and_preserves_uncovered_or_different_rules() {
     );
     let report = report_ip(target.path(), &mut state, "http-response");
     let before = configured_rules(target.path());
+    let path = super::super::source_traffic_policy_path(target.path()).unwrap();
+    let original = crate::policy::parse_policy(&fs::read_to_string(&path).unwrap()).unwrap();
     let planned = checked_plan(target.path(), &mut state, options(&report));
     assert_eq!(configured_rules(target.path()), before);
     let replaced: Vec<_> = planned.traffic_e2e_report["replaced_rules"]
@@ -388,26 +408,42 @@ fn checked_pattern_merges_old_ids_and_preserves_uncovered_or_different_rules() {
         after[0].path_pattern.as_deref(),
         Some("/executor-manager/sandboxes/*")
     );
-    assert_eq!(after[3], another_pointer);
-    let raw: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(super::super::source_traffic_policy_path(target.path())).unwrap(),
-    )
-    .unwrap();
-    let domain = &raw["http_response_rewrite"][0];
-    let entry = &domain["rules"][0];
-    assert_eq!(domain["name"].as_str(), Some("cs.wegent.intra.demo.test"));
-    assert_eq!(
-        entry["path_pattern"].as_str(),
-        Some("GET /executor-manager/sandboxes/*")
+    assert_eq!(after[3], before[4]);
+    let updated = crate::policy::parse_policy(&fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(updated.format, crate::policy::POLICY_FORMAT);
+    assert_eq!(updated.rules.len(), 4);
+    for untouched in &original.rules[2..] {
+        assert_eq!(
+            updated
+                .rules
+                .iter()
+                .find(|rule| rule.id() == untouched.id()),
+            Some(untouched),
+            "an uncovered selector retains its complete typed rule and proofs"
+        );
+    }
+    let merged = updated.rules[0].as_native().unwrap();
+    assert!(
+        merged
+            .proof
+            .fact
+            .contains(&options(&report).source_evidence)
     );
-    assert_eq!(entry["pointer"].as_str(), Some("/base_url"));
-    assert_eq!(
-        entry["source_evidence"].as_str(),
-        Some(options(&report).source_evidence.as_str())
+    assert!(
+        merged
+            .proof
+            .fact
+            .contains("sandbox_id varies; consume base_url")
     );
-    assert_eq!(entry.as_mapping().unwrap().len(), 3);
-    assert_eq!(raw["http_response_rewrite"].as_sequence().unwrap().len(), 1);
-    assert_eq!(domain["rules"].as_sequence().unwrap().len(), 4);
+    let crate::policy::native::NativeEffect::CaptureHttpResponse(effect) = &merged.effect else {
+        panic!("wrong effect")
+    };
+    assert_eq!(effect.authorities, ["cs.wegent.intra.demo.test"]);
+    assert_eq!(effect.methods, ["GET"]);
+    let crate::policy::native::CaptureResponseContract::Urls { pointers } = &effect.contract else {
+        panic!("wrong response contract")
+    };
+    assert_eq!(pointers[0].contract, "/base_url");
     assert_eq!(state.phase, RewritePhase::AwaitingRecordingRefresh);
 }
 
@@ -415,6 +451,7 @@ fn checked_pattern_merges_old_ids_and_preserves_uncovered_or_different_rules() {
 fn checked_exact_path_can_stay_separate_with_a_brief_note_and_same_domain_name() {
     let (target, _recording, mut state) = fixture();
     install_rules(target.path(), vec![rule("/executor-manager/sandboxes/456")]);
+    let before = configured_rules(target.path());
     let report = report_ip(target.path(), &mut state, "http-response");
     let mut input = options(&report);
     input.rule.path_pattern = Some("/executor-manager/sandboxes/123".into());
@@ -424,7 +461,13 @@ fn checked_exact_path_can_stay_separate_with_a_brief_note_and_same_domain_name()
     super::super::apply(target.path(), &mut state, &planned.plan_id).unwrap();
     let rules = configured_rules(target.path());
     assert_eq!(rules.len(), 2);
-    assert_eq!(rules[0].name, rules[1].name);
+    assert_eq!(rules[0], before[0]);
+    assert_ne!(rules[0].name, rules[1].name);
+    assert_eq!(rules[0].authorities, rules[1].authorities);
+    assert_eq!(
+        rules[1].path_pattern.as_deref(),
+        Some("/executor-manager/sandboxes/123")
+    );
 }
 
 #[test]
@@ -434,13 +477,14 @@ fn existing_pattern_is_reused_without_adding_the_new_id() {
     let report = report_ip(target.path(), &mut state, "http-response");
     let mut input = options(&report);
     input.rule.path_pattern = Some("/executor-manager/sandboxes/123".into());
-    let before = fs::read(super::super::source_traffic_policy_path(target.path())).unwrap();
+    let before =
+        fs::read(super::super::source_traffic_policy_path(target.path()).unwrap()).unwrap();
     let planned = checked_plan(target.path(), &mut state, input);
     assert_eq!(planned.traffic_e2e_report["reused_existing"], true);
     assert_eq!(planned.traffic_e2e_report["changed"], false);
     super::super::apply(target.path(), &mut state, &planned.plan_id).unwrap();
     assert_eq!(
-        fs::read(super::super::source_traffic_policy_path(target.path())).unwrap(),
+        fs::read(super::super::source_traffic_policy_path(target.path()).unwrap()).unwrap(),
         before
     );
 }
@@ -465,8 +509,9 @@ fn changed_policy_and_unreviewed_legacy_plans_cannot_apply() {
     assert!(configured_rules(target.path()).is_empty());
     let planned = checked_plan(target.path(), &mut state, options(&report));
     install_rules(target.path(), vec![rule("/other/path")]);
+    let unchanged = configured_rules(target.path());
     assert!(super::super::apply(target.path(), &mut state, &planned.plan_id).is_err());
-    assert_eq!(configured_rules(target.path()), vec![rule("/other/path")]);
+    assert_eq!(configured_rules(target.path()), unchanged);
 }
 
 #[test]

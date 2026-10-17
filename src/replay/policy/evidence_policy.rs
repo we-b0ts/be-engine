@@ -38,7 +38,7 @@ impl ReplayEvidencePolicyFreshness {
     pub(crate) fn ensure_current(&self, description: &str) -> Result<()> {
         ensure!(
             !self.requires_fresh_replay,
-            "{description} uses a different policy: evidence={}, current={}. Run fresh Replay for this API using the existing recordings and current verification.yaml, then query new evidence and plan again. Changing evidence IDs or rule selectors does not refresh Replay evidence.",
+            "{description} uses a different policy: evidence={}, current={}. Run fresh Replay for this API using the existing recordings and current the configured project.policy, then query new evidence and plan again. Changing evidence IDs or rule selectors does not refresh Replay evidence.",
             self.evidence_policy_fingerprint
                 .as_deref()
                 .unwrap_or("unavailable"),

@@ -163,7 +163,7 @@ the [gate order](api-implementer-diagnosis.md#work-scope-contract) when deciding
 which failure owns the next repair.
 For HTTP request-body mismatches, inspect `http_unordered_candidates` and the
 `unordered` hint. Same-request array reorderings may support
-`dependency-rule plan http unordered`; prove source collection and downstream
+a shared `dependency.request` unordered JSON contract; prove source collection and downstream
 semantics, then return the endpoint, JSON Pointer and source citation to the
 coordinator. An HTTP JSON array is ordered by default. A response unordered
 rule does not apply to dependency requests. Complete existing exchanges do not
@@ -207,7 +207,8 @@ discovery mechanism, not authorization to apply the rule.
 
 A source-proven detached API task may produce unused dependencies inside another
 API's recording window. Redis GET, single-key DEL and LRANGE can use
-`dependency-rule plan redis api-triggered` and the existing apply transaction.
+a self-contained `process_owned` rule with explicit API origin and the unified
+`rule plan --file rule.yaml --evidence <id>` transaction.
 See [API-origin process rules](../../../../../docs/api-triggered-process-traffic.md).
 `trigger_source.request_body_json` selects typed scalars by JSON Pointer in the
 triggering inbound REQUEST BODY: `/background: true` means JSON
@@ -220,8 +221,8 @@ recordings are reusable; the engine caches correlation outside immutable evidenc
 Status performs no origin scan or cache build. This rule does not verify the
 background task's eventual result or enable reusable Redis snapshots.
 
-MySQL API-origin SELECT rules use `dependency-rule plan mysql --trigger-source
-JSON --identity-value-index N`. The zero-based template `?` slot must be an
+MySQL API-origin SELECT rules use a typed `process_owned` effect with inline
+origin and `identity_value_index`. The zero-based template `?` slot must be an
 identity equality or singleton IN predicate; other endpoint/table/SQL bounds
 remain exact. Use the same origin capture as related Redis rules. An ordinary
 same-name, exact-selector rule may be narrowed through plan/apply, never reused

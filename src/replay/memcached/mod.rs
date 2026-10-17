@@ -24,6 +24,8 @@ use crate::memcached::{
 };
 
 mod builtins;
+pub(in crate::replay) mod contracts;
+mod delivery;
 mod evidence;
 mod expiration;
 use super::command_matching::{
@@ -37,6 +39,7 @@ use super::report::command::{
 use builtins::{
     adapt_binary_get_responses, binary_error, binary_get_opcodes_match, memcached_is_unsupported,
 };
+use delivery::deliver_memcached_exchange;
 use expiration::{ArgumentSnapshot, arguments_match};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -110,6 +113,9 @@ struct MatchedMemcachedExchange {
     index: usize,
     response_frames: Vec<Vec<u8>>,
     timing: ReplayExchangeTiming,
+    request_observed_at: DateTime<Utc>,
+    request_opcode: Option<u8>,
+    request_opaque: Option<u32>,
     policy_decision: DependencyRuleDecision,
     report: CommandMatchedReport,
 }
@@ -143,6 +149,15 @@ pub(super) struct MemcachedReplayEvents {
 }
 
 impl MemcachedReplayState {
+    pub(in crate::replay) fn has_in_flight(&self) -> bool {
+        self.exchanges.iter().any(|e| {
+            matches!(
+                e.status,
+                ReplayExchangeStatus::Responding | ReplayExchangeStatus::AwaitingClientTermination
+            )
+        })
+    }
+
     pub(super) fn register_connection(
         &mut self,
         record: RecordedConnection,
@@ -289,19 +304,22 @@ impl MemcachedReplayState {
                     .eq_ignore_ascii_case(&request.command)
                 && binary_get_opcodes_match(exchange.record.opcode, request.opcode)
                 && exchange.key == request.key
-                && arguments_match(
+                && policy.is_none_or(|policy| {
+                    if let Err(error) =
+                        contracts::record_request(policy, exchange, request, observed_at)
+                    {
+                        tracing::warn!(%error, "failed to preserve Memcached request witness");
+                        return false;
+                    }
+                    true
+                })
+                && contracts::request_arguments_match(
+                    policy,
+                    exchange,
+                    target,
                     wire_protocol,
-                    &request.command,
-                    ArgumentSnapshot {
-                        args: &exchange.args,
-                        extras: exchange.extras.as_deref(),
-                        observed_at: exchange.record.timestamp,
-                    },
-                    ArgumentSnapshot {
-                        args: &request.args,
-                        extras: request.extras.as_deref(),
-                        observed_at,
-                    },
+                    request,
+                    observed_at,
                 )
                 && memcached_value_matches_policy(policy, exchange, target, request, observed_at)
                 && exchange.record.cas == request.cas
@@ -357,6 +375,9 @@ impl MemcachedReplayState {
             index,
             response_frames,
             timing: exchange.timing,
+            request_observed_at: observed_at,
+            request_opcode: request.opcode,
+            request_opaque: request.opaque,
             policy_decision,
             report: CommandMatchedReport {
                 case_id: active_case_id.map(ToOwned::to_owned),
@@ -557,53 +578,6 @@ pub(super) async fn handle_connection(
     Ok(())
 }
 
-async fn deliver_memcached_exchange(
-    reader: &mut MemcachedBufferedReader<&mut TcpStream>,
-    state: &Arc<Mutex<ReplayState>>,
-    matched: &MatchedMemcachedExchange,
-) -> Result<bool> {
-    if matched.timing.outcome().is_client_terminated() {
-        let result = if reader.buffer.is_empty() {
-            matched
-                .timing
-                .await_client_termination(&mut reader.inner)
-                .await
-                .map(|_| ())
-        } else {
-            Err(anyhow!(
-                "client sent another Memcached request instead of terminating the connection"
-            ))
-        };
-        match result {
-            Ok(()) => {
-                state.lock().await.memcached.complete_exchange(matched);
-                return Ok(true);
-            }
-            Err(error) => {
-                state
-                    .lock()
-                    .await
-                    .memcached
-                    .fail_exchange(matched, error.to_string());
-                return Err(error);
-            }
-        }
-    }
-
-    matched.timing.delay_response().await;
-    for response in &matched.response_frames {
-        if let Err(error) = reader.inner.write_all(response).await {
-            state.lock().await.memcached.fail_exchange(
-                matched,
-                format!("failed to deliver recorded Memcached response: {error}"),
-            );
-            return Err(error.into());
-        }
-    }
-    state.lock().await.memcached.complete_exchange(matched);
-    Ok(false)
-}
-
 async fn record_runtime_unsafe(
     state: &Arc<Mutex<ReplayState>>,
     target: &TargetKey,
@@ -757,6 +731,7 @@ fn memcached_policy_context<'a>(
         recorded_value: exchange.value.as_deref(),
         actual_value: request.value.as_deref(),
         recorded_observed_at: exchange.record.timestamp,
+        recorded_duration_ms: exchange.record.duration_ms,
         actual_observed_at: observed_at,
     }
 }

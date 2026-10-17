@@ -9,15 +9,28 @@ pub(super) fn attach(
     query: &str,
     facts: &mut Value,
 ) -> Result<Option<String>> {
-    if !matches!(query, QUERY_DIRTY_CLUSTERS | QUERY_REPRESENTATIVES)
-        || !matches!(
-            issue.kind,
-            RewriteIssueKind::Response | RewriteIssueKind::Replay | RewriteIssueKind::Dependency
-        )
-    {
+    if !matches!(
+        query,
+        QUERY_DIRTY_CLUSTERS | QUERY_REPRESENTATIVES | QUERY_UNIFIED_RULE_CANDIDATES
+    ) || !matches!(
+        issue.kind,
+        RewriteIssueKind::Response | RewriteIssueKind::Replay | RewriteIssueKind::Dependency
+    ) {
         return Ok(None);
     }
-    let current = crate::validate_replay_policy(&root.join(".traffic-e2e/verification.yaml"))?;
+    let current = match crate::e2e_run::resolve_project(root)
+        .and_then(|(_, config)| crate::validate_replay_policy(&config.replay_policy))
+    {
+        Ok(current) => current,
+        Err(error) => {
+            return project(
+                root,
+                state,
+                facts,
+                &ReplayEvidencePolicyFreshness::unavailable("unavailable", format!("{error:#}")),
+            );
+        }
+    };
     let freshness = {
         match e2e_context(root, state).and_then(|context| {
             Ok(crate::e2e_run::query_rule_policy_freshness(
@@ -82,7 +95,7 @@ pub(super) fn refresh_hint(
         super::super::evidence_model::RewriteRuleHint {
             capability: "fresh_replay".into(),
             rule: "policy_freshness".into(),
-            hint: "verification.yaml changed since this evidence, or its policy identity is unavailable. Follow policy_freshness.refresh_command and the coordinator gates, reuse the existing recordings, then obtain new evidence before planning. This is an evidence freshness requirement, not a missing engine capability or recording-version incompatibility.".into(),
+            hint: "The configured traffic policy changed since this evidence, or its policy identity is unavailable. Follow policy_freshness.refresh_command and the coordinator gates, reuse the existing recordings, then obtain new evidence before planning. This is an evidence freshness requirement, not a missing engine capability or recording-version incompatibility.".into(),
             help: super::super::action::next_command(root),
         }
     })

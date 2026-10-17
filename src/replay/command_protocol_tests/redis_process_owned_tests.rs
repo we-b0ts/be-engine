@@ -4,7 +4,7 @@ use super::*;
 
 #[tokio::test]
 async fn background_hscan_does_not_block_a_following_mget_in_the_source_lane() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
     let case_dir = temp.path().join("case");
     tokio::fs::create_dir_all(&case_dir).await.unwrap();
     tokio::fs::write(case_dir.join("dependencies.jsonl"), b"")

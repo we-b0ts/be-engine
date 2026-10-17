@@ -42,8 +42,18 @@ async fn foreign_rollback_can_be_omitted_while_current_business_rollback_stays_r
             ];
             let global = [read(19364, 0, 1), read(19365, 1, 1)];
             let (temp, addr, runtime, task) = fixture_with_global(&records, &global, None).await;
-            let original = std::fs::read(temp.path().join("case-id/dependencies.jsonl")).unwrap();
-            let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+            let original = std::fs::read(
+                temp.path()
+                    .join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl"),
+            )
+            .unwrap();
+            let mut client = connect(
+                addr,
+                &temp
+                    .path()
+                    .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+            )
+            .await;
             if consume_foreign_first {
                 for _ in 0..2 {
                     sqlx::raw_sql("ROLLBACK")
@@ -78,7 +88,11 @@ async fn foreign_rollback_can_be_omitted_while_current_business_rollback_stays_r
                 "global reads are still evidence"
             );
             assert_eq!(
-                std::fs::read(temp.path().join("case-id/dependencies.jsonl")).unwrap(),
+                std::fs::read(
+                    temp.path()
+                        .join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl")
+                )
+                .unwrap(),
                 original
             );
             task.abort();
@@ -102,7 +116,13 @@ async fn business_commit_takes_precedence_only_after_its_recorded_prefix_is_cons
             ];
             let (temp, addr, runtime, task) =
                 fixture_with_global(&records, &[read(100, 0, 1), read(101, 1, 1)], None).await;
-            let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+            let mut client = connect(
+                addr,
+                &temp
+                    .path()
+                    .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+            )
+            .await;
             if consume_foreign_first {
                 sqlx::raw_sql("COMMIT").execute(&mut client).await.unwrap();
                 let state = runtime.state.lock().await;
@@ -141,7 +161,13 @@ async fn global_read_commit_is_optional_and_still_finitely_consumed_by_real_driv
         let records = [control(102, "COMMIT", 1, 0), read(103, 0, 2)];
         let global = [read(100, 0, 1), read(101, 1, 1)];
         let (temp, addr, runtime, task) = fixture_with_global(&records, &global, None).await;
-        let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         let row = sqlx::query("SELECT id FROM users WHERE id=2")
             .fetch_one(&mut client)
             .await

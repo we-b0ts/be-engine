@@ -1,7 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
+mod http_native;
+mod memcached;
+pub(in crate::replay::policy) mod mysql_contract;
+pub(in crate::replay::policy) mod mysql_native;
 pub(in crate::replay::policy) mod mysql_response;
 pub(in crate::replay::policy) mod mysql_selectors;
 pub(super) mod mysql_values;
+mod source_session;
 use std::fs;
 use std::path::Path;
 
@@ -15,7 +20,6 @@ use super::config::{
     load_replay_policy,
 };
 use super::pattern::{path_pattern_matches, query_values, text_pattern_matches, uri_path};
-use super::protobuf::matches_with_timestamp_fields;
 use super::report::{DependencyRuleReport, ReplayPolicyReport};
 use super::value::{validate_relative_time, validate_value};
 use crate::replay::{
@@ -43,6 +47,21 @@ pub(in crate::replay) struct DependencyRuleDecision {
     usage: BTreeMap<String, DependencyRuleUsage>,
     bindings: Vec<(String, Value)>,
     pub(in crate::replay) dynamic_query_params: Vec<String>,
+    pub(in crate::replay) value_contracts: Vec<super::request_contract::Decision>,
+}
+
+impl DependencyRuleDecision {
+    pub(in crate::replay::policy) fn merge_value_comparison(
+        &mut self,
+        comparison: crate::value_contract::json::Comparison,
+        native: &[&crate::policy::CompiledNativeRule],
+    ) {
+        let other = mysql_native::decision(comparison, native);
+        for (id, usage) in other.usage {
+            self.usage.entry(id).or_default().time_validations += usage.time_validations;
+        }
+        self.value_contracts.extend(other.value_contracts);
+    }
 }
 
 #[derive(Debug)]
@@ -86,6 +105,7 @@ pub(in crate::replay) struct MemcachedPolicyContext<'a> {
     pub(in crate::replay) recorded_value: Option<&'a [u8]>,
     pub(in crate::replay) actual_value: Option<&'a [u8]>,
     pub(in crate::replay) recorded_observed_at: DateTime<Utc>,
+    pub(in crate::replay) recorded_duration_ms: u64,
     pub(in crate::replay) actual_observed_at: DateTime<Utc>,
 }
 
@@ -146,11 +166,18 @@ impl ReplayPolicyRuntime {
                 .filter_map(|(id, case)| case.path.as_ref().map(|path| (id.clone(), path.clone())))
                 .collect(),
         );
+        if let Some(compiled) = &loaded.compiled {
+            dynamic_values.configure_native(&compiled.native);
+        }
         if loaded
-            .document
-            .dynamic_values
-            .iter()
-            .any(|rule| rule.when.is_some())
+            .compiled
+            .as_ref()
+            .is_some_and(|policy| !policy.native.is_empty())
+            || loaded
+                .document
+                .dynamic_values
+                .iter()
+                .any(|rule| rule.when.is_some())
             || loaded
                 .document
                 .dependency_rules
@@ -182,7 +209,7 @@ impl ReplayPolicyRuntime {
             .iter()
             .map(|rule| (rule.id.clone(), DependencyRuleUsage::default()))
             .collect();
-        let runtime = Self {
+        let mut runtime = Self {
             mysql_selectors: mysql_selectors::MysqlSelectors::new(
                 &loaded.document.dependency_rules,
             )?,
@@ -198,6 +225,9 @@ impl ReplayPolicyRuntime {
             usage,
             bindings: BTreeMap::new(),
         };
+        runtime
+            .request_contracts
+            .configure_compiled(runtime.loaded.compiled.clone())?;
         if observe_sources
             && (runtime.dynamic_values.enabled() || runtime.request_contracts.enabled())
         {
@@ -497,6 +527,13 @@ impl ReplayPolicyRuntime {
             }
         }
         let mut decision = DependencyRuleDecision::default();
+        let native_times = self.compare_native_query_times(
+            case_id,
+            &matching_rules,
+            &recorded_query,
+            &actual_query,
+            &mut decision,
+        )?;
         for (name, (rule_id, field)) in fields {
             let recorded_values = recorded_query.get(name).cloned().unwrap_or_default();
             let actual_values = actual_query.get(name).cloned().unwrap_or_default();
@@ -507,79 +544,17 @@ impl ReplayPolicyRuntime {
                     actual_values.len()
                 ));
             }
-            self.preview_dynamic_value(
-                case_id,
-                rule_id,
-                field,
-                &Value::String(recorded_values[0].clone()),
-                &Value::String(actual_values[0].clone()),
-                &mut decision,
-            )?;
-            decision.dynamic_query_params.push(name.to_string());
-        }
-        Ok(decision)
-    }
-
-    pub(in crate::replay) fn preview_memcached(
-        &self,
-        context: &MemcachedPolicyContext<'_>,
-    ) -> Result<DependencyRuleDecision, String> {
-        let Some(case_id) = context.case_id else {
-            return exact_memcached_value(context.recorded_value, context.actual_value);
-        };
-        let Some(case) = self.cases.get(case_id) else {
-            return Err(format!(
-                "replay policy has no request metadata for case {case_id}"
-            ));
-        };
-        let matching_rules = self
-            .loaded
-            .document
-            .dependency_rules
-            .iter()
-            .filter(|rule| {
-                rule.protocol == DependencyProtocol::Memcached
-                    && rule_matches_case(rule, case)
-                    && rule_matches_memcached(rule, context.target, context.command, context.key)
-            })
-            .collect::<Vec<_>>();
-        if matching_rules.is_empty() {
-            return exact_memcached_value(context.recorded_value, context.actual_value);
-        }
-        let (Some(recorded), Some(actual)) = (context.recorded_value, context.actual_value) else {
-            return Err(
-                "replay policy selected a Memcached protobuf value but recorded or actual value is absent"
-                    .to_string(),
-            );
-        };
-
-        let mut selected_fields = BTreeMap::new();
-        for rule in &matching_rules {
-            let memcached = rule.memcached.as_ref().expect("validated Memcached policy");
-            for number in memcached.protobuf.timestamp_fields.keys() {
-                if selected_fields.insert(*number, rule.id.as_str()).is_some() {
-                    return Err(format!(
-                        "multiple replay policy rules select Memcached protobuf field {number}"
-                    ));
-                }
+            if !native_times.contains(&(rule_id.into(), name.into())) {
+                self.preview_dynamic_value(
+                    case_id,
+                    rule_id,
+                    field,
+                    &Value::String(recorded_values[0].clone()),
+                    &Value::String(actual_values[0].clone()),
+                    &mut decision,
+                )?;
             }
-        }
-        let field_numbers = selected_fields.keys().copied().collect::<Vec<_>>();
-        matches_with_timestamp_fields(
-            recorded,
-            actual,
-            &field_numbers,
-            context.recorded_observed_at,
-            context.actual_observed_at,
-        )?;
-
-        let mut decision = DependencyRuleDecision::default();
-        for rule_id in selected_fields.values() {
-            decision
-                .usage
-                .entry((*rule_id).to_string())
-                .or_default()
-                .time_validations += 1;
+            decision.dynamic_query_params.push(name.to_string());
         }
         Ok(decision)
     }
@@ -653,6 +628,9 @@ impl ReplayPolicyRuntime {
         case_id: Option<&str>,
         decision: DependencyRuleDecision,
     ) {
+        for value_contract in decision.value_contracts {
+            self.request_contracts.commit(value_contract);
+        }
         if let Some(case_id) = case_id {
             let bindings = self.bindings.entry(case_id.to_string()).or_default();
             for (name, value) in decision.bindings {
@@ -713,6 +691,7 @@ impl ReplayPolicyRuntime {
             dynamic_capture_candidates: self.dynamic_values.capture_candidates(),
             request_contract_candidates: self.request_contracts.candidates(),
             unused_applicable_dependency_rule_ids,
+            unavailable_value_slots: self.request_contracts.unavailable_value_slots(),
         }
     }
 }

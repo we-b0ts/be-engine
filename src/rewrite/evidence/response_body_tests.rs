@@ -28,7 +28,7 @@ fn exact_hessian2_body_offers_response_body_codec_configuration() {
     assert!(hints[0].hint.contains("Hessian2 candidate"));
     assert!(planners.iter().any(|planner| {
         planner.capability == "hessian2"
-            && planner.command.argv.iter().any(|value| value == "hessian2")
+            && planner.command.argv.iter().any(|value| value == "--file")
     }));
 }
 
@@ -101,5 +101,5 @@ fn docx_candidate_points_to_the_reviewed_timestamp_planner() {
         .iter()
         .find(|planner| planner.capability == "docx")
         .unwrap();
-    assert!(planner.command.argv.iter().any(|value| value == "--help"));
+    assert!(planner.command.argv.iter().any(|value| value == "--file"));
 }

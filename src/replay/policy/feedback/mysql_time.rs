@@ -227,22 +227,10 @@ pub struct MysqlTimeRuleFeedback {
     pub source_evidence: String,
 }
 
-impl MysqlTimeRuleFeedback {
-    /// Shared by SQL-time admission and coordinator recovery; no policy mutation.
-    pub(crate) fn policy_evidence_stale(
-        policy_path: &std::path::Path,
-        report: &serde_json::Value,
-    ) -> Result<bool> {
-        let loaded = load_replay_policy(policy_path)?;
-        Ok(dynamic_policy_stale(&loaded, report))
-    }
-}
-
 fn dynamic_policy_stale(
     loaded: &super::super::config::LoadedReplayPolicy,
     report: &serde_json::Value,
 ) -> bool {
-    // Legacy SQL-time evidence without dynamic bindings remains usable.
     !loaded.document.dynamic_values.is_empty()
         && report["replay_policy"]["fingerprint"].as_str() != Some(loaded.fingerprint.as_str())
 }
@@ -321,6 +309,7 @@ impl MysqlTimeRulePlan {
         &self.report
     }
     pub fn apply(self) -> Result<MysqlTimeRuleReport> {
+        crate::policy::retired_authoring()?;
         ensure!(
             fs::read_to_string(&self.report.policy)? == self.original,
             "replay policy changed after planning; rerun plan before applying"
@@ -336,6 +325,7 @@ impl MysqlTimeRulePlan {
 }
 
 pub fn plan_mysql_time_rule(feedback: MysqlTimeRuleFeedback) -> Result<MysqlTimeRulePlan> {
+    crate::policy::retired_authoring()?;
     let original = fs::read_to_string(&feedback.policy_path)?;
     let mut loaded = load_replay_policy(&feedback.policy_path)?;
     let s = &feedback.selector;

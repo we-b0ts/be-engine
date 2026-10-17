@@ -58,7 +58,7 @@ fn complete_origin_transactions_include_only_explicit_members_and_boundaries() {
         &f.report,
         &f.root,
         "job-write",
-        "0123456789abcdef",
+        SOURCE_REVISION,
         PROOF,
         &selector,
     )
@@ -91,7 +91,7 @@ fn same_route_transactions_require_a_distinct_captured_resource() {
             &f.report,
             &f.root,
             "job-write",
-            "0123456789abcdef",
+            SOURCE_REVISION,
             PROOF,
             &write_selector(),
         );
@@ -134,7 +134,7 @@ fn incomplete_transactions_keep_members_required_and_only_direct_write_handoffs_
         }
         f.mysql_events(&ev);
         let mut rules = f.mysql_rules();
-        rules.push(write_selector().rule("job-write", "0123456789abcdef", PROOF));
+        rules.push(write_selector().rule("job-write", SOURCE_REVISION, PROOF));
         let index = load(&f.root, &rules).unwrap();
         for event in [&ev[1], &ev[4]] {
             assert!(index.witness("victim", event).is_none(), "mode={mode}");
@@ -159,11 +159,7 @@ fn update_rules_require_identity_predicates_and_single_row_success() {
             _ => ev[2]["sql"] = "UPDATE jobs_0001 SET status='OTHER' WHERE id=12".into(),
         }
         f.mysql_events(&ev);
-        let index = load(
-            &f.root,
-            &[selector.rule("write", "0123456789abcdef", PROOF)],
-        )
-        .unwrap();
+        let index = load(&f.root, &[selector.rule("write", SOURCE_REVISION, PROOF)]).unwrap();
         assert!(index.witness("victim", &ev[2]).is_none());
     }
     for sql in [
@@ -176,14 +172,14 @@ fn update_rules_require_identity_predicates_and_single_row_success() {
         assert!(
             crate::config::process_owned_dependencies::validate(&[s.rule(
                 "write",
-                "0123456789abcdef",
+                SOURCE_REVISION,
                 PROOF
             )])
             .is_err(),
             "{sql}"
         );
     }
-    let mut ordinary = selector.rule("write", "0123456789abcdef", PROOF);
+    let mut ordinary = selector.rule("write", SOURCE_REVISION, PROOF);
     if let BackgroundDependencyRuleConfig::Mysql {
         trigger_source,
         identity_value_index,
@@ -211,7 +207,7 @@ fn transaction_members_never_classify_identical_unanchored_queries() {
     ev.push(extra.clone());
     f.mysql_events(&ev);
     let mut rules = f.mysql_rules();
-    rules.push(write_selector().rule("write", "0123456789abcdef", PROOF));
+    rules.push(write_selector().rule("write", SOURCE_REVISION, PROOF));
     let index = load(&f.root, &rules).unwrap();
     assert!(index.witness("victim", &extra).is_none());
 }
@@ -227,7 +223,7 @@ fn transactions_with_two_proven_trigger_cases_keep_boundaries_and_members_requir
     ev[2]["sql"] = "UPDATE jobs_0001 SET status='DONE' WHERE id=99".into();
     f.mysql_events(&ev);
     let mut rules = f.mysql_rules();
-    rules.push(write_selector().rule("write", "0123456789abcdef", PROOF));
+    rules.push(write_selector().rule("write", SOURCE_REVISION, PROOF));
     let index = load(&f.root, &rules).unwrap();
     assert_eq!(
         index.witness("victim", &ev[0]).unwrap().trigger_case_id,
@@ -275,7 +271,7 @@ fn duplicate_commit_on_an_unrelated_connection_prevents_fingerprint_exemption() 
     ev.push(unrelated);
     f.mysql_events(&ev);
     let mut rules = f.mysql_rules();
-    rules.push(write_selector().rule("write", "0123456789abcdef", PROOF));
+    rules.push(write_selector().rule("write", SOURCE_REVISION, PROOF));
     let index = load(&f.root, &rules).unwrap();
     assert!(index.witness("victim", &ev[2]).is_some());
     assert!(index.witness("victim", &ev[3]).is_some());
@@ -300,7 +296,7 @@ fn reused_connections_do_not_load_large_unanchored_transactions() {
     ev.extend([other, commit]);
     f.mysql_events(&ev);
     let mut rules = f.mysql_rules();
-    rules.push(write_selector().rule("write", "0123456789abcdef", PROOF));
+    rules.push(write_selector().rule("write", SOURCE_REVISION, PROOF));
     let index = load(&f.root, &rules).unwrap();
     assert!(index.source_bytes < 1024 * 1024);
     assert!(index.witness("victim", &ev[2]).is_some());
@@ -322,7 +318,7 @@ fn transaction_scope_updates_use_plan_apply_without_deleting_the_anchor_rule() {
         &f.report,
         &f.root,
         "write",
-        "0123456789abcdef",
+        SOURCE_REVISION,
         PROOF,
         &base,
     )
@@ -335,7 +331,7 @@ fn transaction_scope_updates_use_plan_apply_without_deleting_the_anchor_rule() {
         &f.report,
         &f.root,
         "write",
-        "0123456789abcdef",
+        SOURCE_REVISION,
         PROOF,
         &extended,
     )
@@ -351,7 +347,7 @@ fn transaction_scope_updates_use_plan_apply_without_deleting_the_anchor_rule() {
             &f.report,
             &f.root,
             "write",
-            "0123456789abcdef",
+            SOURCE_REVISION,
             PROOF,
             &different
         )
@@ -386,7 +382,7 @@ fn wire_summaries_disambiguate_owned_and_unrelated_identical_commits() {
         &f.report,
         &f.root,
         "write",
-        "0123456789abcdef",
+        SOURCE_REVISION,
         PROOF,
         &write_selector(),
     )
@@ -419,7 +415,7 @@ fn old_summary_diagnoses_ambiguous_commit_without_broadening_ownership() {
         &f.report,
         &f.root,
         "write",
-        "0123456789abcdef",
+        SOURCE_REVISION,
         PROOF,
         &write_selector(),
     )
@@ -436,8 +432,10 @@ fn old_summary_diagnoses_ambiguous_commit_without_broadening_ownership() {
             .any(|r| r.contains("transaction start or contiguous prefix"))
     );
     assert_eq!(plan.report().matched_unused_exchanges, 3);
-    let mut rules = f.mysql_rules();
-    rules.push(write_selector().rule("write", "0123456789abcdef", PROOF));
+    plan.apply().unwrap();
+    let rules = SourceTrafficPolicyConfig::load(&f.policy)
+        .unwrap()
+        .process_owned_dependencies;
     let index = load(&f.root, &rules).unwrap();
     assert!(index.witness("victim", &ev[3]).is_some());
     assert!(index.witness("victim", ev.last().unwrap()).is_none());
@@ -456,7 +454,7 @@ fn old_summary_diagnoses_ambiguous_commit_without_broadening_ownership() {
         &f.report,
         &f.root,
         "write",
-        "0123456789abcdef",
+        SOURCE_REVISION,
         PROOF,
         &write_selector(),
     )
@@ -505,7 +503,7 @@ fn current_summary_diagnoses_missing_start_without_requesting_another_replay() {
         &f.report,
         &f.root,
         "write",
-        "0123456789abcdef",
+        SOURCE_REVISION,
         PROOF,
         &write_selector(),
     )
@@ -535,11 +533,7 @@ fn missing_transaction_prefix_allows_only_direct_proven_update_commit_handoff() 
         }
         f.mysql_events(&ev);
         let selector = write_selector();
-        let index = load(
-            &f.root,
-            &[selector.rule("write", "0123456789abcdef", PROOF)],
-        )
-        .unwrap();
+        let index = load(&f.root, &[selector.rule("write", SOURCE_REVISION, PROOF)]).unwrap();
         assert_eq!(
             index.witness("victim", &ev[1]).is_some(),
             mode == 0,
@@ -551,7 +545,7 @@ fn missing_transaction_prefix_allows_only_direct_proven_update_commit_handoff() 
             no_boundaries.transaction_members.clear();
             let index = load(
                 &f.root,
-                &[no_boundaries.rule("write", "0123456789abcdef", PROOF)],
+                &[no_boundaries.rule("write", SOURCE_REVISION, PROOF)],
             )
             .unwrap();
             assert!(index.witness("victim", &ev[1]).is_none());

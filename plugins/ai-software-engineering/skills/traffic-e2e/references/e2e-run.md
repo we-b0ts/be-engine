@@ -23,16 +23,16 @@ Recorder HTTP gateway listens on port `4080` by default; use
 ports must differ.
 
 The generated version-18 project configuration has separate `source`, `target`,
-`replay`, `verification`, `recording`, `delivery`, and `state` settings plus an
+`policy`, `replay`, `verification`, `delivery`, and `state` settings plus an
 embedded static `recorder` section.
 `replay.case_dependency_post_response_window_ms`
 keeps the active Replay case open for dependencies admitted just after the
 primary response and defaults to 10 ms.
 `verification.max_failed_cases_per_api` defaults to 10 and stops the current
 API after that many non-passing cases; remaining cases are left unexecuted.
-AI-managed source-traffic evidence
-acquisition and classification policy is kept in the separate
-`.traffic-e2e/source-traffic-policy.yaml` document.
+All acquisition, classification, input and comparison rules share the
+`traffic-policy/v1` document named by `project.policy`, normally
+`.traffic-e2e/policy.yaml`. Initialization creates this policy empty.
 Relevant target fields are `.traffic-e2e/Dockerfile.target`, startup mount paths,
 and `startup_timeout_seconds` (180 by default, at most 1800). Quality gates are
 an engine standard rather than project configuration. The timeout bounds the interval from
@@ -51,7 +51,7 @@ Before a run, the runner requires:
   excludes `.git/`, `.traffic-e2e/local/`, and `target/`;
 - a required BuildKit SSH mount in the target Dockerfile and at least one
   default OpenSSH identity loadable by the repository-local managed agent;
-- valid project, source traffic policy, and replay config;
+- valid project settings and one compiled unified policy;
 - ignored `.traffic-e2e/local/`, ensured by repository initialization;
 - a validated `.traffic-e2e/local/source/` snapshot containing the immutable
   source image identity and Kubernetes runtime inputs;

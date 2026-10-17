@@ -10,7 +10,7 @@ fn multi_key_del_requires_exact_order_arity_and_one_identity() {
         "blocks:{job_id}".into(),
         "metrics:{job_id}".into(),
     ];
-    let rule = selector.rule("cleanup", "0123456789abcdef", PROOF);
+    let rule = selector.rule("cleanup", SOURCE_REVISION, PROOF);
     crate::config::process_owned_dependencies::validate(std::slice::from_ref(&rule)).unwrap();
     for mode in 0..5 {
         let mut event = redis("DEL", 12, "victim-lane");
@@ -39,7 +39,7 @@ fn multi_key_del_requires_exact_order_arity_and_one_identity() {
                     &f.report,
                     &f.root,
                     "cleanup",
-                    "0123456789abcdef",
+                    SOURCE_REVISION,
                     PROOF,
                     &selector
                 )
@@ -54,7 +54,7 @@ fn multi_key_del_requires_exact_order_arity_and_one_identity() {
     assert!(
         crate::config::process_owned_dependencies::validate(&[selector.rule(
             "x",
-            "0123456789abcdef",
+            SOURCE_REVISION,
             PROOF
         )])
         .is_err()
@@ -94,11 +94,7 @@ fn same_resource_lua_and_its_script_probe_remain_case_owned() {
     f.change_request(&f.victim, json!({}), "/jobs/12");
     let selector = script_selector();
     write_lines(&f.victim.join("dependencies.jsonl"), &script_events());
-    let index = load(
-        &f.root,
-        &[selector.rule("metrics", "0123456789abcdef", PROOF)],
-    )
-    .unwrap();
+    let index = load(&f.root, &[selector.rule("metrics", SOURCE_REVISION, PROOF)]).unwrap();
     assert!(index.witnesses.is_empty());
 }
 
@@ -106,7 +102,7 @@ fn same_resource_lua_and_its_script_probe_remain_case_owned() {
 fn scripts_bind_argv_identity_and_only_associate_adjacent_same_connection_exists() {
     let f = Fixture::new("DEL");
     let selector = script_selector();
-    let rule = selector.rule("metrics", "0123456789abcdef", PROOF);
+    let rule = selector.rule("metrics", SOURCE_REVISION, PROOF);
     crate::config::process_owned_dependencies::validate(std::slice::from_ref(&rule)).unwrap();
     for mode in 0..9 {
         let mut events = script_events();
@@ -149,7 +145,7 @@ fn script_plan_apply_preserves_finite_responses_and_unmatched_calls() {
         &f.report,
         &f.root,
         "metrics",
-        "0123456789abcdef",
+        SOURCE_REVISION,
         PROOF,
         &selector,
     )
@@ -173,7 +169,7 @@ fn script_plan_apply_preserves_finite_responses_and_unmatched_calls() {
             &f.report,
             &f.root,
             "metrics",
-            "0123456789abcdef",
+            SOURCE_REVISION,
             PROOF,
             &selector
         )
@@ -193,18 +189,16 @@ fn script_plan_explains_nonempty_middle_for_an_exact_key() {
     let key = &mut selector.script.as_mut().unwrap().keys[1];
     key.prefix = "metrics:as-".into();
     key.suffix = "f".into();
-    let error = plan_api_triggered_redis(
-        &f.policy,
-        &f.report,
-        &f.root,
-        "metrics",
-        "0123456789abcdef",
-        PROOF,
-        &selector,
-    )
-    .err()
-    .unwrap()
-    .to_string();
+    // The typed policy stores an exact key as one value. Exercise the Lua
+    // envelope owner directly to retain its prefix/suffix diagnostic contract.
+    let args = crate::api_trigger::redis_args(&events[1]).unwrap();
+    let error = selector
+        .script
+        .as_ref()
+        .unwrap()
+        .check_identity(&args)
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("KEYS[1]"));
     assert!(error.contains("numeric_middle=false requires an exact prefix+suffix"));
     let key = &mut selector.script.as_mut().unwrap().keys[1];
@@ -216,7 +210,7 @@ fn script_plan_explains_nonempty_middle_for_an_exact_key() {
             &f.report,
             &f.root,
             "metrics",
-            "0123456789abcdef",
+            SOURCE_REVISION,
             PROOF,
             &selector
         )

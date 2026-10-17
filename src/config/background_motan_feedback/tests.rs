@@ -9,7 +9,7 @@ use crate::config::{BackgroundDependencyRuleConfig, SourceTrafficPolicyConfig};
 const INTERFACE: &str = "com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc";
 const METHOD: &str = "getConfigByName";
 const GROUP: &str = "kunpeng-config-rpc";
-const REVISION: &str = "0123456789abcdef";
+const REVISION: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 const EVIDENCE: &str = "MapiConfigLoader.java:init scheduled refresh unrelated to selected API";
 
 struct Fixture {
@@ -94,8 +94,8 @@ fn plan_and_apply_add_an_idempotent_motan_rule_without_endpoint_identity() {
     let raw = fs::read_to_string(&fixture.config).unwrap();
     assert!(raw.contains("protocol: motan"));
     assert!(raw.contains(&format!("group: {GROUP}")));
-    assert!(raw.contains(&format!("interface_name: {INTERFACE}")));
-    assert!(raw.contains(&format!("method_name: {METHOD}")));
+    assert!(raw.contains(&format!("interface: {INTERFACE}")));
+    assert!(raw.contains(&format!("method: {METHOD}")));
     assert!(!raw.contains(".trp.test"));
     assert!(!raw.contains("response_role"));
 

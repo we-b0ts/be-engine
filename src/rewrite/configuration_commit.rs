@@ -10,11 +10,25 @@ use super::model::{
 use super::store::{RewriteLockState, RewriteStore};
 use super::{action, traffic_operation};
 
-const CONFIGURATION_PATHS: &[&str] = &[
-    ".traffic-e2e/project.yaml",
-    ".traffic-e2e/source-traffic-policy.yaml",
-    ".traffic-e2e/verification.yaml",
-];
+fn configuration_paths(target_root: &Path) -> Result<Vec<String>> {
+    let mut paths = vec![".traffic-e2e/project.yaml".to_string()];
+    // A malformed or deleted project still needs the configuration commit gate.
+    // Validation reports the parse failure after that review boundary.
+    let policy = super::fingerprint::policy_file(target_root)
+        .unwrap_or_else(|_| target_root.join(".traffic-e2e/policy.yaml"));
+    let relative = policy
+        .strip_prefix(target_root)
+        .context("traffic policy is outside the target repository")?;
+    paths.push(
+        relative
+            .to_str()
+            .context("traffic policy path is not UTF-8")?
+            .to_string(),
+    );
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
 
 pub(super) fn status(target_root: &Path) -> Result<Option<RewriteStatusReport>> {
     Ok(pending(target_root)?.map(|envelope| RewriteStatusReport {
@@ -50,6 +64,7 @@ pub(super) fn pending(target_root: &Path) -> Result<Option<RewriteActionEnvelope
 pub(super) fn pending_locked(target_root: &Path) -> Result<Option<RewriteActionEnvelope>> {
     let target_root = std::fs::canonicalize(target_root)?;
     let target_prefix = git_target_prefix(&target_root)?;
+    let configuration_paths = configuration_paths(&target_root)?;
     let output = Command::new("git")
         .arg("--no-optional-locks")
         .arg("-C")
@@ -63,7 +78,7 @@ pub(super) fn pending_locked(target_root: &Path) -> Result<Option<RewriteActionE
             "-z",
             "--",
         ])
-        .args(CONFIGURATION_PATHS)
+        .args(&configuration_paths)
         .output()
         .context("failed to inspect managed configuration changes")?;
     ensure!(
@@ -85,7 +100,9 @@ pub(super) fn pending_locked(target_root: &Path) -> Result<Option<RewriteActionE
             anyhow::bail!("unexpected configuration path {path:?}");
         };
         ensure!(
-            CONFIGURATION_PATHS.contains(&path),
+            configuration_paths
+                .iter()
+                .any(|configured| configured == path),
             "unexpected configuration path {path:?}"
         );
         required.push(path.to_string());

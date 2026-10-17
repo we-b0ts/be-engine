@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 mod document;
 pub(in crate::replay::policy) use document::BindingEntry;
 
-use super::response::{ResponseRules, response_rule_ids, validate_response_rules};
+use super::response::{ResponseRules, validate_response_rules};
 
 const MIN_POLICY_VERSION: u8 = 1;
 const MAX_POLICY_VERSION: u8 = 3;
@@ -280,6 +280,7 @@ pub struct ReplayPolicyValidationReport {
 
 #[derive(Debug)]
 pub(in crate::replay) struct LoadedReplayPolicy {
+    pub(in crate::replay) compiled: Option<std::sync::Arc<crate::policy::CompiledPolicy>>,
     pub(in crate::replay) document: ReplayPolicyDocument,
     pub(in crate::replay) path: PathBuf,
     pub(in crate::replay) fingerprint: String,
@@ -287,50 +288,83 @@ pub(in crate::replay) struct LoadedReplayPolicy {
 
 pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationReport> {
     let loaded = load_replay_policy(path)?;
-    let response_rule_ids = response_rule_ids(&loaded.document.response_rules);
+    let compiled = loaded
+        .compiled
+        .as_ref()
+        .context("compiled policy is absent")?;
     Ok(ReplayPolicyValidationReport {
-        version: loaded.document.version,
+        version: 1,
         path: loaded.path.display().to_string(),
-        fingerprint: loaded.fingerprint,
-        expected_response: loaded.document.expected_response,
-        dynamic_value_rule_ids: loaded
-            .document
-            .dynamic_values
+        fingerprint: compiled.fingerprints.full.clone(),
+        expected_response: ExpectedResponseUsage::AssertionsOnly,
+        dependency_rule_ids: compiled
+            .rules
             .iter()
-            .map(|rule| rule.id.clone())
-            .collect(),
-        dependency_rule_ids: loaded
-            .document
-            .dependency_rules
-            .into_iter()
-            .map(|rule| rule.id)
+            .filter(|r| r.rule.surface != crate::policy::Surface::ApiResponse)
+            .map(|r| r.rule.id.clone())
             .chain(
-                loaded
-                    .document
-                    .dynamic_values
+                compiled
+                    .native
                     .iter()
-                    .map(|rule| rule.id.clone()),
+                    .filter(|rule| {
+                        matches!(
+                            rule.rule.effect,
+                            crate::policy::NativeEffect::Identity(_)
+                                | crate::policy::NativeEffect::RedisSequence(_)
+                                | crate::policy::NativeEffect::RedisLock
+                                | crate::policy::NativeEffect::RedisPublishIdentity(_)
+                                | crate::policy::NativeEffect::HttpRequest(_)
+                                | crate::policy::NativeEffect::MysqlValues(_)
+                                | crate::policy::NativeEffect::FiniteSharing(_)
+                        )
+                    })
+                    .map(|rule| rule.rule.id.clone()),
             )
             .collect(),
-        response_rule_ids,
-        runner_owned_response_assertions: loaded.document.version >= 3,
+        response_rule_ids: compiled
+            .rules
+            .iter()
+            .filter(|r| r.rule.surface == crate::policy::Surface::ApiResponse)
+            .map(|r| r.rule.id.clone())
+            .chain(
+                compiled
+                    .native
+                    .iter()
+                    .filter(|rule| {
+                        matches!(
+                            rule.rule.effect,
+                            crate::policy::NativeEffect::ResponseGenerated(_)
+                                | crate::policy::NativeEffect::ResponseJwt(_)
+                                | crate::policy::NativeEffect::ResponseBody(_)
+                                | crate::policy::NativeEffect::ResponseHeaderDate(_)
+                        )
+                    })
+                    .map(|rule| rule.rule.id.clone()),
+            )
+            .collect(),
+        dynamic_value_rule_ids: compiled
+            .native
+            .iter()
+            .filter(|rule| matches!(rule.rule.effect, crate::policy::NativeEffect::Identity(_)))
+            .map(|rule| rule.rule.id.clone())
+            .collect(),
+        runner_owned_response_assertions: true,
     })
 }
 
 pub(in crate::replay) fn load_replay_policy(path: &Path) -> Result<LoadedReplayPolicy> {
     let bytes = fs::read(path)
         .with_context(|| format!("failed to read replay policy {}", path.display()))?;
-    let document: ReplayPolicyDocument = serde_yaml::from_slice(&bytes)
-        .with_context(|| format!("failed to parse replay policy {}", path.display()))?;
-    validate_document(&document)
-        .with_context(|| format!("invalid replay policy {}", path.display()))?;
-    let path = path
-        .canonicalize()
-        .with_context(|| format!("failed to resolve replay policy {}", path.display()))?;
+    let source = std::str::from_utf8(&bytes)?;
+    let policy = crate::policy::parse_policy(source)
+        .with_context(|| format!("failed to parse traffic-policy/v1 {}", path.display()))?;
+    let compiled = std::sync::Arc::new(crate::policy::compile_policy(&policy)?);
+    let projection = super::native_projection::project_native(&compiled.native)?;
     Ok(LoadedReplayPolicy {
-        document,
-        path,
-        fingerprint: fingerprint(&bytes),
+        fingerprint: compiled.fingerprints.full.clone(),
+        compiled: Some(compiled),
+        path: path.canonicalize()?,
+        document: projection.document,
     })
 }
 

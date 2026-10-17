@@ -2,7 +2,6 @@ use super::*;
 use crate::replay::ReplayState;
 use crate::{
     RedisUnorderedFeedback, RedisUnorderedField, RedisUnorderedSelector, RedisValueKeySelector,
-    plan_redis_unordered,
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -64,7 +63,7 @@ pub(super) async fn request(client: &mut TcpStream, parts: &[&str], expected: &[
 }
 #[tokio::test]
 async fn redis_value_discovery_plan_apply_then_real_set_get_preserves_lane_and_policy_usage() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
     let case = temp.path().join("apis/models/case");
     std::fs::create_dir_all(&case).unwrap();
     std::fs::write(
@@ -107,13 +106,13 @@ async fn redis_value_discovery_plan_apply_then_real_set_get_preserves_lane_and_p
         .unwrap();
     }
     task.abort();
-    let policy = temp.path().join("verification.yaml");
-    std::fs::write(
+    let policy = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
     .unwrap();
-    plan_redis_unordered(RedisUnorderedFeedback {
+    crate::replay::policy::test_fixture::install_redis_unordered(RedisUnorderedFeedback {
         policy_path: policy.clone(),
         case_source: case.clone(),
         replay_report_path: report,
@@ -131,8 +130,6 @@ async fn redis_value_discovery_plan_apply_then_real_set_get_preserves_lane_and_p
         },
         source_evidence: "cache.py:42 membership IDs are constructed from a set".into(),
     })
-    .unwrap()
-    .apply()
     .unwrap();
     let (addr, state, task) = spawn(&case, Some(policy)).await;
     let mut client = TcpStream::connect(addr).await.unwrap();

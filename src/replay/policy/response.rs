@@ -564,6 +564,7 @@ pub(in crate::replay) fn validate_response_rules(rules: &ResponseRules) -> Resul
     Ok(())
 }
 
+#[cfg(test)]
 pub(in crate::replay) fn response_rule_ids(rules: &ResponseRules) -> Vec<String> {
     rules
         .json

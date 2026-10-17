@@ -35,6 +35,9 @@ pub(in crate::replay) mod key_selector;
 mod lane_tests;
 pub(crate) mod lock;
 mod matching;
+#[cfg(test)]
+mod native_scope_tests;
+mod native_source;
 pub(crate) mod publish;
 pub(in crate::replay) mod pubsub;
 pub(crate) mod time_shift;
@@ -64,6 +67,8 @@ pub(super) struct RecordedExchange {
     id: Option<Uuid>,
     #[serde(default)]
     timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request_started_at: Option<chrono::DateTime<chrono::Utc>>,
     connection_id: Uuid,
     sequence: u64,
     target_host: String,
@@ -88,6 +93,27 @@ pub(super) struct RecordedExchange {
     session_setup: bool,
     #[serde(default)]
     global_dependency_reason: Option<String>,
+}
+
+impl RecordedExchange {
+    fn started_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.request_started_at.or_else(|| {
+            self.timestamp?
+                .checked_sub_signed(chrono::TimeDelta::milliseconds(
+                    i64::try_from(self.duration_ms).ok()?,
+                ))
+        })
+    }
+
+    /// A floor-millisecond duration only establishes a conservative lower bound.
+    fn earliest_start(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.request_started_at.or_else(|| {
+            self.timestamp?
+                .checked_sub_signed(chrono::TimeDelta::milliseconds(
+                    i64::try_from(self.duration_ms.checked_add(1)?).ok()?,
+                ))
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -119,6 +145,7 @@ struct ReplayExchange {
 
 #[derive(Debug, Clone)]
 struct MatchedRedisExchange {
+    unified_delivery: Option<super::policy::request_contract::PreparedRedisDelivery>,
     rpc_push: Option<usize>,
     rpc_response: Option<Vec<u8>>,
     publish_duration_ms: u64,
@@ -134,6 +161,7 @@ struct MatchedRedisExchange {
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayState {
+    request_observed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub(in crate::replay) pubsub: pubsub::PubSubState,
     pub(super) request_contracts: super::policy::request_contract::RequestContracts,
     pub(super) dynamic_values: super::policy::dynamic_values::DynamicValues,
@@ -165,6 +193,15 @@ pub(super) struct RedisReplayEvents {
 }
 
 impl RedisReplayState {
+    pub(in crate::replay) fn has_in_flight(&self) -> bool {
+        self.exchanges.iter().any(|e| {
+            matches!(
+                e.status,
+                ReplayExchangeStatus::Responding | ReplayExchangeStatus::AwaitingClientTermination
+            )
+        })
+    }
+
     pub(in crate::replay) fn validate_pubsub(&self) -> Result<()> {
         self.pubsub.validate_subscriptions(&self.exchanges)
     }
@@ -635,6 +672,23 @@ async fn deliver_redis_exchange(
     }
 
     matched.timing.delay_response().await;
+    let unified_rendered_at = chrono::Utc::now();
+    let unified_rendered = matched
+        .unified_delivery
+        .as_ref()
+        .map(|delivery| delivery.render(unified_rendered_at))
+        .transpose();
+    let unified_rendered = match unified_rendered {
+        Ok(rendered) => rendered,
+        Err(error) => {
+            state
+                .lock()
+                .await
+                .redis
+                .fail_exchange(matched, error.to_string());
+            return Err(error);
+        }
+    };
     let rendered = matched
         .response_time_shift
         .as_ref()
@@ -651,9 +705,11 @@ async fn deliver_redis_exchange(
             return Err(error);
         }
     };
-    let response = rendered
-        .as_ref()
-        .map_or(matched.response.as_slice(), |(bytes, _)| bytes.as_slice());
+    let response = unified_rendered.as_deref().unwrap_or_else(|| {
+        rendered
+            .as_ref()
+            .map_or(matched.response.as_slice(), |(bytes, _)| bytes.as_slice())
+    });
     if let Err(error) = reader.inner.write_all(response).await {
         state.lock().await.redis.fail_exchange(
             matched,
@@ -663,6 +719,16 @@ async fn deliver_redis_exchange(
     }
     let state_ref = state;
     let mut state = state_ref.lock().await;
+    if let Some(delivery) = &matched.unified_delivery
+        && let Err(error) = state.redis.request_contracts.commit_redis_delivery(
+            delivery,
+            response,
+            unified_rendered_at,
+        )
+    {
+        state.redis.fail_exchange(matched, error.to_string());
+        return Err(error);
+    }
     if let (Some(shift), Some((_, offset_milliseconds))) = (&matched.response_time_shift, rendered)
     {
         if let Some(policy) = state.replay_policy.as_mut() {

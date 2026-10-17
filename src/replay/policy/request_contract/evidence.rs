@@ -68,11 +68,15 @@ impl RequestContracts {
             "redis_key_request"
         } else if source.first() != actual.first() {
             return;
-        } else if matches!(command, "SET" | "RPUSH" | "PUBLISH")
-            && source.len() >= 2
-            && crate::replay::json_order::parse(&source[1]).is_some()
-            && crate::replay::json_order::parse(&actual[1]).is_some()
-        {
+        } else if (if command == "RPUSH" && source.len() >= 2 {
+            Some(1)
+        } else {
+            super::unified::value_index(command, source.len())
+        })
+        .is_some_and(|index| {
+            crate::replay::json_order::parse(&source[index]).is_some()
+                && crate::replay::json_order::parse(&actual[index]).is_some()
+        }) {
             "redis_json_request"
         } else if matches!(command, "ZADD" | "ZREMRANGEBYSCORE") && source.len() == 3 {
             "redis_request_time"
@@ -321,6 +325,7 @@ pub(in crate::replay::policy) fn verify_capture(
             .insert(
                 candidate.case_id.clone(),
                 CaseAnchor {
+                    source_body: super::unified::source_body(&request),
                     method: scope.method.clone(),
                     path: super::super::pattern::uri_path(request["uri"].as_str().unwrap()),
                     recorded,
@@ -405,13 +410,16 @@ pub(in crate::replay::policy) fn verify_capture(
                     continue;
                 }
                 let normalized = dynamic
-                    .redis(
+                    .redis_with_identity(
                         Some(&candidate.case_id),
                         &TargetKey {
                             host: candidate.host.clone(),
                             port: candidate.port,
                         },
-                        candidate.database,
+                        super::super::dynamic_values::RedisIdentity {
+                            database: candidate.database,
+                            username: event["username"].as_str(),
+                        },
                         &candidate.command,
                         &source,
                         &actual,
@@ -427,6 +435,7 @@ pub(in crate::replay::policy) fn verify_capture(
                     publish
                         .preview_json(
                             crate::replay::redis::publish::json::JsonContext {
+                                case_id: Some(&candidate.case_id),
                                 host: &candidate.host,
                                 port: candidate.port,
                                 database: candidate.database,

@@ -30,7 +30,7 @@ fn client_info(
 async fn redis_client_info_is_optional_for_all_sdk_identities_and_server_results() {
     for response in [SETINFO_ERROR, b"+OK\r\n".as_slice()] {
         for target_announces in [false, true] {
-            let temp = tempfile::tempdir().unwrap();
+            let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
             let case_dir = temp.path().join("case");
             tokio::fs::create_dir_all(&case_dir).await.unwrap();
             let connection = Uuid::new_v4();

@@ -42,6 +42,26 @@ impl ReplayState {
                 {
                     continue;
                 }
+                if exchange.record.method.eq_ignore_ascii_case(method.as_str())
+                    && uri_path_only(&exchange.record.uri) == uri.path()
+                    && let Some(policy) = &self.replay_policy
+                    && let Err(error) = contracts::record_request(
+                        policy,
+                        exchange,
+                        &contracts::RequestView {
+                            method,
+                            uri,
+                            headers,
+                            body,
+                            started_at: request_started_at,
+                        },
+                    )
+                {
+                    closest_mismatch.get_or_insert_with(|| {
+                        format!("HTTP request witness unavailable: {error:#}")
+                    });
+                    continue;
+                }
                 if let Some(origin) = &exchange.shared_origin
                     && &origin.request_fingerprint
                         != target_fingerprint.get_or_insert_with(|| {
@@ -161,6 +181,33 @@ impl ReplayState {
                     mismatch = None;
                 }
                 let mut request_decision = None;
+                if (mismatch.is_none()
+                    || mismatch.as_deref()
+                        == Some("HTTP request body did not match the recorded body"))
+                    && let Some(policy) = &self.replay_policy
+                    && let Some(result) = contracts::preview_request(
+                        policy,
+                        exchange,
+                        &contracts::RequestView {
+                            method,
+                            uri,
+                            headers,
+                            body,
+                            started_at: request_started_at,
+                        },
+                        &policy_decision.dynamic_query_params,
+                    )
+                {
+                    match result {
+                        Ok(decision) => {
+                            mismatch = None;
+                            policy_decision.value_contracts.push(decision);
+                        }
+                        Err(error) => {
+                            mismatch = Some(format!("HTTP body value contract failed: {error:#}"))
+                        }
+                    }
+                }
                 if exchange.source == ReplaySource::Case
                     && exchange.shared_origin.is_none()
                     && (mismatch.is_none()
@@ -345,6 +392,18 @@ impl ReplayState {
             return Err(HttpReplayMatchError::BadGateway(reason));
         }
 
+        if let Some(policy) = &self.replay_policy {
+            match contracts::materialize_response(policy, &mut exchange, request_started_at) {
+                Ok(decision) => matching_policy_decision
+                    .value_contracts
+                    .extend(decision.value_contracts),
+                Err(error) => {
+                    let reason = format!("HTTP response value contract failed: {error:#}");
+                    self.record_unmatched_http(scheme, target, method, uri, reason.clone());
+                    return Err(HttpReplayMatchError::BadGateway(reason));
+                }
+            }
+        }
         let mut audited_headers = headers.clone();
         if matching_request_decision.is_some() {
             audited_headers.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));

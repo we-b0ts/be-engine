@@ -19,6 +19,8 @@ use image::{copy_image_path, ensure_local_image};
 pub use provider::{
     ContainerSourceOptions, KubernetesSourceOptions, SourceOptions, SourceProviderEvidence,
 };
+#[cfg(test)]
+pub(crate) mod test_fixture;
 mod upgrade;
 
 pub(crate) use upgrade::begin_kubernetes_source_snapshot_upgrade;
@@ -660,6 +662,15 @@ impl SnapshotHash {
     fn finish(self) -> String {
         format!("fnv1a64:{:016x}", self.0)
     }
+}
+
+/// Exact files read by the frozen Source environment projection.
+pub(crate) fn target_environment_witness_paths(target_root: &Path) -> Result<Vec<PathBuf>> {
+    let snapshot = load(target_root)?;
+    Ok(vec![
+        snapshot.root.join("manifest.json"),
+        snapshot.root.join("runtime.json"),
+    ])
 }
 
 #[cfg(test)]

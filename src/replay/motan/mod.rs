@@ -180,6 +180,15 @@ impl Default for MotanReplayState {
 }
 
 impl MotanReplayState {
+    pub(in crate::replay) fn has_in_flight(&self) -> bool {
+        self.exchanges.iter().any(|e| {
+            matches!(
+                e.status,
+                ReplayExchangeStatus::Responding | ReplayExchangeStatus::AwaitingClientTermination
+            )
+        })
+    }
+
     pub(super) fn register_connection(
         &mut self,
         record: RecordedConnection,

@@ -49,6 +49,7 @@ impl RedisUnorderedPlan {
         &self.report
     }
     pub fn apply(self) -> Result<RedisUnorderedReport> {
+        crate::policy::retired_authoring()?;
         ensure!(
             fs::read_to_string(&self.feedback.policy_path)? == self.original,
             "policy changed after planning; rerun Redis unordered plan"
@@ -73,6 +74,7 @@ impl RedisUnorderedPlan {
 }
 
 pub fn plan_redis_unordered(feedback: RedisUnorderedFeedback) -> Result<RedisUnorderedPlan> {
+    crate::policy::retired_authoring()?;
     feedback.selector.validate()?;
     crate::config::process_owned_dependencies::validate_source_evidence(&feedback.source_evidence)?;
     let original = fs::read_to_string(&feedback.policy_path)?;

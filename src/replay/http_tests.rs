@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
+use crate::replay::policy::test_fixture::managed_tempdir as tempdir;
 use hyper::client::conn::http1;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, RootCertStore};
-use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsConnector;
@@ -81,6 +81,7 @@ fn one_fake_ip_is_reused_for_all_ports_on_a_host() {
 #[test]
 fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
     let record = RecordedHttpExchange {
+        id: None,
         response_evidence: None,
         outcome: crate::DependencyExchangeOutcome::Response,
         duration_ms: None,
@@ -143,6 +144,7 @@ fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
 #[test]
 fn response_discovered_http_target_reserves_its_recorded_fake_ip() {
     let record = RecordedHttpExchange {
+        id: None,
         response_evidence: None,
         outcome: crate::DependencyExchangeOutcome::Response,
         duration_ms: None,
@@ -305,7 +307,7 @@ async fn replays_http_exchange_with_unscoped_dynamic_query_policy() {
         .await
         .unwrap();
     let policy_path = temp.path().join("replay.yaml");
-    tokio::fs::write(
+    crate::replay::write_policy_fixture(
         &policy_path,
         r#"
 version: 1
@@ -330,7 +332,6 @@ dependency_rules:
             tolerance: 5s
 "#,
     )
-    .await
     .unwrap();
     let timestamp = Utc::now().format("%Y-%m-%dT%H%%3A%M%%3A%SZ");
     let actual_uri = format!(
@@ -473,6 +474,7 @@ async fn preflight_probe_global_exchange_is_repeatable_for_system_and_target_che
     let temp = tempdir().unwrap();
     let dependency = serde_json::json!({
         "event_type": "http_exchange",
+        "id": uuid::Uuid::new_v4(),
         "scheme": "fake_ip_http",
         "method": "POST",
         "uri": "/probe",
@@ -866,6 +868,7 @@ pub(super) async fn write_http_dependency(
     let dependency = serde_json::json!({
         "event_type": "http_exchange",
         "scheme": scheme,
+        "id": uuid::Uuid::new_v4(),
         "method": "POST",
         "uri": uri,
         "authority": authority,
@@ -910,10 +913,4 @@ pub(crate) async fn spawn_coordinator_http_replay(
 
 pub(crate) async fn snapshot_http_replay(runtime: &TestHttpReplayRuntime) -> Value {
     serde_json::to_value(runtime.0.state.lock().await.snapshot_report()).unwrap()
-}
-
-pub(crate) async fn write_http_replay_evidence(path: &Path, report: &Value) {
-    crate::replay::report::write_final_report_value(path.to_path_buf(), report)
-        .await
-        .unwrap();
 }

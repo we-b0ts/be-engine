@@ -28,11 +28,9 @@ impl DynamicValues {
             if event["global_dependency_reason"].is_string() {
                 continue;
             }
-            for rule in self
-                .rules
-                .iter()
-                .filter(|rule| self.matches_case(rule, case))
-            {
+            for rule in self.rules.iter().filter(|rule| {
+                self.matches_case(rule, case) && self.native_source_allowed(rule, &event)
+            }) {
                 let applicable = match &rule.capture {
                     DynamicValueCapture::Mysql {
                         target,

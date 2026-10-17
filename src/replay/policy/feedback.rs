@@ -73,6 +73,7 @@ impl ResponseRulePlan {
     }
 
     pub fn apply(self) -> Result<ResponseRuleReport> {
+        crate::policy::retired_authoring()?;
         let current = fs::read_to_string(&self.policy_path).with_context(|| {
             format!(
                 "failed to reread replay policy {}",
@@ -99,6 +100,7 @@ impl ResponseRulePlan {
 }
 
 pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRulePlan> {
+    crate::policy::retired_authoring()?;
     ensure!(
         feedback.kind != ResponseRuleKind::Jwt,
         "JWT responses require the typed response-jwt planner"

@@ -1,5 +1,13 @@
 # Redis key request contracts
 
+> Authoring migration: the legacy YAML and flag-based commands below are
+> historical semantic references. They are not accepted configuration or CLI
+> syntax. Use the self-contained `traffic-policy/v1` rules, `project.policy`,
+> and `rule plan --file … --evidence …` described in
+> [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
+> evidence and lifecycle constraints described here remain mandatory.
+
+
 Declare key differences only when Source code proves their generation.
 These are Redis request contracts under version-three `dependency_rules`,
 planned with `rule plan --dependency-request RULE_JSON`, applied through the

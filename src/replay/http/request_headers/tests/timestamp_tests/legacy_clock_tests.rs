@@ -35,8 +35,8 @@ async fn legacy_clock_supports_plan_apply_and_fresh_replay_without_changing_reco
     report["finalized"] = json!(true);
     let report_path = temp.path().join("replay-report.json");
     std::fs::write(&report_path, report.to_string()).unwrap();
-    let policy_path = temp.path().join("verification.yaml");
-    std::fs::write(
+    let policy_path = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy_path,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
@@ -56,28 +56,13 @@ async fn legacy_clock_supports_plan_apply_and_fresh_replay_without_changing_reco
         },
         source_evidence: "sdk.py:build_headers obtains current UTC time".into(),
     };
-    let plan = plan_http_header_timestamp(feedback.clone()).unwrap();
+    let error = plan_http_header_timestamp(feedback.clone()).err().unwrap();
     assert!(
-        plan.report().candidates["records"][0]
-            .get("request_time_reference")
-            .is_none()
+        error
+            .to_string()
+            .contains("legacy rule authoring is retired")
     );
-    // Even a still-in-window timing change invalidates the evidence binding.
-    write_duration(&case, json!(29000));
-    assert!(plan.apply().is_err());
-    std::fs::write(&recording_path, &original_recording).unwrap();
-    // Reject invented clocks against the immutable dependency, even within the window.
-    let mut forged = report.clone();
-    let fake = source_time() + Duration::seconds(1);
-    forged["http_request_header_mismatches"][0]["source_request_started_at"] = json!(fake);
-    std::fs::write(&report_path, forged.to_string()).unwrap();
-    assert!(plan_http_header_timestamp(feedback.clone()).is_err());
-    std::fs::write(&report_path, report.to_string()).unwrap();
-    let applied = plan_http_header_timestamp(feedback)
-        .unwrap()
-        .apply()
-        .unwrap();
-    assert!(applied.applied && applied.requires_replay);
+    crate::replay::policy::test_fixture::install_http_header(feedback).unwrap();
     let (next_addr, next_runtime, next_task) =
         spawn_http_replay_with_policy(&case, vec![], Some(policy_path), None).await;
     send(

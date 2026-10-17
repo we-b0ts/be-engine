@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::config::{BackgroundDependencyRuleConfig, SourceTrafficPolicyConfig};
 
-const REVISION: &str = "0123456789abcdef";
+const REVISION: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 const EVIDENCE: &str =
     "InterestTagCardServiceImpl.java:init schedules WAIC cache refresh unrelated to users/show";
 
@@ -120,7 +120,7 @@ fn plan_and_apply_persist_ports_without_redis_domains() {
 
     let raw = fs::read_to_string(&fixture.config).unwrap();
     assert!(raw.contains("protocol: redis"));
-    assert!(raw.contains("command: ZCOUNT"));
+    assert!(raw.contains("operation: ZCOUNT"));
     assert!(!raw.contains("rs20917"));
 
     let config = SourceTrafficPolicyConfig::load(&fixture.config).unwrap();
@@ -406,7 +406,20 @@ fn hash_read_plans_merge_keys_and_patterns_into_compatible_existing_rules() {
                 source_evidence: format!("TrafficServiceImpl.loadAllCacheData {command} warm-up"),
             });
     }
-    fs::write(&config, rules.render().unwrap()).unwrap();
+    let mut original = crate::policy::parse_policy(&rules.render().unwrap()).unwrap();
+    for entry in &mut original.rules {
+        if let crate::policy::PolicyRule::Native(rule) = entry
+            && let crate::policy::NativeEffect::ProcessOwned(effect) = &rule.effect
+            && let crate::policy::native::ProcessSelector::Redis { operation, .. } =
+                &effect.selector
+        {
+            rule.proof = crate::policy::Proof {
+                source: "TrafficServiceImpl.loadAllCacheData".into(),
+                fact: format!("loadAllCacheData {operation} warm-up"),
+            };
+        }
+    }
+    fs::write(&config, serde_yaml::to_string(&original).unwrap()).unwrap();
     let exchanges = [
         ("HGET", "traffic-result", vec!["version"]),
         ("HGET", "exp:config:collection:43", vec!["version"]),

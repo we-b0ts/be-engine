@@ -36,8 +36,8 @@ fn install_with_recorded_coverage(root: &Path, unprepared_api: bool) -> super::E
     let document = json!({"version":18,"project":{
         "source":{"snapshot":".traffic-e2e/local/source"},
         "target":{"dockerfile":".traffic-e2e/Dockerfile.target","startup":{}},
-        "replay":{"policy":".traffic-e2e/verification.yaml"},
-        "recording":{"source_traffic_policy":"source-traffic-policy.yaml"},
+        "policy":".traffic-e2e/policy.yaml",
+        "replay":{},
         "delivery":{"pr_base":"master"},"state":{"runtime_root":"local/runtime"}},
         "recorder":recorder});
     fs::write(
@@ -46,13 +46,8 @@ fn install_with_recorded_coverage(root: &Path, unprepared_api: bool) -> super::E
     )
     .unwrap();
     fs::write(
-        root.join(".traffic-e2e/verification.yaml"),
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
-    )
-    .unwrap();
-    fs::write(
-        root.join(".traffic-e2e/source-traffic-policy.yaml"),
-        "version: 2\n",
+        root.join(".traffic-e2e/policy.yaml"),
+        "format: traffic-policy/v1\nrules: []\n",
     )
     .unwrap();
     fs::write(
@@ -94,8 +89,8 @@ fn install_with_recorded_coverage(root: &Path, unprepared_api: bool) -> super::E
     }
     let mut report: serde_json::Value =
         serde_json::from_slice(&fs::read(&original.replay_report).unwrap()).unwrap();
-    report["replay_policy"] = json!({"path":root.join(".traffic-e2e/verification.yaml"),
-        "fingerprint":crate::validate_replay_policy(&root.join(".traffic-e2e/verification.yaml")).unwrap().fingerprint,
+    report["replay_policy"] = json!({"path":root.join(".traffic-e2e/policy.yaml"),
+        "fingerprint":crate::validate_replay_policy(&root.join(".traffic-e2e/policy.yaml")).unwrap().fingerprint,
         "expected_response":"assertions_only","unused_applicable_dependency_rule_ids":[]});
     let context = super::E2eRunContext {
         target_root: root.into(),
@@ -182,8 +177,17 @@ pub(crate) fn state_path(context: &super::E2eRunContext, api: &str) -> std::path
 }
 
 pub(crate) fn classify_stream(root: &Path) {
-    fs::write(root.join(".traffic-e2e/source-traffic-policy.yaml"),
-        "version: 2\nprocess_owned_dependencies:\n  - protocol: http\n    name: stream-startup\n    authorities: [stream.test]\n    methods: [GET]\n    path_prefixes: [/connect]\n    source_evidence: startup.rs starts process-wide stream\n").unwrap();
+    let policy = json!({"format":"traffic-policy/v1","rules":[{
+        "id":"stream-startup","match":{},"effect":{"kind":"process_owned","source_revision":"",
+            "selector":{"protocol":"http","authorities":["stream.test"],"methods":["GET"],"path_prefixes":["/connect"]}},
+        "proof":{"source":"startup.rs:1","fact":"Source starts this process-wide stream independently of API calls"}
+    }]});
+    crate::policy::compile_policy(&serde_json::from_value(policy.clone()).unwrap()).unwrap();
+    fs::write(
+        root.join(".traffic-e2e/policy.yaml"),
+        serde_yaml::to_string(&policy).unwrap(),
+    )
+    .unwrap();
 }
 
 pub(super) fn config(root: &Path) -> ResolvedProjectConfig {
@@ -205,7 +209,7 @@ pub(super) fn config(root: &Path) -> ResolvedProjectConfig {
         target_request_timeout: Duration::from_secs(1),
         target_quality_gates: Vec::new(),
         target_max_response_bytes: 1024,
-        replay_policy: root.join("verification.yaml"),
+        replay_policy: root.join("policy.yaml"),
         replay_case_dependency_post_response_window: Duration::from_millis(10),
         max_failed_cases_per_api: crate::DEFAULT_MAX_FAILED_CASES_PER_API,
         replay_loading: Default::default(),
@@ -213,7 +217,7 @@ pub(super) fn config(root: &Path) -> ResolvedProjectConfig {
         pr_base: "master".into(),
         managed_paths: Vec::new(),
         recorder_config: root.join("project.yaml"),
-        source_traffic_policy: root.join("source-traffic-policy.yaml"),
+        source_traffic_policy: root.join("policy.yaml"),
         runner_owned_response_assertions: true,
     }
 }

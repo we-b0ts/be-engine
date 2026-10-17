@@ -26,6 +26,13 @@ mod case_index;
 mod command_matching;
 #[cfg(test)]
 mod command_protocol_tests;
+mod contract_value;
+pub(crate) use memcached::contracts::{
+    source_witness as memcached_source_witness, validate_witness as memcached_validate_witness,
+};
+pub(crate) use policy::validate_finite_sharing as validate_native_finite_sharing;
+pub(crate) use policy::{NativeSourceCase, validate_native_source_dependencies};
+pub(crate) use report::source_owned_match;
 mod control;
 mod deferred;
 mod dependencies;
@@ -45,12 +52,16 @@ pub use egress_counter::{
 #[cfg(test)]
 mod global_dependency_tests;
 mod http;
+pub(crate) use http::contracts::{
+    source_witness as http_source_witness, validate_witness as http_validate_witness,
+    witness_matches as http_witness_matches,
+    witness_metadata_matches as http_witness_metadata_matches, witness_value as http_witness_value,
+};
 pub(crate) use http::cross_case as http_cross_case;
 pub use http::cross_case::HttpCrossCaseSelector;
 #[cfg(test)]
 pub(crate) use http::tests::{
     snapshot_http_replay, spawn_coordinator_http_replay, write_http_case,
-    write_http_replay_evidence,
 };
 pub(crate) use http::unordered as http_unordered;
 pub use http::unordered::HttpUnorderedSelector;
@@ -62,9 +73,16 @@ mod memcached;
 mod model;
 mod motan;
 mod mysql;
+pub(crate) use mysql::contracts::{
+    source_witness as mysql_source_witness, validate_witness as mysql_validate_witness,
+    witness_values as mysql_witness_values,
+};
+pub(crate) use policy::mysql_native_witness_matches;
+pub(crate) use policy::mysql_witness_matches;
 mod network_access;
 mod policy;
 pub(crate) use policy::replace_request_rule_section;
+pub(crate) use policy::request_contract::redis_bulk_payload;
 mod redis;
 pub(crate) mod report;
 #[cfg(test)]
@@ -159,7 +177,6 @@ pub(crate) use assertion::{
 };
 pub(crate) use policy::ReplayEvidencePolicyFreshness;
 pub use policy::ResponseHeaderDateRule;
-pub(crate) use policy::render_validated_replay_policy;
 pub use policy::{CaseCondition, JsonCondition};
 pub use policy::{
     DocxTimestampRule, Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath,
@@ -621,6 +638,10 @@ pub use policy::{
     HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
 };
 
+#[cfg(test)]
+pub(crate) use policy::test_fixture::install_dependency_rule as install_dependency_rule_fixture;
+#[cfg(test)]
+pub(crate) use policy::test_fixture::write_policy as write_policy_fixture;
 pub use policy::{
     RedisTimeShiftFeedback, RedisTimeShiftPlan, RedisTimeShiftReport, plan_redis_time_shift,
 };
@@ -660,3 +681,14 @@ pub(crate) use policy::request_contract::discover as discover_dependency_request
 pub use policy::{ResponseJwtAlgorithm, ResponseJwtKeySource, ResponseJwtRule};
 
 pub use policy::{ResponseJwtRuleFeedback, plan_response_jwt_rule};
+
+pub(crate) use assertion::native::{
+    NativeResponseContext, compare_body as native_response_body,
+    compare_header as native_response_header, selected as native_response_selected,
+};
+pub(crate) use assertion::response_payload_pair;
+pub(crate) use mysql::contracts::validate_contract_witness as mysql_validate_contract_witness;
+pub(crate) use policy::native_projection::validate_native_adapter;
+
+pub(crate) use assertion::native::source_request_body as native_source_request_body;
+pub(crate) use policy::native_projection::compiled_input_rules;

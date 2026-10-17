@@ -169,11 +169,46 @@ struct SelectedIdentity<'a> {
 }
 #[derive(Debug, Default)]
 pub(in crate::replay) struct PublishRules {
+    scope: crate::replay::policy::request_contract::RequestContracts,
     rules: Vec<PublishRule>,
     bindings: BTreeMap<BindingKey, Vec<u8>>,
 }
 
 impl PublishRules {
+    pub(super) fn validate_source(
+        &mut self,
+        exchanges: &[ReplayExchange],
+    ) -> Result<BTreeMap<String, usize>> {
+        let mut counts = BTreeMap::new();
+        for exchange in exchanges {
+            if exchange.source != super::ReplaySource::Case {
+                continue;
+            }
+            let Some(selected) = self.selection(exchange, &exchange.args) else {
+                continue;
+            };
+            ensure!(
+                !selected.is_empty(),
+                "Source PUBLISH identity is missing or ambiguous"
+            );
+            ensure!(
+                exchange.record.outcome == crate::DependencyExchangeOutcome::Response
+                    && exchange.record.response_kind == "integer",
+                "Source PUBLISH requires a complete native integer response"
+            );
+            for id in self.claim(exchange, &exchange.args) {
+                *counts.entry(id).or_default() += 1;
+            }
+        }
+        Ok(counts)
+    }
+
+    pub(in crate::replay) fn configure_scope(
+        &mut self,
+        scope: crate::replay::policy::request_contract::RequestContracts,
+    ) {
+        self.scope = scope;
+    }
     pub(in crate::replay) fn configure(&mut self, rules: Vec<PublishRule>) {
         self.rules = rules;
     }
@@ -187,6 +222,19 @@ impl PublishRules {
             .rules
             .iter()
             .filter(|rule| rule.selector.matches(&exchange.record, &exchange.args))
+            .filter(|rule| {
+                self.scope.native_rule_scope_matches(
+                    &rule.id,
+                    exchange.case_id.as_deref(),
+                    crate::policy::Protocol::Redis,
+                    &super::TargetKey {
+                        host: exchange.record.target_host.clone(),
+                        port: exchange.record.target_port,
+                    },
+                    Some(&crate::policy::Database::Index(exchange.record.database)),
+                    exchange.record.username.as_deref(),
+                )
+            })
             .collect::<Vec<_>>();
         if rules.is_empty() {
             return None;

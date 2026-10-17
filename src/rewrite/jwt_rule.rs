@@ -47,13 +47,6 @@ pub struct JwtPlanRecord {
     leeway_seconds: i64,
 }
 
-impl JwtPlanRecord {
-    /// Digest of the verification policy captured when this plan was created.
-    pub(super) fn policy_revision(&self) -> &str {
-        &self.policy_revision
-    }
-}
-
 pub(super) fn facts(root: &Path, state: &RewriteState) -> Result<JwtTimeEvidence> {
     let evidence = jwt_evidence::query(
         evidence::e2e_context(root, state)?,
@@ -76,6 +69,7 @@ pub(super) fn plan(
     source_evidence: Option<String>,
     options: JwtRulePlanOptions,
 ) -> Result<RewriteRuleReport> {
+    crate::policy::retired_authoring()?;
     let source_evidence = source_evidence.filter(|s| !s.trim().is_empty()).context("JWT rule requires --source-evidence confirming the source and target authentication path, key source, and expiration leeway")?;
     super::validate_single_line("JWT source evidence", &source_evidence)?;
     let issue = state
@@ -127,6 +121,7 @@ pub(super) fn plan(
     };
     let (_, _, traffic_report) = build(root, state, &spec)?;
     let record = RewriteRulePlanRecord {
+        unified: None,
         generated_witnesses: Vec::new(),
         response_jwts: Vec::new(),
         header_dates: Vec::new(),
@@ -283,6 +278,7 @@ pub(super) fn apply(
     state: &mut RewriteState,
     record: RewriteRulePlanRecord,
 ) -> Result<RewriteRuleReport> {
+    crate::policy::retired_authoring()?;
     ensure!(
         matches!(
             super::traffic_operation::state(root)?,

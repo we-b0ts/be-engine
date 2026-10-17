@@ -6,9 +6,8 @@ use anyhow::{Context, Result, ensure};
 use hyper::http::uri::Authority;
 use serde::Serialize;
 
+use super::HttpGatewayConfig;
 use super::edit::write_atomic;
-use super::rule_document::whole_file_diff;
-use super::{AppConfig, HttpGatewayConfig, SourceTrafficPolicyConfig};
 
 const FIELD: &str = "allowed_unused_http_hosts";
 
@@ -70,49 +69,12 @@ pub fn plan_allowed_unused_http_hosts(
         !feedback.hosts.is_empty(),
         "at least one --host is required"
     );
-    let requested = feedback
-        .hosts
-        .iter()
-        .map(|host| normalize_host(host))
-        .collect::<Result<BTreeSet<_>>>()?;
-    let original_project_config = read(&feedback.project_config_path, "project config")?;
-    let original_rules = read(&feedback.rules_path, "source traffic policy")?;
-    let mut rules = SourceTrafficPolicyConfig::parse(&original_rules, &feedback.rules_path)?;
-    let mut static_config = AppConfig::load_static(&feedback.project_config_path)?;
-    let before = rules
-        .http
-        .allowed_unused_http_hosts
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let after = before.union(&requested).cloned().collect::<BTreeSet<_>>();
-    rules.http.allowed_unused_http_hosts = after.iter().cloned().collect();
-    rules.apply_to(&mut static_config)?;
-    static_config.validate()?;
-    let updated_rules = rules.render()?;
-    let changed = updated_rules != original_rules;
-    let added = after.difference(&before).cloned().collect::<Vec<_>>();
-    let diff = if changed {
-        whole_file_diff(&feedback.rules_path, &original_rules, &updated_rules)
-    } else {
-        String::new()
-    };
-    Ok(AllowedUnusedHttpHostPlan {
-        project_config_path: feedback.project_config_path,
-        rules_path: feedback.rules_path.clone(),
-        original_project_config,
-        original_rules,
-        updated_rules,
-        report: AllowedUnusedHttpHostReport {
-            rules: feedback.rules_path,
-            changed,
-            applied: false,
-            hosts_before: before.into_iter().collect(),
-            hosts_after: after.into_iter().collect(),
-            added,
-            diff,
-        },
-    })
+    for host in &feedback.hosts {
+        normalize_host(host)?;
+    }
+    anyhow::bail!(
+        "unbounded unused HTTP hosts have no unified rule effect; use a Source-proven process-owned HTTP selector or narrow capture scope; sharing does not authorize unused work"
+    )
 }
 
 pub(super) fn validate_config(config: &HttpGatewayConfig) -> Result<()> {

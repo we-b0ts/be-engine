@@ -44,7 +44,8 @@ pub(crate) fn reclassify_background_dependencies(
     report_path: &Path,
     case_dirs: &BTreeMap<String, PathBuf>,
 ) -> Result<BackgroundReclassification> {
-    let config = SourceTrafficPolicyConfig::load(source_traffic_policy)?;
+    let (config, fingerprints) =
+        SourceTrafficPolicyConfig::load_with_fingerprints(source_traffic_policy)?;
     let rules = &config.process_owned_dependencies;
     let matcher = BackgroundDependencyMatcher::from_rules(rules)?;
     let memcached_ports = matcher.resolved_memcached_rule_ports();
@@ -79,8 +80,7 @@ pub(crate) fn reclassify_background_dependencies(
     annotate_api_origins(&mut report, &origins);
     by_protocol.retain(|_, count| *count > 0);
     let matched_unused_case = by_protocol.values().sum();
-    let rules_payload = serde_json::to_vec(rules)?;
-    let rules_fingerprint = crate::verification_progress::fingerprint(&rules_payload);
+    let rules_fingerprint = fingerprints.classification;
     let remaining_dirty_case_ids = dirty_case_ids(&report);
     report["background_reclassification"] = json!({
         "rules_fingerprint": rules_fingerprint,
@@ -167,6 +167,40 @@ fn matched_recorded_exchanges(
         }
     }
     Ok(matched)
+}
+
+/// Pure Source selector proof shared with unified authoring. Origin causality and
+/// protocol selectors remain with the same owners used by report reclassification.
+pub(crate) fn source_owned_match(
+    event: &Value,
+    case: Option<&str>,
+    rule: &BackgroundDependencyRuleConfig,
+    memcached_ports: &BTreeMap<String, BTreeSet<u16>>,
+    origins: &crate::api_trigger::OriginIndex,
+) -> Result<bool> {
+    if rule.trigger_source().is_some() {
+        return Ok(case
+            .and_then(|case| origins.witness(case, event))
+            .is_some_and(|witness| witness.rule == rule.name()));
+    }
+    if let BackgroundDependencyRuleConfig::Mysql { selector, .. } = rule {
+        return Ok(event["event_type"] == "mysql_exchange"
+            && selector.matches_query(
+                event["target_host"].as_str(),
+                event["target_port"]
+                    .as_u64()
+                    .and_then(|p| u16::try_from(p).ok()),
+                event["database"].as_str(),
+                event["username"].as_str(),
+                event["command"].as_str().unwrap_or_default(),
+                event["sql"].as_str(),
+            ));
+    }
+    if matches!(rule, BackgroundDependencyRuleConfig::Http { .. }) {
+        return Ok(event["event_type"] == "http_exchange"
+            && matching_http_rule(event, std::slice::from_ref(rule)).is_some());
+    }
+    Ok(matching_rule(event, std::slice::from_ref(rule), memcached_ports).is_some())
 }
 
 fn matching_rule<'a>(
@@ -332,6 +366,10 @@ fn matching_http_rule<'a>(
 }
 
 fn report_http_authority(event: &Value, uri: &str) -> Option<String> {
+    if let Some(authority) = event["authority"].as_str().and_then(normalize_authority) {
+        return Some(authority);
+    }
+
     if let Some(authority) = uri
         .parse::<Uri>()
         .ok()

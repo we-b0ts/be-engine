@@ -180,7 +180,18 @@ fn plan_capture(
     let mut static_config = AppConfig::load_static(&project_config_path)?;
     rules.apply_to(&mut static_config)?;
     static_config.validate()?;
-    let updated_rules = rules.render()?;
+    let updated_rules = super::native_policy::render_updated(
+        &original_rules,
+        &rules,
+        &crate::policy::Proof {
+            source: format!(
+                "{} at {}",
+                candidate.resource.descriptor_path.display(),
+                source_revision
+            ),
+            fact: source_evidence.clone(),
+        },
+    )?;
     let changed = updated_rules != original_rules;
     let diff = if changed {
         whole_file_diff(&rules_path, &original_rules, &updated_rules)

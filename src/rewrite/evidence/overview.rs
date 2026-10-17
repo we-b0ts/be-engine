@@ -64,8 +64,12 @@ pub(super) fn report(
                 .push(json!({"api": api, "issue": method_issue, "queries": method_queries}));
         }
     }
+    let rule_discovery = queries
+        .iter()
+        .filter(|q| q.purpose.starts_with("Discover bounded typed rule drafts"))
+        .collect::<Vec<_>>();
     let facts = json!({ "work_scope": scope, "issue": issue, "method_apis": methods,
-        "method_issues": method_issues });
+        "method_issues": method_issues,"rule_discovery":rule_discovery });
     let evidence_id = format!(
         "evidence-{}",
         fingerprint::id(&[requested_id, &serde_json::to_string(&facts)?])
@@ -87,7 +91,7 @@ pub(super) fn report(
         facts,
         queries,
         applicable_rule_planners: Vec::new(),
-        rule_hints: Vec::new(),
+        rule_hints: super::unified_rule_hint(target_root,state).into_iter().collect(),
         does_not_prove: vec![
             "Issue ownership and possible causes are investigation guidance, not a proven root cause."
                 .to_string(),

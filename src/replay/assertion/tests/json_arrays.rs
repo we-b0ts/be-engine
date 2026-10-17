@@ -17,6 +17,10 @@ fn all_generated_rules_support_variable_and_nested_arrays() {
         let (source, target) = match kind {
             "timestamp" => (json!(1700000000), json!(1700000060)),
             "duration" => (json!(120), json!(180)),
+            "uuid" => (
+                json!("11111111-1111-4111-8111-111111111111"),
+                json!("22222222-2222-4222-8222-222222222222"),
+            ),
             _ => (json!("source"), json!("target")),
         };
         for count in [0, 1, 3] {
@@ -33,10 +37,7 @@ fn all_generated_rules_support_variable_and_nested_arrays() {
             );
             let report = assert_recorded_response(options).unwrap();
             assert!(report.passed, "{kind}: {report:?}");
-            assert_eq!(
-                report.applied_generated_rule_ids.len(),
-                usize::from(count > 0)
-            );
+            assert_eq!(report.applied_body_rule_ids.len(), usize::from(count > 0));
             assert!(report.unused_applicable_generated_rule_ids.is_empty());
         }
     }
@@ -44,37 +45,37 @@ fn all_generated_rules_support_variable_and_nested_arrays() {
 
 #[test]
 fn array_rules_keep_missing_types_lengths_order_and_other_fields_exact() {
-    let expected = json!({"data": [{"value": 1, "id": "a"}, {"value": 2, "id": "b"}]});
+    let expected = json!({"data": [{"value": "src1", "id": "a"}, {"value": "src2", "id": "b"}]});
     for (actual, pointer, kind) in [
         (
-            json!({"data": [{"id": "a"}, {"value": 4, "id": "b"}]}),
+            json!({"data": [{"id": "a"}, {"value": "tgt2", "id": "b"}]}),
             "/data/0/value",
             ResponseDifferenceKind::MissingActual,
         ),
         (
-            json!({"data": [{"value": "3", "id": "a"}, {"value": 4, "id": "b"}]}),
+            json!({"data": [{"value": 3, "id": "a"}, {"value": "tgt2", "id": "b"}]}),
             "/data/0/value",
             ResponseDifferenceKind::GeneratedFieldNotScalar,
         ),
         (
-            json!({"data": [{"value": 3, "id": "a"}, {"value": null, "id": "b"}]}),
+            json!({"data": [{"value": "tgt1", "id": "a"}, {"value": null, "id": "b"}]}),
             "/data/1/value",
             ResponseDifferenceKind::GeneratedFieldNotScalar,
         ),
         (
-            json!({"data": [{"value": 3, "id": "a"}]}),
+            json!({"data": [{"value": "tgt1", "id": "a"}]}),
             "/data",
             ResponseDifferenceKind::ArrayLengthMismatch,
         ),
         (
-            json!({"data": [{"value": 3, "id": "changed"}, {"value": 4, "id": "b"}]}),
+            json!({"data": [{"value": "tgt1", "id": "changed"}, {"value": "tgt2", "id": "b"}]}),
             "/data/0/id",
             ResponseDifferenceKind::ValueMismatch,
         ),
         (
-            json!({"data": [{"value": 2, "id": "b"}, {"value": 1, "id": "a"}]}),
-            "/data",
-            ResponseDifferenceKind::ArrayOrderMismatch,
+            json!({"data": [{"value": "src2", "id": "b"}, {"value": "src1", "id": "a"}]}),
+            "/data/0/id",
+            ResponseDifferenceKind::ValueMismatch,
         ),
     ] {
         let (_temp, options) = write_raw_case(
@@ -104,13 +105,17 @@ fn array_rules_do_not_relax_numeric_object_keys() {
     let report = assert_recorded_response(options).unwrap();
     assert!(!report.passed);
     assert_eq!(report.differences[0].pointer, "/data/0/value");
-    assert!(report.applied_generated_rule_ids.is_empty());
+    assert!(report.applied_body_rule_ids.is_empty());
 }
 
 #[test]
 fn array_rules_support_root_scalars_and_keep_explicit_indexes() {
     for pointer in ["/*", "/0"] {
-        let (_temp, options) = write_raw_case(&generated_rule("random", pointer), "[1,2]", "[3,2]");
+        let (_temp, options) = write_raw_case(
+            &generated_rule("random", pointer),
+            r#"["source","same"]"#,
+            r#"["target","same"]"#,
+        );
         assert!(assert_recorded_response(options).unwrap().passed);
     }
 }
@@ -150,7 +155,7 @@ fn time_array_rules_fail_on_one_invalid_element_or_missing_request_time() {
         })
         .unwrap();
         assert!(!report.passed);
-        assert_eq!(report.applied_generated_rule_ids.len(), 1);
+        assert_eq!(report.applied_body_rule_ids.len(), 1);
         assert!(
             report
                 .differences

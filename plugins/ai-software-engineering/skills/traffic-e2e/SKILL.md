@@ -42,7 +42,8 @@ Read only the reference for the active operation:
 - Standalone Source recording and evidence handoff: [recording.md](references/recording.md)
 - Case grouping: [case-grouping.md](references/case-grouping.md)
 - Prepare, run, and recover replay E2E: [e2e-run.md](references/e2e-run.md)
-- Change response policy: [replay-policy.md](references/replay-policy.md)
+- Discover and authorize unified Source/input/value/native rules:
+  [replay-policy.md](references/replay-policy.md)
 - Configure source-proven process-owned dependency rules:
   [process-owned-dependencies.md](references/process-owned-dependencies.md)
 - Diagnose Replay or protocol engine capability:
@@ -79,6 +80,23 @@ Treat the result as facts, not migration attribution. For an independent
 operation, report the exact command, scope, status, gates, bounded diagnosis,
 and whether an engine capability investigation is required. Do not choose a
 target repair, migration route, blocker status, or completion state.
+
+## Unified Policy Boundary
+
+`project.policy` names one `traffic-policy/v1` document, normally
+`.traffic-e2e/policy.yaml`. Keep resources, codecs, contracts and proof inline
+by default. Current bounded evidence supplies rule discovery and capability
+metadata. During managed rewrites, the backend-rewrite skill owns the single
+`rule plan --file ... --evidence ...` / `rule apply <plan-id>` transaction.
+Plans expand the complete rule, protect unselected evidence and expose remaining
+Replay, reclassification or recording obligations. Source self-validation does
+not create independent Target evidence. Protocol framing, sessions and finite
+consumption remain with the protocol owner.
+
+API route-pattern bootstrap retains `traffic-e2e config recorder ...
+case-path-patterns`. It updates capture effects in the same policy and preserves
+unrelated rules and proofs. Old verification/Source document formats and
+codec-specific rule planners are retired.
 
 ## Engine Capability Diagnosis
 

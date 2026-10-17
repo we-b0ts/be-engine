@@ -39,7 +39,7 @@ fn relative_timestamp_accepts_expiry_offsets_formats_and_timezone_equivalence() 
         );
         let report = assert_recorded_response(options).unwrap();
         assert!(report.passed, "{format}: {report:?}");
-        assert_eq!(report.applied_generated_rule_ids.len(), 1);
+        assert_eq!(report.applied_body_rule_ids.len(), 1);
     }
 }
 

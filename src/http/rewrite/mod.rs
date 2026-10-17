@@ -246,7 +246,7 @@ pub(crate) fn matches(rule: &HttpResponseRewriteRuleConfig, input: &RewriteInput
     authority_matches && method_matches && path_matches && status_matches && content_type_matches
 }
 
-fn decode_rewrite_body<'a>(
+pub(crate) fn decode_rewrite_body<'a>(
     headers: &HeaderMap,
     body: &'a [u8],
     max_decoded_body_bytes: usize,

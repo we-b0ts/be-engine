@@ -39,6 +39,7 @@ pub(in crate::replay) enum OptionalSessionExchange {
 
 #[derive(Debug, Clone)]
 pub(in crate::replay) struct MatchedExchange {
+    pub(in crate::replay) value_delivery: Option<contracts::PreparedDelivery>,
     pub(in crate::replay) response_time_shift_rules: Vec<String>,
     #[allow(dead_code)]
     pub(in crate::replay) source: ReplaySource,
@@ -75,6 +76,8 @@ pub(in crate::replay) struct RecordedMysqlConnection {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(in crate::replay) struct RecordedMysqlExchange {
+    #[serde(default)]
+    pub(in crate::replay) timestamp: Option<chrono::DateTime<chrono::Utc>>,
     pub(in crate::replay) server_status_before: Option<u16>,
     pub(in crate::replay) query_sequence: Option<u64>,
     pub(in crate::replay) connection_id: Option<Uuid>,
@@ -95,7 +98,7 @@ pub(in crate::replay) struct RecordedMysqlExchange {
     pub(in crate::replay) duration_ms: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub(in crate::replay) struct RecordedMysqlResponse {
     #[serde(skip)]
     pub(in crate::replay) evidence: Option<crate::dependency_index::RecordRef>,
@@ -115,7 +118,7 @@ pub(in crate::replay) struct RecordedMysqlResponse {
     pub(in crate::replay) rows_truncated: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub(in crate::replay) struct RecordedMysqlColumn {
     pub(in crate::replay) name: String,
     pub(in crate::replay) table: Option<String>,
@@ -169,4 +172,18 @@ pub(in crate::replay) struct BoundParamType {
 pub(in crate::replay) enum ResultRowEncoding {
     Text,
     Binary,
+}
+
+impl PartialEq for RecordedMysqlResponse {
+    fn eq(&self, other: &Self) -> bool {
+        self.server_status == other.server_status
+            && self.status == other.status
+            && self.error_code == other.error_code
+            && self.error_message == other.error_message
+            && self.affected_rows == other.affected_rows
+            && self.last_insert_id == other.last_insert_id
+            && self.columns == other.columns
+            && self.rows == other.rows
+            && self.rows_truncated == other.rows_truncated
+    }
 }

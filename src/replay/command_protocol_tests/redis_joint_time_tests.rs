@@ -1,8 +1,6 @@
 //! Native identity/time planning followed by a finite Redis replay over TCP.
 use super::*;
-use crate::{
-    DynamicValueRedisTimeRule, DynamicValueRuleFeedback, plan_dynamic_value_redis_time_rule,
-};
+use crate::DynamicValueRedisTimeRule;
 use serde_json::json;
 
 const ERROR: &[u8] = b"-ERR no recorded Redis dependency matched\r\n";
@@ -20,7 +18,7 @@ fn inbound(mode: &str) -> String {
 #[tokio::test]
 async fn redis_joint_time_plans_from_failure_then_replays_nil_capture_references_and_finite_consumption()
  {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
     let local = temp.path().join(".traffic-e2e/local");
     let case = local.join("recordings/run/case");
     std::fs::create_dir_all(&case).unwrap();
@@ -67,8 +65,8 @@ async fn redis_joint_time_plans_from_failure_then_replays_nil_capture_references
         .join("\n");
     let dependencies = case.join("dependencies.jsonl");
     std::fs::write(&dependencies, &immutable).unwrap();
-    let policy = temp.path().join(".traffic-e2e/verification.yaml");
-    std::fs::write(
+    let policy = temp.path().join(".traffic-e2e/policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
@@ -102,31 +100,37 @@ async fn redis_joint_time_plans_from_failure_then_replays_nil_capture_references
         .unwrap();
     }
     task.abort();
-    let identity=serde_json::from_value(json!({
-        "id":"item-identity","api":"/items","targets":[{"host":"redis.internal","port":6379}],
+    let identity = json!({
+        "kind":"dynamic_value","id":"item-identity","api":"/items","targets":[{"host":"redis.internal","port":6379}],
         "when":{"request_body_json":{"/mode":{"equals":"generated"}}},
         "capture":{"protocol":"redis","target":{"host":"redis.internal","port":6379},"database":0,
             "command":"RPUSH","key":{"prefix":"items:","numeric":true},"argument_index":1,"json_pointer":"/id",
             "references":[{"json_pointer":"/content_key","template":"cache:payload:{key_middle}:{value}"}],
             "derived_from":{"json_pointer":"/timestamp","prefix":"item-"}},
         "source_evidence":"Item:create generates its ID from current milliseconds and reuses it in bounded payload references"
-    })).unwrap();
+    });
     let time: DynamicValueRedisTimeRule =
         serde_json::from_value(json!({"id":"item-time","method":"POST",
         "time_values":[{"json_pointer":"/timestamp","format":"unix_milliseconds"}],
         "source_evidence":"Item:create stores the current request-relative millisecond timestamp"}))
         .unwrap();
-    let plan = plan_dynamic_value_redis_time_rule(
-        DynamicValueRuleFeedback {
-            policy_path: policy.clone(),
-            rule: identity,
-            replay_report: report,
-        },
-        time,
-    )
-    .unwrap();
-    assert_eq!(plan.report().matching_cases, 1);
-    plan.apply().unwrap();
+    crate::replay::install_dependency_rule_fixture(&policy, identity.clone()).unwrap();
+    let fields = time
+        .time_values
+        .iter()
+        .map(|field| {
+            (
+                field.json_pointer.clone(),
+                json!({"time":"preserve_relative","format":field.format}),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    crate::replay::install_dependency_rule_fixture(&policy,json!({
+        "id":time.id,"protocol":"redis","target":identity["capture"]["target"],
+        "case":{"method":time.method,"path":identity["api"]},"when":identity["when"],
+        "source_evidence":time.source_evidence,"redis":{"database":0,"key":identity["capture"]["key"],
+            "commands":[{"command":"RPUSH","argument_values":{"1":{"json":fields}}}]}
+    })).unwrap();
     for mode in ["forwarded", "generated"] {
         std::fs::write(case.join("request.json"), inbound(mode)).unwrap();
         let (addr, state, task) = redis_value_tests::spawn(&case, Some(policy.clone())).await;

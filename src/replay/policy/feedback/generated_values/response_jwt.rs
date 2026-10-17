@@ -16,6 +16,7 @@ pub struct ResponseJwtRuleFeedback {
 }
 
 pub fn plan_response_jwt_rule(feedback: ResponseJwtRuleFeedback) -> Result<GeneratedValueRulePlan> {
+    crate::policy::retired_authoring()?;
     let original = fs::read_to_string(&feedback.policy_path)?;
     let mut loaded = load_replay_policy(&feedback.policy_path)?;
     ensure!(

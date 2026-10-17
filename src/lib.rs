@@ -40,6 +40,8 @@ mod mysql;
 mod network_probe;
 mod path_pattern;
 mod platform;
+pub mod policy;
+pub(crate) mod policy_evidence;
 mod proxy;
 pub mod record_service;
 mod recorded_request;
@@ -63,6 +65,8 @@ mod tcp_gateway;
 mod tcp_listener;
 mod tls;
 mod udp_gateway;
+pub(crate) mod value_codec;
+pub(crate) mod value_contract;
 mod verification_progress;
 
 use std::sync::Arc;
@@ -136,6 +140,7 @@ pub use config::{
     plan_breeze_memcached_background_dependency, plan_breeze_resource_capture,
     plan_case_path_pattern_feedback, plan_motan_background_dependency,
     plan_mysql_background_dependency, plan_redis_background_dependency,
+    resolve_unified_policy_path,
 };
 pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
@@ -220,23 +225,23 @@ pub use rewrite::{
     RewriteSourceProcessRedisSnapshotEndpointView, RewriteSourceProcessRedisSnapshotView,
     RewriteSourceProcessTrafficScopeView, RewriteSourceProcessTrafficView, RewriteStatusReport,
     RewriteTargetQualityOptions, RewriteTrafficOperationKind, RewriteTrafficOperationView,
-    RewriteWaitOptions, RewriteWorkScope, RewriteWorkerActivity, RewriteWorkerBlockingReason,
-    RewriteWorkerConfirmOptions, RewriteWorkerCoverageState, RewriteWorkerDispatchState,
-    RewriteWorkerDispatchView, RewriteWorkerInventoryItem, RewriteWorkerMissingQuery,
-    RewriteWorkerReportOptions, RewriteWorkerTransferOptions, RewriteWorkflowView,
-    accept_rewrite_review, apply_rewrite_case_patterns, apply_rewrite_dependency_rule,
-    apply_rewrite_recorder_capture, apply_rewrite_rule, begin_rewrite_regression,
-    cancel_misrouted_rewrite_repair, check_batch_rewrite_review, check_rewrite_review,
-    check_rewrite_review_batch_file, close_rewrite_expert, confirm_rewrite_expert,
-    confirm_rewrite_worker, execute_rewrite_operation, export_rewrite_integration_batch,
-    inventory_rewrite, next_rewrite, plan_rewrite_dependency_payload_rule,
-    plan_rewrite_dependency_rule, plan_rewrite_http_response_capture,
-    plan_rewrite_recorder_capture, plan_rewrite_rule, prepare_rewrite_expert,
-    query_rewrite_case_dependencies, query_rewrite_evidence, query_rewrite_evidence_for_scope,
-    rebuild_rewrite_case_groups, recover_rewrite, recover_rewrite_rule_plan,
-    report_rewrite_expert_delivery, report_rewrite_worker, request_rewrite_revalidation,
-    resume_rewrite_replay_planning, retry_rewrite_operation,
-    retry_rewrite_replay_after_out_of_band_run, rework_rewrite_review,
+    RewriteUnifiedRulePlanOptions, RewriteWaitOptions, RewriteWorkScope, RewriteWorkerActivity,
+    RewriteWorkerBlockingReason, RewriteWorkerConfirmOptions, RewriteWorkerCoverageState,
+    RewriteWorkerDispatchState, RewriteWorkerDispatchView, RewriteWorkerInventoryItem,
+    RewriteWorkerMissingQuery, RewriteWorkerReportOptions, RewriteWorkerTransferOptions,
+    RewriteWorkflowView, accept_rewrite_review, apply_rewrite_case_patterns,
+    apply_rewrite_dependency_rule, apply_rewrite_recorder_capture, apply_rewrite_rule,
+    begin_rewrite_regression, cancel_misrouted_rewrite_repair, check_batch_rewrite_review,
+    check_rewrite_review, check_rewrite_review_batch_file, close_rewrite_expert,
+    confirm_rewrite_expert, confirm_rewrite_worker, execute_rewrite_operation,
+    export_rewrite_integration_batch, inventory_rewrite, next_rewrite,
+    plan_rewrite_dependency_payload_rule, plan_rewrite_dependency_rule,
+    plan_rewrite_http_response_capture, plan_rewrite_recorder_capture, plan_rewrite_rule,
+    plan_rewrite_unified_rule, prepare_rewrite_expert, query_rewrite_case_dependencies,
+    query_rewrite_evidence, query_rewrite_evidence_for_scope, rebuild_rewrite_case_groups,
+    recover_rewrite, recover_rewrite_rule_plan, report_rewrite_expert_delivery,
+    report_rewrite_worker, request_rewrite_revalidation, resume_rewrite_replay_planning,
+    retry_rewrite_operation, retry_rewrite_replay_after_out_of_band_run, rework_rewrite_review,
     rework_rewrite_review_with_report, route_rewrite, run_rewrite_target_quality,
     show_rewrite_review, start_rewrite_next, start_rewrite_target_quality, status_rewrite,
     status_rewrite_for_api, status_rewrite_for_selector, transfer_rewrite_worker,

@@ -54,6 +54,7 @@ fn event(host: &str, port: u16, command: &str, key: &str) -> RecorderEvent {
         connection_id: Uuid::new_v4(),
         sequence: 1,
         timestamp: Utc::now(),
+        request_started_at: chrono::Utc::now(),
         client_addr: None,
         target_host: host.to_string(),
         target_port: port,

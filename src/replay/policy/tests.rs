@@ -150,20 +150,20 @@ dependency_rules:
 }
 
 #[test]
-fn validates_verification_policy_example() {
+fn validates_unified_policy_example() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("config")
-        .join("verification.example.yaml");
+        .join("policy.example.yaml");
     let report = validate_replay_policy(&path).unwrap();
 
-    assert_eq!(report.version, 3);
+    assert_eq!(report.version, 1);
     assert!(report.runner_owned_response_assertions);
 }
 
 #[test]
 fn rejects_removed_version_two_policy_contract() {
     let temp = TempDir::new().unwrap();
-    let path = temp.path().join("verification.yaml");
+    let path = temp.path().join("policy.yaml");
     fs::write(
         &path,
         "version: 2\nexpected_response: assertions_only\ndependency_rules: []\n",
@@ -171,13 +171,13 @@ fn rejects_removed_version_two_policy_contract() {
     .unwrap();
 
     let error = validate_replay_policy(&path).unwrap_err();
-    assert!(format!("{error:#}").contains("unsupported replay policy version 2; expected 1 or 3"));
+    assert!(format!("{error:#}").contains("traffic-policy/v1"));
 }
 
 #[test]
 fn rejects_legacy_rules_key() {
     let temp = TempDir::new().unwrap();
-    let path = temp.path().join("verification.yaml");
+    let path = temp.path().join("policy.yaml");
     fs::write(
         &path,
         "version: 3\nexpected_response: assertions_only\nrules: []\n",
@@ -185,14 +185,14 @@ fn rejects_legacy_rules_key() {
     .unwrap();
 
     let error = validate_replay_policy(&path).unwrap_err();
-    assert!(format!("{error:#}").contains("unknown field `rules`"));
+    assert!(format!("{error:#}").contains("traffic-policy/v1"));
 }
 
 #[test]
 fn validates_assertion_only_policy_contract() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("replay.yaml");
-    fs::write(
+    crate::replay::write_policy_fixture(
         &path,
         r#"
 version: 1
@@ -209,7 +209,7 @@ dependency_rules: []
         ExpectedResponseUsage::AssertionsOnly
     );
     assert!(report.dependency_rule_ids.is_empty());
-    assert!(report.fingerprint.starts_with("fnv1a64:"));
+    assert!(report.fingerprint.starts_with("sha256:"));
 }
 
 #[test]
@@ -242,7 +242,7 @@ fn rejects_policy_without_expected_response_contract() {
     fs::write(&path, "version: 1\ndependency_rules: []\n").unwrap();
 
     let error = validate_replay_policy(&path).unwrap_err();
-    assert!(error.to_string().contains("failed to parse replay policy"));
+    assert!(error.to_string().contains("traffic-policy/v1"));
 }
 
 #[test]
@@ -271,33 +271,45 @@ fn binds_and_references_runtime_mysql_uuid() {
         case_id: Some(CASE_ID),
         identity: &identity,
         command: "COM_STMT_EXECUTE",
-        recorded_sql: Some("INSERT INTO request_log_202606 (uuid, request_time) VALUES (?, ?)"),
+        recorded_sql: Some("INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)"),
         sql: Some("INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)"),
         recorded: Some(&recorded_insert),
         actual: Some(&actual_insert),
     };
+    let changed_table = MysqlPolicyContext {
+        case_id: Some(CASE_ID),
+        identity: &identity,
+        command: "COM_STMT_EXECUTE",
+        recorded_sql: insert_context.recorded_sql,
+        sql: Some("INSERT INTO request_log_202606 (uuid, request_time) VALUES (?, ?)"),
+        recorded: Some(&recorded_insert),
+        actual: Some(&actual_insert),
+    };
+    assert!(
+        preview_mysql_contract(&runtime, &changed_table, now)
+            .unwrap_err()
+            .contains("physical")
+    );
     assert!(runtime.allows_mysql_sql_difference(&insert_context));
-    let insert = runtime.preview_mysql(&insert_context, now).unwrap();
+    let insert = preview_mysql_contract(&runtime, &insert_context, now).unwrap();
     runtime.commit(Some(CASE_ID), insert);
 
     let recorded_update = values(&[json!("11111111-1111-4111-8111-111111111111")]);
     let actual_update = values(&[json!("22222222-2222-4222-8222-222222222222")]);
-    let update = runtime
-        .preview_mysql(
-            &MysqlPolicyContext {
-                case_id: Some(CASE_ID),
-                identity: &identity,
-                command: "COM_STMT_EXECUTE",
-                recorded_sql: Some(
-                    "UPDATE request_log_202607 SET response_status=200 WHERE uuid=?",
-                ),
-                sql: Some("UPDATE request_log_202607 SET response_status=200 WHERE uuid=?"),
-                recorded: Some(&recorded_update),
-                actual: Some(&actual_update),
-            },
-            now,
-        )
-        .unwrap();
+    let update = preview_mysql_contract(
+        &runtime,
+        &MysqlPolicyContext {
+            case_id: Some(CASE_ID),
+            identity: &identity,
+            command: "COM_STMT_EXECUTE",
+            recorded_sql: Some("UPDATE request_log_202607 SET response_status=200 WHERE uuid=?"),
+            sql: Some("UPDATE request_log_202607 SET response_status=200 WHERE uuid=?"),
+            recorded: Some(&recorded_update),
+            actual: Some(&actual_update),
+        },
+        now,
+    )
+    .unwrap();
     runtime.commit(Some(CASE_ID), update);
 
     let report = runtime.report();
@@ -330,23 +342,23 @@ fn rejects_changed_reference_and_out_of_window_time() {
         json!("2026-07-15 13:30:00"),
     ]);
     assert!(
-        runtime
-            .preview_mysql(
-                &MysqlPolicyContext {
-                    case_id: Some(CASE_ID),
-                    identity: &identity,
-                    command: "COM_STMT_EXECUTE",
-                    recorded_sql: Some(
-                        "INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)",
-                    ),
-                    sql: Some("INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)",),
-                    recorded: Some(&recorded_insert),
-                    actual: Some(&bad_time),
-                },
-                now,
-            )
-            .unwrap_err()
-            .contains("fixed tolerance")
+        preview_mysql_contract(
+            &runtime,
+            &MysqlPolicyContext {
+                case_id: Some(CASE_ID),
+                identity: &identity,
+                command: "COM_STMT_EXECUTE",
+                recorded_sql: Some(
+                    "INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)",
+                ),
+                sql: Some("INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)",),
+                recorded: Some(&recorded_insert),
+                actual: Some(&bad_time),
+            },
+            now,
+        )
+        .unwrap_err()
+        .contains("SQL value contract failed")
     );
 
     let actual_insert = values(&[
@@ -356,26 +368,8 @@ fn rejects_changed_reference_and_out_of_window_time() {
     let mut wrong_kind = actual_insert.clone();
     wrong_kind[0].kind = "bytes".to_string();
     assert!(
-        runtime
-            .preview_mysql(
-                &MysqlPolicyContext {
-                    case_id: Some(CASE_ID),
-                    identity: &identity,
-                    command: "COM_STMT_EXECUTE",
-                    recorded_sql: Some(
-                        "INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)",
-                    ),
-                    sql: Some("INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)",),
-                    recorded: Some(&recorded_insert),
-                    actual: Some(&wrong_kind),
-                },
-                now,
-            )
-            .unwrap_err()
-            .contains("changed kind")
-    );
-    let decision = runtime
-        .preview_mysql(
+        preview_mysql_contract(
+            &runtime,
             &MysqlPolicyContext {
                 case_id: Some(CASE_ID),
                 identity: &identity,
@@ -383,34 +377,50 @@ fn rejects_changed_reference_and_out_of_window_time() {
                 recorded_sql: Some(
                     "INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)",
                 ),
-                sql: Some("INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)"),
+                sql: Some("INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)",),
                 recorded: Some(&recorded_insert),
-                actual: Some(&actual_insert),
+                actual: Some(&wrong_kind),
             },
             now,
         )
-        .unwrap();
+        .unwrap_err()
+        .contains("parameter kind changed")
+    );
+    let decision = preview_mysql_contract(
+        &runtime,
+        &MysqlPolicyContext {
+            case_id: Some(CASE_ID),
+            identity: &identity,
+            command: "COM_STMT_EXECUTE",
+            recorded_sql: Some("INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)"),
+            sql: Some("INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)"),
+            recorded: Some(&recorded_insert),
+            actual: Some(&actual_insert),
+        },
+        now,
+    )
+    .unwrap();
     runtime.commit(Some(CASE_ID), decision);
     let wrong_update = values(&[json!("33333333-3333-4333-8333-333333333333")]);
     let recorded_update = values(&[json!("11111111-1111-4111-8111-111111111111")]);
     assert!(
-        runtime
-            .preview_mysql(
-                &MysqlPolicyContext {
-                    case_id: Some(CASE_ID),
-                    identity: &identity,
-                    command: "COM_STMT_EXECUTE",
-                    recorded_sql: Some(
-                        "UPDATE request_log_202607 SET response_status=200 WHERE uuid=?",
-                    ),
-                    sql: Some("UPDATE request_log_202607 SET response_status=200 WHERE uuid=?"),
-                    recorded: Some(&recorded_update),
-                    actual: Some(&wrong_update),
-                },
-                now,
-            )
-            .unwrap_err()
-            .contains("did not match its bound value")
+        preview_mysql_contract(
+            &runtime,
+            &MysqlPolicyContext {
+                case_id: Some(CASE_ID),
+                identity: &identity,
+                command: "COM_STMT_EXECUTE",
+                recorded_sql: Some(
+                    "UPDATE request_log_202607 SET response_status=200 WHERE uuid=?",
+                ),
+                sql: Some("UPDATE request_log_202607 SET response_status=200 WHERE uuid=?"),
+                recorded: Some(&recorded_update),
+                actual: Some(&wrong_update),
+            },
+            now,
+        )
+        .unwrap_err()
+        .contains("did not match its bound value")
     );
 }
 
@@ -426,7 +436,7 @@ fn validates_memcached_protobuf_timestamp_without_exposing_literals() {
     let recorded_at = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
     let actual_at = Utc.timestamp_opt(1_800_000_000, 0).unwrap();
     let recorded = protobuf_user_info(1_699_999_995, b"stable");
-    let actual = protobuf_user_info(1_800_000_005, b"stable");
+    let actual = protobuf_user_info(1_799_999_995, b"stable");
     let decision = runtime
         .preview_memcached(&MemcachedPolicyContext {
             case_id: Some(CASE_ID),
@@ -436,6 +446,7 @@ fn validates_memcached_protobuf_timestamp_without_exposing_literals() {
             recorded_value: Some(&recorded),
             actual_value: Some(&actual),
             recorded_observed_at: recorded_at,
+            recorded_duration_ms: 0,
             actual_observed_at: actual_at,
         })
         .unwrap();
@@ -463,9 +474,10 @@ fn validates_memcached_protobuf_timestamp_without_exposing_literals() {
                 recorded_value: Some(&recorded),
                 actual_value: Some(&actual),
                 recorded_observed_at: recorded_at,
+                recorded_duration_ms: 0,
                 actual_observed_at: actual_at,
             })
-            .is_ok()
+            .is_err()
     );
 
     let same_host_other_port = TargetKey {
@@ -483,6 +495,7 @@ fn validates_memcached_protobuf_timestamp_without_exposing_literals() {
                 recorded_value: Some(&recorded),
                 actual_value: Some(&changed_stable_value),
                 recorded_observed_at: recorded_at,
+                recorded_duration_ms: 0,
                 actual_observed_at: actual_at,
             })
             .unwrap_err()
@@ -491,35 +504,26 @@ fn validates_memcached_protobuf_timestamp_without_exposing_literals() {
 }
 
 #[test]
-fn rejects_memcached_timestamp_rule_with_a_broad_or_invalid_selector() {
-    let missing_resource = memcached_policy().replace(
-        "      resource:\n        kind: cache_service\n        port: 11211\n",
-        "",
-    );
-    let fixture = policy_fixture(&missing_resource);
-    let error = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap_err();
-    assert!(format!("{error:#}").contains("missing field `resource`"));
-
-    let unsupported_breeze = memcached_policy().replace(
-        "        kind: cache_service\n        port: 11211",
-        "        kind: breeze\n        namespace: user-info",
-    );
-    let fixture = policy_fixture(&unsupported_breeze);
-    let error = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap_err();
-    assert!(format!("{error:#}").contains("unknown variant `breeze`"));
-
-    let cache_service_namespace = memcached_policy().replace(
-        "        port: 11211",
-        "        port: 11211\n        namespace: user-info",
-    );
-    let fixture = policy_fixture(&cache_service_namespace);
-    let error = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap_err();
-    assert!(format!("{error:#}").contains("unknown field `namespace`"));
-
-    let empty_key = memcached_policy().replace("        prefix: u", "        prefix: ''");
-    let fixture = policy_fixture(&empty_key);
-    let error = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap_err();
-    assert!(format!("{error:#}").contains("requires a prefix or suffix"));
+fn rejects_memcached_contract_without_an_executable_resource_and_value_slot() {
+    for invalid in 0..4 {
+        let fixture = policy_fixture(memcached_policy());
+        let mut policy =
+            crate::policy::parse_policy(&fs::read_to_string(&fixture.policy_path).unwrap())
+                .unwrap();
+        let rule = policy.rules[0].as_value_mut().unwrap();
+        match invalid {
+            0 => rule.selector.resource = None,
+            1 => rule.selector.resource.as_mut().unwrap().endpoint.port = 0,
+            2 => rule.selector.operation = Some("APPEND".into()),
+            _ => rule.selector.key = Some(crate::policy::KeySelector::default()),
+        }
+        fs::write(
+            &fixture.policy_path,
+            serde_yaml::to_string(&policy).unwrap(),
+        )
+        .unwrap();
+        assert!(ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).is_err());
+    }
 }
 
 #[test]
@@ -641,26 +645,55 @@ fn scoped_and_unscoped_rules_compose_on_disjoint_mysql_params() {
     let recorded = values(&[json!(10), json!("old"), json!("request-id")]);
     let actual = values(&[json!(20), json!("new"), json!("request-id")]);
 
-    let decision = runtime
-        .preview_mysql(
-            &MysqlPolicyContext {
-                case_id: Some(CASE_ID),
-                identity: &identity,
-                command: "COM_STMT_EXECUTE",
-                recorded_sql: Some(sql),
-                sql: Some(sql),
-                recorded: Some(&recorded),
-                actual: Some(&actual),
-            },
-            Utc::now(),
-        )
-        .unwrap();
+    let decision = preview_mysql_contract(
+        &runtime,
+        &MysqlPolicyContext {
+            case_id: Some(CASE_ID),
+            identity: &identity,
+            command: "COM_STMT_EXECUTE",
+            recorded_sql: Some(sql),
+            sql: Some(sql),
+            recorded: Some(&recorded),
+            actual: Some(&actual),
+        },
+        Utc::now(),
+    )
+    .unwrap();
     runtime.commit(Some(CASE_ID), decision);
 
     let report = runtime.report();
     assert_eq!(report.dependency_rules[0].matches, 1);
     assert_eq!(report.dependency_rules[1].matches, 1);
     assert!(report.unused_applicable_dependency_rule_ids.is_empty());
+}
+
+fn preview_mysql_contract(
+    runtime: &ReplayPolicyRuntime,
+    context: &MysqlPolicyContext<'_>,
+    observed: chrono::DateTime<Utc>,
+) -> Result<super::matcher::DependencyRuleDecision, String> {
+    let record = serde_json::from_value(json!({
+        "connection_id":uuid::Uuid::nil(), "query_sequence":1,
+        "target_host":context.identity.target.as_ref().unwrap().host,
+        "target_port":context.identity.target.as_ref().unwrap().port,
+        "database":context.identity.database, "username":context.identity.username,
+        "command":context.command,"sql":context.recorded_sql,"params":context.recorded,
+        "response":{"status":"ok"},"outcome":"response","parse_warnings":[]
+    }))
+    .unwrap();
+    runtime
+        .request_contracts
+        .preview_mysql_values(
+            context.case_id,
+            context.identity,
+            &record,
+            context.command,
+            context.sql,
+            context.actual,
+            observed,
+            runtime,
+        )
+        .expect("explicit native SQL contract must select its Source physical statement")
 }
 
 struct PolicyFixture {
@@ -692,7 +725,23 @@ fn policy_fixture(policy: &str) -> PolicyFixture {
     fs::write(case_dir.join("expected-response.json"), "{}").unwrap();
     fs::write(case_dir.join("dependencies.jsonl"), "").unwrap();
     let policy_path = temp.path().join("replay.yaml");
-    fs::write(&policy_path, policy).unwrap();
+    let mut synthetic: serde_yaml::Value = serde_yaml::from_str(policy).unwrap();
+    for rule in synthetic["dependency_rules"]
+        .as_sequence_mut()
+        .into_iter()
+        .flatten()
+    {
+        if rule["protocol"].as_str() == Some("mysql") && rule["target"].is_null() {
+            rule["target"] =
+                serde_yaml::from_str("{host: audit.example.test, port: 3306}").unwrap();
+            rule["mysql"]["command"] = serde_yaml::Value::String("COM_STMT_EXECUTE".into());
+        }
+        if rule["protocol"].as_str() == Some("memcached") && rule["target"].is_null() {
+            rule["target"] = serde_yaml::from_str("{host: cache.internal, port: 11211}").unwrap();
+        }
+    }
+    crate::replay::write_policy_fixture(&policy_path, serde_yaml::to_string(&synthetic).unwrap())
+        .unwrap();
     let cases = BTreeMap::from([(
         CASE_ID.to_string(),
         ReplayCase {
@@ -721,7 +770,8 @@ dependency_rules:
       port: 3306
     mysql:
       command: COM_STMT_EXECUTE
-      sql: "INSERT INTO request_log_* (uuid, request_time) VALUES (?, ?)"
+      sql: "INSERT INTO {{table}} (uuid, request_time) VALUES (?, ?)"
+      tables: [request_log_202606, request_log_202607]
       database: pluto_audit
       username: audit_user
       params:
@@ -741,7 +791,8 @@ dependency_rules:
       port: 3306
     mysql:
       command: COM_STMT_EXECUTE
-      sql: "UPDATE request_log_* SET response_status=200 WHERE uuid=?"
+      sql: "UPDATE {{table}} SET response_status=200 WHERE uuid=?"
+      tables: [request_log_202606, request_log_202607]
       database: pluto_audit
       username: audit_user
       params:
@@ -826,7 +877,8 @@ dependency_rules:
       port: 3306
     mysql:
       command: COM_STMT_EXECUTE
-      sql: "UPDATE request_log_* SET * WHERE uuid=?"
+      sql: "UPDATE {{table}} SET elapsed=?, response_data=? WHERE uuid=?"
+      tables: [request_log_202606, request_log_202607]
       database: pluto_audit
       username: audit_user
       params:
@@ -842,7 +894,8 @@ dependency_rules:
       port: 3306
     mysql:
       command: COM_STMT_EXECUTE
-      sql: "UPDATE request_log_* SET * WHERE uuid=?"
+      sql: "UPDATE {{table}} SET elapsed=?, response_data=? WHERE uuid=?"
+      tables: [request_log_202606, request_log_202607]
       database: pluto_audit
       username: audit_user
       params:
@@ -859,7 +912,7 @@ fn observe_mysql_policy_exchanges(
         Some(CASE_ID),
         identity,
         "COM_STMT_EXECUTE",
-        Some("INSERT INTO request_log_202606 (uuid, request_time) VALUES (?, ?)"),
+        Some("INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)"),
     );
     runtime.observe_recorded_mysql_exchange(
         Some(CASE_ID),

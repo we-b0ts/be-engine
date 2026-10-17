@@ -3,6 +3,7 @@ use crate::replay::redis::key_selector::RedisValueKeySelector;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -79,6 +80,8 @@ pub(crate) enum RequestTimestampFormat {
     UnixMicroseconds,
     Rfc3339,
     Iso8601Naive,
+    SqlDatetime,
+    AmzDate,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -94,7 +97,7 @@ pub(crate) struct JwtContract {
     #[serde(default = "default_tolerance", skip_serializing)]
     pub tolerance: String,
     #[serde(default)]
-    pub dynamic_claims: Vec<String>,
+    pub dynamic_claims: Vec<crate::request_rules::JwtDynamicClaim>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -129,12 +132,15 @@ impl TimeField {
                 "clock_group requires 1..64 ASCII letters, digits, underscores or hyphens"
             );
         }
-        if self.format == RequestTimestampFormat::Iso8601Naive {
+        if matches!(
+            self.format,
+            RequestTimestampFormat::Iso8601Naive | RequestTimestampFormat::SqlDatetime
+        ) {
             super::time::offset(self)?;
         } else {
             ensure!(
                 self.utc_offset.is_none(),
-                "utc_offset is only valid for iso8601_naive"
+                "utc_offset is only valid for a naive timestamp"
             );
         }
         Ok(())
@@ -232,27 +238,17 @@ impl RedisRequestSelector {
                                     )?;
                                     tolerance(&field.jwt.tolerance)?;
                                     ensure!(
-                                        matches!(
-                                            json.json.get(&field.jwt.relative_to),
-                                            Some(JsonField::Time(_))
-                                        ),
-                                        "JWT relative_to must select a time field in the same JSON argument"
+                                        field.jwt.dynamic_claims.len() <= 16,
+                                        "JWT supports at most sixteen typed nonces"
                                     );
-                                    ensure!(
-                                        matches!(
-                                            json.json.get(&field.jwt.relative_to),
-                                            Some(JsonField::Time(TimeField {
-                                                format: RequestTimestampFormat::UnixSeconds,
-                                                ..
-                                            }))
-                                        ),
-                                        "JWT relative_to requires Unix seconds"
-                                    );
-                                    ensure!(
-                                        field.jwt.dynamic_claims.is_empty()
-                                            || field.jwt.dynamic_claims == ["/jti"],
-                                        "JWT dynamic claims support only an explicit UUID v4 /jti"
-                                    );
+                                    let mut claims = BTreeSet::new();
+                                    for claim in &field.jwt.dynamic_claims {
+                                        claim.validate()?;
+                                        ensure!(
+                                            claims.insert(claim.pointer()),
+                                            "duplicate request JWT nonce claim"
+                                        );
+                                    }
                                 }
                             }
                             ensure!(

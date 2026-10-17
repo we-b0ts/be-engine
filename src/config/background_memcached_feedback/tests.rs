@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::config::SourceTrafficPolicyConfig;
 
-const REVISION: &str = "0123456789abcdef";
+const REVISION: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 const EVIDENCE: &str = "TopUserServiceImpl.java:691 scheduled local cache warm";
 const DESCRIPTOR: &str = "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs";
 
@@ -122,7 +122,7 @@ fn plans_exact_breeze_identity_without_persisting_dynamic_port() {
     let raw = fs::read_to_string(&fixture.config).unwrap();
     assert!(raw.contains("protocol: memcached"));
     assert!(!raw.contains("response_role"));
-    assert!(!raw.contains("source_revision"));
+    assert!(raw.contains("source_revision:"));
     assert!(raw.contains("key_start: 0"));
     assert!(raw.contains("key_end: 4095"));
     assert!(raw.contains("initial_load_timeout_ms: 30000"));

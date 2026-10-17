@@ -95,6 +95,7 @@ impl GeneratedValueRulePlan {
         &self.report
     }
     pub fn apply(self) -> Result<GeneratedValueRuleReport> {
+        crate::policy::retired_authoring()?;
         ensure!(
             fs::read_to_string(&self.policy_path)? == self.original,
             "verification policy changed after planning; the pending plan is stale. Run fresh Replay using the existing recordings and current verification.yaml, query new evidence, and plan again before applying"
@@ -123,6 +124,7 @@ impl GeneratedValueRulePlan {
 pub fn plan_dynamic_value_rule(
     feedback: DynamicValueRuleFeedback,
 ) -> Result<GeneratedValueRulePlan> {
+    crate::policy::retired_authoring()?;
     plan_dynamic_value(feedback, None)
 }
 
@@ -130,6 +132,7 @@ pub fn plan_dynamic_value_mysql_time_rule(
     feedback: DynamicValueRuleFeedback,
     time: DynamicValueMysqlTimeRule,
 ) -> Result<GeneratedValueRulePlan> {
+    crate::policy::retired_authoring()?;
     plan_dynamic_value(feedback, Some(TimeCompanion::Mysql(time)))
 }
 
@@ -137,6 +140,7 @@ pub fn plan_dynamic_value_redis_time_rule(
     feedback: DynamicValueRuleFeedback,
     time: DynamicValueRedisTimeRule,
 ) -> Result<GeneratedValueRulePlan> {
+    crate::policy::retired_authoring()?;
     plan_dynamic_value(feedback, Some(TimeCompanion::Redis(time)))
 }
 
@@ -257,6 +261,7 @@ fn plan_dynamic_value(
 pub fn plan_response_header_date_rule(
     feedback: ResponseHeaderDateRuleFeedback,
 ) -> Result<GeneratedValueRulePlan> {
+    crate::policy::retired_authoring()?;
     let original = fs::read_to_string(&feedback.policy_path)?;
     let mut loaded = load_replay_policy(&feedback.policy_path)?;
     let rules = std::collections::BTreeMap::from([(feedback.api.clone(), feedback.rules.clone())]);

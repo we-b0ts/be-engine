@@ -28,6 +28,7 @@ mod sql_values_tests;
 mod subquery_tests;
 mod time_shift_tests;
 mod tuple_tests;
+mod unified_contracts;
 
 fn exchange(sql: &str, response: Value) -> Value {
     json!({"event_type":"mysql_exchange", "target_host":"127.0.0.1", "target_port":3306,
@@ -78,8 +79,16 @@ async fn fixture_with_global(
     tokio::task::JoinHandle<()>,
 ) {
     let temp = tempdir().unwrap();
-    let case = temp.path().join("case-id");
-    std::fs::create_dir(&case).unwrap();
+    let case = temp.path().join(".traffic-e2e/local/recordings/case-id");
+    std::fs::create_dir_all(&case).unwrap();
+    let local = temp.path().join(".traffic-e2e/local");
+    let key = local.join(crate::repository::LOCAL_ENCRYPTION_KEY_FROM_LOCAL);
+    std::fs::create_dir_all(key.parent().unwrap()).unwrap();
+    std::fs::write(
+        key,
+        crate::request_headers::generate_encryption_key().unwrap(),
+    )
+    .unwrap();
     std::fs::write(
         case.join("dependencies.jsonl"),
         records
@@ -91,7 +100,7 @@ async fn fixture_with_global(
     .unwrap();
     if !global.is_empty() {
         std::fs::write(
-            temp.path().join("global-dependencies.jsonl"),
+            case.parent().unwrap().join("global-dependencies.jsonl"),
             global
                 .iter()
                 .map(Value::to_string)
@@ -108,7 +117,7 @@ async fn fixture_with_global(
         .unwrap();
         std::fs::write(case.join("expected-response.json"), "{}").unwrap();
         let path = temp.path().join("policy.yaml");
-        std::fs::write(&path, policy).unwrap();
+        crate::replay::write_policy_fixture(&path, policy).unwrap();
         Some(path)
     } else {
         None
@@ -149,7 +158,7 @@ async fn sqlx_defaults_tls_prepared_queries_and_policy_use_text_evidence() {
         let sql = "SELECT id,name,missing,payload,created,amount FROM users WHERE name='AbC  中文' AND missing <=> NULL AND payload=X'00ff' LIMIT 1";
         let records = [exchange(sql, response)];
         let (temp, addr, runtime, task) = fixture(&records, true).await;
-        let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let row = sqlx::query("SELECT id,name,missing,payload,created,amount FROM users WHERE name=? AND missing <=> ? AND payload=? LIMIT 1")
             .bind("AbC  中文").bind(Option::<String>::None).bind(vec![0_u8, 255])
             .fetch_one(&mut client).await.unwrap();
@@ -197,7 +206,13 @@ async fn sqlx_cached_statement_rebinds_params_and_replays_writes_transactions_an
             ),
         ];
         let (temp, addr, runtime, task) = fixture(&records, false).await;
-        let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         let sql = "SELECT id FROM tasks_0509 WHERE uid=? AND note='?' /* ? */";
         let first = sqlx::query(sql)
             .bind(509_u64)

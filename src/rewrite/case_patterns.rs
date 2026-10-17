@@ -159,6 +159,8 @@ pub fn apply(options: RewriteCasePatternApplyOptions) -> Result<RewriteActionEnv
         &project.recorder_config,
         &project.source_traffic_policy,
         &patterns,
+        &fingerprint::source_image_revision(&target_root)?,
+        &artifacts::recording_run(&target_root, &state.recording_run_id),
     )?;
     recanonicalize_catalog(&mut state.api_catalog, &effective_patterns)?;
     extend_catalog(
@@ -211,6 +213,8 @@ fn apply_patterns(
     project_config: &Path,
     policy_path: &Path,
     patterns: &[String],
+    source_revision: &str,
+    case_source: &Path,
 ) -> Result<Vec<String>> {
     SourceTrafficPolicyConfig::load(policy_path)?;
     let original = fs::read_to_string(policy_path)
@@ -224,11 +228,22 @@ fn apply_patterns(
         .collect::<BTreeSet<_>>();
     after.extend(patterns.iter().cloned());
     policy.http.case_path_patterns = after.into_iter().collect();
+    policy.http.source_revision = source_revision.into();
 
     let mut effective = crate::config::AppConfig::load_static(project_config)?;
     policy.apply_to(&mut effective)?;
     effective.validate()?;
-    let updated = policy.render()?;
+    let updated = crate::config::native_policy::render_updated(
+        &original,
+        &policy,
+        &crate::policy::Proof {
+            source: format!("{} at {}", case_source.display(), source_revision),
+            fact: format!(
+                "Finalized Source API inventory supports case-path patterns: {}",
+                patterns.join(", ")
+            ),
+        },
+    )?;
     let current = fs::read_to_string(policy_path)
         .with_context(|| format!("failed to read {}", policy_path.display()))?;
     ensure!(
@@ -326,6 +341,7 @@ mod tests {
     fn finalized_recording_requests_only_new_uncovered_apis_and_recanonicalizes_without_mutating_cases()
      {
         let target = configured_target();
+        crate::rewrite::test_support::install_source_snapshot(target.path());
         write_run(
             target.path(),
             "20260901000000",
@@ -438,8 +454,8 @@ mod tests {
             None,
         );
         fs::write(
-            target.path().join(".traffic-e2e/verification.yaml"),
-            "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+            target.path().join(".traffic-e2e/policy.yaml"),
+            "format: traffic-policy/v1\nrules: []\n",
         )
         .unwrap();
         fs::write(target.path().join("lib.rs"), "pub fn value() {}\n").unwrap();

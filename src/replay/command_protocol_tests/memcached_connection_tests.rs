@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn replays_memcached_binary_with_live_opaque() {
     for global in [false, true] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
         let case_dir = temp.path().join("case");
         tokio::fs::create_dir_all(&case_dir).await.unwrap();
         let mut recorded_response = vec![0_u8; 24];
@@ -69,7 +69,7 @@ async fn replays_memcached_binary_with_live_opaque() {
 
 #[tokio::test]
 async fn one_memcached_target_connection_consumes_multiple_recorded_source_lanes() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
     let case_dir = temp.path().join("case");
     tokio::fs::create_dir_all(&case_dir).await.unwrap();
     let read_connection = Uuid::new_v4();
@@ -133,7 +133,7 @@ async fn one_memcached_target_connection_consumes_multiple_recorded_source_lanes
 
 #[tokio::test]
 async fn cross_lane_memcached_matching_preserves_each_source_lane_order() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
     let case_dir = temp.path().join("case");
     tokio::fs::create_dir_all(&case_dir).await.unwrap();
     let connection_id = Uuid::new_v4();

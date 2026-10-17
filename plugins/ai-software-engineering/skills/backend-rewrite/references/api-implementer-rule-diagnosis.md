@@ -1,110 +1,80 @@
-# API Implementer Rule Diagnosis
+# Rule Diagnosis
 
-Read after [API Implementer Diagnosis](api-implementer-diagnosis.md) when source
-analysis, current evidence, or a rule hint suggests generated values,
-non-contractual order, or a rule capability gap. Use only relevant sections;
-the common evidence and handoff contracts still apply.
+Read this after tracing Source and Target behavior. Rules are self-contained
+`traffic-policy/v1` records in the file named by `project.policy`. Workers return
+Source conclusions and a proposed record; the coordinator plans/applies it.
+The complete schema, examples and lifecycle are in
+[unified rule contracts](../../../../../docs/unified-rule-contracts.md).
 
 ## Rule Discovery From Source Diagnosis
 
-For a random identity shared across protocols, return one capture (MySQL SQL
-template/value index, Redis SET/HSET value, or HTTP dependency JSON pointer),
-exact allowed host/port
-endpoints and source generator/lifetime proof. `rule plan --dynamic-value`
-correlates later decoded references without enumerating every decoded request reference;
-format is optional. See [dynamic value rules](../../../../../docs/dynamic-value-rules.md).
-For a current-date filename in `Content-Disposition`, return the header parameter,
-calendar format, timezone and exporter proof for `rule plan --header-date`.
-It checks `filename*` too and retains static filename/header/body assertions;
-see [header date rules](../../../../../docs/response-header-date-rules.md).
-Only the coordinator plans/applies these rules, followed by fresh verification.
+Use `facts.rule_guidance`, mechanical candidates, declared capability requirements
+and the current evidence ID. A candidate establishes a possible mechanism, not
+business permission. Return the smallest Source-proven scope, exact field and
+encoding, Source file/symbol, and a fact explaining the allowed relationship.
+An absent candidate does not mean the capability is unavailable. Ask for missing
+schema or clock evidence rather than guessing from field names or values.
 
-For a JSON expiry or scheduled timestamp generated as current time plus a
-source-proven offset, return its pointer, timestamp format, source proof and
-observed source/target examples for `timestamp` with `time: preserve_relative`.
-The coordinator uses `--timestamp-mode preserve-relative`; default timestamp
-rules check the request-time window instead. Relative comparison keeps the
-offset from each side's captured request within five seconds, so wrong TTLs
-and fixed absolute expiry values remain checked. Existing recordings are reusable.
-See [JSON response time rules](../../../../../docs/response-time-rules.md).
+Use one proposal for one complete rule by default. Keep its resource, codec,
+contracts and proof inline. The same `time` or `unordered` contract works on
+supported JSON and Protobuf slots; selecting an encoding grants no permission
+on other endpoints, operations or surfaces.
 
-Check `facts.policy_freshness` before recommending a plan. If it requires fresh
-Replay, keep the source diagnosis and return the structured `refresh_command`
-to the coordinator. Any policy edit can stale earlier evidence, including a
-rule for another API. The coordinator follows normal review/scheduling gates,
-reuses the recording run, and obtains new evidence. Changing evidence IDs or
-selectors cannot fix this mismatch; it does not prove an engine capability gap.
+| Evidence and Source fact | Proposed contract/effect | Preserve |
+| --- | --- | --- |
+| An unordered Set becomes a JSON array or repeated PB field | `contract: {<logical-path>: {kind: unordered}}`; PB declares field numbers/types explicitly | Multiplicity, membership, element associations, presence, unknown PB fields and remainder |
+| A generated timestamp or expiry | `kind: time`, explicit format, relation and trusted anchor | Units, microseconds, TTL offset, copied instants and clock groups |
+| Live elapsed duration that stops at terminal state | Source sibling `conditional` around `duration` | Terminal values and status stay exact; missing/wrong-type status rejects |
+| Expired recorded Redis/MySQL input | Explicit `dependency.response` time contract plus selected `delivery.rebase_time`, or typed SQL response effect | Raw Source bytes, sentinel values, protocol outcomes, finite inventory and signature dependencies |
+| Identity captured in SQL/Redis/HTTP and reused later | `effect.kind: identity` with capture, shape/lifetime and exact allowed reference resources | Bijection, case scope and atomic candidate decisions |
+| SET NX lock and conditional release | `effect.kind: redis_lock` with endpoint/database/user/key scope | Successful acquisition completion before reference, token equality, NX/TTL/script and finite consumption |
+| Script ARGV/time-key or INCRBY/EXPIRE chain | `effect.kind: redis_sequence` with Source-proven ordered commands | Script identity, numkeys, KEYS, stable ARGV, sequence closure and derived key relationships |
+| PUBLISH UUID and JSON times | Typed publisher identity plus disjoint shared time contracts | Channel, publisher bijection and atomic commit |
+| Signed JWT, including URL-contained tokens | `effect.kind: response_jwt` with inline key provenance and nonce contracts | Both signatures, stable claims/URL bytes, related expiry/issued-at/TTL |
+| Encrypted JSON with random IV | `response_generated` / `encrypted_json` with declared envelope and effective startup key | Valid padding, plaintext structure and all unselected plaintext; ciphertext is not whole-field random |
+| Generated URL/session fragments | `response_generated` / `template` with explicitly typed tokens and shared bindings | Fixed scheme/authority/path/query and identity equality |
+| Current date in a header or DOCX field | `response_header_date` or `response_body` | Timezone, static filename/header/XML and other archive parts |
+| Expired inbound JWT | `input_jwt` with exact location, algorithm and effective startup key | Original signature, invalid-authentication cases and relative validity |
+| Shared process initialization recorded in another case | `finite_sharing` with complete Source lifetime proof | Same-run immutable inventory, exact request identity and single consumption |
+| Detached Source work appears unused in another case | `process_owned` with Source origin/capture/predicate proof | Original attribution, lane/transaction/identity boundaries and reversible classification |
+| Missing Source acquisition or IP learned from a response | `capture_http`, `capture_breeze` or `capture_http_response` | Real new Recording and provenance of original/transformed response |
 
-For API issues, consult these capabilities after tracing source and target
-behavior. Engine hints and mechanical candidates are additional evidence;
-their absence does not mean a documented capability is unavailable.
+For timezone-free timestamps, prove the fixed UTC offset from Source deployment.
+Different `clock_group` names require independent Source clock reads; omission
+retains rigid copy/precision checks. For SQL, return the exact SQL template,
+physical table bounds, parameter/value indices, database and authentication
+identity. HGET response rules select the hash field separately from the key.
 
-| Proven scenario | Capability and next investigation |
-| --- | --- |
-| An inbound JWT in a Bearer header or named URL query parameter expired between capture and Replay | JWT `preserve_relative`; inspect the returned `jwt-time-validity` query and prove the exact token location, authentication path, expiry leeway, and signing-key source. |
-| A DOCX download differs because OPC ZIP metadata and `docProps/core.xml` creation time are generated per request | DOCX response-body rule; prove the generated XML timestamp in source, select it explicitly, verify that its source-to-target delta tracks elapsed request time, and keep every other decompressed package part exact. |
-| Random SET NX ownership tokens differ from recordings, or a script/DELEX references that token | Redis `lock`; inspect `redis_lock_candidates`, prove random tokens and conditional release from source, and return host, port, key selector plus source evidence. One rule correlates all supported references; never remove the lock or independently ignore token arguments. |
-| Redis writes differ at a source-generated ZADD score or ZREMRANGEBYSCORE cutoff | Dependency request `time: preserve_relative`; inspect `dependency_request_candidates` from `dirty_clusters`, then return endpoint/key, `commands.argument_values` (ZADD index 1, ZREMRANGEBYSCORE index 2), timestamp format and source proof for `rule plan --dependency-request`. See [dependency request rules](../../../../../docs/dependency-request-rules.md). |
-| EVAL/EVALSHA carries generated scalar or JSON ARGV timestamps | Dependency request `time: preserve_relative`, including `unix_microseconds`; prove the exact script digest and raw argument indices (ARGV[n] = numkeys + 1 + n). Select exact JSON pointers inside the ARGV value, preserving KEYS and stable business fields. If Source reads the clock independently at different stages, declare `clock_group` per time field: copies and derived windows stay together, independent reads use different names; omission retains the existing rigid group. Prove each group from Source. See [dependency request rules](../../../../../docs/dependency-request-rules.md#script-json-and-microsecond-timestamp-copies). |
-| A JSON PUBLISH message carries a generated completion time alongside a random publisher UUID | Compose a dependency request time contract on an exact channel with the existing PUBLISH UUID binding. Prove the time generator and, for timezone-free ISO strings, the fixed `utc_offset`; do not classify the timestamp as random. Source messages without selected time pointers retain ordinary matching. See [PUBLISH JSON time contracts](../../../../../docs/dependency-request-rules.md#publish-json-timestamps-and-publisher-uuids). |
-| A recorded Redis response timestamp makes an otherwise correct cache expire during Replay, causing extra reads or an error branch | Redis `time-shift`; inspect earlier successfully matched GET/HGET responses, including previous cases, and prove their time semantics. |
-| A matched MySQL SELECT returns an absolute lease or expiry that is stale during Replay | Explicit MySQL `response_time_shift` through `rule plan --dependency-request`; prove exact UTC result columns and fixed sentinel values. See [MySQL result time shifts](../../../../../docs/mysql-response-time-shift.md). |
-| Fast Replay keeps a process TTL cache warm across requests that were farther apart in recording | Currently unsupported. Retain strict unused-dependency evidence and return source-proven TTL semantics as an engine capability gap. |
-| Shared HTTP initialization was recorded in another case | HTTP `cross-case`; verify same-run request identity and source sharing semantics. |
-| An outbound HTTP array or Redis write collection differs only in order | Protocol-specific `unordered`; prove collection semantics and inspect exact order witnesses. |
+JWT diagnosis uses the failed attempt's trusted clocks and key discovery, never
+current wall time or raw tokens in notes. A 401 or missing key is insufficient
+proof. Trace configuration precedence. Return a variable name, or a read-only
+mounted dotenv path/field; never return key bytes. Recorded public keys may verify
+response signatures and cannot sign inbound requests.
 
-The two CLI entrypoints group supported planners; they are not disjoint policy
-categories. Both can author `verification.yaml` `dependency_rules`.
+## Plan And Verification Handoff
 
-| Entrypoint | Examples of supported planners |
-| --- | --- |
-| `rule plan/apply` | Inbound JWT time translation, response assertions, generated identities (`--dynamic-value`), dependency request contracts and MySQL result time shifts (`--dependency-request`). |
-| `dependency-rule plan/apply` | Protocol-specific ownership, cross-case scope, HTTP/Redis unordered values, Redis lock/publish/response time-shift, and MySQL time values. |
+Check `facts.policy_freshness` first. If it requires Replay, return its structured
+refresh action; changing evidence IDs cannot repair stale evidence. The coordinator
+uses the same entrypoint for value and native effects:
 
-Check both `rule plan --help` and the relevant protocol's `dependency-rule plan`
-help before declaring a capability gap, even when dynamic candidates or planner
-hints are absent. The coordinator plans and applies with current evidence and
-source proof, followed by fresh Replay.
+```text
+backend-rewrite rule plan --file rule.yaml --evidence <current-evidence-id>
+backend-rewrite rule apply --plan <returned-plan-id>
+```
 
-Redis `time-shift` has no automatic hint: a numeric value, field name, elapsed
-time, extra read, or missing exchange cannot establish business time semantics.
-Its documented read-only entrypoint is
-`backend-rewrite dependency-rule plan redis time-shift --help`. Return the current
-dirty-cluster evidence ID, source-selected endpoint/key/hash-field, response JSON
-Pointer, timestamp format, and source proof to the coordinator. Proof establishes
-the expiry/cache calculation, units, and downstream uses, including signatures.
-An absent `applicable_rule_planners` hint does not rule out this documented
-capability. Supply the expiry proof and exact inputs; immutable response matching
-alone does not establish expiry causality. Use exact JSON Pointers and explicit
-Unix seconds or milliseconds; prove any broader key/field selector shares those
-semantics. A signed timestamp or downstream dependency argument needs additional
-compatibility proof; this rule neither re-signs Redis tokens nor relaxes matching.
+Return the proposed self-contained record, current evidence ID, missing proof,
+and residual differences. Do not execute apply or Replay as an implementer.
+The plan verifies all selected complete immutable observations, freezes policy,
+startup/schema/key and Source inventory, and returns an effect diff and obligations.
+Source self-validation and derived delivery copies are distinct from independent
+Target observations. Stateful changes always require actual Replay; acquisition
+and snapshot changes may additionally require a fresh Recording. No-op plans
+preserve existing policy bytes and require no artificial verification.
 
-JWT diagnosis uses the failed attempt's time and `signing_key_discovery`, never
-the current clock or raw tokens in notes. A 401, missing key, or unverified
-signature is insufficient proof. Trace authentication and configuration
-precedence; return current evidence, header, supported HMAC algorithm, key alias,
-expiry leeway, source proof, and either the effective environment variable name
-or read-only mounted dotenv path and field. Existing bindings may be reused.
-The capability supports Bearer HS256/HS384/HS512 with integer NumericDate claims;
-it preserves relative validity and does not justify weakening authentication.
-Do not apply rules or run Replay.
+`dependency-rule` and the old flag-based `rule plan` interface are retired.
+The engine's returned `rule recover` action safely retires old or interrupted
+plans; never edit workflow state or reuse a stale plan.
 
-## Supported Protocol Rules
-
-Use this table only to discover a rule worth investigating. A listed rule does
-not prove that the observed difference is safe to ignore.
-
-| Problem stage | Protocol | Rule | Repairs |
-| --- | --- | --- | --- |
-| `dirty_clusters` with positive rejection-count evidence; source-proven `ip_capture` preflight | HTTP JSON | Response URL pointers | Capture later HTTP(S) calls to an IP obtained from an upstream JSON URL; requires source proof and fresh recording. |
-| `dirty_clusters` during a response, Replay, or dependency issue | Memcached | `protobuf-timestamp` | A `SET` value mismatch where source proves that one selected top-level protobuf varint field is current Unix seconds; all other protobuf fields must remain equal, and each timestamp must be within the engine-owned fixed five-second window around its own `SET`. |
-
-Run the exact `help` command returned with the rule before planning it. Add a
-row only when the corresponding evidence hint, help command, planner, and
-runtime behavior are all implemented.
-
-Memcached `SET` exptime is not a protocol rule. Replay already keeps `0` and
-relative expirations exact and compares absolute expirations by the remaining
-TTL at each `SET`, with a fixed five-second tolerance. Do not plan a rule for an
-exptime-only mismatch.
+Memcached `SET` exptime retains native protocol comparison: relative TTL and zero
+stay exact, absolute expirations compare remaining TTL within the fixed engine
+window. A value codec rule does not change exptime/CAS/noreply behavior.

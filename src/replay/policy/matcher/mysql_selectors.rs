@@ -24,7 +24,9 @@ impl MysqlSelectors {
             let Some(mysql) = &rule.mysql else {
                 continue;
             };
-            let selector = if !mysql.sql_values.is_empty() || !mysql.response_time_shift.is_empty()
+            let selector = if !mysql.params.is_empty()
+                || !mysql.sql_values.is_empty()
+                || !mysql.response_time_shift.is_empty()
             {
                 SqlSelector::Template(SqlValueTemplate::new(
                     &mysql.sql,

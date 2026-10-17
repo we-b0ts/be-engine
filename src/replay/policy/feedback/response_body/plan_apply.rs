@@ -13,6 +13,7 @@ impl ResponseBodyRulePlan {
     }
 
     pub fn apply(self) -> Result<ResponseBodyRuleReport> {
+        crate::policy::retired_authoring()?;
         let current = fs::read_to_string(&self.policy_path).with_context(|| {
             format!(
                 "failed to reread replay policy {}",

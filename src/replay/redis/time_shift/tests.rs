@@ -13,15 +13,24 @@ fn selector() -> RedisTimeShiftSelector {
 }
 
 #[test]
-fn recording_run_scope_rejects_patterned_redis_identity() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("verification.yaml");
-    let document = "version: 3\nexpected_response: assertions_only\ndependency_rules:\n- id: token-time\n  replay_scope: recording_run\n  source_evidence: tauth.py cache is shared\n  protocol: redis\n  target: {host: redis.test, port: 6379}\n  redis:\n    command: HGET\n    key: token_v2\n    hash_field: {numeric: true}\n    response_json:\n      /timestamp: {time: preserve_relative, format: unix_milliseconds}\n";
-    fs::write(&path, document).unwrap();
-    let error = crate::replay::validate_replay_policy(&path).unwrap_err();
-    assert!(format!("{error:#}").contains("exact key and hash field"));
-    fs::write(&path, document.replace("{numeric: true}", "'00123'")).unwrap();
-    crate::replay::validate_replay_policy(&path).unwrap();
+fn finite_sharing_rejects_patterned_redis_identity() {
+    let proof = json!({"source":"tauth.py:cache","fact":"Source shares this exact key and hash field finitely"});
+    let rule = json!({"id":"token-time","match":{"resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0},
+        "operation":"HGET","key":{"kind":"exact","value":"token_v2"}},"proof":proof,
+        "effect":{"kind":"finite_sharing","protocol":"redis","hash_field":"00123","response_time":{
+            "/timestamp":{"contract":{"format":"unix_milliseconds","relation":"preserve_offset","anchor":"dependency.response_delivery"},"proof":proof}}}});
+    let parse = |rule: Value| {
+        crate::policy::parse_policy(
+            &json!({"format":"traffic-policy/v1","rules":[rule]}).to_string(),
+        )
+    };
+    parse(rule.clone()).unwrap();
+    let mut patterned_key = rule.clone();
+    patterned_key["match"]["key"] = json!({"kind":"numeric","prefix":"token:"});
+    assert!(parse(patterned_key).is_err());
+    let mut patterned_field = rule;
+    patterned_field["effect"]["hash_field"] = json!({"numeric":true});
+    assert!(parse(patterned_field).is_err());
 }
 fn record(value: Value) -> RecordedExchange {
     let body = value.to_string();
@@ -266,8 +275,8 @@ fn fixture() -> (
         .to_string(),
     )
     .unwrap();
-    let policy = temp.path().join("verification.yaml");
-    fs::write(
+    let policy = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy,
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
@@ -285,47 +294,52 @@ fn fixture() -> (
     (temp, feedback, path)
 }
 #[test]
-fn manual_plan_uses_previously_matched_response_without_hints_and_rejects_stale_evidence() {
+fn matched_response_evidence_preserves_recording_bytes_and_retired_authoring_writes_nothing() {
     let (_temp, f, path) = fixture();
-    let original = fs::read(&path).unwrap();
-    let plan = plan_redis_time_shift(f.clone()).unwrap();
-    let report = serde_json::to_string(plan.report()).unwrap();
-    assert!(!report.contains("private-token") && !report.contains("private-secret"));
-    assert_eq!(plan.report().evidence["matched_in_attempt"], 1);
-    plan.apply().unwrap();
-    assert_eq!(fs::read(&path).unwrap(), original);
+    let before = [
+        fs::read(&f.policy_path).unwrap(),
+        fs::read(&path).unwrap(),
+        fs::read(&f.replay_report_path).unwrap(),
+    ];
+    let proof = evidence::verify(&f.case_source, &f.replay_report_path, &f.selector).unwrap();
+    assert_eq!(proof["matched_in_attempt"], 1);
     assert!(
-        plan_redis_time_shift(f.clone())
-            .unwrap()
-            .report()
-            .reused_existing
+        !proof.to_string().contains("private-token")
+            && !proof.to_string().contains("private-secret")
     );
-    let plan = plan_redis_time_shift(f.clone()).unwrap();
+    let error = plan_redis_time_shift(f.clone()).err().unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("legacy rule authoring is retired")
+    );
+    assert_eq!(
+        before,
+        [
+            fs::read(&f.policy_path).unwrap(),
+            fs::read(&path).unwrap(),
+            fs::read(&f.replay_report_path).unwrap()
+        ]
+    );
     fs::write(
         &path,
-        String::from_utf8(original)
+        String::from_utf8(before[1].clone())
             .unwrap()
             .replace("private-token", "changed-token"),
     )
     .unwrap();
-    assert!(plan.apply().is_err());
-    let plan = plan_redis_time_shift(f.clone()).unwrap();
-    fs::write(
-        &f.policy_path,
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
-    )
-    .unwrap();
-    assert!(plan.apply().is_err());
+    let updated = evidence::verify(&f.case_source, &f.replay_report_path, &f.selector).unwrap();
+    assert_ne!(proof["recording_revision"], updated["recording_revision"]);
     fs::write(
         &f.replay_report_path,
         r#"{"finalized":true,"redis":{"matched":[]}}"#,
     )
     .unwrap();
-    assert!(plan_redis_time_shift(f).is_err());
+    assert!(evidence::verify(&f.case_source, &f.replay_report_path, &f.selector).is_err());
 }
 
 #[test]
-fn rfc3339_get_and_hget_plan_apply_validate_and_preserve_recorded_evidence() {
+fn rfc3339_get_and_hget_evidence_validate_without_rewriting_recordings() {
     for command in ["GET", "HGET"] {
         let (_temp, mut feedback, path) = fixture();
         let mut event: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
@@ -350,31 +364,26 @@ fn rfc3339_get_and_hget_plan_apply_validate_and_preserve_recorded_evidence() {
             event["response"]["data"] = format!("${}\r\n{body}\r\n", body.len()).into();
             fs::write(&path, event.to_string()).unwrap();
             if !text.ends_with("+00:00") {
-                assert!(plan_redis_time_shift(feedback.clone()).is_err());
+                assert!(
+                    evidence::verify(
+                        &feedback.case_source,
+                        &feedback.replay_report_path,
+                        &feedback.selector
+                    )
+                    .is_err()
+                );
                 continue;
             }
             let immutable = fs::read(&path).unwrap();
-            let plan = plan_redis_time_shift(feedback.clone()).unwrap();
-            assert_eq!(plan.report().evidence["matched_in_attempt"], 1);
-            assert!(
-                !serde_json::to_string(plan.report())
-                    .unwrap()
-                    .contains("private-token")
-            );
-            plan.apply().unwrap();
-            assert!(
-                fs::read_to_string(&feedback.policy_path)
-                    .unwrap()
-                    .contains("format: rfc3339")
-            );
-            crate::replay::validate_replay_policy(&feedback.policy_path).unwrap();
+            let proof = evidence::verify(
+                &feedback.case_source,
+                &feedback.replay_report_path,
+                &feedback.selector,
+            )
+            .unwrap();
+            assert_eq!(proof["matched_in_attempt"], 1);
+            assert!(!proof.to_string().contains("private-token"));
             assert_eq!(fs::read(&path).unwrap(), immutable);
-            assert!(
-                plan_redis_time_shift(feedback.clone())
-                    .unwrap()
-                    .report()
-                    .reused_existing
-            );
         }
     }
 }
@@ -417,13 +426,15 @@ fn seconds_get_scope_and_policy_overlaps_remain_explicit() {
         decode_payload(&shift.render(now).unwrap().0).unwrap()["timestamp"],
         1788848325_i64
     );
-    plan_redis_time_shift(f.clone()).unwrap().apply().unwrap();
-    let mut narrower = f.clone();
-    narrower.rule_id = "overlap".into();
-    narrower.selector.read.hash_field = Some(value::RedisValueKeySelector::Exact {
-        value: "00123".into(),
-    });
-    assert!(plan_redis_time_shift(narrower).is_err());
+    let mut overlapping = f.selector.read.clone();
+    overlapping.response_json.insert(
+        "/timestamp/child".into(),
+        RelativeTimeField {
+            time: RelativeTime::PreserveRelative,
+            format: RedisTimestampFormat::UnixMilliseconds,
+        },
+    );
+    assert!(overlapping.validate().is_err());
     let mut missing = f;
     missing.selector.read.response_json = BTreeMap::from([(
         "/missing".into(),
@@ -432,5 +443,12 @@ fn seconds_get_scope_and_policy_overlaps_remain_explicit() {
             format: RedisTimestampFormat::UnixMilliseconds,
         },
     )]);
-    assert!(plan_redis_time_shift(missing).is_err());
+    assert!(
+        evidence::verify(
+            &missing.case_source,
+            &missing.replay_report_path,
+            &missing.selector
+        )
+        .is_err()
+    );
 }

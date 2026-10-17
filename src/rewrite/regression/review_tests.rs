@@ -197,12 +197,12 @@ fn changed_purpose_needs_a_fresh_accepted_receipt_and_keeps_rework_gates() {
 
 #[test]
 fn first_traffic_policy_update_does_not_require_delivery_review() {
-    for policy_name in ["source-traffic-policy.yaml", "verification.yaml"] {
-        assert_first_traffic_policy_update(policy_name);
+    for source_effect in [true, false] {
+        assert_first_traffic_policy_update(source_effect);
     }
 }
 
-fn assert_first_traffic_policy_update(policy_name: &str) {
+fn assert_first_traffic_policy_update(source_effect: bool) {
     for record_new_traffic in [false, true] {
         let target = fixture();
         begin(RewriteRegressionBeginOptions {
@@ -215,19 +215,15 @@ fn assert_first_traffic_policy_update(policy_name: &str) {
             .load()
             .unwrap()
             .unwrap();
-        let policy_relative = format!(".traffic-e2e/{policy_name}");
+        let policy_relative = ".traffic-e2e/policy.yaml".to_owned();
         let policy_path = target.path().join(&policy_relative);
-        if policy_name == "source-traffic-policy.yaml" {
+        if source_effect {
             let mut policy = crate::config::SourceTrafficPolicyConfig::load(&policy_path).unwrap();
+            policy.http.source_revision = format!("sha256:{}", "1".repeat(64));
             policy.http.case_path_patterns = vec!["/api/*".into()];
             fs::write(&policy_path, policy.render().unwrap()).unwrap();
         } else {
-            let policy = fs::read_to_string(&policy_path).unwrap();
-            fs::write(
-                &policy_path,
-                format!("{policy}response_rules:\n  json: {{}}\n"),
-            )
-            .unwrap();
+            append_runtime_rule(&policy_path);
         }
         assert!(!review::requires_delivery_review(target.path(), &state));
         assert!(
@@ -251,4 +247,11 @@ fn assert_first_traffic_policy_update(policy_name: &str) {
                 .is_some()
         );
     }
+}
+
+fn append_runtime_rule(path: &std::path::Path) {
+    let mut policy = crate::policy::parse_policy(&fs::read_to_string(path).unwrap()).unwrap();
+    policy.rules.push(serde_json::from_value(serde_json::json!({"id":"runtime-members","surface":"api.response","match":{"api":"GET /api"},"slot":"body","codec":"json","contract":{"/members":{"kind":"unordered"}},"proof":{"source":"tests.rs:members","fact":"The fixture models a reviewed unordered membership contract"}})).unwrap());
+    crate::policy::compile_policy(&policy).unwrap();
+    fs::write(path, serde_yaml::to_string(&policy).unwrap()).unwrap();
 }

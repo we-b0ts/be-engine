@@ -298,6 +298,10 @@ struct RuntimeJwtRule {
     rule: JwtRule,
     profile: JwtProfile,
     key: RuntimeKey,
+    scope: Option<(
+        crate::policy::NativeMatch,
+        Option<crate::policy::SourceCondition>,
+    )>,
 }
 
 enum RuntimeKey {
@@ -308,7 +312,9 @@ enum RuntimeKey {
 
 impl RequestRuleRuntime {
     pub(crate) fn load(target_root: &Path, policy: &Path) -> Result<Self> {
-        let configured = policy::load(policy)?;
+        let document = crate::policy::parse_policy(&std::fs::read_to_string(policy)?)?;
+        let compiled = crate::policy::compile_policy(&document)?;
+        let configured = crate::replay::compiled_input_rules(&compiled)?;
         let mut rules = Vec::with_capacity(configured.jwt.rules.len());
         for rule in configured.jwt.rules {
             let profile = configured
@@ -322,10 +328,19 @@ impl RequestRuleRuntime {
                         rule.id
                     )
                 })?;
+            let source_scope = compiled
+                .native
+                .iter()
+                .find(|native| native.rule.id == rule.id)
+                .context("input JWT lost its compiled Source scope")?;
             rules.push(RuntimeJwtRule {
                 rule,
                 profile,
                 key: RuntimeKey::TargetStartup(target_root.to_path_buf()),
+                scope: Some((
+                    source_scope.rule.selector.clone(),
+                    source_scope.rule.when.clone(),
+                )),
             });
         }
         Ok(Self { rules })
@@ -340,6 +355,7 @@ impl RequestRuleRuntime {
                     rule,
                     profile,
                     key: RuntimeKey::Fixed(key),
+                    scope: None,
                 })
                 .collect(),
         }
@@ -352,7 +368,28 @@ impl RequestRuleRuntime {
     ) -> Result<Vec<RequestRuleObservation>> {
         let mut observations = Vec::new();
         let mut transformed = BTreeSet::new();
+        let source_method = request["method"].as_str().unwrap_or_default().to_string();
+        let source_path = request["uri"]
+            .as_str()
+            .and_then(|uri| uri.parse::<hyper::Uri>().ok())
+            .map(|uri| uri.path().to_string())
+            .unwrap_or_default();
+        let source_body = crate::replay::native_source_request_body(request);
         for configured in &self.rules {
+            if let Some((scope, when)) = &configured.scope
+                && (!scope.api.as_deref().is_none_or(|api| {
+                    api.split_once(' ').is_some_and(|(method, path)| {
+                        method == source_method
+                            && crate::path_pattern::matches_path_pattern(path, &source_path)
+                    })
+                }) || !when.as_ref().is_none_or(|when| {
+                    source_body
+                        .as_ref()
+                        .is_some_and(|body| when.matches_body(body))
+                }))
+            {
+                continue;
+            }
             let rule = &configured.rule;
             let profile = &configured.profile;
             let location = rule.location()?;
@@ -375,7 +412,7 @@ impl RequestRuleRuntime {
                 RuntimeKey::TargetStartup(root) => {
                     let source = profile.signing_key_source.as_ref().with_context(|| {
                         format!(
-                            "JWT request rule {:?} matched a parseable JWT requiring time translation, but profile {:?} has no signing_key_source in verification.yaml",
+                            "JWT request rule {:?} matched a parseable JWT requiring time translation, but profile {:?} has no signing_key_source in project.policy",
                             rule.id, rule.profile
                         )
                     })?;

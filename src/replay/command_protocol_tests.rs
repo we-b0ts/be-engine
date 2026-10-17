@@ -285,7 +285,17 @@ async fn consumes_redis_timeout_only_after_client_close() {
 #[tokio::test]
 async fn replays_memcached_set_with_a_case_relative_protobuf_timestamp() {
     let temp = tempfile::tempdir().unwrap();
-    let case_dir = temp.path().join("case");
+    let key = temp
+        .path()
+        .join(".traffic-e2e/local")
+        .join(crate::repository::LOCAL_ENCRYPTION_KEY_FROM_LOCAL);
+    std::fs::create_dir_all(key.parent().unwrap()).unwrap();
+    std::fs::write(
+        key,
+        crate::request_headers::generate_encryption_key().unwrap(),
+    )
+    .unwrap();
+    let case_dir = temp.path().join(".traffic-e2e/local/recordings/case");
     tokio::fs::create_dir_all(&case_dir).await.unwrap();
     tokio::fs::write(
         case_dir.join("request.json"),
@@ -331,8 +341,8 @@ async fn replays_memcached_set_with_a_case_relative_protobuf_timestamp() {
     )
     .await
     .unwrap();
-    let policy_path = temp.path().join("verification.yaml");
-    tokio::fs::write(
+    let policy_path = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(
         &policy_path,
         r#"
 version: 1
@@ -355,7 +365,6 @@ dependency_rules:
             source_evidence: UserInfoServiceBase.java:438 current time
 "#,
     )
-    .await
     .unwrap();
 
     let report_path = temp.path().join("report.json");

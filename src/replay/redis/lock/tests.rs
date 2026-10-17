@@ -304,8 +304,8 @@ fn plan_fixture() -> (tempfile::TempDir, crate::RedisLockFeedback, PathBuf) {
         json!({"finalized":true,"redis":state.snapshot()}).to_string(),
     )
     .unwrap();
-    let policy = temp.path().join("verification.yaml");
-    fs::write(&policy,"version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_rules: {json: {}}\n").unwrap();
+    let policy = temp.path().join("policy.yaml");
+    crate::replay::write_policy_fixture(&policy,"version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_rules: {json: {}}\n").unwrap();
     (
         temp,
         crate::RedisLockFeedback {
@@ -321,41 +321,52 @@ fn plan_fixture() -> (tempfile::TempDir, crate::RedisLockFeedback, PathBuf) {
     )
 }
 #[test]
-fn discovery_plan_apply_is_bounded_secret_free_idempotent_and_stale_safe() {
+fn source_lock_evidence_is_secret_free_stale_safe_and_authoring_is_retired() {
     let (_temp, feedback, dependencies) = plan_fixture();
     let candidates = evidence::discover(&feedback.replay_report_path).unwrap();
     let output = candidates.to_string();
     assert_eq!(candidates["candidates"].as_array().unwrap().len(), 1);
     assert!(!output.contains("source-secret-token") && !output.contains("target-private-token"));
-    let before = fs::read(&dependencies).unwrap();
-    let plan = crate::plan_redis_lock(feedback.clone()).unwrap();
-    assert!(plan.report().requires_replay && plan.report().changed);
-    let plan = plan.apply().unwrap();
-    assert!(plan.applied);
-    assert_eq!(fs::read(&dependencies).unwrap(), before);
-    let text = fs::read_to_string(&feedback.policy_path).unwrap();
+    evidence::verify(
+        &feedback.case_source,
+        &feedback.replay_report_path,
+        &feedback.selector,
+    )
+    .unwrap();
+    let before = [
+        fs::read(&dependencies).unwrap(),
+        fs::read(&feedback.policy_path).unwrap(),
+        fs::read(&feedback.replay_report_path).unwrap(),
+    ];
+    let error = crate::plan_redis_lock(feedback.clone()).err().unwrap();
     assert!(
-        text.contains("lock:") && !text.contains("release:") && text.contains("response_rules:")
+        error
+            .to_string()
+            .contains("legacy rule authoring is retired")
     );
-    assert!(
-        crate::plan_redis_lock(feedback.clone())
-            .unwrap()
-            .report()
-            .reused_existing
+    assert_eq!(
+        before,
+        [
+            fs::read(&dependencies).unwrap(),
+            fs::read(&feedback.policy_path).unwrap(),
+            fs::read(&feedback.replay_report_path).unwrap()
+        ]
     );
-    let plan = crate::plan_redis_lock(feedback.clone()).unwrap();
     fs::write(
         &dependencies,
-        String::from_utf8(before.clone())
+        String::from_utf8(before[0].clone())
             .unwrap()
             .replace("source-secret-token", "changed-source-token"),
     )
     .unwrap();
-    assert!(plan.apply().is_err());
-    fs::write(&dependencies, before).unwrap();
-    let plan = crate::plan_redis_lock(feedback.clone()).unwrap();
-    fs::write(&feedback.policy_path, format!("{text}\n# modified\n")).unwrap();
-    assert!(plan.apply().is_err());
+    assert!(
+        evidence::verify(
+            &feedback.case_source,
+            &feedback.replay_report_path,
+            &feedback.selector
+        )
+        .is_err()
+    );
 }
 #[test]
 fn unrelated_mismatches_and_missing_source_references_do_not_authorize_rules() {
@@ -375,7 +386,14 @@ fn unrelated_mismatches_and_missing_source_references_do_not_authorize_rules() {
         .unwrap()
         .to_string();
     fs::write(&dependencies, first).unwrap();
-    assert!(crate::plan_redis_lock(feedback.clone()).is_err());
+    assert!(
+        evidence::verify(
+            &feedback.case_source,
+            &feedback.replay_report_path,
+            &feedback.selector
+        )
+        .is_err()
+    );
     fs::write(
         &feedback.replay_report_path,
         r#"{"finalized":true,"redis":{}}"#,
@@ -385,39 +403,63 @@ fn unrelated_mismatches_and_missing_source_references_do_not_authorize_rules() {
         evidence::discover(&feedback.replay_report_path).unwrap()["requires_fresh_replay"],
         true
     );
-    assert!(crate::plan_redis_lock(feedback).is_err());
+    assert!(
+        evidence::verify(
+            &feedback.case_source,
+            &feedback.replay_report_path,
+            &feedback.selector
+        )
+        .is_err()
+    );
 }
 #[test]
 fn policy_requires_endpoint_source_proof_and_disjoint_selectors() {
-    use crate::replay::policy::load_replay_policy;
-    let (_temp, feedback, _) = plan_fixture();
-    crate::plan_redis_lock(feedback.clone())
-        .unwrap()
-        .apply()
-        .unwrap();
-    let valid = fs::read_to_string(&feedback.policy_path).unwrap();
-    for bad in [
-        valid.replace("port: 6379", "port: 0"),
-        valid.replace("redis.test", ""),
-        valid.replace(
-            "locks.rs:acquire/release uses random ownership tokens and compare-delete",
-            "",
-        ),
-    ] {
-        fs::write(&feedback.policy_path, bad).unwrap();
-        assert!(load_replay_policy(&feedback.policy_path).is_err());
+    let rule = json!({"id":"locks","match":{"api":"GET /api", "resource":{"protocol":"redis","endpoint":"redis.test:6379"},
+        "key":{"kind":"affix","prefix":"lock:"}},"effect":{"kind":"redis_lock"},
+        "proof":{"source":"locks.rs:acquire/release","fact":"Source uses random ownership tokens and compare-delete"}});
+    let parse = |rules: serde_json::Value| {
+        crate::policy::parse_policy(
+            &json!({"format":"traffic-policy/v1","rules":rules}).to_string(),
+        )
+    };
+    parse(json!([rule])).unwrap();
+    for (path, value) in [("endpoint", json!("redis.test:0")), ("endpoint", json!(""))] {
+        let mut bad = rule.clone();
+        bad["match"]["resource"][path] = value;
+        assert!(parse(json!([bad])).is_err());
     }
-    let mut value: serde_yaml::Value = serde_yaml::from_str(&valid).unwrap();
-    let mut duplicate = value["dependency_rules"][0].clone();
+    let mut missing_proof = rule.clone();
+    missing_proof["proof"]["fact"] = json!("");
+    assert!(parse(json!([missing_proof])).is_err());
+    let mut duplicate = rule.clone();
     duplicate["id"] = "other".into();
-    value["dependency_rules"]
-        .as_sequence_mut()
-        .unwrap()
-        .push(duplicate);
-    fs::write(
-        &feedback.policy_path,
-        serde_yaml::to_string(&value).unwrap(),
-    )
-    .unwrap();
-    assert!(load_replay_policy(&feedback.policy_path).is_err());
+    assert!(parse(json!([rule, duplicate])).is_err());
+}
+
+#[test]
+fn source_lock_order_requires_completion_before_the_earliest_proven_reference_start() {
+    let mut state = fixture("EVAL", ReplaySource::Case);
+    let acquired: chrono::DateTime<chrono::Utc> = "2026-10-17T00:00:00Z".parse().unwrap();
+    state.exchanges[0].record.timestamp = Some(acquired);
+    state.exchanges[1].record.timestamp = Some(acquired + chrono::TimeDelta::milliseconds(2));
+    state.exchanges[1].record.request_started_at = Some(acquired);
+    let rules = [LockTokenRule {
+        id: "locks".into(),
+        selector: selector(),
+    }];
+    let scope = crate::replay::policy::request_contract::RequestContracts::default();
+    assert_eq!(
+        LockTokens::validate_source(&state.exchanges, &rules, &scope).unwrap()["locks"],
+        2
+    );
+    state.exchanges[1].record.request_started_at =
+        Some(acquired - chrono::TimeDelta::nanoseconds(1));
+    assert!(LockTokens::validate_source(&state.exchanges, &rules, &scope).is_err());
+    // A missing exact start may only use the conservative millisecond interval.
+    state.exchanges[1].record.request_started_at = None;
+    assert!(LockTokens::validate_source(&state.exchanges, &rules, &scope).is_ok());
+    state.exchanges[1].record.timestamp = Some(acquired + chrono::TimeDelta::microseconds(500));
+    assert!(LockTokens::validate_source(&state.exchanges, &rules, &scope).is_err());
+    state.exchanges[0].record.timestamp = None;
+    assert!(LockTokens::validate_source(&state.exchanges, &rules, &scope).is_err());
 }

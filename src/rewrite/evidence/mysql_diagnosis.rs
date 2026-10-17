@@ -92,7 +92,7 @@ mod tests {
         let hints = rule_guidance::rule_hints(Path::new("/target"), QUERY_DIRTY_CLUSTERS, &facts);
         let hint = hints
             .iter()
-            .find(|h| h.rule == "mysql-api-triggered")
+            .find(|h| h.capability == "api_triggered_process_traffic")
             .unwrap();
         assert!(hint.hint.contains("not evidence of process ownership"));
     }

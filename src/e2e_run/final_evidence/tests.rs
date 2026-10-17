@@ -1,17 +1,18 @@
 use super::*;
 use crate::case_group::{CanonicalCase, CanonicalCaseGroup};
-use crate::{BackgroundDependencyFeedback, plan_background_dependency};
 use serde_json::{Value, json};
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use crate::e2e_run::test_session::{config, session};
 
 #[test]
-fn interrupted_apply_retries_reclassification_and_rebuilds_published_method_evidence() {
+fn interrupted_reclassification_retries_and_rebuilds_published_method_evidence() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let config = config(root);
-    fs::write(&config.source_traffic_policy, "version: 2\n").unwrap();
     let (layout, inventory, session) = session(root);
     let mut selected = crate::e2e_run::focused_batch::project(&session, "OPTIONS /api");
     let mut method_inventory = inventory.clone();
@@ -20,25 +21,18 @@ fn interrupted_apply_retries_reclassification_and_rebuilds_published_method_evid
         .retain(|group| group.method == "OPTIONS");
     let original = selected.clone();
     let recorded = fs::read(layout.case_source.join("get-case/dependencies.jsonl")).unwrap();
-    let replay_report = selected.replay_report.clone();
-    let feedback = || BackgroundDependencyFeedback {
-        rules_path: config.source_traffic_policy.clone(),
-        replay_report_path: replay_report.clone(),
-        name: "stream-startup".into(),
-        authority: "stream.test".into(),
-        method: "GET".into(),
-        path_prefix: "/connect".into(),
-        source_revision: "source".into(),
-        source_evidence: "startup.rs:run starts process-wide stream".into(),
-    };
-    plan_background_dependency(feedback())
-        .unwrap()
-        .apply()
-        .unwrap();
+    write_process_policy(
+        &config.source_traffic_policy,
+        json!({
+            "protocol":"http","authorities":["stream.test"],
+            "methods":["GET"],"path_prefixes":["/connect"]
+        }),
+    );
+    let original_policy = fs::read(&config.source_traffic_policy).unwrap();
     let reclassified = refresh_background_evidence(&config, &selected, &inventory).unwrap();
     assert_eq!(reclassified.matched_unused_case, 14);
     apply_reclassified_case_outcomes(&mut selected, &reclassified);
-    // Fail after policy/report publication, before the coordinator can retire its plan.
+    // Fail after report publication, before aggregate evidence can be committed.
     fs::create_dir_all(&selected.aggregate_report).unwrap();
     assert!(
         build_final_evidence_from_current_report(
@@ -51,10 +45,6 @@ fn interrupted_apply_retries_reclassification_and_rebuilds_published_method_evid
     );
     fs::remove_dir(&selected.aggregate_report).unwrap();
 
-    let retry = plan_background_dependency(feedback()).unwrap();
-    assert!(retry.report().reused_existing);
-    assert_eq!(retry.report().matched_unused_exchanges, 14);
-    retry.apply().unwrap();
     let mut selected = original;
     let reclassified = refresh_background_evidence(&config, &selected, &inventory).unwrap();
     assert_eq!(reclassified.matched_unused_case, 14);
@@ -85,6 +75,10 @@ fn interrupted_apply_retries_reclassification_and_rebuilds_published_method_evid
         fs::read(layout.case_source.join("get-case/dependencies.jsonl")).unwrap(),
         recorded
     );
+    assert_eq!(
+        fs::read(&config.source_traffic_policy).unwrap(),
+        original_policy
+    );
 }
 
 #[test]
@@ -93,22 +87,17 @@ fn method_reclassification_uses_immutable_dependencies_of_sibling_session_cases(
     let config = config(temp.path());
     let (layout, inventory, session) = session(temp.path());
     let selected = crate::e2e_run::focused_batch::project(&session, "OPTIONS /api");
-    fs::write(
+    write_process_policy(
         &config.source_traffic_policy,
-        r#"version: 2
-process_owned_dependencies:
-  - protocol: redis
-    name: cache-warm
-    ports: [6379]
-    command: SCARD
-    initial_load_timeout_ms: 60000
-    keys: [startup:cache]
-    source_evidence: startup.rs scheduled cache warm
-"#,
-    )
-    .unwrap();
+        json!({
+            "protocol":"redis","ports":[6379],"operation":"SCARD", "initial_load_timeout_ms":60000,
+            "keys":[{"kind":"exact","value":"startup:cache"}]
+        }),
+    );
     let dependency = json!({"event_type":"redis_exchange","connection_id":"connection","sequence":1,
-        "target_port":6379,"command":"SCARD","args":[{"encoding":"utf8","data":"startup:cache"}],"replay_safe":true});
+        "target_host":"redis.test","target_port":6379,"database":0,"command":"SCARD",
+        "outcome":"response","args":[{"encoding":"utf8","data":"startup:cache","truncated":false}],
+        "response":{"encoding":"utf8","data":":1\r\n","truncated":false},"replay_safe":true});
     fs::write(
         layout.case_source.join("get-case/dependencies.jsonl"),
         dependency.to_string(),
@@ -123,6 +112,16 @@ process_owned_dependencies:
     assert_eq!(classified.by_protocol["redis"], 1);
     // The unrelated HTTP evidence remains dirty for the shared session.
     assert!(classified.remaining_dirty_case_ids.contains("get-case"));
+}
+
+fn write_process_policy(path: &Path, selector: Value) {
+    let document = json!({"format":"traffic-policy/v1","rules":[{
+        "id":"process-startup","match":{},
+        "effect":{"kind":"process_owned","source_revision":format!("sha256:{}", "1".repeat(64)),"selector":selector},
+        "proof":{"source":"startup.rs:run","fact":"Source starts this process-wide dependency independently of API calls"}
+    }]});
+    crate::policy::compile_policy(&serde_json::from_value(document.clone()).unwrap()).unwrap();
+    fs::write(path, serde_yaml::to_string(&document).unwrap()).unwrap();
 }
 
 #[test]

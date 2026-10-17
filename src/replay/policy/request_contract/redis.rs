@@ -3,6 +3,7 @@ use super::*;
 use config::{ArgumentRule, JsonField, JwtContract, RedisRequestSelector};
 
 impl RequestContracts {
+    #[cfg(test)]
     pub(in crate::replay) fn preview_redis(
         &self,
         case: &str,
@@ -12,6 +13,34 @@ impl RequestContracts {
         source: &[Vec<u8>],
         actual: &[Vec<u8>],
     ) -> Option<Result<Decision>> {
+        if let Some(result) = self.preview_unified_redis(
+            &RedisRequestContext::without_exchange(case, target, database, command),
+            source,
+            actual,
+        ) {
+            return Some(result);
+        }
+        self.preview_redis_legacy(
+            &RedisRequestContext::without_exchange(case, target, database, command),
+            source,
+            actual,
+        )
+    }
+
+    pub(super) fn preview_redis_legacy(
+        &self,
+        context: &RedisRequestContext<'_>,
+        source: &[Vec<u8>],
+        actual: &[Vec<u8>],
+    ) -> Option<Result<Decision>> {
+        let RedisRequestContext {
+            case,
+            target,
+            database,
+            username,
+            command,
+            ..
+        } = *context;
         let rules: Vec<_> = self
             .selected(case, target, DependencyProtocol::Redis)
             .into_iter()
@@ -21,7 +50,14 @@ impl RequestContracts {
                 else {
                     return false;
                 };
-                selector.database == database
+                self.native_rule_scope_matches(
+                    &rule.id,
+                    Some(case),
+                    crate::policy::Protocol::Redis,
+                    target,
+                    Some(&crate::policy::Database::Index(database)),
+                    username,
+                ) && selector.database == database
                     && selector.commands.iter().any(|entry| {
                         entry.command == command
                             && entry.matches_identity(source)
@@ -149,6 +185,10 @@ impl RequestContracts {
                                     b,
                                     &source_original,
                                     &actual_original,
+                                    match fields.json.get(&field.jwt.relative_to) {
+                                        Some(JsonField::Time(field)) => field,
+                                        _ => anyhow::bail!("JWT anchor has no typed time contract"),
+                                    },
                                     &field.jwt,
                                     &mut decision,
                                 )?;
@@ -225,6 +265,7 @@ impl RequestContracts {
         actual: &Value,
         source_document: &Value,
         actual_document: &Value,
+        anchor_contract: &config::TimeField,
         config: &JwtContract,
         decision: &mut Decision,
     ) -> Result<()> {
@@ -233,15 +274,17 @@ impl RequestContracts {
             .get(&(rule.into(), pointer.into()))
             .context("request JWT signing key is unavailable")?
             .bytes();
-        let a = super::time::number(
+        let a = super::time::timestamp(
             source_document
                 .pointer(&config.relative_to)
                 .context("source JWT time anchor missing")?,
+            anchor_contract,
         )?;
-        let b = super::time::number(
+        let b = super::time::timestamp(
             actual_document
                 .pointer(&config.relative_to)
                 .context("target JWT time anchor missing")?,
+            anchor_contract,
         )?;
         let validated = crate::request_rules::jwt::contract::compare(
             source,
@@ -249,14 +292,9 @@ impl RequestContracts {
             crate::request_rules::jwt::contract::Contract {
                 algorithm: config.algorithm,
                 key,
-                anchors: [(a * 1e9).round() as i128, (b * 1e9).round() as i128],
+                anchors: [a, b],
                 tolerance: (config::tolerance(&config.tolerance)? * 1e9).round() as i128,
-                dynamic_claims: &config
-                    .dynamic_claims
-                    .iter()
-                    .cloned()
-                    .map(crate::request_rules::JwtDynamicClaim::Legacy)
-                    .collect::<Vec<_>>(),
+                dynamic_claims: &config.dynamic_claims,
             },
         )
         .map_err(|error| anyhow::anyhow!("JWT contract failed: {error:?}"))?;

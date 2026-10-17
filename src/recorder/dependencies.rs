@@ -569,6 +569,7 @@ mod tests {
             connection_id,
             sequence,
             timestamp: Utc::now(),
+            request_started_at: chrono::Utc::now(),
             client_addr: None,
             target_host: "redis.internal".to_string(),
             target_port: 6379,

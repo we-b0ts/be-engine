@@ -1,4 +1,4 @@
-//! Exercise a published response-JWT planner after the active directory is gone.
+//! Published JWT differences remain readable after the active directory is gone.
 use super::*;
 use crate::case_group::CaseGroupInventory;
 use crate::e2e_run::model::{AssertionCase, CaseExecution, CaseStatus, RunStatus};
@@ -12,7 +12,7 @@ use crate::{
 use serde_json::json;
 
 #[test]
-fn published_jwt_evidence_is_consumable_on_first_publish_and_replacement() {
+fn published_jwt_evidence_survives_first_publish_replacement_and_retired_authoring() {
     for replacement in [false, true] {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
@@ -41,12 +41,8 @@ fn published_jwt_evidence_is_consumable_on_first_publish_and_replacement() {
             )
             .unwrap();
         }
-        let policy = root.join(".traffic-e2e/verification.yaml");
-        fs::write(
-            &policy,
-            "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
-        )
-        .unwrap();
+        let policy = root.join(".traffic-e2e/policy.yaml");
+        fs::write(&policy, "format: traffic-policy/v1\nrules: []\n").unwrap();
         let token = |now| {
             jsonwebtoken::encode(
                 &jsonwebtoken::Header::default(),
@@ -173,13 +169,24 @@ fn published_jwt_evidence_is_consumable_on_first_publish_and_replacement() {
             assert!(error.to_string().contains(message));
             fs::rename(moved, path).unwrap();
         }
-        let plan = plan_response_jwt_rule(ResponseJwtRuleFeedback {
-            policy_path:policy,api:"POST /token".into(),
+        let unchanged = [
+            fs::read(&policy).unwrap(),
+            fs::read(&evidence.assertions).unwrap(),
+            fs::read(&evidence.aggregate).unwrap(),
+        ];
+        let error = plan_response_jwt_rule(ResponseJwtRuleFeedback {
+            policy_path:policy.clone(),api:"POST /token".into(),
             rules:vec![serde_json::from_value(json!({"pointer":"/access_token","algorithm":"HS256","signing_key_source":{"kind":"target_env","name":"SECRET_KEY"},"source_evidence":"Issuer:issue signs current identity claims and a 30-minute expiry"})).unwrap()],
-            evidence:ResponseBodyRuleEvidence::FocusedE2e { assertion_report:evidence.assertions,aggregate_report:evidence.aggregate },
-        }).unwrap();
-        assert_eq!(plan.report().matching_cases, 1);
-        plan.apply().unwrap();
+            evidence:ResponseBodyRuleEvidence::FocusedE2e { assertion_report:evidence.assertions.clone(),aggregate_report:evidence.aggregate.clone() },
+        }).err().expect("retired authoring must not mutate a published run");
+        assert!(
+            error
+                .to_string()
+                .contains("legacy rule authoring is retired")
+        );
+        assert_eq!(fs::read(&policy).unwrap(), unchanged[0]);
+        assert_eq!(fs::read(&evidence.assertions).unwrap(), unchanged[1]);
+        assert_eq!(fs::read(&evidence.aggregate).unwrap(), unchanged[2]);
     }
 }
 
@@ -211,15 +218,15 @@ fn install_project(root: &std::path::Path) {
     fs::create_dir_all(&directory).unwrap();
     fs::write(directory.join("Dockerfile.target"), "FROM scratch\n").unwrap();
     fs::write(
-        directory.join("verification.yaml"),
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+        directory.join("policy.yaml"),
+        "format: traffic-policy/v1\nrules: []\n",
     )
     .unwrap();
     let options = E2eRunInitOptions {
         target_root: root.into(),
         target_dockerfile: ".traffic-e2e/Dockerfile.target".into(),
         target_startup: Default::default(),
-        replay_policy: ".traffic-e2e/verification.yaml".into(),
+        replay_policy: ".traffic-e2e/policy.yaml".into(),
         pr_base: "master".into(),
         recorder_config: ".traffic-e2e/project.yaml".into(),
         force: false,
@@ -229,13 +236,6 @@ fn install_project(root: &std::path::Path) {
     fs::write(
         directory.join("project.yaml"),
         config::render_project_config(&options, recorder).unwrap(),
-    )
-    .unwrap();
-    fs::write(
-        directory.join("source-traffic-policy.yaml"),
-        crate::config::SourceTrafficPolicyConfig::empty()
-            .render()
-            .unwrap(),
     )
     .unwrap();
 }

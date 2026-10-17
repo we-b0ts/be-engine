@@ -4,6 +4,7 @@ use super::*;
 use anyhow::{Context, ensure};
 
 pub(in crate::replay) struct JsonContext<'a> {
+    pub case_id: Option<&'a str>,
     pub host: &'a str,
     pub port: u16,
     pub database: i64,
@@ -25,7 +26,17 @@ impl PublishRules {
             .rules
             .iter()
             .filter(|r| {
-                r.selector.host.eq_ignore_ascii_case(context.host)
+                self.scope.native_rule_scope_matches(
+                    &r.id,
+                    context.case_id,
+                    crate::policy::Protocol::Redis,
+                    &super::super::TargetKey {
+                        host: context.host.into(),
+                        port: context.port,
+                    },
+                    Some(&crate::policy::Database::Index(context.database)),
+                    context.username,
+                ) && r.selector.host.eq_ignore_ascii_case(context.host)
                     && r.selector.port == context.port
                     && source
                         .first()

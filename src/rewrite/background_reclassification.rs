@@ -36,6 +36,9 @@ pub(super) fn pending_api(target_root: &Path, state: &RewriteState) -> Result<Op
             || slice.rule_plan.is_some()
             || slice.dependency_rule_plan.is_some()
             || slice.recorder_capture_plan.is_some()
+            // An explicit unified apply requires genuine new Replay. A report
+            // reclassification cannot consume that execution obligation.
+            || slice.rule_replay_pending
             || slice
                 .active_issue
                 .as_ref()

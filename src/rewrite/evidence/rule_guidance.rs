@@ -1,3 +1,4 @@
+//! Mechanism-specific explanations share one typed rule authoring transaction.
 use super::super::evidence_model::{RewriteApplicableRulePlanner, RewriteRuleHint};
 use super::*;
 mod generated_values;
@@ -8,570 +9,260 @@ pub(super) fn http_header_timestamp_candidates(facts: &Value) -> Vec<Value> {
     http_header_timestamp::candidates(facts)
 }
 
-pub(super) fn rule_hints(
-    target_root: &Path,
-    query_kind: &str,
-    facts: &Value,
-) -> Vec<RewriteRuleHint> {
-    if let Some(hint) = super::policy_freshness::refresh_hint(target_root, facts) {
+fn help(root: &Path) -> super::super::model::RewriteCommandSpec {
+    super::super::action::command(
+        root,
+        vec!["rule".into(), "plan".into(), "--help".into()],
+        vec![],
+    )
+}
+
+fn plan_command(root: &Path, evidence: &str) -> super::super::model::RewriteCommandSpec {
+    super::super::action::command(
+        root,
+        vec![
+            "rule".into(),
+            "plan".into(),
+            "--file".into(),
+            "<rule.yaml>".into(),
+            "--evidence".into(),
+            evidence.into(),
+        ],
+        vec![],
+    )
+}
+
+fn nonempty(value: &Value) -> bool {
+    value.as_array().is_some_and(|items| !items.is_empty())
+}
+
+fn cluster(facts: &Value, protocol: &str, reason: &str) -> bool {
+    facts["clusters"].as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| item["protocol"] == protocol && item["reason"] == reason)
+    })
+}
+
+fn complete_candidates(facts: &Value, name: &str) -> bool {
+    nonempty(&facts[name]["candidates"]) && facts[name]["omitted_candidates"] == 0
+}
+
+pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleHint> {
+    if let Some(hint) = super::policy_freshness::refresh_hint(root, facts) {
         return vec![hint];
     }
-    if query_kind == QUERY_REPRESENTATIVES {
-        let mut hints = generated_values::hints(target_root, query_kind, facts);
-        let codecs = response_body::codec_candidates(facts);
-        if codecs.is_empty() {
-            return hints;
-        }
-        let configured = response_body::configured(facts);
-        hints.extend(codecs
-            .into_iter()
-            .map(|codec| {
-                let hint = match (configured, codec) {
-                    (true, "protobuf") => "The response body codec is protobuf. Review unordered_path_candidates as mechanical candidates; they do not authorize order-insensitive comparison. Apply only fields whose order is irrelevant in the source contract, with field_path, semantic display_path, explicit element_type, and source_evidence.",
-                    (true, "hessian2") => "The response body codec is Hessian2. Candidates identify lists or joined strings but do not authorize order-insensitive comparison. Apply only source-proven sets; joined strings also require the reviewed separator.",
-                    (false, "protobuf") => "The exact response body is a protobuf candidate. The response rule planner can configure the codec and verify the existing focused-E2E artifacts offline without recording new traffic.",
-                    (false, "hessian2") => "The exact response body is a Hessian2 candidate. The response rule planner can configure the codec and verify the existing focused-E2E artifacts offline without recording new traffic.",
-                    (_, "docx") => "Both response bodies are DOCX OPC packages. Review package-part differences and add only source-proven dynamic XML timestamps; ZIP entry timestamps and compression metadata are container metadata, while every decompressed part remains exact.",
-                    _ => "The exact response body has a supported codec candidate. Review the body evidence before applying a response rule.",
-                };
-                RewriteRuleHint {
-                    capability: codec.to_string(),
-                    rule: "response_body".to_string(),
-                    hint: hint.to_string(),
-                    help: super::super::action::command(
-                        target_root,
-                        vec![
-                            "rule".to_string(),
-                            "plan".to_string(),
-                            "--body-codec".to_string(),
-                            codec.to_string(),
-                            "--help".to_string(),
-                        ],
-                        Vec::new(),
-                    ),
-                }
-            })
+    let mut hints = generated_values::hints(root, query, facts);
+    let mut add = |capability: &str, rule: &str, instruction: &str| {
+        hints.push(RewriteRuleHint {
+        capability: capability.into(), rule: rule.into(),
+        hint: format!("{instruction} Write a self-contained traffic-policy/v1 rule with fresh Source file:line proof. Use rule plan --file <rule.yaml> --evidence <evidence-id>, inspect the immutable plan, apply, then complete its genuine Replay or recording obligations."),
+        help: help(root),
+    })
+    };
+    if query == QUERY_REPRESENTATIVES {
+        for codec in response_body::codec_candidates(facts) {
+            add(
+                codec,
+                "response_body",
+                match codec {
+                    "protobuf" => {
+                        "The focused-E2E response has a protobuf codec candidate. Declare typed numeric field paths and types before selecting source-proven unordered fields. Encoded bytes alone do not prove a schema or ordering intent."
+                    }
+                    "hessian2" => {
+                        "The focused-E2E response has a Hessian2 candidate. Select source-proven sets or joined strings through a typed response_body effect; joined strings require the proven separator."
+                    }
+                    "docx" => {
+                        "DOCX OPC package differences can use source-proven XML timestamp fields. Each decompressed part and its native package association remain evidence; declare the exact part and element."
+                    }
+                    _ => {
+                        "Review the complete focused-E2E response and trace Source encoding before declaring a codec or a field contract."
+                    }
+                },
             );
+        }
         return hints;
     }
-    if query_kind == QUERY_IP_CAPTURE {
-        return vec![RewriteRuleHint {
-            capability: "http_response_url".to_string(), rule: "recorder_capture".to_string(),
-            hint: "Trace the reported IP to source code. HTTP JSON URL fields can use response rewrite pointers. plan-http-response first returns a path review, including existing rules with the same authority, method and pointers. Check source path construction even for the first rule; choose an exact path or pattern, then explicitly submit --pattern-checked and a brief --source-evidence note. Inspect the merge diff, apply and verify fresh recording before submitting a remaining capture defect. Static or hardcoded addresses require source configuration or a source mock.".to_string(),
-            help: super::super::action::command(target_root, vec!["recorder-capture".into(), "plan-http-response".into(), "--help".into()], Vec::new()),
-        }];
+    if query == QUERY_IP_CAPTURE {
+        add(
+            "http_response_url",
+            "recorder_capture",
+            "Trace the reported IP to Source generation. A capture_http_response effect must declare exact authority, method, path and proven URL pointers. Review path construction and existing scope, then verify a fresh recording. Static addresses require Source configuration or a Source mock.",
+        );
+        return hints;
     }
-    if query_kind != QUERY_DIRTY_CLUSTERS {
-        return Vec::new();
+    if query == QUERY_JWT_TIME_VALIDITY && nonempty(&facts["candidates"]) {
+        add(
+            "jwt_time_shift",
+            "input_token_rebase",
+            "Trace the inbound token location and signing key in the frozen startup inputs. Declare input_jwt with an explicit algorithm and relative-time contract; Source signature and lifetime evidence are required.",
+        );
+        return hints;
     }
-    let has_memcached = facts
-        .get("clusters")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .any(|cluster| cluster.get("protocol").and_then(Value::as_str) == Some("memcached"));
-    let mut hints = generated_values::hints(target_root, query_kind, facts);
-    if facts["clusters"].as_array().is_some_and(|clusters| {
-        clusters.iter().any(|cluster| {
-            cluster["protocol"] == "redis"
-                && cluster["reason"] == "unused_recorded"
-                && cluster["operations"].as_object().is_some_and(|ops| {
-                    ops.keys().any(|command| {
-                        matches!(
-                            command.as_str(),
-                            "GET" | "DEL" | "LRANGE" | "EVALSHA" | "SCRIPT"
-                        )
-                    })
-                })
-        })
-    }) {
-        hints.push(RewriteRuleHint {
-            capability: "api_triggered_process_traffic".into(), rule: "api-triggered".into(),
-            hint: "Unused Redis GET/DEL/LRANGE/EVALSHA and linked SCRIPT EXISTS can be another API's asynchronous work. DEL key_sequence binds every key to one identity; script binds an exact digest/KEYS envelope to identity_argv_index. Trace source spawning and cleanup; identify an explicit single-row MySQL INSERT and its integer identity before proposing trigger_source. request_body_json selects typed fields in the trigger REQUEST BODY (JSON Pointer), never query or response. A shared task ID is a candidate, not ownership proof. Plan verifies unique recorded origins, foreign-case references and conflicts; it preserves trigger/resource API calls, target failures and finite responses. Existing complete recordings are reusable. See docs/api-triggered-process-traffic.md.".into(),
-            help: super::super::action::command(target_root, vec!["dependency-rule".into(),"plan".into(),"redis".into(),"api-triggered".into(),"--help".into()], Vec::new()),
-        });
+    if query == QUERY_SOURCE_PROCESS_TRAFFIC && has_redis_bootstrap_traffic(facts) {
+        add(
+            "redis_bootstrap",
+            "process_ownership",
+            "Trace process startup and initialization ownership in Source. A process_owned effect requires its Source revision and complete acquisition inventory; unused calls alone do not prove ownership.",
+        );
+        return hints;
     }
-
-    if facts["clusters"].as_array().is_some_and(|clusters| {
-        clusters
-            .iter()
-            .any(|c| c["protocol"] == "mysql" && c["reason"] == "unused_recorded")
-    }) {
-        hints.push(RewriteRuleHint {
-            capability: "api_triggered_process_traffic".into(), rule: "mysql-api-triggered".into(),
-            hint: "Discovery only: unused MySQL calls are not evidence of process ownership. First trace request-owned calls, including ORM expiration/refresh after commit or rollback and later attribute access; see mysql_unused_diagnosis. A source-proven detached API task can produce unused MySQL SELECTs/UPDATEs inside another API case. Trace direct and indirect terminal-result collectors, not only polling/cancel endpoints. Use mysql --trigger-source JSON --identity-value-index N to bind a SELECT template '?' slot to one uniquely captured INSERT identity. request_body_json selects the trigger request BODY. Plan verifies identity and foreign-case evidence; source_evidence must prove caller ownership. Complete transaction boundaries require --include-transaction-boundaries and wire/status evidence; explicit read-only --transaction-member selectors cover only helpers inside that anchored transaction. Same-name ordinary SELECT rules with the exact selector may be narrowed; target failures and direct trigger/resource calls remain required. See docs/api-triggered-process-traffic.md.".into(),
-            help: super::super::action::command(target_root, vec!["dependency-rule".into(),"plan".into(),"mysql".into(),"--help".into()], Vec::new()),
-        });
+    if query != QUERY_DIRTY_CLUSTERS {
+        return hints;
     }
-
-    if facts["http_header_timestamp_candidates"]
-        .as_array()
-        .is_some_and(|items| !items.is_empty())
-    {
-        hints.push(RewriteRuleHint {
-            capability: "http_header_timestamp".into(), rule: "header-timestamp".into(),
-            hint: "HTTP request header differences contain timestamp-format candidates near each dependency request's own start. Trace SDK/source generation and confirm host, port, method, path and header. Use dependency-rule plan http header-timestamp with --timestamp-format and source evidence, apply, then fresh Replay. The tolerance is fixed at five seconds; primary API request clocks are not used. Presence, multiplicity, invalid times and ordinary identity headers remain checked.".into(),
-            help: super::super::action::command(target_root, vec!["dependency-rule".into(), "plan".into(), "http".into(), "header-timestamp".into(), "--help".into()], Vec::new()),
-        });
+    if cluster(facts, "redis", "unused_recorded") || cluster(facts, "mysql", "unused_recorded") {
+        add(
+            "api_triggered_process_traffic",
+            "process_ownership",
+            "Unused dependency calls are not evidence of process ownership and can be detached API work. Prove the unique API origin, typed request-body predicates and captured SQL identity; linked scripts, transaction members and resource calls retain their own proof. process_owned is an ownership effect and cannot be inferred from a value codec or a shared task ID. Target failures and finite consumption stay required.",
+        );
     }
-    if facts["clusters"].as_array().is_some_and(|items| {
-        items
-            .iter()
-            .any(|c| c["protocol"] == "http" && c["reason"] == "unmatched_target")
-    }) {
-        hints.push(RewriteRuleHint {
-            capability: "http_json_unordered".into(), rule: "unordered".into(),
-            hint: "Inspect http_unordered_candidates for same-request JSON array reorderings. A candidate is not proof that order is non-contractual: trace source collection construction and downstream use. Return the exact endpoint, JSON Pointer and source evidence to the coordinator for dependency-rule plan http unordered / apply and fresh Replay. Old reports require fresh Replay; response unordered rules do not change outbound dependency matching.".into(),
-            help: super::super::action::command(target_root, vec!["dependency-rule".into(), "plan".into(), "http".into(), "unordered".into(), "--help".into()], Vec::new()),
-        });
-        hints.push(RewriteRuleHint {
-            capability: "http_cross_case".into(), rule: "cross-case".into(),
-            hint: "Inspect cross_case_candidates. A matching exchange in another case is a candidate, not proof of sharing. Trace source shared initialization/cache/refresh and side effects. Unavailable request identity requires fresh Replay; do not change target behavior or treat the call as background work.".into(),
-            help: super::super::action::command(target_root, vec!["dependency-rule".into(), "plan".into(), "http".into(), "cross-case".into(), "--help".into()], Vec::new()),
-        });
+    if nonempty(&facts["http_header_timestamp_candidates"]) {
+        add(
+            "http_header_timestamp",
+            "header-timestamp",
+            "Trace source SDK header generation and declare a typed http_request header time contract with its own dependency request anchor, exact endpoint, method and path. Header presence, multiplicity and authentication remain checked.",
+        );
     }
-    if facts["clusters"].as_array().is_some_and(|items| {
-        items
-            .iter()
-            .any(|c| c["protocol"] == "redis" && c["reason"] == "unmatched_target")
-    }) {
-        hints.push(RewriteRuleHint {
-            capability: "redis_value_unordered".into(), rule: "unordered".into(),
-            hint: "Inspect redis_unordered_candidates. Redis string-write values automatically compare JSON objects by content; JSON arrays and Protobuf repeated fields require source-proven unordered semantics. Confirm host, port, exact key or key affixes, field path and Protobuf element type. Use dependency-rule plan redis unordered, apply and fresh Replay; this never changes dependency ownership. Old reports require fresh Replay.".into(),
-            help: super::super::action::command(target_root, vec!["dependency-rule".into(), "plan".into(), "redis".into(), "unordered".into(), "--help".into()], Vec::new()),
-        });
-        hints.push(RewriteRuleHint {
-            capability: "redis_cross_case".into(), rule: "cross-case".into(),
-            hint: "If an existing case-scoped GET/HGET time-shift rule describes a shared source cache, inspect the completed recording for one exact read in a sibling case. Confirm the same host, port, database, key and field, then trace cache initialization, refresh and side effects in source. A finalized unmatched Replay report and source evidence are required for dependency-rule plan redis cross-case; apply requires fresh Replay.".into(),
-            help: super::super::action::command(target_root, vec!["dependency-rule".into(), "plan".into(), "redis".into(), "cross-case".into(), "--help".into()], Vec::new()),
-        });
+    for (protocol, capability) in [
+        ("http", "http_json_unordered"),
+        ("redis", "redis_value_unordered"),
+    ] {
+        if cluster(facts, protocol, "unmatched_target") {
+            add(
+                capability,
+                "unordered",
+                "Inspect protected Source/Target value differences. Declare the dependency.request surface, exact resource and value slot, explicit JSON or PB codec, and only Source-proven unordered logical fields. A response rule does not authorize outbound request changes.",
+            );
+            add(
+                if protocol == "http" {
+                    "http_cross_case"
+                } else {
+                    "redis_cross_case"
+                },
+                "cross-case",
+                "A matching exchange in another case is a sharing candidate. A finite_sharing effect needs complete Source inventory plus proof of shared initialization, refresh and side effects. Value contracts do not change ownership, snapshot admission or available responses.",
+            );
+        }
     }
-    if facts["redis_lock_candidates"]["candidates"]
-        .as_array()
-        .is_some_and(|items| !items.is_empty())
-    {
-        hints.push(RewriteRuleHint {
-            capability: "redis_lock".into(), rule: "lock".into(),
-            hint: "Inspect redis_lock_candidates for token-only SET NX or same-key script/DELEX argument differences. Trace source random ownership tokens and conditional release; the command shape does not prove lock semantics. Configure host, port and a bounded key selector through dependency-rule plan redis lock, apply and fresh Replay. One rule preserves token equality across references without configuring a UUID format or script SHA. Keys, expiry/options, scripts, database/authentication and finite exchange consumption remain strict.".into(),
-            help: super::super::action::command(target_root, vec!["dependency-rule".into(),"plan".into(),"redis".into(),"lock".into(),"--help".into()], Vec::new()),
-        });
+    if nonempty(&facts["redis_lock_candidates"]["candidates"]) {
+        add(
+            "redis_lock",
+            "lock",
+            "Trace Source token generation and conditional release before declaring redis_lock. Matching SET NX or script shape is a candidate. Exact key/options, script identity, database/authentication, linked token equality and finite consumption remain checked.",
+        );
     }
-    if facts["redis_publish_candidates"]["candidates"]
-        .as_array()
-        .is_some_and(|items| !items.is_empty())
-    {
-        hints.push(RewriteRuleHint {
-            capability: "redis_publish".into(), rule: "publish".into(),
-            hint: "Inspect redis_publish_candidates for an exact-channel PUBLISH payload differing only at one ASCII UUID v4 position. Trace that identity's random generation and lifetime in source. Use dependency-rule plan redis publish with --uuid-field (an exact marker such as host_id) or --uuid-index, apply and fresh Replay. Channel, all other payload bytes, database/authentication, identity consistency and finite consumption stay strict; no message codec is assumed.".into(),
-            help: super::super::action::command(target_root, vec!["dependency-rule".into(),"plan".into(),"redis".into(),"publish".into(),"--help".into()], Vec::new()),
-        });
+    if nonempty(&facts["redis_publish_candidates"]["candidates"]) {
+        add(
+            "redis_publish",
+            "publish",
+            "Trace the PUBLISH identity generator and lifetime before declaring redis_publish_identity with its bounded exact channel and explicit identity position. All other bytes and case-local identity consistency remain checked.",
+        );
     }
     if facts["egress_rejections"]["rejected_packets_in_samples"]
         .as_u64()
-        .is_some_and(|count| count > 0)
+        .is_some_and(|n| n > 0)
     {
-        hints.push(RewriteRuleHint {
-            capability:"http_response_url".into(), rule:"recorder_capture".into(),
-            hint:"Rejected outbound packet counts accompany this response/dependency failure. They identify no IP or origin. Inspect source dependency calls; a source-proven upstream JSON IP URL can use response rewrite pointers. Run route --cause unrecorded-ip with current evidence once the endpoint and source are known, then follow plan/apply and recording refresh before submitting a remaining system defect.".into(),
-            help: super::super::action::command(target_root, vec!["recorder-capture".into(),"plan-http-response".into(),"--help".into()],Vec::new()),
-        });
+        add(
+            "http_response_url",
+            "recorder_capture",
+            "Packet rejection counts identify neither an IP nor its origin. Inspect Source calls and use route --cause unrecorded-ip with current evidence when the endpoint is known. A capture_http_response effect requires Source URL provenance and a fresh recording.",
+        );
     }
-    if has_memcached {
-        hints.push(RewriteRuleHint {
-        capability: "memcached".to_string(),
-        rule: "protobuf-timestamp".to_string(),
-        hint: "Investigate this rule when a Memcached SET value contains a protobuf varint field generated from the current Unix time."
-            .to_string(),
-        help: super::super::action::command(
-            target_root,
-            vec![
-                "dependency-rule".to_string(),
-                "plan".to_string(),
-                "memcached".to_string(),
-                "protobuf-timestamp".to_string(),
-                "--help".to_string(),
-            ],
-            Vec::new(),
-        ),
-    });
+    if facts["clusters"]
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item["protocol"] == "memcached"))
+    {
+        add(
+            "memcached",
+            "value-contract",
+            "Investigate Memcached SET value differences through the same JSON or typed PB value contract used by Redis. Choose an explicit operation/key and logical field; protocol presence alone proves neither a time strategy nor an ordering exemption.",
+        );
     }
     hints
 }
 
 pub(super) fn applicable_rule_planners(
-    target_root: &Path,
-    issue_kind: RewriteIssueKind,
-    query_kind: &str,
+    root: &Path,
+    issue: RewriteIssueKind,
+    query: &str,
     facts: &Value,
-    evidence_id: &str,
+    evidence: &str,
 ) -> Vec<RewriteApplicableRulePlanner> {
     if facts["policy_freshness"]["requires_fresh_replay"] == true {
-        return Vec::new();
+        return vec![];
     }
-    let mut planners =
-        generated_values::planners(target_root, issue_kind, query_kind, facts, evidence_id);
-    if query_kind == QUERY_DIRTY_CLUSTERS
-        && matches!(
-            issue_kind,
-            RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
-        )
-        && facts["redis_publish_candidates"]["candidates"]
-            .as_array()
-            .is_some_and(|items| !items.is_empty())
-        && facts["redis_publish_candidates"]["omitted_candidates"] == 0
-    {
+    let mut planners = generated_values::planners(root, issue, query, facts, evidence);
+    let mut add = |kind: &str, capability: &str| {
         planners.push(RewriteApplicableRulePlanner {
-            kind: "dependency_value".into(),
-            capability: "redis_publish".into(),
-            evidence_id: evidence_id.into(),
-            command: super::super::action::command(
-                target_root,
-                vec![
-                    "dependency-rule".into(),
-                    "plan".into(),
-                    "redis".into(),
-                    "publish".into(),
-                    "--evidence-id".into(),
-                    evidence_id.into(),
-                    "--help".into(),
-                ],
-                Vec::new(),
-            ),
-        });
-    }
-    if query_kind == QUERY_DIRTY_CLUSTERS
-        && matches!(
-            issue_kind,
-            RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
-        )
-        && facts["redis_lock_candidates"]["candidates"]
-            .as_array()
-            .is_some_and(|items| !items.is_empty())
-        && facts["redis_lock_candidates"]["omitted_candidates"] == 0
-    {
-        planners.push(RewriteApplicableRulePlanner {
-            kind: "dependency_value".into(),
-            capability: "redis_lock".into(),
-            evidence_id: evidence_id.into(),
-            command: super::super::action::command(
-                target_root,
-                vec![
-                    "dependency-rule".into(),
-                    "plan".into(),
-                    "redis".into(),
-                    "lock".into(),
-                    "--evidence-id".into(),
-                    evidence_id.into(),
-                    "--help".into(),
-                ],
-                Vec::new(),
-            ),
-        });
-    }
-    if query_kind == QUERY_DIRTY_CLUSTERS
-        && matches!(
-            issue_kind,
-            RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
-        )
-        && facts["http_header_timestamp_candidates"]
-            .as_array()
-            .is_some_and(|items| !items.is_empty())
-    {
-        planners.push(RewriteApplicableRulePlanner {
-            kind: "dependency_value".into(),
-            capability: "http_header_timestamp".into(),
-            evidence_id: evidence_id.into(),
-            command: super::super::action::command(
-                target_root,
-                vec![
-                    "dependency-rule".into(),
-                    "plan".into(),
-                    "http".into(),
-                    "header-timestamp".into(),
-                    "--evidence-id".into(),
-                    evidence_id.into(),
-                    "--help".into(),
-                ],
-                Vec::new(),
-            ),
-        });
-    }
-    if query_kind == QUERY_DIRTY_CLUSTERS
-        && matches!(
-            issue_kind,
-            RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
-        )
-        && facts["http_unordered_candidates"]["candidates"]
-            .as_array()
-            .is_some_and(|items| !items.is_empty())
-        && facts["http_unordered_candidates"]["omitted_candidates"] == 0
-    {
-        planners.push(RewriteApplicableRulePlanner {
-            kind: "dependency_value".into(),
-            capability: "http_json_unordered".into(),
-            evidence_id: evidence_id.into(),
-            command: super::super::action::command(
-                target_root,
-                vec![
-                    "dependency-rule".into(),
-                    "plan".into(),
-                    "http".into(),
-                    "unordered".into(),
-                    "--evidence-id".into(),
-                    evidence_id.into(),
-                    "--help".into(),
-                ],
-                Vec::new(),
-            ),
-        });
-    }
-    if query_kind == QUERY_DIRTY_CLUSTERS
-        && matches!(
-            issue_kind,
-            RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
-        )
-        && facts["redis_unordered_candidates"]["candidates"]
-            .as_array()
-            .is_some_and(|items| !items.is_empty())
-        && facts["redis_unordered_candidates"]["omitted_candidates"] == 0
-    {
-        planners.push(RewriteApplicableRulePlanner {
-            kind: "dependency_value".into(),
-            capability: "redis_value_unordered".into(),
-            evidence_id: evidence_id.into(),
-            command: super::super::action::command(
-                target_root,
-                vec![
-                    "dependency-rule".into(),
-                    "plan".into(),
-                    "redis".into(),
-                    "unordered".into(),
-                    "--evidence-id".into(),
-                    evidence_id.into(),
-                    "--help".into(),
-                ],
-                Vec::new(),
-            ),
-        });
-    }
-
-    if query_kind == QUERY_DIRTY_CLUSTERS
-        && matches!(
-            issue_kind,
-            RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
-        )
-        && facts["cross_case_candidates"]["candidates"]
-            .as_array()
-            .is_some_and(|items| items.iter().any(|c| c["request_match"] == "verified"))
-    {
-        planners.push(RewriteApplicableRulePlanner {
-            kind: "dependency_scope".into(),
-            capability: "http_cross_case".into(),
-            evidence_id: evidence_id.into(),
-            command: super::super::action::command(
-                target_root,
-                vec![
-                    "dependency-rule".into(),
-                    "plan".into(),
-                    "http".into(),
-                    "cross-case".into(),
-                    "--evidence-id".into(),
-                    evidence_id.into(),
-                    "--help".into(),
-                ],
-                Vec::new(),
-            ),
-        });
-    }
-    if query_kind == QUERY_JWT_TIME_VALIDITY {
-        let mut seen = std::collections::BTreeSet::new();
-        for candidate in facts["candidates"].as_array().into_iter().flatten() {
-            let (selector_flag, selector) =
-                if let Some(query_param) = candidate["query_param"].as_str() {
-                    ("--query-param", query_param)
-                } else if let Some(raw_header) = candidate["raw_header"].as_str() {
-                    ("--header", raw_header)
-                } else {
-                    ("--header", candidate["header"].as_str().unwrap_or_default())
-                };
-            let algorithm = candidate["algorithm"].as_str().unwrap_or_default();
-            let raw_header = candidate["raw_header"].is_string();
-            if !seen.insert((selector_flag, selector, algorithm, raw_header)) {
-                continue;
-            }
-            let mut arguments = vec![
-                "rule".into(),
-                "plan".into(),
-                "--request-kind".into(),
-                "jwt".into(),
-                "--evidence-id".into(),
-                evidence_id.into(),
-                selector_flag.into(),
-                selector.into(),
-                "--algorithm".into(),
-                algorithm.into(),
-                "--help".into(),
-            ];
-            if raw_header {
-                arguments.extend(["--header-scheme".into(), "raw".into()]);
-            }
-            planners.push(RewriteApplicableRulePlanner {
-                kind: "request_rule".into(),
-                capability: "jwt_time_shift".into(),
-                evidence_id: evidence_id.into(),
-                command: super::super::action::command(target_root, arguments, Vec::new()),
-            });
+            kind: kind.into(),
+            capability: capability.into(),
+            evidence_id: evidence.into(),
+            command: plan_command(root, evidence),
+        })
+    };
+    if query == QUERY_REPRESENTATIVES && issue == RewriteIssueKind::Response {
+        for codec in response_body::codec_candidates(facts) {
+            add("response_body", codec);
         }
+    }
+    if query == QUERY_JWT_TIME_VALIDITY && nonempty(&facts["candidates"]) {
+        add("request_rule", "jwt_time_shift");
+    }
+    if query == QUERY_IP_CAPTURE
+        && facts["reported"]["origin"] == "http-response"
+        && nonempty(&facts["http_response_url_candidates"])
+    {
+        add("recorder_capture", "http_response_url");
+    }
+    if query == QUERY_SOURCE_PROCESS_TRAFFIC
+        && issue == RewriteIssueKind::Response
+        && has_redis_bootstrap_traffic(facts)
+    {
+        add("dependency_ownership", "redis_bootstrap");
+    }
+    if query != QUERY_DIRTY_CLUSTERS
+        || !matches!(
+            issue,
+            RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
+        )
+    {
         return planners;
     }
-
-    if query_kind == QUERY_IP_CAPTURE && facts["reported"]["origin"] == "http-response" {
-        for candidate in facts["http_response_url_candidates"]
+    for (name, capability) in [
+        ("redis_publish_candidates", "redis_publish"),
+        ("redis_lock_candidates", "redis_lock"),
+        ("http_unordered_candidates", "http_json_unordered"),
+        ("redis_unordered_candidates", "redis_value_unordered"),
+    ] {
+        if complete_candidates(facts, name) {
+            add("dependency_value", capability);
+        }
+    }
+    if nonempty(&facts["http_header_timestamp_candidates"]) {
+        add("dependency_value", "http_header_timestamp");
+    }
+    if facts["cross_case_candidates"]["candidates"]
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item["request_match"] == "verified"))
+    {
+        add("dependency_scope", "http_cross_case");
+    }
+    if cluster(facts, "mysql", "unmatched_target") {
+        add("dependency_value", "mysql_sql_time");
+    }
+    if issue == RewriteIssueKind::Dependency {
+        let protocols = facts["clusters"]
             .as_array()
             .into_iter()
             .flatten()
-        {
-            let mut arguments = vec![
-                "recorder-capture".to_string(),
-                "plan-http-response".to_string(),
-                "--evidence-id".to_string(),
-                evidence_id.to_string(),
-            ];
-            for (flag, field) in [
-                ("--case-id", "case_id"),
-                ("--response-id", "response_id"),
-                ("--name", "authority"),
-                ("--pointer", "pointer"),
-            ] {
-                arguments.extend([
-                    flag.to_string(),
-                    candidate[field].as_str().unwrap_or_default().to_string(),
-                ]);
-            }
-            arguments.extend([
-                "--path-pattern".to_string(),
-                format!(
-                    "{} {}",
-                    candidate["method"].as_str().unwrap_or_default(),
-                    candidate["path"].as_str().unwrap_or_default()
-                ),
-            ]);
-            planners.push(RewriteApplicableRulePlanner {
-                kind: "recorder_capture".to_string(),
-                capability: "http_response_url".to_string(),
-                evidence_id: evidence_id.to_string(),
-                command: super::super::action::command(target_root, arguments, Vec::new()),
-            });
+            .filter_map(|cluster| cluster["protocol"].as_str())
+            .filter(|p| matches!(*p, "http" | "memcached" | "motan" | "redis" | "mysql"))
+            .collect::<std::collections::BTreeSet<_>>();
+        for protocol in protocols {
+            add("dependency_ownership", protocol);
         }
     }
-    if query_kind == QUERY_REPRESENTATIVES && matches!(issue_kind, RewriteIssueKind::Response) {
-        let configured = response_body::configured(facts);
-        planners.extend(
-            response_body::codec_candidates(facts)
-                .into_iter()
-                .map(|codec| {
-                    let mut arguments = vec![
-                        "rule".to_string(),
-                        "plan".to_string(),
-                        "--evidence-id".to_string(),
-                        evidence_id.to_string(),
-                        "--body-codec".to_string(),
-                        codec.to_string(),
-                    ];
-                    if configured || codec == "docx" {
-                        arguments.push("--help".to_string());
-                    }
-                    RewriteApplicableRulePlanner {
-                        kind: "response_body".to_string(),
-                        capability: codec.to_string(),
-                        evidence_id: evidence_id.to_string(),
-                        command: super::super::action::command(target_root, arguments, Vec::new()),
-                    }
-                }),
-        );
-    }
-    if issue_kind == RewriteIssueKind::Response
-        && query_kind == QUERY_SOURCE_PROCESS_TRAFFIC
-        && has_redis_bootstrap_traffic(facts)
-    {
-        planners.push(RewriteApplicableRulePlanner {
-            kind: "dependency_ownership".to_string(),
-            capability: "redis_bootstrap".to_string(),
-            evidence_id: evidence_id.to_string(),
-            command: super::super::action::command(
-                target_root,
-                vec![
-                    "dependency-rule".to_string(),
-                    "plan".to_string(),
-                    "redis".to_string(),
-                    "--help".to_string(),
-                ],
-                Vec::new(),
-            ),
-        });
-    }
-    if query_kind == QUERY_DIRTY_CLUSTERS
-        && matches!(
-            issue_kind,
-            RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
-        )
-        && facts["clusters"].as_array().is_some_and(|clusters| {
-            clusters.iter().any(|cluster| {
-                cluster["protocol"] == "mysql" && cluster["reason"] == "unmatched_target"
-            })
-        })
-    {
-        planners.push(RewriteApplicableRulePlanner {
-            kind: "dependency_value".into(),
-            capability: "mysql_sql_time".into(),
-            evidence_id: evidence_id.into(),
-            command: super::super::action::command(
-                target_root,
-                vec![
-                    "dependency-rule".into(),
-                    "plan".into(),
-                    "mysql-time".into(),
-                    "--help".into(),
-                ],
-                Vec::new(),
-            ),
-        });
-    }
-    if issue_kind != RewriteIssueKind::Dependency || query_kind != QUERY_DIRTY_CLUSTERS {
-        return planners;
-    }
-    let protocols = facts
-        .get("clusters")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|cluster| cluster.get("protocol").and_then(Value::as_str))
-        .filter(|protocol| {
-            matches!(
-                *protocol,
-                "http" | "memcached" | "motan" | "redis" | "mysql"
-            )
-        })
-        .collect::<std::collections::BTreeSet<_>>();
-    planners.extend(
-        protocols
-            .into_iter()
-            .map(|protocol| RewriteApplicableRulePlanner {
-                kind: "dependency_ownership".to_string(),
-                capability: protocol.to_string(),
-                evidence_id: evidence_id.to_string(),
-                command: super::super::action::command(
-                    target_root,
-                    vec![
-                        "dependency-rule".to_string(),
-                        "plan".to_string(),
-                        protocol.to_string(),
-                        "--help".to_string(),
-                    ],
-                    Vec::new(),
-                ),
-            }),
-    );
     planners
 }
 
@@ -611,7 +302,7 @@ mod tests {
                 .find(|p| p.capability == "mysql_sql_time")
                 .unwrap();
             assert_eq!(time.evidence_id, "current");
-            assert!(time.command.argv.contains(&"mysql-time".into()));
+            assert!(time.command.argv.contains(&"--file".into()));
         }
         assert!(
             applicable_rule_planners(
@@ -633,7 +324,7 @@ mod tests {
         let hints = rule_hints(root, QUERY_DIRTY_CLUSTERS, &facts);
         assert_eq!(hints.len(), 1);
         assert_eq!(hints[0].capability, "http_response_url");
-        assert!(hints[0].help.argv.contains(&"plan-http-response".into()));
+        assert!(hints[0].help.argv.contains(&"rule".into()));
         assert!(hints[0].hint.contains("route --cause unrecorded-ip"));
         assert!(
             applicable_rule_planners(
@@ -690,7 +381,7 @@ mod cross_case_tests {
                 .find(|p| p.capability == "http_cross_case")
                 .unwrap();
             assert_eq!(planner.kind, "dependency_scope");
-            assert!(planner.command.argv.contains(&"cross-case".into()));
+            assert!(planner.command.argv.contains(&"--file".into()));
         }
     }
 }
@@ -731,7 +422,7 @@ mod http_unordered_tests {
                 .find(|p| p.capability == "http_json_unordered")
                 .unwrap();
             assert_eq!(planner.kind, "dependency_value");
-            assert!(planner.command.argv.contains(&"unordered".into()));
+            assert!(planner.command.argv.contains(&"--file".into()));
             assert!(planner.command.argv.contains(&"ev".into()));
         }
         facts["http_unordered_candidates"]["omitted_candidates"] = serde_json::json!(1);
@@ -785,7 +476,7 @@ mod redis_unordered_tests {
                 .find(|p| p.capability == "redis_value_unordered")
                 .unwrap();
             assert_eq!(planner.kind, "dependency_value");
-            assert!(planner.command.argv.contains(&"unordered".into()));
+            assert!(planner.command.argv.contains(&"--file".into()));
             assert!(planner.command.argv.contains(&"ev".into()));
         }
         facts["redis_unordered_candidates"]["omitted_candidates"] = serde_json::json!(1);
@@ -834,7 +525,7 @@ mod redis_lock_tests {
                 .find(|p| p.capability == "redis_lock")
                 .unwrap();
             assert!(
-                planner.command.argv.contains(&"lock".into())
+                planner.command.argv.contains(&"--file".into())
                     && planner.command.argv.contains(&"current".into())
             );
             assert!(
@@ -889,7 +580,7 @@ mod redis_publish_tests {
                 .find(|planner| planner.capability == "redis_publish")
                 .unwrap();
             assert!(
-                planner.command.argv.contains(&"publish".into())
+                planner.command.argv.contains(&"--file".into())
                     && planner.command.argv.contains(&"current".into())
             );
             assert!(

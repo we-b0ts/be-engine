@@ -18,8 +18,8 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let rules = temp.path().join("source-traffic-policy.yaml");
-        fs::write(&rules, "version: 2\n").unwrap();
+        let rules = temp.path().join("policy.yaml");
+        fs::write(&rules, "format: traffic-policy/v1\nrules: []\n").unwrap();
         let report = temp.path().join("replay-report.json");
         let case_dir = temp.path().join(CASE);
         fs::create_dir(&case_dir).unwrap();
@@ -60,7 +60,7 @@ impl Fixture {
     fn feedback(&self) -> MysqlBackgroundDependencyFeedback {
         MysqlBackgroundDependencyFeedback {
             rules_path:self.rules.clone(), replay_report_path:self.report.clone(),
-            name:"video-recovery".into(), source_revision:"0123456789abcdef".into(),
+            name:"video-recovery".into(), source_revision:"sha256:1111111111111111111111111111111111111111111111111111111111111111".into(),
             source_evidence:"src/recovery.py:run startup recovery independent of requests".into(),
             selector: MysqlBackgroundSelector {
                 target_host:"db.internal".into(), target_port:3306,
@@ -128,7 +128,7 @@ fn mysql_plan_apply_reclassifies_existing_evidence_and_rule_removal_restores_dir
         );
         assert_eq!(fs::read(&deps).unwrap(), original);
     }
-    fs::write(&f.rules, "version: 2\n").unwrap();
+    fs::write(&f.rules, "format: traffic-policy/v1\nrules: []\n").unwrap();
     let result = f.reclassify();
     assert_eq!(result.matched_unused_case, 0);
     assert_eq!(result.remaining_dirty_case_ids, [CASE.to_owned()].into());
@@ -217,14 +217,16 @@ fn mixed_mysql_and_redis_rules_reclassify_the_same_immutable_case() {
             key_suffix: String::new(),
             fields: Vec::new(),
             initial_load_timeout_ms: Some(1000),
-            source_revision: "0123456789abcdef".into(),
+            source_revision:
+                "sha256:1111111111111111111111111111111111111111111111111111111111111111".into(),
             source_evidence: "src/cache.rs:init process cache refresh".into(),
         });
-    fs::write(&f.rules, serde_yaml::to_string(&policy).unwrap()).unwrap();
+    fs::write(&f.rules, policy.render().unwrap()).unwrap();
     let deps = f.case_dir.join("dependencies.jsonl");
     let raw = fs::read_to_string(&deps).unwrap();
-    let redis = json!({"event_type":"redis_exchange", "target_port":6379,
+    let redis = json!({"event_type":"redis_exchange", "target_host":"redis.test", "target_port":6379,"database":0,
         "connection_id":"cache-connection", "sequence":1, "command":"SCARD", "replay_safe":true,
+        "outcome":"response", "response":{"encoding":"utf8","data":":1\r\n","truncated":false},
         "args":[{"encoding":"utf8", "data":"cache:tasks", "truncated":false}]});
     let original = format!("{raw}\n{redis}\n");
     fs::write(&deps, &original).unwrap();
@@ -241,7 +243,7 @@ fn mixed_mysql_and_redis_rules_reclassify_the_same_immutable_case() {
         assert!(result.remaining_dirty_case_ids.is_empty());
     }
     assert_eq!(fs::read_to_string(&deps).unwrap(), original);
-    fs::write(&f.rules, "version: 2\n").unwrap();
+    fs::write(&f.rules, "format: traffic-policy/v1\nrules: []\n").unwrap();
     let restored = f.reclassify();
     assert_eq!(restored.remaining_dirty_case_ids, [CASE.to_owned()].into());
     assert_eq!(f.read_report()["unused_case_exchanges"][0]["case_id"], CASE);

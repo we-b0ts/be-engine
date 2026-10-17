@@ -30,6 +30,21 @@ is unclear.
 
 ## Current Boundaries
 
+- `policy/schema` owns the strict self-contained `traffic-policy/v1` document.
+  `policy/compiler` owns typed capability validation, field ownership and
+  semantic effect fingerprints; neither module reads evidence or changes runtime
+  state. `value_contract/time` owns exact timestamp arithmetic and trusted-clock
+  relations. `value_contract/json` composes field contracts with strict remainder
+  comparison and bounded whole-element multiset pairing; `value_contract/delivery`
+  writes only explicitly authorized timestamps in derived copies. These pure
+  owners never claim protocol exchanges or mutate recorded evidence.
+- `policy_evidence` owns authenticated private payload witnesses, complete
+  coverage accounting, sealing and publication of their relative artifacts.
+  Public reports retain role/identity/digest metadata without payload bodies.
+  Protocol adapters supply independent observed clocks and original exchange
+  identities. Assertion and request adapters map the same compiled contracts
+  into their existing status, lane, admission and consumption lifecycles.
+
 - `config/api_trigger` owns API-origin process-rule schema, SQL identity slots and bounded key-template
   validation; `api_trigger` owns immutable origin evidence and disposable index
   persistence. Its `same_resource` child owns report-only read eligibility for
@@ -169,8 +184,10 @@ is unclear.
   Its `script` child validates explicit Lua digests and bounded KEYS/ARGV
   envelopes without evaluating Lua. Redis compares dynamic-identity copies
   before disjoint request-time contracts; overlapping field ownership is rejected.
-  Its `time` child uses exact integer nanoseconds for timestamp parsing and relative-clock validation across
-  protocols, reusing the assertion time decimal scaler. It owns explicit clock-group relationships with a strict shared default; request sequence state retains those group observations across commands. `redis/publish/json` owns UUID-only JSON comparison copies for composition with time contracts; `redis/matching/request` commits their bindings only after all request checks pass. Planning uses the same copies without mutating recorded evidence. `http_json` owns JSON body stable-field pairing and time comparisons
+  Its `time` child adapts request-specific source format and calendar constraints
+  to `value_contract/time`. Explicit clock groups retain a strict shared default;
+  request sequence state carries group observations across commands.
+  `redis/publish/json` owns UUID-only JSON comparison copies for composition with time contracts; `redis/matching/request` commits their bindings only after all request checks pass. Planning uses the same copies without mutating recorded evidence. `http_json` owns JSON body stable-field pairing and time comparisons
   using dependency-local clocks, and `evidence/http_json` protects and verifies
   failed target witnesses before planning.
   `replay/policy/case_condition` owns bounded scalar conditions on immutable
@@ -203,8 +220,8 @@ is unclear.
   from process-owned traffic classification when reusing Replay responses.
   `rewrite/plan_recovery` retires a pending rule with unavailable Replay evidence
   and requests fresh verification while returning its selector and source proof.
-- `replay/assertion/time` owns the shared timestamp formats and fixed request
-  time windows consumed by response assertions and dependency-header rules.
+- `replay/assertion/time` adapts response time configuration and diagnostics to
+  the shared `value_contract/time` formats, fixed windows and precision rules.
   `replay/policy/http_headers` owns typed selectors/schema validation, its
   matcher child selects/accounts for rules, and its feedback child owns
   evidence-backed plan/apply. `replay/http/request_headers` owns post-match
@@ -213,7 +230,8 @@ is unclear.
   timestamp-evidence child verifies immutable witnesses.
   `rewrite/evidence/rule_guidance/http_header_timestamp` projects bounded
   candidates without proving source semantics. The coordinator model and HTTP
-  CLI children own dependency-rule persistence and command projection.
+  The unified rule transaction owns authoring; protocol children own only their
+  typed domain behavior and command projection.
 - `gateway/motan` owns primary Motan request admission, fixed-response routing,
   matched-source forwarding, and primary-case persistence orchestration for
   both Motan1 and Motan2.
@@ -297,7 +315,7 @@ is unclear.
   the corresponding time-shift rule.
 - `http/rewrite/json_urls` owns JSON Pointer URL substitution and discovered
   HTTP routes. Recorder configuration owns concise rule validation and the
-  source-traffic-policy overlay; no application-specific sandbox plugin is
+  typed Source-policy overlay; no application-specific sandbox plugin is
   required.
 - `local_interception/egress_counters` owns read-only firewall command parsing.
   `replay/egress_counter` owns bounded sampling and per-case counter differences;
@@ -519,7 +537,7 @@ is unclear.
   for source-traffic evidence acquisition and classification policy. Static
   recorder fields remain embedded in `.traffic-e2e/project.yaml`; planners
   validate both documents and atomically replace only
-  `.traffic-e2e/source-traffic-policy.yaml`.
+  the unified file named by `project.policy`.
 - Config, TLS, DNS, and process lookup remain focused infrastructure concerns.
 - `platform/mod.rs` owns one managed subprocess composition boundary: it maps
   validated project/recorder state into the staged shell runtime and collects
@@ -687,7 +705,7 @@ explicit repository-wide audit.
   comparator owns value comparison and rule applicability using those resolved
   locations; feedback keeps plan/apply evidence validation and persistence.
 - `replay/policy/response/time_rule` owns explicit timestamp-format, comparison-mode and duration-unit
-  contracts. `replay/assertion/time` owns numeric parsing and fixed five-second
+  contracts. `value_contract/time` owns numeric parsing and fixed five-second
   request-relative validation; artifact adapters supply captured request times.
   `feedback/time_plan` preflights proposed response time rules with this same
   comparator and freezes actual case/response witnesses before plan/apply.
@@ -777,3 +795,42 @@ explicit repository-wide audit.
   failed and client-termination exchanges remain blockers; final success and
   policy usage are still committed only after delivery. Other protocols keep
   their existing consumption-based admission.
+
+
+## Unified policy responsibilities
+
+- `policy/{schema,native,native_compile,strict_map,capability}` owns closed typed
+  contracts, Source scope and pure validation. Unknown combinations reject before
+  replay; adapter admission and runtime construction share typed projections.
+- `policy/authoring` owns document revision context, rule-local proof inheritance,
+  named contract abbreviations and readable YAML rendering. Its closed traversal
+  expands only typed contract locations, preserving business literals and the
+  complete rule/proof IR used by compilation, plans and evidence. Rendering
+  verifies compiled equality after a parse round trip.
+- `value_contract/{json,encoded,time,generated,delivery}` owns pure values, whole
+  element pairing, microsecond relationships, conditional fields and staged
+  nonces/templates. Keys are borrowed immutable inputs; bytes and plaintext do
+  not enter errors or reports.
+- `replay/policy/native_projection` translates typed effects to existing domain
+  data. Its SourceSession exercises a complete immutable Source trace in private
+  state; it cannot claim live Target work or certify Target correctness.
+- Protocol adapters keep envelope/session/lane/transaction/claim/delivery and
+  termination responsibility. They call shared value contracts only for selected
+  slots. SQL generated parameters bind atomically with scalar/JSON comparisons.
+- `config/native_policy` owns acquisition, API origin, process ownership, finite
+  sharing obligations and lossless whole-policy updates. `unified_policy_path`
+  resolves the sole Target-root-relative `project.policy` path.
+- `rewrite/unified_rule/{manifest,preflight,discovery}` owns complete protected
+  evidence, Source/Target role distinctions, reviewable plan/apply and recovery.
+  `manifest/primary` freezes each selected Case's original primary-response oracle
+  and published assertion/Target artifacts, including inline binary bodies, even
+  for dependency-only rules. `preflight/{api,dependency,session,source}` delegates
+  payload, native envelope, stateful Source trace and whole-recording proof to
+  their existing owners. Whole-recording Source effects explicitly enumerate
+  their broader inventory; ordinary payload rules retain their prepared API scope.
+  Coordinator admission preserves write intents and fresh real verification
+  obligations across crashes. Bounded hints never substitute for full coverage.
+- Historical feedback DTOs may remain as domain data or journal recovery inputs.
+  Their old authoring entrypoints reject and production loaders accept only
+  `traffic-policy/v1`. Test-only explicit fixture migration is not a reader
+  fallback and cannot produce project proof.

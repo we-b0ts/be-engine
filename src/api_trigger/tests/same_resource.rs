@@ -100,7 +100,10 @@ fn same_resource_mysql_unused_counts_follow_each_recording_not_a_fixed_allowance
         assert!(!plan.report().changed);
         assert_eq!(plan.report().matched_unused_exchanges, count as usize);
         plan.apply().unwrap();
-        let index = load(&f.root, &f.mysql_rules()).unwrap();
+        let rules = SourceTrafficPolicyConfig::load(&f.policy)
+            .unwrap()
+            .process_owned_dependencies;
+        let index = load(&f.root, &rules).unwrap();
         assert!(index.cache_reused);
         assert_eq!(index.source_bytes, 0);
         assert_eq!(
@@ -267,11 +270,7 @@ fn same_resource_read_permission_does_not_prove_transaction_boundaries() {
     f.mysql_events(&[query.clone(), commit.clone()]);
     let mut selector = mysql::mysql_selector();
     selector.include_transaction_boundaries = true;
-    let index = load(
-        &f.root,
-        &[selector.rule("reads", "0123456789abcdef", PROOF)],
-    )
-    .unwrap();
+    let index = load(&f.root, &[selector.rule("reads", SOURCE_REVISION, PROOF)]).unwrap();
     assert!(index.witness("victim", &query).unwrap().same_resource_read);
     assert!(index.witness("victim", &commit).is_none());
 }

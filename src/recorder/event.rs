@@ -180,6 +180,8 @@ pub struct RedisExchangeEvent {
     pub connection_id: Uuid,
     pub sequence: u64,
     pub timestamp: DateTime<Utc>,
+    /// Original request observation; duration_ms is a truncated scheduling hint.
+    pub request_started_at: DateTime<Utc>,
     pub client_addr: Option<String>,
     pub target_host: String,
     pub target_port: u16,

@@ -1,5 +1,13 @@
 # JWT request rules
 
+> Authoring migration: the legacy YAML and flag-based commands below are
+> historical semantic references. They are not accepted configuration or CLI
+> syntax. Use the self-contained `traffic-policy/v1` rules, `project.policy`,
+> and `rule plan --file … --evidence …` described in
+> [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
+> evidence and lifecycle constraints described here remain mandatory.
+
+
 Recorded JWTs can expire between capture and Replay. A `401` status mismatch
 is a reason to investigate, not permission to bypass authentication. The
 engine can preserve the original relative lifetime of a signed HMAC JWT while

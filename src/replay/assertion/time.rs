@@ -1,19 +1,15 @@
-use chrono::{DateTime, Utc};
+//! Adapt response time policy and diagnostics to the shared pure time contracts.
+#[cfg(test)]
+use chrono::DateTime;
 use serde_json::Value;
 
 use super::model::ResponseDifferenceKind;
 use crate::replay::policy::{
     ResponseDurationUnit, ResponseTimeRule, ResponseTimestampFormat, ResponseTimestampMode,
 };
+use crate::value_contract::time::{self, DurationUnit, TimeError, TimeMode, TimestampFormat};
 
-const NANOS_PER_SECOND: i128 = 1_000_000_000;
-const TOLERANCE_NANOS: u128 = 5_000_000_000;
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(in crate::replay) struct RequestTimes {
-    pub(in crate::replay) source: Option<DateTime<Utc>>,
-    pub(in crate::replay) target: Option<DateTime<Utc>>,
-}
+pub(in crate::replay) use crate::value_contract::time::ClockPair as RequestTimes;
 
 pub(in crate::replay) fn compare(
     rule: ResponseTimeRule,
@@ -21,37 +17,24 @@ pub(in crate::replay) fn compare(
     actual: &Value,
     times: RequestTimes,
 ) -> Result<(), ResponseDifferenceKind> {
-    let invalid = ResponseDifferenceKind::TimeFieldInvalid;
-    if !(expected.is_number() && actual.is_number() || expected.is_string() && actual.is_string()) {
-        return Err(invalid);
-    }
-    let (Some(source_time), Some(target_time)) = (times.source, times.target) else {
-        return Err(ResponseDifferenceKind::TimeReferenceMissing);
-    };
+    validate_inputs(expected, actual, times)?;
     match rule {
-        ResponseTimeRule::Timestamp { format, mode } => {
-            if mode == ResponseTimestampMode::PreserveRelative {
-                return compare_preserved_timestamp(format, expected, actual, times);
-            }
-            let source = timestamp_nanos(expected, format).ok_or(invalid)?;
-            let target = timestamp_nanos(actual, format).ok_or(invalid)?;
-            if source.abs_diff(date_nanos(source_time)) > TOLERANCE_NANOS
-                || target.abs_diff(date_nanos(target_time)) > TOLERANCE_NANOS
-            {
-                return Err(ResponseDifferenceKind::TimestampOutsideRequestWindow);
-            }
-        }
-        ResponseTimeRule::Duration { unit } => {
-            let source = numeric_nanos(expected, unit).ok_or(invalid)?;
-            let target = numeric_nanos(actual, unit).ok_or(invalid)?;
-            let duration_delta = target.checked_sub(source).ok_or(invalid)?;
-            let request_delta = date_nanos(target_time) - date_nanos(source_time);
-            if duration_delta.abs_diff(request_delta) > TOLERANCE_NANOS {
-                return Err(ResponseDifferenceKind::DurationDeltaMismatch);
-            }
-        }
+        ResponseTimeRule::Timestamp { format, mode } => time::compare_timestamp_nanos(
+            timestamp_nanos(expected, format)?,
+            timestamp_nanos(actual, format)?,
+            match mode {
+                ResponseTimestampMode::RequestWindow => TimeMode::RequestWindow,
+                ResponseTimestampMode::PreserveRelative => TimeMode::PreserveRelative,
+            },
+            times,
+        ),
+        ResponseTimeRule::Duration { unit } => time::compare_duration_nanos(
+            numeric_nanos(expected, unit).ok_or(ResponseDifferenceKind::TimeFieldInvalid)?,
+            numeric_nanos(actual, unit).ok_or(ResponseDifferenceKind::TimeFieldInvalid)?,
+            times,
+        ),
     }
-    Ok(())
+    .map_err(difference)
 }
 
 pub(super) fn compare_preserved_timestamp(
@@ -60,123 +43,57 @@ pub(super) fn compare_preserved_timestamp(
     actual: &Value,
     times: RequestTimes,
 ) -> Result<(), ResponseDifferenceKind> {
-    let invalid = ResponseDifferenceKind::TimeFieldInvalid;
-    if !(expected.is_number() && actual.is_number() || expected.is_string() && actual.is_string()) {
-        return Err(invalid);
-    }
-    if times.source.is_none() || times.target.is_none() {
-        return Err(ResponseDifferenceKind::TimeReferenceMissing);
-    }
-    let source = timestamp_nanos(expected, format).ok_or(invalid)?;
-    let target = timestamp_nanos(actual, format).ok_or(invalid)?;
-    compare_timestamp_delta(source, target, times)
+    validate_inputs(expected, actual, times)?;
+    time::compare_timestamp_nanos(
+        timestamp_nanos(expected, format)?,
+        timestamp_nanos(actual, format)?,
+        TimeMode::PreserveRelative,
+        times,
+    )
+    .map_err(difference)
 }
 
-/// Preserve timestamp distance from each request with the engine's fixed 5s limit.
-pub(in crate::replay) fn compare_timestamp_delta(
-    source: i128,
-    target: i128,
+fn validate_inputs(
+    expected: &Value,
+    actual: &Value,
     times: RequestTimes,
 ) -> Result<(), ResponseDifferenceKind> {
-    let invalid = ResponseDifferenceKind::TimeFieldInvalid;
-    let (Some(source_time), Some(target_time)) = (times.source, times.target) else {
-        return Err(ResponseDifferenceKind::TimeReferenceMissing);
-    };
-    let timestamp_delta = target.checked_sub(source).ok_or(invalid)?;
-    let request_delta = date_nanos(target_time) - date_nanos(source_time);
-    if timestamp_delta.abs_diff(request_delta) > TOLERANCE_NANOS {
-        return Err(ResponseDifferenceKind::DurationDeltaMismatch);
+    if !(expected.is_number() && actual.is_number() || expected.is_string() && actual.is_string()) {
+        return Err(ResponseDifferenceKind::TimeFieldInvalid);
     }
-    Ok(())
+    times.require().map(|_| ()).map_err(difference)
 }
 
-pub(in crate::replay) fn date_nanos(time: DateTime<Utc>) -> i128 {
-    i128::from(time.timestamp()) * NANOS_PER_SECOND + i128::from(time.timestamp_subsec_nanos())
-}
-
-fn timestamp_nanos(value: &Value, format: ResponseTimestampFormat) -> Option<i128> {
-    match format {
-        ResponseTimestampFormat::UnixSeconds => numeric_nanos(value, ResponseDurationUnit::Seconds),
-        ResponseTimestampFormat::UnixMilliseconds => {
-            numeric_nanos(value, ResponseDurationUnit::Milliseconds)
-        }
-        ResponseTimestampFormat::Rfc3339 => DateTime::parse_from_rfc3339(value.as_str()?)
-            .ok()
-            .map(|time| date_nanos(time.with_timezone(&Utc))),
-        ResponseTimestampFormat::AmzDate => {
-            let text = value.as_str()?;
-            if text.len() != 16
-                || !text.bytes().enumerate().all(|(index, byte)| match index {
-                    8 => byte == b'T',
-                    15 => byte == b'Z',
-                    _ => byte.is_ascii_digit(),
-                })
-            {
-                return None;
-            }
-            chrono::NaiveDateTime::parse_from_str(text, "%Y%m%dT%H%M%SZ")
-                .ok()
-                .map(|time| date_nanos(time.and_utc()))
-        }
+fn difference(error: TimeError) -> ResponseDifferenceKind {
+    match error {
+        TimeError::ReferenceMissing => ResponseDifferenceKind::TimeReferenceMissing,
+        TimeError::OutsideWindow => ResponseDifferenceKind::TimestampOutsideRequestWindow,
+        TimeError::DeltaMismatch => ResponseDifferenceKind::DurationDeltaMismatch,
+        _ => ResponseDifferenceKind::TimeFieldInvalid,
     }
 }
 
-/// Parse decimal numbers (including numeric strings and scientific notation)
-/// to nanoseconds without floating-point subtraction. Round fractional
-/// nanoseconds to the nearest nanosecond and reject arithmetic overflow.
-fn numeric_nanos(value: &Value, unit: ResponseDurationUnit) -> Option<i128> {
-    let multiplier = match unit {
-        ResponseDurationUnit::Minutes => 60,
-        ResponseDurationUnit::Hours => 3600,
-        _ => 1,
-    };
-    let scale = if unit == ResponseDurationUnit::Milliseconds {
-        6
-    } else {
-        9
-    };
-    numeric_nanos_scaled(value, scale, multiplier)
-}
-
-/// Exact decimal scaling shared with request timestamp contracts.
-pub(in crate::replay) fn numeric_nanos_scaled(
+fn timestamp_nanos(
     value: &Value,
-    scale: i32,
-    multiplier: i128,
-) -> Option<i128> {
-    let text = match value {
-        Value::Number(number) => number.to_string(),
-        Value::String(text) => text.clone(),
-        _ => return None,
+    format: ResponseTimestampFormat,
+) -> Result<i128, ResponseDifferenceKind> {
+    let format = match format {
+        ResponseTimestampFormat::UnixSeconds => TimestampFormat::UnixSeconds,
+        ResponseTimestampFormat::UnixMilliseconds => TimestampFormat::UnixMilliseconds,
+        ResponseTimestampFormat::Rfc3339 => TimestampFormat::Rfc3339,
+        ResponseTimestampFormat::AmzDate => TimestampFormat::AmzDate,
     };
-    let (mantissa, exponent) = match text.split_once(['e', 'E']) {
-        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i32>().ok()?),
-        None => (text.as_str(), 0),
+    time::parse_timestamp(value, format, None).map_err(difference)
+}
+
+fn numeric_nanos(value: &Value, unit: ResponseDurationUnit) -> Option<i128> {
+    let unit = match unit {
+        ResponseDurationUnit::Seconds => DurationUnit::Seconds,
+        ResponseDurationUnit::Milliseconds => DurationUnit::Milliseconds,
+        ResponseDurationUnit::Minutes => DurationUnit::Minutes,
+        ResponseDurationUnit::Hours => DurationUnit::Hours,
     };
-    let negative = mantissa.starts_with('-');
-    let unsigned = mantissa.strip_prefix('-').unwrap_or(mantissa);
-    let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
-    if whole.is_empty()
-        || !whole.bytes().all(|byte| byte.is_ascii_digit())
-        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
-        || (unsigned.contains('.') && fraction.is_empty())
-    {
-        return None;
-    }
-    let digits = format!("{whole}{fraction}")
-        .parse::<i128>()
-        .ok()?
-        .checked_mul(multiplier)?;
-    let power = scale
-        .checked_add(exponent)?
-        .checked_sub(i32::try_from(fraction.len()).ok()?)?;
-    let factor = 10_i128.checked_pow(power.unsigned_abs())?;
-    let nanos = if power >= 0 {
-        digits.checked_mul(factor)?
-    } else {
-        digits.checked_add(factor / 2)? / factor
-    };
-    Some(if negative { -nanos } else { nanos })
+    time::parse_duration(value, unit).ok()
 }
 
 #[cfg(test)]

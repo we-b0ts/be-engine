@@ -18,6 +18,7 @@ fn exchange() -> RedisExchangeEvent {
         connection_id: uuid::Uuid::new_v4(),
         sequence: 1,
         timestamp: chrono::Utc::now(),
+        request_started_at: chrono::Utc::now(),
         client_addr: None,
         target_host: "redis.test".into(),
         target_port: 6379,

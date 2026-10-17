@@ -101,12 +101,10 @@ fn next_query_observes_changed_rules_and_rejects_changed_session_membership() {
         })
         .unwrap()
     );
-    let policy = target
-        .path()
-        .join(".traffic-e2e/source-traffic-policy.yaml");
+    let policy = target.path().join(".traffic-e2e/policy.yaml");
     let document = fs::read_to_string(&policy)
         .unwrap()
-        .replace("name: stream-startup", "name: stream-startup-v2");
+        .replace("id: stream-startup", "id: stream-startup-v2");
     fs::write(&policy, document).unwrap();
     assert!(
         !with_background_reclassification_snapshot(|| {

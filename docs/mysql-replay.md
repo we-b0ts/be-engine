@@ -1,5 +1,11 @@
 # MySQL driver interoperability
 
+> Rule authoring now uses self-contained `traffic-policy/v1` records in
+> `project.policy` and `rule plan --file … --evidence …`. Legacy rule YAML and
+> commands below are historical semantic references; protocol/TLS/transaction
+> requirements remain current. See [unified rule contracts](unified-rule-contracts.md).
+
+
 Replay accepts the ordinary SQLx 0.8 MySQL client, including TLS, connection
 initialization, prepared statements, cached statement reuse and explicit
 single-connection transactions. Targets retain their driver's normal settings;

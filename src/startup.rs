@@ -19,7 +19,7 @@ pub use environment::{
 };
 pub(crate) use environment::{
     startup_environment_revision, startup_environment_value, startup_environment_variable_names,
-    write_docker_environment_file,
+    startup_environment_witness_paths, write_docker_environment_file,
 };
 pub(crate) use snapshot::{
     StartupSnapshotMount, capture_startup_snapshot, extend_startup_snapshot, load_startup_snapshot,

@@ -79,11 +79,6 @@ fn project_resolution_cache_is_stable_only_inside_its_read_scope() {
         test_support::managed_test_recorder(),
         Some(serde_json::json!([])),
     );
-    fs::write(
-        target.path().join(".traffic-e2e/verification.yaml"),
-        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
-    )
-    .unwrap();
     git_ok(target.path(), &["init", "-q", "-b", "integration"]);
     git_ok(target.path(), &["config", "user.email", "test@example.com"]);
     git_ok(target.path(), &["config", "user.name", "Traffic E2E Test"]);
@@ -207,20 +202,19 @@ fn reclassification_reuses_only_classification_changes_and_never_upgrades_legacy
         let original = state.target_fingerprint.clone();
         match change {
             "classification" => {
-                fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
-                fs::write(
-                    target
-                        .path()
-                        .join(".traffic-e2e/source-traffic-policy.yaml"),
-                    "version: 2\n",
-                )
-                .unwrap();
+                crate::e2e_run::test_session::classify_stream(target.path());
             }
             "verification" => {
-                fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
+                let document = serde_json::json!({"format":"traffic-policy/v1","rules":[{
+                    "id":"response-items","surface":"api.response","match":{"api":"GET /api"},
+                    "slot":"body","codec":"json","contract":{"/items":{"kind":"unordered"}},
+                    "proof":{"source":"handler.rs:12","fact":"Source emits these items from a set"}
+                }]});
+                crate::policy::compile_policy(&serde_json::from_value(document.clone()).unwrap())
+                    .unwrap();
                 fs::write(
-                    target.path().join(".traffic-e2e/verification.yaml"),
-                    "version: 3\nexpected_response: assertions_only\n",
+                    target.path().join(".traffic-e2e/policy.yaml"),
+                    serde_yaml::to_string(&document).unwrap(),
                 )
                 .unwrap();
             }
@@ -288,6 +282,12 @@ fn reclassification_fixture() -> (
     fs::write(
         target.path().join("Cargo.toml"),
         "[package]\nname='target'\n",
+    )
+    .unwrap();
+    fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
+    fs::write(
+        target.path().join(".traffic-e2e/policy.yaml"),
+        "format: traffic-policy/v1\nrules: []\n",
     )
     .unwrap();
     git_ok(target.path(), &["init"]);

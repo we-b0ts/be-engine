@@ -380,6 +380,17 @@ pub(in crate::rewrite) fn record_running_for_test(
 }
 
 pub(in crate::rewrite) fn acceptance_ready(state: &RewriteState, scope: &RewriteWorkScope) -> bool {
+    let RewriteWorkScope::Api { api } = scope;
+    if super::super::replay_admission::applying_policy(state)
+        || std::iter::once(&state.active_slice)
+            .chain(state.parked_slices.values())
+            .any(|slice| {
+                (slice.api == *api || super::super::api_selector::public_api(&slice.api) == api)
+                    && super::super::replay_admission::pending_transaction(slice)
+            })
+    {
+        return false;
+    }
     super::super::replay_admission::admitted(state, scope)
         || (super::issue_for_scope(state, scope).is_some()
             && coverage(state, scope) == RewriteWorkerCoverageState::VerificationRequired)

@@ -1,5 +1,13 @@
 # JSON response time rules
 
+> Authoring migration: the legacy YAML and flag-based commands below are
+> historical semantic references. They are not accepted configuration or CLI
+> syntax. Use the self-contained `traffic-policy/v1` rules, `project.policy`,
+> and `rule plan --file … --evidence …` described in
+> [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
+> evidence and lifecycle constraints described here remain mandatory.
+
+
 Use a source-proven JSON timestamp rule for a generated time field. The
 default `request_window` mode checks that each value is within five seconds
 of its own request start. An expiry or scheduled time instead needs an

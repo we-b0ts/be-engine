@@ -31,7 +31,7 @@ mysql:
         let policy = serde_yaml::to_string(&policy).unwrap();
         let (temp,addr,runtime,task) = fixture_with_policy(&records,Some(&policy)).await;
         let before = chrono::Utc::now().naive_utc();
-        let mut client = connect(addr,&temp.path().join("case-id/.replay/ca.pem")).await;
+        let mut client = connect(addr,&temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let text = client.fetch_one(sql).await.unwrap();
         assert!(sqlx::query("SELECT expires_at,owner FROM leases WHERE id=? FOR UPDATE")
             .bind(8_i64).fetch_one(&mut client).await.is_err());

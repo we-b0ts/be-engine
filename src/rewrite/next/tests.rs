@@ -392,7 +392,7 @@ async fn configuration_changes_and_disabling_auto_next_stop_at_the_boundary() {
                 calls += 1;
                 let result = replay(options, true, |_| {});
                 if change_configuration {
-                    let path = target.path().join(".traffic-e2e/verification.yaml");
+                    let path = target.path().join(".traffic-e2e/policy.yaml");
                     fs::write(
                         &path,
                         format!(

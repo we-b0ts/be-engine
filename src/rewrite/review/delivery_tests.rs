@@ -559,11 +559,10 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
     assert_eq!(fs::read_to_string(&counter).unwrap(), review_invocations);
 
     // Case pattern discovery invalidates traffic verification, not the code receipt.
-    let policy_path = target
-        .path()
-        .join(".traffic-e2e/source-traffic-policy.yaml");
+    let policy_path = target.path().join(".traffic-e2e/policy.yaml");
     let mut policy = crate::config::SourceTrafficPolicyConfig::load(&policy_path).unwrap();
     let verification = fingerprint::repository_fingerprint(target.path()).unwrap();
+    policy.http.source_revision = format!("sha256:{}", "1".repeat(64));
     policy.http.case_path_patterns = vec!["/api/*".into()];
     fs::write(&policy_path, policy.render().unwrap()).unwrap();
     assert_ne!(
@@ -572,24 +571,16 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
     );
     assert!(terminal_current(target.path(), &state));
     assert!(gate(target.path(), &state, "master").unwrap().is_none());
-    git(
-        target.path(),
-        &["add", ".traffic-e2e/source-traffic-policy.yaml"],
-    );
+    git(target.path(), &["add", ".traffic-e2e/policy.yaml"]);
     git(target.path(), &["commit", "-qm", "discover case pattern"]);
     assert!(terminal_current(target.path(), &state));
     assert!(gate(target.path(), &state, "master").unwrap().is_none());
     assert_eq!(fs::read_to_string(&counter).unwrap(), review_invocations);
 
     // Verification policy edits keep the code receipt and stale prior API results.
-    let policy_path = target.path().join(".traffic-e2e/verification.yaml");
+    let policy_path = target.path().join(".traffic-e2e/policy.yaml");
     let verification = fingerprint::repository_fingerprint(target.path()).unwrap();
-    let policy = fs::read_to_string(&policy_path).unwrap();
-    fs::write(
-        &policy_path,
-        format!("{policy}response_rules:\n  json: {{}}\n"),
-    )
-    .unwrap();
+    append_runtime_rule(&policy_path);
     let updated = fingerprint::repository_fingerprint(target.path()).unwrap();
     assert_ne!(updated, verification);
     assert!(terminal_current(target.path(), &state));
@@ -604,7 +595,7 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
             ..
         }
     ));
-    git(target.path(), &["add", ".traffic-e2e/verification.yaml"]);
+    git(target.path(), &["add", ".traffic-e2e/policy.yaml"]);
     git(
         target.path(),
         &["commit", "-qm", "update verification policy"],
@@ -821,4 +812,11 @@ fn canonical_commit_drift_requires_reconciliation_even_with_identical_files() {
     assert!(!error.contains("reviewed candidate is not published"));
     assert_eq!(candidate::head(target.path()).unwrap(), published);
     assert!(!integrated_path(target.path()).exists());
+}
+
+fn append_runtime_rule(path: &std::path::Path) {
+    let mut policy = crate::policy::parse_policy(&fs::read_to_string(path).unwrap()).unwrap();
+    policy.rules.push(serde_json::from_value(serde_json::json!({"id":"runtime-members","surface":"api.response","match":{"api":"GET /api"},"slot":"body","codec":"json","contract":{"/members":{"kind":"unordered"}},"proof":{"source":"tests.rs:members","fact":"The fixture models a reviewed unordered membership contract"}})).unwrap());
+    crate::policy::compile_policy(&policy).unwrap();
+    fs::write(path, serde_yaml::to_string(&policy).unwrap()).unwrap();
 }

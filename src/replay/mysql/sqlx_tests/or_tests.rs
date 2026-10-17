@@ -26,9 +26,9 @@ async fn sqlx_or_groups_match_all_protocol_pairs_with_aliases_tuples_and_cached_
                         record
                     };
                     let (temp, addr, runtime, task) = fixture(&[source(7), source(8)], policy).await;
-                    let path = temp.path().join("case-id/dependencies.jsonl");
+                    let path = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
                     let original = std::fs::read(&path).unwrap();
-                    let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+                    let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
                     let target = "SELECT DISTINCT t.id AS id FROM teams t WHERE ((t.namespace,t.name) IN ((?,?),(?,?)) OR (t.name=? AND t.namespace=?) OR (t.name=? AND t.namespace=?)) AND t.tenant=?";
                     let mut compiled = 0;
                     for (attempt, tenant, name) in [(0,7,"b"), (1,8,"wrong"), (2,8,"b"), (3,8,"b")] {
@@ -83,7 +83,7 @@ async fn sqlx_nested_exists_in_lists_match_text_recording_with_prepared_target()
             ),
         );
         let (temp, addr, runtime, task) = fixture(&[record], false).await;
-        let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let target = "SELECT kinds.id AS kinds_id FROM kinds \
             WHERE kinds.id IN (?,?,?) AND (\
               coalesce(json_unquote(json_extract(kinds.json, '$.spec.directAccessRequirement')), '') = '' \

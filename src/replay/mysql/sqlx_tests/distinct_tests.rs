@@ -28,9 +28,17 @@ async fn sqlx_distinct_real_query_shape_matches_without_text_protocol_emulation(
                 exchange(SOURCE, departments(&[])),
             ];
             let (temp, addr, runtime, task) = fixture(&records, policy).await;
-            let capture = temp.path().join("case-id/dependencies.jsonl");
+            let capture = temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
             let before = std::fs::read(&capture).unwrap();
-            let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+            let mut client = connect(
+                addr,
+                &temp
+                    .path()
+                    .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+            )
+            .await;
             let rows = sqlx::query(TARGET).fetch_all(&mut client).await.unwrap();
             assert_eq!(
                 rows.iter()
@@ -97,7 +105,7 @@ async fn sqlx_distinct_protocol_pairs_rebind_cached_values_and_reorder_predicate
                     record
                 });
                 let (temp, addr, runtime, task) = fixture(&records, false).await;
-                let mut client = connect(addr, &temp.path().join("case-id/.replay/ca.pem")).await;
+                let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
                 let target = "SELECT DISTINCT r.entity_id AS entity_id FROM resource_members r WHERE r.status = ? AND (r.entity_id IS NOT NULL AND r.entity_type = ?) AND r.resource_type = ?";
                 let mut compilations = 0;
                 for (i, resource_type) in ["Namespace", "WRONG", "KnowledgeBase"].into_iter().enumerate() {

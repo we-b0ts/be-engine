@@ -94,8 +94,8 @@ Redis error responses. Other case, bootstrap-only, legacy, HTTP, Motan, and
 Memcached exchanges retain their existing consumption and connection-order
 semantics. This replay treatment does not replace destination behavior.
 
-When a Redis rule is added after an immutable recording already exists, Replay
-may derive the same reusable-seed behavior without editing that recording. It
+A previously authorized Redis rule may derive reusable-seed behavior without
+editing the recording when its complete snapshot proof is available. It
 does so only when every matching exchange has complete replay-safe evidence,
 each observed logical target/session/command/argument identity has a
 successful `bootstrap_window` Global seed, and all matching Global and Case
@@ -113,242 +113,55 @@ exact `get` and bounded key-series matching. Every configured identity must be
 resolved when the source HTTP ready probe succeeds; a missing descriptor at
 that boundary is a source or recording-configuration readiness error.
 
-## Evidence-Gated Commands
+## Unified Authorization
 
-For source-proven process-owned HTTP traffic, preview one exact selector:
+A process-owned selector is a typed rule in the policy named by `project.policy`.
+During managed rewrites, use the returned discovery/capability evidence and the
+single rule transaction described in [unified rules](replay-policy.md):
 
-```bash
-traffic-e2e config recorder plan process-owned-dependencies \
-  --target-root <target> \
-  --name <stable-process-owned-rule-name> \
-  --case-source <exact-finalized-case-source> \
-  --source-revision <same-source-revision> \
-  --evidence '<source file/symbol and ownership explanation>' \
-  http \
-  --authority <exact-authority> \
-  --method <exact-method> \
-  --path-prefix <exact-path-prefix>
+```yaml
+id: configuration-refresh
+match: {}
+effect:
+  kind: process_owned
+  source_revision: ''
+  selector:
+    protocol: http
+    authorities: [config.example]
+    methods: [GET]
+    path_prefixes: [/refresh]
+proof:
+  source: src/config/refresh.rs:42
+  fact: A process scheduler refreshes this endpoint independently of API handlers.
 ```
 
-Review the selector and matched case IDs, then repeat with `apply`. The command
-requires at least one matching unused case exchange, rejects selectors that
-also match unmatched or unsupported target requests, and replans from current
-config and evidence before writing atomically.
-
-For source-proven process-owned Motan traffic:
-
 ```bash
-traffic-e2e config recorder plan process-owned-dependencies \
-  --target-root <target> \
-  --name <stable-process-owned-rule-name> \
-  --case-source <exact-finalized-case-source> \
-  --source-revision <same-source-revision> \
-  --evidence '<source file/symbol and process-ownership explanation>' \
-  motan \
-  --group <exact-vintage-service-group> \
-  --interface-name <exact-interface> \
-  --method-name <exact-method>
+backend-rewrite --target-root <target> rule plan \
+  --file /tmp/process-rule.yaml --evidence <current-evidence-id>
+backend-rewrite --target-root <target> rule apply <plan-id>
 ```
 
-The selector is the exact Vintage service group plus Motan interface and method;
-the Vintage cluster is derived from the interface as `<interface>/service`.
-Planning requires a matching unused case Motan exchange and rejects the RPC
-command when it also appears as unmatched, unsupported, or unsafe target
-traffic. Apply uses the same arguments.
+The full updated policy supplies origin and conflict context; only proposed
+rules receive new authorization. Source validation enumerates the complete
+finalized recording, including sibling Cases and Global evidence. Apply checks
+that inventory again. Global evidence never impersonates a Case origin.
+Truncated captures, incomplete MySQL result rows and failed ownership evidence
+cannot authorize a selector.
 
-For source-proven Redis ZCOUNT process traffic, use the stable service
-port set rather than domains. Repeat `--port` for every source-proven member of
-the logical service group:
+API-triggered asynchronous work uses the `origin` contract with explicit
+request conditions, captures and nested proofs. Transaction members and Redis
+script selectors use their typed domain owner. Follow the returned schema;
+do not flatten an origin into a broad process permission.
 
-```bash
-traffic-e2e config recorder plan process-owned-dependencies \
-  --target-root <target> \
-  --name interest-tag-mining-cache-refresh \
-  --case-source <exact-finalized-case-source> \
-  --source-revision <same-source-revision> \
-  --evidence '<source file/symbol and process-ownership explanation>' \
-  redis \
-  zcount \
-  --port 20917 \
-  --port 20918 \
-  --port 20919 \
-  --key-prefix '1042015:' \
-  --key-suffix '.wtm2'
-```
+Classification-only changes can rebuild a derived report without modifying
+JSONL. Snapshot-producing Redis GET selectors require fresh recording under the
+current conservative authorization boundary. Capture plugins also require
+fresh recording to verify their output; scope and complete Source input alone
+are not plugin output evidence. Preserve any Replay obligation returned by the
+plan. An older retained snapshot overlay is never silently promoted by a new
+classification rule.
 
-The rule is process-level and applies regardless of which API is being
-recorded. Ports identify the stable Redis business group; source or fake-DNS
-hostnames are diagnostic evidence only and are not written to configuration.
-Planning requires a finalized version-6 replay report, at least one matching
-unused case exchange, immutable case dependency evidence with a replay-safe
-matching key, and no unmatched, unsupported, or unsafe target `ZCOUNT` on the
-configured ports. `apply` rechecks the config, replay report, and case evidence
-before writing atomically. Use only source-proven group ports; a port need not
-be observed in the current sample when source configuration proves it belongs
-to the same group. The same named Redis rule may add source-proven ports through
-another `plan|apply`, but cannot remove ports or change its command or key
-shape. Apply uses the same arguments, then create a new standard recording.
-
-For process-owned Redis GET startup reads, provide every exact key:
-
-```bash
-traffic-e2e config recorder plan process-owned-dependencies \
-  --target-root <target> \
-  --name startup-cache-warm \
-  --case-source <exact-finalized-case-source> \
-  --source-revision <same-source-revision> \
-  --evidence '<source file/symbol and response-driving state explanation>' \
-  redis \
-  get \
-  --port 20917 \
-  --key cache:init:a \
-  --key cache:init:b \
-  --initial-load-timeout-ms 60000
-```
-
-Planning requires a finalized version-6 report and replay-safe matching unused
-case evidence for every configured key. Unmatched, unsupported, or unsafe
-traffic on the selected ports and command is rejected. Apply uses the same
-arguments, then creates a new standard recording.
-
-For source-proven bootstrap hash reads, use the coordinator planner with a
-small number of exact exceptions and numeric key shapes rather than enumerating
-every observed key:
-
-```bash
-backend-rewrite --target-root <target> dependency-rule plan redis hget \
-  --evidence-id <pre-readiness-traffic-evidence-id> \
-  --ownership process-owned \
-  --name experiment-bootstrap \
-  --source-evidence '<source file/symbol and bootstrap ownership proof>' \
-  --port 6379 \
-  --numeric-key-pattern 'exp:matchlist:<id>' \
-  --numeric-key-pattern 'exp:list:<id>' \
-  --key traffic-result \
-  --field version
-```
-
-Use `redis hmget` with repeated `--field` arguments in exact wire order for
-HMGET. Planning reads replay-safe `bootstrap_window` exchanges from the
-immutable Global dependency file, requires evidence for every exact key and
-numeric pattern, and rejects same-command unsafe or unsupported traffic.
-Unmatched target requests do not authorize the rule and remain dirty. Apply the
-returned plan, then create a fresh standard recording so its first-value seed
-is explicit and reusable.
-
-When an evidence-backed HGET/HMGET request has the same stable port set,
-command, and exact field sequence as one existing rule, planning preserves that
-rule's name and merges the new exact keys and numeric key patterns into it.
-Hostname remains diagnostic evidence rather than persisted selector identity.
-Different ports, commands, or fields remain separate rules; if more than one
-existing rule is otherwise compatible, use an existing rule name to select the
-merge target.
-
-For source-proven process-owned Redis hash scans, scope the command and hash
-key rather than the cursor returned by Redis:
-
-```bash
-backend-rewrite --target-root <target> dependency-rule plan redis hscan \
-  --evidence-id <source-process-traffic-evidence-id> \
-  --ownership process-owned \
-  --name dingtalk-card-inbox-recovery \
-  --source-evidence 'card_inbox.py:CardActionInbox.list_pending is called by the process recovery task' \
-  --port 6379 \
-  --numeric-key-pattern 'dingtalk:card_inbox:<id>'
-```
-
-Planning requires replay-safe unused Case evidence for every exact key and key
-pattern and rejects matching target `HSCAN` traffic that is unmatched,
-unsupported, or unsafe. HSCAN has no initial-load timeout or field selector.
-Its rule reclassifies future source recordings as Global `background_rule`, so
-the recorded source connection cannot block later target Redis commands. An
-old Case-only HSCAN is not promoted in place: apply the plan and create the
-scheduled fresh recording to establish its Global evidence.
-
-Every configured Redis process-owned rule also participates in the shared
-post-ready cache quiet window, including HGET/HMGET rules without an
-initial-load completion count. Case admission waits at least 15 seconds after
-source readiness, each matching Redis request restarts that window, and the
-180-second hard limit allows admission even when requests continue.
-
-For a process-owned Memcached `get` rule, preview before applying:
-
-```bash
-traffic-e2e config recorder plan process-owned-dependencies \
-  --target-root . \
-  --name planet-video-cache-warm \
-  --case-source <exact-finalized-case-source> \
-  --source-revision <lowercase-git-revision> \
-  --evidence '<file>:<symbol> scheduled local-cache warm' \
-  memcached \
-  --breeze-resource user-video \
-  --key-start 0 \
-  --key-end 4095 \
-  --key-separator . \
-  --key-suffix pl_video \
-  --initial-load-timeout-ms 60000
-```
-
-`apply` uses the same arguments. Planning requires a finalized replay report,
-matching unused case exchanges, immutable dependency records, a
-unique Breeze descriptor, replay-safe keys and responses, and no same-port
-`get` traffic reported as unmatched, unsupported, or unsafe. Apply rechecks the config,
-report, dependency evidence, and descriptor port before its atomic write.
-The observation window defaults to 60000 ms and starts when the source HTTP
-ready probe succeeds. Recorder logs incomplete progress as a warning and
-continues case admission when the window elapses.
-
-After a Redis ownership-rule change, let the rewrite coordinator attempt the
-read-only old-Global snapshot overlay first when the command has compatible
-Global seed evidence. If it reports
-`reused_old_global_evidence`, continue with the same recording. If strict
-derivation fails, the coordinator consolidates the rule with other pending
-recording-contract changes and requires one fresh externally produced batch
-after runnable API work drains. Follow the [recording handoff](recording.md#rewrite-handoff).
-In particular, do not modify old Case-only HSCAN JSONL to
-manufacture a Global seed.
-
-## API-triggered asynchronous process traffic
-
-A source-proven detached API task may produce unused dependencies inside another
-API's recording window. Redis GET, single-key DEL and LRANGE can use
-`dependency-rule plan redis api-triggered` and the existing apply transaction.
-See [API-origin process rules](../../../../../docs/api-triggered-process-traffic.md).
-`trigger_source.request_body_json` selects typed scalars by JSON Pointer in the
-triggering inbound REQUEST BODY: `/background: true` means JSON
-`{"background":true}`, never URL query, response JSON, or the victim API's body.
-Trace spawning and cleanup in source, then supply one explicit successful
-COM_QUERY INSERT identity capture and exact Redis key template/arguments. A shared
-ID or unused exchange is not source ownership proof. Trigger/resource API calls,
-ambiguous origins/references and target failures remain strict. Complete old
-recordings are reusable; the engine caches correlation outside immutable evidence.
-Status performs no origin scan or cache build. This rule does not verify the
-background task's eventual result or enable reusable Redis snapshots.
-
-MySQL API-origin SELECT rules use `dependency-rule plan mysql --trigger-source
-JSON --identity-value-index N`. The zero-based template `?` slot must be an
-identity equality or singleton IN predicate; other endpoint/table/SQL bounds
-remain exact. Use the same origin capture as related Redis rules. An ordinary
-same-name, exact-selector rule may be narrowed through plan/apply, never reused
-as API-origin proof. Do not classify every SELECT on a task table as background.
-
-When a helper has polling/cancel callers, also trace indirect detached-task
-callers such as terminal result collectors and accumulated-content helpers.
-Protect direct inbound polling/cancel requests; a task reacting to cancellation
-in its own detached lifecycle can still produce process-owned dependencies.
-Plan proves recording correlation and scope, while source evidence proves
-caller ownership.
-
-API-origin Redis DEL accepts an exact ordered `key_sequence` through repeated
-`--key-sequence-template`; every key must bind the same captured identity.
-For EVALSHA, `--script JSON` declares an exact SHA-1, ordered KEYS envelope,
-ARGV count and `identity_argv_index`. Date-keyed metrics may still carry the task
-ID in ARGV. SCRIPT EXISTS requires a proven adjacent same-connection invocation.
-
-API-origin MySQL also supports bounded single-row UPDATEs. Complete transaction
-boundaries require `--include-transaction-boundaries`, consistent wire sequences
-and server flags. `--transaction-member JSON` can admit explicit read-only helper
-selectors only inside a fully proven transaction. Ordinary write rules, broad
-COMMIT/ROLLBACK exceptions and standalone member matches remain unsupported.
-Inspect actual dirty summaries: source-recorded ROLLBACKs may already be optional
-cleanup and do not by themselves establish a missing capability.
+Unbounded unused-host exemptions are retired. A finite-sharing rule is a
+separate bounded cross-case delivery permission and does not authorize unused
+work. Implement Source-compatible refresh, readiness and cache state in the
+Target even when the traffic is process owned.

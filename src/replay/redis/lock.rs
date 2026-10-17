@@ -113,12 +113,105 @@ pub(super) fn positions(command: &str, args: &[Vec<u8>]) -> Option<(usize, usize
 }
 
 impl LockTokens {
+    /// Validate the complete immutable token trace without claiming live work.
+    pub(super) fn validate_source(
+        exchanges: &[ReplayExchange],
+        rules: &[LockTokenRule],
+        scope: &crate::replay::policy::request_contract::RequestContracts,
+    ) -> Result<BTreeMap<String, usize>> {
+        let prepared = Self::prepare_scoped(exchanges, rules, scope);
+        let mut counts = BTreeMap::new();
+        for rule in rules {
+            let selected = prepared
+                .selected
+                .iter()
+                .filter(|(_, selected)| selected.rule_id == rule.id)
+                .collect::<Vec<_>>();
+            if selected.is_empty() {
+                continue;
+            }
+            let mut references = 0;
+            for (id, selected) in selected {
+                let reference = exchanges
+                    .iter()
+                    .position(|exchange| exchange_id(exchange) == *id)
+                    .ok_or_else(|| anyhow::anyhow!("lock Source reference identity is absent"))?;
+                let acquisition = &exchanges[selected.acquisition];
+                ensure!(
+                    exchanges[reference].record.outcome
+                        == crate::DependencyExchangeOutcome::Response
+                        && exchanges[reference].record.response_kind != "error",
+                    "lock Source reference has no successful protocol completion"
+                );
+                if selected.token_index != 1 {
+                    ensure!(
+                        acquisition.record.command.eq_ignore_ascii_case("SET")
+                            && acquisition.record.outcome
+                                == crate::DependencyExchangeOutcome::Response
+                            && acquisition.response == b"+OK\r\n",
+                        "lock Source token reference requires a successful acquisition"
+                    );
+                    ensure!(
+                        selected.acquisition < reference
+                            && resource(acquisition, &acquisition.args[0]) == selected.resource,
+                        "lock Source reference precedes or changes its acquisition identity"
+                    );
+                    let completed = acquisition.record.timestamp.ok_or_else(|| {
+                        anyhow::anyhow!("lock Source acquisition completion clock is missing")
+                    })?;
+                    let started =
+                        exchanges[reference]
+                            .record
+                            .earliest_start()
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("lock Source reference start clock is missing")
+                            })?;
+                    ensure!(
+                        completed <= started,
+                        "lock Source reference starts before acquisition completion is proven; recapture with precise request clocks"
+                    );
+                    references += 1;
+                }
+                *counts.entry(rule.id.clone()).or_default() += 1;
+            }
+            ensure!(
+                references > 0,
+                "lock Source scope requires both a successful SET and its same-case token reference"
+            );
+        }
+        Ok(counts)
+    }
+
     pub(super) fn prepare(exchanges: &[ReplayExchange], rules: &[LockTokenRule]) -> Self {
+        Self::prepare_scoped(
+            exchanges,
+            rules,
+            &crate::replay::policy::request_contract::RequestContracts::default(),
+        )
+    }
+    pub(super) fn prepare_scoped(
+        exchanges: &[ReplayExchange],
+        rules: &[LockTokenRule],
+        scope: &crate::replay::policy::request_contract::RequestContracts,
+    ) -> Self {
         let mut result = Self::default();
         for rule in rules {
             let mut values = BTreeMap::new();
             for (index, exchange) in exchanges.iter().enumerate() {
                 if exchange.source != ReplaySource::Case {
+                    continue;
+                }
+                if !scope.native_rule_scope_matches(
+                    &rule.id,
+                    exchange.case_id.as_deref(),
+                    crate::policy::Protocol::Redis,
+                    &super::TargetKey {
+                        host: exchange.record.target_host.clone(),
+                        port: exchange.record.target_port,
+                    },
+                    Some(&crate::policy::Database::Index(exchange.record.database)),
+                    exchange.record.username.as_deref(),
+                ) {
                     continue;
                 }
                 let Some((key_index, token_index)) =

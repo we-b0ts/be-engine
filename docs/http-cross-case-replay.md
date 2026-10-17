@@ -1,5 +1,13 @@
 # Cross-case HTTP dependency replay
 
+> Authoring migration: the legacy YAML and flag-based commands below are
+> historical semantic references. They are not accepted configuration or CLI
+> syntax. Use the self-contained `traffic-policy/v1` rules, `project.policy`,
+> and `rule plan --file … --evidence …` described in
+> [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
+> evidence and lifecycle constraints described here remain mandatory.
+
+
 An API can reuse process-local state populated by an earlier API. For example,
 one request obtains an OAuth client token and a later request reuses the cached
 token. A fresh target replaying only the later API still emits the token fetch.

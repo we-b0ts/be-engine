@@ -134,8 +134,9 @@ evidence, and their absence does not mean a documented capability is unavailable
 In particular, Redis `time-shift` has no automatic hint. When an earlier matched
 Redis timestamp may cause expiry, extra reads, or an error branch, read its
 [proof contract](api-implementer-rule-diagnosis.md#rule-discovery-from-source-diagnosis)
-and use `backend-rewrite dependency-rule plan redis time-shift --help`.
-Check both planner families before declaring a capability gap. Only the
+and inspect the shared `dependency.response` time contract and explicit delivery
+permission. Check `backend-rewrite rule plan --help` and the typed capabilities
+before declaring a gap. Only the
 coordinator plans/applies rules and runs fresh verification.
 
 ## API Evidence Queries

@@ -16,6 +16,8 @@ pub(super) struct RecordedRequest {
     #[serde(default)]
     pub(super) headers: Option<HeaderMapSnapshot>,
     pub(super) protocol_version: Option<String>,
+    #[serde(default)]
+    pub(super) body: Option<ResponseBody>,
 }
 
 impl RecordedRequest {

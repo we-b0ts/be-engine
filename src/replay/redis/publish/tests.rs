@@ -81,6 +81,7 @@ fn json_composition_keeps_original_uuid_index_and_binding_scope() {
     let source = vec![b"events".to_vec(), source.into_bytes()];
     let actual = vec![b"events".to_vec(), actual.into_bytes()];
     let context = || JsonContext {
+        case_id: None,
         host: "redis.test",
         port: 6379,
         database: 0,
@@ -107,6 +108,7 @@ fn json_composition_keeps_original_uuid_index_and_binding_scope() {
             .is_err()
     );
     let other = JsonContext {
+        case_id: None,
         host: "redis.test",
         port: 6379,
         database: 1,

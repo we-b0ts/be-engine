@@ -4,8 +4,8 @@ use std::{collections::BTreeMap, path::Path};
 use serde_json::Value;
 
 use super::{RequestTimes, ResponseDifferenceKind};
-mod companions;
-mod keys;
+pub(in crate::replay) mod companions;
+pub(in crate::replay) mod keys;
 mod rsa;
 use crate::{
     replay::policy::{ResponseField, ResponseJwtRule},

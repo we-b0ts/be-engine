@@ -16,13 +16,16 @@ impl RedisReplayState {
             if exchange.source == ReplaySource::Case && exchange.shared_rule_id.is_none() {
                 match self
                     .dynamic_values
-                    .redis(
+                    .redis_with_identity(
                         exchange.case_id.as_deref(),
                         &TargetKey {
                             host: exchange.record.target_host.clone(),
                             port: exchange.record.target_port,
                         },
-                        exchange.record.database,
+                        crate::replay::policy::dynamic_values::RedisIdentity {
+                            database: exchange.record.database,
+                            username: exchange.record.username.as_deref(),
+                        },
                         &exchange.record.command,
                         &exchange.args,
                         args,
@@ -66,9 +69,12 @@ impl RedisReplayState {
     }
 
     pub(in crate::replay) fn configure_lock_tokens(&mut self, rules: &[lock::LockTokenRule]) {
-        self.lock_tokens = lock::LockTokens::prepare(&self.exchanges, rules);
+        self.lock_tokens =
+            lock::LockTokens::prepare_scoped(&self.exchanges, rules, &self.request_contracts);
     }
     pub(in crate::replay) fn configure_publish(&mut self, rules: Vec<publish::PublishRule>) {
+        self.publish_rules
+            .configure_scope(self.request_contracts.clone());
         self.publish_rules.configure(rules);
     }
 
@@ -84,6 +90,7 @@ impl RedisReplayState {
         command: &str,
         args: &[Vec<u8>],
     ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
+        self.request_observed_at = Some(chrono::Utc::now());
         let matched = preferred_match(&self.exchanges, active_case_id, |exchange| {
             (exchange.status.is_available()
                 || (exchange.reusable_snapshot && exchange.status != ReplayExchangeStatus::Failed))
@@ -226,16 +233,59 @@ impl RedisReplayState {
             }
         })?;
         let exchange = &self.exchanges[index];
+        let unified_delivery = (exchange.record.outcome
+            == crate::DependencyExchangeOutcome::Response)
+            .then_some(exchange.case_id.as_deref())
+            .flatten()
+            .and_then(|case| {
+                self.request_contracts.prepare_redis_delivery(
+                    case,
+                    target,
+                    database,
+                    username,
+                    command,
+                    &exchange.args,
+                    &response,
+                    exchange.record.timestamp,
+                    self.request_observed_at,
+                    exchange.record.started_at(),
+                    exchange.record.connection_id,
+                    exchange.record.sequence,
+                )
+            })
+            .transpose()
+            .map_err(|error| CommandMatchDiagnostic::EvidenceUnavailable {
+                reason: format!("response contract failed: {error:#}"),
+            })?;
+        if unified_delivery.is_some() && exchange.response_time_shift.is_some() {
+            return Err(CommandMatchDiagnostic::EvidenceUnavailable {
+                reason: "overlapping dependency delivery owners".into(),
+            });
+        }
+        if unified_delivery.is_some()
+            && (exchange.reusable_snapshot
+                || exchange.shared_rule_id.is_some()
+                || exchange.record.cache_snapshot_hit
+                || exchange.record.cache_snapshot_rule.is_some())
+        {
+            return Err(CommandMatchDiagnostic::EvidenceUnavailable {
+                reason: "value delivery rules cannot renew shared or snapshot response inventory"
+                    .into(),
+            });
+        }
         let normalized = (exchange.source == ReplaySource::Case
             && exchange.shared_rule_id.is_none())
         .then(|| {
-            self.dynamic_values.redis(
+            self.dynamic_values.redis_with_identity(
                 exchange.case_id.as_deref(),
                 &TargetKey {
                     host: exchange.record.target_host.clone(),
                     port: exchange.record.target_port,
                 },
-                exchange.record.database,
+                crate::replay::policy::dynamic_values::RedisIdentity {
+                    database: exchange.record.database,
+                    username: exchange.record.username.as_deref(),
+                },
                 &exchange.record.command,
                 &exchange.args,
                 args,
@@ -290,6 +340,7 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Ok(MatchedRedisExchange {
+            unified_delivery,
             rpc_push: exchange.rpc_push,
             rpc_response,
             publish_duration_ms: exchange.record.duration_ms,
@@ -370,6 +421,7 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Some(MatchedRedisExchange {
+            unified_delivery: None,
             rpc_push: None,
             rpc_response: None,
             publish_duration_ms: exchange.record.duration_ms,

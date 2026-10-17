@@ -49,12 +49,12 @@ pub(super) struct ProjectConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ProjectSettings {
+    pub policy: PathBuf,
     pub source: SourceProjectConfig,
     pub target: TargetProjectConfig,
     pub replay: ReplayProjectConfig,
     #[serde(default)]
     pub verification: VerificationProjectConfig,
-    pub recording: RecordingProjectConfig,
     pub delivery: DeliveryProjectConfig,
     pub state: StateProjectConfig,
 }
@@ -86,7 +86,6 @@ pub(crate) struct TargetQualityGateConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ReplayProjectConfig {
-    pub policy: PathBuf,
     #[serde(default = "default_replay_startup_timeout_seconds")]
     pub startup_timeout_seconds: u64,
     #[serde(
@@ -115,14 +114,6 @@ impl Default for VerificationProjectConfig {
 
 fn default_max_failed_cases_per_api() -> usize {
     DEFAULT_MAX_FAILED_CASES_PER_API
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct RecordingProjectConfig {
-    #[serde(default, rename = "rule", skip_serializing)]
-    pub _legacy_rule: Option<String>,
-    pub source_traffic_policy: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

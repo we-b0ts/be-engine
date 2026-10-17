@@ -7,6 +7,33 @@ use serde_json::{Value, json};
 use super::{RewriteContext, action, inventory, model::RewriteState, store::RewriteStore};
 
 pub(super) fn evidence_unusable(target_root: &Path, state: &RewriteState) -> Result<bool> {
+    let retired_format = state
+        .rule_plan
+        .as_ref()
+        .is_some_and(|plan| plan.unified.is_none())
+        || state.dependency_rule_plan.is_some();
+    if retired_format {
+        ensure!(
+            matches!(
+                super::traffic_operation::state(target_root)?,
+                super::traffic_operation::TrafficOperationState::Absent
+            ),
+            "retired plans must wait for active traffic or workflow recovery"
+        );
+        if let (Some(case_source), Some(api)) = (&state.case_source, &state.group_id)
+            && case_source.is_dir()
+        {
+            crate::e2e_run::ensure_response_rule_evidence_inactive(
+                crate::E2eRunContext {
+                    target_root: target_root.into(),
+                    case_source: case_source.clone(),
+                    run_key: None,
+                },
+                api,
+            )?;
+        }
+        return Ok(true);
+    }
     let context = crate::E2eRunContext {
         target_root: target_root.into(),
         case_source: state
@@ -17,68 +44,14 @@ pub(super) fn evidence_unusable(target_root: &Path, state: &RewriteState) -> Res
     };
     let api = state.group_id.as_deref().context("plan has no API group")?;
     crate::e2e_run::ensure_response_rule_evidence_inactive(context.clone(), api)?;
-    if state
+    if let Some(plan) = state
         .rule_plan
         .as_ref()
-        .is_some_and(|plan| super::rule::generated_evidence_stale(target_root, state, plan))
+        .and_then(|plan| plan.unified.as_ref())
     {
-        return Ok(true);
+        return Ok(super::unified_rule::stale(target_root, state, plan));
     }
-    let evidence = crate::resolve_e2e_response_rule_evidence(context, api)?;
-    if !evidence.replay.is_file()
-        || !crate::replay::report::dependency_evidence_path(&evidence.replay).is_file()
-    {
-        return Ok(true);
-    }
-    if state.dependency_rule_plan.as_ref().is_some_and(|plan| {
-        matches!(
-            plan.spec,
-            super::model::RewriteDependencyRuleSpec::MysqlSqlTime { .. }
-        )
-    }) {
-        let report: Value = serde_json::from_slice(&std::fs::read(&evidence.replay)?)?;
-        if crate::MysqlTimeRuleFeedback::policy_evidence_stale(
-            &target_root.join(".traffic-e2e/verification.yaml"),
-            &report,
-        )? {
-            return Ok(true);
-        }
-    }
-    // A generated-value plan freezes the policy identity its evidence was
-    // validated against. When the verification policy or the assertion report
-    // advanced afterwards, apply can never validate the frozen evidence again;
-    // recovery must retire the plan so fresh Replay and replanning can proceed
-    // instead of deadlocking the coordinator queue.
-    if let Some(plan) = state.rule_plan.as_ref() {
-        if let Some(spec) = plan.jwt.as_ref() {
-            let (_, config) = crate::e2e_run::resolve_project(target_root)?;
-            let current =
-                crate::e2e_run::jwt_evidence::digest(&std::fs::read(&config.replay_policy)?);
-            if current != spec.policy_revision() {
-                return Ok(true);
-            }
-        }
-        if !plan.response_jwts.is_empty() || !plan.header_dates.is_empty() {
-            let current =
-                crate::validate_replay_policy(&target_root.join(".traffic-e2e/verification.yaml"))?;
-            let assertions: Value = serde_json::from_slice(&std::fs::read(&evidence.assertions)?)?;
-            if assertions["policy_fingerprint"].as_str() != Some(current.fingerprint.as_str()) {
-                return Ok(true);
-            }
-        }
-        if plan.dependency_request.is_some() || plan.dynamic_value.is_some() {
-            // Dependency-request and dynamic-value plans validate the replay
-            // report's replay_policy fingerprint against the current policy at
-            // apply time; retire the plan when the report is policy-stale.
-            let current =
-                crate::validate_replay_policy(&target_root.join(".traffic-e2e/verification.yaml"))?;
-            let report: Value = serde_json::from_slice(&std::fs::read(&evidence.replay)?)?;
-            if report["replay_policy"]["fingerprint"].as_str() != Some(current.fingerprint.as_str())
-            {
-                return Ok(true);
-            }
-        }
-    }
+
     Ok(false)
 }
 
@@ -89,13 +62,6 @@ pub(super) fn required_action(
     let plan_id = state
         .rule_plan
         .as_ref()
-        .filter(|plan| {
-            plan.jwt.is_some()
-                || !plan.response_jwts.is_empty()
-                || !plan.header_dates.is_empty()
-                || plan.dynamic_value.is_some()
-                || plan.dependency_request.is_some()
-        })
         .map(|plan| &plan.id)
         .or_else(|| state.dependency_rule_plan.as_ref().map(|plan| &plan.id))?;
     if !evidence_unusable(target_root, state).unwrap_or(false) {
@@ -117,6 +83,7 @@ pub fn recover_rewrite_rule_plan(context: RewriteContext, plan_id: &str) -> Resu
     let api = inventory::api_for_rule_plan(&state, plan_id)
         .or_else(|| inventory::api_for_dependency_rule_plan(&state, plan_id))
         .context("rule plan is stale or belongs to no API work item")?;
+    super::worker::ensure_api_confirmed(&state, &api, "recovering a traffic rule")?;
     let report = inventory::with_slice_mut(&mut state, &api, |state| {
         ensure!(
             evidence_unusable(&root, state)?,
@@ -151,6 +118,17 @@ fn recover_slice(root: &Path, state: &mut RewriteState, plan_id: &str) -> Result
         );
         serde_json::to_value(plan)?
     };
+    if let Some(record) = state
+        .rule_plan
+        .as_ref()
+        .filter(|plan| plan.id == plan_id)
+        .and_then(|plan| plan.unified.as_ref())
+        && record.applying()
+    {
+        // Retirement cannot abandon a partially published capture/runtime effect.
+        // Restore only the exact authorized bytes, retaining the intent on any CAS conflict.
+        super::unified_rule::rollback(record)?;
+    }
     if state
         .rule_plan
         .as_ref()
