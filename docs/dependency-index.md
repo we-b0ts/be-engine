@@ -28,6 +28,10 @@ before the primary request is sent and remains an incomplete case.
 
 Recorder creates `.dependency-index.json` together with the case dependency
 summary, before publishing the case. Both consume the same read and JSON parse.
+At run finalization it creates `.global-replay-index.json` and portable Global
+metadata/notification pages while computing the Global summary. These indexes
+travel with the completed recording, so first use on another host can validate
+and reuse them instead of scanning the original payload again.
 Recorder refreshes the sealed fragment identity after its own final ownership
 assignment, checking unchanged size, inode and modification time without reading
 the payload again. Ordinary Replay never relaxes change-time validation.
@@ -95,6 +99,33 @@ traffic-e2e diagnose dependency-index --case-source /path/to/completed/run
 
 The command reports `built`/`reused`, file count, source bytes and index location.
 It never starts a target or changes recording evidence.
+
+## Shared Global evidence
+
+Global report inventories are durable derived evidence under
+`.traffic-e2e/local/artifacts/shared-global-inventories/`, separately from the
+disposable dependency-index cache. Source identity, projection version and the
+relevant policy/layout identity select an immutable inventory. Each Replay keeps
+its own visibility or notification-delivery changes and exact counts. Unused
+details are projected from the shared inventory only when requested; finalization
+and publication normally reuse it across APIs. A cross-case rule that reclassifies
+native Global HTTP entries changes their runtime metadata/order; those sessions
+retain the original full HTTP projection rather than reuse an incompatible one.
+Native protocol matching, finite consumption and Case ownership remain unchanged.
+Recorder also prepares these report projections for its already admitted policy
+at run finalization, using the same Source-only protocol adapters as Replay. The
+portable inventories live under the recording's `.replay/` directory and
+`.global-report-preparation.json` records their source/policy/version identity and
+preparation status. They contain no actual Target observation. A first Replay
+imports matching inventories once into its shared artifact owner; later APIs
+reuse them without visiting all Global rows. A different Source or policy gets a
+different identity. Changed rules and older recordings retain on-demand rebuilds.
+Prewarm failure is explicit and preserves recording completion semantics and
+original bytes; it does not authorize Replay to bypass its native validation.
+An unreferenced prewarm may be rebuilt from intact Source; missing or changed
+evidence already referenced by a published report remains an error.
+See [Replay performance](replay-performance.md) for the implementation boundaries
+and a reproducible, isolated before/after benchmark.
 
 ## Local acceptance measurement
 

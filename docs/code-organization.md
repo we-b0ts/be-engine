@@ -44,6 +44,32 @@ is unclear.
   Protocol adapters supply independent observed clocks and original exchange
   identities. Assertion and request adapters map the same compiled contracts
   into their existing status, lane, admission and consumption lifecycles.
+  Its versioned observation graph separates immutable Source observations,
+  independently identified Target requests, derived deliveries and authenticated
+  candidate references. Content sharing never merges physical request identities.
+  Offline discovery and preflight expand these references through the evidence
+  reader; runtime candidate search does not copy complete payload pairs.
+
+- `replay/report/global_evidence` owns durable, source-bound shared Global report
+  inventories and lazy detail projection. Its artifact child owns atomic private
+  storage and portable publication; protocol children supply immutable report rows
+  and sparse visibility changes using their existing consumption semantics.
+  Generic Pub/Sub notifications retain Source-confirmed lane identities and their
+  own sparse delivery state. These inventories are evidence, separate from the
+  disposable dependency-index cache. Case reclassification remains a reversible
+  report overlay. The report layer never grants matching or consumption permission.
+  `replay/global_source` supplies a read-only projection view and Source-only
+  preparation through the same protocol adapters. Recorder's preparation child
+  invokes it after its writers and native indexes are sealed, without a Target,
+  Case response oracle, CA or listener. `global_evidence/preparation` owns portable
+  source/policy/version binding and prewarm import; failure remains explicit and
+  does not change Recorder's original completion contract.
+- `value_codec` prepares immutable typed decoding plans and bounded schema reuse;
+  decoded Source values may be shared within a comparison. The pure value kernel
+  still evaluates every applicable permission and supplied clock independently.
+  `replay/policy/request_contract/mysql_selection` owns immutable SQL selector
+  preparation and bounded raw-token reuse; bound parameters and live applicability
+  never belong in that cache.
 
 - `config/api_trigger` owns API-origin process-rule schema, SQL identity slots and bounded key-template
   validation; `api_trigger` owns immutable origin evidence and disposable index
