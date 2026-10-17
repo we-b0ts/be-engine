@@ -59,8 +59,8 @@ or genuine Replay obligation.
 ## Resource bounds
 
 There is no 512 MiB limit on the sum of an entire recording's files. Hashing uses
-a bounded buffer; original evidence reads retain an 8 MiB record bound and a
-bounded byte cache. File/record counts and format-specific limits remain
+a bounded buffer; Source classification/capture retain their 8 MiB record bound,
+and sharing retains protocol-owned bounds and a bounded byte cache. File/record counts and format-specific limits remain
 explicit. Large descriptor inventories are hashed independently; they cannot
 silently omit members to fit a preview or memory budget.
 
