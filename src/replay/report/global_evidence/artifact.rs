@@ -7,6 +7,14 @@ use std::fs::{self, File, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 const MANIFEST: &str = "manifest.json";
+fn report_parent(report: &Path) -> Result<&Path> {
+    let parent = report.parent().context("report has no parent")?;
+    Ok(if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    })
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Anchor {
@@ -15,7 +23,7 @@ enum Anchor {
 }
 impl Anchor {
     fn for_report(report: &Path) -> Result<Self> {
-        let parent = fs::canonicalize(report.parent().context("report has no parent")?)?;
+        let parent = fs::canonicalize(report_parent(report)?)?;
         Ok(
             match parent
                 .ancestors()
@@ -45,7 +53,7 @@ impl Anchor {
                 )
             }
             Self::ReportDirectory => (
-                fs::canonicalize(report.parent().context("report has no parent")?)?,
+                fs::canonicalize(report_parent(report)?)?,
                 &[".replay", "shared-global-inventories"],
             ),
         };
@@ -84,6 +92,28 @@ impl ArtifactReference {
     pub(super) fn key(&self) -> &str {
         &self.key
     }
+    pub(super) fn existing<T: Serialize + DeserializeOwned>(
+        report: &Path,
+        key: &str,
+    ) -> Result<Option<Self>> {
+        ensure!(valid_digest(key), "invalid shared inventory key");
+        let parent = report_parent(report)?;
+        if !parent.exists() {
+            store::private_directory(parent)?;
+        }
+        let anchor = Anchor::for_report(report)?;
+        let root = anchor.root(report, true)?;
+        let manifest = root.join(key).join(MANIFEST);
+        if !manifest.try_exists()? {
+            return Ok(None);
+        }
+        let document: T = store::read_json(&manifest)?;
+        Ok(Some(Self {
+            anchor,
+            key: key.into(),
+            sha256: digest(&document)?,
+        }))
+    }
     /// Domain owners bind all source, projection-version and policy/layout inputs
     /// in the key, then validate that binding after loading the document.
     pub(super) fn retain<T: Serialize + DeserializeOwned>(
@@ -92,7 +122,27 @@ impl ArtifactReference {
         build: impl FnOnce(&Path) -> Result<T>,
     ) -> Result<Self> {
         ensure!(valid_digest(&key), "invalid shared inventory key");
+        let parent = report_parent(report)?;
+        if !parent.exists() {
+            store::private_directory(parent)?;
+        }
         let anchor = Anchor::for_report(report)?;
+        Self::retain_at(report, key, anchor, build)
+    }
+    pub(super) fn retain_portable<T: Serialize + DeserializeOwned>(
+        report: &Path,
+        key: String,
+        build: impl FnOnce(&Path) -> Result<T>,
+    ) -> Result<Self> {
+        ensure!(valid_digest(&key), "invalid shared inventory key");
+        Self::retain_at(report, key, Anchor::ReportDirectory, build)
+    }
+    fn retain_at<T: Serialize + DeserializeOwned>(
+        report: &Path,
+        key: String,
+        anchor: Anchor,
+        build: impl FnOnce(&Path) -> Result<T>,
+    ) -> Result<Self> {
         let root = anchor.root(report, true)?;
         let sha256 = publish(&root, &key, None, build)?;
         Ok(Self {
@@ -131,6 +181,10 @@ impl ArtifactReference {
         build: impl FnOnce(&T, &Path, &Path) -> Result<T>,
     ) -> Result<Self> {
         let (document, source_root) = self.load::<T>(source)?;
+        let parent = report_parent(destination)?;
+        if !parent.exists() {
+            store::private_directory(parent)?;
+        }
         let anchor = Anchor::for_report(destination)?;
         let root = anchor.root(destination, true)?;
         if root == self.anchor.root(source, false)? {
@@ -218,3 +272,6 @@ fn publish<T: Serialize + DeserializeOwned>(
     }
     result
 }
+
+#[cfg(test)]
+mod tests;

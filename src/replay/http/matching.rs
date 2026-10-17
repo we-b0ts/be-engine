@@ -408,6 +408,7 @@ impl ReplayState {
             && (exchange.record.error.is_some() || exchange.record.response_status.is_none())
         {
             self.http_exchanges[index].status = crate::replay::ReplayExchangeStatus::Consumed;
+            self.refresh_http_global_report(index);
             let reason = "recorded HTTP exchange contains an upstream error that replay v1 cannot synthesize"
                 .to_string();
             if let Some(case_id) = &exchange.case_id {
@@ -480,6 +481,7 @@ impl ReplayState {
             )));
         }
         self.http_exchanges[index].status = crate::replay::ReplayExchangeStatus::Consumed;
+        self.refresh_http_global_report(index);
         self.complete_http_exchange(detail);
         Ok(exchange.record)
     }

@@ -48,8 +48,13 @@ impl ReplayRuntime {
             discover_replay_cases(&root_dir, &selected_case_ids).await?;
         let ca = Arc::new(MitmCa::load_or_generate(&ca_cert_path, &ca_key_path)?);
         let (global_path, global_debug_path) = find_run_level_dependencies(&root_dir);
+        let global_report_stamp = global_path
+            .as_ref()
+            .map(|path| crate::dependency_index::FileStamp::read(path))
+            .transpose()?;
         let mut mysql = MysqlReplayState::default();
         let mut http_exchanges = Vec::new();
+        let mut http_events = http::HttpReplayEvents::default();
         let mut http_blackholes = Vec::new();
         let mut redis = redis::RedisReplayState::default();
         let mut memcached = memcached::MemcachedReplayState::default();
@@ -88,6 +93,16 @@ impl ReplayRuntime {
             )
             .await?;
         }
+        // Source-owned Global slots are stable across selected APIs. Later
+        // Case-derived Global aliases remain small session-specific evidence.
+        mysql.freeze_global_report_layout();
+        http_events
+            .global_report
+            .freeze_layout(vec![http_exchanges.len()]);
+        redis.freeze_global_report_layout();
+        memcached.freeze_global_report_layout();
+        kafka.freeze_global_report_layout();
+        motan.freeze_global_report_layout();
         if let Some(path) = global_debug_path {
             load_motan_debug_file(&path, &mut motan, &mut targets).await?;
         }
@@ -302,7 +317,17 @@ impl ReplayRuntime {
                 known_targets,
             ))
         });
-        let state = ReplayState {
+        let regular_policy_identity = crate::policy_evidence::digest(&serde_json::to_vec(&(
+            process_owned_dependencies,
+            replay_policy
+                .as_ref()
+                .map(|policy| policy.report().fingerprint),
+        ))?);
+        let regular_report = config
+            .report_path
+            .clone()
+            .unwrap_or_else(|| replay_artifact_dir.join("replay-report.json"));
+        let mut state = ReplayState {
             deferred,
             egress_counter_reader: None,
             egress_counter_starts: BTreeMap::new(),
@@ -318,6 +343,7 @@ impl ReplayRuntime {
             active_case_id,
             case_dependency_post_response_window: lifecycle.case_dependency_post_response_window,
             global_path,
+            regular_global: BTreeMap::new(),
             targets,
             mysql,
             http_exchanges,
@@ -327,7 +353,7 @@ impl ReplayRuntime {
             memcached,
             kafka,
             motan,
-            http_events: http::HttpReplayEvents::default(),
+            http_events,
             ca_cert_path,
             replay_policy,
             http_ignore_query_params,
@@ -341,6 +367,28 @@ impl ReplayRuntime {
             unrecorded_targets: Vec::new(),
             unrecorded_case_ids: BTreeSet::new(),
         };
+        let state = tokio::task::spawn_blocking(move || -> Result<_> {
+            if let (Some(source), Some(expected)) = (&state.global_path, &global_report_stamp) {
+                ensure!(
+                    crate::dependency_index::FileStamp::read(source)? == *expected,
+                    "Global Source changed before report projection preparation"
+                );
+            }
+            report::global_evidence::regular::initialize(
+                &mut state,
+                &regular_report,
+                &regular_policy_identity,
+            )?;
+            if let (Some(source), Some(expected)) = (&state.global_path, &global_report_stamp) {
+                ensure!(
+                    crate::dependency_index::FileStamp::read(source)? == *expected,
+                    "Global Source changed while preparing report projection"
+                );
+            }
+            Ok(state)
+        })
+        .await
+        .context("Global report inventory preparation failed")??;
         let runtime = Self {
             state: Arc::new(Mutex::new(state)),
             ca,

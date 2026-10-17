@@ -24,7 +24,7 @@ pub(super) struct RedisEvidence {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct NotificationEvidence {
+pub(super) struct NotificationEvidence {
     semantics: String,
     inventory: SharedReference,
     recorded: usize,
@@ -41,35 +41,14 @@ impl RedisEvidence {
         pages: PageManifest,
         session: NotificationSessionEvidence,
     ) -> Result<Option<Self>> {
-        if session.lanes.is_empty() {
-            ensure!(
-                session.recorded == 0 && session.delivered == 0 && session.failed == 0,
-                "empty notification inventory has deliveries"
-            );
-            return Ok(None);
-        }
-        let inventory = super::shared::retain(report, &session.lanes)?;
-        let remaining = session
-            .recorded
-            .checked_sub(session.delivered)
-            .context("notification count underflow")?;
-        let evidence = Self {
-            kind: KIND.into(),
-            pages,
-            notifications: NotificationEvidence {
-                semantics: SEMANTICS.into(),
-                inventory,
-                recorded: session.recorded,
-                delivered: session.delivered,
-                failed: session.failed,
-                remaining,
-                deltas: session.deltas,
-            },
-        };
-        evidence.load(report)?;
-        Ok(Some(evidence))
+        Ok(
+            NotificationEvidence::prepare(report, session)?.map(|notifications| Self {
+                kind: KIND.into(),
+                pages,
+                notifications,
+            }),
+        )
     }
-
     pub(super) fn parse(value: &Value) -> Result<Option<Self>> {
         if value.get("kind").is_none() {
             return Ok(None);
@@ -78,20 +57,71 @@ impl RedisEvidence {
         ensure!(evidence.kind == KIND, "unsupported Global evidence format");
         Ok(Some(evidence))
     }
-
     pub(super) fn count(&self) -> Result<usize> {
         self.pages
             .count
             .checked_add(self.notifications.remaining)
             .context("Global detail count overflow")
     }
-
+    pub(super) fn load(&self, report: &Path) -> Result<(SharedInventory, std::path::PathBuf)> {
+        ensure!(self.kind == KIND, "unsupported Global evidence format");
+        self.notifications.load(report)
+    }
+    pub(super) fn read_notifications(
+        &self,
+        report: &Path,
+        offset: usize,
+        limit: usize,
+        items: &mut Vec<Value>,
+    ) -> Result<()> {
+        self.notifications.read(report, offset, limit, items)
+    }
+    pub(super) fn stage(&mut self, source: &Path, destination: &Path) -> Result<()> {
+        self.load(source)?;
+        self.pages.stage_into(
+            source.parent().context("report has no parent")?,
+            destination.parent().context("report has no parent")?,
+        )?;
+        self.notifications = self.notifications.stage(source, destination)?;
+        Ok(())
+    }
+}
+impl NotificationEvidence {
+    pub(super) fn prepare(
+        report: &Path,
+        session: NotificationSessionEvidence,
+    ) -> Result<Option<Self>> {
+        if session.lanes.is_empty() {
+            ensure!(
+                session.recorded == 0 && session.delivered == 0 && session.failed == 0,
+                "empty notification inventory has deliveries"
+            );
+            return Ok(None);
+        }
+        let evidence = Self {
+            semantics: SEMANTICS.into(),
+            inventory: super::shared::retain(report, &session.lanes)?,
+            recorded: session.recorded,
+            delivered: session.delivered,
+            failed: session.failed,
+            remaining: session
+                .recorded
+                .checked_sub(session.delivered)
+                .context("notification count underflow")?,
+            deltas: session.deltas,
+        };
+        evidence.load(report)?;
+        Ok(Some(evidence))
+    }
+    pub(super) fn count(&self) -> usize {
+        self.remaining
+    }
     pub(super) fn load(&self, report: &Path) -> Result<(SharedInventory, std::path::PathBuf)> {
         ensure!(
-            self.kind == KIND && self.notifications.semantics == SEMANTICS,
+            self.semantics == SEMANTICS,
             "unsupported Global notification semantics"
         );
-        let (inventory, root) = self.notifications.inventory.load(report)?;
+        let (inventory, root) = self.inventory.load(report)?;
         let mut recorded = 0usize;
         let mut delivered = 0usize;
         let mut failed = 0usize;
@@ -101,7 +131,7 @@ impl RedisEvidence {
                 .context("notification count overflow")?;
         }
         let mut previous = None;
-        for delta in &self.notifications.deltas {
+        for delta in &self.deltas {
             ensure!(
                 previous.is_none_or(|lane| lane < delta.lane),
                 "duplicate/unordered notification lane delta"
@@ -140,16 +170,16 @@ impl RedisEvidence {
                 .context("notification count overflow")?;
         }
         ensure!(
-            recorded == self.notifications.recorded
-                && delivered == self.notifications.delivered
-                && failed == self.notifications.failed
-                && recorded.checked_sub(delivered) == Some(self.notifications.remaining),
+            recorded == self.recorded
+                && delivered == self.delivered
+                && failed == self.failed
+                && recorded.checked_sub(delivered) == Some(self.remaining),
             "notification session counts do not match complete inventory and deltas"
         );
         Ok((inventory, root))
     }
 
-    pub(super) fn read_notifications(
+    pub(super) fn read(
         &self,
         report: &Path,
         mut offset: usize,
@@ -157,9 +187,15 @@ impl RedisEvidence {
         items: &mut Vec<Value>,
     ) -> Result<()> {
         let (inventory, root) = self.load(report)?;
+        ensure!(
+            offset <= self.remaining,
+            "notification detail offset exceeds count"
+        );
+        if items.len() >= limit || offset == self.remaining {
+            return Ok(());
+        }
         for (lane_index, lane) in inventory.lanes.iter().enumerate() {
             let consumed = self
-                .notifications
                 .deltas
                 .iter()
                 .find(|delta| delta.lane == lane_index)
@@ -209,13 +245,11 @@ impl RedisEvidence {
         Ok(())
     }
 
-    pub(super) fn stage(&mut self, source: &Path, destination: &Path) -> Result<()> {
+    pub(super) fn stage(&self, source: &Path, destination: &Path) -> Result<Self> {
         self.load(source)?;
-        self.pages.stage_into(
-            source.parent().context("report has no parent")?,
-            destination.parent().context("report has no parent")?,
-        )?;
-        self.notifications.inventory = self.notifications.inventory.stage(source, destination)?;
-        Ok(())
+        Ok(Self {
+            inventory: self.inventory.stage(source, destination)?,
+            ..self.clone()
+        })
     }
 }

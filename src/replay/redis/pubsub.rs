@@ -9,6 +9,7 @@ pub(in crate::replay) use inventory::{
     NotificationDelta, NotificationIdentity, NotificationLaneEvidence, NotificationSessionEvidence,
 };
 mod notifications;
+mod report_inventory;
 pub(in crate::replay) mod subscription_evidence;
 pub(super) use notifications::{NotificationJob, schedule_notifications};
 #[cfg(test)]
@@ -77,6 +78,7 @@ struct Subscription {
 
 #[derive(Debug, Default)]
 pub(in crate::replay) struct PubSubState {
+    global_report: crate::replay::report::global_evidence::regular_usage::Usage,
     subscription_mirrors: BTreeMap<(Uuid, u64), RecordedExchange>,
     indexed: inventory::IndexedNotifications,
     pushes: Vec<Push>,
@@ -291,6 +293,7 @@ impl PubSubState {
         self.delivered += 1;
         self.delivered_callbacks += usize::from(self.pushes[index].record.rpc_request.is_some());
         self.pushes[index].status = ReplayExchangeStatus::Consumed;
+        self.refresh_global_report(index);
     }
     pub(super) fn fail(&mut self, id: PushId) {
         let index = match id {
@@ -308,6 +311,7 @@ impl PubSubState {
         }
         self.failed += 1;
         self.pushes[index].status = ReplayExchangeStatus::Failed;
+        self.refresh_global_report(index);
     }
 
     pub(super) fn unused(&self, source: ReplaySource) -> Vec<CommandUnusedReport> {

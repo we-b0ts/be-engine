@@ -54,6 +54,11 @@ impl RedisReplayState {
         self.pubsub.notification_evidence(&self.exchanges)
     }
     pub(in crate::replay) fn global_unused_count(&self) -> usize {
+        if let Some(count) = self.global_regular_report_count() {
+            return count
+                + self.global_report_extra_count()
+                + self.pubsub.indexed_global_remaining();
+        }
         unused_iter(&self.exchanges, ReplaySource::Global).count()
             + self.pubsub.global_unused_count()
     }

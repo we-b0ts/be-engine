@@ -18,6 +18,7 @@ use super::report::{
     KafkaMatchedReport, KafkaProtocolReport, KafkaRequestReport, KafkaUnusedReport,
 };
 mod evidence;
+mod report_inventory;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(in crate::replay) struct RecordedKafkaConnection {
@@ -165,6 +166,7 @@ pub(in crate::replay) struct KafkaReplayState {
 
 #[derive(Debug, Default)]
 pub(super) struct KafkaReplayEvents {
+    global_report: crate::replay::report::global_evidence::regular_usage::Usage,
     dirty_case_ids: BTreeSet<String>,
     pub(super) connections: usize,
     matched_count: usize,
@@ -426,6 +428,7 @@ impl KafkaReplayState {
                     target_event_index: Some(target_event_index),
                 },
             );
+            self.refresh_global_report(0, index);
         }
     }
 
@@ -437,6 +440,7 @@ impl KafkaReplayState {
     ) {
         for index in reservation.indices {
             self.produces[index].status = ReplayExchangeStatus::Failed;
+            self.refresh_global_report(0, index);
         }
         self.record_unsafe(target, "produce", reason);
     }
@@ -517,6 +521,7 @@ impl KafkaReplayState {
                 target_event_index: Some(target_event_index),
             },
         );
+        self.refresh_global_report(1, reservation.fetch_index);
         for index in reservation.delivery_indices {
             let delivery = &mut self.deliveries[index];
             delivery.status = ReplayExchangeStatus::Consumed;
@@ -535,6 +540,7 @@ impl KafkaReplayState {
                     target_event_index: Some(target_event_index),
                 },
             );
+            self.refresh_global_report(2, index);
         }
     }
 
@@ -545,8 +551,10 @@ impl KafkaReplayState {
         reason: String,
     ) {
         self.fetches[reservation.fetch_index].status = ReplayExchangeStatus::Failed;
+        self.refresh_global_report(1, reservation.fetch_index);
         for index in reservation.delivery_indices {
             self.deliveries[index].status = ReplayExchangeStatus::Failed;
+            self.refresh_global_report(2, index);
         }
         self.record_unsafe(target, "fetch", reason);
     }

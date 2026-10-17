@@ -28,6 +28,7 @@ pub(in crate::replay) mod contracts;
 mod delivery;
 mod evidence;
 mod expiration;
+mod report_inventory;
 use super::command_matching::{
     CommandExchangeScope, PreferredMatch, is_connection_independent_background,
     lane_blocked_diagnostic, preferred_match, unmatched_diagnostic,
@@ -138,6 +139,7 @@ pub(super) struct MemcachedReplayState {
 
 #[derive(Debug, Default)]
 pub(super) struct MemcachedReplayEvents {
+    global_report: crate::replay::report::global_evidence::regular_usage::Usage,
     dirty_case_ids: BTreeSet<String>,
     pub(super) connections: usize,
     matched_count: usize,
@@ -421,6 +423,7 @@ impl MemcachedReplayState {
         if let Some(exchange) = self.exchanges.get_mut(matched.index) {
             exchange.status = ReplayExchangeStatus::Consumed;
         }
+        self.refresh_global_report(matched.index);
         let case_id = matched.report.case_id.clone();
         push_success_detail(
             &mut self.events.matched_count,
@@ -439,6 +442,7 @@ impl MemcachedReplayState {
         if let Some(exchange) = self.exchanges.get_mut(matched.index) {
             exchange.status = ReplayExchangeStatus::Failed;
         }
+        self.refresh_global_report(matched.index);
         if let Some(case_id) = &matched.report.case_id {
             self.events.dirty_case_ids.insert(case_id.clone());
         }

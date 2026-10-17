@@ -9,6 +9,7 @@ use serde_json::json;
 use std::fs;
 use std::sync::Mutex as StdMutex;
 use uuid::Uuid;
+mod protocol;
 
 struct Fixture {
     root: tempfile::TempDir,

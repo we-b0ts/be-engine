@@ -1,6 +1,8 @@
 pub(in crate::replay) mod contracts;
 mod matching;
 pub(in crate::replay) mod multipart;
+mod report_inventory;
+pub(super) use report_inventory::visit_global_report_range as visit_global_report_rows;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::future::pending;
@@ -142,6 +144,7 @@ enum HttpReplayMatchError {
 
 #[derive(Debug, Default)]
 pub(super) struct HttpReplayEvents {
+    pub(super) global_report: crate::replay::report::global_evidence::regular_usage::Usage,
     pub(super) dirty_case_ids: BTreeSet<String>,
     pub(super) matched_count: usize,
     pub(super) matched: Vec<MatchedHttpExchangeReport>,

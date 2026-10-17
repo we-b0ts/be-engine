@@ -40,6 +40,7 @@ mod native_scope_tests;
 mod native_source;
 pub(crate) mod publish;
 pub(in crate::replay) mod pubsub;
+mod report_inventory;
 pub(crate) mod time_shift;
 pub(crate) mod value;
 use connection_scope::{ConnectionScopes, TargetConnection};
@@ -183,6 +184,7 @@ pub(super) struct RedisReplayState {
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayEvents {
+    global_report: crate::replay::report::global_evidence::regular_usage::Usage,
     dirty_case_ids: BTreeSet<String>,
     pub(super) connections: usize,
     matched_count: usize,
@@ -339,6 +341,7 @@ impl RedisReplayState {
                 exchange.status = ReplayExchangeStatus::Consumed;
             }
         }
+        self.refresh_global_report(matched.index);
         let case_id = matched.report.case_id.clone();
         push_success_detail(
             &mut self.events.matched_count,
@@ -357,6 +360,7 @@ impl RedisReplayState {
         if let Some(exchange) = self.exchanges.get_mut(matched.index) {
             exchange.status = ReplayExchangeStatus::Failed;
         }
+        self.refresh_global_report(matched.index);
         if let Some(case_id) = &matched.report.case_id {
             self.events.dirty_case_ids.insert(case_id.clone());
         }

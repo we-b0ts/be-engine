@@ -48,6 +48,9 @@ impl MotanReplayState {
         Ok(())
     }
     pub(in crate::replay) fn global_unused_count(&self) -> usize {
+        if let Some(count) = self.global_report_usage().count() {
+            return count + self.global_report_extra_count();
+        }
         unused_iter(&self.exchanges, ReplaySource::Global).count()
     }
 }

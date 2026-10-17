@@ -6,6 +6,7 @@ mod matcher;
 mod model;
 pub(in crate::replay) mod optional_session;
 mod projection;
+mod report_inventory;
 mod response;
 mod session;
 mod session_setup;

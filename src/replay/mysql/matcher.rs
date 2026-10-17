@@ -519,6 +519,7 @@ impl ReplayState {
                         } else {
                             ReplayExchangeStatus::Responding
                         };
+                    self.refresh_mysql_global_report(index);
                     if let Some(policy) = &mut self.replay_policy {
                         if let (Some(case_id), Some(normalized)) =
                             (active_case_id.as_deref(), dynamic.as_ref())
@@ -584,6 +585,14 @@ impl ReplayState {
                     continue;
                 }
                 exchange.status = ReplayExchangeStatus::Consumed;
+                if exchange.source == ReplaySource::Global {
+                    self.mysql.events.global_report.observe(
+                        0,
+                        index,
+                        exchange.optional_session.is_none(),
+                        false,
+                    );
+                }
                 return Some((exchange.source, index));
             }
         }
@@ -782,6 +791,7 @@ impl ReplayState {
             return;
         };
         exchange.status = ReplayExchangeStatus::Consumed;
+        self.refresh_mysql_global_report(matched.index);
         if let Some(policy) = &mut self.replay_policy {
             policy.commit_mysql_response_shift(&matched.response_time_shift_rules);
         }
@@ -808,6 +818,7 @@ impl ReplayState {
         if let Some(exchange) = self.mysql.exchanges.get_mut(matched.index) {
             exchange.status = ReplayExchangeStatus::Failed;
         }
+        self.refresh_mysql_global_report(matched.index);
         self.record_unmatched(
             identity,
             &matched.record.command,
