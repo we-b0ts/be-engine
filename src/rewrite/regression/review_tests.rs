@@ -53,7 +53,7 @@ fn both_purposes_ignore_old_receipts_at_entry() {
 }
 
 #[test]
-fn unchanged_purposes_complete_without_review_after_progress_publication() {
+fn unchanged_purposes_require_final_review_and_sweep_before_progress_completion() {
     for record_new_traffic in [false, true] {
         let target = fixture();
         begin(RewriteRegressionBeginOptions {
@@ -84,6 +84,35 @@ fn unchanged_purposes_complete_without_review_after_progress_publication() {
             ),
         )
         .unwrap();
+        let final_gate = action::for_status(target.path(), &state).unwrap();
+        assert!(matches!(
+            final_gate.action,
+            rewrite::RewriteAction::PreRevalidationReviewRequired { .. }
+        ));
+        assert!(!final_gate.terminal_allowed);
+        store.save(&state).unwrap();
+        let report = review::check_pre_revalidation(rewrite::RewriteReviewOptions {
+            target_root: target.path().into(),
+            worktree: Some(target.path().into()),
+            integration: true,
+            scope: None,
+            handoff_id: None,
+            evidence: None,
+            hardcode_ai_verified: Vec::new(),
+        })
+        .unwrap();
+        review::accept(target.path().into(), report.report_path).unwrap();
+        state = store.load().unwrap().unwrap();
+        assert_eq!(state.phase, RewritePhase::ApiPending);
+        state.phase = RewritePhase::SliceComplete;
+        state.e2e_current = true;
+        state.target_fingerprint =
+            Some(fingerprint::repository_fingerprint(target.path()).unwrap());
+        inventory::complete_current_and_advance(&mut state).unwrap();
+        assert!(review::pre_revalidation::completion_current(
+            target.path(),
+            &state
+        ));
         let before_commit = action::for_status(target.path(), &state).unwrap();
         assert!(!before_commit.terminal_allowed);
         assert!(matches!(

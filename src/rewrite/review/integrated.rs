@@ -178,9 +178,9 @@ fn rework_wait(root: &Path) -> RewriteAction {
 pub(super) fn review_action(root: &Path, report: Option<&RewriteReviewReport>) -> RewriteAction {
     RewriteAction::SourceReviewRequired {
         summary: match report.map(|r| r.status) {
-            Some(ReviewStatus::ChangesRequired) => "source review found code changes required; inspect review show and route each finding with review rework to its owning work item",
+            Some(ReviewStatus::ChangesRequired) => "source review found code changes required; inspect review show. The code integrator fixes routine formatting and Clippy failures in its assigned worktree and reruns complete integration review. Route findings requiring API behavior decisions with review rework to their owning work item",
             Some(ReviewStatus::EvidenceRequired) => "inspect review show; investigate each spawn and rerun review check --evidence with startup/request ownership evidence",
-            Some(ReviewStatus::Passed) => "publish the reviewed integration candidate and accept its complete quality receipt before advancing verification",
+            Some(ReviewStatus::Passed) => "publish the reviewed candidate and accept its engine source/isolation receipt before advancing verification; full fmt/test/Clippy runs only at review check --pre-revalidation",
             _ => "refresh the global quality receipt: prepare the code integrator worktree at the current canonical commit, preserving unfinished work, and delegate commands.check to the code integrator without a scope, --handoff-id or --batch-handoffs. Complete review checks the whole candidate; receipt expiry does not undo existing handoff integrations. If no new changes are needed, review that exact commit without an empty merge. Otherwise publish the exact passing candidate, then execute commands.accept before advancing verification",
         }.into(),
         check: action::command(root, vec!["review".into(), "check".into(), "--integration".into()], vec!["BACKEND_REWRITE_REVIEW_WORKTREE".into()]),

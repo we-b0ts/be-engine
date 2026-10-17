@@ -129,6 +129,12 @@ fn deferred_envelope(
     api: &RecordingApi,
     respect_resources: bool,
 ) -> Result<Option<RewriteActionEnvelope>> {
+    if state.revalidation_round.is_some() {
+        let mut projected = state.clone();
+        if super::review::pre_revalidation::reconcile(target_root, &mut projected)? {
+            return deferred_envelope(target_root, &projected, api, respect_resources);
+        }
+    }
     let requested = api.to_string();
     let Some(item) = state
         .api_inventory
@@ -137,6 +143,12 @@ fn deferred_envelope(
     else {
         return Ok(None);
     };
+    if (!respect_resources || !super::coordination::resources_busy(target_root)?)
+        && let Some(required) =
+            super::review::pre_revalidation::required_action(target_root, state)?
+    {
+        return Ok(Some(action::envelope(target_root, state, required)));
+    }
     let outside_round = state.revalidation_round.is_some()
         && !inventory::revalidation_round::contains(state, &requested);
     if item.status != RewriteApiStatus::RevalidationPending && !outside_round {
@@ -344,11 +356,50 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        assert!(
-            deferred_next_envelope(target.path(), &state, &api)
-                .unwrap()
-                .is_none()
-        );
+        let required = deferred_next_envelope(target.path(), &state, &api)
+            .unwrap()
+            .expect("the owned lock must not hide the final review stage");
+        assert!(matches!(
+            required.action,
+            RewriteAction::PreRevalidationReviewRequired { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn explicit_api_next_cannot_start_an_unreviewed_final_sweep() {
+        let target = configured_target();
+        let mut state = crate::rewrite::test_state();
+        inventory::install(&mut state, vec!["GET /a".into(), "POST /b".into()]).unwrap();
+        for item in &mut state.api_inventory {
+            item.status = RewriteApiStatus::RevalidationPending;
+        }
+        state.phase = crate::rewrite::RewritePhase::SliceComplete;
+        state.current_api_index = None;
+        let store = RewriteStore::new(target.path()).unwrap();
+        store.save(&state).unwrap();
+        let result = crate::rewrite::advance::advance_rewrite(crate::rewrite::RewriteNextOptions {
+            target_root: target.path().into(),
+            api: Some("/a".parse().unwrap()),
+            source_route: None,
+        })
+        .await
+        .unwrap();
+        assert!(!result.replay_can_continue);
+        assert!(matches!(
+            result.envelope.action,
+            RewriteAction::PreRevalidationReviewRequired { .. }
+        ));
+        let saved = store.load().unwrap().unwrap();
+        assert!(saved.attempts.is_empty());
+        assert!(saved.api_inventory.iter().all(|item| item.attempts == 0));
+        assert!(matches!(
+            action::for_status(target.path(), &saved).unwrap().action,
+            RewriteAction::PreRevalidationReviewRequired { .. }
+        ));
+        assert!(matches!(
+            traffic_operation::state(target.path()).unwrap(),
+            traffic_operation::TrafficOperationState::Absent
+        ));
     }
 
     fn configured_target() -> tempfile::TempDir {

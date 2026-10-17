@@ -36,6 +36,24 @@ fn status(root: &Path) -> RewriteStatusReport {
     .unwrap()
 }
 
+fn accept_final(root: &Path, state: &mut RewriteState) {
+    let store = RewriteStore::new(root).unwrap();
+    store.save(state).unwrap();
+    let report = rewrite::review::check_pre_revalidation(rewrite::RewriteReviewOptions {
+        target_root: root.into(),
+        worktree: Some(root.into()),
+        scope: None,
+        evidence: None,
+        integration: false,
+        handoff_id: None,
+        hardcode_ai_verified: Vec::new(),
+    })
+    .unwrap();
+    assert_eq!(report.status, rewrite::review::ReviewStatus::Passed);
+    rewrite::review::accept(root.into(), report.report_path).unwrap();
+    *state = store.load().unwrap().unwrap();
+}
+
 fn assert_advance(action: &RewriteAction, api: &str) {
     let RewriteAction::AdvanceRequired {
         command,
@@ -110,7 +128,7 @@ fn parked_system_repair_survives_revalidation_and_becomes_resumable_after_revisi
     let original_slice = serde_json::to_value(&state.active_slice).unwrap();
     let repair_id = state.route.as_ref().unwrap().repair_id.clone().unwrap();
     let store = RewriteStore::new(target.path()).unwrap();
-    store.save(&state).unwrap();
+    accept_final(target.path(), &mut state);
     assert_advance(&status(target.path()).action, "GET /revalidate-0");
     inventory::activate_requested(&mut state, Some(&"GET /revalidate-0".parse().unwrap())).unwrap();
     assert_eq!(
@@ -346,20 +364,23 @@ fn completed_evidence_is_revalidated_again_only_after_target_changes() {
     let target = configured_target();
     let mut state = with_revalidation(1);
     mark_repair(&mut state);
-    inventory::activate_requested(&mut state, Some(&"GET /revalidate-0".parse().unwrap())).unwrap();
+    accept_final(target.path(), &mut state);
+    let first_fingerprint = rewrite::fingerprint::repository_fingerprint(target.path()).unwrap();
     state.phase = RewritePhase::SliceComplete;
     state.e2e_current = true;
-    state.target_fingerprint = Some("target-v1".into());
+    state.target_fingerprint = Some(first_fingerprint.clone());
     assert!(!inventory::complete_current_and_advance(&mut state).unwrap());
-    assert!(!inventory::defer_completed_for_target_change(&mut state, "target-v1").unwrap());
+    assert!(!inventory::defer_completed_for_target_change(&mut state, &first_fingerprint).unwrap());
     assert!(matches!(
         action::for_state(target.path(), &state).action,
         RewriteAction::Blocked { .. }
     ));
-    assert!(inventory::defer_completed_for_target_change(&mut state, "target-v2").unwrap());
+    std::fs::write(target.path().join("lib.rs"), "pub fn value() -> u8 { 2 }\n").unwrap();
+    let changed = rewrite::fingerprint::repository_fingerprint(target.path()).unwrap();
+    assert!(inventory::defer_completed_for_target_change(&mut state, &changed).unwrap());
     assert_eq!(state.phase, RewritePhase::SliceComplete);
-    assert_advance(
-        &action::for_state(target.path(), &state).action,
-        "GET /revalidate-0",
-    );
+    assert!(matches!(
+        action::for_state(target.path(), &state).action,
+        RewriteAction::PreRevalidationReviewRequired { .. }
+    ));
 }

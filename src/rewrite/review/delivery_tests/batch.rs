@@ -327,14 +327,7 @@ fn six_integrated_handoffs_and_one_new_delivery_review_and_admit_as_one_candidat
                 .contains_key(Path::new(&format!("src/incremental_{index}.rs")))
         );
     }
-    assert!(
-        report.quality.as_ref().unwrap().passed(
-            &crate::e2e_run::resolve_project(root)
-                .unwrap()
-                .1
-                .target_quality_gates
-        )
-    );
+    assert!(report.quality.as_ref().unwrap().passed());
     // Checking does not publish or acknowledge the new delivery.
     assert_eq!(candidate::head(root).unwrap(), initial_report.head_revision);
     assert_eq!(

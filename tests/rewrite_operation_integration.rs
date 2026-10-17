@@ -182,6 +182,31 @@ fn assert_detached_idle_revalidation(auto_next: bool) {
     .unwrap();
     let before = command(target.path(), &["status"]);
     assert_eq!(before["pending"], 1);
+    assert_eq!(before["action"]["kind"], "pre_revalidation_review_required");
+    assert_eq!(before["terminal_allowed"], false);
+    let checked = command(
+        target.path(),
+        &[
+            "review",
+            "check",
+            "--pre-revalidation",
+            "--worktree",
+            target.path().to_str().unwrap(),
+        ],
+    );
+    assert_eq!(checked["status"], "passed");
+    assert_eq!(checked["quality"]["scope"], "pre_revalidation");
+    command(
+        target.path(),
+        &[
+            "review",
+            "accept",
+            "--report",
+            checked["report_path"].as_str().unwrap(),
+        ],
+    );
+    let before = command(target.path(), &["status"]);
+    assert_eq!(before["pending"], 1);
     assert_eq!(before["action"]["details"]["api"], "/revalidate/*");
     let launched = command(target.path(), &["next"]);
     assert_eq!(launched["action"]["kind"], "wait_required");

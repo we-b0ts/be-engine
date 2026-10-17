@@ -15,7 +15,17 @@ use super::{
 };
 
 pub(super) fn for_state(target_root: &Path, state: &RewriteState) -> RewriteActionEnvelope {
-    let base = state_action(target_root, state);
+    if state.revalidation_round.is_some() {
+        let mut projected = state.clone();
+        if super::review::pre_revalidation::reconcile(target_root, &mut projected).unwrap_or(false)
+        {
+            return for_state(target_root, &projected);
+        }
+    }
+    let base = super::review::pre_revalidation::required_action(target_root, state)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| state_action(target_root, state));
     let selected = select_action(target_root, state, base);
     envelope(target_root, state, selected)
 }
@@ -37,6 +47,12 @@ pub(super) fn for_status(
 /// Native workflow gate, before choosing among worker actions. Counts consume this
 /// same gate regardless of which API's action the caller wants to inspect.
 pub(super) fn status_base(target_root: &Path, state: &RewriteState) -> Result<RewriteAction> {
+    if state.revalidation_round.is_some() {
+        let mut projected = state.clone();
+        if super::review::pre_revalidation::reconcile(target_root, &mut projected)? {
+            return status_base(target_root, &projected);
+        }
+    }
     if state.case_pattern_identification.is_some()
         || super::transition::replay_completion_pending(state)
     {
@@ -47,6 +63,9 @@ pub(super) fn status_base(target_root: &Path, state: &RewriteState) -> Result<Re
         repair::acceptance_ready(target_root, &scoped)?;
     }
     let recording_status = recording_action::status_action(target_root, state)?;
+    if let Some(review) = super::review::pre_revalidation::required_action(target_root, state)? {
+        return Ok(review);
+    }
     if let Some(review) = super::review::required_action(target_root, state)? {
         return Ok(review);
     }
@@ -71,6 +90,21 @@ pub(super) fn select_action(
     state: &RewriteState,
     base: RewriteAction,
 ) -> RewriteAction {
+    if matches!(base, RewriteAction::PreRevalidationReviewRequired { .. }) {
+        return base;
+    }
+    if state.revalidation_round.is_some() {
+        let mut projected = state.clone();
+        if super::review::pre_revalidation::reconcile(target_root, &mut projected).unwrap_or(false)
+        {
+            return select_action(target_root, &projected, base);
+        }
+    }
+    if matches!(&base, RewriteAction::WaitRequired { resource, .. }
+        if resource == "pre_revalidation_candidate")
+    {
+        return base;
+    }
     if matches!(
         base,
         RewriteAction::AdvanceRequired {
@@ -156,6 +190,15 @@ pub(super) fn for_scoped_status(
     target_root: &Path,
     state: &RewriteState,
 ) -> Result<RewriteActionEnvelope> {
+    if state.revalidation_round.is_some() {
+        let mut projected = state.clone();
+        if super::review::pre_revalidation::reconcile(target_root, &mut projected)? {
+            return for_scoped_status(target_root, &projected);
+        }
+    }
+    if let Some(review) = super::review::pre_revalidation::required_action(target_root, state)? {
+        return Ok(envelope(target_root, state, review));
+    }
     if let Some(refresh) = super::background_reclassification::required_action(target_root, state)?
     {
         if let Some(review) = super::review::required_action(target_root, state)? {
@@ -324,6 +367,7 @@ pub(super) fn envelope(
         latest_focused_e2e: latest_focused_e2e(state),
         terminal_allowed: super::expert::counts(state).2 == 0
             && super::review::admission_current(target_root, state)
+            && super::review::pre_revalidation::completion_current(target_root, state)
             && progress_publication::state(target_root, state)
                 == Some(progress_publication::PublicationState::Published),
         action,

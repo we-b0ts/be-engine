@@ -3,8 +3,9 @@
 mod batch;
 #[path = "delivery_tests/batch_export.rs"]
 mod batch_export;
+#[path = "delivery_tests/quality_scope.rs"]
+mod quality_scope;
 use super::*;
-use crate::rewrite::quality::QualityCommandStatus;
 use crate::rewrite::worker::model::RewriteWorkerActivity;
 use crate::rewrite::worker::runtime::RewriteWorkerReportOptions;
 use crate::rewrite::worker::tests::{configured_target, implementation_state_with_inventory};
@@ -192,75 +193,6 @@ fn worker_review_includes_pr_violations_inherited_before_dispatch() {
     assert_eq!(report.status, ReviewStatus::ChangesRequired);
     let isolation = serde_json::to_value(report.quality.unwrap().replay_isolation).unwrap();
     assert_eq!(isolation["violations"][0]["file"], "src/inherited.rs");
-}
-
-#[test]
-fn failed_or_incomplete_quality_reports_cannot_be_delivered() {
-    let directory = tempfile::tempdir().unwrap();
-    let repaired = directory.path().join("repaired");
-    let target = target();
-    enable_standard_rust_checks(
-        target.path(),
-        &format!(
-            "use std::path::Path;\n\nfn main() {{\n    let marker = {marker:?};\n    println!(\"cargo:rerun-if-changed={{marker}}\");\n    assert!(Path::new(marker).is_file(), \"private_interfaces warning\");\n}}\n",
-            marker = repaired.to_string_lossy(),
-        ),
-    );
-    let worker = worktree(target.path(), directory.path(), "worker");
-    let scope = worker_scope(target.path(), &worker);
-    let opts = options(target.path(), &worker, Some(scope.clone()));
-    let failed = check(opts.clone()).unwrap();
-    assert_eq!(failed.status, ReviewStatus::ChangesRequired);
-    let command = failed
-        .quality
-        .as_ref()
-        .unwrap()
-        .commands
-        .iter()
-        .find(|command| command.status == QualityCommandStatus::Failed)
-        .unwrap();
-    assert_eq!(command.exit_code, Some(101));
-    assert!(
-        fs::read_to_string(&command.log_path)
-            .unwrap()
-            .contains("private_interfaces")
-    );
-    let handoff = delivery(target.path(), &scope, &failed);
-    assert!(worker::runtime::report(handoff.clone()).is_err());
-    fs::write(repaired, "fixed").unwrap();
-    let passed = check(opts).unwrap();
-    assert_eq!(passed.status, ReviewStatus::Passed);
-    assert_ne!(failed.report_path, passed.report_path);
-    assert!(worker::runtime::report(handoff).is_err());
-    let handoff = delivery(target.path(), &scope, &passed);
-    let mut incomplete = passed.clone();
-    incomplete.quality = None;
-    write_json(&passed.report_path, &incomplete).unwrap();
-    assert!(
-        worker::runtime::report(handoff.clone())
-            .unwrap_err()
-            .to_string()
-            .contains("quality")
-    );
-    incomplete.quality = passed.quality.clone();
-    incomplete.quality.as_mut().unwrap().commands.clear();
-    write_json(&passed.report_path, &incomplete).unwrap();
-    assert!(
-        worker::runtime::report(handoff.clone())
-            .unwrap_err()
-            .to_string()
-            .contains("commands")
-    );
-    let store = RewriteStore::new(target.path()).unwrap();
-    assert!(worker::runtime::observation(&store.load().unwrap().unwrap(), &scope).is_none());
-    write_json(&passed.report_path, &passed).unwrap();
-    worker::runtime::report(handoff).unwrap();
-    assert_eq!(
-        worker::runtime::observation(&store.load().unwrap().unwrap(), &scope)
-            .unwrap()
-            .activity,
-        RewriteWorkerActivity::HandoffReady
-    );
 }
 
 #[test]
@@ -519,8 +451,7 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
     commit_code(&candidate);
     let reviewed = check(options(target.path(), &candidate, None)).unwrap();
     assert_eq!(reviewed.status, ReviewStatus::Passed);
-    let review_invocations = fs::read_to_string(&counter).unwrap();
-    assert!(!review_invocations.is_empty());
+    assert!(!counter.exists());
     assert!(gate(target.path(), &state, "master").unwrap().is_some());
     git(
         target.path(),
@@ -532,7 +463,7 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
         target_root: target.path().into(),
     })
     .unwrap();
-    assert_eq!(fs::read_to_string(&counter).unwrap(), review_invocations);
+    assert!(!counter.exists());
 
     // Engine progress publication changes Git history without changing the
     // reviewed code or canonical execution inputs. Reuse the accepted receipt.
@@ -556,7 +487,7 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
         target_root: target.path().into(),
     })
     .unwrap();
-    assert_eq!(fs::read_to_string(&counter).unwrap(), review_invocations);
+    assert!(!counter.exists());
 
     // Case pattern discovery invalidates traffic verification, not the code receipt.
     let policy_path = target.path().join(".traffic-e2e/policy.yaml");
@@ -575,7 +506,7 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
     git(target.path(), &["commit", "-qm", "discover case pattern"]);
     assert!(terminal_current(target.path(), &state));
     assert!(gate(target.path(), &state, "master").unwrap().is_none());
-    assert_eq!(fs::read_to_string(&counter).unwrap(), review_invocations);
+    assert!(!counter.exists());
 
     // Verification policy edits keep the code receipt and stale prior API results.
     let policy_path = target.path().join(".traffic-e2e/policy.yaml");
@@ -602,7 +533,7 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
     );
     assert!(terminal_current(target.path(), &state));
     assert!(gate(target.path(), &state, "master").unwrap().is_none());
-    assert_eq!(fs::read_to_string(&counter).unwrap(), review_invocations);
+    assert!(!counter.exists());
     let mut completed = state.clone();
     let api = &mut completed.api_inventory[0];
     api.status = crate::rewrite::RewriteApiStatus::Complete;
@@ -636,7 +567,7 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
     );
     assert!(!terminal_current(target.path(), &state));
     assert!(gate(target.path(), &state, "master").unwrap().is_some());
-    assert_eq!(fs::read_to_string(&counter).unwrap(), review_invocations);
+    assert!(!counter.exists());
 
     fs::write(target.path().join("lib.rs"), "pub fn value() -> u8 { 3 }\n").unwrap();
     assert!(gate(target.path(), &state, "master").unwrap().is_some());
@@ -644,7 +575,7 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
         target_root: target.path().into(),
     })
     .unwrap();
-    assert_eq!(fs::read_to_string(&counter).unwrap(), review_invocations);
+    assert!(!counter.exists());
 
     // Losing the receipt cannot downgrade revalidation to initial diagnosis.
     // Persisted history requires a replacement review but never proves a pass.
@@ -666,7 +597,7 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
         status.action,
         RewriteAction::SourceReviewRequired { .. }
     ));
-    assert_eq!(fs::read_to_string(&counter).unwrap(), review_invocations);
+    assert!(!counter.exists());
 
     // A malformed receipt has the same actionable recovery as an absent one.
     fs::write(integrated_path(target.path()), "{broken report").unwrap();
@@ -678,7 +609,7 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
         status.action,
         RewriteAction::SourceReviewRequired { .. }
     ));
-    assert_eq!(fs::read_to_string(&counter).unwrap(), review_invocations);
+    assert!(!counter.exists());
 }
 
 #[test]
@@ -753,8 +684,7 @@ fn unpublished_candidates_require_publication_instead_of_repeated_checks() {
         let published = candidate::head(target.path()).unwrap();
         let report = check(options(target.path(), &integration, None)).unwrap();
         assert_eq!(report.status, ReviewStatus::Passed);
-        let review_invocations = fs::read_to_string(&counter).unwrap();
-        assert!(!review_invocations.is_empty());
+        assert!(!counter.exists());
         assert_ne!(report.head_revision, published);
         let store = RewriteStore::new(target.path()).unwrap();
         let before = serde_json::to_value(store.load().unwrap().unwrap()).unwrap();
@@ -785,7 +715,7 @@ fn unpublished_candidates_require_publication_instead_of_repeated_checks() {
             target.path(),
             &store.load().unwrap().unwrap()
         ));
-        assert_eq!(fs::read_to_string(&counter).unwrap(), review_invocations);
+        assert!(!counter.exists());
     }
 }
 

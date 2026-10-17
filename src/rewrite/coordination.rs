@@ -26,6 +26,12 @@ pub(super) fn status_details(
     target_root: &Path,
     state: &RewriteState,
 ) -> Result<RewriteCoordinationDetails> {
+    if state.revalidation_round.is_some() {
+        let mut projected = state.clone();
+        if super::review::pre_revalidation::reconcile(target_root, &mut projected)? {
+            return status_details(target_root, &projected);
+        }
+    }
     let busy = resources_busy(target_root)?;
     let base = super::action::status_base(target_root, state)?;
     let execution = super::execution::status_action(target_root)?;
@@ -85,6 +91,19 @@ fn remove_one(counts: &mut BTreeMap<String, usize>, previous: &str) {
         if *value == 0 {
             counts.remove(previous);
         }
+    }
+}
+
+fn project_pre_revalidation(result: &mut RewriteCoordinationDetails, busy: bool) {
+    for (name, count) in std::mem::take(&mut result.ready) {
+        if name != "pre_revalidation_review" {
+            add(&mut result.waiting, "pre_revalidation_review", count);
+        }
+    }
+    if busy {
+        add(&mut result.waiting, "workflow_resource", 1);
+    } else {
+        add(&mut result.ready, "pre_revalidation_review", 1);
     }
 }
 
@@ -163,6 +182,9 @@ pub(super) fn details(
     );
     result.completed = super::inventory::view(state).completed;
     match action {
+        RewriteAction::PreRevalidationReviewRequired { .. } => {
+            project_pre_revalidation(&mut result, busy);
+        }
         RewriteAction::SystemRepairRequired { acceptance, .. } => {
             if acceptance.is_some() && !busy {
                 add(&mut result.ready, "verify_system_repair", 1);
@@ -229,6 +251,13 @@ pub(super) fn projected_details(
     selected: &RewriteAction,
     busy: bool,
 ) -> RewriteCoordinationDetails {
+    if state.revalidation_round.is_some() {
+        let mut projected = state.clone();
+        if super::review::pre_revalidation::reconcile(target_root, &mut projected).unwrap_or(false)
+        {
+            return projected_details(target_root, &projected, base, selected, busy);
+        }
+    }
     let mut result = details(state, base, busy);
     // Count parked repair acceptances as well as the active one. A repair is
     // actionable only after its observed external revision has changed.
@@ -262,7 +291,18 @@ pub(super) fn projected_details(
             }
         }
     }
-    if matches!(selected, RewriteAction::Blocked { .. }) {
+    if matches!(
+        selected,
+        RewriteAction::PreRevalidationReviewRequired { .. }
+    ) {
+        project_pre_revalidation(&mut result, busy);
+    } else if matches!(selected, RewriteAction::WaitRequired { resource, .. }
+        if resource == "pre_revalidation_candidate")
+    {
+        result.ready.clear();
+        add(&mut result.waiting, "pre_revalidation_candidate", 1);
+        add(&mut result.ready, "wait", 1);
+    } else if matches!(selected, RewriteAction::Blocked { .. }) {
         result.ready.clear();
     } else if !busy
         && super::scheduling::round_action(target_root, state).is_some()

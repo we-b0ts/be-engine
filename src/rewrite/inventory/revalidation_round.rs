@@ -65,6 +65,9 @@ pub(in crate::rewrite) fn begin(state: &mut RewriteState) -> bool {
 
 /// A terminal failure consumes membership too; repairs wait until the sweep drains.
 pub(in crate::rewrite) fn finish(state: &mut RewriteState, api: &str) {
+    if let Some(review) = state.pre_revalidation_review.as_mut() {
+        review.remaining.remove(api);
+    }
     if let Some(round) = state.revalidation_round.as_mut() {
         round.remaining.remove(api);
         if round.remaining.is_empty() {

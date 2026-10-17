@@ -96,6 +96,22 @@ fn fingerprint_changes_and_restart_do_not_repeat_a_finished_round_member() {
 fn multiple_failures_drain_the_sweep_then_all_repairs_must_be_accepted() {
     let target = crate::rewrite::worker::tests::configured_target();
     let mut state = stale(&["GET /a", "GET /b", "GET /c"]);
+    let store = crate::rewrite::store::RewriteStore::new(target.path()).unwrap();
+    store.save(&state).unwrap();
+    let report =
+        crate::rewrite::review::check_pre_revalidation(crate::rewrite::RewriteReviewOptions {
+            target_root: target.path().into(),
+            worktree: Some(target.path().into()),
+            scope: None,
+            evidence: None,
+            integration: false,
+            handoff_id: None,
+            hardcode_ai_verified: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(report.status, crate::rewrite::review::ReviewStatus::Passed);
+    crate::rewrite::review::accept(target.path().into(), report.report_path).unwrap();
+    state = store.load().unwrap().unwrap();
     inventory::activate_requested(&mut state, Some(&"GET /a".parse().unwrap())).unwrap();
     api_batch::apply_results(target.path(), &mut state, &[failure("GET /a")], None).unwrap();
     assert_eq!(next(&state), Some("GET /b"));
@@ -150,7 +166,16 @@ fn active_round_member_does_not_hide_another_waiting_api() {
     let mut state = stale(&["GET /a", "GET /b", "GET /c"]);
     inventory::activate_requested(&mut state, Some(&"GET /a".parse().unwrap())).unwrap();
     complete(&mut state, "v1");
-    let details = crate::rewrite::coordination::status_details(target.path(), &state).unwrap();
+    // Exercise the round owner's projection; global admission independently
+    // requires a current final review before selecting this Replay action.
+    let action = crate::rewrite::scheduling::round_action(target.path(), &state).unwrap();
+    let details = crate::rewrite::coordination::projected_details(
+        target.path(),
+        &state,
+        &action,
+        &action,
+        false,
+    );
     assert_eq!(details.ready.get("revalidate_api"), Some(&1));
     assert_eq!(details.waiting.get("final_revalidation"), Some(&1));
 }

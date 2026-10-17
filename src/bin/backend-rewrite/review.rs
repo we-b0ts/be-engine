@@ -23,16 +23,20 @@ enum ReviewCommand {
         #[arg(long, required = true, value_parser = super::parse_api_scope)]
         api: Vec<String>,
     },
-    /// Run all source, isolation, and engine-standard quality checks before delivery.
+    /// Check source and isolation before delivery, or final quality before full revalidation.
     Check {
         #[arg(long, env = "BACKEND_REWRITE_REVIEW_WORKTREE")]
         worktree: PathBuf,
         /// Check an integration candidate instead of a registered worker delivery.
         #[arg(long)]
         integration: bool,
+        /// Run the final candidate's full checks before full revalidation.
+        /// This automatically selects global integration review.
+        #[arg(long, conflicts_with_all = ["api", "handoff_id", "batch_handoffs"])]
+        pre_revalidation: bool,
         #[arg(
             long,
-            required_unless_present = "integration",
+            required_unless_present_any = ["integration", "pre_revalidation"],
             value_parser = super::parse_api_scope
         )]
         api: Option<String>,
@@ -89,6 +93,7 @@ pub(super) fn run(root: PathBuf, args: ReviewArgs, pretty: bool) -> Result<()> {
         ReviewCommand::Check {
             worktree,
             integration,
+            pre_revalidation,
             api,
             handoff_id,
             batch_handoffs,
@@ -96,6 +101,7 @@ pub(super) fn run(root: PathBuf, args: ReviewArgs, pretty: bool) -> Result<()> {
             hardcode_ai_verified,
         } => {
             let scope = api.map(|api| RewriteWorkScope::Api { api });
+            let integration = integration || pre_revalidation;
             ensure!(
                 !integration || scope.is_some() == handoff_id.is_some(),
                 "integration review requires both a work-item selector and --handoff-id, or neither for a global candidate"
@@ -109,7 +115,9 @@ pub(super) fn run(root: PathBuf, args: ReviewArgs, pretty: bool) -> Result<()> {
                 evidence,
                 hardcode_ai_verified,
             };
-            let report = if let Some(path) = batch_handoffs {
+            let report = if pre_revalidation {
+                traffic_e2e::check_rewrite_pre_revalidation(options)?
+            } else if let Some(path) = batch_handoffs {
                 traffic_e2e::check_rewrite_review_batch_file(options, &path)?
             } else {
                 traffic_e2e::check_rewrite_review(options)?

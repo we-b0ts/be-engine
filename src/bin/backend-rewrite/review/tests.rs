@@ -178,3 +178,57 @@ fn integration_review_rejects_incomplete_handoff_identity_before_accessing_state
         );
     }
 }
+
+#[test]
+fn final_review_selects_global_integration_without_a_separate_integration_flag() {
+    let cli = Cli::try_parse_from([
+        "test",
+        "review",
+        "check",
+        "--pre-revalidation",
+        "--worktree",
+        "/integration",
+    ])
+    .unwrap();
+    let RewriteCommand::Review(args) = cli.command else {
+        panic!("expected review command");
+    };
+    let super::ReviewCommand::Check {
+        pre_revalidation,
+        integration,
+        api,
+        handoff_id,
+        batch_handoffs,
+        ..
+    } = args.command
+    else {
+        panic!("expected check command");
+    };
+    assert!(pre_revalidation);
+    assert!(!integration);
+    assert!(api.is_none());
+    assert!(handoff_id.is_none());
+    assert!(batch_handoffs.is_none());
+}
+
+#[test]
+fn final_review_rejects_scoped_or_batch_delivery_selectors() {
+    for forbidden in [
+        vec!["--api", "/api"],
+        vec!["--handoff-id", "commit"],
+        vec!["--batch-handoffs", "/integration/batch.json"],
+    ] {
+        let mut argv = vec![
+            "test",
+            "review",
+            "check",
+            "--pre-revalidation",
+            "--integration",
+            "--worktree",
+            "/integration",
+        ];
+        argv.extend(forbidden);
+        assert!(Cli::try_parse_from(&argv).is_err(), "accepted {argv:?}");
+    }
+    assert!(Cli::try_parse_from(["test", "review", "check", "--pre-revalidation"]).is_err());
+}

@@ -18,6 +18,7 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
         recording_apis: vec!["GET /api".to_string()],
         api_inventory: Vec::new(),
         revalidation_round: None,
+        pre_revalidation_review: None,
         skipped_api_statuses: Default::default(),
         source_route_bindings: std::collections::BTreeMap::new(),
         current_api_index: None,

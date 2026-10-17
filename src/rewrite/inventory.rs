@@ -74,6 +74,7 @@ pub(super) fn install(state: &mut RewriteState, apis: Vec<String>) -> Result<boo
     source_route::retain_bindings(state);
     state.skipped_api_statuses.clear();
     state.revalidation_round = None;
+    state.pre_revalidation_review = None;
     state.api_inventory = apis
         .into_iter()
         .enumerate()
@@ -394,6 +395,7 @@ pub(super) fn reset_for_recording(state: &mut RewriteState) {
     source_route::retain_bindings(state);
     state.api_inventory.clear();
     state.revalidation_round = None;
+    state.pre_revalidation_review = None;
     state.skipped_api_statuses.clear();
     state.current_api_index = None;
     state.parked_slices.clear();
