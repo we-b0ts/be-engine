@@ -358,3 +358,68 @@ fn json_uses_duplicate_rejecting_decode_and_the_same_authorized_delivery_api() {
         assert!(decoded.encode(&edited, &["/time".into()]).is_err());
     }
 }
+
+#[test]
+fn comparison_views_borrow_exact_json_and_only_copy_authorized_protobuf_views() {
+    let json = CodecPlan::compile(&Codec::Json)
+        .unwrap()
+        .decode(br#"{"time":1,"stable":[1,2,3]}"#)
+        .unwrap();
+    assert!(matches!(
+        json.comparison_view(&["/time".into()]),
+        std::borrow::Cow::Borrowed(_)
+    ));
+    let codec = codec(&[("/value", &[1], Type::Uint64, false)]);
+    let original = [8, 0x81, 0, 0x10, 0x87, 0];
+    let decoded = CodecPlan::compile(&codec)
+        .unwrap()
+        .decode(&original)
+        .unwrap();
+    assert!(matches!(
+        decoded.comparison_view(&[]),
+        std::borrow::Cow::Borrowed(_)
+    ));
+    assert!(matches!(
+        decoded.comparison_view(&["/value".into()]),
+        std::borrow::Cow::Owned(_)
+    ));
+    assert_eq!(decoded.encode(&decoded.logical, &[]).unwrap(), original);
+    assert_eq!(decoded.logical["value"], json!(1));
+}
+
+#[test]
+fn reusable_codec_plans_keep_payload_validation_and_wire_identity_independent() {
+    let codec = codec(&[("/value", &[1], Type::Uint64, false)]);
+    let plan = CodecPlan::compile(&codec).unwrap();
+    let first = plan.decode(&[8, 0x81, 0, 0x10, 7]).unwrap();
+    let second = plan.decode(&[8, 2, 0x10, 8]).unwrap();
+    assert_eq!(first.logical["value"], json!(1));
+    assert_eq!(second.logical["value"], json!(2));
+    assert_ne!(
+        first.comparison_view(&["/value".into()]),
+        second.comparison_view(&["/value".into()])
+    );
+    for invalid in [&[8, 1, 8, 2][..], &[8, 0x80], &[10, 1, 1]] {
+        assert!(plan.decode(invalid).is_err());
+    }
+    assert_eq!(
+        first.encode(&first.logical, &[]).unwrap(),
+        [8, 0x81, 0, 0x10, 7]
+    );
+}
+
+#[test]
+fn codec_pointer_matching_retains_canonical_array_indexes_and_escaped_names() {
+    for (pattern, pointer, expected) in [
+        ("/items/*/value", "/items/0/value", true),
+        ("/items/*/value", "/items/12/value", true),
+        ("/items/*/value", "/items/00/value", false),
+        ("/items/*/value", "/items/-1/value", false),
+        ("/items/*/value", "/items/name/value", false),
+        ("/items/*", "/items/0/value", false),
+        ("/a~1b/~0", "/a~1b/~0", true),
+        ("", "", true),
+    ] {
+        assert_eq!(pointer_matches(pattern, pointer), expected);
+    }
+}
