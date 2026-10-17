@@ -50,6 +50,8 @@ pub(crate) mod test_fixture;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub(in crate::replay) use config::ReplayPolicyDocument;
 pub(in crate::replay) use config::{LoadedReplayPolicy, fingerprint, load_replay_policy};
 pub use config::{ReplayPolicyValidationReport, validate_replay_policy};
 pub use feedback::{

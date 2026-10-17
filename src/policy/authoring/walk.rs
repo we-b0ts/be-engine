@@ -10,6 +10,7 @@ enum Shape {
     Field,
     Time,
     SqlValue,
+    SqlTime,
     GeneratedValue,
     GeneratedResponse,
     Plaintext,
@@ -222,24 +223,39 @@ impl Walker<'_> {
 
     fn node(&self, value: &mut Value, shape: Shape, parent: &Value, depth: usize) -> Result<()> {
         ensure!(depth < 128, "authoring contract nesting exceeds 128 levels");
+        // SQL write clocks belong to the individual dependency request. Keep an
+        // explicitly selected API clock for values generated before a batch.
+        if !self.compact
+            && matches!(shape, Shape::SqlValue | Shape::SqlTime)
+            && let Some(map) = value.as_mapping_mut()
+            && map.get("kind").and_then(Value::as_str) != Some("json")
+        {
+            map.entry("anchor".into())
+                .or_insert_with(|| "dependency.request_start".into());
+        }
         if matches!(
             shape,
             Shape::Field
                 | Shape::Time
                 | Shape::SqlValue
+                | Shape::SqlTime
                 | Shape::GeneratedValue
                 | Shape::Plaintext
                 | Shape::SequenceArgument
                 | Shape::SequenceField
         ) {
-            contracts::transform(value, !matches!(shape, Shape::Time), self.compact)?;
+            contracts::transform(
+                value,
+                !matches!(shape, Shape::Time | Shape::SqlTime),
+                self.compact,
+            )?;
         }
         let Some(map) = value.as_mapping_mut() else {
             return Ok(());
         };
         match shape {
             Shape::Field => self.one(map, "contract", Shape::Field, false, parent, depth)?,
-            Shape::SqlValue => self.field_map(map, "fields", Shape::Time, parent, depth)?,
+            Shape::SqlValue => self.field_map(map, "fields", Shape::SqlTime, parent, depth)?,
             Shape::SequenceArgument => {
                 self.field_map(map, "fields", Shape::SequenceField, parent, depth)?
             }
@@ -271,7 +287,11 @@ impl Walker<'_> {
             Shape::CaptureResponse => {
                 self.list(map, "pointers", Shape::Leaf, true, parent, depth)?
             }
-            Shape::Leaf | Shape::Time | Shape::GeneratedValue | Shape::Plaintext => (),
+            Shape::Leaf
+            | Shape::Time
+            | Shape::SqlTime
+            | Shape::GeneratedValue
+            | Shape::Plaintext => (),
         }
         Ok(())
     }

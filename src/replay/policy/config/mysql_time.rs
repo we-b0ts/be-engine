@@ -20,6 +20,8 @@ enum TimeConfig {
 #[serde(deny_unknown_fields)]
 pub(super) struct TimeFieldConfig {
     time: TimeConfig,
+    #[serde(default = "case_anchor", skip_serializing_if = "is_case_anchor")]
+    anchor: crate::policy::TimeAnchor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tolerance: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -30,6 +32,14 @@ pub(super) struct TimeFieldConfig {
     timezone: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     source_evidence: String,
+}
+
+fn case_anchor() -> crate::policy::TimeAnchor {
+    crate::policy::TimeAnchor::ApiRequestStart
+}
+
+fn is_case_anchor(anchor: &crate::policy::TimeAnchor) -> bool {
+    *anchor == case_anchor()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -49,6 +59,10 @@ impl TryFrom<TimeFieldConfig> for MysqlTimeFieldRule {
     type Error = anyhow::Error;
 
     fn try_from(config: TimeFieldConfig) -> Result<Self> {
+        ensure!(
+            config.anchor != crate::policy::TimeAnchor::DependencyDelivery,
+            "SQL request times cannot use a future response-delivery clock"
+        );
         let mut time = match config.time {
             TimeConfig::Reference(relative_to) => TimeRule {
                 relative_to,
@@ -85,6 +99,7 @@ impl TryFrom<TimeFieldConfig> for MysqlTimeFieldRule {
         Ok(Self {
             source_evidence: config.source_evidence,
             time,
+            anchor: config.anchor,
         })
     }
 }
@@ -96,6 +111,7 @@ impl From<MysqlTimeFieldRule> for TimeFieldConfig {
         if compact {
             TimeFieldConfig {
                 time: TimeConfig::Reference(TimeReference::PreserveRelative),
+                anchor: rule.anchor,
                 tolerance: None,
                 offset: None,
                 format: rule.time.format.filter(|value| value != FORMAT),
@@ -105,6 +121,7 @@ impl From<MysqlTimeFieldRule> for TimeFieldConfig {
         } else {
             TimeFieldConfig {
                 time: TimeConfig::Detailed(rule.time),
+                anchor: rule.anchor,
                 tolerance: None,
                 offset: None,
                 format: None,

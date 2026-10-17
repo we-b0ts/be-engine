@@ -43,7 +43,7 @@ fn local_inheritance_expands_every_contract_and_partial_override_without_crossin
     );
     assert_eq!(
         fields["/updatedAt"].contract.anchor,
-        TimeAnchor::ApiRequestStart
+        TimeAnchor::DependencyRequestStart
     );
     assert_eq!(
         fields["/updatedAt"].contract.relation,

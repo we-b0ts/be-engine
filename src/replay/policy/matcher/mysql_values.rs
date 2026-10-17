@@ -68,12 +68,16 @@ pub(in crate::replay::policy) struct SelectedMysqlTime {
     pub(in crate::replay::policy) source: Value,
     pub(in crate::replay::policy) target: Value,
     pub(in crate::replay::policy) rule: TimeRule,
+    anchor: crate::policy::TimeAnchor,
 }
 
 pub(in crate::replay::policy) fn validate_selected_time(
     selected: &SelectedMysqlTime,
     times: crate::replay::assertion::RequestTimes,
 ) -> Result<(), String> {
+    if selected.anchor != crate::policy::TimeAnchor::ApiRequestStart {
+        return Err("SQL dependency time requires independent dependency request clocks".into());
+    }
     validate_relative_time(&selected.source, &selected.target, &selected.rule, times)
 }
 
@@ -105,6 +109,7 @@ pub(in crate::replay::policy) fn selected_times(
                 source,
                 target,
                 rule: field.time.clone(),
+                anchor: field.anchor,
             }])
         }
         MysqlTimeValueRule::Json(fields) => {
@@ -125,6 +130,7 @@ pub(in crate::replay::policy) fn selected_times(
                     source,
                     target,
                     rule: field.time.clone(),
+                    anchor: field.anchor,
                 });
                 *source_json
                     .pointer_mut(pointer)
@@ -238,6 +244,15 @@ impl ReplayPolicyRuntime {
                         }
                         let times = selected_times(&recorded[position], &actual[position], field)?;
                         for selected in &times {
+                            // PREPARE has no execution clock. Preserve the selected
+                            // anchor through inventory projection; the typed native
+                            // evaluator validates it with independent clocks at EXECUTE.
+                            if metadata
+                                && selected.anchor
+                                    == crate::policy::TimeAnchor::DependencyRequestStart
+                            {
+                                continue;
+                            }
                             validate_selected_time(
                                 selected,
                                 self.request_contracts

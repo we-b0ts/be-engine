@@ -143,6 +143,7 @@ pub(super) enum MysqlTimeValueRule {
 pub(super) struct MysqlTimeFieldRule {
     pub(super) source_evidence: String,
     pub(super) time: TimeRule,
+    pub(super) anchor: crate::policy::TimeAnchor,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

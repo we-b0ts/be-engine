@@ -139,7 +139,8 @@ available. Human authoring can omit repeated information within the same rule:
 - Nested contracts may retain the full `contract`/`proof` wrapper or use the
   direct contract spelling. `relative_time: FORMAT` expands to typed time with
   `preserve_offset`; `request_time: FORMAT` expands to `request_window`. Both
-  default to `case.request_start` and accept an explicit `anchor`, `utc_offset`
+  default to `case.request_start` (SQL `mysql_values.values` defaults to
+  `dependency.request_start`, including JSON time fields) and accept an explicit `anchor`, `utc_offset`
   and `clock_group`. Formats/units are always explicit. The renderer keeps the
   effective anchor visible. `unordered` abbreviates `{kind: unordered}`.
 

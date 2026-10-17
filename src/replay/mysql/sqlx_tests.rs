@@ -12,6 +12,7 @@ use tempfile::tempdir;
 mod autocommit_tests;
 mod combined_capture_tests;
 mod continuation_tests;
+mod dependency_time_tests;
 mod distinct_tests;
 mod dynamic_values_tests;
 mod foreign_cleanup_tests;
