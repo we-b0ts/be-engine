@@ -173,7 +173,8 @@ pub(in crate::replay) fn compare(
         Failure::Time => ResponseDifferenceKind::JwtTimeMismatch,
         Failure::Nonce => ResponseDifferenceKind::JwtNonceMismatch,
     })?;
-    if let [Some(source_iat), Some(target_iat)] = validated.iat
+    if rule.ttl.is_none()
+        && let [Some(source_iat), Some(target_iat)] = validated.iat
         && validated.exp[0].checked_sub(source_iat) != validated.exp[1].checked_sub(target_iat)
     {
         return Err(ResponseDifferenceKind::JwtTimeMismatch);
